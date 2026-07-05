@@ -28,7 +28,7 @@ export default function DevicesPage() {
     setLoading(true);
     try {
       const { data } = await api.get('/devices');
-      setDevices(data);
+      setDevices(Array.isArray(data) ? data : []);
     } catch {
       toast.error('Failed to load devices');
     } finally {
