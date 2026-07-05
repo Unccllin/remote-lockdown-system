@@ -1,0 +1,8 @@
+[agent]
+server_url = https://your-server.example.com
+agent_key = change_this_to_match_server_AGENT_SHARED_KEY
+hostname = DEVICE-HOSTNAME-001
+poll_interval = 30
+lockdown_folder = C:\Users\FieldAgent\SecureData
+lock_sentinel = C:\ProgramData\LockdownAgent\.locked
+verify_tls = true

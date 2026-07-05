@@ -1,0 +1,8 @@
+node_modules/
+.env
+*.env
+dist/
+.DS_Store
+agent/config.ini
+agent/__pycache__/
+*.pyc
