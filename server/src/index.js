@@ -30,8 +30,16 @@ app.use((err, req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+const pool = require('./db/pool');
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`DB mode: ${process.env.DATABASE_URL ? 'DATABASE_URL (cloud)' : 'individual vars (local)'}`);
+  console.log(`DATABASE_URL prefix: ${process.env.DATABASE_URL ? process.env.DATABASE_URL.substring(0, 30) : 'NOT SET'}`);
+  try {
+    await pool.query('SELECT 1');
+    console.log('DB connection: OK');
+  } catch (err) {
+    console.error('DB connection FAILED:', err.message);
+  }
 });
