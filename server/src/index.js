@@ -41,5 +41,7 @@ app.listen(PORT, async () => {
     console.log('DB connection: OK');
   } catch (err) {
     console.error('DB connection FAILED:', err.message);
+    console.error('DB error code:', err.code);
+    console.error('DB error detail:', JSON.stringify(err));
   }
 });
