@@ -6,11 +6,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': {
-        target: 'https://uniquely-chef-rewrap.ngrok-free.dev',
-        changeOrigin: true,
-        headers: { 'ngrok-skip-browser-warning': 'true' },
-      },
+      '/api': 'http://localhost:3001',
     },
   },
 });
