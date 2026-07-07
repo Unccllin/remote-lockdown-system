@@ -313,7 +313,8 @@ def startup_check(cfg: dict) -> None:
 # Dead man's switch
 # ---------------------------------------------------------------------------
 
-DEADMAN_FILE = Path(__file__).parent / ".deadman"
+DEADMAN_FILE  = Path(__file__).parent / ".deadman"
+HEARTBEAT_FILE = Path(__file__).parent / ".heartbeat"
 DEADMAN_TIMEOUT_HOURS = 24  # Lock if flagged-stolen and offline for this long
 
 def update_deadman_timer(status: str) -> None:
@@ -363,6 +364,12 @@ def main() -> None:
     startup_check(cfg)
 
     while True:
+        # Update heartbeat so watchdog knows agent is alive
+        try:
+            HEARTBEAT_FILE.touch()
+        except Exception:
+            pass
+
         # Check dead man's switch before attempting network
         check_deadman(cfg)
 
