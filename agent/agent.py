@@ -310,6 +310,45 @@ def startup_check(cfg: dict) -> None:
         apply_lock_screen()
 
 # ---------------------------------------------------------------------------
+# Dead man's switch
+# ---------------------------------------------------------------------------
+
+DEADMAN_FILE = Path(__file__).parent / ".deadman"
+DEADMAN_TIMEOUT_HOURS = 24  # Lock if flagged-stolen and offline for this long
+
+def update_deadman_timer(status: str) -> None:
+    """Write current time + device status to the dead man's file."""
+    DEADMAN_FILE.write_text(json.dumps({
+        "last_seen": time.time(),
+        "status": status,
+    }))
+
+def check_deadman(cfg: dict) -> None:
+    """If device was flagged stolen and hasn't reached server in DEADMAN_TIMEOUT_HOURS, lock it."""
+    if not DEADMAN_FILE.exists():
+        return
+    try:
+        state = json.loads(DEADMAN_FILE.read_text())
+        if state.get("status") != "stolen":
+            return
+        elapsed_hours = (time.time() - state["last_seen"]) / 3600
+        if elapsed_hours >= DEADMAN_TIMEOUT_HOURS:
+            log.warning(
+                "DEAD MAN SWITCH: device was stolen and offline for %.1fh — triggering lockdown",
+                elapsed_hours
+            )
+            sentinel = cfg["lock_sentinel"]
+            if not sentinel.exists():
+                key = generate_key()
+                encrypt_folder(cfg["lockdown_folder"], key)
+                apply_lock_screen()
+                sentinel.write_text(json.dumps({"locked": True, "deadman": True}))
+                log.warning("Deadman lockdown complete — key NOT transmitted (offline)")
+                del key
+    except Exception as e:
+        log.error("Dead man check failed: %s", e)
+
+# ---------------------------------------------------------------------------
 # Main polling loop
 # ---------------------------------------------------------------------------
 
@@ -324,8 +363,14 @@ def main() -> None:
     startup_check(cfg)
 
     while True:
+        # Check dead man's switch before attempting network
+        check_deadman(cfg)
+
         data = checkin(cfg)
         if data:
+            # Update dead man's timer with current server-reported status
+            update_deadman_timer(data.get("status", "active"))
+
             command = data.get("command")
             if command:
                 cmd_type = command.get("type")
