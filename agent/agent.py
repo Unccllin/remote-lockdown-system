@@ -28,6 +28,7 @@ import logging
 import platform
 import subprocess
 import socket
+import uuid
 import configparser
 from pathlib import Path
 
@@ -146,6 +147,43 @@ def remove_lock_screen() -> None:
     log.info("Lock screen removed — normal login restored")
 
 # ---------------------------------------------------------------------------
+# Hardware identity
+# ---------------------------------------------------------------------------
+
+def get_mac_address() -> str:
+    """Return the primary MAC address as a colon-separated string."""
+    mac = uuid.getnode()
+    return ':'.join(('%012X' % mac)[i:i+2] for i in range(0, 12, 2))
+
+def get_hardware_uuid() -> str:
+    """Return a stable hardware UUID from the OS."""
+    system = platform.system()
+    try:
+        if system == "Windows":
+            result = subprocess.check_output(
+                ["wmic", "csproduct", "get", "UUID"],
+                timeout=10, stderr=subprocess.DEVNULL
+            ).decode().strip().split()
+            return result[-1] if result else str(uuid.getnode())
+        elif system == "Linux":
+            result = subprocess.check_output(
+                ["cat", "/sys/class/dmi/id/product_uuid"],
+                timeout=10, stderr=subprocess.DEVNULL
+            ).decode().strip()
+            return result
+        elif system == "Darwin":
+            result = subprocess.check_output(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                timeout=10, stderr=subprocess.DEVNULL
+            ).decode()
+            for line in result.splitlines():
+                if "IOPlatformUUID" in line:
+                    return line.split('"')[-2]
+    except Exception as e:
+        log.warning("Could not get hardware UUID: %s", e)
+    return str(uuid.getnode())
+
+# ---------------------------------------------------------------------------
 # Server communication
 # ---------------------------------------------------------------------------
 
@@ -153,7 +191,11 @@ def checkin(cfg: dict) -> dict | None:
     try:
         resp = requests.post(
             f"{cfg['server_url']}/api/agent/checkin",
-            json={"hostname": cfg["hostname"]},
+            json={
+                "hostname": cfg["hostname"],
+                "mac_address": get_mac_address(),
+                "hardware_uuid": get_hardware_uuid(),
+            },
             headers={"x-agent-key": cfg["agent_key"]},
             timeout=15,
             verify=cfg["verify_tls"],
@@ -167,6 +209,8 @@ def checkin(cfg: dict) -> dict | None:
 def ack_command(cfg: dict, command_id: str, result_status: str, key_material: str | None = None) -> None:
     payload = {
         "hostname": cfg["hostname"],
+        "mac_address": get_mac_address(),
+        "hardware_uuid": get_hardware_uuid(),
         "command_id": command_id,
         "result_status": result_status,
     }

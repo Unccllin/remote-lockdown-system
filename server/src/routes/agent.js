@@ -12,13 +12,28 @@ function agentAuth(req, res, next) {
 }
 
 router.post('/checkin', agentAuth, async (req, res) => {
-  const { hostname } = req.body;
+  const { hostname, mac_address, hardware_uuid } = req.body;
   if (!hostname) return res.status(400).json({ error: 'hostname required' });
 
-  const devResult = await pool.query(
-    'UPDATE devices SET last_checkin = NOW() WHERE hostname = $1 RETURNING *',
-    [hostname]
-  );
+  // Match by hardware identity first, fall back to hostname
+  let devResult;
+  if (mac_address || hardware_uuid) {
+    devResult = await pool.query(
+      `UPDATE devices SET last_checkin = NOW(), hostname = $1,
+        mac_address = COALESCE($2, mac_address),
+        hardware_uuid = COALESCE($3, hardware_uuid)
+       WHERE (mac_address = $2 AND $2 IS NOT NULL)
+          OR (hardware_uuid = $3 AND $3 IS NOT NULL)
+       RETURNING *`,
+      [hostname, mac_address || null, hardware_uuid || null]
+    );
+  }
+  if (!devResult || !devResult.rows[0]) {
+    devResult = await pool.query(
+      'UPDATE devices SET last_checkin = NOW() WHERE hostname = $1 RETURNING *',
+      [hostname]
+    );
+  }
   if (!devResult.rows[0]) return res.status(404).json({ error: 'Device not registered' });
 
   const device = devResult.rows[0];
@@ -50,12 +65,21 @@ router.post('/checkin', agentAuth, async (req, res) => {
 });
 
 router.post('/command-ack', agentAuth, async (req, res) => {
-  const { hostname, command_id, result_status, key_material } = req.body;
+  const { hostname, command_id, result_status, key_material, mac_address, hardware_uuid } = req.body;
   if (!hostname || !command_id || !result_status) {
     return res.status(400).json({ error: 'hostname, command_id, result_status required' });
   }
 
-  const devResult = await pool.query('SELECT * FROM devices WHERE hostname = $1', [hostname]);
+  let devResult;
+  if (mac_address || hardware_uuid) {
+    devResult = await pool.query(
+      'SELECT * FROM devices WHERE (mac_address = $1 AND $1 IS NOT NULL) OR (hardware_uuid = $2 AND $2 IS NOT NULL)',
+      [mac_address || null, hardware_uuid || null]
+    );
+  }
+  if (!devResult || !devResult.rows[0]) {
+    devResult = await pool.query('SELECT * FROM devices WHERE hostname = $1', [hostname]);
+  }
   const device = devResult.rows[0];
   if (!device) return res.status(404).json({ error: 'Device not registered' });
 

@@ -13,9 +13,11 @@ const schema = `
 
   CREATE TABLE IF NOT EXISTS devices (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    hostname VARCHAR(255) UNIQUE NOT NULL,
+    hostname VARCHAR(255) NOT NULL,
     owner_name VARCHAR(255) NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'active',
+    mac_address VARCHAR(100) UNIQUE,
+    hardware_uuid VARCHAR(255) UNIQUE,
     last_checkin TIMESTAMPTZ,
     enrolled_at TIMESTAMPTZ DEFAULT NOW()
   );
