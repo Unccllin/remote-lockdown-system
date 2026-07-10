@@ -28,6 +28,7 @@ export default function AuditPage() {
     device_enrolled: 'text-blue-400',
     agent_lockdown_confirmed: 'text-orange-400',
     agent_unlock_confirmed: 'text-emerald-400',
+    agent_deadman_lockdown_confirmed: 'text-red-500',
   };
 
   return (

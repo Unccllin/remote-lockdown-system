@@ -88,11 +88,13 @@ router.post('/:id/recover', requireAuth, async (req, res) => {
   if (device.hostname !== hostname_confirm) {
     return res.status(400).json({ error: 'Confirmation hostname does not match' });
   }
-  if (device.status !== 'stolen') {
-    return res.status(409).json({ error: 'Device is not flagged as stolen' });
+  if (device.status !== 'stolen' && device.status !== 'locked') {
+    return res.status(409).json({ error: 'Device is not in a locked/stolen state' });
   }
 
-  await pool.query('UPDATE devices SET status = $1 WHERE id = $2', ['active', device.id]);
+  // Set transitional 'recovering' status — the agent ACK for the unlock
+  // command will flip this to 'active' once decryption is confirmed.
+  await pool.query('UPDATE devices SET status = $1 WHERE id = $2', ['recovering', device.id]);
 
   const keyResult = await pool.query(
     'SELECT * FROM encryption_keys WHERE device_id = $1 AND released_at IS NULL ORDER BY created_at DESC LIMIT 1',
@@ -113,7 +115,7 @@ router.post('/:id/recover', requireAuth, async (req, res) => {
   );
 
   res.json({
-    device: { ...device, status: 'active' },
+    device: { ...device, status: 'recovering' },
     command: cmd.rows[0],
     key_released: !!key,
     key_material: key ? key.key_material : null,

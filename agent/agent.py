@@ -30,6 +30,7 @@ import subprocess
 import socket
 import uuid
 import configparser
+import threading
 from pathlib import Path
 
 import requests
@@ -106,44 +107,82 @@ def decrypt_folder(folder: Path, key: bytes) -> None:
 # Lock screen (platform-specific, best-effort)
 # ---------------------------------------------------------------------------
 
-def apply_lock_screen() -> None:
-    """Replace interactive shell with a lock message. Best-effort per platform."""
-    msg = (
-        "\n\n"
-        "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
-        "  !                                                       !\n"
-        "  !   THIS DEVICE HAS BEEN REPORTED STOLEN               !\n"
-        "  !   Contact IT Support immediately:                     !\n"
-        "  !   support@yourcompany.com  /  +1-800-XXX-XXXX        !\n"
-        "  !                                                       !\n"
-        "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n"
-    )
+_BANNER = (
+    "\n\n"
+    "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+    "  !                                                       !\n"
+    "  !   THIS DEVICE HAS BEEN REPORTED STOLEN               !\n"
+    "  !   Contact IT Support immediately:                     !\n"
+    "  !   support@yourcompany.com  /  +1-800-XXX-XXXX        !\n"
+    "  !                                                       !\n"
+    "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n"
+)
+
+def _lock_workstation() -> None:
+    """Platform-specific workstation lock. Best-effort, no banner."""
     system = platform.system()
     if system == "Windows":
         try:
             import ctypes
             ctypes.windll.user32.LockWorkStation()
-            log.info("Windows: workstation locked")
         except Exception as e:
             log.warning("Windows lock failed: %s", e)
     elif system == "Linux":
         for cmd in [["dm-tool", "lock"], ["loginctl", "lock-session"], ["xdg-screensaver", "lock"]]:
             try:
                 subprocess.run(cmd, check=True, timeout=5)
-                log.info("Linux: screen locked via %s", cmd[0])
                 break
             except Exception:
                 continue
     elif system == "Darwin":
         try:
             subprocess.run(["/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession", "-suspend"], timeout=5)
-            log.info("macOS: screen locked")
         except Exception as e:
             log.warning("macOS lock failed: %s", e)
 
-    print(msg)
+def apply_lock_screen() -> None:
+    """Lock the workstation and display the stolen banner."""
+    _lock_workstation()
+    print(_BANNER)
+
+# ---------------------------------------------------------------------------
+# Lock guardian — background thread that re-asserts the lock screen so a
+# thief cannot simply unlock and use the device.
+# ---------------------------------------------------------------------------
+
+LOCK_GUARDIAN_INTERVAL = 10  # seconds between re-lock attempts
+_lock_guardian_stop: threading.Event | None = None
+_lock_guardian_thread: threading.Thread | None = None
+
+def start_lock_guardian() -> None:
+    """Start (or restart) the background thread that re-locks the screen."""
+    global _lock_guardian_stop, _lock_guardian_thread
+    stop_lock_guardian()
+    _lock_guardian_stop = threading.Event()
+    _lock_guardian_thread = threading.Thread(
+        target=_lock_guardian_loop, args=(_lock_guardian_stop,), daemon=True
+    )
+    _lock_guardian_thread.start()
+    log.info("Lock guardian started — re-asserting lock every %ds", LOCK_GUARDIAN_INTERVAL)
+
+def stop_lock_guardian() -> None:
+    """Stop the lock guardian thread if one is running."""
+    global _lock_guardian_stop, _lock_guardian_thread
+    if _lock_guardian_stop:
+        _lock_guardian_stop.set()
+    if _lock_guardian_thread and _lock_guardian_thread.is_alive():
+        _lock_guardian_thread.join(timeout=5)
+    _lock_guardian_stop = None
+    _lock_guardian_thread = None
+
+def _lock_guardian_loop(stop_event: threading.Event) -> None:
+    """Background loop — re-lock the screen at regular intervals."""
+    while not stop_event.is_set():
+        _lock_workstation()
+        stop_event.wait(LOCK_GUARDIAN_INTERVAL)
 
 def remove_lock_screen() -> None:
+    stop_lock_guardian()
     log.info("Lock screen removed — normal login restored")
 
 # ---------------------------------------------------------------------------
@@ -238,6 +277,13 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     folder = cfg["lockdown_folder"]
     sentinel = cfg["lock_sentinel"]
 
+    # If the deadman switch already locked the device, the folder is already
+    # encrypted and the key was uploaded via report_deadman_key. Just ACK.
+    if sentinel.exists():
+        log.warning("Sentinel already exists — device already locked, skipping encryption")
+        ack_command(cfg, command["id"], "executed")
+        return
+
     if not folder.exists():
         log.info("Lockdown folder does not exist, creating empty one: %s", folder)
         folder.mkdir(parents=True, exist_ok=True)
@@ -251,6 +297,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         return
 
     apply_lock_screen()
+    start_lock_guardian()
 
     sentinel.write_text(json.dumps({"locked": True, "command_id": command["id"]}))
     log.info("Sentinel written: %s", sentinel)
@@ -308,6 +355,7 @@ def startup_check(cfg: dict) -> None:
     if sentinel.exists():
         log.warning("Device was previously locked — re-asserting lock screen")
         apply_lock_screen()
+        start_lock_guardian()
 
 # ---------------------------------------------------------------------------
 # Dead man's switch
@@ -315,6 +363,7 @@ def startup_check(cfg: dict) -> None:
 
 DEADMAN_FILE  = Path(__file__).parent / ".deadman"
 HEARTBEAT_FILE = Path(__file__).parent / ".heartbeat"
+DEADMAN_KEY_FILE = Path(__file__).parent / ".deadman_key"
 DEADMAN_TIMEOUT_HOURS = 24  # Lock if flagged-stolen and offline for this long
 
 def update_deadman_timer(status: str) -> None:
@@ -343,11 +392,43 @@ def check_deadman(cfg: dict) -> None:
                 key = generate_key()
                 encrypt_folder(cfg["lockdown_folder"], key)
                 apply_lock_screen()
+                start_lock_guardian()
                 sentinel.write_text(json.dumps({"locked": True, "deadman": True}))
-                log.warning("Deadman lockdown complete — key NOT transmitted (offline)")
+                # Store key locally so it can be uploaded to the server once
+                # network connectivity is restored — without this the device
+                # would be permanently unrecoverable.
+                DEADMAN_KEY_FILE.write_text(key.decode())
+                log.warning("Deadman lockdown complete — key stored locally for upload on reconnection")
                 del key
     except Exception as e:
         log.error("Dead man check failed: %s", e)
+
+def report_deadman_key(cfg: dict) -> None:
+    """If a deadman key is stored locally, upload it to the server and wipe the local copy."""
+    if not DEADMAN_KEY_FILE.exists():
+        return
+    try:
+        key_material = DEADMAN_KEY_FILE.read_text().strip()
+        resp = requests.post(
+            f"{cfg['server_url']}/api/agent/deadman-report",
+            json={
+                "hostname": cfg["hostname"],
+                "mac_address": get_mac_address(),
+                "hardware_uuid": get_hardware_uuid(),
+                "key_material": key_material,
+            },
+            headers={"x-agent-key": cfg["agent_key"]},
+            timeout=15,
+            verify=cfg["verify_tls"],
+        )
+        resp.raise_for_status()
+        DEADMAN_KEY_FILE.unlink()
+        log.warning("Deadman key uploaded to server — local copy wiped. Device is now recoverable.")
+        del key_material
+    except requests.RequestException as e:
+        log.warning("Could not upload deadman key (will retry): %s", e)
+    except Exception as e:
+        log.error("Deadman key upload failed: %s", e)
 
 # ---------------------------------------------------------------------------
 # Main polling loop
@@ -375,6 +456,9 @@ def main() -> None:
 
         data = checkin(cfg)
         if data:
+            # Upload deadman key (if any) now that we have connectivity
+            report_deadman_key(cfg)
+
             # Update dead man's timer with current server-reported status
             update_deadman_timer(data.get("status", "active"))
 

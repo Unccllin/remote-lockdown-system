@@ -11,32 +11,44 @@ function agentAuth(req, res, next) {
   next();
 }
 
+/**
+ * Find a device by hardware identity (MAC + UUID) first, fall back to hostname.
+ * Returns the device row or null.
+ */
+async function findDevice(hostname, mac_address, hardware_uuid) {
+  let devResult;
+  if (mac_address || hardware_uuid) {
+    devResult = await pool.query(
+      `SELECT * FROM devices
+       WHERE (mac_address = $1 AND $1 IS NOT NULL)
+          OR (hardware_uuid = $2 AND $2 IS NOT NULL)
+       LIMIT 1`,
+      [mac_address || null, hardware_uuid || null]
+    );
+  }
+  if (!devResult || !devResult.rows[0]) {
+    devResult = await pool.query('SELECT * FROM devices WHERE hostname = $1', [hostname]);
+  }
+  return devResult.rows[0] || null;
+}
+
 router.post('/checkin', agentAuth, async (req, res) => {
   const { hostname, mac_address, hardware_uuid } = req.body;
   if (!hostname) return res.status(400).json({ error: 'hostname required' });
 
-  // Match by hardware identity first, fall back to hostname
-  let devResult;
-  if (mac_address || hardware_uuid) {
-    devResult = await pool.query(
-      `UPDATE devices SET last_checkin = NOW(), hostname = $1,
-        mac_address = COALESCE($2, mac_address),
-        hardware_uuid = COALESCE($3, hardware_uuid)
-       WHERE (mac_address = $2 AND $2 IS NOT NULL)
-          OR (hardware_uuid = $3 AND $3 IS NOT NULL)
-       RETURNING *`,
-      [hostname, mac_address || null, hardware_uuid || null]
-    );
-  }
-  if (!devResult || !devResult.rows[0]) {
-    devResult = await pool.query(
-      'UPDATE devices SET last_checkin = NOW() WHERE hostname = $1 RETURNING *',
-      [hostname]
-    );
-  }
-  if (!devResult.rows[0]) return res.status(404).json({ error: 'Device not registered' });
+  const device = await findDevice(hostname, mac_address, hardware_uuid);
+  if (!device) return res.status(404).json({ error: 'Device not registered' });
 
-  const device = devResult.rows[0];
+  // --- Update phase: record check-in and populate hardware identity if missing ---
+  await pool.query(
+    `UPDATE devices
+       SET last_checkin   = NOW(),
+           hostname       = $1,
+           mac_address    = COALESCE($2, mac_address),
+           hardware_uuid  = COALESCE($3, hardware_uuid)
+     WHERE id = $4`,
+    [hostname, mac_address || null, hardware_uuid || null, device.id]
+  );
 
   const cmdResult = await pool.query(
     `SELECT * FROM commands WHERE device_id = $1 AND status = 'pending' ORDER BY created_at ASC LIMIT 1`,
@@ -70,17 +82,7 @@ router.post('/command-ack', agentAuth, async (req, res) => {
     return res.status(400).json({ error: 'hostname, command_id, result_status required' });
   }
 
-  let devResult;
-  if (mac_address || hardware_uuid) {
-    devResult = await pool.query(
-      'SELECT * FROM devices WHERE (mac_address = $1 AND $1 IS NOT NULL) OR (hardware_uuid = $2 AND $2 IS NOT NULL)',
-      [mac_address || null, hardware_uuid || null]
-    );
-  }
-  if (!devResult || !devResult.rows[0]) {
-    devResult = await pool.query('SELECT * FROM devices WHERE hostname = $1', [hostname]);
-  }
-  const device = devResult.rows[0];
+  const device = await findDevice(hostname, mac_address, hardware_uuid);
   if (!device) return res.status(404).json({ error: 'Device not registered' });
 
   await pool.query(
@@ -109,6 +111,37 @@ router.post('/command-ack', agentAuth, async (req, res) => {
       await pool.query("UPDATE devices SET status = 'active' WHERE id = $1", [device.id]);
     }
   }
+
+  res.json({ ok: true });
+});
+
+/**
+ * Dead man's switch report — the agent calls this when it comes back online
+ * after a deadman-triggered lockdown. It uploads the encryption key so the
+ * admin can recover the device through the normal recover flow.
+ */
+router.post('/deadman-report', agentAuth, async (req, res) => {
+  const { hostname, mac_address, hardware_uuid, key_material } = req.body;
+  if (!hostname || !key_material) {
+    return res.status(400).json({ error: 'hostname and key_material required' });
+  }
+
+  const device = await findDevice(hostname, mac_address, hardware_uuid);
+  if (!device) return res.status(404).json({ error: 'Device not registered' });
+
+  // Store the deadman key so it can be released during recovery
+  await pool.query(
+    'INSERT INTO encryption_keys (device_id, key_material) VALUES ($1, $2)',
+    [device.id, key_material]
+  );
+
+  // Mark device as locked (not just stolen — the deadman actually encrypted it)
+  await pool.query("UPDATE devices SET status = 'locked' WHERE id = $1", [device.id]);
+
+  await pool.query(
+    'INSERT INTO audit_log (device_id, action, detail) VALUES ($1, $2, $3)',
+    [device.id, 'agent_deadman_lockdown_confirmed', { source: 'deadman_switch' }]
+  );
 
   res.json({ ok: true });
 });

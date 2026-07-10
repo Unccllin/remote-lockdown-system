@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Monitor, RefreshCw, Plus, WifiOff, Wifi, ShieldOff } from 'lucide-react';
+import { Monitor, RefreshCw, Plus, WifiOff, Wifi, ShieldOff, Loader } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
@@ -9,6 +9,7 @@ const STATUS_BADGE = {
   active: 'badge-active',
   stolen: 'badge-stolen',
   locked: 'badge-locked',
+  recovering: 'badge-recovering',
   inactive: 'badge-inactive',
 };
 
@@ -16,6 +17,7 @@ const STATUS_ICON = {
   active: <Wifi size={11} />,
   stolen: <ShieldOff size={11} />,
   locked: <ShieldOff size={11} />,
+  recovering: <Loader size={11} className="animate-spin" />,
   inactive: <WifiOff size={11} />,
 };
 
@@ -43,6 +45,7 @@ export default function DevicesPage() {
     active: devices.filter((d) => d.status === 'active').length,
     stolen: devices.filter((d) => d.status === 'stolen').length,
     locked: devices.filter((d) => d.status === 'locked').length,
+    recovering: devices.filter((d) => d.status === 'recovering').length,
   };
 
   return (
@@ -64,7 +67,7 @@ export default function DevicesPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-4 gap-4 mb-6">
         <div className="card">
           <p className="text-xs text-slate-400 mb-1">Active</p>
           <p className="text-3xl font-bold text-emerald-400">{stats.active}</p>
@@ -72,6 +75,10 @@ export default function DevicesPage() {
         <div className="card">
           <p className="text-xs text-slate-400 mb-1">Stolen / Locked</p>
           <p className="text-3xl font-bold text-red-400">{stats.stolen + stats.locked}</p>
+        </div>
+        <div className="card">
+          <p className="text-xs text-slate-400 mb-1">Recovering</p>
+          <p className="text-3xl font-bold text-amber-400">{stats.recovering}</p>
         </div>
         <div className="card">
           <p className="text-xs text-slate-400 mb-1">Total</p>

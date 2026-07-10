@@ -6,3 +6,8 @@ dist/
 agent/config.ini
 agent/__pycache__/
 *.pyc
+agent/.deadman
+agent/.deadman_key
+agent/.heartbeat
+agent/.locked
+agent/logs/

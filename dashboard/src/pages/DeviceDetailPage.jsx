@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ShieldAlert, Unlock, RefreshCw, ClipboardList } from 'lucide-react';
+import { ArrowLeft, ShieldAlert, Unlock, RefreshCw, ClipboardList, Loader } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
@@ -10,6 +10,7 @@ const STATUS_BADGE = {
   active: 'badge-active',
   stolen: 'badge-stolen',
   locked: 'badge-locked',
+  recovering: 'badge-recovering',
   inactive: 'badge-inactive',
 };
 
@@ -135,7 +136,7 @@ export default function DeviceDetailPage() {
         <button className="btn-ghost" onClick={load}>
           <RefreshCw size={14} /> Refresh
         </button>
-        {device.status !== 'stolen' && device.status !== 'locked' && (
+        {device.status !== 'stolen' && device.status !== 'locked' && device.status !== 'recovering' && (
           <button className="btn-danger" onClick={() => setModal('flag')}>
             <ShieldAlert size={14} /> Flag as Stolen
           </button>
@@ -144,6 +145,12 @@ export default function DeviceDetailPage() {
           <button className="btn-success" onClick={() => setModal('recover')}>
             <Unlock size={14} /> Recover Device
           </button>
+        )}
+        {device.status === 'recovering' && (
+          <span className="badge-recovering">
+            <Loader size={11} className="animate-spin" />
+            Recovery in progress — waiting for agent to decrypt
+          </span>
         )}
       </div>
 
