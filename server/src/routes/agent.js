@@ -109,6 +109,10 @@ router.post('/command-ack', agentAuth, async (req, res) => {
       await pool.query("UPDATE devices SET status = 'locked' WHERE id = $1", [device.id]);
     } else if (cmdType === 'unlock') {
       await pool.query("UPDATE devices SET status = 'active' WHERE id = $1", [device.id]);
+    } else if (cmdType === 'track') {
+      await pool.query("UPDATE devices SET status = 'tracking' WHERE id = $1", [device.id]);
+    } else if (cmdType === 'stop_track') {
+      await pool.query("UPDATE devices SET status = 'active' WHERE id = $1", [device.id]);
     }
   }
 
@@ -141,6 +145,40 @@ router.post('/deadman-report', agentAuth, async (req, res) => {
   await pool.query(
     'INSERT INTO audit_log (device_id, action, detail) VALUES ($1, $2, $3)',
     [device.id, 'agent_deadman_lockdown_confirmed', { source: 'deadman_switch' }]
+  );
+
+  res.json({ ok: true });
+});
+
+/**
+ * Location report — the agent calls this periodically when in tracking mode.
+ * Stores the geolocation data for map display and history.
+ */
+router.post('/location', agentAuth, async (req, res) => {
+  const { hostname, mac_address, hardware_uuid, location } = req.body;
+  if (!hostname || !location) {
+    return res.status(400).json({ error: 'hostname and location required' });
+  }
+
+  const device = await findDevice(hostname, mac_address, hardware_uuid);
+  if (!device) return res.status(404).json({ error: 'Device not registered' });
+
+  const {
+    latitude, longitude, accuracy_meters, source,
+    city, region, country, ip, wifi_count,
+  } = location;
+
+  await pool.query(
+    `INSERT INTO location_reports
+       (device_id, latitude, longitude, accuracy_meters, source,
+        city, region, country, ip_address, wifi_count, raw_data)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    [
+      device.id, latitude, longitude, accuracy_meters || null,
+      source || 'ip', city || null, region || null, country || null,
+      ip || null, wifi_count || null,
+      JSON.stringify(location),
+    ]
   );
 
   res.json({ ok: true });

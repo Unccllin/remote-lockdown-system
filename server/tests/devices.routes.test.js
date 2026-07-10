@@ -254,3 +254,155 @@ describe('POST /api/devices/:id/recover', () => {
     expect(releaseCall).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/devices/:id/track
+// ---------------------------------------------------------------------------
+describe('POST /api/devices/:id/track', () => {
+  const app = createApp();
+
+  test('queues track command for active device', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    const cmd = { id: 'cmd-1', command_type: 'track' };
+
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+    mockPool.query.setResult('INSERT INTO commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/track')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.command.command_type).toBe('track');
+
+    // Verify audit log entry
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') &&
+           c[1].includes('start_tracking')
+    );
+    expect(auditCall).toBeDefined();
+  });
+
+  test('rejects if device is already tracking', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'tracking' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/track')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(409);
+  });
+
+  test('returns 404 if device not found', async () => {
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [] });
+
+    const res = await request(app)
+      .post('/api/devices/nonexistent/track')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/devices/:id/stop-track
+// ---------------------------------------------------------------------------
+describe('POST /api/devices/:id/stop-track', () => {
+  const app = createApp();
+
+  test('queues stop_track command for tracking device', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'tracking' };
+    const cmd = { id: 'cmd-1', command_type: 'stop_track' };
+
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+    mockPool.query.setResult('INSERT INTO commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/stop-track')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.command.command_type).toBe('stop_track');
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') &&
+           c[1].includes('stop_tracking')
+    );
+    expect(auditCall).toBeDefined();
+  });
+
+  test('rejects if device is not tracking', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/stop-track')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(409);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/devices/:id/locations
+// ---------------------------------------------------------------------------
+describe('GET /api/devices/:id/locations', () => {
+  const app = createApp();
+
+  test('returns location history', async () => {
+    const locations = [
+      { id: 'loc-1', latitude: 37.77, longitude: -122.41, source: 'wifi', reported_at: '2025-01-01T00:00:00Z' },
+      { id: 'loc-2', latitude: 40.71, longitude: -74.00, source: 'ip', reported_at: '2025-01-02T00:00:00Z' },
+    ];
+    mockPool.query.setResult('SELECT * FROM location_reports', { rows: locations });
+
+    const res = await request(app)
+      .get('/api/devices/dev-1/locations')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body[0].latitude).toBe(37.77);
+  });
+
+  test('returns empty array if no locations', async () => {
+    mockPool.query.setResult('SELECT * FROM location_reports', { rows: [] });
+
+    const res = await request(app)
+      .get('/api/devices/dev-1/locations')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/devices/:id/location/latest
+// ---------------------------------------------------------------------------
+describe('GET /api/devices/:id/location/latest', () => {
+  const app = createApp();
+
+  test('returns latest location', async () => {
+    const loc = { id: 'loc-1', latitude: 37.77, longitude: -122.41, source: 'wifi', city: 'SF' };
+    mockPool.query.setResult('SELECT * FROM location_reports', { rows: [loc] });
+
+    const res = await request(app)
+      .get('/api/devices/dev-1/location/latest')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.city).toBe('SF');
+  });
+
+  test('returns 404 if no location data', async () => {
+    mockPool.query.setResult('SELECT * FROM location_reports', { rows: [] });
+
+    const res = await request(app)
+      .get('/api/devices/dev-1/location/latest')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(404);
+  });
+});

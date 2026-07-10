@@ -481,3 +481,122 @@ class TestCheckin:
 
             result = agent.checkin(cfg)
             assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Geolocation
+# ---------------------------------------------------------------------------
+
+class TestGeolocation:
+    def test_get_ip_geolocation_returns_location(self):
+        """IP geolocation should return lat/long from ip-api.com."""
+        with patch.object(agent, 'requests') as mock_requests:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "status": "success",
+                "lat": 37.7749,
+                "lon": -122.4194,
+                "city": "San Francisco",
+                "regionName": "CA",
+                "countryCode": "US",
+                "query": "1.2.3.4",
+            }
+            mock_resp.raise_for_status = MagicMock()
+            mock_requests.get.return_value = mock_resp
+
+            result = agent.get_ip_geolocation()
+            assert result is not None
+            assert result["latitude"] == 37.7749
+            assert result["longitude"] == -122.4194
+            assert result["source"] == "ip"
+            assert result["city"] == "San Francisco"
+
+    def test_get_ip_geolocation_returns_none_on_failure(self):
+        with patch.object(agent, 'requests') as mock_requests:
+            mock_requests.get.side_effect = Exception("Network error")
+            result = agent.get_ip_geolocation()
+            assert result is None
+
+    def test_get_geolocation_falls_back_to_ip_without_api_key(self, cfg):
+        """Without a Google API key, should fall back to IP geolocation."""
+        cfg["google_api_key"] = ""
+        with patch.object(agent, 'get_ip_geolocation') as mock_ip:
+            mock_ip.return_value = {"latitude": 1, "longitude": 2, "source": "ip"}
+            result = agent.get_geolocation(cfg)
+            assert result["source"] == "ip"
+            mock_ip.assert_called_once()
+
+    def test_get_geolocation_uses_wifi_with_api_key(self, cfg):
+        """With a Google API key and WiFi networks, should use WiFi triangulation."""
+        cfg["google_api_key"] = "test-key"
+        with patch.object(agent, 'scan_wifi_networks') as mock_scan, \
+             patch.object(agent, 'requests') as mock_requests:
+            mock_scan.return_value = [{"bssid": "AA:BB:CC:DD:EE:FF", "signal": 80}]
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "location": {"lat": 37.77, "lng": -122.41},
+                "accuracy": 25,
+            }
+            mock_resp.raise_for_status = MagicMock()
+            mock_requests.post.return_value = mock_resp
+
+            result = agent.get_geolocation(cfg)
+            assert result["source"] == "wifi"
+            assert result["latitude"] == 37.77
+            assert result["longitude"] == -122.41
+            assert result["accuracy_meters"] == 25
+
+    def test_report_location_sends_to_server(self, cfg):
+        with patch.object(agent, 'get_geolocation') as mock_geo, \
+             patch.object(agent, 'requests') as mock_requests:
+            mock_geo.return_value = {
+                "latitude": 37.77,
+                "longitude": -122.41,
+                "source": "wifi",
+                "accuracy_meters": 25,
+            }
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_requests.post.return_value = mock_resp
+
+            result = agent.report_location(cfg)
+            assert result is not None
+            assert result["latitude"] == 37.77
+            mock_requests.post.assert_called_once()
+            call_args = mock_requests.post.call_args
+            assert 'location' in call_args[1]['json']
+
+    def test_report_location_returns_none_on_failure(self, cfg):
+        with patch.object(agent, 'get_geolocation') as mock_geo, \
+             patch.object(agent, 'requests') as mock_requests:
+            mock_geo.return_value = {"latitude": 1, "longitude": 2, "source": "ip"}
+            import requests as real_requests
+            mock_requests.post.side_effect = real_requests.RequestException("Network error")
+            mock_requests.RequestException = real_requests.RequestException
+
+            result = agent.report_location(cfg)
+            assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Track command handlers
+# ---------------------------------------------------------------------------
+
+class TestTrackHandlers:
+    def test_handle_track_reports_location_and_acks(self, cfg):
+        with patch.object(agent, 'report_location') as mock_loc, \
+             patch.object(agent, 'ack_command') as mock_ack:
+            agent.handle_track(cfg, {"id": "cmd-1"})
+            mock_loc.assert_called_once_with(cfg)
+            mock_ack.assert_called_once_with(cfg, "cmd-1", "executed")
+
+    def test_handle_stop_track_acks(self, cfg):
+        with patch.object(agent, 'ack_command') as mock_ack:
+            agent.handle_stop_track(cfg, {"id": "cmd-1"})
+            mock_ack.assert_called_once_with(cfg, "cmd-1", "executed")
+
+    def test_command_handlers_include_track(self):
+        assert "track" in agent.COMMAND_HANDLERS
+        assert "stop_track" in agent.COMMAND_HANDLERS
+        assert agent.COMMAND_HANDLERS["track"] == agent.handle_track
+        assert agent.COMMAND_HANDLERS["stop_track"] == agent.handle_stop_track

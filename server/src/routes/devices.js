@@ -122,4 +122,81 @@ router.post('/:id/recover', requireAuth, async (req, res) => {
   });
 });
 
+/**
+ * Start covert tracking — sends a 'track' command to the agent.
+ * The device remains fully usable; the agent silently reports geolocation.
+ */
+router.post('/:id/track', requireAuth, async (req, res) => {
+  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
+  const device = devResult.rows[0];
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (device.status === 'tracking') {
+    return res.status(409).json({ error: 'Device is already being tracked' });
+  }
+
+  const cmd = await pool.query(
+    'INSERT INTO commands (device_id, command_type) VALUES ($1, $2) RETURNING *',
+    [device.id, 'track']
+  );
+  await pool.query(
+    'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
+    [device.id, req.admin.id, 'start_tracking', { command_id: cmd.rows[0].id }]
+  );
+
+  res.json({ device, command: cmd.rows[0] });
+});
+
+/**
+ * Stop covert tracking — sends a 'stop_track' command to the agent.
+ */
+router.post('/:id/stop-track', requireAuth, async (req, res) => {
+  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
+  const device = devResult.rows[0];
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (device.status !== 'tracking') {
+    return res.status(409).json({ error: 'Device is not being tracked' });
+  }
+
+  const cmd = await pool.query(
+    'INSERT INTO commands (device_id, command_type) VALUES ($1, $2) RETURNING *',
+    [device.id, 'stop_track']
+  );
+  await pool.query(
+    'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
+    [device.id, req.admin.id, 'stop_tracking', { command_id: cmd.rows[0].id }]
+  );
+
+  res.json({ device, command: cmd.rows[0] });
+});
+
+/**
+ * Get location history for a device.
+ */
+router.get('/:id/locations', requireAuth, async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+  const result = await pool.query(
+    `SELECT * FROM location_reports
+     WHERE device_id = $1
+     ORDER BY reported_at DESC
+     LIMIT $2`,
+    [req.params.id, limit]
+  );
+  res.json(result.rows);
+});
+
+/**
+ * Get the latest known location for a device.
+ */
+router.get('/:id/location/latest', requireAuth, async (req, res) => {
+  const result = await pool.query(
+    `SELECT * FROM location_reports
+     WHERE device_id = $1
+     ORDER BY reported_at DESC
+     LIMIT 1`,
+    [req.params.id]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: 'No location data' });
+  res.json(result.rows[0]);
+});
+
 module.exports = router;

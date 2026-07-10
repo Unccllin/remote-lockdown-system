@@ -45,6 +45,9 @@
   .badge-recovering {
     @apply badge bg-amber-900/60 text-amber-400;
   }
+  .badge-tracking {
+    @apply badge bg-cyan-900/60 text-cyan-400;
+  }
   .badge-inactive {
     @apply badge bg-slate-700 text-slate-400;
   }

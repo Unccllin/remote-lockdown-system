@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ShieldAlert, Unlock, RefreshCw, ClipboardList, Loader } from 'lucide-react';
+import { ArrowLeft, ShieldAlert, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
@@ -11,6 +11,7 @@ const STATUS_BADGE = {
   stolen: 'badge-stolen',
   locked: 'badge-locked',
   recovering: 'badge-recovering',
+  tracking: 'badge-tracking',
   inactive: 'badge-inactive',
 };
 
@@ -19,6 +20,7 @@ export default function DeviceDetailPage() {
   const navigate = useNavigate();
   const [device, setDevice] = useState(null);
   const [audit, setAudit] = useState([]);
+  const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [acting, setActing] = useState(false);
@@ -26,12 +28,14 @@ export default function DeviceDetailPage() {
   async function load() {
     setLoading(true);
     try {
-      const [devRes, auditRes] = await Promise.all([
+      const [devRes, auditRes, locRes] = await Promise.all([
         api.get(`/devices/${id}`),
         api.get(`/audit?device_id=${id}&limit=20`),
+        api.get(`/devices/${id}/locations?limit=20`).catch(() => ({ data: [] })),
       ]);
       setDevice(devRes.data);
       setAudit(auditRes.data);
+      setLocations(locRes.data);
     } catch {
       toast.error('Failed to load device');
     } finally {
@@ -69,8 +73,38 @@ export default function DeviceDetailPage() {
     }
   }
 
+  async function startTracking() {
+    setActing(true);
+    try {
+      await api.post(`/devices/${id}/track`);
+      toast.success('Tracking activated — agent will report location silently');
+      setModal(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Action failed');
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function stopTracking() {
+    setActing(true);
+    try {
+      await api.post(`/devices/${id}/stop-track`);
+      toast.success('Tracking stopped — device returned to active status');
+      setModal(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Action failed');
+    } finally {
+      setActing(false);
+    }
+  }
+
   if (loading) return <div className="text-slate-500 text-center py-32">Loading...</div>;
   if (!device) return <div className="text-slate-500 text-center py-32">Device not found.</div>;
+
+  const latestLocation = locations[0];
 
   return (
     <div>
@@ -92,6 +126,26 @@ export default function DeviceDetailPage() {
           confirmLabel={acting ? 'Processing…' : 'Recover Device'}
           confirmValue={device.hostname}
           onConfirm={recover}
+          onCancel={() => setModal(null)}
+          danger={false}
+        />
+      )}
+      {modal === 'track' && (
+        <ConfirmModal
+          title="Start Covert Tracking"
+          description={`This will activate covert tracking on "${device.hostname}". The device remains fully usable — the agent will silently report geolocation. The user will not be notified.`}
+          confirmLabel={acting ? 'Processing…' : 'Start Tracking'}
+          onConfirm={startTracking}
+          onCancel={() => setModal(null)}
+          danger={false}
+        />
+      )}
+      {modal === 'stop_track' && (
+        <ConfirmModal
+          title="Stop Tracking"
+          description={`Stop covert tracking on "${device.hostname}"? The device will return to normal active status.`}
+          confirmLabel={acting ? 'Processing…' : 'Stop Tracking'}
+          onConfirm={stopTracking}
           onCancel={() => setModal(null)}
           danger={false}
         />
@@ -132,6 +186,44 @@ export default function DeviceDetailPage() {
         </div>
       </div>
 
+      {/* Latest location card */}
+      {latestLocation && (
+        <div className="card mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <MapPin size={16} className="text-cyan-400" />
+            <h2 className="font-semibold text-slate-200 text-sm">Latest Location</h2>
+          </div>
+          <div className="grid grid-cols-4 gap-4">
+            <div>
+              <p className="text-xs text-slate-400">Latitude</p>
+              <p className="text-sm font-mono text-slate-200">{latestLocation.latitude?.toFixed(4) ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400">Longitude</p>
+              <p className="text-sm font-mono text-slate-200">{latestLocation.longitude?.toFixed(4) ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400">Source / Accuracy</p>
+              <p className="text-sm text-slate-200">
+                {latestLocation.source}
+                {latestLocation.accuracy_meters ? ` (~${Math.round(latestLocation.accuracy_meters)}m)` : ''}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400">Reported</p>
+              <p className="text-sm text-slate-200">
+                {formatDistanceToNow(new Date(latestLocation.reported_at), { addSuffix: true })}
+              </p>
+            </div>
+          </div>
+          {latestLocation.city && (
+            <p className="text-xs text-slate-400 mt-3">
+              {latestLocation.city}, {latestLocation.region}, {latestLocation.country}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-3 mb-8">
         <button className="btn-ghost" onClick={load}>
           <RefreshCw size={14} /> Refresh
@@ -139,6 +231,16 @@ export default function DeviceDetailPage() {
         {device.status !== 'stolen' && device.status !== 'locked' && device.status !== 'recovering' && (
           <button className="btn-danger" onClick={() => setModal('flag')}>
             <ShieldAlert size={14} /> Flag as Stolen
+          </button>
+        )}
+        {device.status !== 'tracking' && device.status !== 'stolen' && device.status !== 'locked' && device.status !== 'recovering' && (
+          <button className="btn-ghost text-cyan-400 border-cyan-700/50 hover:bg-cyan-900/20" onClick={() => setModal('track')}>
+            <Crosshair size={14} /> Start Tracking
+          </button>
+        )}
+        {device.status === 'tracking' && (
+          <button className="btn-ghost text-cyan-400 border-cyan-700/50 hover:bg-cyan-900/20" onClick={() => setModal('stop_track')}>
+            <Square size={14} /> Stop Tracking
           </button>
         )}
         {(device.status === 'stolen' || device.status === 'locked') && (
@@ -153,6 +255,33 @@ export default function DeviceDetailPage() {
           </span>
         )}
       </div>
+
+      {/* Location history */}
+      {locations.length > 0 && (
+        <div className="card mb-6">
+          <div className="flex items-center gap-2 mb-4">
+            <MapPin size={16} className="text-slate-400" />
+            <h2 className="font-semibold text-slate-200 text-sm">Location History</h2>
+          </div>
+          <ul className="space-y-2">
+            {locations.map((loc) => (
+              <li key={loc.id} className="flex items-start gap-4 py-2 border-b border-slate-800/50 last:border-0">
+                <span className="text-xs text-slate-500 w-36 shrink-0">
+                  {format(new Date(loc.reported_at), 'MMM d, HH:mm:ss')}
+                </span>
+                <span className="text-xs font-mono text-cyan-400 shrink-0">
+                  {loc.latitude?.toFixed(4)}, {loc.longitude?.toFixed(4)}
+                </span>
+                <span className="text-xs text-slate-500">
+                  {loc.source}
+                  {loc.city ? ` — ${loc.city}, ${loc.country}` : ''}
+                  {loc.accuracy_meters ? ` (~${Math.round(loc.accuracy_meters)}m)` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="card">
         <div className="flex items-center gap-2 mb-4">

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Monitor, RefreshCw, Plus, WifiOff, Wifi, ShieldOff, Loader } from 'lucide-react';
+import { Monitor, RefreshCw, Plus, WifiOff, Wifi, ShieldOff, Loader, MapPin, Crosshair } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
@@ -10,6 +10,7 @@ const STATUS_BADGE = {
   stolen: 'badge-stolen',
   locked: 'badge-locked',
   recovering: 'badge-recovering',
+  tracking: 'badge-tracking',
   inactive: 'badge-inactive',
 };
 
@@ -18,6 +19,7 @@ const STATUS_ICON = {
   stolen: <ShieldOff size={11} />,
   locked: <ShieldOff size={11} />,
   recovering: <Loader size={11} className="animate-spin" />,
+  tracking: <Crosshair size={11} />,
   inactive: <WifiOff size={11} />,
 };
 
@@ -46,6 +48,7 @@ export default function DevicesPage() {
     stolen: devices.filter((d) => d.status === 'stolen').length,
     locked: devices.filter((d) => d.status === 'locked').length,
     recovering: devices.filter((d) => d.status === 'recovering').length,
+    tracking: devices.filter((d) => d.status === 'tracking').length,
   };
 
   return (
@@ -67,7 +70,7 @@ export default function DevicesPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-5 gap-4 mb-6">
         <div className="card">
           <p className="text-xs text-slate-400 mb-1">Active</p>
           <p className="text-3xl font-bold text-emerald-400">{stats.active}</p>
@@ -75,6 +78,10 @@ export default function DevicesPage() {
         <div className="card">
           <p className="text-xs text-slate-400 mb-1">Stolen / Locked</p>
           <p className="text-3xl font-bold text-red-400">{stats.stolen + stats.locked}</p>
+        </div>
+        <div className="card">
+          <p className="text-xs text-slate-400 mb-1">Tracking</p>
+          <p className="text-3xl font-bold text-cyan-400">{stats.tracking}</p>
         </div>
         <div className="card">
           <p className="text-xs text-slate-400 mb-1">Recovering</p>

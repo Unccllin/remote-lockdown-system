@@ -1,13 +1,21 @@
 """
-Remote Lockdown Agent
----------------------
+Remote Device Tracking & Lockdown Agent
+---------------------------------------
 Runs on the managed device. Polls the server for pending commands and executes them.
+
+OPERATING MODES:
+  - active:  Normal operation. Agent checks in, no visible action.
+  - track:   Covert tracking. Agent reports geolocation silently. User is unaware.
+             Device remains fully usable. No lock screen, no encryption.
+  - lockdown: Full lockdown. Encrypts folder, locks screen, blocks usage.
+  - recover: Unlock device, restore files.
 
 SAFETY RULES (enforced in code):
   - Only encrypts LOCKDOWN_FOLDER, never touches system files or full disk.
   - Decryption key is NEVER stored locally after locking — it lives only on the server.
   - All communication over TLS (verify=True in requests).
   - Lock state persists across reboots via a sentinel file.
+  - In track mode, NO visible action is taken. Agent is silent.
 
 REQUIREMENTS:
   pip install cryptography requests
@@ -18,6 +26,9 @@ USAGE:
 
   To run as a background service on Windows, use NSSM or Task Scheduler.
   On Linux, use a systemd unit file.
+
+  For silent operation (no console window), run with:
+    pythonw agent.py --silent
 """
 
 import os
@@ -68,6 +79,8 @@ def load_config() -> dict:
             os.environ.get("LOCK_SENTINEL", section.get("lock_sentinel", str(Path(__file__).parent / ".locked")))
         ),
         "verify_tls": section.get("verify_tls", "true").lower() != "false",
+        "google_api_key": os.environ.get("GOOGLE_API_KEY", section.get("google_api_key", "")),
+        "location_interval": int(os.environ.get("LOCATION_INTERVAL", section.get("location_interval", "300"))),
     }
 
 # ---------------------------------------------------------------------------
@@ -223,6 +236,168 @@ def get_hardware_uuid() -> str:
     return str(uuid.getnode())
 
 # ---------------------------------------------------------------------------
+# Geolocation — WiFi-based triangulation + IP fallback
+# ---------------------------------------------------------------------------
+
+def scan_wifi_networks() -> list[dict]:
+    """Scan nearby WiFi networks. Returns list of {bssid, ssid, signal, channel}.
+
+    Uses platform-native tools:
+      - Windows: netsh wlan show networks mode=bssid
+      - Linux:   nmcli dev wifi list
+      - macOS:   /System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s
+    """
+    networks = []
+    system = platform.system()
+    try:
+        if system == "Windows":
+            output = subprocess.check_output(
+                ["netsh", "wlan", "show", "networks", "mode=bssid"],
+                timeout=10, stderr=subprocess.DEVNULL
+            ).decode("utf-8", errors="replace")
+            # Parse netsh output — blocks separated by BSSID lines
+            current_ssid = None
+            for line in output.splitlines():
+                line = line.strip()
+                if line.startswith("SSID ") and ":" in line:
+                    current_ssid = line.split(":", 1)[1].strip()
+                elif "BSSID" in line and ":" in line:
+                    parts = line.split(":", 1)[1].strip().split()
+                    bssid = parts[0] if parts else ""
+                    networks.append({"ssid": current_ssid, "bssid": bssid})
+                elif "Signal" in line and ":" in line:
+                    pct = line.split(":")[-1].strip().replace("%", "")
+                    if networks and pct:
+                        networks[-1]["signal"] = int(pct)
+        elif system == "Linux":
+            output = subprocess.check_output(
+                ["nmcli", "-t", "-f", "BSSID,SSID,SIGNAL,FREQ", "dev", "wifi", "list"],
+                timeout=10, stderr=subprocess.DEVNULL
+            ).decode("utf-8", errors="replace")
+            for line in output.splitlines():
+                parts = line.split(":")
+                if len(parts) >= 4:
+                    bssid = ":".join(parts[:6])
+                    ssid = parts[6] if len(parts) > 6 else ""
+                    signal = int(parts[-2]) if parts[-2].isdigit() else 0
+                    freq = parts[-1]
+                    networks.append({"ssid": ssid, "bssid": bssid, "signal": signal, "frequency": freq})
+        elif system == "Darwin":
+            output = subprocess.check_output(
+                ["/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport", "-s"],
+                timeout=10, stderr=subprocess.DEVNULL
+            ).decode("utf-8", errors="replace")
+            for line in output.splitlines()[1:]:
+                parts = line.split()
+                if len(parts) >= 5:
+                    networks.append({"ssid": parts[0], "bssid": parts[1], "signal": int(parts[2]) if parts[2].isdigit() else 0})
+    except Exception as e:
+        log.warning("WiFi scan failed: %s", e)
+    return networks
+
+
+def get_ip_geolocation() -> dict | None:
+    """Fallback: get rough location from IP address using ip-api.com (free, no key)."""
+    try:
+        resp = requests.get("http://ip-api.com/json/", timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") == "success":
+            return {
+                "latitude": data.get("lat"),
+                "longitude": data.get("lon"),
+                "city": data.get("city"),
+                "region": data.get("regionName"),
+                "country": data.get("countryCode"),
+                "ip": data.get("query"),
+                "source": "ip",
+                "accuracy": "city",
+            }
+    except Exception as e:
+        log.warning("IP geolocation failed: %s", e)
+    return None
+
+
+def get_geolocation(cfg: dict) -> dict | None:
+    """Get device geolocation. Tries WiFi triangulation first, falls back to IP.
+
+    WiFi triangulation uses Google Geolocation API if GOOGLE_API_KEY is set,
+    otherwise falls back to IP-based geolocation.
+    """
+    # Try WiFi-based geolocation if Google API key is configured
+    google_key = os.environ.get("GOOGLE_API_KEY") or cfg.get("google_api_key")
+    if google_key:
+        wifi = scan_wifi_networks()
+        if wifi:
+            try:
+                wifi_points = []
+                for net in wifi[:20]:  # Max 20 access points
+                    point = {"macAddress": net["bssid"]}
+                    if "signal" in net:
+                        # Google expects signal strength in dBm (negative).
+                        # netsh gives percentage, convert approximately.
+                        pct = net["signal"]
+                        if pct > 0:
+                            point["signalStrength"] = -(100 - pct)
+                    if "frequency" in net:
+                        point["channel"] = int(float(net["frequency"]) * 1000)
+                    wifi_points.append(point)
+
+                resp = requests.post(
+                    f"https://www.googleapis.com/geolocation/v1/geolocate?key={google_key}",
+                    json={"wifiAccessPoints": wifi_points},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                loc = data.get("location", {})
+                acc = data.get("accuracy", 0)
+                return {
+                    "latitude": loc.get("lat"),
+                    "longitude": loc.get("lng"),
+                    "accuracy_meters": acc,
+                    "source": "wifi",
+                    "wifi_count": len(wifi_points),
+                }
+            except Exception as e:
+                log.warning("WiFi geolocation failed: %s", e)
+
+    # Fallback to IP-based geolocation
+    return get_ip_geolocation()
+
+
+def report_location(cfg: dict) -> dict | None:
+    """Collect geolocation data and report it to the server."""
+    location = get_geolocation(cfg)
+    if not location:
+        log.warning("Could not determine geolocation")
+        return None
+
+    try:
+        resp = requests.post(
+            f"{cfg['server_url']}/api/agent/location",
+            json={
+                "hostname": cfg["hostname"],
+                "mac_address": get_mac_address(),
+                "hardware_uuid": get_hardware_uuid(),
+                "location": location,
+            },
+            headers={"x-agent-key": cfg["agent_key"]},
+            timeout=15,
+            verify=cfg["verify_tls"],
+        )
+        resp.raise_for_status()
+        log.info("Location reported: %.4f, %.4f (%s, ~%sm)",
+                 location.get("latitude", 0),
+                 location.get("longitude", 0),
+                 location.get("source", "unknown"),
+                 location.get("accuracy_meters", location.get("accuracy", "?")))
+        return location
+    except requests.RequestException as e:
+        log.warning("Location report failed: %s", e)
+        return None
+
+# ---------------------------------------------------------------------------
 # Server communication
 # ---------------------------------------------------------------------------
 
@@ -340,10 +515,25 @@ def handle_status(cfg: dict, command: dict) -> None:
     log.info("STATUS command received — reporting OK")
     ack_command(cfg, command["id"], "executed")
 
+def handle_track(cfg: dict, command: dict) -> None:
+    """Switch to covert tracking mode. No visible action — just report location."""
+    log.info("TRACK command received — entering covert tracking mode")
+    # Report location immediately
+    report_location(cfg)
+    # ACK as executed — server will set status to 'tracking'
+    ack_command(cfg, command["id"], "executed")
+
+def handle_stop_track(cfg: dict, command: dict) -> None:
+    """Exit covert tracking mode — return to normal active status."""
+    log.info("STOP_TRACK command received — exiting tracking mode")
+    ack_command(cfg, command["id"], "executed")
+
 COMMAND_HANDLERS = {
     "lockdown": handle_lockdown,
     "unlock": handle_unlock,
     "status": handle_status,
+    "track": handle_track,
+    "stop_track": handle_stop_track,
 }
 
 # ---------------------------------------------------------------------------
@@ -440,9 +630,18 @@ def main() -> None:
         log.error("AGENT_SHARED_KEY is not set. Exiting.")
         sys.exit(1)
 
+    # --silent flag: suppress stdout logging for covert operation
+    silent = "--silent" in sys.argv
+    if silent:
+        logging.disable(logging.INFO)
+        log.info("Running in silent mode — stdout logging suppressed")
+
     log.info("Agent starting — hostname=%s server=%s poll=%ss",
              cfg["hostname"], cfg["server_url"], cfg["poll_interval"])
     startup_check(cfg)
+
+    last_location_report = 0.0
+    current_status = "active"
 
     while True:
         # Update heartbeat so watchdog knows agent is alive
@@ -460,7 +659,8 @@ def main() -> None:
             report_deadman_key(cfg)
 
             # Update dead man's timer with current server-reported status
-            update_deadman_timer(data.get("status", "active"))
+            current_status = data.get("status", "active")
+            update_deadman_timer(current_status)
 
             command = data.get("command")
             if command:
@@ -474,6 +674,14 @@ def main() -> None:
                         ack_command(cfg, command["id"], "failed")
                 else:
                     log.warning("Unknown command type: %s", cmd_type)
+
+            # If device is in tracking mode, report location periodically
+            if current_status == "tracking":
+                now = time.time()
+                if now - last_location_report >= cfg["location_interval"]:
+                    report_location(cfg)
+                    last_location_report = now
+
         time.sleep(cfg["poll_interval"])
 
 if __name__ == "__main__":

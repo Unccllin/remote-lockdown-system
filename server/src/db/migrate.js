@@ -47,6 +47,25 @@ const schema = `
     detail JSONB,
     timestamp TIMESTAMPTZ DEFAULT NOW()
   );
+
+  CREATE TABLE IF NOT EXISTS location_reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
+    accuracy_meters DOUBLE PRECISION,
+    source VARCHAR(20) DEFAULT 'ip',
+    city VARCHAR(255),
+    region VARCHAR(255),
+    country VARCHAR(10),
+    ip_address VARCHAR(100),
+    wifi_count INT,
+    raw_data JSONB,
+    reported_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_location_reports_device_id ON location_reports(device_id);
+  CREATE INDEX IF NOT EXISTS idx_location_reports_reported_at ON location_reports(reported_at DESC);
 `;
 
 async function migrate() {

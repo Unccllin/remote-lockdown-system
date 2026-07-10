@@ -333,3 +333,106 @@ describe('POST /api/agent/deadman-report', () => {
     expect(auditCall).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/agent/location
+// ---------------------------------------------------------------------------
+describe('POST /api/agent/location', () => {
+  const app = createApp();
+
+  test('rejects without agent key', async () => {
+    const res = await request(app)
+      .post('/api/agent/location')
+      .send({ hostname: 'DEV-001', location: { latitude: 1, longitude: 2 } });
+    expect(res.status).toBe(401);
+  });
+
+  test('returns 400 if hostname or location missing', async () => {
+    const res1 = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ location: { latitude: 1 } });
+    expect(res1.status).toBe(400);
+
+    const res2 = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+    expect(res2.status).toBe(400);
+  });
+
+  test('returns 404 if device not registered', async () => {
+    const res = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'NOPE', location: { latitude: 1, longitude: 2 } });
+    expect(res.status).toBe(404);
+  });
+
+  test('stores location report', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'tracking' };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+
+    const res = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        mac_address: 'AA:BB:CC:DD:EE:FF',
+        hardware_uuid: 'hw-uuid-1',
+        location: {
+          latitude: 37.7749,
+          longitude: -122.4194,
+          source: 'wifi',
+          accuracy_meters: 25,
+          city: 'San Francisco',
+          region: 'CA',
+          country: 'US',
+          wifi_count: 8,
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    // Verify location was stored
+    const insertCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO location_reports')
+    );
+    expect(insertCall).toBeDefined();
+    expect(insertCall[1]).toContain(37.7749);
+    expect(insertCall[1]).toContain(-122.4194);
+    expect(insertCall[1]).toContain('wifi');
+  });
+
+  test('stores IP-based location with city info', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'tracking' };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+
+    const res = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        location: {
+          latitude: 40.7128,
+          longitude: -74.0060,
+          source: 'ip',
+          city: 'New York',
+          region: 'NY',
+          country: 'US',
+          ip: '1.2.3.4',
+          accuracy: 'city',
+        },
+      });
+
+    expect(res.status).toBe(200);
+
+    const insertCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO location_reports')
+    );
+    expect(insertCall).toBeDefined();
+    expect(insertCall[1]).toContain('New York');
+    expect(insertCall[1]).toContain('1.2.3.4');
+  });
+});

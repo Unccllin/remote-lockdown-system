@@ -122,4 +122,65 @@ describe('DeviceDetailPage', () => {
 
     expect(screen.queryByText('Flag as Stolen')).not.toBeInTheDocument();
   });
+
+  it('shows Start Tracking button when status is active', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1')) {
+        return Promise.resolve({ data: baseDevice });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('Start Tracking')).toBeInTheDocument();
+    });
+  });
+
+  it('shows Stop Tracking button when status is tracking', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'tracking' } });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('Stop Tracking')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Start Tracking')).not.toBeInTheDocument();
+  });
+
+  it('shows latest location card when location data exists', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: baseDevice });
+      }
+      if (url.includes('/locations')) {
+        return Promise.resolve({
+          data: [{
+            id: 'loc-1',
+            latitude: 37.7749,
+            longitude: -122.4194,
+            source: 'wifi',
+            accuracy_meters: 25,
+            city: 'San Francisco',
+            region: 'CA',
+            country: 'US',
+            reported_at: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('Latest Location')).toBeInTheDocument();
+    }, { timeout: 3000 });
+  });
 });

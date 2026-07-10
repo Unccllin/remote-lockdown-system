@@ -77,7 +77,7 @@ describe('DevicesPage', () => {
     });
   });
 
-  it('shows 4 stat cards (Active, Stolen/Locked, Recovering, Total)', async () => {
+  it('shows 5 stat cards (Active, Stolen/Locked, Tracking, Recovering, Total)', async () => {
     api.get.mockResolvedValue({
       data: [
         { id: '1', hostname: 'DEV-001', owner_name: 'Alice', status: 'active', last_checkin: null, enrolled_at: '2025-01-01' },
@@ -92,6 +92,7 @@ describe('DevicesPage', () => {
 
     expect(screen.getByText('Active')).toBeInTheDocument();
     expect(screen.getByText('Stolen / Locked')).toBeInTheDocument();
+    expect(screen.getByText('Tracking')).toBeInTheDocument();
     expect(screen.getByText('Recovering')).toBeInTheDocument();
     expect(screen.getByText('Total')).toBeInTheDocument();
   });

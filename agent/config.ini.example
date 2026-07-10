@@ -6,3 +6,9 @@ poll_interval = 30
 lockdown_folder = C:\Users\FieldAgent\SecureData
 lock_sentinel = C:\ProgramData\LockdownAgent\.locked
 verify_tls = true
+
+# Geolocation settings (for covert tracking mode)
+# Google API key for WiFi triangulation (optional — falls back to IP geolocation)
+google_api_key =
+# How often to report location when in tracking mode (seconds, default 300 = 5min)
+location_interval = 300
