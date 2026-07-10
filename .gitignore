@@ -11,3 +11,6 @@ agent/.deadman_key
 agent/.heartbeat
 agent/.locked
 agent/logs/
+agent/.pytest_cache/
+server/coverage/
+dashboard/coverage/
