@@ -54,6 +54,35 @@ log = logging.getLogger("lockdown-agent")
 
 HP_WMI_NAMESPACE = r"root\hp\InstrumentedBIOS"
 
+# Dry-run mode: when True, all PowerShell/WMI calls are intercepted and
+# their commands are printed instead of executed. No BIOS changes happen.
+# Set via set_dry_run(True) or the DRY_RUN env var.
+_DRY_RUN = False
+
+# Simulated BIOS state for dry-run mode (mimics a typical HP EliteBook)
+_DRY_RUN_BIOS_STATE = {
+    "Setup Password": {"is_set": False},
+    "Network (PXE) Boot": "Enable",
+    "Network Boot": "Enable",
+    "USB Boot": "Enable",
+    "USB Storage Boot": "Enable",
+    "USB Floppy/CD Boot": "Enable",
+    "Legacy Boot Options": "Enable",
+    "Legacy Support": "Enable",
+    "Fast Boot": "Disable",
+    "Prompt for Admin password on F12 (Network Boot)": "Disable",
+    "F12 Boot Menu": "Enable",
+    "One-Time Boot Menu": "Enable",
+}
+
+
+def set_dry_run(enabled: bool) -> None:
+    """Enable or disable dry-run mode."""
+    global _DRY_RUN
+    _DRY_RUN = enabled
+    if enabled:
+        log.info("DRY RUN mode enabled — no BIOS changes will be made")
+
 # BIOS settings to apply during lockdown.
 # Each entry: (setting_name, lockdown_value)
 # We try each setting name — not all exist on every HP model.
@@ -98,6 +127,9 @@ SET_BIOS_RETURN_CODES = {
 
 def _run_powershell(script: str, timeout: int = 30) -> str:
     """Run a PowerShell command and return stdout. Raises on failure."""
+    if _DRY_RUN:
+        print(f"  [DRY-RUN] PowerShell: {script}")
+        return _dry_run_powershell_response(script)
     result = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True,
@@ -109,8 +141,48 @@ def _run_powershell(script: str, timeout: int = 30) -> str:
     return result.stdout.strip()
 
 
+def _dry_run_powershell_response(script: str) -> str:
+    """Return a simulated response for a PowerShell WMI query in dry-run mode."""
+    # Detect what kind of query this is and return simulated data
+    if "HP_BIOSSetting " in script and "Select-Object -First 1" in script:
+        # is_hp_machine check
+        return "Fast Boot"  # non-empty = HP machine detected
+    if "HP_BIOSPassword" in script and "IsSet" in script:
+        # _is_setup_password_set check
+        return "0"  # password not set
+    if "HP_BIOSEnumeration" in script and "CurrentValue" in script:
+        # _read_setting from enumeration
+        for name, val in _DRY_RUN_BIOS_STATE.items():
+            if f"Name='{name}'" in script:
+                return str(val)
+        return ""
+    if "HP_BIOSSetting" in script and ".Value" in script:
+        # _read_setting from BIOSSetting
+        for name, val in _DRY_RUN_BIOS_STATE.items():
+            if f"Name='{name}'" in script:
+                return str(val)
+        return ""
+    if "SetBIOSSetting" in script:
+        # _set_setting — simulate success and update dry-run state
+        # Parse the setting name from the script
+        for name in _DRY_RUN_BIOS_STATE:
+            if f"'{name}'" in script:
+                if name == "Setup Password":
+                    _DRY_RUN_BIOS_STATE[name]["is_set"] = True
+                else:
+                    # Parse the value — it's the second arg to SetBIOSSetting
+                    # Format: SetBIOSSetting('Name', '<utf-16/>Value', '<utf-16/>Password')
+                    # We just return 0 (success)
+                    pass
+                return "0"
+        return "0"
+    return ""
+
+
 def is_hp_machine() -> bool:
     """Check if this is an HP machine by looking for the HP WMI namespace."""
+    if _DRY_RUN:
+        return True
     if platform.system() != "Windows":
         return False
     try:
@@ -125,6 +197,11 @@ def is_hp_machine() -> bool:
 
 def _read_setting(name: str) -> str | None:
     """Read the current value of a BIOS setting. Returns None if not found."""
+    if _DRY_RUN:
+        val = _DRY_RUN_BIOS_STATE.get(name)
+        if isinstance(val, dict):
+            return None
+        return val
     # Try HP_BIOSEnumeration first (most settings are here)
     try:
         output = _run_powershell(
@@ -150,6 +227,14 @@ def _read_setting(name: str) -> str | None:
 
 def _set_setting(name: str, value: str, password: str | None) -> int:
     """Set a BIOS setting. Returns the WMI return code (0 = success)."""
+    if _DRY_RUN:
+        print(f"  [DRY-RUN] SetBIOSSetting('{name}', '{value}', '***')")
+        # Update simulated state
+        if name == "Setup Password":
+            _DRY_RUN_BIOS_STATE[name]["is_set"] = bool(value)
+        else:
+            _DRY_RUN_BIOS_STATE[name] = value
+        return 0
     pw_format = f"<utf-16/>{password}" if password else "<utf-16/>"
     # Escape single quotes in the name and value for the PowerShell filter
     escaped_name = name.replace("'", "''")
@@ -167,6 +252,8 @@ def _set_setting(name: str, value: str, password: str | None) -> int:
 
 def _is_setup_password_set() -> bool:
     """Check if a BIOS Setup password is currently set."""
+    if _DRY_RUN:
+        return _DRY_RUN_BIOS_STATE.get("Setup Password", {}).get("is_set", False)
     try:
         output = _run_powershell(
             f"(Get-WmiObject -Namespace '{HP_WMI_NAMESPACE}' "

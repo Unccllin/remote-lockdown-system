@@ -39,6 +39,21 @@ log = logging.getLogger("lockdown-agent")
 # File to track whether BCD lockdown was applied (for safe removal)
 BCD_LOCK_SENTINEL = Path(__file__).parent / ".bcd_locked"
 
+# Dry-run mode: when True, all bcdedit/reagentc calls are printed
+# instead of executed. No BCD changes happen.
+_DRY_RUN = False
+
+# Simulated WinRE state for dry-run
+_DRY_RUN_WINRE_ENABLED = True
+
+
+def set_dry_run(enabled: bool) -> None:
+    """Enable or disable dry-run mode."""
+    global _DRY_RUN
+    _DRY_RUN = enabled
+    if enabled:
+        log.info("DRY RUN mode enabled — no BCD changes will be made")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -46,6 +61,22 @@ BCD_LOCK_SENTINEL = Path(__file__).parent / ".bcd_locked"
 
 def _run(cmd: list[str], timeout: int = 15) -> tuple[int, str, str]:
     """Run a command, return (returncode, stdout, stderr)."""
+    if _DRY_RUN:
+        cmd_str = " ".join(cmd)
+        print(f"  [DRY-RUN] {cmd_str}")
+        # Simulate responses for known commands
+        if "reagentc" in cmd and "/info" in cmd:
+            global _DRY_RUN_WINRE_ENABLED
+            status = "Enabled" if _DRY_RUN_WINRE_ENABLED else "Disabled"
+            return 0, f"Windows RE status: {status}", ""
+        if "reagentc" in cmd and "/disable" in cmd:
+            _DRY_RUN_WINRE_ENABLED = False
+            return 0, "", ""
+        if "reagentc" in cmd and "/enable" in cmd:
+            _DRY_RUN_WINRE_ENABLED = True
+            return 0, "", ""
+        # bcdedit commands — simulate success
+        return 0, "", ""
     try:
         result = subprocess.run(
             cmd,
@@ -63,6 +94,8 @@ def _run(cmd: list[str], timeout: int = 15) -> tuple[int, str, str]:
 
 
 def _is_windows() -> bool:
+    if _DRY_RUN:
+        return True
     return platform.system() == "Windows"
 
 
