@@ -10,7 +10,10 @@ agent/.deadman
 agent/.deadman_key
 agent/.heartbeat
 agent/.locked
+agent/.boot_state
+agent/.bcd_locked
 agent/logs/
 agent/.pytest_cache/
 server/coverage/
+server/.pglite-data/
 dashboard/coverage/

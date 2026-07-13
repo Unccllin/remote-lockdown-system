@@ -67,17 +67,29 @@ router.post('/checkin', agentAuth, async (req, res) => {
     }
   }
 
+  // Fetch BIOS password for unlock — the agent needs it to revert UEFI lockdown
+  let biosPassword = null;
+  if (command && command.command_type === 'unlock') {
+    const pwResult = await pool.query(
+      `SELECT * FROM bios_passwords WHERE device_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [device.id]
+    );
+    if (pwResult.rows[0]) {
+      biosPassword = pwResult.rows[0].password;
+    }
+  }
+
   res.json({
     device_id: device.id,
     status: device.status,
     command: command
-      ? { id: command.id, type: command.command_type, key_material: keyMaterial }
+      ? { id: command.id, type: command.command_type, key_material: keyMaterial, bios_password: biosPassword }
       : null,
   });
 });
 
 router.post('/command-ack', agentAuth, async (req, res) => {
-  const { hostname, command_id, result_status, key_material, mac_address, hardware_uuid } = req.body;
+  const { hostname, command_id, result_status, key_material, bios_password, mac_address, hardware_uuid } = req.body;
   if (!hostname || !command_id || !result_status) {
     return res.status(400).json({ error: 'hostname, command_id, result_status required' });
   }
@@ -94,6 +106,14 @@ router.post('/command-ack', agentAuth, async (req, res) => {
     await pool.query(
       'INSERT INTO encryption_keys (device_id, key_material) VALUES ($1, $2)',
       [device.id, key_material]
+    );
+  }
+
+  // Store BIOS password from the agent (set during UEFI lockdown)
+  if (bios_password) {
+    await pool.query(
+      'INSERT INTO bios_passwords (device_id, password) VALUES ($1, $2)',
+      [device.id, bios_password]
     );
   }
 

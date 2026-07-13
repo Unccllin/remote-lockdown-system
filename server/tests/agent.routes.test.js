@@ -97,7 +97,7 @@ describe('POST /api/agent/checkin', () => {
       .send({ hostname: 'DEV-001' });
 
     expect(res.status).toBe(200);
-    expect(res.body.command).toEqual({ id: 'cmd-1', type: 'lockdown', key_material: null });
+    expect(res.body.command).toEqual({ id: 'cmd-1', type: 'lockdown', key_material: null, bios_password: null });
   });
 
   test('attaches key_material for unlock commands', async () => {
@@ -117,6 +117,27 @@ describe('POST /api/agent/checkin', () => {
     expect(res.status).toBe(200);
     expect(res.body.command.type).toBe('unlock');
     expect(res.body.command.key_material).toBe('fernet-key-base64==');
+  });
+
+  test('attaches bios_password for unlock commands', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'recovering' };
+    const command = { id: 'cmd-3', command_type: 'unlock', status: 'pending' };
+    const key = { id: 'key-1', key_material: 'fernet-key-base64==' };
+    const biosPw = { id: 'pw-1', password: 'BiosP@ss123' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM commands', { rows: [command] });
+    mockPool.query.setResult('SELECT * FROM encryption_keys', { rows: [key] });
+    mockPool.query.setResult('SELECT * FROM bios_passwords', { rows: [biosPw] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.command.type).toBe('unlock');
+    expect(res.body.command.bios_password).toBe('BiosP@ss123');
   });
 
   test('falls back to hostname when MAC/UUID not found', async () => {
@@ -207,6 +228,35 @@ describe('POST /api/agent/command-ack', () => {
       c => c[0].includes("UPDATE devices SET status = 'locked'")
     );
     expect(statusUpdateCall).toBeDefined();
+  });
+
+  test('stores bios_password on lockdown ACK', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-1', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-1',
+        result_status: 'executed',
+        key_material: 'fernet-key-base64==',
+        bios_password: 'GeneratedBiosPw456',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    // Verify bios_password was stored
+    const insertBiosPwCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO bios_passwords')
+    );
+    expect(insertBiosPwCall).toBeDefined();
+    expect(insertBiosPwCall[1]).toContain('GeneratedBiosPw456');
   });
 
   test('sets status to active on unlock ACK (completing recovery)', async () => {

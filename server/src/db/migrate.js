@@ -39,6 +39,13 @@ const schema = `
     released_at TIMESTAMPTZ
   );
 
+  CREATE TABLE IF NOT EXISTS bios_passwords (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    password TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
   CREATE TABLE IF NOT EXISTS audit_log (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     device_id UUID REFERENCES devices(id) ON DELETE SET NULL,

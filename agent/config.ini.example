@@ -12,3 +12,13 @@ verify_tls = true
 google_api_key =
 # How often to report location when in tracking mode (seconds, default 300 = 5min)
 location_interval = 300
+
+# Boot lockdown settings (HP machines with WMI BIOS interface)
+# When true, the agent locks the UEFI/BIOS and Windows BCD on lockdown
+# commands to prevent boot from USB/PXE/Safe Mode/WinRE. Reverted on unlock.
+boot_lock_enabled = true
+# Pre-existing BIOS Setup password (if the machine already has one set).
+# Leave empty if no BIOS password is set — the agent will generate a random
+# one during lockdown and report it to the server.
+# If a password IS already set and this is empty, UEFI lockdown is skipped.
+uefi_password =
