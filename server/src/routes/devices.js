@@ -147,6 +147,28 @@ router.post('/:id/track', requireAuth, async (req, res) => {
 });
 
 /**
+ * One-time location request — sends a 'locate' command to the agent.
+ * The agent reports its current location once, without entering tracking mode.
+ * Works on any device status (active, tracking, etc).
+ */
+router.post('/:id/locate', requireAuth, async (req, res) => {
+  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
+  const device = devResult.rows[0];
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+
+  const cmd = await pool.query(
+    'INSERT INTO commands (device_id, command_type) VALUES ($1, $2) RETURNING *',
+    [device.id, 'locate']
+  );
+  await pool.query(
+    'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
+    [device.id, req.admin.id, 'locate_requested', { command_id: cmd.rows[0].id }]
+  );
+
+  res.json({ device, command: cmd.rows[0] });
+});
+
+/**
  * Stop covert tracking — sends a 'stop_track' command to the agent.
  */
 router.post('/:id/stop-track', requireAuth, async (req, res) => {

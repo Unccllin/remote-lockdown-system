@@ -47,6 +47,14 @@ from pathlib import Path
 import requests
 from cryptography.fernet import Fernet
 
+# Boot lockdown modules (imported lazily on Windows to avoid import errors on Linux)
+try:
+    import hp_uefi_lockdown
+    import bcd_lockdown
+    _boot_lock_modules_available = True
+except ImportError:
+    _boot_lock_modules_available = False
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -81,6 +89,18 @@ def load_config() -> dict:
         "verify_tls": section.get("verify_tls", "true").lower() != "false",
         "google_api_key": os.environ.get("GOOGLE_API_KEY", section.get("google_api_key", "")),
         "location_interval": int(os.environ.get("LOCATION_INTERVAL", section.get("location_interval", "300"))),
+        # Boot lockdown: when True, the agent locks the UEFI/BIOS and BCD
+        # on lockdown commands and reverts them on unlock. Requires Windows
+        # + HP WMI BIOS interface (for UEFI lockdown). BCD lockdown works
+        # on any Windows machine.
+        "boot_lock_enabled": os.environ.get(
+            "BOOT_LOCK_ENABLED", section.get("boot_lock_enabled", "true")
+        ).lower() != "false",
+        # Pre-existing BIOS Setup password (if the machine already has one).
+        # If empty and no password is set, the agent generates a random one.
+        # If empty and a password IS set, UEFI lockdown is skipped (can't
+        # authenticate BIOS changes without it).
+        "uefi_password": os.environ.get("UEFI_PASSWORD", section.get("uefi_password", "")),
     }
 
 # ---------------------------------------------------------------------------
@@ -420,7 +440,13 @@ def checkin(cfg: dict) -> dict | None:
         log.warning("Check-in failed: %s", e)
         return None
 
-def ack_command(cfg: dict, command_id: str, result_status: str, key_material: str | None = None) -> None:
+def ack_command(
+    cfg: dict,
+    command_id: str,
+    result_status: str,
+    key_material: str | None = None,
+    bios_password: str | None = None,
+) -> None:
     payload = {
         "hostname": cfg["hostname"],
         "mac_address": get_mac_address(),
@@ -430,6 +456,8 @@ def ack_command(cfg: dict, command_id: str, result_status: str, key_material: st
     }
     if key_material:
         payload["key_material"] = key_material
+    if bios_password:
+        payload["bios_password"] = bios_password
     try:
         resp = requests.post(
             f"{cfg['server_url']}/api/agent/command-ack",
@@ -477,11 +505,33 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     sentinel.write_text(json.dumps({"locked": True, "command_id": command["id"]}))
     log.info("Sentinel written: %s", sentinel)
 
+    # --- Boot lockdown: lock UEFI/BIOS + BCD to prevent bypass via boot ---
+    bios_password = None
+    if cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available:
+        try:
+            # BCD lockdown (works on any Windows machine)
+            bcd_lockdown.apply_bcd_lockdown()
+        except Exception as e:
+            log.error("BCD lockdown failed: %s", e)
+
+        try:
+            # UEFI lockdown (HP-specific via WMI)
+            existing_pw = cfg.get("uefi_password") or None
+            bios_password = hp_uefi_lockdown.apply_boot_lockdown(existing_pw)
+            if bios_password:
+                log.warning("UEFI boot lockdown applied — BIOS password sent to server")
+            else:
+                log.warning("UEFI boot lockdown skipped (not HP or password required)")
+        except Exception as e:
+            log.error("UEFI lockdown failed: %s", e)
+
     key_b64 = key.decode()
-    ack_command(cfg, command["id"], "executed", key_material=key_b64)
+    ack_command(cfg, command["id"], "executed", key_material=key_b64, bios_password=bios_password)
     log.warning("Key transmitted to server — wiping local copy")
     del key
     del key_b64
+    if bios_password:
+        del bios_password
 
 def handle_unlock(cfg: dict, command: dict) -> None:
     log.info("UNLOCK command received")
@@ -508,6 +558,24 @@ def handle_unlock(cfg: dict, command: dict) -> None:
         sentinel.unlink()
         log.info("Sentinel removed")
 
+    # --- Remove boot lockdown: restore UEFI/BIOS + BCD to pre-lockdown state ---
+    if cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available:
+        bios_password = command.get("bios_password")
+        try:
+            bcd_lockdown.remove_bcd_lockdown()
+        except Exception as e:
+            log.error("BCD lockdown removal failed: %s", e)
+
+        if bios_password:
+            try:
+                hp_uefi_lockdown.remove_boot_lockdown(bios_password)
+                log.info("UEFI boot lockdown removed — BIOS restored to pre-lockdown state")
+                del bios_password
+            except Exception as e:
+                log.error("UEFI lockdown removal failed: %s — admin may need to clear BIOS manually", e)
+        else:
+            log.warning("No BIOS password in unlock command — cannot remove UEFI lockdown automatically")
+
     del key
     ack_command(cfg, command["id"], "executed")
 
@@ -528,12 +596,19 @@ def handle_stop_track(cfg: dict, command: dict) -> None:
     log.info("STOP_TRACK command received — exiting tracking mode")
     ack_command(cfg, command["id"], "executed")
 
+def handle_locate(cfg: dict, command: dict) -> None:
+    """One-time location ping. Reports current geolocation without changing mode."""
+    log.info("LOCATE command received — reporting one-time location")
+    report_location(cfg)
+    ack_command(cfg, command["id"], "executed")
+
 COMMAND_HANDLERS = {
     "lockdown": handle_lockdown,
     "unlock": handle_unlock,
     "status": handle_status,
     "track": handle_track,
     "stop_track": handle_stop_track,
+    "locate": handle_locate,
 }
 
 # ---------------------------------------------------------------------------

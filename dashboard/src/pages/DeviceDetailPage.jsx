@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ShieldAlert, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square } from 'lucide-react';
+import { ArrowLeft, ShieldAlert, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
@@ -101,6 +101,20 @@ export default function DeviceDetailPage() {
     }
   }
 
+  async function locateNow() {
+    setActing(true);
+    try {
+      await api.post(`/devices/${id}/locate`);
+      toast.success('Location request queued — agent will report on next check-in');
+      setModal(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Action failed');
+    } finally {
+      setActing(false);
+    }
+  }
+
   if (loading) return <div className="text-slate-500 text-center py-32">Loading...</div>;
   if (!device) return <div className="text-slate-500 text-center py-32">Device not found.</div>;
 
@@ -146,6 +160,16 @@ export default function DeviceDetailPage() {
           description={`Stop covert tracking on "${device.hostname}"? The device will return to normal active status.`}
           confirmLabel={acting ? 'Processing…' : 'Stop Tracking'}
           onConfirm={stopTracking}
+          onCancel={() => setModal(null)}
+          danger={false}
+        />
+      )}
+      {modal === 'locate' && (
+        <ConfirmModal
+          title="Locate Device Now"
+          description={`Send a one-time location request to "${device.hostname}"? The agent will report its current location on the next check-in. The device status will not change.`}
+          confirmLabel={acting ? 'Processing…' : 'Locate Now'}
+          onConfirm={locateNow}
           onCancel={() => setModal(null)}
           danger={false}
         />
@@ -224,6 +248,18 @@ export default function DeviceDetailPage() {
         </div>
       )}
 
+      {/* No location data placeholder */}
+      {!latestLocation && device.status !== 'recovering' && (
+        <div className="card mb-6 text-center">
+          <MapPin size={24} className="mx-auto mb-2 text-slate-600" />
+          <p className="text-slate-400 text-sm">No location data for this device yet.</p>
+          <p className="text-slate-500 text-xs mt-1">
+            Click <span className="text-blue-400">Locate Now</span> to request a one-time location ping,
+            or <span className="text-cyan-400">Start Tracking</span> for continuous reporting.
+          </p>
+        </div>
+      )}
+
       <div className="flex gap-3 mb-8">
         <button className="btn-ghost" onClick={load}>
           <RefreshCw size={14} /> Refresh
@@ -241,6 +277,11 @@ export default function DeviceDetailPage() {
         {device.status === 'tracking' && (
           <button className="btn-ghost text-cyan-400 border-cyan-700/50 hover:bg-cyan-900/20" onClick={() => setModal('stop_track')}>
             <Square size={14} /> Stop Tracking
+          </button>
+        )}
+        {device.status !== 'recovering' && (
+          <button className="btn-ghost text-blue-400 border-blue-700/50 hover:bg-blue-900/20" onClick={() => setModal('locate')}>
+            <Locate size={14} /> Locate Now
           </button>
         )}
         {(device.status === 'stolen' || device.status === 'locked') && (
