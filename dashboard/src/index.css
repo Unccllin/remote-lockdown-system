@@ -5,50 +5,135 @@
 @layer base {
   body {
     @apply bg-slate-950 text-slate-100 antialiased;
+    background-image:
+      radial-gradient(at 20% 0%, rgba(59, 130, 246, 0.08) 0px, transparent 50%),
+      radial-gradient(at 80% 100%, rgba(6, 182, 212, 0.05) 0px, transparent 50%);
+    background-attachment: fixed;
   }
 }
 
 @layer components {
+  /* --- Buttons --- */
   .btn {
-    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply btn bg-blue-600 hover:bg-blue-500 text-white;
+    @apply btn bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20 hover:shadow-blue-500/30;
   }
   .btn-danger {
-    @apply btn bg-red-600 hover:bg-red-500 text-white;
+    @apply btn bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-600/20 hover:shadow-red-500/30;
   }
   .btn-success {
-    @apply btn bg-emerald-600 hover:bg-emerald-500 text-white;
+    @apply btn bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20 hover:shadow-emerald-500/30;
   }
   .btn-ghost {
-    @apply btn bg-slate-800 hover:bg-slate-700 text-slate-200;
+    @apply btn bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 border border-slate-700/50;
   }
+
+  /* --- Glassmorphism cards --- */
   .card {
-    @apply bg-slate-900 border border-slate-800 rounded-xl p-6;
+    @apply bg-slate-900/60 backdrop-blur-xl border border-slate-800/60 rounded-2xl p-6 shadow-xl shadow-black/20;
   }
+  .card-hover {
+    @apply card transition-all duration-200 hover:border-slate-700/80 hover:bg-slate-900/80;
+  }
+
+  /* --- Inputs --- */
   .input {
-    @apply w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500;
+    @apply w-full bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all;
   }
+
+  /* --- Badges --- */
   .badge {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold;
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold;
   }
   .badge-active {
-    @apply badge bg-emerald-900/60 text-emerald-400;
+    @apply badge bg-emerald-500/10 text-emerald-400 border border-emerald-500/20;
   }
   .badge-stolen {
-    @apply badge bg-red-900/60 text-red-400;
+    @apply badge bg-red-500/10 text-red-400 border border-red-500/20;
   }
   .badge-locked {
-    @apply badge bg-orange-900/60 text-orange-400;
+    @apply badge bg-orange-500/10 text-orange-400 border border-orange-500/20;
   }
   .badge-recovering {
-    @apply badge bg-amber-900/60 text-amber-400;
+    @apply badge bg-amber-500/10 text-amber-400 border border-amber-500/20;
   }
   .badge-tracking {
-    @apply badge bg-cyan-900/60 text-cyan-400;
+    @apply badge bg-cyan-500/10 text-cyan-400 border border-cyan-500/20;
   }
   .badge-inactive {
-    @apply badge bg-slate-700 text-slate-400;
+    @apply badge bg-slate-700/30 text-slate-400 border border-slate-600/30;
   }
+
+  /* --- Glow effects --- */
+  .glow-emerald { box-shadow: 0 0 20px rgba(16, 185, 129, 0.15); }
+  .glow-red { box-shadow: 0 0 20px rgba(239, 68, 68, 0.15); }
+  .glow-cyan { box-shadow: 0 0 20px rgba(6, 182, 212, 0.15); }
+  .glow-amber { box-shadow: 0 0 20px rgba(245, 158, 11, 0.15); }
+  .glow-blue { box-shadow: 0 0 20px rgba(59, 130, 246, 0.15); }
+
+  /* --- Loading skeleton --- */
+  .skeleton {
+    @apply bg-slate-800/50 rounded-lg animate-pulse;
+  }
+
+  /* --- Scrollbar --- */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(71, 85, 105, 0.4); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 0.6); }
+
+  /* --- Leaflet map dark theme overrides --- */
+  .leaflet-container {
+    background: #0f172a !important;
+    border-radius: 1rem;
+  }
+  .leaflet-tile {
+    filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9);
+  }
+  .leaflet-control-attribution {
+    background: rgba(15, 23, 42, 0.8) !important;
+    color: #64748b !important;
+    font-size: 10px !important;
+  }
+  .leaflet-control-attribution a {
+    color: #94a3b8 !important;
+  }
+  .leaflet-popup-content-wrapper {
+    background: rgba(15, 23, 42, 0.95) !important;
+    color: #e2e8f0 !important;
+    border: 1px solid rgba(51, 65, 85, 0.5) !important;
+    border-radius: 0.75rem !important;
+    backdrop-filter: blur(12px);
+  }
+  .leaflet-popup-tip {
+    background: rgba(15, 23, 42, 0.95) !important;
+  }
+  .leaflet-popup-close-button {
+    color: #64748b !important;
+  }
+
+  /* --- Animations --- */
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fade-in {
+    animation: fade-in 0.3s ease-out;
+  }
+  @keyframes pulse-ring {
+    0% { transform: scale(0.8); opacity: 0.8; }
+    100% { transform: scale(2); opacity: 0; }
+  }
+  .pulse-ring {
+    animation: pulse-ring 2s ease-out infinite;
+  }
+
+  /* --- Leaflet marker pulse (tracking devices) --- */
+  @keyframes marker-pulse {
+    0% { transform: scale(1); opacity: 0.5; }
+    100% { transform: scale(3); opacity: 0; }
+  }
+  .custom-marker { background: transparent !important; border: none !important; }
 }
