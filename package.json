@@ -1,0 +1,13 @@
+{
+  "name": "remote-lockdown-system",
+  "version": "1.0.0",
+  "description": "Remote Device Lockdown System — unified test runner",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:server && npm run test:agent",
+    "test:server": "cd server && node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit --detectOpenHandles",
+    "test:agent": "cd agent && python3 -m pytest tests/ -v",
+    "test:dashboard": "cd dashboard && npx vitest run",
+    "test:ci": "npm run test:server -- --maxWorkers=1 && npm run test:agent"
+  }
+}

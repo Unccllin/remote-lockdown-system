@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import DeviceDetailPage from '../src/pages/DeviceDetailPage';
 
@@ -133,8 +133,9 @@ describe('DeviceDetailPage', () => {
 
     renderWithRouter();
 
+    // FA7: Use getByRole to find the button specifically (text also appears in info span)
     await waitFor(() => {
-      expect(screen.getByText('Start Tracking')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Start Tracking/i })).toBeInTheDocument();
     });
   });
 
@@ -149,9 +150,9 @@ describe('DeviceDetailPage', () => {
     renderWithRouter();
 
     await waitFor(() => {
-      expect(screen.getByText('Stop Tracking')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Stop Tracking/i })).toBeInTheDocument();
     });
-    expect(screen.queryByText('Start Tracking')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Start Tracking/i })).not.toBeInTheDocument();
   });
 
   it('shows latest location card when location data exists', async () => {
@@ -182,5 +183,136 @@ describe('DeviceDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Latest Location')).toBeInTheDocument();
     }, { timeout: 3000 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FA7: userEvent flow tests — test clicks through ConfirmModal-gated paths
+// ---------------------------------------------------------------------------
+
+describe('DeviceDetailPage — userEvent flows', () => {
+  it('FA7: flag as stolen flow — click button, type hostname, confirm', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: baseDevice });
+      }
+      return Promise.resolve({ data: [] });
+    });
+    api.post.mockResolvedValue({ data: { device: { ...baseDevice, status: 'stolen' } } });
+
+    renderWithRouter();
+
+    // Wait for the action button and click to open modal
+    const actionBtn = await screen.findByRole('button', { name: /Flag as Stolen/i });
+    fireEvent.click(actionBtn);
+
+    // Wait for modal to appear, then scope queries to the modal overlay
+    const modalTitle = await screen.findByRole('heading', { name: /Flag Device as Stolen/i });
+    const modalContainer = modalTitle.closest('.fixed.inset-0');
+
+    // Type hostname in the modal input
+    const input = within(modalContainer).getByPlaceholderText('DEV-001');
+    fireEvent.change(input, { target: { value: 'DEV-001' } });
+
+    // Click the confirm button inside the modal
+    await waitFor(() => {
+      const confirmBtn = within(modalContainer).getByRole('button', { name: /Flag as Stolen/i });
+      expect(confirmBtn).not.toBeDisabled();
+    });
+    const confirmBtn = within(modalContainer).getByRole('button', { name: /Flag as Stolen/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith('/devices/1/flag-stolen', expect.any(Object));
+    });
+  });
+
+  it('FA7: recover device flow — click button, type hostname, confirm', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'stolen' } });
+      }
+      return Promise.resolve({ data: [] });
+    });
+    api.post.mockResolvedValue({ data: { device: { ...baseDevice, status: 'recovering' } } });
+
+    renderWithRouter();
+
+    const actionBtn = await screen.findByRole('button', { name: /Recover Device/i });
+    fireEvent.click(actionBtn);
+
+    // Use heading role to find the modal title (not the action button)
+    const modalTitle = await screen.findByRole('heading', { name: /Recover Device/i });
+    const modalContainer = modalTitle.closest('.fixed.inset-0');
+
+    const input = within(modalContainer).getByPlaceholderText('DEV-001');
+    fireEvent.change(input, { target: { value: 'DEV-001' } });
+
+    await waitFor(() => {
+      const confirmBtn = within(modalContainer).getByRole('button', { name: /Recover Device/i });
+      expect(confirmBtn).not.toBeDisabled();
+    });
+    const confirmBtn = within(modalContainer).getByRole('button', { name: /Recover Device/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith('/devices/1/recover', expect.anything());
+    });
+  });
+
+  it('FA7: start tracking flow — click button, confirm (active device)', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: baseDevice }); // status: active
+      }
+      return Promise.resolve({ data: [] });
+    });
+    api.post.mockResolvedValue({ data: { command: { id: 'cmd-1', command_type: 'track' } } });
+
+    renderWithRouter();
+
+    // Use getAllByRole to find the button (not the info span)
+    await waitFor(() => {
+      const btns = screen.getAllByRole('button', { name: /Start Tracking/i });
+      expect(btns.length).toBeGreaterThanOrEqual(1);
+    });
+    const actionBtn = screen.getAllByRole('button', { name: /Start Tracking/i })[0];
+    fireEvent.click(actionBtn);
+
+    // Track modal — no confirmValue, so confirm is enabled immediately
+    const modalTitle = await screen.findByRole('heading', { name: /Start Covert Tracking/i });
+    const modalContainer = modalTitle.closest('.fixed.inset-0');
+
+    const confirmBtn = within(modalContainer).getByRole('button', { name: /Start Tracking/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith('/devices/1/track');
+    });
+  });
+
+  it('FA7: stop tracking flow — click button, confirm', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'tracking' } });
+      }
+      return Promise.resolve({ data: [] });
+    });
+    api.post.mockResolvedValue({ data: { command: { id: 'cmd-1', command_type: 'stop_track' } } });
+
+    renderWithRouter();
+
+    const actionBtn = await screen.findByRole('button', { name: /Stop Tracking/i });
+    fireEvent.click(actionBtn);
+
+    const modalTitle = await screen.findByRole('heading', { name: /Stop Tracking/i });
+    const modalContainer = modalTitle.closest('.fixed.inset-0');
+
+    const confirmBtn = within(modalContainer).getByRole('button', { name: /Stop Tracking/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith('/devices/1/stop-track');
+    });
   });
 });

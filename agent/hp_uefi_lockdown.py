@@ -6,21 +6,39 @@ boot process so a thief cannot boot from external media or enter BIOS setup.
 
 What this module does on lockdown:
   1. Sets a BIOS Setup (supervisor) password — prevents entering BIOS setup (F10)
-  2. Disables USB boot — prevents booting from USB sticks
-  3. Disables Network (PXE) boot — prevents booting from network
-  4. Disables Legacy/CSM boot — forces UEFI-only (harder to boot random tools)
-  5. Enables Fast Boot — prevents F-key interruption during POST
-  6. Requires admin password for F12 boot menu — can't pick alternate boot device
+  2. Disables USB boot — prevents booting from USB sticks          [CRITICAL]
+  3. Disables Network (PXE) boot — prevents booting from network   [CRITICAL]
+  4. Disables Legacy/CSM boot — forces UEFI-only                   [CRITICAL]
+  5. Disables F12 / One-Time Boot Menu                             [CRITICAL]
+  6. Enables Fast Boot — prevents F-key interruption during POST   [BEST-EFFORT]
+  7. Requires admin password for F12 boot menu                     [BEST-EFFORT]
 
-What this prevents:
-  - Pressing F10 to enter BIOS setup → requires password
-  - Pressing F12 to boot from USB → requires password / USB boot disabled
-  - Booting from USB stick → USB boot disabled
-  - Booting from PXE/network → PXE boot disabled
-  - Using F-keys during POST to interrupt boot → Fast Boot enabled
-  - Booting legacy OS/tools → Legacy boot disabled
+CC19: Critical vs. best-effort split.
+  - Critical settings close direct bypass vectors (USB/PXE boot, legacy boot,
+    F12 boot menu). If ANY critical setting fails after the Setup Password is
+    set, ALL BIOS changes are rolled back — BUT the Setup Password is NOT
+    cleared (CC18: clearing it during rollback risks a BIOS-locked machine
+    with no recorded password if the clear fails).
+  - Best-effort settings (Fast Boot, F12 admin password prompt) are
+    defense-in-depth. Failure is logged but does not trigger rollback.
 
-All changes are reversible during the recovery flow.
+CC18: Rollback on critical failure.
+  - Rollback restores BIOS settings to pre-lockdown values (from .boot_state).
+  - Rollback does NOT clear the Setup Password even if we set it.
+    Rationale: if password-clear fails during rollback, the machine is
+    BIOS-locked with no recorded password and no server ACK. Instead, the
+    password is returned to the caller for server-side operator action.
+  - Rollback failures are NON-FATAL: log ERROR, return False, do not raise.
+  - Rollback is scoped to boot-state files (.boot_state) ONLY. It must NOT
+    delete or touch the encryption key files (File A / File B).
+
+Phase 4: Verification re-reads.
+  - After setting each BIOS value, re-read it to verify it took effect.
+  - If verification fails, treat as a failed setting (triggers rollback if critical).
+
+Phase 4: apply_boot_lockdown() returns the password even on critical failure.
+  - The password is needed for server-side operator action (manual BIOS clear).
+  - The caller (agent.py) ACKs with key_material + bios_password + boot_lock_status: "partial".
 
 Requirements:
   - HP business machine (EliteBook, ProBook, EliteDesk, ProDesk, etc.)
@@ -83,11 +101,46 @@ def set_dry_run(enabled: bool) -> None:
     if enabled:
         log.info("DRY RUN mode enabled — no BIOS changes will be made")
 
-# BIOS settings to apply during lockdown.
+
+# ---------------------------------------------------------------------------
+# Admin check (Phase 4.1 — fail-fast before any state writes)
+# ---------------------------------------------------------------------------
+
+def _is_admin() -> bool:
+    """Check if the current process has admin/elevation privileges.
+
+    On Windows, uses `net session` (succeeds only as admin).
+    On non-Windows, returns True (dry-run/test mode).
+    In dry-run mode, always returns True.
+
+    This is the FIRST check before any state-file writes or BIOS changes.
+    Admin-failure is fail-fast, not rollback — there's nothing to roll back.
+    """
+    if _DRY_RUN:
+        return True
+    if platform.system() != "Windows":
+        return True  # Non-Windows = test/dev environment
+    try:
+        result = subprocess.run(
+            ["net", "session"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# BIOS settings: critical vs. best-effort (CC19)
+# ---------------------------------------------------------------------------
+
+# Critical settings: close direct bypass vectors.
+# If ANY of these fail after the Setup Password is set, ALL BIOS changes are
+# rolled back (but the Setup Password is NOT cleared — CC18).
 # Each entry: (setting_name, lockdown_value)
-# We try each setting name — not all exist on every HP model.
-# Missing settings are silently skipped (logged at debug level).
-LOCKDOWN_SETTINGS = [
+HP_CRITICAL_SETTINGS = [
     # --- Disable external boot paths ---
     ("Network (PXE) Boot", "Disable"),
     ("Network Boot", "Disable"),
@@ -97,14 +150,22 @@ LOCKDOWN_SETTINGS = [
     # --- Force UEFI only (no legacy/CSM) ---
     ("Legacy Boot Options", "Disable"),
     ("Legacy Support", "Disable"),
+    # --- Disable F12 / one-time boot menu (CC19: added to critical) ---
+    ("F12 Boot Menu", "Disable"),
+    ("One-Time Boot Menu", "Disable"),
+]
+
+# Best-effort settings: defense-in-depth.
+# Failure is logged but does not trigger rollback.
+HP_BEST_EFFORT_SETTINGS = [
     # --- Enable Fast Boot (prevents F-key interruption during POST) ---
     ("Fast Boot", "Enable"),
     # --- Require setup password for F12 boot menu ---
     ("Prompt for Admin password on F12 (Network Boot)", "Enable"),
-    ("F12 Boot Menu", "Disable"),
-    # --- Disable one-time boot menu if available ---
-    ("One-Time Boot Menu", "Disable"),
 ]
+
+# Combined list (for state save/restore — saves ALL settings we might change)
+ALL_LOCKDOWN_SETTINGS = HP_CRITICAL_SETTINGS + HP_BEST_EFFORT_SETTINGS
 
 # File to save pre-lockdown BIOS state for restoration on recovery
 BOOT_STATE_FILE = Path(__file__).parent / ".boot_state"
@@ -147,6 +208,9 @@ def _dry_run_powershell_response(script: str) -> str:
     if "HP_BIOSSetting " in script and "Select-Object -First 1" in script:
         # is_hp_machine check
         return "Fast Boot"  # non-empty = HP machine detected
+    if "net session" in script:
+        # _is_admin check
+        return ""  # non-empty = admin
     if "HP_BIOSPassword" in script and "IsSet" in script:
         # _is_setup_password_set check
         return "0"  # password not set
@@ -164,15 +228,12 @@ def _dry_run_powershell_response(script: str) -> str:
         return ""
     if "SetBIOSSetting" in script:
         # _set_setting — simulate success and update dry-run state
-        # Parse the setting name from the script
         for name in _DRY_RUN_BIOS_STATE:
             if f"'{name}'" in script:
                 if name == "Setup Password":
                     _DRY_RUN_BIOS_STATE[name]["is_set"] = True
                 else:
                     # Parse the value — it's the second arg to SetBIOSSetting
-                    # Format: SetBIOSSetting('Name', '<utf-16/>Value', '<utf-16/>Password')
-                    # We just return 0 (success)
                     pass
                 return "0"
         return "0"
@@ -250,6 +311,35 @@ def _set_setting(name: str, value: str, password: str | None) -> int:
     return int(output) if output.isdigit() else -1
 
 
+def _set_and_verify(name: str, value: str, password: str) -> bool:
+    """Set a BIOS setting and verify it took effect (Phase 4.5).
+
+    Returns True if the setting was applied AND verified, False otherwise.
+    """
+    rc = _set_setting(name, value, password)
+    if rc != 0:
+        log.warning(
+            "BIOS setting '%s' → '%s' failed: %s",
+            name, value, SET_BIOS_RETURN_CODES.get(rc, f"code {rc}")
+        )
+        return False
+
+    # Verification re-read: confirm the setting actually took effect
+    current = _read_setting(name)
+    if current is None:
+        log.warning("Could not verify BIOS setting '%s' (read failed)", name)
+        return False
+    if current.lower() != value.lower():
+        log.warning(
+            "BIOS setting '%s' verification failed: expected '%s', got '%s'",
+            name, value, current
+        )
+        return False
+
+    log.info("BIOS setting '%s' → %s (verified)", name, value)
+    return True
+
+
 def _is_setup_password_set() -> bool:
     """Check if a BIOS Setup password is currently set."""
     if _DRY_RUN:
@@ -312,11 +402,61 @@ def clear_boot_state() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Rollback (CC18 — on critical failure, restore BIOS to pre-lockdown state)
+# ---------------------------------------------------------------------------
+
+def _rollback_bios_settings(saved_settings: dict, bios_password: str) -> bool:
+    """Restore BIOS settings to pre-lockdown values.
+
+    CC18: Does NOT clear the Setup Password even if we set it.
+    Rationale: if password-clear fails during rollback, the machine is
+    BIOS-locked with no recorded password and no server ACK. Instead,
+    the password is returned to the caller for server-side operator action.
+
+    CC18: Rollback failures are NON-FATAL. Log ERROR, return False, do not raise.
+
+    This function is scoped to boot-state files (.boot_state) ONLY. It must
+    NOT touch the encryption key files (File A / File B).
+
+    Returns True if all restorations succeeded, False if any failed.
+    """
+    log.warning("Rolling back BIOS changes due to critical failure...")
+    all_ok = True
+
+    for setting_name, original_value in saved_settings.items():
+        rc = _set_setting(setting_name, original_value, bios_password)
+        if rc == 0:
+            log.info("Rollback: %s → %s (restored)", setting_name, original_value)
+        else:
+            log.error(
+                "Rollback: failed to restore '%s' to '%s': %s — non-fatal, continuing",
+                setting_name, original_value, SET_BIOS_RETURN_CODES.get(rc, f"code {rc}")
+            )
+            all_ok = False
+
+    # Remove the boot state file (rollback complete)
+    clear_boot_state()
+
+    if all_ok:
+        log.info("BIOS rollback complete — settings restored (password NOT cleared per CC18)")
+    else:
+        log.error("BIOS rollback completed with errors — some settings may need manual restoration")
+    return all_ok
+
+
+# ---------------------------------------------------------------------------
 # Public API: apply / remove boot lockdown
 # ---------------------------------------------------------------------------
 
-def apply_boot_lockdown(existing_password: str | None = None) -> str | None:
+def apply_boot_lockdown(existing_password: str | None = None) -> dict:
     """Apply UEFI/BIOS lockdown on an HP machine.
+
+    Phase 4 changes:
+      - Admin check first (fail-fast before any state writes)
+      - Critical/best-effort split (CC19)
+      - Verification re-reads after each setting (Phase 4.5)
+      - Rollback on critical failure (CC18) — does NOT clear Setup Password
+      - Returns a dict with password + status (password returned even on critical failure)
 
     Args:
         existing_password: The current BIOS Setup password, if one is already
@@ -325,15 +465,38 @@ def apply_boot_lockdown(existing_password: str | None = None) -> str | None:
             proceed (we can't authenticate BIOS changes without it).
 
     Returns:
-        The BIOS password used (for reporting to the server), or None if
-        the lockdown could not be applied.
-
-    Raises:
-        RuntimeError if a critical step fails.
+        dict with keys:
+          - bios_password: str | None — the BIOS password (for server-side storage).
+            Returned even on critical failure (for operator manual BIOS clear).
+          - success: bool — True if all critical settings applied successfully
+          - partial: bool — True if some best-effort settings failed (but critical OK)
+          - rolled_back: bool — True if a critical failure triggered rollback
+          - critical_applied: int — number of critical settings applied
+          - best_effort_applied: int — number of best-effort settings applied
+          - best_effort_failed: int — number of best-effort settings that failed
+          - not_hp: bool — True if not an HP machine (nothing done)
     """
+    result = {
+        "bios_password": None,
+        "success": False,
+        "partial": False,
+        "rolled_back": False,
+        "critical_applied": 0,
+        "best_effort_applied": 0,
+        "best_effort_failed": 0,
+        "not_hp": False,
+    }
+
     if not is_hp_machine():
         log.warning("Not an HP machine — skipping UEFI lockdown")
-        return None
+        result["not_hp"] = True
+        result["success"] = True  # Not an error — just nothing to do
+        return result
+
+    # Phase 4.1: Admin check — fail-fast before any state writes
+    if not _is_admin():
+        log.error("UEFI lockdown requires admin privileges — aborting (fail-fast)")
+        return result
 
     # Determine the password to use
     password_already_set = _is_setup_password_set()
@@ -343,7 +506,7 @@ def apply_boot_lockdown(existing_password: str | None = None) -> str | None:
             "Cannot apply BIOS lockdown without the existing password. "
             "Set UEFI_PASSWORD in the agent config to the current BIOS password."
         )
-        return None
+        return result
 
     if not password_already_set:
         # Generate a new password and set it
@@ -352,61 +515,84 @@ def apply_boot_lockdown(existing_password: str | None = None) -> str | None:
         rc = _set_setting("Setup Password", bios_password, None)
         if rc != 0:
             log.error("Failed to set Setup password: %s", SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"))
-            return None
+            return result
         log.info("BIOS Setup password set successfully")
     else:
         # Use the existing password to authorize changes
         bios_password = existing_password
         log.info("Using existing BIOS Setup password for lockdown changes")
 
-    # Save current state of all settings we're about to change
+    # Always return the password, even on critical failure (CC18)
+    result["bios_password"] = bios_password
+
+    # Save current state of all settings we're about to change (for rollback)
     saved_settings = {}
-    for setting_name, _ in LOCKDOWN_SETTINGS:
+    for setting_name, _ in ALL_LOCKDOWN_SETTINGS:
         current = _read_setting(setting_name)
         if current is not None:
             saved_settings[setting_name] = current
 
     save_boot_state(password_already_set, saved_settings)
 
-    # Apply each lockdown setting
-    applied = 0
-    skipped = 0
-    failed = 0
-    for setting_name, lockdown_value in LOCKDOWN_SETTINGS:
+    # --- Apply critical settings (with verification re-reads) ---
+    critical_applied = 0
+    critical_failed = 0
+    for setting_name, lockdown_value in HP_CRITICAL_SETTINGS:
         current = _read_setting(setting_name)
         if current is None:
-            # Setting doesn't exist on this model — skip
-            skipped += 1
+            # Setting doesn't exist on this model — skip (not a failure)
+            log.debug("Setting '%s' not supported on this model — skipping", setting_name)
             continue
         if current == lockdown_value:
-            # Already in desired state
-            skipped += 1
+            # Already in desired state — count as applied
+            critical_applied += 1
             continue
-        rc = _set_setting(setting_name, lockdown_value, bios_password)
-        if rc == 0:
-            applied += 1
-            log.info("BIOS setting '%s' → %s", setting_name, lockdown_value)
-        elif rc == 1:
-            # Not supported on this model — skip
-            skipped += 1
-            log.debug("Setting '%s' not supported on this model", setting_name)
+        if _set_and_verify(setting_name, lockdown_value, bios_password):
+            critical_applied += 1
         else:
-            failed += 1
-            log.warning(
-                "Failed to set '%s' to '%s': %s",
-                setting_name, lockdown_value, SET_BIOS_RETURN_CODES.get(rc, f"code {rc}")
-            )
+            critical_failed += 1
+
+    # --- Check for critical failure → rollback (CC18) ---
+    if critical_failed > 0:
+        log.error(
+            "UEFI lockdown: %d critical setting(s) failed — rolling back BIOS changes",
+            critical_failed
+        )
+        # CC18: Rollback does NOT clear the Setup Password
+        _rollback_bios_settings(saved_settings, bios_password)
+        result["rolled_back"] = True
+        result["success"] = False
+        # Password is still returned (already set above) for server-side operator action
+        return result
+
+    # --- Apply best-effort settings (failure does not trigger rollback) ---
+    best_effort_applied = 0
+    best_effort_failed = 0
+    for setting_name, lockdown_value in HP_BEST_EFFORT_SETTINGS:
+        current = _read_setting(setting_name)
+        if current is None:
+            log.debug("Setting '%s' not supported on this model — skipping", setting_name)
+            continue
+        if current == lockdown_value:
+            best_effort_applied += 1
+            continue
+        if _set_and_verify(setting_name, lockdown_value, bios_password):
+            best_effort_applied += 1
+        else:
+            best_effort_failed += 1
+            log.warning("BEST-EFFORT: '%s' failed — continuing (not critical)", setting_name)
 
     log.info(
-        "UEFI lockdown applied: %d settings changed, %d skipped, %d failed",
-        applied, skipped, failed
+        "UEFI lockdown applied: %d critical, %d best-effort succeeded, %d best-effort failed",
+        critical_applied, best_effort_applied, best_effort_failed
     )
 
-    if failed > 0 and applied == 0:
-        log.error("All BIOS settings failed to apply — lockdown may be ineffective")
-        return None
-
-    return bios_password
+    result["success"] = True
+    result["partial"] = best_effort_failed > 0
+    result["critical_applied"] = critical_applied
+    result["best_effort_applied"] = best_effort_applied
+    result["best_effort_failed"] = best_effort_failed
+    return result
 
 
 def remove_boot_lockdown(bios_password: str) -> bool:
@@ -423,12 +609,16 @@ def remove_boot_lockdown(bios_password: str) -> bool:
         log.warning("Not an HP machine — skipping UEFI lockdown removal")
         return True  # Nothing to remove
 
+    # Phase 4.1: Admin check
+    if not _is_admin():
+        log.error("UEFI lockdown removal requires admin privileges — aborting")
+        return False
+
     state = load_boot_state()
     if not state:
         log.warning("No saved boot state — restoring BIOS settings to safe defaults")
-        # If we have no saved state, just re-enable everything
         restore_settings = {}
-        for setting_name, _ in LOCKDOWN_SETTINGS:
+        for setting_name, _ in ALL_LOCKDOWN_SETTINGS:
             restore_settings[setting_name] = None  # None = set to safe default
     else:
         restore_settings = state.get("settings", {})
@@ -450,7 +640,7 @@ def remove_boot_lockdown(bios_password: str) -> bool:
     }
 
     restored = 0
-    for setting_name, _ in LOCKDOWN_SETTINGS:
+    for setting_name, _ in ALL_LOCKDOWN_SETTINGS:
         original = restore_settings.get(setting_name)
         if original is None:
             # Use safe default

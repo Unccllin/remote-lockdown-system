@@ -22,3 +22,26 @@ boot_lock_enabled = true
 # one during lockdown and report it to the server.
 # If a password IS already set and this is empty, UEFI lockdown is skipped.
 uefi_password =
+
+# --- Key lifecycle & brick prevention (A1/A4/A8) ---
+# Pending ACK state file (transient, deleted on ACK success).
+# Written BEFORE encryption so a crash doesn't lose the key.
+pending_ack_file = C:\ProgramData\LockdownAgent\.pending_ack
+
+# Recovery key file (long-lived, RSA-wrapped, deleted on unlock).
+# Contains the Fernet data key wrapped with IT's master RSA public key.
+# Enables offline recovery if the server is destroyed.
+recovery_key_file = C:\ProgramData\LockdownAgent\.recovery_key
+
+# IT's offline master recovery PUBLIC key (PEM format).
+# The PRIVATE key is kept in a safe/HSM by IT — never on the device.
+# Generate with: openssl genrsa -out recovery_master.key 4096
+#                openssl rsa -in recovery_master.key -pubout -out recovery_master.pub
+# Distribute recovery_master.pub to all devices; keep recovery_master.key offline.
+recovery_public_key = C:\ProgramData\LockdownAgent\recovery_master.pub
+
+# A4: Set to true once the server supports command_id dedup on encryption_keys.
+# When false, the pending ACK file is written (fixes A1 crash recovery) but
+# failed ACKs are not retried (the server may not have dedup yet).
+# When true, failed ACKs are retried on every loop iteration.
+server_supports_ack_dedup = false

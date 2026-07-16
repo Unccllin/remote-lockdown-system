@@ -8,7 +8,7 @@ jest.mock('../src/db/pool', () => mockPool);
 
 const devicesRoutes = require('../src/routes/devices');
 
-const JWT_SECRET = 'test-secret-key';
+const JWT_SECRET = 'test-secret-key-that-is-long-enough-for-validation-32';
 
 function makeToken(adminId = 'admin-1', username = 'admin') {
   return jwt.sign({ id: adminId, username }, JWT_SECRET, { expiresIn: '1h' });
@@ -61,8 +61,8 @@ describe('GET /api/devices', () => {
 describe('POST /api/devices (enroll)', () => {
   const app = createApp();
 
-  test('creates a new device and audit log entry', async () => {
-    const newDevice = { id: 'dev-new', hostname: 'DEV-NEW', owner_name: 'Charlie', status: 'active' };
+  test('creates a new device with per-device API key and audit log entry', async () => {
+    const newDevice = { id: 'dev-new', hostname: 'DEV-NEW', owner_name: 'Charlie', status: 'active', api_key_hash: 'some-hash' };
     mockPool.query.setResult('INSERT INTO devices', { rows: [newDevice] });
 
     const res = await request(app)
@@ -72,6 +72,10 @@ describe('POST /api/devices (enroll)', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.hostname).toBe('DEV-NEW');
+    // FA3: enrollment returns a per-device API key (plaintext, shown once)
+    expect(res.body.api_key).toBeDefined();
+    expect(typeof res.body.api_key).toBe('string');
+    expect(res.body.api_key.length).toBeGreaterThan(0);
 
     // Verify audit log was written
     const auditCall = mockPool.query.mock.calls.find(
@@ -261,8 +265,9 @@ describe('POST /api/devices/:id/recover', () => {
 describe('POST /api/devices/:id/track', () => {
   const app = createApp();
 
-  test('queues track command for active device', async () => {
-    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+  test('queues track command for stolen device', async () => {
+    // FA5: track is gated to stolen/locked/recovering
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
     const cmd = { id: 'cmd-1', command_type: 'track' };
 
     mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
@@ -281,6 +286,36 @@ describe('POST /api/devices/:id/track', () => {
            c[1].includes('start_tracking')
     );
     expect(auditCall).toBeDefined();
+  });
+
+  test('FA5: rejects track for active device (status gating)', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/track')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(403);
+    // Verify track_denied audit entry
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') &&
+           c[1].includes('track_denied')
+    );
+    expect(auditCall).toBeDefined();
+  });
+
+  test('FA5: allows track for locked device', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'locked' };
+    const cmd = { id: 'cmd-1', command_type: 'track' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+    mockPool.query.setResult('INSERT INTO commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/track')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
   });
 
   test('rejects if device is already tracking', async () => {
@@ -404,5 +439,150 @@ describe('GET /api/devices/:id/location/latest', () => {
       .set('Authorization', `Bearer ${makeToken()}`);
 
     expect(res.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FA5: POST /api/devices/:id/locate — status gating
+// ---------------------------------------------------------------------------
+
+describe('FA5: POST /api/devices/:id/locate (status gating)', () => {
+  const app = createApp();
+
+  test('allows locate for stolen device', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-1', command_type: 'locate' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+    mockPool.query.setResult('INSERT INTO commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/locate')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.command.command_type).toBe('locate');
+  });
+
+  test('allows locate for tracking device', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'tracking' };
+    const cmd = { id: 'cmd-1', command_type: 'locate' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+    mockPool.query.setResult('INSERT INTO commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/locate')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+  });
+
+  test('FA5: rejects locate for active device (status gating)', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/locate')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(403);
+    // Verify locate_denied audit entry
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') &&
+           c[1].includes('locate_denied')
+    );
+    expect(auditCall).toBeDefined();
+  });
+
+  test('returns 404 if device not found', async () => {
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [] });
+
+    const res = await request(app)
+      .post('/api/devices/nonexistent/locate')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FA5: Retention scheduler tests
+// ---------------------------------------------------------------------------
+
+describe('FA5: Retention scheduler', () => {
+  const { runRetentionPurge, startScheduler, stopScheduler } = require('../src/jobs/retentionScheduler');
+
+  beforeEach(() => {
+    mockPool.query.reset();
+  });
+
+  test('runRetentionPurge deletes old location reports and writes audit log', async () => {
+    // Mock: advisory lock succeeds, DELETE returns 5 rows, audit insert succeeds
+    let callIdx = 0;
+    mockPool.query.mockImplementation(async (sql) => {
+      callIdx++;
+      if (sql.includes('pg_try_advisory_lock')) {
+        return { rows: [{ pg_try_advisory_lock: true }] };
+      }
+      if (sql.includes('DELETE FROM location_reports')) {
+        return { rows: [{ id: 'loc-1' }, { id: 'loc-2' }, { id: 'loc-3' }], rowCount: 3 };
+      }
+      if (sql.includes('INSERT INTO audit_log')) {
+        return { rows: [] };
+      }
+      if (sql.includes('pg_advisory_unlock')) {
+        return { rows: [{ pg_advisory_unlock: true }] };
+      }
+      return { rows: [] };
+    });
+
+    // Mock connect() to return a client with query + release
+    const mockClient = {
+      query: mockPool.query,
+      release: jest.fn(),
+    };
+    mockPool.connect = jest.fn(async () => mockClient);
+
+    const result = await runRetentionPurge();
+
+    expect(result.rowsDeleted).toBe(3);
+    expect(result.skipped).toBe(false);
+
+    // Verify audit log was written
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') &&
+           c[1].includes('retention_purge')
+    );
+    expect(auditCall).toBeDefined();
+  });
+
+  test('runRetentionPurge skips if advisory lock not acquired', async () => {
+    mockPool.query.mockImplementation(async (sql) => {
+      if (sql.includes('pg_try_advisory_lock')) {
+        return { rows: [{ pg_try_advisory_lock: false }] };
+      }
+      if (sql.includes('pg_advisory_unlock')) {
+        return { rows: [{ pg_advisory_unlock: true }] };
+      }
+      return { rows: [] };
+    });
+
+    const mockClient = {
+      query: mockPool.query,
+      release: jest.fn(),
+    };
+    mockPool.connect = jest.fn(async () => mockClient);
+
+    const result = await runRetentionPurge();
+
+    expect(result.rowsDeleted).toBe(0);
+    expect(result.skipped).toBe(true);
+  });
+
+  test('startScheduler and stopScheduler work without errors', async () => {
+    // Use a short interval for testing
+    startScheduler(100);
+    // Stop immediately
+    await stopScheduler(500);
+    // No error means success
   });
 });

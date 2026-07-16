@@ -8,14 +8,42 @@ jest.mock('../src/db/pool', () => mockPool);
 
 // We need to require the router AFTER the mock is set up
 const agentRoutes = require('../src/routes/agent');
+const { generateApiKey, hashApiKey } = require('../src/db/apiKey');
 
-const AGENT_KEY = 'test-agent-key';
+const AGENT_KEY = 'test-agent-key-that-is-long-enough-24';
 
 function createApp() {
   const app = express();
   app.use(express.json());
   app.use('/api/agent', agentRoutes);
   return app;
+}
+
+/**
+ * FA3: Provision a device with a per-device API key for testing.
+ * Returns { device, apiKey }.
+ * Sets up the mock to return the device when queried by api_key_hash.
+ */
+function provisionDevice(overrides = {}) {
+  const apiKey = overrides.api_key || generateApiKey();
+  const apiKeyHash = hashApiKey(apiKey);
+  const device = {
+    id: overrides.id || 'dev-1',
+    hostname: overrides.hostname || 'DEV-001',
+    owner_name: overrides.owner_name || 'Test Owner',
+    status: overrides.status || 'active',
+    mac_address: overrides.mac_address || null,
+    hardware_uuid: overrides.hardware_uuid || null,
+    api_key_hash: apiKeyHash,
+    ...overrides,
+  };
+  // Remove api_key from device object (not stored in DB)
+  delete device.api_key;
+
+  // Set up mock: hash lookup returns the device
+  mockPool.query.setResult('SELECT * FROM devices WHERE api_key_hash', { rows: [device] });
+
+  return { device, apiKey };
 }
 
 beforeEach(() => {
@@ -45,20 +73,25 @@ describe('POST /api/agent/checkin', () => {
   });
 
   test('returns 400 if hostname missing', async () => {
+    // FA3: Auth succeeds via per-device key, then route validates body
+    const { apiKey } = provisionDevice();
     const res = await request(app)
       .post('/api/agent/checkin')
-      .set('x-agent-key', AGENT_KEY)
+      .set('x-agent-key', apiKey)
       .send({});
     expect(res.status).toBe(400);
   });
 
-  test('returns 404 if device not registered', async () => {
+  test('returns 401 if device not registered (auth identifies device)', async () => {
+    // FA3: With per-device keys, auth and device identification are coupled.
+    // If the key doesn't match any device's hash AND the legacy fallback
+    // can't find the device, auth fails with 401 (not 404).
     // mockPool defaults to { rows: [] }
     const res = await request(app)
       .post('/api/agent/checkin')
       .set('x-agent-key', AGENT_KEY)
       .send({ hostname: 'UNKNOWN-DEV' });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
   test('matches by MAC address first, then hostname', async () => {
@@ -140,21 +173,15 @@ describe('POST /api/agent/checkin', () => {
     expect(res.body.command.bios_password).toBe('BiosP@ss123');
   });
 
-  test('falls back to hostname when MAC/UUID not found', async () => {
-    const deviceByMac = { rows: [] }; // no match by MAC
-    const deviceByHost = { rows: [{ id: 'dev-2', hostname: 'DEV-002', status: 'active' }] };
+  test('falls back to hostname when MAC/UUID not found (legacy auth)', async () => {
+    // FA3: Legacy shared-key auth path. The hash lookup returns empty,
+    // then the legacy fallback finds the device by hostname.
+    const device = { id: 'dev-2', hostname: 'DEV-002', status: 'active', api_key_hash: null };
 
-    let callCount = 0;
-    mockPool.query.mockImplementation(async (sql) => {
-      callCount++;
-      if (sql.includes('SELECT * FROM devices') && callCount === 1) {
-        return deviceByMac; // first SELECT (by MAC) returns empty
-      }
-      if (sql.includes('SELECT * FROM devices')) {
-        return deviceByHost; // second SELECT (by hostname) finds device
-      }
-      return { rows: [] };
-    });
+    // Hash lookup returns empty, hostname lookup returns device
+    mockPool.query.setResult('SELECT * FROM devices WHERE api_key_hash', { rows: [] });
+    mockPool.query.setResult('SELECT * FROM devices WHERE hostname', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM devices WHERE (mac_address', { rows: [] });
 
     const res = await request(app)
       .post('/api/agent/checkin')
@@ -181,19 +208,20 @@ describe('POST /api/agent/command-ack', () => {
   });
 
   test('returns 400 if required fields missing', async () => {
+    const { apiKey } = provisionDevice();
     const res = await request(app)
       .post('/api/agent/command-ack')
-      .set('x-agent-key', AGENT_KEY)
+      .set('x-agent-key', apiKey)
       .send({ hostname: 'DEV-001' });
     expect(res.status).toBe(400);
   });
 
-  test('returns 404 if device not registered', async () => {
+  test('returns 401 if device not registered (auth identifies device)', async () => {
     const res = await request(app)
       .post('/api/agent/command-ack')
       .set('x-agent-key', AGENT_KEY)
       .send({ hostname: 'NOPE', command_id: 'cmd-1', result_status: 'executed' });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
   test('stores key_material on lockdown ACK and sets status to locked', async () => {
@@ -324,25 +352,26 @@ describe('POST /api/agent/deadman-report', () => {
   });
 
   test('returns 400 if hostname or key_material missing', async () => {
+    const { apiKey } = provisionDevice();
     const res1 = await request(app)
       .post('/api/agent/deadman-report')
-      .set('x-agent-key', AGENT_KEY)
+      .set('x-agent-key', apiKey)
       .send({ key_material: 'key==' });
     expect(res1.status).toBe(400);
 
     const res2 = await request(app)
       .post('/api/agent/deadman-report')
-      .set('x-agent-key', AGENT_KEY)
+      .set('x-agent-key', apiKey)
       .send({ hostname: 'DEV-001' });
     expect(res2.status).toBe(400);
   });
 
-  test('returns 404 if device not registered', async () => {
+  test('returns 401 if device not registered (auth identifies device)', async () => {
     const res = await request(app)
       .post('/api/agent/deadman-report')
       .set('x-agent-key', AGENT_KEY)
       .send({ hostname: 'NOPE', key_material: 'key==' });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
   test('stores key, sets status to locked, writes audit log', async () => {
@@ -398,34 +427,34 @@ describe('POST /api/agent/location', () => {
   });
 
   test('returns 400 if hostname or location missing', async () => {
+    const { apiKey } = provisionDevice();
     const res1 = await request(app)
       .post('/api/agent/location')
-      .set('x-agent-key', AGENT_KEY)
+      .set('x-agent-key', apiKey)
       .send({ location: { latitude: 1 } });
     expect(res1.status).toBe(400);
 
     const res2 = await request(app)
       .post('/api/agent/location')
-      .set('x-agent-key', AGENT_KEY)
+      .set('x-agent-key', apiKey)
       .send({ hostname: 'DEV-001' });
     expect(res2.status).toBe(400);
   });
 
-  test('returns 404 if device not registered', async () => {
+  test('returns 401 if device not registered (auth identifies device)', async () => {
     const res = await request(app)
       .post('/api/agent/location')
       .set('x-agent-key', AGENT_KEY)
       .send({ hostname: 'NOPE', location: { latitude: 1, longitude: 2 } });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
-  test('stores location report', async () => {
-    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'tracking' };
-    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+  test('stores location report with encrypted sensitive fields', async () => {
+    const { apiKey } = provisionDevice({ hostname: 'DEV-001', status: 'tracking' });
 
     const res = await request(app)
       .post('/api/agent/location')
-      .set('x-agent-key', AGENT_KEY)
+      .set('x-agent-key', apiKey)
       .send({
         hostname: 'DEV-001',
         mac_address: 'AA:BB:CC:DD:EE:FF',
@@ -445,23 +474,28 @@ describe('POST /api/agent/location', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
 
-    // Verify location was stored
+    // Verify location was stored with encrypted columns
     const insertCall = mockPool.query.mock.calls.find(
       c => c[0].includes('INSERT INTO location_reports')
     );
     expect(insertCall).toBeDefined();
+    // FA5: Encrypted columns present in the INSERT
+    expect(insertCall[0]).toContain('latitude_enc');
+    expect(insertCall[0]).toContain('longitude_enc');
+    expect(insertCall[0]).toContain('city_enc');
+    // FA5: raw_data NOT in the INSERT
+    expect(insertCall[0]).not.toContain('raw_data');
+    // Plaintext values still stored in original columns (dual-mode)
     expect(insertCall[1]).toContain(37.7749);
-    expect(insertCall[1]).toContain(-122.4194);
-    expect(insertCall[1]).toContain('wifi');
+    expect(insertCall[1]).toContain('San Francisco');
   });
 
   test('stores IP-based location with city info', async () => {
-    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'tracking' };
-    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    const { apiKey } = provisionDevice({ hostname: 'DEV-001', status: 'tracking' });
 
     const res = await request(app)
       .post('/api/agent/location')
-      .set('x-agent-key', AGENT_KEY)
+      .set('x-agent-key', apiKey)
       .send({
         hostname: 'DEV-001',
         location: {
@@ -484,5 +518,171 @@ describe('POST /api/agent/location', () => {
     expect(insertCall).toBeDefined();
     expect(insertCall[1]).toContain('New York');
     expect(insertCall[1]).toContain('1.2.3.4');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FA3 / CC5 / CC6: Per-device API key authentication tests
+// ---------------------------------------------------------------------------
+
+describe('FA3: Per-device API key authentication', () => {
+  const app = createApp();
+
+  test('authenticates with per-device key (hash lookup)', async () => {
+    const { device, apiKey } = provisionDevice({ hostname: 'PD-001', status: 'active' });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'PD-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.device_id).toBe(device.id);
+  });
+
+  test('rejects with invalid per-device key', async () => {
+    const { device } = provisionDevice({ hostname: 'PD-002' });
+    // Override: hash lookup checks the hash param — only return device for correct hash
+    const { hashApiKey } = require('../src/db/apiKey');
+    const correctHash = device.api_key_hash;
+    mockPool.query.setResult('SELECT * FROM devices WHERE api_key_hash', (sql, params) => {
+      if (params[0] === correctHash) return { rows: [device] };
+      return { rows: [] };
+    });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', 'invalid-key-not-matching')
+      .send({ hostname: 'PD-002' });
+
+    expect(res.status).toBe(401);
+  });
+
+  test('CC5: legacy shared key works for device without api_key_hash', async () => {
+    // Device with api_key_hash = null → legacy fallback succeeds
+    const device = { id: 'legacy-1', hostname: 'LEGACY-001', status: 'active', api_key_hash: null };
+    mockPool.query.setResult('SELECT * FROM devices WHERE api_key_hash', { rows: [] });
+    mockPool.query.setResult('SELECT * FROM devices WHERE hostname', { rows: [device] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'LEGACY-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.device_id).toBe('legacy-1');
+  });
+
+  test('CC5: shared key rejected for device WITH api_key_hash (per-device fallback)', async () => {
+    // Device has api_key_hash → shared key no longer works for it
+    const { device } = provisionDevice({ hostname: 'MIGRATED-001' });
+    // Override: hash lookup returns empty (wrong key), but device exists
+    mockPool.query.setResult('SELECT * FROM devices WHERE api_key_hash', { rows: [] });
+    mockPool.query.setResult('SELECT * FROM devices WHERE hostname', { rows: [device] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY) // shared key
+      .send({ hostname: 'MIGRATED-001' });
+
+    // CC5: shared key rejected because device has api_key_hash
+    expect(res.status).toBe(401);
+  });
+
+  test('CC6: no x-device-id header required', async () => {
+    // CC6: Device is identified by hash lookup, not by x-device-id header
+    const { apiKey } = provisionDevice({ hostname: 'NOHEADER-001' });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey)
+      // No x-device-id header
+      .send({ hostname: 'NOHEADER-001' });
+
+    expect(res.status).toBe(200);
+  });
+
+  test('per-device key works across all agent routes', async () => {
+    const { device, apiKey } = provisionDevice({ hostname: 'ALLROUTES-001', status: 'stolen' });
+    const cmd = { id: 'cmd-1', command_type: 'lockdown' };
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', apiKey)
+      .send({
+        hostname: 'ALLROUTES-001',
+        command_id: 'cmd-1',
+        result_status: 'executed',
+        key_material: 'fernet-key==',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FA3: Key rotation tests
+// ---------------------------------------------------------------------------
+
+describe('FA3: Key rotation (POST /api/devices/:id/rotate-key)', () => {
+  const { mockPool } = require('./mockPool');
+  const deviceRoutes = require('../src/routes/devices');
+
+  function createAdminApp() {
+    const app = express();
+    app.use(express.json());
+    app.use('/api/devices', deviceRoutes);
+    return app;
+  }
+
+  const JWT_SECRET = process.env.JWT_SECRET || 'test-secret-key-that-is-long-enough-for-validation-32';
+  function adminToken(adminId = 'admin-1') {
+    return jwt.sign({ id: adminId, username: 'admin' }, JWT_SECRET);
+  }
+
+  beforeEach(() => {
+    mockPool.query.reset();
+  });
+
+  test('rotates API key and returns new plaintext', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', api_key_hash: 'old-hash' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+
+    const app = createAdminApp();
+    const res = await request(app)
+      .post('/api/devices/dev-1/rotate-key')
+      .set('Authorization', `Bearer ${adminToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.api_key).toBeDefined();
+    expect(res.body.api_key).not.toBe('old-hash');
+    expect(res.body.device_id).toBe('dev-1');
+
+    // Verify UPDATE was called
+    const updateCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('UPDATE devices SET api_key_hash')
+    );
+    expect(updateCall).toBeDefined();
+  });
+
+  test('returns 404 for non-existent device', async () => {
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [] });
+
+    const app = createAdminApp();
+    const res = await request(app)
+      .post('/api/devices/nonexistent/rotate-key')
+      .set('Authorization', `Bearer ${adminToken()}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  test('requires admin auth', async () => {
+    const app = createAdminApp();
+    const res = await request(app)
+      .post('/api/devices/dev-1/rotate-key');
+
+    expect(res.status).toBe(401);
   });
 });

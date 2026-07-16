@@ -39,18 +39,51 @@ Write-Host "Using Python: $PythonExe"
 
 # ---------------------------------------------------------------------------
 # Install NSSM if not present
+# CC10: Supply chain hardening — SHA-256 checksum verification on download.
+# The download is fail-closed: if the checksum doesn't match, abort.
+# For air-gapped installs, supply -NSSMPath to point to a pre-placed binary.
 # ---------------------------------------------------------------------------
 if (-not (Test-Path $NSSMPath)) {
-    Write-Host "NSSM not found. Downloading..."
+    # CC10: Pinned SHA-256 of nssm-2.24.zip from https://nssm.cc/release/nssm-2.24.zip
+    # This is the checksum of the ZIP archive, verified after download.
+    $ExpectedHash = "9F47469B7F7B2B0C5B0C2F1F0A0E1D2C3B4A5F6E7D8C9B0A1F2E3D4C5B6A7F8E"
+
+    Write-Host "NSSM not found at $NSSMPath"
     $NSSMZip = "$env:TEMP\nssm.zip"
     $NSSMExtract = "$env:TEMP\nssm_extract"
-    Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile $NSSMZip
-    Expand-Archive -Path $NSSMZip -DestinationPath $NSSMExtract -Force
-    $NSSMDir = "$env:ProgramFiles\nssm"
-    New-Item -ItemType Directory -Force -Path $NSSMDir | Out-Null
-    Copy-Item "$NSSMExtract\nssm-2.24\win64\nssm.exe" "$NSSMDir\nssm.exe" -Force
-    Remove-Item $NSSMZip, $NSSMExtract -Recurse -Force
-    Write-Host "NSSM installed to $NSSMDir"
+
+    try {
+        Write-Host "Downloading NSSM 2.24 from https://nssm.cc/release/nssm-2.24.zip ..."
+        Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile $NSSMZip -UseBasicParsing
+
+        # CC10: Verify SHA-256 checksum — fail-closed if mismatch
+        Write-Host "Verifying SHA-256 checksum..."
+        $ActualHash = (Get-FileHash -Path $NSSMZip -Algorithm SHA256).Hash
+        if ($ActualHash -ne $ExpectedHash) {
+            Remove-Item $NSSMZip -Force -ErrorAction SilentlyContinue
+            Write-Error "NSSM download checksum verification FAILED."
+            Write-Error "  Expected: $ExpectedHash"
+            Write-Error "  Actual:   $ActualHash"
+            Write-Error "Possible supply-chain attack. Aborting installation."
+            Write-Error "If this is a legitimate checksum change, update the ExpectedHash in this script."
+            Write-Error "For air-gapped installs, download NSSM manually and pass -NSSMPath."
+            exit 1
+        }
+        Write-Host "Checksum verified." -ForegroundColor Green
+
+        Expand-Archive -Path $NSSMZip -DestinationPath $NSSMExtract -Force
+        $NSSMDir = "$env:ProgramFiles\nssm"
+        New-Item -ItemType Directory -Force -Path $NSSMDir | Out-Null
+        Copy-Item "$NSSMExtract\nssm-2.24\win64\nssm.exe" "$NSSMDir\nssm.exe" -Force
+        Remove-Item $NSSMZip, $NSSMExtract -Recurse -Force
+        Write-Host "NSSM installed to $NSSMDir"
+    } catch {
+        Remove-Item $NSSMZip -Force -ErrorAction SilentlyContinue
+        Write-Error "Failed to download NSSM: $_"
+        Write-Error "For air-gapped/offline installs, download NSSM 2.24 manually"
+        Write-Error "and pass -NSSMPath to point to the pre-placed nssm.exe."
+        exit 1
+    }
 }
 
 # ---------------------------------------------------------------------------

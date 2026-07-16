@@ -35,6 +35,7 @@ import os
 import sys
 import time
 import json
+import base64
 import logging
 import platform
 import subprocess
@@ -77,7 +78,13 @@ def load_config() -> dict:
 
     return {
         "server_url": os.environ.get("SERVER_URL", section.get("server_url", "https://localhost:3001")),
-        "agent_key": os.environ.get("AGENT_SHARED_KEY", section.get("agent_key", "")),
+        # FA3: Per-device API key (preferred) with AGENT_SHARED_KEY legacy fallback.
+        # The per-device key is provisioned at enrollment and unique to this device.
+        # The legacy shared key is used only for devices that haven't been
+        # re-enrolled with a per-device key yet (CC5 per-device fallback).
+        "agent_key": os.environ.get("DEVICE_API_KEY", os.environ.get(
+            "AGENT_SHARED_KEY", section.get("agent_key", section.get("device_api_key", ""))
+        )),
         "hostname": os.environ.get("DEVICE_HOSTNAME", section.get("hostname", socket.gethostname())),
         "poll_interval": int(os.environ.get("POLL_INTERVAL", section.get("poll_interval", "30"))),
         "lockdown_folder": Path(
@@ -101,6 +108,22 @@ def load_config() -> dict:
         # If empty and a password IS set, UEFI lockdown is skipped (can't
         # authenticate BIOS changes without it).
         "uefi_password": os.environ.get("UEFI_PASSWORD", section.get("uefi_password", "")),
+        # A1/A4: Pending ACK state file (transient, deleted on ACK success)
+        "pending_ack_file": Path(
+            os.environ.get("PENDING_ACK_FILE", section.get("pending_ack_file", str(PENDING_ACK_FILE)))
+        ),
+        # A8: Recovery key file (long-lived, RSA-wrapped, deleted on unlock)
+        "recovery_key_file": Path(
+            os.environ.get("RECOVERY_KEY_FILE", section.get("recovery_key_file", str(RECOVERY_KEY_FILE)))
+        ),
+        # A8: IT's offline master recovery PUBLIC key (PEM). Private key never on device.
+        "recovery_public_key": os.environ.get(
+            "RECOVERY_PUBLIC_KEY", section.get("recovery_public_key", "")
+        ),
+        # A4: Flip to true once server supports command_id dedup on encryption_keys
+        "server_supports_ack_dedup": os.environ.get(
+            "SERVER_SUPPORTS_ACK_DEDUP", section.get("server_supports_ack_dedup", "false")
+        ).lower() != "false",
     }
 
 # ---------------------------------------------------------------------------
@@ -111,14 +134,24 @@ def generate_key() -> bytes:
     return Fernet.generate_key()
 
 def encrypt_folder(folder: Path, key: bytes) -> None:
-    """Encrypt all files inside `folder` in-place. Never touches files outside it."""
+    """Encrypt all files inside `folder` in-place. Never touches files outside it.
+
+    CC20: Resumable — skips files that already have a .enc counterpart
+    (from a previous interrupted run). This allows handle_lockdown to
+    resume encryption with the same persisted key after a crash, rather
+    than generating a new key and leaving a mix of .enc and plaintext files.
+    """
     folder = folder.resolve()
     fernet = Fernet(key)
     for filepath in folder.rglob("*"):
         if filepath.is_file() and not filepath.name.endswith(".enc"):
+            enc_path = filepath.with_suffix(filepath.suffix + ".enc")
+            # CC20: Skip if already encrypted (resumable encryption)
+            if enc_path.exists():
+                log.info("Already encrypted, skipping: %s", filepath.name)
+                continue
             data = filepath.read_bytes()
             encrypted = fernet.encrypt(data)
-            enc_path = filepath.with_suffix(filepath.suffix + ".enc")
             enc_path.write_bytes(encrypted)
             filepath.unlink()
             log.info("Encrypted: %s", filepath.name)
@@ -446,7 +479,13 @@ def ack_command(
     result_status: str,
     key_material: str | None = None,
     bios_password: str | None = None,
-) -> None:
+    boot_lock_status: str | None = None,
+) -> bool:
+    """Send command ACK to server. Returns True on success, False on failure.
+
+    The return value is used by the pending-ACK retry mechanism (A4):
+    on failure, the ACK is persisted locally and retried on the next loop.
+    """
     payload = {
         "hostname": cfg["hostname"],
         "mac_address": get_mac_address(),
@@ -458,6 +497,8 @@ def ack_command(
         payload["key_material"] = key_material
     if bios_password:
         payload["bios_password"] = bios_password
+    if boot_lock_status:
+        payload["boot_lock_status"] = boot_lock_status
     try:
         resp = requests.post(
             f"{cfg['server_url']}/api/agent/command-ack",
@@ -468,8 +509,197 @@ def ack_command(
         )
         resp.raise_for_status()
         log.info("ACK sent: command=%s status=%s", command_id, result_status)
+        return True
     except requests.RequestException as e:
         log.error("ACK failed: %s", e)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Pending ACK persistence (A1 + A4)
+# ---------------------------------------------------------------------------
+
+def _fsync_file(path: Path) -> None:
+    """Ensure file contents are flushed to disk (crash safety)."""
+    import contextlib
+    with contextlib.suppress(Exception):
+        with open(path, 'r+b') as f:
+            f.flush()
+            os.fsync(f.fileno())
+
+
+def write_pending_ack(
+    file_path: Path,
+    command_id: str,
+    result_status: str,
+    key_material: str | None = None,
+    bios_password: str | None = None,
+    boot_lock_status: str | None = None,
+) -> None:
+    """Write the pending ACK state to disk (fsync'd).
+
+    Called BEFORE encrypt_folder() so a crash doesn't lose the key.
+    """
+    state = {
+        "command_id": command_id,
+        "result_status": result_status,
+        "created_at": time.time(),
+    }
+    if key_material:
+        state["key_material"] = key_material
+    if bios_password:
+        state["bios_password"] = bios_password
+    if boot_lock_status:
+        state["boot_lock_status"] = boot_lock_status
+    file_path.write_text(json.dumps(state))
+    _fsync_file(file_path)
+
+
+def update_pending_ack(
+    file_path: Path,
+    bios_password: str | None = None,
+    boot_lock_status: str | None = None,
+) -> None:
+    """Update the pending ACK file with bios_password / boot_lock_status
+    after boot lockdown completes."""
+    if not file_path.exists():
+        return
+    state = json.loads(file_path.read_text())
+    if bios_password:
+        state["bios_password"] = bios_password
+    if boot_lock_status:
+        state["boot_lock_status"] = boot_lock_status
+    file_path.write_text(json.dumps(state))
+    _fsync_file(file_path)
+
+
+def drain_pending_ack(cfg: dict) -> None:
+    """Re-send any pending ACK from a previous crash.
+
+    Called at the top of the main loop, BEFORE checkin(), so the server
+    receives the pending ACK before it can hand us a new command (prevents
+    command interleaving).
+
+    Gated by cfg['server_supports_ack_dedup']: if False, the ACK is only
+    deleted on success but NOT retried (the server may not have command_id
+    dedup yet). This still fixes A1 (crash recovery) because the key is
+    on disk; it just doesn't retry-send until the server is upgraded.
+    """
+    pending_ack_file = cfg.get("pending_ack_file", PENDING_ACK_FILE)
+    if not pending_ack_file.exists():
+        return
+    try:
+        state = json.loads(pending_ack_file.read_text())
+        log.warning("Found pending ACK for command=%s — attempting to re-send", state["command_id"])
+
+        ok = ack_command(
+            cfg,
+            state["command_id"],
+            state["result_status"],
+            key_material=state.get("key_material"),
+            bios_password=state.get("bios_password"),
+            boot_lock_status=state.get("boot_lock_status"),
+        )
+        if ok:
+            pending_ack_file.unlink()
+            log.info("Pending ACK drained & deleted for command=%s", state["command_id"])
+        else:
+            log.warning("Pending ACK retry failed; will retry next loop")
+    except Exception as e:
+        log.error("Failed to drain pending ACK: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Recovery key persistence (A8) — RSA-wrapped, long-lived
+# ---------------------------------------------------------------------------
+
+def _get_recovery_public_key(cfg: dict):
+    """Load the RSA public key for wrapping recovery keys.
+
+    Returns None if no recovery key is configured (recovery feature disabled).
+    """
+    pem_path = cfg.get("recovery_public_key", "")
+    if not pem_path:
+        return None
+    pem_path = Path(pem_path)
+    if not pem_path.exists():
+        log.warning("Recovery public key not found: %s", pem_path)
+        return None
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+        from cryptography.hazmat.primitives import hashes
+        pem_data = pem_path.read_bytes()
+        public_key = serialization.load_pem_public_key(pem_data)
+        return public_key
+    except Exception as e:
+        log.warning("Could not load recovery public key: %s", e)
+        return None
+
+
+def write_recovery_key(
+    file_path: Path,
+    command_id: str,
+    key_material: str,
+    bios_password: str | None = None,
+    cfg: dict | None = None,
+) -> None:
+    """Write the recovery key blob (RSA-wrapped) to disk.
+
+    The Fernet data key is encrypted with the IT master RSA public key.
+    The agent never holds the private half, so a thief with the machine
+    cannot unwrap it. IT with the offline private key can.
+    """
+    if cfg is None:
+        return
+    public_key = _get_recovery_public_key(cfg)
+    if public_key is None:
+        log.info("No recovery public key configured — skipping recovery key file")
+        return
+    try:
+        from cryptography.hazmat.primitives.asymmetric import padding
+        from cryptography.hazmat.primitives import hashes
+
+        # Wrap the Fernet key (bytes) with RSA-OAEP
+        wrapped_key = public_key.encrypt(
+            key_material.encode(),
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None,
+            ),
+        )
+
+        state = {
+            "command_id": command_id,
+            "wrapped_key": base64.b64encode(wrapped_key).decode(),
+            "created_at": time.time(),
+        }
+
+        # Also wrap bios_password if present
+        if bios_password:
+            wrapped_bios = public_key.encrypt(
+                bios_password.encode(),
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None,
+                ),
+            )
+            state["wrapped_bios_password"] = base64.b64encode(wrapped_bios).decode()
+
+        file_path.write_text(json.dumps(state))
+        _fsync_file(file_path)
+        log.info("Recovery key file written (RSA-wrapped, command=%s)", command_id)
+    except Exception as e:
+        log.error("Failed to write recovery key file: %s", e)
+
+
+def delete_recovery_key() -> None:
+    """Delete the recovery key file. Called on successful unlock."""
+    if RECOVERY_KEY_FILE.exists():
+        RECOVERY_KEY_FILE.unlink()
+        log.info("Recovery key file deleted (unlock successful)")
 
 # ---------------------------------------------------------------------------
 # Command handlers
@@ -492,10 +722,22 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         folder.mkdir(parents=True, exist_ok=True)
 
     key = generate_key()
+    key_b64 = key.decode()
+
+    # --- A1: Durability boundary is HERE (before encrypt_folder), not at the ACK ---
+    # File A: transient plaintext for ACK retry (A1 + A4)
+    pending_ack_file = cfg.get("pending_ack_file", PENDING_ACK_FILE)
+    write_pending_ack(pending_ack_file, command["id"], "executed", key_material=key_b64)
+    # File B: long-lived recovery blob, wrapped with master public key (A8)
+    recovery_key_file = cfg.get("recovery_key_file", RECOVERY_KEY_FILE)
+    write_recovery_key(recovery_key_file, command["id"], key_b64, cfg=cfg)
+
     try:
         encrypt_folder(folder, key)
     except Exception as e:
         log.error("Encryption failed: %s", e)
+        # Update pending ACK to 'failed' so the server knows. Do NOT delete File A.
+        write_pending_ack(pending_ack_file, command["id"], "failed", key_material=key_b64)
         ack_command(cfg, command["id"], "failed")
         return
 
@@ -506,30 +748,85 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     log.info("Sentinel written: %s", sentinel)
 
     # --- Boot lockdown: lock UEFI/BIOS + BCD to prevent bypass via boot ---
+    # CC17: Key files (A + B) are already on disk. Boot lockdown rollback
+    # must NOT touch them. If boot lockdown critically fails, the agent
+    # still ACKs with key_material + boot_lock_status: "partial".
+    #
+    # Phase 4: apply_bcd_lockdown() and apply_boot_lockdown() now return dicts
+    # with success/partial/rolled_back status. The agent uses these to set
+    # boot_lock_status in the ACK payload:
+    #   - None: boot lockdown fully applied (all critical + best-effort OK)
+    #   - "partial": some best-effort settings failed, or boot lockdown was
+    #     rolled back due to critical failure (device is encrypted but not
+    #     boot-locked — operator may need to manually clear BIOS)
+    #   - "applied": all critical settings applied (best-effort may have failed)
     bios_password = None
+    boot_lock_status = None
     if cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available:
         try:
             # BCD lockdown (works on any Windows machine)
-            bcd_lockdown.apply_bcd_lockdown()
+            # Phase 4: returns dict with success/partial/rolled_back
+            bcd_result = bcd_lockdown.apply_bcd_lockdown()
+            if bcd_result.get("rolled_back"):
+                log.error("BCD lockdown critically failed and was rolled back")
+                boot_lock_status = "partial"
+            elif bcd_result.get("partial"):
+                log.warning("BCD lockdown applied with some best-effort failures")
+                boot_lock_status = "partial"
+            elif bcd_result.get("success"):
+                log.info("BCD lockdown fully applied")
+            else:
+                log.error("BCD lockdown failed")
+                boot_lock_status = "partial"
         except Exception as e:
             log.error("BCD lockdown failed: %s", e)
+            boot_lock_status = "partial"
 
         try:
             # UEFI lockdown (HP-specific via WMI)
+            # Phase 4: returns dict with bios_password + success/partial/rolled_back
             existing_pw = cfg.get("uefi_password") or None
-            bios_password = hp_uefi_lockdown.apply_boot_lockdown(existing_pw)
-            if bios_password:
+            hp_result = hp_uefi_lockdown.apply_boot_lockdown(existing_pw)
+            bios_password = hp_result.get("bios_password")
+            if hp_result.get("not_hp"):
+                log.info("UEFI boot lockdown skipped (not an HP machine)")
+            elif hp_result.get("rolled_back"):
+                log.error("UEFI lockdown critically failed and was rolled back — BIOS password retained for operator action")
+                boot_lock_status = "partial"
+            elif hp_result.get("partial"):
+                log.warning("UEFI lockdown applied with some best-effort failures")
+                boot_lock_status = "partial" if boot_lock_status is None else boot_lock_status
+            elif hp_result.get("success"):
                 log.warning("UEFI boot lockdown applied — BIOS password sent to server")
             else:
                 log.warning("UEFI boot lockdown skipped (not HP or password required)")
+                if boot_lock_status is None:
+                    boot_lock_status = "partial"
         except Exception as e:
             log.error("UEFI lockdown failed: %s", e)
+            if boot_lock_status is None:
+                boot_lock_status = "partial"
 
-    key_b64 = key.decode()
-    ack_command(cfg, command["id"], "executed", key_material=key_b64, bios_password=bios_password)
-    log.warning("Key transmitted to server — wiping local copy")
-    del key
-    del key_b64
+    # Update File A with bios_password + boot_lock_status for ACK retry
+    update_pending_ack(pending_ack_file, bios_password=bios_password, boot_lock_status=boot_lock_status)
+
+    # --- A4: ACK with return value. On success, delete File A (NOT File B). ---
+    ok = ack_command(
+        cfg, command["id"], "executed",
+        key_material=key_b64,
+        bios_password=bios_password,
+        boot_lock_status=boot_lock_status,
+    )
+    if ok:
+        if pending_ack_file.exists():
+            pending_ack_file.unlink()
+        log.warning("Key transmitted to server — wiping local pending ACK")
+    else:
+        log.error("ACK failed — pending ACK file preserved for retry on next loop")
+
+    # File B survives until handle_unlock. File A is deleted (on ACK success)
+    # or preserved for retry (on ACK failure).
+    del key, key_b64
     if bios_password:
         del bios_password
 
@@ -557,6 +854,17 @@ def handle_unlock(cfg: dict, command: dict) -> None:
     if sentinel.exists():
         sentinel.unlink()
         log.info("Sentinel removed")
+
+    # --- A8: Delete the recovery key file (unlock successful, no longer needed) ---
+    recovery_key_file = cfg.get("recovery_key_file", RECOVERY_KEY_FILE)
+    if recovery_key_file.exists():
+        recovery_key_file.unlink()
+        log.info("Recovery key file deleted (unlock successful)")
+
+    # Also clean up any stale pending ACK file
+    pending_ack_file = cfg.get("pending_ack_file", PENDING_ACK_FILE)
+    if pending_ack_file.exists():
+        pending_ack_file.unlink()
 
     # --- Remove boot lockdown: restore UEFI/BIOS + BCD to pre-lockdown state ---
     if cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available:
@@ -631,6 +939,16 @@ HEARTBEAT_FILE = Path(__file__).parent / ".heartbeat"
 DEADMAN_KEY_FILE = Path(__file__).parent / ".deadman_key"
 DEADMAN_TIMEOUT_HOURS = 24  # Lock if flagged-stolen and offline for this long
 
+# --- A1/A4: Pending ACK file (transient, plaintext, deleted on ACK success) ---
+# Written BEFORE encrypt_folder() so a crash between encryption and ACK
+# doesn't lose the key. Drained by the main loop on restart.
+PENDING_ACK_FILE = Path(__file__).parent / ".pending_ack"
+
+# --- A8: Recovery key file (long-lived, RSA-wrapped, deleted on unlock) ---
+# Contains the Fernet data key wrapped with the IT master RSA public key.
+# Survives ACK success, reboots, and server loss — enables offline recovery.
+RECOVERY_KEY_FILE = Path(__file__).parent / ".recovery_key"
+
 def update_deadman_timer(status: str) -> None:
     """Write current time + device status to the dead man's file."""
     DEADMAN_FILE.write_text(json.dumps({
@@ -655,6 +973,13 @@ def check_deadman(cfg: dict) -> None:
             sentinel = cfg["lock_sentinel"]
             if not sentinel.exists():
                 key = generate_key()
+                key_b64 = key.decode()
+                # A1: Write pending ACK file before encryption (crash safety)
+                pending_ack_file = cfg.get("pending_ack_file", PENDING_ACK_FILE)
+                write_pending_ack(pending_ack_file, "deadman", "executed", key_material=key_b64)
+                # A8: Write recovery key file (RSA-wrapped, for offline recovery)
+                recovery_key_file = cfg.get("recovery_key_file", RECOVERY_KEY_FILE)
+                write_recovery_key(recovery_key_file, "deadman", key_b64, cfg=cfg)
                 encrypt_folder(cfg["lockdown_folder"], key)
                 apply_lock_screen()
                 start_lock_guardian()
@@ -662,9 +987,9 @@ def check_deadman(cfg: dict) -> None:
                 # Store key locally so it can be uploaded to the server once
                 # network connectivity is restored — without this the device
                 # would be permanently unrecoverable.
-                DEADMAN_KEY_FILE.write_text(key.decode())
+                DEADMAN_KEY_FILE.write_text(key_b64)
                 log.warning("Deadman lockdown complete — key stored locally for upload on reconnection")
-                del key
+                del key, key_b64
     except Exception as e:
         log.error("Dead man check failed: %s", e)
 
@@ -727,6 +1052,11 @@ def main() -> None:
 
         # Check dead man's switch before attempting network
         check_deadman(cfg)
+
+        # A4: Drain any pending ACK from a previous crash BEFORE checkin.
+        # This ensures the server receives the pending ACK before it can
+        # hand us a new command (prevents command interleaving).
+        drain_pending_ack(cfg)
 
         data = checkin(cfg)
         if data:

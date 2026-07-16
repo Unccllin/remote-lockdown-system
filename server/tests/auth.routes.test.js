@@ -60,7 +60,7 @@ describe('POST /api/auth/login', () => {
     expect(res.body.admin.username).toBe('admin');
 
     // Verify token is valid
-    const decoded = jwt.verify(res.body.token, 'test-secret-key');
+    const decoded = jwt.verify(res.body.token, 'test-secret-key-that-is-long-enough-for-validation-32');
     expect(decoded.username).toBe('admin');
   });
 

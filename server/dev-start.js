@@ -7,8 +7,11 @@
  */
 
 // Set env defaults BEFORE requiring anything else
-process.env.AGENT_SHARED_KEY = process.env.AGENT_SHARED_KEY || 'dev-agent-key';
-process.env.JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret';
+process.env.NODE_ENV = process.env.NODE_ENV || 'development';
+// FA3: AGENT_SHARED_KEY is transitional — use a long non-placeholder value for dev
+process.env.AGENT_SHARED_KEY = process.env.AGENT_SHARED_KEY || 'dev-agent-shared-key-not-a-placeholder-24';
+process.env.AGENT_KEY_PEPPER = process.env.AGENT_KEY_PEPPER || 'dev-pepper-key-not-a-placeholder-32';
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret-not-a-placeholder-32';
 process.env.CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
 process.env.USE_PGLITE = 'true';
 
@@ -22,85 +25,15 @@ require.cache[require.resolve('./src/db/pool')] = {
 };
 
 const bcrypt = require('bcryptjs');
+const { runMigrations } = require('./src/db/migrationRunner');
+const { validateEnv } = require('./src/config/env');
 
-async function runMigrations(pool) {
+// Validate env in dev mode (relaxed length floors, but still rejects placeholders)
+validateEnv({ dev: true });
+
+async function runMigrationsOnPglite(pool) {
   console.log('Running migrations on PGlite...');
-  const statements = [
-    'CREATE EXTENSION IF NOT EXISTS "pgcrypto"',
-    `CREATE TABLE IF NOT EXISTS admins (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      username VARCHAR(100) UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )`,
-    `CREATE TABLE IF NOT EXISTS devices (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      hostname VARCHAR(255) NOT NULL,
-      owner_name VARCHAR(255) NOT NULL,
-      status VARCHAR(50) NOT NULL DEFAULT 'active',
-      mac_address VARCHAR(100) UNIQUE,
-      hardware_uuid VARCHAR(255) UNIQUE,
-      last_checkin TIMESTAMPTZ,
-      enrolled_at TIMESTAMPTZ DEFAULT NOW()
-    )`,
-    `CREATE TABLE IF NOT EXISTS commands (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-      command_type VARCHAR(50) NOT NULL,
-      status VARCHAR(50) NOT NULL DEFAULT 'pending',
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      executed_at TIMESTAMPTZ
-    )`,
-    `CREATE TABLE IF NOT EXISTS encryption_keys (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-      key_material TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      released_at TIMESTAMPTZ
-    )`,
-    `CREATE TABLE IF NOT EXISTS bios_passwords (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-      password TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )`,
-    `CREATE TABLE IF NOT EXISTS audit_log (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      device_id UUID REFERENCES devices(id) ON DELETE SET NULL,
-      admin_id UUID REFERENCES admins(id) ON DELETE SET NULL,
-      action TEXT NOT NULL,
-      detail JSONB,
-      timestamp TIMESTAMPTZ DEFAULT NOW()
-    )`,
-    `CREATE TABLE IF NOT EXISTS location_reports (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-      latitude DOUBLE PRECISION,
-      longitude DOUBLE PRECISION,
-      accuracy_meters DOUBLE PRECISION,
-      source VARCHAR(20) DEFAULT 'ip',
-      city VARCHAR(255),
-      region VARCHAR(255),
-      country VARCHAR(10),
-      ip_address VARCHAR(100),
-      wifi_count INT,
-      raw_data JSONB,
-      reported_at TIMESTAMPTZ DEFAULT NOW()
-    )`,
-    'CREATE INDEX IF NOT EXISTS idx_location_reports_device_id ON location_reports(device_id)',
-    'CREATE INDEX IF NOT EXISTS idx_location_reports_reported_at ON location_reports(reported_at DESC)',
-  ];
-
-  for (const sql of statements) {
-    try {
-      await pool.query(sql);
-    } catch (e) {
-      // Ignore "already exists" errors
-      if (!e.message.includes('already exists')) {
-        console.error('Migration error:', e.message);
-      }
-    }
-  }
+  await runMigrations(pool);
   console.log('Migrations complete.');
 }
 
@@ -175,7 +108,7 @@ async function main() {
   const pool = pglitePool;
 
   try {
-    await runMigrations(pool);
+    await runMigrationsOnPglite(pool);
     await seedData(pool);
   } catch (err) {
     console.error('Setup failed:', err.message);
@@ -199,7 +132,28 @@ async function main() {
   app.use('/api/agent', require('./src/routes/agent'));
   app.use('/api/audit', require('./src/routes/audit'));
 
-  app.get('/api/health', (req, res) => res.json({ status: 'ok', db: 'pglite' }));
+  // FA6: Extended health check — DB probe + scheduler status, reject agent-key probing
+  app.get('/api/health', async (req, res) => {
+    if (req.headers['x-agent-key']) {
+      return res.status(400).json({ error: 'Health endpoint is not for agent use' });
+    }
+    try {
+      await pglitePool.query('SELECT 1');
+      res.json({
+        status: 'ok',
+        db: 'pglite',
+        scheduler: 'running',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      res.status(503).json({
+        status: 'degraded',
+        db: 'disconnected',
+        error: err.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
 
   app.use((err, req, res, _next) => {
     console.error(err);

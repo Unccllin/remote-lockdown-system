@@ -1,0 +1,71 @@
+# FA6: Docker Compose for dev/test of the Remote Device Lockdown System.
+# Scoped as dev/test infrastructure — NOT the production deploy path yet.
+#
+# Usage:
+#   docker compose up --build
+#
+# Secret handling (CC12): Secrets are mounted as files via Docker secrets,
+# not passed as ENV vars (which are visible in `docker inspect`).
+# The server reads them via the _FILE convention:
+#   FIELD_ENCRYPTION_KEY_FILE -> reads the key from the file
+#   AGENT_KEY_PEPPER_FILE -> reads the pepper from the file
+#
+# For local dev without Docker secrets, you can still use ENV vars directly
+# in a .env file (see .env.example). The _FILE convention takes precedence.
+
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - CORS_ORIGIN=http://localhost:5173
+      # Secrets via _FILE convention (CC12) — mount as Docker secrets
+      # For dev/test without secrets, set these directly in .env:
+      # - FIELD_ENCRYPTION_KEY=...
+      # - LOCATION_FIELD_KEY=...
+      # - JWT_SECRET=...
+      # - AGENT_KEY_PEPPER=...
+      - FIELD_ENCRYPTION_KEY_FILE=/run/secrets/field_encryption_key
+      - LOCATION_FIELD_KEY_FILE=/run/secrets/location_field_key
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+      - AGENT_KEY_PEPPER_FILE=/run/secrets/agent_key_pepper
+      # DB config (uses PGlite in dev, real Postgres in prod)
+      - USE_PGLITE=true
+      # Retention
+      - LOCATION_RETENTION_DAYS=90
+    volumes:
+      - pglite-data:/app/.pglite-data
+    secrets:
+      - field_encryption_key
+      - location_field_key
+      - jwt_secret
+      - agent_key_pepper
+    restart: unless-stopped
+
+  # Frontend dashboard (optional — uncomment if you have a frontend build)
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "5173:5173"
+  #   depends_on:
+  #     - server
+
+volumes:
+  pglite-data:
+
+secrets:
+  field_encryption_key:
+    file: ./secrets/field_encryption_key.txt
+  location_field_key:
+    file: ./secrets/location_field_key.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
+  agent_key_pepper:
+    file: ./secrets/agent_key_pepper.txt
