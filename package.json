@@ -8,6 +8,11 @@
     "test:server": "cd server && node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit --detectOpenHandles",
     "test:agent": "cd agent && python3 -m pytest tests/ -v",
     "test:dashboard": "cd dashboard && npx vitest run",
-    "test:ci": "npm run test:server -- --maxWorkers=1 && npm run test:agent"
+    "test:ci": "npm run test:server -- --maxWorkers=1 && npm run test:agent",
+    "dev:server": "cd server && node dev-start-sqlite.js",
+    "dev:dashboard": "cd dashboard && npx vite",
+    "dev:electron": "cd electron && npm run start:dev",
+    "build:dashboard": "cd dashboard && npx vite build",
+    "build:electron": "cd electron && npm run build"
   }
 }
