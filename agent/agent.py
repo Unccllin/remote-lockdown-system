@@ -43,6 +43,9 @@ import socket
 import uuid
 import configparser
 import threading
+import hashlib
+import hmac
+import secrets
 from pathlib import Path
 
 import requests
@@ -427,15 +430,15 @@ def report_location(cfg: dict) -> dict | None:
         return None
 
     try:
-        resp = requests.post(
+        resp = _signed_post(
             f"{cfg['server_url']}/api/agent/location",
-            json={
+            cfg,
+            {
                 "hostname": cfg["hostname"],
                 "mac_address": get_mac_address(),
                 "hardware_uuid": get_hardware_uuid(),
                 "location": location,
             },
-            headers={"x-agent-key": cfg["agent_key"]},
             timeout=15,
             verify=cfg["verify_tls"],
         )
@@ -451,19 +454,71 @@ def report_location(cfg: dict) -> dict | None:
         return None
 
 # ---------------------------------------------------------------------------
+# HMAC request signing (Phase 0 security hardening)
+# ---------------------------------------------------------------------------
+
+def sign_headers(agent_key: str, body_bytes: bytes) -> dict:
+    """Build HMAC-signed headers for a request to the server.
+
+    Returns headers dict with x-agent-key, x-timestamp, x-nonce,
+    x-signature, and x-sig-version. The server validates the signature
+    and rejects replays (same nonce within 10 min).
+
+    The signature is HMAC-SHA256(agent_key, "{timestamp}:{nonce}:{body_sha256}").
+    """
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_hex(16)  # 32-char hex
+    body_hash = hashlib.sha256(body_bytes).hexdigest()
+    payload = f"{timestamp}:{nonce}:{body_hash}"
+    signature = hmac.new(
+        agent_key.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "x-agent-key": agent_key,
+        "x-timestamp": timestamp,
+        "x-nonce": nonce,
+        "x-signature": signature,
+        "x-sig-version": "1",
+    }
+
+
+def _signed_post(url: str, cfg: dict, json_body: dict, **kwargs) -> requests.Response:
+    """Wrapper around requests.post that adds HMAC-signed headers.
+
+    Falls back to plain x-agent-key header if signing fails (shouldn't happen,
+    but keeps the agent working if there's an encoding edge case).
+
+    The body is pre-serialized to bytes and sent via data= (not json=) so the
+    server sees the exact same bytes we computed the signature over.
+    """
+    body_bytes = json.dumps(json_body, separators=(",", ":")).encode("utf-8")
+    try:
+        headers = sign_headers(cfg["agent_key"], body_bytes)
+    except Exception as e:
+        log.warning("HMAC signing failed, falling back to plain key: %s", e)
+        headers = {"x-agent-key": cfg["agent_key"]}
+    # Merge any caller-provided headers (e.g., none currently, but future-proof)
+    headers.update(kwargs.pop("headers", {}))
+    headers.setdefault("Content-Type", "application/json")
+    return requests.post(url, data=body_bytes, headers=headers, **kwargs)
+
+
+# ---------------------------------------------------------------------------
 # Server communication
 # ---------------------------------------------------------------------------
 
 def checkin(cfg: dict) -> dict | None:
     try:
-        resp = requests.post(
+        resp = _signed_post(
             f"{cfg['server_url']}/api/agent/checkin",
-            json={
+            cfg,
+            {
                 "hostname": cfg["hostname"],
                 "mac_address": get_mac_address(),
                 "hardware_uuid": get_hardware_uuid(),
             },
-            headers={"x-agent-key": cfg["agent_key"]},
             timeout=15,
             verify=cfg["verify_tls"],
         )
@@ -500,10 +555,10 @@ def ack_command(
     if boot_lock_status:
         payload["boot_lock_status"] = boot_lock_status
     try:
-        resp = requests.post(
+        resp = _signed_post(
             f"{cfg['server_url']}/api/agent/command-ack",
-            json=payload,
-            headers={"x-agent-key": cfg["agent_key"]},
+            cfg,
+            payload,
             timeout=15,
             verify=cfg["verify_tls"],
         )
@@ -999,15 +1054,15 @@ def report_deadman_key(cfg: dict) -> None:
         return
     try:
         key_material = DEADMAN_KEY_FILE.read_text().strip()
-        resp = requests.post(
+        resp = _signed_post(
             f"{cfg['server_url']}/api/agent/deadman-report",
-            json={
+            cfg,
+            {
                 "hostname": cfg["hostname"],
                 "mac_address": get_mac_address(),
                 "hardware_uuid": get_hardware_uuid(),
                 "key_material": key_material,
             },
-            headers={"x-agent-key": cfg["agent_key"]},
             timeout=15,
             verify=cfg["verify_tls"],
         )

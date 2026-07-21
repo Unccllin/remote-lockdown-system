@@ -15,14 +15,36 @@ const app = express();
 
 app.use(helmet());
 app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173' }));
-app.use(express.json());
 
+// Phase 0: capture raw body for HMAC signature verification.
+// express.json() parses the body but we also need the raw bytes to compute
+// the SHA-256 hash for HMAC. The verify hook runs before parsing — we stash
+// the raw body on req.rawBody.
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    req.rawBody = buf.toString('utf8');
+  },
+}));
+
+// Global rate limiter (admin/dashboard endpoints)
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
 app.use(limiter);
 
+// Phase 0: Per-device rate limiter for agent endpoints.
+// Applied only to /api/agent/* — keyed on device ID (set by agentAuth) or
+// x-agent-key header (pre-auth). Stricter than the global limiter since
+// agents check in frequently.
+const agentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600, // 600 req / 15 min per device (40/min — enough for 30s polling + retries)
+  keyGenerator: (req) => req.device?.id || req.headers['x-agent-key'] || req.ip,
+  standardHeaders: true,
+  message: { error: 'Too many agent requests — rate limited per device' },
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/devices', devicesRoutes);
-app.use('/api/agent', agentRoutes);
+app.use('/api/agent', agentLimiter, agentRoutes);
 app.use('/api/audit', auditRoutes);
 
 app.get('/api/health', async (req, res) => {

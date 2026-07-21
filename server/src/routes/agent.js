@@ -3,6 +3,7 @@ const pool = require('../db/pool');
 const { withTransaction } = require('../db/withTransaction');
 const { encryptField, readDualMode } = require('../db/fieldCrypto');
 const { hashApiKey, verifyApiKey, verifySharedKey } = require('../db/apiKey');
+const { hmacVerify } = require('../middleware/hmacAuth');
 
 const router = express.Router();
 
@@ -40,6 +41,8 @@ async function agentAuth(req, res, next) {
       // Per-device key verified — attach device to request
       req.device = result.rows[0];
       req.authMethod = 'per_device_key';
+      // Phase 0: capture plaintext key for HMAC verification (downstream middleware)
+      req.deviceKey = key;
       return next();
     }
   } catch (err) {
@@ -102,7 +105,7 @@ async function findDevice(hostname, mac_address, hardware_uuid) {
   return devResult.rows[0] || null;
 }
 
-router.post('/checkin', agentAuth, async (req, res) => {
+router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, mac_address, hardware_uuid } = req.body;
   if (!hostname) return res.status(400).json({ error: 'hostname required' });
 
@@ -175,7 +178,7 @@ router.post('/checkin', agentAuth, async (req, res) => {
 });
 
 // A2/A4: command-ack wrapped in transaction with idempotent key insert
-router.post('/command-ack', agentAuth, async (req, res) => {
+router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, command_id, result_status, key_material, bios_password, mac_address, hardware_uuid, boot_lock_status } = req.body;
   if (!hostname || !command_id || !result_status) {
     return res.status(400).json({ error: 'hostname, command_id, result_status required' });
@@ -245,7 +248,7 @@ router.post('/command-ack', agentAuth, async (req, res) => {
 });
 
 // A2: deadman-report wrapped in transaction
-router.post('/deadman-report', agentAuth, async (req, res) => {
+router.post('/deadman-report', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, mac_address, hardware_uuid, key_material } = req.body;
   if (!hostname || !key_material) {
     return res.status(400).json({ error: 'hostname and key_material required' });
@@ -296,7 +299,7 @@ router.post('/deadman-report', agentAuth, async (req, res) => {
  * of fields rather than storing the entire location object. This prevents
  * accidental storage of future fields that may contain PII.
  */
-router.post('/location', agentAuth, async (req, res) => {
+router.post('/location', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, mac_address, hardware_uuid, location } = req.body;
   if (!hostname || !location) {
     return res.status(400).json({ error: 'hostname and location required' });
