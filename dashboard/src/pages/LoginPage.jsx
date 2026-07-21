@@ -1,13 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ShieldAlert, Loader, Lock, User } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/client';
+import { setupApi } from '../api/setup';
 
 export default function LoginPage() {
   const [form, setForm] = useState({ username: '', password: '' });
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  // Check if setup is needed (no admin exists yet) — redirect to setup
+  useEffect(() => {
+    setupApi
+      .getStatus()
+      .then(({ data }) => {
+        if (data.needsSetup) {
+          navigate('/setup', { replace: true });
+        }
+      })
+      .catch(() => {
+        // If we can't check, continue to login
+      });
+  }, [navigate]);
 
   async function handleSubmit(e) {
     e.preventDefault();

@@ -1,0 +1,117 @@
+/**
+ * Setup routes — first-run admin creation.
+ *
+ * These endpoints are used by the Electron admin app's first-run setup wizard.
+ * They are only active when no admin user exists yet (first run).
+ *
+ * Security:
+ *   - GET /api/setup/status: returns { needsSetup: true/false }
+ *     This endpoint is safe to expose — it only reveals whether any admin
+ *     exists, not any actual data.
+ *   - POST /api/setup/create-admin: creates the initial admin account.
+ *     This endpoint ONLY works when no admin exists. Once the first admin
+ *     is created, it returns 403 (forbidden) permanently.
+ *     This prevents attackers from using it to create rogue admin accounts.
+ */
+
+const express = require('express');
+const router = express.Router();
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const pool = require('../db/pool');
+
+/**
+ * GET /api/setup/status
+ * Returns whether the system needs initial setup (no admin exists).
+ */
+router.get('/status', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT COUNT(*) as count FROM admins');
+    const count = parseInt(result.rows[0].count);
+    res.json({
+      needsSetup: count === 0,
+      adminCount: count,
+    });
+  } catch (err) {
+    // If the admins table doesn't exist yet, setup is needed
+    res.json({
+      needsSetup: true,
+      adminCount: 0,
+      error: 'Database not initialized',
+    });
+  }
+});
+
+/**
+ * POST /api/setup/create-admin
+ * Creates the initial admin account. Only works when no admin exists.
+ *
+ * Body: { username, password }
+ * Validation:
+ *   - username: 3-100 chars, alphanumeric + underscore + hyphen
+ *   - password: minimum 8 chars
+ */
+router.post('/create-admin', async (req, res) => {
+  const { username, password } = req.body;
+
+  // Validate input
+  if (!username || !password) {
+    return res.status(400).json({ error: 'username and password are required' });
+  }
+  if (typeof username !== 'string' || username.length < 3 || username.length > 100) {
+    return res.status(400).json({ error: 'Username must be 3-100 characters' });
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+    return res.status(400).json({ error: 'Username can only contain letters, numbers, underscores, and hyphens' });
+  }
+  if (typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+
+  try {
+    // CRITICAL SECURITY CHECK: verify no admin exists
+    const checkResult = await pool.query('SELECT COUNT(*) as count FROM admins');
+    const count = parseInt(checkResult.rows[0].count);
+
+    if (count > 0) {
+      // An admin already exists — this endpoint is permanently disabled
+      return res.status(403).json({
+        error: 'Initial setup has already been completed. This endpoint is disabled.',
+      });
+    }
+
+    // Create the admin account
+    const hash = bcrypt.hashSync(password, 10);
+    const adminId = crypto.randomUUID();
+
+    await pool.query(
+      'INSERT INTO admins (id, username, password_hash) VALUES ($1, $2, $3)',
+      [adminId, username, hash]
+    );
+
+    // Log the setup event (no admin_id since this is the first admin)
+    await pool.query(
+      'INSERT INTO audit_log (id, device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4, $5)',
+      [crypto.randomUUID(), null, adminId, 'initial_setup', JSON.stringify({ username })]
+    );
+
+    console.log(`[setup] Initial admin created: ${username}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Admin account created successfully',
+      username,
+    });
+  } catch (err) {
+    console.error('[setup] Failed to create admin:', err.message);
+
+    // Handle duplicate username
+    if (err.message && err.message.includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+
+    res.status(500).json({ error: 'Failed to create admin account' });
+  }
+});
+
+module.exports = router;

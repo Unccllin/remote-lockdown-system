@@ -1,6 +1,7 @@
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
+import SetupPage from './pages/SetupPage';
 import DashboardLayout from './components/DashboardLayout';
 import OverviewPage from './pages/OverviewPage';
 import DevicesPage from './pages/DevicesPage';
@@ -16,6 +17,7 @@ function PrivateRoute({ children }) {
 export default function App() {
   return (
     <Routes>
+      <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route
         path="/"

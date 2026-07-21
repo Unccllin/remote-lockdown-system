@@ -127,6 +127,7 @@ async function startServer(options = {}) {
   app.use('/api/devices', require('../server/src/routes/devices'));
   app.use('/api/agent', require('../server/src/routes/agent'));
   app.use('/api/audit', require('../server/src/routes/audit'));
+  app.use('/api/setup', require('../server/src/routes/setup'));
 
   // Health check
   app.get('/api/health', async (req, res) => {

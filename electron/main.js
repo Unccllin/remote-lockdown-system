@@ -12,10 +12,12 @@
 const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { initConfig } = require('./config');
 
 // Keep a global reference to prevent garbage collection
 let mainWindow = null;
 let serverInfo = null;
+let isFirstRun = false;
 
 // --- Paths ---
 function getSqlitePath() {
@@ -136,7 +138,13 @@ function createWindow(serverPort) {
 // --- App lifecycle ---
 app.whenReady().then(async () => {
   try {
-    // Set SQLite path before starting server
+    // Initialize config (load existing or generate new on first run)
+    const userDataPath = app.getPath('userData');
+    const { config, isFirstRun: firstRun } = initConfig(userDataPath);
+    isFirstRun = firstRun;
+    console.log('[main] First run:', isFirstRun);
+
+    // Set SQLite path
     process.env.SQLITE_PATH = getSqlitePath();
     console.log('[main] SQLite path:', process.env.SQLITE_PATH);
 
@@ -149,6 +157,7 @@ app.whenReady().then(async () => {
     serverInfo = await startServer({
       isDev,
       dashboardDistPath,
+      // Don't seed admin via server-starter — the setup wizard handles it
     });
 
     console.log(`[main] Server started on port ${serverInfo.port}`);

@@ -144,6 +144,7 @@ async function main() {
   app.use('/api/devices', require('./src/routes/devices'));
   app.use('/api/agent', require('./src/routes/agent'));
   app.use('/api/audit', require('./src/routes/audit'));
+  app.use('/api/setup', require('./src/routes/setup'));
 
   // FA6: Extended health check — DB probe + scheduler status, reject agent-key probing
   app.get('/api/health', async (req, res) => {
