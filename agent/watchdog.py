@@ -8,7 +8,8 @@ Uses a heartbeat file that agent.py must update every poll cycle.
 If the heartbeat goes stale, the watchdog kills and restarts the agent.
 
 USAGE:
-  python watchdog.py
+  python watchdog.py                  # Run from source
+  lockdown-watchdog                   # Run as PyInstaller-bundled executable
 
 INSTALL AS SERVICE:
   Use install_watchdog_service.ps1 (run as Administrator)
@@ -23,10 +24,38 @@ import signal
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
+# Frozen-mode detection (PyInstaller bundle)
+# ---------------------------------------------------------------------------
+def _is_frozen():
+    """Check if the watchdog is running as a PyInstaller bundle."""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-AGENT_SCRIPT    = Path(__file__).parent / "agent.py"
-HEARTBEAT_FILE  = Path(__file__).parent / ".heartbeat"
+# When frozen, the agent binary lives next to the watchdog binary.
+# When running from source, we launch agent.py via the Python interpreter.
+if _is_frozen():
+    _EXE_DIR = Path(sys.executable).parent
+    AGENT_BIN = _EXE_DIR / ('lockdown-agent.exe' if sys.platform == 'win32' else 'lockdown-agent')
+    AGENT_SCRIPT = AGENT_BIN  # Unified name (binary path either way)
+    LAUNCH_VIA_PYTHON = False
+else:
+    AGENT_SCRIPT = Path(__file__).parent / "agent.py"
+    LAUNCH_VIA_PYTHON = True
+
+# Heartbeat file: must match the path used by agent.py.
+# agent.py uses _STATE_DIR (platform-specific system dir when frozen,
+# script dir when running from source). We replicate that logic here.
+if _is_frozen():
+    if sys.platform == 'win32':
+        _STATE_DIR = Path(os.environ.get('PROGRAMDATA', 'C:\\ProgramData')) / 'LockdownAgent'
+    else:
+        _STATE_DIR = Path('/var/lib/lockdown-agent')
+else:
+    _STATE_DIR = Path(__file__).parent
+HEARTBEAT_FILE = _STATE_DIR / ".heartbeat"
+
 HEARTBEAT_MAX_AGE_SEC = 120   # Restart agent if no heartbeat for 2 minutes
 CHECK_INTERVAL_SEC    = 30    # How often watchdog checks the heartbeat
 PYTHON_EXE      = sys.executable
@@ -47,11 +76,18 @@ log = logging.getLogger("watchdog")
 _agent_proc: subprocess.Popen | None = None
 
 def start_agent() -> subprocess.Popen:
-    log.info("Starting agent: %s %s", PYTHON_EXE, AGENT_SCRIPT)
-    proc = subprocess.Popen(
-        [PYTHON_EXE, str(AGENT_SCRIPT)],
-        cwd=str(AGENT_SCRIPT.parent),
-    )
+    if LAUNCH_VIA_PYTHON:
+        log.info("Starting agent: %s %s", PYTHON_EXE, AGENT_SCRIPT)
+        proc = subprocess.Popen(
+            [PYTHON_EXE, str(AGENT_SCRIPT)],
+            cwd=str(AGENT_SCRIPT.parent),
+        )
+    else:
+        log.info("Starting agent: %s", AGENT_SCRIPT)
+        proc = subprocess.Popen(
+            [str(AGENT_SCRIPT)],
+            cwd=str(AGENT_SCRIPT.parent),
+        )
     log.info("Agent started — PID %d", proc.pid)
     return proc
 
@@ -83,7 +119,7 @@ def main() -> None:
              HEARTBEAT_MAX_AGE_SEC, CHECK_INTERVAL_SEC)
 
     if not AGENT_SCRIPT.exists():
-        log.error("agent.py not found at %s — exiting", AGENT_SCRIPT)
+        log.error("Agent not found at %s — exiting", AGENT_SCRIPT)
         sys.exit(1)
 
     # Handle SIGTERM gracefully

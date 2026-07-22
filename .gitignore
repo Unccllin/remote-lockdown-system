@@ -14,6 +14,10 @@ agent/.boot_state
 agent/.bcd_locked
 agent/logs/
 agent/.pytest_cache/
+# PyInstaller build artifacts
+agent/build/
+agent/dist/
+*.spec.bak
 server/coverage/
 server/.pglite-data/
 dashboard/coverage/
