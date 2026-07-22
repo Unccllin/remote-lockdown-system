@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Run tests before releasing
+  # ---------------------------------------------------------------------------
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: cd server && npm ci && npm test
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - run: cd agent && pip install -r requirements.txt && pip install pytest && pytest tests/ -v
+
+  # ---------------------------------------------------------------------------
+  # Build + publish Electron app for Windows
+  # ---------------------------------------------------------------------------
+  release-windows:
+    name: Release (Windows)
+    needs: test
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: electron
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - run: npm ci
+
+      # Build dashboard (needed by Electron app)
+      - run: cd ../dashboard && npm ci && npm run build
+
+      # Build agent binaries (Windows)
+      - run: cd ../agent && pip install -r requirements.txt pyinstaller && python build.ps1
+        shell: pwsh
+
+      # Build + publish Electron app
+      - run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Azure Trusted Signing (uncomment when configured):
+          # AZURE_TRUSTED_SIGNING_TENANT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          # AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          # AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+
+  # ---------------------------------------------------------------------------
+  # Build + publish Electron app for macOS
+  # ---------------------------------------------------------------------------
+  release-macos:
+    name: Release (macOS)
+    needs: test
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: electron
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - run: npm ci
+
+      - run: cd ../dashboard && npm ci && npm run build
+
+      - run: cd ../agent && pip install -r requirements.txt pyinstaller && ./build.sh
+
+      - run: npx electron-builder --mac --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Apple Developer signing (uncomment when configured):
+          # CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          # CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+  # ---------------------------------------------------------------------------
+  # Build + publish Electron app for Linux
+  # ---------------------------------------------------------------------------
+  release-linux:
+    name: Release (Linux)
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: electron
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - run: npm ci
+
+      - run: cd ../dashboard && npm ci && npm run build
+
+      - run: cd ../agent && pip install -r requirements.txt pyinstaller && ./build.sh
+
+      - run: npx electron-builder --linux --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

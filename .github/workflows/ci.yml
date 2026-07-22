@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Server tests (Node.js + Jest)
+  # ---------------------------------------------------------------------------
+  server-tests:
+    name: Server Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+
+      - run: npm test
+
+  # ---------------------------------------------------------------------------
+  # Dashboard tests (React + Vitest)
+  # ---------------------------------------------------------------------------
+  dashboard-tests:
+    name: Dashboard Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - run: npm ci
+
+      - run: npm test
+
+  # ---------------------------------------------------------------------------
+  # Agent tests (Python + pytest)
+  # ---------------------------------------------------------------------------
+  agent-tests:
+    name: Agent Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - run: pip install pytest
+
+      - run: pytest tests/ -v
