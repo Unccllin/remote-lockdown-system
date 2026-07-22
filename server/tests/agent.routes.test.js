@@ -130,7 +130,7 @@ describe('POST /api/agent/checkin', () => {
       .send({ hostname: 'DEV-001' });
 
     expect(res.status).toBe(200);
-    expect(res.body.command).toEqual({ id: 'cmd-1', type: 'lockdown', key_material: null, bios_password: null });
+    expect(res.body.command).toEqual({ id: 'cmd-1', type: 'lockdown', key_material: null, bios_password: null, command_uuid: null });
   });
 
   test('attaches key_material for unlock commands', async () => {

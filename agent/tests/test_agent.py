@@ -333,7 +333,9 @@ class TestDeadmanKey:
                 mock_requests.post.assert_called_once()
                 call_args = mock_requests.post.call_args
                 assert 'deadman-report' in call_args[0][0]
-                assert call_args[1]['json']['key_material'] == 'test-fernet-key=='
+                # Phase 0: _signed_post sends JSON as data= (not json=) for HMAC signing
+                body = json.loads(call_args[1]['data'])
+                assert body['key_material'] == 'test-fernet-key=='
 
                 # Local key file should be deleted
                 assert not agent.DEADMAN_KEY_FILE.exists()
@@ -595,7 +597,9 @@ class TestGeolocation:
             assert result["latitude"] == 37.77
             mock_requests.post.assert_called_once()
             call_args = mock_requests.post.call_args
-            assert 'location' in call_args[1]['json']
+            # Phase 0: _signed_post sends JSON as data= (not json=) for HMAC signing
+            body = json.loads(call_args[1]['data'])
+            assert 'location' in body
 
     def test_report_location_returns_none_on_failure(self, cfg):
         with patch.object(agent, 'get_geolocation') as mock_geo, \
