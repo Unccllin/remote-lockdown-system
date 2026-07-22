@@ -6,10 +6,12 @@
   "scripts": {
     "start": "electron .",
     "start:dev": "ELECTRON_IS_DEV=1 electron .",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux"
+    "build:agent": "cd ../agent && python3 -m PyInstaller agent.spec --noconfirm && python3 -m PyInstaller watchdog.spec --noconfirm && python3 -m PyInstaller offline_recovery.spec --noconfirm",
+    "build:dashboard": "cd ../dashboard && npx vite build",
+    "build": "npm run build:dashboard && npm run build:agent && electron-builder",
+    "build:win": "npm run build:dashboard && npm run build:agent && electron-builder --win",
+    "build:mac": "npm run build:dashboard && npm run build:agent && electron-builder --mac",
+    "build:linux": "npm run build:dashboard && npm run build:agent && electron-builder --linux"
   },
   "dependencies": {},
   "devDependencies": {
@@ -31,7 +33,28 @@
       "../server/node_modules/**/*",
       "../dashboard/dist/**/*"
     ],
-    "extraResources": [],
+    "extraResources": [
+      {
+        "from": "../agent/dist",
+        "to": "agent",
+        "filter": [
+          "lockdown-agent",
+          "lockdown-agent.exe",
+          "lockdown-watchdog",
+          "lockdown-watchdog.exe",
+          "lockdown-recovery",
+          "lockdown-recovery.exe"
+        ]
+      },
+      {
+        "from": "../agent/bin",
+        "to": "agent/bin",
+        "filter": [
+          "nssm.exe",
+          "nssm"
+        ]
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "build/icon.ico"

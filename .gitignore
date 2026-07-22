@@ -12,6 +12,9 @@ agent/.heartbeat
 agent/.locked
 agent/.boot_state
 agent/.bcd_locked
+agent/.update_pending
+agent/.update_downloaded
+agent/.update_downloaded.tmp
 agent/logs/
 agent/.pytest_cache/
 # PyInstaller build artifacts

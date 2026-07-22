@@ -10,6 +10,7 @@ const authRoutes = require('./routes/auth');
 const devicesRoutes = require('./routes/devices');
 const agentRoutes = require('./routes/agent');
 const auditRoutes = require('./routes/audit');
+const installerRoutes = require('./routes/installer');
 
 const app = express();
 
@@ -46,6 +47,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/devices', devicesRoutes);
 app.use('/api/agent', agentLimiter, agentRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/installer', installerRoutes);
 
 app.get('/api/health', async (req, res) => {
   // FA6: Extended health check — DB probe + scheduler status

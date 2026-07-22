@@ -347,4 +347,137 @@ router.post('/location', agentAuth, hmacVerify(), async (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * Phase 4: Agent auto-update check.
+ *
+ * The agent calls this endpoint on each checkin (or periodically) to see
+ * if a newer version of itself is available. If so, it downloads the
+ * new binary from /api/agent/download, verifies the SHA-256, and signals
+ * the watchdog to perform a hot-swap restart.
+ *
+ * Auth: agentAuth (per-device key or legacy shared key).
+ * HMAC: optional (transition period — unsigned requests get a warning).
+ *
+ * Request body: { hostname, agent_version, platform }
+ * Response: { update_available: bool, latest_version, sha256, download_url, size }
+ */
+router.get('/update', agentAuth, async (req, res) => {
+  const agentVersion = req.headers['x-agent-version'] || req.query.version || '0.0.0';
+  const agentPlatform = req.headers['x-agent-platform'] || req.query.platform || 'linux';
+
+  // Find the bundled agent binary
+  const fs = require('fs');
+  const path = require('path');
+  const crypto = require('crypto');
+
+  // Binary search paths (same logic as installer.js)
+  const candidates = [];
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, 'agent'));
+  }
+  candidates.push(path.join(__dirname, '..', '..', '..', '..', 'agent', 'dist'));
+  candidates.push(path.join(__dirname, '..', '..', '..', 'agent', 'dist'));
+
+  const ext = agentPlatform === 'win' ? '.exe' : '';
+  const agentBinName = `lockdown-agent${ext}`;
+
+  let binPath = null;
+  for (const dir of candidates) {
+    const p = path.join(dir, agentBinName);
+    if (fs.existsSync(p)) {
+      binPath = p;
+      break;
+    }
+  }
+
+  if (!binPath) {
+    // No binary available — report no update
+    return res.json({
+      update_available: false,
+      latest_version: agentVersion,
+      reason: 'no_binary_available',
+    });
+  }
+
+  const stat = fs.statSync(binPath);
+  const hash = crypto.createHash('sha256');
+  hash.update(fs.readFileSync(binPath));
+  const sha256 = hash.digest('hex');
+
+  const LATEST_VERSION = '1.0.0';
+  const updateAvailable = compareVersions(agentVersion, LATEST_VERSION) < 0;
+
+  // Build download URL — the agent will use its server_url + this path
+  const downloadPath = `/api/agent/download?platform=${agentPlatform}`;
+
+  res.json({
+    update_available: updateAvailable,
+    latest_version: LATEST_VERSION,
+    current_version: agentVersion,
+    sha256,
+    size: stat.size,
+    download_url: downloadPath,
+    built_at: stat.mtime.toISOString(),
+  });
+});
+
+/**
+ * Phase 4: Agent binary download endpoint.
+ *
+ * Serves the pre-built agent binary for auto-update. The agent verifies
+ * the SHA-256 hash (from /update) before applying the update.
+ *
+ * Auth: agentAuth (per-device key or legacy shared key).
+ */
+router.get('/download', agentAuth, async (req, res) => {
+  const agentPlatform = req.query.platform || 'linux';
+
+  const fs = require('fs');
+  const path = require('path');
+
+  const candidates = [];
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, 'agent'));
+  }
+  candidates.push(path.join(__dirname, '..', '..', '..', '..', 'agent', 'dist'));
+  candidates.push(path.join(__dirname, '..', '..', '..', 'agent', 'dist'));
+
+  const ext = agentPlatform === 'win' ? '.exe' : '';
+  const agentBinName = `lockdown-agent${ext}`;
+
+  let binPath = null;
+  for (const dir of candidates) {
+    const p = path.join(dir, agentBinName);
+    if (fs.existsSync(p)) {
+      binPath = p;
+      break;
+    }
+  }
+
+  if (!binPath) {
+    return res.status(404).json({ error: 'Agent binary not available' });
+  }
+
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${agentBinName}"`);
+  res.sendFile(path.resolve(binPath));
+});
+
+/**
+ * Compare two version strings (semver-ish: "1.2.3").
+ * Returns: -1 if a < b, 0 if a == b, 1 if a > b
+ */
+function compareVersions(a, b) {
+  const partsA = a.split('.').map(Number);
+  const partsB = b.split('.').map(Number);
+  const len = Math.max(partsA.length, partsB.length);
+  for (let i = 0; i < len; i++) {
+    const va = partsA[i] || 0;
+    const vb = partsB[i] || 0;
+    if (va < vb) return -1;
+    if (va > vb) return 1;
+  }
+  return 0;
+}
+
 module.exports = router;

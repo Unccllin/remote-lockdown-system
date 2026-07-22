@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Download, Copy, Check, Key, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Download, Copy, Check, Key, AlertTriangle, Package } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/client';
 
@@ -10,6 +10,7 @@ export default function EnrollPage() {
   const [loading, setLoading] = useState(false);
   const [enrolled, setEnrolled] = useState(null); // { device, apiKey }
   const [copied, setCopied] = useState(false);
+  const [downloadingInstaller, setDownloadingInstaller] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -140,6 +141,39 @@ echo "Done!"
     toast.success('Setup script downloaded');
   }
 
+  async function downloadAgentInstaller(platform) {
+    setDownloadingInstaller(true);
+    try {
+      const response = await api.get(`/installer/${enrolled.device.id}?platform=${platform}`, {
+        responseType: 'blob',
+      });
+      const blob = new Blob([response.data], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `lockdown-agent-${enrolled.device.hostname.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${platform}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Agent installer (${platform}) downloaded — contains binary, config, and install script`);
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message || 'Installer download failed';
+      // If the response is a blob (error JSON), parse it
+      if (err.response?.data instanceof Blob) {
+        try {
+          const text = await err.response.data.text();
+          const parsed = JSON.parse(text);
+          toast.error(parsed.error || 'Installer download failed');
+        } catch {
+          toast.error('Installer download failed');
+        }
+      } else {
+        toast.error(msg);
+      }
+    } finally {
+      setDownloadingInstaller(false);
+    }
+  }
+
   // --- Enrollment success view ---
   if (enrolled) {
     return (
@@ -237,6 +271,46 @@ echo "Done!"
               </div>
             </button>
           </div>
+        </div>
+
+        {/* Agent installer (pre-built binary + config + install script) */}
+        <div className="card mb-6">
+          <h3 className="text-sm font-medium text-slate-300 mb-4">Agent Installer (Recommended)</h3>
+          <p className="text-xs text-slate-500 mb-4">
+            Download a complete installer package containing the pre-built agent binary,
+            device-specific config, and an install script. Just run on the target device.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              onClick={() => downloadAgentInstaller('win')}
+              disabled={downloadingInstaller}
+              className="flex items-center gap-2 px-4 py-3 rounded-lg bg-indigo-900/30 hover:bg-indigo-900/50 border border-indigo-700/50 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Package size={16} className="text-indigo-400" />
+              <div className="text-left">
+                <div className="font-medium">Windows Installer</div>
+                <div className="text-xs text-slate-500">
+                  {downloadingInstaller ? 'Preparing...' : 'ZIP with .exe + install.ps1'}
+                </div>
+              </div>
+            </button>
+            <button
+              onClick={() => downloadAgentInstaller('linux')}
+              disabled={downloadingInstaller}
+              className="flex items-center gap-2 px-4 py-3 rounded-lg bg-indigo-900/30 hover:bg-indigo-900/50 border border-indigo-700/50 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Package size={16} className="text-indigo-400" />
+              <div className="text-left">
+                <div className="font-medium">Linux Installer</div>
+                <div className="text-xs text-slate-500">
+                  {downloadingInstaller ? 'Preparing...' : 'ZIP with binary + install.sh'}
+                </div>
+              </div>
+            </button>
+          </div>
+          <p className="text-xs text-amber-500/60 mt-3">
+            Note: The installer generates a new API key for this device. The old key will stop working.
+          </p>
         </div>
 
         {/* Actions */}

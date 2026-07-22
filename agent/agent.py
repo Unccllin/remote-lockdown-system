@@ -71,6 +71,12 @@ logging.basicConfig(
 log = logging.getLogger("lockdown-agent")
 
 # ---------------------------------------------------------------------------
+# Version
+# ---------------------------------------------------------------------------
+
+AGENT_VERSION = "1.0.0"
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
@@ -1221,6 +1227,151 @@ def report_deadman_key(cfg: dict) -> None:
         log.error("Deadman key upload failed: %s", e)
 
 # ---------------------------------------------------------------------------
+# Auto-update (Phase 4)
+# ---------------------------------------------------------------------------
+#
+# The agent checks for updates on each checkin. If a newer version is
+# available, it downloads the new binary to a temp file, verifies the
+# SHA-256 hash, then writes a signal file (.update_pending) that tells
+# the watchdog to perform a hot-swap:
+#
+#   1. Watchdog sees .update_pending file
+#   2. Watchdog stops the agent process
+#   3. Watchdog replaces the agent binary with the downloaded one
+#   4. Watchdog starts the new agent
+#   5. New agent deletes .update_pending on startup
+#
+# This approach avoids self-replacement (which doesn't work on Windows
+# while the binary is running) and lets the watchdog handle the swap.
+
+# Update signal file (watchdog watches for this)
+UPDATE_PENDING_FILE = _STATE_DIR / '.update_pending'
+# Downloaded binary (watchdog moves this to replace the current binary)
+UPDATE_DOWNLOAD_FILE = _STATE_DIR / '.update_downloaded'
+
+# Check for updates at most once per hour (not every checkin)
+UPDATE_CHECK_INTERVAL = 3600  # seconds
+
+
+def check_for_update(cfg: dict) -> None:
+    """Check if a newer agent version is available on the server.
+
+    If an update is available, downloads and verifies it, then writes
+    a signal file for the watchdog to perform the hot-swap.
+    """
+    try:
+        # Use a signed GET request (HMAC over empty body)
+        headers = sign_headers(cfg["agent_key"], b"")
+        headers["X-Agent-Version"] = AGENT_VERSION
+        headers["X-Agent-Platform"] = "win" if sys.platform == "win32" else "linux"
+
+        resp = requests.get(
+            f"{cfg['server_url']}/api/agent/update",
+            headers=headers,
+            timeout=15,
+            verify=cfg["verify_tls"],
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        if not data.get("update_available"):
+            return
+
+        latest_version = data.get("latest_version", "")
+        expected_sha256 = data.get("sha256", "")
+        download_url = data.get("download_url", "")
+        size = data.get("size", 0)
+
+        log.info("Update available: %s → %s (%s bytes)",
+                 AGENT_VERSION, latest_version, size)
+
+        # Download the new binary
+        if not download_url:
+            log.warning("Update available but no download_url provided")
+            return
+
+        full_url = f"{cfg['server_url']}{download_url}"
+        download_update(cfg, full_url, expected_sha256, latest_version)
+
+    except requests.RequestException as e:
+        log.debug("Update check failed: %s", e)
+    except Exception as e:
+        log.warning("Update check error: %s", e)
+
+
+def download_update(cfg: dict, url: str, expected_sha256: str, version: str) -> None:
+    """Download the new agent binary, verify SHA-256, and signal the watchdog.
+
+    Downloads to UPDATE_DOWNLOAD_FILE, then writes UPDATE_PENDING_FILE
+    with metadata for the watchdog to consume.
+    """
+    try:
+        log.info("Downloading update from %s ...", url)
+        headers = sign_headers(cfg["agent_key"], b"")
+        headers["X-Agent-Platform"] = "win" if sys.platform == "win32" else "linux"
+
+        resp = requests.get(url, headers=headers, stream=True,
+                            timeout=120, verify=cfg["verify_tls"])
+        resp.raise_for_status()
+
+        # Download to temp file first, then rename (atomic)
+        tmp_file = UPDATE_DOWNLOAD_FILE.with_suffix('.tmp')
+        sha256 = hashlib.sha256()
+        total = 0
+
+        with open(tmp_file, 'wb') as f:
+            for chunk in resp.iter_content(chunk_size=65536):
+                if chunk:
+                    f.write(chunk)
+                    sha256.update(chunk)
+                    total += len(chunk)
+
+        actual_sha256 = sha256.hexdigest()
+        if actual_sha256 != expected_sha256:
+            log.error("Update SHA-256 mismatch: expected %s, got %s",
+                      expected_sha256, actual_sha256)
+            tmp_file.unlink(missing_ok=True)
+            return
+
+        # Rename to final download path
+        tmp_file.replace(UPDATE_DOWNLOAD_FILE)
+        log.info("Update downloaded and verified (%s bytes, SHA-256 OK)", total)
+
+        # Write signal file for watchdog
+        import json as _json
+        signal = {
+            "version": version,
+            "sha256": actual_sha256,
+            "downloaded_at": time.time(),
+            "download_path": str(UPDATE_DOWNLOAD_FILE),
+        }
+        UPDATE_PENDING_FILE.write_text(_json.dumps(signal, indent=2))
+        log.info("Update signal written — watchdog will apply on next check")
+
+    except Exception as e:
+        log.error("Update download failed: %s", e)
+        # Clean up partial download
+        try:
+            tmp_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def clear_update_signal() -> None:
+    """Clear any pending update signal on startup.
+
+    Called by the agent after a successful start — if we're running,
+    either the update was applied or it's stale.
+    """
+    if UPDATE_PENDING_FILE.exists():
+        log.info("Clearing stale update signal")
+        UPDATE_PENDING_FILE.unlink(missing_ok=True)
+    if UPDATE_DOWNLOAD_FILE.exists():
+        log.info("Clearing stale update download")
+        UPDATE_DOWNLOAD_FILE.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
 # Main polling loop
 # ---------------------------------------------------------------------------
 
@@ -1236,7 +1387,7 @@ def main() -> None:
     args, _ = parser.parse_known_args()
 
     if args.version:
-        print(f"lockdown-agent 1.0.0 (frozen={_is_frozen()})")
+        print(f"lockdown-agent {AGENT_VERSION} (frozen={_is_frozen()})")
         sys.exit(0)
 
     cfg = load_config(config_path=args.config)
@@ -1254,7 +1405,11 @@ def main() -> None:
              cfg["hostname"], cfg["server_url"], cfg["poll_interval"])
     startup_check(cfg)
 
+    # Clear any stale update signal from a previous run
+    clear_update_signal()
+
     last_location_report = 0.0
+    last_update_check = 0.0
     current_status = "active"
 
     while True:
@@ -1300,6 +1455,12 @@ def main() -> None:
                 if now - last_location_report >= cfg["location_interval"]:
                     report_location(cfg)
                     last_location_report = now
+
+            # Phase 4: Check for agent updates (throttled to once per hour)
+            now = time.time()
+            if now - last_update_check >= UPDATE_CHECK_INTERVAL:
+                check_for_update(cfg)
+                last_update_check = now
 
         time.sleep(cfg["poll_interval"])
 

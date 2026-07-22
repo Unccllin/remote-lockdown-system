@@ -108,6 +108,89 @@ def is_heartbeat_stale() -> bool:
     return age > HEARTBEAT_MAX_AGE_SEC
 
 # ---------------------------------------------------------------------------
+# Auto-update support (Phase 4)
+# ---------------------------------------------------------------------------
+#
+# The agent downloads a new binary and writes .update_pending + .update_downloaded.
+# The watchdog detects this, stops the agent, replaces the binary, and restarts.
+
+UPDATE_PENDING_FILE = _STATE_DIR / '.update_pending'
+UPDATE_DOWNLOAD_FILE = _STATE_DIR / '.update_downloaded'
+
+
+def check_and_apply_update() -> bool:
+    """Check if an update is pending and apply it.
+
+    Returns True if an update was applied (agent was stopped and restarted).
+    """
+    if not UPDATE_PENDING_FILE.exists():
+        return False
+
+    import json
+    try:
+        signal = json.loads(UPDATE_PENDING_FILE.read_text())
+    except Exception as e:
+        log.error("Failed to read update signal: %s — removing", e)
+        UPDATE_PENDING_FILE.unlink(missing_ok=True)
+        return False
+
+    download_path = signal.get('download_path', str(UPDATE_DOWNLOAD_FILE))
+    version = signal.get('version', 'unknown')
+
+    log.info("Update pending: version %s, binary at %s", version, download_path)
+
+    if not Path(download_path).exists():
+        log.error("Update binary not found at %s — clearing signal", download_path)
+        UPDATE_PENDING_FILE.unlink(missing_ok=True)
+        return False
+
+    # Stop the current agent
+    log.info("Stopping agent for update...")
+    stop_agent(_agent_proc)
+
+    # Replace the agent binary
+    try:
+        # On Windows, we can't overwrite a running .exe, but we already
+        # stopped the process above. On Linux, this is straightforward.
+        import shutil
+        target = AGENT_SCRIPT
+        backup = AGENT_SCRIPT.with_suffix('.bak')
+
+        # Back up the current binary
+        if target.exists():
+            shutil.copy2(str(target), str(backup))
+
+        # Move the new binary into place
+        shutil.move(str(download_path), str(target))
+
+        # Make it executable (Linux/macOS)
+        if sys.platform != 'win32':
+            import os
+            os.chmod(str(target), 0o755)
+
+        log.info("Agent binary updated to version %s", version)
+
+    except Exception as e:
+        log.error("Failed to apply update: %s — restoring backup", e)
+        # Try to restore the backup
+        backup = AGENT_SCRIPT.with_suffix('.bak')
+        if backup.exists():
+            import shutil
+            shutil.move(str(backup), str(AGENT_SCRIPT))
+        UPDATE_PENDING_FILE.unlink(missing_ok=True)
+        _agent_proc = start_agent()
+        return False
+
+    # Clean up signal and backup
+    UPDATE_PENDING_FILE.unlink(missing_ok=True)
+    backup = AGENT_SCRIPT.with_suffix('.bak')
+    if backup.exists():
+        backup.unlink(missing_ok=True)
+
+    log.info("Update applied successfully — starting new agent")
+    return True
+
+# ---------------------------------------------------------------------------
 # Main watchdog loop
 # ---------------------------------------------------------------------------
 
@@ -136,6 +219,11 @@ def main() -> None:
 
     while True:
         time.sleep(CHECK_INTERVAL_SEC)
+
+        # Phase 4: Check for pending agent update (before other checks)
+        if check_and_apply_update():
+            _agent_proc = start_agent()
+            continue
 
         # Check if agent process died
         if _agent_proc.poll() is not None:
