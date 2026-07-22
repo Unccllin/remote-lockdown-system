@@ -125,6 +125,19 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
     [hostname, mac_address || null, hardware_uuid || null, device.id]
   );
 
+  // Phase 5: Expire stale pending commands (older than 30 days).
+  // This is a lightweight cleanup — runs on each checkin but only affects
+  // the current device. The 30-day default is configurable via env var.
+  const COMMAND_EXPIRY_DAYS = parseInt(process.env.COMMAND_EXPIRY_DAYS || '30', 10);
+  await pool.query(
+    `UPDATE commands SET status = 'expired', executed_at = NOW()
+     WHERE device_id = $1 AND status = 'pending'
+       AND created_at < NOW() - INTERVAL '${COMMAND_EXPIRY_DAYS} days'`,
+    [device.id]
+  );
+
+  // Phase 5: Fetch the next pending command (if any).
+  // Uses the (device_id, status) index for efficiency.
   const cmdResult = await pool.query(
     `SELECT * FROM commands WHERE device_id = $1 AND status = 'pending' ORDER BY created_at ASC LIMIT 1`,
     [device.id]
@@ -168,33 +181,93 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
     }
   }
 
+  // Phase 5: Adaptive polling — tell the agent how often to check in.
+  //   - stolen/tracking: 30s (need rapid response for anti-theft)
+  //   - recovering: 30s (need to confirm unlock quickly)
+  //   - locked: 60s (agent is locked, but may need new commands)
+  //   - active/normal: 300s (5 min — reduces server load)
+  //
+  // The agent uses this value if present, falling back to its config
+  // default (poll_interval from config file or env var).
+  const ADAPTIVE_POLL = {
+    stolen: 30,
+    tracking: 30,
+    recovering: 30,
+    locked: 60,
+    active: 300,
+  };
+  const serverPollInterval = ADAPTIVE_POLL[device.status] || 300;
+
   res.json({
     device_id: device.id,
     status: device.status,
+    poll_interval: serverPollInterval,
     command: command
-      ? { id: command.id, type: command.command_type, key_material: keyMaterial, bios_password: biosPassword }
+      ? {
+          id: command.id,
+          type: command.command_type,
+          command_uuid: command.command_uuid || null,
+          key_material: keyMaterial,
+          bios_password: biosPassword,
+        }
       : null,
   });
 });
 
 // A2/A4: command-ack wrapped in transaction with idempotent key insert
+// Phase 5: supports command_uuid for client-side idempotency, and
+// expanded status values: 'executed', 'failed', 'not_now'.
 router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
-  const { hostname, command_id, result_status, key_material, bios_password, mac_address, hardware_uuid, boot_lock_status } = req.body;
+  const {
+    hostname, command_id, result_status, key_material, bios_password,
+    mac_address, hardware_uuid, boot_lock_status, command_uuid,
+  } = req.body;
   if (!hostname || !command_id || !result_status) {
     return res.status(400).json({ error: 'hostname, command_id, result_status required' });
+  }
+
+  // Phase 5: Validate result_status — only allow known values
+  const VALID_STATUSES = ['executed', 'failed', 'not_now'];
+  if (!VALID_STATUSES.includes(result_status)) {
+    return res.status(400).json({
+      error: `Invalid result_status: ${result_status}. Must be one of: ${VALID_STATUSES.join(', ')}`,
+    });
   }
 
   const device = req.device || await findDevice(hostname, mac_address, hardware_uuid);
   if (!device) return res.status(404).json({ error: 'Device not registered' });
 
+  // Phase 5: If command_uuid is provided, check for duplicate ACK.
+  // This allows the agent to retry safely — if we've already seen this
+  // UUID, return success without re-processing.
+  if (command_uuid) {
+    const dupResult = await pool.query(
+      'SELECT id FROM commands WHERE command_uuid = $1 AND status != $2',
+      [command_uuid, 'pending']
+    );
+    if (dupResult.rows[0]) {
+      // Already processed — idempotent success
+      return res.json({ ok: true, deduplicated: true });
+    }
+  }
+
   try {
     await withTransaction(async (client) => {
       // A4: Update command status (idempotent — if already executed, no-op)
-      await client.query(
-        `UPDATE commands SET status = $1, executed_at = NOW()
-         WHERE id = $2 AND device_id = $3`,
-        [result_status, command_id, device.id]
-      );
+      // Phase 5: Also store command_uuid if provided
+      if (command_uuid) {
+        await client.query(
+          `UPDATE commands SET status = $1, executed_at = NOW(), command_uuid = $2
+           WHERE id = $3 AND device_id = $4`,
+          [result_status, command_uuid, command_id, device.id]
+        );
+      } else {
+        await client.query(
+          `UPDATE commands SET status = $1, executed_at = NOW()
+           WHERE id = $2 AND device_id = $3`,
+          [result_status, command_id, device.id]
+        );
+      }
 
       // A3/A4: Insert encryption key with ON CONFLICT DO NOTHING (idempotent)
       if (key_material) {
@@ -222,7 +295,7 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
         const cmdType = cmdResult.rows[0]?.command_type;
         await client.query(
           'INSERT INTO audit_log (device_id, action, detail) VALUES ($1, $2, $3)',
-          [device.id, `agent_${cmdType}_confirmed`, { command_id, boot_lock_status }]
+          [device.id, `agent_${cmdType}_confirmed`, { command_id, command_uuid, boot_lock_status }]
         );
 
         if (cmdType === 'lockdown') {
@@ -234,13 +307,23 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
         } else if (cmdType === 'stop_track') {
           await client.query("UPDATE devices SET status = 'active' WHERE id = $1", [device.id]);
         }
+      } else if (result_status === 'failed') {
+        // Phase 5: Log failures for audit trail
+        await client.query(
+          'INSERT INTO audit_log (device_id, action, detail) VALUES ($1, $2, $3)',
+          [device.id, 'agent_command_failed', { command_id, command_uuid, boot_lock_status }]
+        );
       }
+      // 'not_now' — the agent couldn't execute (e.g., user is working).
+      // The command stays in 'not_now' status. The server can re-queue it
+      // or the admin can cancel it. No device status change.
     });
 
     res.json({ ok: true });
   } catch (err) {
     // A4: Idempotent retry — if the conflict is from a duplicate insert, treat as success
-    if (err.code === '23505') {
+    // Phase 5: Also handle command_uuid unique constraint violation
+    if (err.code === '23505' || (command_uuid && err.message?.includes('command_uuid'))) {
       return res.json({ ok: true, deduplicated: true });
     }
     throw err;

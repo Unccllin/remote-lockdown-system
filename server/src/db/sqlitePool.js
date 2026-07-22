@@ -67,6 +67,17 @@ function translateSql(sql) {
     }
   );
 
+  // 3b. Handle INTERVAL addition (Phase 5: command expiry)
+  //    Pattern: datetime('now') + INTERVAL '30 days'
+  //    SQLite:  datetime('now', '+30 days')
+  out = out.replace(
+    /datetime\('now'\)\s*\+\s*INTERVAL\s*'(\d+)\s*(days?|hours?|minutes?|seconds?)'/gi,
+    (match, num, unit) => {
+      const u = unit.toLowerCase()[0]; // d, h, m, s
+      return `datetime('now', '+${num} ${u}')`;
+    }
+  );
+
   // 4. Handle ::interval cast with string concatenation
   //    Pattern: NOW() + ($2 || ' milliseconds')::interval
   //    SQLite:  datetime('now', '+' || ? || ' milliseconds')

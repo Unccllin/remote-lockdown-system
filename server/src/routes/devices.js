@@ -8,6 +8,21 @@ const { readDualMode } = require('../db/fieldCrypto');
 const router = express.Router();
 
 /**
+ * Phase 5: Default command expiry (30 days).
+ * Configurable via COMMAND_EXPIRY_DAYS env var.
+ */
+const COMMAND_EXPIRY_DAYS = parseInt(process.env.COMMAND_EXPIRY_DAYS || '30', 10);
+
+/**
+ * Phase 5: Build the expires_at SQL fragment for command insertion.
+ * Returns "'<timestamp>'" or "NULL" for use in INSERT.
+ */
+function commandExpirySql() {
+  // Use NOW() + INTERVAL so it works with both PG and SQLite (via translation)
+  return `NOW() + INTERVAL '${COMMAND_EXPIRY_DAYS} days'`;
+}
+
+/**
  * FA5: Decrypt sensitive location fields for a row (dual-mode read).
  * Returns a new row with decrypted values for lat/lon/city/region/ip.
  */
@@ -131,7 +146,7 @@ router.post('/:id/flag-stolen', requireAuth, async (req, res) => {
   const cmd = await withTransaction(async (client) => {
     await client.query('UPDATE devices SET status = $1 WHERE id = $2', ['stolen', device.id]);
     const cmdResult = await client.query(
-      'INSERT INTO commands (device_id, command_type) VALUES ($1, $2) RETURNING *',
+      `INSERT INTO commands (device_id, command_type, expires_at) VALUES ($1, $2, ${commandExpirySql()}) RETURNING *`,
       [device.id, 'lockdown']
     );
     await client.query(
@@ -173,7 +188,7 @@ router.post('/:id/recover', requireAuth, async (req, res) => {
     }
 
     const cmdResult = await client.query(
-      'INSERT INTO commands (device_id, command_type) VALUES ($1, $2) RETURNING *',
+      `INSERT INTO commands (device_id, command_type, expires_at) VALUES ($1, $2, ${commandExpirySql()}) RETURNING *`,
       [device.id, 'unlock']
     );
     await client.query(
@@ -252,7 +267,7 @@ router.post('/:id/track', requireAuth, async (req, res) => {
   }
 
   const cmd = await pool.query(
-    'INSERT INTO commands (device_id, command_type) VALUES ($1, $2) RETURNING *',
+    `INSERT INTO commands (device_id, command_type, expires_at) VALUES ($1, $2, ${commandExpirySql()}) RETURNING *`,
     [device.id, 'track']
   );
   await pool.query(
@@ -290,7 +305,7 @@ router.post('/:id/locate', requireAuth, async (req, res) => {
   }
 
   const cmd = await pool.query(
-    'INSERT INTO commands (device_id, command_type) VALUES ($1, $2) RETURNING *',
+    `INSERT INTO commands (device_id, command_type, expires_at) VALUES ($1, $2, ${commandExpirySql()}) RETURNING *`,
     [device.id, 'locate']
   );
   await pool.query(
@@ -313,7 +328,7 @@ router.post('/:id/stop-track', requireAuth, async (req, res) => {
   }
 
   const cmd = await pool.query(
-    'INSERT INTO commands (device_id, command_type) VALUES ($1, $2) RETURNING *',
+    `INSERT INTO commands (device_id, command_type, expires_at) VALUES ($1, $2, ${commandExpirySql()}) RETURNING *`,
     [device.id, 'stop_track']
   );
   await pool.query(

@@ -571,22 +571,28 @@ def get_geolocation(cfg: dict) -> dict | None:
 
 
 def report_location(cfg: dict) -> dict | None:
-    """Collect geolocation data and report it to the server."""
+    """Collect geolocation data and report it to the server.
+
+    Phase 5: If the server is unreachable, the location report is queued
+    locally and sent when connectivity returns.
+    """
     location = get_geolocation(cfg)
     if not location:
         log.warning("Could not determine geolocation")
         return None
 
+    payload = {
+        "hostname": cfg["hostname"],
+        "mac_address": get_mac_address(),
+        "hardware_uuid": get_hardware_uuid(),
+        "location": location,
+    }
+
     try:
         resp = _signed_post(
             f"{cfg['server_url']}/api/agent/location",
             cfg,
-            {
-                "hostname": cfg["hostname"],
-                "mac_address": get_mac_address(),
-                "hardware_uuid": get_hardware_uuid(),
-                "location": location,
-            },
+            payload,
             timeout=15,
             verify=cfg["verify_tls"],
         )
@@ -598,7 +604,8 @@ def report_location(cfg: dict) -> dict | None:
                  location.get("accuracy_meters", location.get("accuracy", "?")))
         return location
     except requests.RequestException as e:
-        log.warning("Location report failed: %s", e)
+        log.warning("Location report failed: %s — queuing offline", e)
+        queue_offline('/api/agent/location', payload)
         return None
 
 # ---------------------------------------------------------------------------
@@ -683,18 +690,28 @@ def ack_command(
     key_material: str | None = None,
     bios_password: str | None = None,
     boot_lock_status: str | None = None,
+    command_uuid: str | None = None,
 ) -> bool:
     """Send command ACK to server. Returns True on success, False on failure.
 
     The return value is used by the pending-ACK retry mechanism (A4):
     on failure, the ACK is persisted locally and retried on the next loop.
+
+    Phase 5: command_uuid is a client-generated UUID for idempotent ACKs.
+    If the server receives the same UUID twice, it deduplicates.
     """
+    # Phase 5: Generate a command_uuid if not provided.
+    # This ensures idempotent retries — the server won't process the same ACK twice.
+    if not command_uuid:
+        command_uuid = str(uuid.uuid4())
+
     payload = {
         "hostname": cfg["hostname"],
         "mac_address": get_mac_address(),
         "hardware_uuid": get_hardware_uuid(),
         "command_id": command_id,
         "result_status": result_status,
+        "command_uuid": command_uuid,
     }
     if key_material:
         payload["key_material"] = key_material
@@ -711,11 +728,115 @@ def ack_command(
             verify=cfg["verify_tls"],
         )
         resp.raise_for_status()
-        log.info("ACK sent: command=%s status=%s", command_id, result_status)
+        log.info("ACK sent: command=%s status=%s uuid=%s", command_id, result_status, command_uuid[:8])
         return True
     except requests.RequestException as e:
         log.error("ACK failed: %s", e)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Offline queue (Phase 5) — SQLite-based queue for location reports
+# ---------------------------------------------------------------------------
+#
+# When the agent is offline, location reports and other non-critical
+# data are queued locally and synced when connectivity returns.
+# ACKs are already handled by the pending ACK mechanism (A1/A4).
+
+import sqlite3
+
+# Offline queue database (in _STATE_DIR)
+OFFLINE_QUEUE_DB = _STATE_DIR / '.offline_queue.db'
+
+
+def _get_queue_db() -> sqlite3.Connection:
+    """Get a connection to the offline queue database."""
+    conn = sqlite3.connect(str(OFFLINE_QUEUE_DB))
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS offline_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            endpoint TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            attempts INTEGER DEFAULT 0
+        )
+    ''')
+    conn.commit()
+    return conn
+
+
+def queue_offline(endpoint: str, payload: dict) -> None:
+    """Queue a request for later delivery when the server is unreachable."""
+    try:
+        conn = _get_queue_db()
+        conn.execute(
+            'INSERT INTO offline_queue (endpoint, payload, created_at) VALUES (?, ?, ?)',
+            (endpoint, json.dumps(payload), time.time())
+        )
+        conn.commit()
+        conn.close()
+        log.debug("Queued offline: %s (%d items in queue)", endpoint, _queue_size())
+    except Exception as e:
+        log.warning("Failed to queue offline request: %s", e)
+
+
+def _queue_size() -> int:
+    """Return the number of items in the offline queue."""
+    try:
+        conn = _get_queue_db()
+        row = conn.execute('SELECT COUNT(*) FROM offline_queue').fetchone()
+        conn.close()
+        return row[0] if row else 0
+    except Exception:
+        return 0
+
+
+def drain_offline_queue(cfg: dict) -> None:
+    """Send all queued requests to the server.
+
+    Called after a successful checkin — if we can reach the server,
+    we can probably deliver queued items too.
+    """
+    if _queue_size() == 0:
+        return
+
+    try:
+        conn = _get_queue_db()
+        rows = conn.execute(
+            'SELECT id, endpoint, payload, attempts FROM offline_queue ORDER BY created_at ASC LIMIT 50'
+        ).fetchall()
+
+        sent = 0
+        for row_id, endpoint, payload_json, attempts in rows:
+            try:
+                payload = json.loads(payload_json)
+                resp = _signed_post(
+                    f"{cfg['server_url']}{endpoint}",
+                    cfg,
+                    payload,
+                    timeout=15,
+                    verify=cfg["verify_tls"],
+                )
+                resp.raise_for_status()
+                conn.execute('DELETE FROM offline_queue WHERE id = ?', (row_id,))
+                sent += 1
+            except Exception as e:
+                # Increment attempt count; give up after 10 attempts
+                conn.execute(
+                    'UPDATE offline_queue SET attempts = attempts + 1 WHERE id = ?',
+                    (row_id,)
+                )
+                if attempts >= 10:
+                    log.warning("Dropping offline queue item after %d attempts: %s", attempts, endpoint)
+                    conn.execute('DELETE FROM offline_queue WHERE id = ?', (row_id,))
+                break  # Stop on first failure (server might be down again)
+
+        conn.commit()
+        conn.close()
+        if sent > 0:
+            log.info("Drained %d offline queue items (%d remaining)", sent, _queue_size())
+    except Exception as e:
+        log.warning("Failed to drain offline queue: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -738,10 +859,12 @@ def write_pending_ack(
     key_material: str | None = None,
     bios_password: str | None = None,
     boot_lock_status: str | None = None,
+    command_uuid: str | None = None,
 ) -> None:
     """Write the pending ACK state to disk (fsync'd).
 
     Called BEFORE encrypt_folder() so a crash doesn't lose the key.
+    Phase 5: includes command_uuid for idempotent retries.
     """
     state = {
         "command_id": command_id,
@@ -754,6 +877,8 @@ def write_pending_ack(
         state["bios_password"] = bios_password
     if boot_lock_status:
         state["boot_lock_status"] = boot_lock_status
+    if command_uuid:
+        state["command_uuid"] = command_uuid
     file_path.write_text(json.dumps(state))
     _fsync_file(file_path)
 
@@ -802,6 +927,7 @@ def drain_pending_ack(cfg: dict) -> None:
             key_material=state.get("key_material"),
             bios_password=state.get("bios_password"),
             boot_lock_status=state.get("boot_lock_status"),
+            command_uuid=state.get("command_uuid"),
         )
         if ok:
             pending_ack_file.unlink()
@@ -1411,6 +1537,8 @@ def main() -> None:
     last_location_report = 0.0
     last_update_check = 0.0
     current_status = "active"
+    # Phase 5: effective_poll_interval starts from config, updated by server
+    effective_poll_interval = cfg["poll_interval"]
 
     while True:
         # Update heartbeat so watchdog knows agent is alive
@@ -1432,20 +1560,37 @@ def main() -> None:
             # Upload deadman key (if any) now that we have connectivity
             report_deadman_key(cfg)
 
+            # Phase 5: Drain offline queue (location reports, etc.)
+            drain_offline_queue(cfg)
+
             # Update dead man's timer with current server-reported status
             current_status = data.get("status", "active")
             update_deadman_timer(current_status)
 
+            # Phase 5: Adaptive polling — use server-sent poll_interval if present.
+            # The server tells us how often to check in based on device status:
+            #   stolen/tracking: 30s, locked: 60s, active: 300s
+            # We use a separate variable so we don't modify cfg (which is
+            # the config from file/env). The server value takes precedence.
+            server_poll = data.get("poll_interval")
+            if server_poll and isinstance(server_poll, (int, float)) and server_poll > 0:
+                if server_poll != effective_poll_interval:
+                    log.info("Adaptive polling: %ss → %ss (status=%s)",
+                             effective_poll_interval, int(server_poll), current_status)
+                effective_poll_interval = int(server_poll)
+
             command = data.get("command")
             if command:
                 cmd_type = command.get("type")
+                # Phase 5: Extract command_uuid from server response for idempotent ACK
+                cmd_uuid = command.get("command_uuid")
                 handler = COMMAND_HANDLERS.get(cmd_type)
                 if handler:
                     try:
                         handler(cfg, command)
                     except Exception as e:
                         log.exception("Handler %s crashed: %s", cmd_type, e)
-                        ack_command(cfg, command["id"], "failed")
+                        ack_command(cfg, command["id"], "failed", command_uuid=cmd_uuid)
                 else:
                     log.warning("Unknown command type: %s", cmd_type)
 
@@ -1462,7 +1607,7 @@ def main() -> None:
                 check_for_update(cfg)
                 last_update_check = now
 
-        time.sleep(cfg["poll_interval"])
+        time.sleep(effective_poll_interval)
 
 if __name__ == "__main__":
     main()

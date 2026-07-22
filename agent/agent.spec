@@ -35,6 +35,7 @@ hiddenimports = collect_submodules('cryptography') + [
     'certifi',
     'charset_normalizer',
     'idna',
+    'sqlite3',  # Phase 5: offline queue database
 ]
 
 # Boot lockdown modules (Windows-only, but include if available)
