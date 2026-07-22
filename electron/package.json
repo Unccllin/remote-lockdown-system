@@ -4,7 +4,7 @@
   "description": "Remote Device Lockdown System — Admin Desktop App",
   "author": {
     "name": "Remote Lockdown",
-    "email": "noreply@remotelockdown.com",
+    "email": "research@remotelockdown.com",
     "url": "https://github.com/unccllin/remote-lockdown-system"
   },
   "main": "main.js",
@@ -112,7 +112,7 @@
       ],
       "icon": "build/icon.png",
       "category": "Security",
-      "maintainer": "Remote Lockdown <noreply@remotelockdown.com>"
+      "maintainer": "Remote Lockdown <research@remotelockdown.com>"
     },
     "nsis": {
       "oneClick": false,

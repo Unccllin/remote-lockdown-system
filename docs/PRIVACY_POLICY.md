@@ -142,7 +142,7 @@ These providers may process minimal data necessary to provide their services.
 - **Objection** — object to processing based on legitimate interests
 - **Withdrawal of consent** — withdraw consent at any time
 
-To exercise these rights, contact us at: privacy@remotelockdown.com
+To exercise these rights, contact us at: research@remotelockdown.com
 
 ### 6.2 CCPA Rights (California)
 - **Know** — what personal information is collected
@@ -187,11 +187,11 @@ material changes by:
 ## 10. Contact
 
 For privacy questions or requests:
-- **Email:** privacy@remotelockdown.com
-- **Data Protection Officer (EU):** dpo@remotelockdown.com
+- **Email:** research@remotelockdown.com
+- **Data Protection Officer (EU):** research@remotelockdown.com
 
 For security vulnerability reports:
-- **Email:** security@remotelockdown.com
+- **Email:** research@remotelockdown.com
 
 ---
 

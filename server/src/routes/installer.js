@@ -578,7 +578,7 @@ YOUR RIGHTS
   - Withdrawal: Remove the agent at any time (Add/Remove Programs or
     systemctl)
 
-  To exercise these rights, contact: privacy@remotelockdown.com
+  To exercise these rights, contact: research@remotelockdown.com
 
 DATA SECURITY
 

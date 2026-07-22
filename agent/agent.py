@@ -329,8 +329,7 @@ _BANNER = (
     "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
     "  !                                                       !\n"
     "  !   THIS DEVICE HAS BEEN REPORTED STOLEN               !\n"
-    "  !   Contact IT Support immediately:                     !\n"
-    "  !   support@yourcompany.com  /  +1-800-XXX-XXXX        !\n"
+    "  !   Contact your administrator immediately.             !\n"
     "  !                                                       !\n"
     "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n"
 )

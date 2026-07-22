@@ -144,7 +144,7 @@ The Caddy reverse proxy (cloud deployment) sets:
 ## Vulnerability Reporting
 
 If you discover a security vulnerability, please report it responsibly:
-- **Email:** security@remotelockdown.com
+- **Email:** research@remotelockdown.com
 - **Do NOT** open a public GitHub issue for security vulnerabilities
 - Include: description, reproduction steps, potential impact
 - We will acknowledge within 48 hours and provide a fix timeline

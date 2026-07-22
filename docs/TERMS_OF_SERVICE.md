@@ -190,7 +190,7 @@ provider is established, without regard to conflict of law principles.
 ## 13. Contact
 
 For questions about these Terms:
-- **Email:** legal@remotelockdown.com
+- **Email:** research@remotelockdown.com
 - **Repository:** https://github.com/unccllin/remote-lockdown-system
 
 ---
