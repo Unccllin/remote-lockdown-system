@@ -56,22 +56,16 @@ jobs:
             platform: windows
             arch: x64
             ext: .exe
-            build_script: python build.ps1
-            shell: pwsh
           - os: ubuntu-latest
             label: linux-x64
             platform: linux
             arch: x64
             ext: ""
-            build_script: ./build.sh
-            shell: bash
           - os: macos-latest
             label: darwin-x64
             platform: darwin
             arch: x64
             ext: ""
-            build_script: ./build.sh
-            shell: bash
 
     runs-on: ${{ matrix.os }}
     defaults:
@@ -87,10 +81,12 @@ jobs:
           cache: pip
 
       - name: Install dependencies + build agent binaries
+        shell: bash
         run: |
           pip install -r requirements.txt pyinstaller
-          ${{ matrix.build_script }}
-        shell: ${{ matrix.shell }}
+          python -m PyInstaller agent.spec --noconfirm
+          python -m PyInstaller watchdog.spec --noconfirm
+          python -m PyInstaller offline_recovery.spec --noconfirm
 
       - name: Stage binaries with platform-specific names
         shell: bash
@@ -131,36 +127,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all release assets
-        uses: dsaltares/fetch-gh-release-asset@master
-        with:
-          version: ${{ github.ref_name }}
-          file: "SHA256SUMS-windows-x64"
-          target: "SHA256SUMS-windows-x64"
+      - name: Download per-platform checksums
+        run: |
+          gh release download "${{ github.ref_name }}" \
+            --pattern "SHA256SUMS-*" \
+            --dir ./checksums \
+            --clobber
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download linux checksums
-        uses: dsaltares/fetch-gh-release-asset@master
-        with:
-          version: ${{ github.ref_name }}
-          file: "SHA256SUMS-linux-x64"
-          target: "SHA256SUMS-linux-x64"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download darwin checksums
-        uses: dsaltares/fetch-gh-release-asset@master
-        with:
-          version: ${{ github.ref_name }}
-          file: "SHA256SUMS-darwin-x64"
-          target: "SHA256SUMS-darwin-x64"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Merge checksums
         run: |
-          cat SHA256SUMS-windows-x64 SHA256SUMS-linux-x64 SHA256SUMS-darwin-x64 > SHA256SUMS
+          cat checksums/SHA256SUMS-* > SHA256SUMS
           echo "=== Merged SHA256SUMS ==="
           cat SHA256SUMS
 
@@ -197,8 +175,7 @@ jobs:
       - run: cd ../dashboard && npm ci && npm run build
 
       # Build agent binaries (Windows)
-      - run: cd ../agent && pip install -r requirements.txt pyinstaller && python build.ps1
-        shell: pwsh
+      - run: cd ../agent && pip install -r requirements.txt pyinstaller && python -m PyInstaller agent.spec --noconfirm && python -m PyInstaller watchdog.spec --noconfirm && python -m PyInstaller offline_recovery.spec --noconfirm
 
       # Build + publish Electron app
       - run: npx electron-builder --win --publish always
