@@ -107,7 +107,7 @@ jobs:
         shell: bash
         run: |
           cd staging
-          sha256sum * > SHA256SUMS-${{ matrix.label }}
+          sha256sum lockdown-* > SHA256SUMS-${{ matrix.label }}
           cat SHA256SUMS-${{ matrix.label }}
 
       - name: Upload binaries to GitHub Release
