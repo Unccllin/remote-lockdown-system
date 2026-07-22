@@ -6,19 +6,50 @@ Anti-theft system for field devices. Lets IT admins remotely flag a stolen devic
 remote-lockdown-system/
 ├── server/          # Node.js / Express API + PostgreSQL
 ├── dashboard/       # React + Vite + Tailwind admin UI
-└── agent/           # Python background agent (runs on managed device)
+├── agent/           # Python background agent (runs on managed device)
+├── electron/        # Electron desktop app (packaged admin + agent installer)
+├── docs/            # Legal, security, and testing documentation
+└── docker-compose.prod.yml  # Cloud deployment (Postgres + Caddy + server)
 ```
 
 ---
 
 ## Quick Start
 
-### 1. Prerequisites
+### Option A: Install as Desktop App (Recommended)
+
+1. Download the installer from [GitHub Releases](https://github.com/unccllin/remote-lockdown-system/releases)
+   - **Windows:** `Remote-Lockdown-Admin-Setup-x.y.z.exe`
+   - **macOS:** `Remote-Lockdown-Admin-x.y.z.dmg`
+   - **Linux:** `Remote-Lockdown-Admin-x.y.z.AppImage`
+2. Run the installer and launch "Remote Lockdown Admin"
+3. Create your admin account on first run
+4. Click "Enroll New Device" to enroll a device and download the agent installer
+
+The desktop app bundles the admin server, dashboard, and agent installer
+generator. No separate server setup needed. Auto-updates via GitHub Releases.
+
+See [electron/README.md](electron/README.md) for build + sign instructions.
+
+### Option B: Cloud Deployment (Docker)
+
+```bash
+cp .env.prod.example .env.prod
+# Edit .env.prod with your domain, DB password, JWT secret, etc.
+docker compose -f docker-compose.prod.yml up -d
+```
+
+This starts PostgreSQL, the admin server, and Caddy (auto-HTTPS).
+Navigate to `https://your-domain.com` and create your admin account.
+
+### Option C: Development Setup
+
+#### 1. Prerequisites
 - Node.js 18+, npm
-- PostgreSQL 14+
+- PostgreSQL 14+ (or use SQLite for development)
 - Python 3.10+
 
-### 2. Server
+#### 2. Server
 
 ```bash
 cd server
@@ -35,7 +66,7 @@ node src/db/migrate.js
 npm run dev
 ```
 
-### 3. Dashboard
+#### 3. Dashboard
 
 ```bash
 cd dashboard
@@ -51,7 +82,7 @@ curl -X POST http://localhost:3001/api/auth/register \
   -d '{"username":"admin","password":"yourpassword"}'
 ```
 
-### 4. Agent (run on a VM/sandbox only)
+#### 4. Agent (run on a VM/sandbox only)
 
 ```bash
 cd agent
@@ -127,3 +158,34 @@ Admin Dashboard (React)
 | `DEVICE_HOSTNAME` | Hostname registered in the dashboard |
 | `LOCKDOWN_FOLDER` | Folder to encrypt on lockdown |
 | `POLL_INTERVAL` | Seconds between check-ins (default `30`) |
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [docs/PRIVACY_POLICY.md](docs/PRIVACY_POLICY.md) | Privacy policy (GDPR/CCPA compliant) |
+| [docs/TERMS_OF_SERVICE.md](docs/TERMS_OF_SERVICE.md) | Terms of service / EULA |
+| [docs/GDPR_LIA.md](docs/GDPR_LIA.md) | GDPR Legitimate Interest Assessment |
+| [docs/SECURITY.md](docs/SECURITY.md) | Threat model + security architecture |
+| [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md) | Code signing guide (Windows + macOS) |
+| [docs/E2E_TEST.md](docs/E2E_TEST.md) | End-to-end test guide |
+| [electron/README.md](electron/README.md) | Electron app build + sign instructions |
+
+---
+
+## Testing
+
+```bash
+# Agent tests (Python)
+cd agent && pip install -r requirements.txt && pip install pytest && pytest tests/ -v
+
+# Server tests (Node.js)
+cd server && npm install && npm test
+
+# Dashboard tests (React)
+cd dashboard && npm install && npm test
+```
+
+See [docs/E2E_TEST.md](docs/E2E_TEST.md) for the full end-to-end test flow.
