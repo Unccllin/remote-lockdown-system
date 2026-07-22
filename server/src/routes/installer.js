@@ -9,6 +9,25 @@
  *   Production:  process.resourcesPath/agent/lockdown-agent.exe
  *   Dev:         ../agent/dist/lockdown-agent  (or .exe on Windows)
  *
+ * Cross-platform support (Solution A — Hybrid):
+ *   The admin app bundles its own platform's agent binaries locally.
+ *   If the admin requests an installer for a DIFFERENT platform (e.g.,
+ *   running on Linux but generating a Windows installer), the endpoint
+ *   downloads the missing binary from GitHub Releases on-demand, caches
+ *   it in the userData directory, and packages it into the ZIP.
+ *
+ *   Binary lookup order:
+ *     1. Local bundled binary (resources/agent/ or agent/dist/)
+ *     2. Cached binary in userData/agent-cache/{platform}/
+ *     3. Download from GitHub Releases (cached after download)
+ *
+ *   GitHub Releases assets are named:
+ *     lockdown-agent-{platform}-{arch}{ext}
+ *     lockdown-watchdog-{platform}-{arch}{ext}
+ *     lockdown-recovery-{platform}-{arch}{ext}
+ *
+ *   Checksums are verified against the SHA256SUMS file in the Release.
+ *
  * The ZIP contains:
  *   - lockdown-agent (or .exe)   — the standalone agent binary
  *   - lockdown-watchdog (or .exe) — the process monitor
@@ -23,6 +42,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
+const https = require('https');
 const pool = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { hashApiKey } = require('../db/apiKey');
@@ -89,6 +109,282 @@ function getPlatformConfig(requestedPlatform) {
     agentName: 'lockdown-agent',
     watchdogName: 'lockdown-watchdog',
   };
+}
+
+// ---------------------------------------------------------------------------
+// Cross-platform binary resolution (Solution A — Hybrid local + remote)
+// ---------------------------------------------------------------------------
+//
+// When the admin app runs on platform X and requests an installer for
+// platform Y, the Y-platform agent binary won't be in the local bundle.
+// This module downloads it from GitHub Releases on-demand, caches it,
+// and verifies its SHA256 checksum.
+//
+// Lookup order for each binary:
+//   1. Local bundled binary (resources/agent/ or agent/dist/)
+//   2. Cached binary in userData/agent-cache/{platform}/
+//   3. Download from GitHub Releases → cache → return
+//
+
+/**
+ * Map our internal platform names to GitHub Releases asset naming.
+ * 'win' → 'windows', 'linux' → 'linux', 'mac' → 'darwin'
+ */
+function getReleasePlatformName(internalPlatform) {
+  if (internalPlatform === 'win') return 'windows';
+  if (internalPlatform === 'mac') return 'darwin';
+  return 'linux';
+}
+
+/**
+ * Get the cache directory for downloaded agent binaries.
+ * Uses userData/agent-cache in Electron, or a temp dir in standalone mode.
+ */
+function getCacheDir() {
+  // In Electron: use userData directory (set via env var by server-starter)
+  if (process.env.USER_DATA_DIR) {
+    return path.join(process.env.USER_DATA_DIR, 'agent-cache');
+  }
+  // In Electron production: process.resourcesPath is set, userData is nearby
+  if (process.resourcesPath) {
+    // userData is typically ../ from resourcesPath on most platforms
+    const candidates = [
+      path.join(process.resourcesPath, '..', 'agent-cache'),
+      path.join(process.env.HOME || '/tmp', '.remote-lockdown-cache'),
+    ];
+    for (const c of candidates) {
+      try {
+        if (!fs.existsSync(c)) fs.mkdirSync(c, { recursive: true });
+        return c;
+      } catch (e) { /* try next */ }
+    }
+  }
+  // Standalone server: use a temp directory
+  const fallback = path.join(require('os').tmpdir(), 'remote-lockdown-agent-cache');
+  if (!fs.existsSync(fallback)) fs.mkdirSync(fallback, { recursive: true });
+  return fallback;
+}
+
+/**
+ * Get GitHub Releases configuration from env vars.
+ * Defaults to the public repo, but can be overridden for self-hosted forks.
+ */
+function getGitHubReleaseConfig() {
+  return {
+    owner: process.env.AGENT_BINARY_RELEASE_OWNER || 'unccllin',
+    repo: process.env.AGENT_BINARY_RELEASE_REPO || 'remote-lockdown-system',
+    tag: process.env.AGENT_BINARY_RELEASE_TAG || 'latest', // 'latest' or 'v1.0.0'
+    token: process.env.GITHUB_TOKEN || null, // optional, for private repos / rate limits
+  };
+}
+
+/**
+ * Make an HTTPS GET request and return the response body as a Buffer or string.
+ * Follows up to 5 redirects (GitHub Releases uses 302 redirects to CDN).
+ * @returns {Promise<{data: Buffer, statusCode: number, headers: Object}>}
+ */
+function httpsGet(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const timeout = options.timeout || 60000; // 60s default
+    const maxRedirects = options.maxRedirects || 5;
+
+    const req = https.get(url, {
+      headers: {
+        'User-Agent': 'remote-lockdown-admin/1.0',
+        'Accept': options.accept || 'application/octet-stream',
+        ...(options.token ? { 'Authorization': `Bearer ${options.token}` } : {}),
+      },
+    }, (res) => {
+      // Handle redirects
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && maxRedirects > 0) {
+        res.resume(); // drain
+        return resolve(httpsGet(res.headers.location, { ...options, maxRedirects: maxRedirects - 1 }));
+      }
+
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+      }
+
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        resolve({
+          data: Buffer.concat(chunks),
+          statusCode: res.statusCode,
+          headers: res.headers,
+        });
+      });
+      res.on('error', reject);
+    });
+
+    req.on('error', reject);
+    req.setTimeout(timeout, () => {
+      req.destroy(new Error(`Request timeout after ${timeout}ms`));
+    });
+  });
+}
+
+/**
+ * Fetch the latest GitHub Release info (or a specific tag) via the REST API.
+ * Returns the release object with assets array.
+ * @returns {Promise<{tag_name: string, assets: Array<{name: string, browser_download_url: string, size: number}>}>}
+ */
+async function fetchReleaseInfo() {
+  const config = getGitHubReleaseConfig();
+  const url = config.tag === 'latest'
+    ? `https://api.github.com/repos/${config.owner}/${config.repo}/releases/latest`
+    : `https://api.github.com/repos/${config.owner}/${config.repo}/releases/tags/${config.tag}`;
+
+  const { data } = await httpsGet(url, {
+    accept: 'application/vnd.github+json',
+    token: config.token,
+    timeout: 15000,
+  });
+
+  const release = JSON.parse(data.toString('utf8'));
+  if (!release || !release.assets) {
+    throw new Error(`Invalid release response from GitHub API`);
+  }
+  return release;
+}
+
+/**
+ * Fetch and parse the SHA256SUMS file from the release assets.
+ * Returns a map of { filename: sha256hex }.
+ * @param {object} release - Release object from fetchReleaseInfo()
+ * @returns {Promise<Object<string, string>>}
+ */
+async function fetchChecksums(release) {
+  const checksumsAsset = release.assets.find(a => a.name === 'SHA256SUMS');
+  if (!checksumsAsset) {
+    console.warn('[installer] No SHA256SUMS file in release — checksum verification disabled');
+    return {};
+  }
+
+  const { data } = await httpsGet(checksumsAsset.browser_download_url, {
+    timeout: 15000,
+    token: getGitHubReleaseConfig().token,
+  });
+
+  const text = data.toString('utf8');
+  const checksums = {};
+  for (const line of text.split('\n')) {
+    const match = line.match(/^([a-f0-9]{64})\s+\*?(.+)$/);
+    if (match) {
+      checksums[match[2].trim()] = match[1];
+    }
+  }
+  return checksums;
+}
+
+/**
+ * Download a specific agent binary from GitHub Releases.
+ * Verifies SHA256 checksum if SHA256SUMS is available.
+ * Caches the binary in the cache directory.
+ *
+ * @param {string} internalPlatform - 'win', 'linux', or 'mac'
+ * @param {string} binaryName - 'lockdown-agent', 'lockdown-watchdog', or 'lockdown-recovery'
+ * @returns {Promise<string>} Path to the downloaded (and cached) binary
+ */
+async function downloadBinaryFromGitHub(internalPlatform, binaryName) {
+  const releasePlatform = getReleasePlatformName(internalPlatform);
+  const arch = 'x64';
+  const ext = internalPlatform === 'win' ? '.exe' : '';
+  const assetName = `${binaryName}-${releasePlatform}-${arch}${ext}`;
+
+  console.log(`[installer] Downloading ${assetName} from GitHub Releases...`);
+
+  // Fetch release info
+  const release = await fetchReleaseInfo();
+
+  // Find the asset
+  const asset = release.assets.find(a => a.name === assetName);
+  if (!asset) {
+    throw new Error(`Agent binary not found in GitHub Release ${release.tag_name}: ${assetName}. ` +
+      `Available assets: ${release.assets.map(a => a.name).join(', ')}`);
+  }
+
+  // Download the binary
+  const { data } = await httpsGet(asset.browser_download_url, {
+    timeout: 120000, // 2 minutes for large binaries
+    token: getGitHubReleaseConfig().token,
+  });
+
+  // Verify checksum
+  const checksums = await fetchChecksums(release);
+  if (checksums[assetName]) {
+    const hash = crypto.createHash('sha256').update(data).digest('hex');
+    if (hash !== checksums[assetName]) {
+      throw new Error(`Checksum mismatch for ${assetName}: expected ${checksums[assetName]}, got ${hash}`);
+    }
+    console.log(`[installer] Checksum verified for ${assetName}`);
+  }
+
+  // Cache the binary
+  const cacheDir = getCacheDir();
+  const platformCacheDir = path.join(cacheDir, internalPlatform);
+  if (!fs.existsSync(platformCacheDir)) {
+    fs.mkdirSync(platformCacheDir, { recursive: true });
+  }
+
+  // Use the local platform's naming convention for the cached file
+  const plat = getPlatformConfig(internalPlatform);
+  const localName = internalPlatform === 'win'
+    ? `${binaryName}.exe`
+    : binaryName;
+  const cachedPath = path.join(platformCacheDir, localName);
+
+  fs.writeFileSync(cachedPath, data);
+  // Make executable on Unix
+  if (internalPlatform !== 'win') {
+    fs.chmodSync(cachedPath, 0o755);
+  }
+
+  console.log(`[installer] Cached ${assetName} → ${cachedPath} (${(data.length / 1024 / 1024).toFixed(1)}MB)`);
+  return cachedPath;
+}
+
+/**
+ * Resolve an agent binary path for the requested platform.
+ *
+ * Lookup order:
+ *   1. Local bundled binary (resources/agent/ or agent/dist/)
+ *   2. Cached binary in cacheDir/{platform}/
+ *   3. Download from GitHub Releases → cache → return
+ *
+ * @param {string} internalPlatform - 'win' or 'linux'
+ * @param {string} binaryName - e.g. 'lockdown-agent.exe' or 'lockdown-agent'
+ * @param {string} binaryBaseName - e.g. 'lockdown-agent' (without extension)
+ * @returns {Promise<string|null>} Path to the binary, or null if not available
+ */
+async function resolveAgentBinary(internalPlatform, binaryName, binaryBaseName) {
+  // 1. Check local bundled binaries
+  const binariesDir = getAgentBinariesDir();
+  if (binariesDir) {
+    const localPath = path.join(binariesDir, binaryName);
+    if (fs.existsSync(localPath)) {
+      return localPath;
+    }
+  }
+
+  // 2. Check cache
+  const cacheDir = getCacheDir();
+  const platformCacheDir = path.join(cacheDir, internalPlatform);
+  const cachedPath = path.join(platformCacheDir, binaryName);
+  if (fs.existsSync(cachedPath)) {
+    console.log(`[installer] Using cached binary: ${cachedPath}`);
+    return cachedPath;
+  }
+
+  // 3. Download from GitHub Releases
+  try {
+    const downloadedPath = await downloadBinaryFromGitHub(internalPlatform, binaryBaseName);
+    return downloadedPath;
+  } catch (err) {
+    console.error(`[installer] Failed to download ${binaryBaseName} for ${internalPlatform}:`, err.message);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -746,23 +1042,25 @@ router.get('/:deviceId', requireAuth, async (req, res) => {
     return res.status(404).json({ error: 'Device not found' });
   }
 
-  // Find the agent binaries
-  const binariesDir = getAgentBinariesDir();
-  if (!binariesDir) {
-    return res.status(503).json({
-      error: 'Agent binaries not found. Build them first with: cd agent && ./build.sh',
-    });
-  }
-
+  // Resolve agent binaries (local → cache → GitHub Releases download)
   const plat = getPlatformConfig(platform);
-  const agentBinPath = path.join(binariesDir, plat.agentName);
-  const watchdogBinPath = path.join(binariesDir, plat.watchdogName);
 
-  if (!fs.existsSync(agentBinPath)) {
+  // Determine the base names (without extension) for GitHub Releases lookup
+  const agentBaseName = 'lockdown-agent';
+  const watchdogBaseName = 'lockdown-watchdog';
+
+  // Resolve the agent binary
+  const agentBinPath = await resolveAgentBinary(platform, plat.agentName, agentBaseName);
+  if (!agentBinPath) {
     return res.status(503).json({
-      error: `Agent binary not found: ${plat.agentName}. Build for the target platform first.`,
+      error: `Agent binary not found for platform "${platform}". ` +
+        `Tried: local bundle, cache, and GitHub Releases download. ` +
+        `Ensure agent binaries are built and published to GitHub Releases.`,
     });
   }
+
+  // Resolve the watchdog binary (non-fatal if missing)
+  const watchdogBinPath = await resolveAgentBinary(platform, plat.watchdogName, watchdogBaseName);
 
   // Build the device-specific config
   // Note: We can't return the plaintext API key here (it's not stored).
@@ -804,7 +1102,7 @@ router.get('/:deviceId', requireAuth, async (req, res) => {
   });
 
   // Watchdog binary (if it exists)
-  if (fs.existsSync(watchdogBinPath)) {
+  if (watchdogBinPath && fs.existsSync(watchdogBinPath)) {
     files.push({
       name: plat.watchdogName,
       data: fs.readFileSync(watchdogBinPath),
@@ -865,15 +1163,10 @@ router.get('/:deviceId', requireAuth, async (req, res) => {
  * Used by the auto-update check.
  */
 router.get('/agent-version', requireAuth, async (req, res) => {
-  const binariesDir = getAgentBinariesDir();
-  if (!binariesDir) {
-    return res.json({ version: null, available: false });
-  }
-
   const plat = getPlatformConfig(req.query.platform);
-  const agentBinPath = path.join(binariesDir, plat.agentName);
+  const agentBinPath = await resolveAgentBinary(plat.platform, plat.agentName, 'lockdown-agent');
 
-  if (!fs.existsSync(agentBinPath)) {
+  if (!agentBinPath) {
     return res.json({ version: null, available: false });
   }
 
@@ -888,6 +1181,7 @@ router.get('/agent-version', requireAuth, async (req, res) => {
     size: stat.size,
     built_at: stat.mtime.toISOString(),
     platform: plat.platform,
+    source: agentBinPath.includes('agent-cache') ? 'cache' : 'local',
   });
 });
 

@@ -52,6 +52,13 @@ function setupEnv(isDev) {
     throw new Error('SQLITE_PATH must be set before starting server');
   }
 
+  // User data directory — used by installer.js for caching cross-platform
+  // agent binaries downloaded from GitHub Releases
+  // Derive from SQLITE_PATH (both are in userData directory)
+  if (!process.env.USER_DATA_DIR) {
+    process.env.USER_DATA_DIR = path.dirname(path.dirname(process.env.SQLITE_PATH));
+  }
+
   // Server port — use 0 to let the OS pick an available port
   process.env.PORT = process.env.PORT || '0';
 }

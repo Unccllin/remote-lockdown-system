@@ -31,6 +31,147 @@ jobs:
       - run: cd agent && pip install -r requirements.txt && pip install pytest && pytest tests/ -v
 
   # ---------------------------------------------------------------------------
+  # Build agent binaries on all 3 platforms and publish to GitHub Release.
+  #
+  # These binaries are separate from the Electron app. They allow the admin
+  # app's installer endpoint to download cross-platform agent binaries on
+  # demand (Solution A: Hybrid local + remote download).
+  #
+  # Asset naming convention:
+  #   lockdown-agent-{platform}-{arch}{ext}
+  #   lockdown-watchdog-{platform}-{arch}{ext}
+  #   lockdown-recovery-{platform}-{arch}{ext}
+  #
+  # Plus a SHA256SUMS file for checksum verification.
+  # ---------------------------------------------------------------------------
+  publish-agent-binaries:
+    name: Agent Binaries (${{ matrix.label }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+            platform: windows
+            arch: x64
+            ext: .exe
+            build_script: python build.ps1
+            shell: pwsh
+          - os: ubuntu-latest
+            label: linux-x64
+            platform: linux
+            arch: x64
+            ext: ""
+            build_script: ./build.sh
+            shell: bash
+          - os: macos-latest
+            label: darwin-x64
+            platform: darwin
+            arch: x64
+            ext: ""
+            build_script: ./build.sh
+            shell: bash
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: agent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies + build agent binaries
+        run: |
+          pip install -r requirements.txt pyinstaller
+          ${{ matrix.build_script }}
+        shell: ${{ matrix.shell }}
+
+      - name: Stage binaries with platform-specific names
+        shell: bash
+        run: |
+          mkdir -p staging
+          for bin in lockdown-agent lockdown-watchdog lockdown-recovery; do
+            src="dist/${bin}${{ matrix.ext }}"
+            dst="staging/${bin}-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}"
+            if [ -f "$src" ]; then
+              cp "$src" "$dst"
+              echo "Staged: $dst ($(du -h "$dst" | cut -f1))"
+            else
+              echo "WARNING: $src not found, skipping"
+            fi
+          done
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd staging
+          sha256sum * > SHA256SUMS-${{ matrix.label }}
+          cat SHA256SUMS-${{ matrix.label }}
+
+      - name: Upload binaries to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agent/staging/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Merge all platform checksums into a single SHA256SUMS file
+  # ---------------------------------------------------------------------------
+  publish-checksums:
+    name: Publish Checksums
+    needs: publish-agent-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all release assets
+        uses: dsaltares/fetch-gh-release-asset@master
+        with:
+          version: ${{ github.ref_name }}
+          file: "SHA256SUMS-windows-x64"
+          target: "SHA256SUMS-windows-x64"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download linux checksums
+        uses: dsaltares/fetch-gh-release-asset@master
+        with:
+          version: ${{ github.ref_name }}
+          file: "SHA256SUMS-linux-x64"
+          target: "SHA256SUMS-linux-x64"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download darwin checksums
+        uses: dsaltares/fetch-gh-release-asset@master
+        with:
+          version: ${{ github.ref_name }}
+          file: "SHA256SUMS-darwin-x64"
+          target: "SHA256SUMS-darwin-x64"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge checksums
+        run: |
+          cat SHA256SUMS-windows-x64 SHA256SUMS-linux-x64 SHA256SUMS-darwin-x64 > SHA256SUMS
+          echo "=== Merged SHA256SUMS ==="
+          cat SHA256SUMS
+
+      - name: Upload merged checksums
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
   # Build + publish Electron app for Windows
   # ---------------------------------------------------------------------------
   release-windows:
