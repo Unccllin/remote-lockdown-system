@@ -1,0 +1,98 @@
+# docker-compose.prod.yml — Production cloud deployment
+#
+# For users who want cloud-hosted admin server instead of the desktop app.
+# This stack provides:
+#   - PostgreSQL database (with persistent volume)
+#   - Admin server (Express API + built dashboard)
+#   - Caddy reverse proxy (automatic HTTPS with Let's Encrypt)
+#
+# Usage:
+#   1. Copy .env.prod.example to .env.prod and fill in your secrets
+#   2. docker compose -f docker-compose.prod.yml up -d
+#   3. Visit https://your-domain.com
+#
+# The admin server uses the same codebase as the Electron desktop app,
+# but runs as a standalone Node.js process with PostgreSQL instead of SQLite.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lockdown}
+      POSTGRES_USER: ${POSTGRES_USER:-lockdown}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lockdown} -d ${POSTGRES_DB:-lockdown}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      # Database
+      DATABASE_URL: postgres://${POSTGRES_USER:-lockdown}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-lockdown}
+      DB_SSL_VERIFY: "false"  # Internal network, no SSL needed between containers
+      # Security keys (from .env.prod)
+      JWT_SECRET: ${JWT_SECRET}
+      AGENT_SHARED_KEY: ${AGENT_SHARED_KEY}
+      AGENT_KEY_PEPPER: ${AGENT_KEY_PEPPER}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
+      LOCATION_FIELD_KEY: ${LOCATION_FIELD_KEY}
+      # CORS
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://your-domain.com}
+      # Port
+      PORT: "3001"
+      # Location retention (days)
+      LOCATION_RETENTION_DAYS: ${LOCATION_RETENTION_DAYS:-90}
+      # Phase 5: Command expiry (days)
+      COMMAND_EXPIRY_DAYS: ${COMMAND_EXPIRY_DAYS:-30}
+    volumes:
+      # Persist agent binaries (for installer generation) across restarts
+      - agent_binaries:/app/agent/dist
+      - agent_binaries_bin:/app/agent/bin
+    networks:
+      - internal
+      - web
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN:-your-domain.com}
+    depends_on:
+      - server
+    networks:
+      - web
+
+volumes:
+  postgres_data:
+  agent_binaries:
+  agent_binaries_bin:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
+    # Internal network for postgres ↔ server communication
+  web:
+    # External network for caddy ↔ server communication

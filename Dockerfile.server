@@ -1,0 +1,58 @@
+# Dockerfile.server — Production image for the admin server
+#
+# Multi-stage build:
+#   1. Build stage: compile dashboard (Vite) and install server deps
+#   2. Runtime stage: slim image with only what's needed to run
+
+# --- Build stage ---
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files and install dependencies
+COPY server/package.json server/package-lock.json* ./server/
+RUN cd server && npm ci --production
+
+COPY dashboard/package.json dashboard/package-lock.json* ./dashboard/
+RUN cd dashboard && npm ci
+
+# Copy source code
+COPY server/ ./server/
+COPY dashboard/ ./dashboard/
+
+# Build the dashboard
+RUN cd dashboard && npx vite build
+
+# --- Runtime stage ---
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+
+# Install only production dependencies for the server
+COPY server/package.json server/package-lock.json* ./server/
+RUN cd server && npm ci --production
+
+# Copy server source
+COPY server/ ./server/
+
+# Copy built dashboard from builder stage
+COPY --from=builder /app/dashboard/dist ./dashboard/dist
+
+# Copy agent build scripts and spec files (for building agent binaries on first run)
+# The actual binaries are built inside the container using PyInstaller
+COPY agent/ ./agent/
+
+# Install Python and PyInstaller for agent binary generation
+# (The server builds agent installers on demand)
+RUN apk add --no-cache python3 py3-pip && \
+    pip3 install --break-system-packages pyinstaller requests cryptography
+
+# Expose the server port
+EXPOSE 3001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget -qO- http://localhost:3001/api/health || exit 1
+
+# Start the server
+CMD ["node", "server/src/index.js"]

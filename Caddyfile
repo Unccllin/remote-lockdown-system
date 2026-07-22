@@ -1,0 +1,35 @@
+# Caddyfile — Reverse proxy for the admin server
+#
+# Caddy automatically provisions and renews TLS certificates via Let's Encrypt.
+# Just set your domain in the .env.prod file and Caddy handles the rest.
+#
+# Usage:
+#   1. Set DOMAIN in .env.prod (e.g., lockdown.example.com)
+#   2. Point your DNS A record to the server's IP
+#   3. docker compose -f docker-compose.prod.yml up -d
+
+{$DOMAIN} {
+	# Reverse proxy to the admin server
+	reverse_proxy server:3001
+
+	# Security headers
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+	}
+
+	# Compression
+	encode gzip zstd
+
+	# Access logs
+	log {
+		output stdout
+		format json
+	}
+
+	# Rate limiting (basic — Caddy doesn't have built-in rate limiting,
+	# the Express server handles API rate limiting)
+}

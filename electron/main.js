@@ -164,6 +164,14 @@ app.whenReady().then(async () => {
 
     // Create the browser window
     createWindow(serverInfo.port);
+
+    // Phase 6: Initialize auto-updater (only works in production)
+    try {
+      const { initUpdater } = require('./updater');
+      initUpdater(mainWindow);
+    } catch (err) {
+      console.warn('[main] Auto-updater not available:', err.message);
+    }
   } catch (err) {
     console.error('[main] Failed to start:', err);
     // Show an error dialog and quit

@@ -2,6 +2,11 @@
   "name": "remote-lockdown-admin",
   "version": "1.0.0",
   "description": "Remote Device Lockdown System — Admin Desktop App",
+  "author": {
+    "name": "Remote Lockdown",
+    "email": "noreply@remotelockdown.com",
+    "url": "https://github.com/unccllin/remote-lockdown-system"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -11,9 +16,13 @@
     "build": "npm run build:dashboard && npm run build:agent && electron-builder",
     "build:win": "npm run build:dashboard && npm run build:agent && electron-builder --win",
     "build:mac": "npm run build:dashboard && npm run build:agent && electron-builder --mac",
-    "build:linux": "npm run build:dashboard && npm run build:agent && electron-builder --linux"
+    "build:linux": "npm run build:dashboard && npm run build:agent && electron-builder --linux",
+    "publish": "npm run build:dashboard && npm run build:agent && electron-builder --publish always"
   },
-  "dependencies": {},
+  "dependencies": {
+    "electron-log": "^5.2.0",
+    "electron-updater": "^6.3.9"
+  },
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0"
@@ -21,13 +30,22 @@
   "build": {
     "appId": "com.remotelockdown.admin",
     "productName": "Remote Lockdown Admin",
+    "copyright": "Copyright © 2026 Remote Lockdown",
     "directories": {
-      "output": "dist-electron"
+      "output": "dist-electron",
+      "buildResources": "build"
     },
     "files": [
       "main.js",
       "preload.js",
       "server-starter.js",
+      "config.js",
+      "updater.js",
+      "node_modules/electron-updater/**/*",
+      "node_modules/electron-log/**/*",
+      "node_modules/builder-util-runtime/**/*",
+      "node_modules/js-yaml/**/*",
+      "node_modules/lazy-val/**/*",
       "../server/src/**/*",
       "../server/package.json",
       "../server/node_modules/**/*",
@@ -56,22 +74,67 @@
       }
     ],
     "win": {
-      "target": "nsis",
-      "icon": "build/icon.ico"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "msi",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "publisherName": "Remote Lockdown",
+      "verifyUpdateCodeSignature": false
     },
     "mac": {
-      "target": "dmg",
-      "icon": "build/icon.icns"
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.security",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": false
     },
     "linux": {
-      "target": "AppImage",
-      "icon": "build/icon.png"
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "Security",
+      "maintainer": "Remote Lockdown <noreply@remotelockdown.com>"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
-    }
+      "createStartMenuShortcut": true,
+      "shortcutName": "Remote Lockdown Admin",
+      "uninstallDisplayName": "Remote Lockdown Admin",
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": true
+    },
+    "msi": {
+      "oneClick": false,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "shortcutName": "Remote Lockdown Admin"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "unccllin",
+      "repo": "remote-lockdown-system"
+    },
+    "generateUpdatesFilesForAllChannels": true
   }
 }
