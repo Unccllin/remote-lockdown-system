@@ -98,6 +98,7 @@ function getPlatformConfig(requestedPlatform) {
 /**
  * Generate the Windows PowerShell install script.
  * Installs the agent + watchdog as a Windows service using NSSM.
+ * Phase 7: Shows EULA + tracking disclosure, registers uninstaller.
  */
 function generateInstallPs1(config, hostname) {
   const serviceName = 'LockdownAgent';
@@ -118,8 +119,61 @@ $serviceName = "${serviceName}"
 $watchdogServiceName = "${watchdogServiceName}"
 $installDir = "${installDir}"
 
+# --- Phase 7: EULA + Tracking Disclosure ---
 Write-Host "=== Remote Lockdown Agent Installer ===" -ForegroundColor Green
 Write-Host "Device: ${hostname}"
+Write-Host ""
+Write-Host "IMPORTANT — PLEASE READ CAREFULLY" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "This software is an anti-theft device protection agent."
+Write-Host "By installing this software, you acknowledge that:"
+Write-Host ""
+Write-Host "  1. You own or are authorized to manage this device"
+Write-Host "  2. This agent will periodically check in with the admin server"
+Write-Host "  3. If this device is reported stolen, the agent will:"
+Write-Host "     - Encrypt the locked folder to prevent unauthorized access"
+Write-Host "     - Lock the boot loader (BIOS/UEFI) on supported hardware"
+Write-Host "     - Collect location data (IP-based and/or GPS/WiFi if available)"
+Write-Host "  4. Location data is only collected when the device is flagged as stolen"
+Write-Host "  5. Location data is retained for 90 days (configurable) then auto-deleted"
+Write-Host "  6. The agent does NOT monitor: browsing, files, keystrokes, audio, video"
+Write-Host ""
+Write-Host "See EULA.txt and PRIVACY_POLICY.txt for full terms."
+Write-Host ""
+
+$eulaAccepted = $false
+
+# Check if running in interactive mode
+if ($Host.Name -eq "ConsoleHost") {
+    $response = Read-Host "Do you accept the EULA and acknowledge the tracking capabilities? (yes/no)"
+    if ($response -match "^[Yy]es$") {
+        $eulaAccepted = $true
+    }
+} else {
+    # Non-interactive (e.g., double-click): show dialog
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $result = [Microsoft.VisualBasic.Interaction]::MsgBox(
+        "Remote Lockdown Agent will be installed on this device.\`n\`n" +
+        "This agent includes anti-theft tracking capabilities:\`n" +
+        "- If this device is reported stolen, location data will be collected\`n" +
+        "- The locked folder will be encrypted\`n" +
+        "- Boot loader may be locked (BIOS/UEFI)\`n\`n" +
+        "Location data is only collected when the device is flagged as stolen.\`n\`n" +
+        "Do you accept the EULA and acknowledge these capabilities?",
+        4,  # vbYesNo
+        "Remote Lockdown Agent — EULA Acceptance"
+    )
+    if ($result -eq 6) {  # vbYes
+        $eulaAccepted = $true
+    }
+}
+
+if (-not $eulaAccepted) {
+    Write-Host "EULA not accepted. Installation cancelled." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "EULA accepted. Proceeding with installation..." -ForegroundColor Green
 Write-Host ""
 
 # Create install directory
@@ -174,16 +228,51 @@ if ($nssmPath) {
     Write-Host "Agent started in background."
 }
 
+# --- Phase 7: Register uninstaller in Add/Remove Programs ---
+$uninstallerPath = "$installDir\\uninstall.ps1"
+# Create uninstaller script
+$uninstallerScript = @"
+#Requires -RunAsAdministrator
+Write-Host "Uninstalling Remote Lockdown Agent..." -ForegroundColor Yellow
+# Stop and remove services
+& nssm stop $serviceName 2>\`$null
+& nssm remove $serviceName confirm 2>\`$null
+& nssm stop $watchdogServiceName 2>\`$null
+& nssm remove $watchdogServiceName confirm 2>\`$null
+# Remove install directory
+Remove-Item "$installDir" -Recurse -Force -ErrorAction SilentlyContinue
+# Remove registry entry
+Remove-Item "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\LockdownAgent" -ErrorAction SilentlyContinue
+Write-Host "Uninstallation complete." -ForegroundColor Green
+"@
+Set-Content -Path $uninstallerPath -Value $uninstallerScript -Encoding UTF8
+
+# Register in Add/Remove Programs
+$regKey = "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\LockdownAgent"
+New-Item -Path $regKey -Force | Out-Null
+Set-ItemProperty -Path $regKey -Name "DisplayName" -Value "Remote Lockdown Agent"
+Set-ItemProperty -Path $regKey -Name "DisplayVersion" -Value "1.0.0"
+Set-ItemProperty -Path $regKey -Name "Publisher" -Value "Remote Lockdown"
+Set-ItemProperty -Path $regKey -Name "InstallLocation" -Value $installDir
+Set-ItemProperty -Path $regKey -Name "UninstallString" -Value "powershell -ExecutionPolicy Bypass -File \`"$uninstallerPath\`""
+Set-ItemProperty -Path $regKey -Name "DisplayIcon" -Value "$installDir\\lockdown-agent.exe"
+Set-ItemProperty -Path $regKey -Name "NoModify" -Value 1 -Type DWord
+Set-ItemProperty -Path $regKey -Name "NoRepair" -Value 1 -Type DWord
+Write-Host "Uninstaller registered in Add/Remove Programs." -ForegroundColor Green
+
 Write-Host ""
 Write-Host "Installation complete!" -ForegroundColor Green
 Write-Host "The agent will check in with the server at: ${config.server_url}"
 Write-Host "Verify checkin in the admin dashboard."
+Write-Host ""
+Write-Host "To uninstall: Use Add/Remove Programs or run: $uninstallerPath"
 `;
 }
 
 /**
  * Generate the Linux/macOS install script.
  * Installs the agent + watchdog as a systemd service.
+ * Phase 7: Shows EULA + tracking disclosure before installation.
  */
 function generateInstallSh(config, hostname) {
   const serviceName = 'lockdown-agent';
@@ -207,6 +296,39 @@ CONFIG_DIR="${configDir}"
 
 echo "=== Remote Lockdown Agent Installer ==="
 echo "Device: ${hostname}"
+echo ""
+echo "IMPORTANT — PLEASE READ CAREFULLY"
+echo ""
+echo "This software is an anti-theft device protection agent."
+echo "By installing this software, you acknowledge that:"
+echo ""
+echo "  1. You own or are authorized to manage this device"
+echo "  2. This agent will periodically check in with the admin server"
+echo "  3. If this device is reported stolen, the agent will:"
+echo "     - Encrypt the locked folder to prevent unauthorized access"
+echo "     - Lock the boot loader (BIOS/UEFI) on supported hardware"
+echo "     - Collect location data (IP-based and/or GPS/WiFi if available)"
+echo "  4. Location data is only collected when the device is flagged as stolen"
+echo "  5. Location data is retained for 90 days (configurable) then auto-deleted"
+echo "  6. The agent does NOT monitor: browsing, files, keystrokes, audio, video"
+echo ""
+echo "See EULA.txt and PRIVACY_POLICY.txt for full terms."
+echo ""
+
+# Check if running interactively
+if [ -t 0 ]; then
+    read -p "Do you accept the EULA and acknowledge the tracking capabilities? (yes/no) " response
+    if [ "$response" != "yes" ] && [ "$response" != "Yes" ]; then
+        echo "EULA not accepted. Installation cancelled."
+        exit 1
+    fi
+else
+    # Non-interactive: accept by default (e.g., automated deployment)
+    echo "Non-interactive mode — EULA accepted by default."
+    echo "Ensure you have read and accepted the EULA before running this script."
+fi
+
+echo "EULA accepted. Proceeding with installation..."
 echo ""
 
 # Check root
@@ -341,6 +463,135 @@ Support:
   This agent is part of the Remote Lockdown System.
   The agent is visible in ${isWin ? 'Add/Remove Programs' : 'systemctl list-units'}.
   It does NOT hide itself — this is intentional for ethical transparency.
+`;
+}
+
+/**
+ * Phase 7: Generate a short EULA for the installer package.
+ * The full Terms of Service are in docs/TERMS_OF_SERVICE.md.
+ */
+function generateEula(hostname) {
+  return `Remote Lockdown Agent — End User License Agreement
+=========================================================
+Device: ${hostname}
+Date: ${new Date().toISOString()}
+
+IMPORTANT — READ CAREFULLY
+
+By installing this software, you agree to the following terms:
+
+1. AUTHORIZATION
+   You represent and warrant that you own or are authorized to manage
+   this device. Installing monitoring software on a device without the
+   owner's consent may be illegal in your jurisdiction.
+
+2. TRACKING CAPABILITIES
+   This agent includes anti-theft tracking capabilities. When this device
+   is reported stolen via the admin dashboard, the agent will:
+   - Encrypt the locked folder to prevent unauthorized access
+   - Lock the boot loader (BIOS/UEFI) on supported hardware
+   - Collect location data (IP-based and/or GPS/WiFi if available)
+
+   Location data is ONLY collected when the device is flagged as stolen.
+   The agent does NOT monitor: browsing history, files, keystrokes,
+   audio, video, emails, or application usage.
+
+3. DATA RETENTION
+   Location data is retained for 90 days (configurable) and then
+   automatically deleted. Audit logs are retained for 365 days.
+   Device records are retained until the device is released from
+   the admin account.
+
+4. TRANSPARENCY
+   This agent is visible in the system's program list (Add/Remove
+   Programs on Windows, systemctl on Linux). It does NOT hide itself,
+   run in stealth mode, or attempt to evade detection. This is
+   intentional for ethical transparency.
+
+5. CONSENT
+   For corporate/institutional devices, ensure employees are notified
+   per applicable labor laws (GDPR Art. 88 in the EU). For personal
+   devices, your installation constitutes consent.
+
+6. DISCLAIMER
+   This software is provided "AS IS" without warranty. The provider
+   is not liable for data loss, device damage, or failure to recover
+   a stolen device. Boot-level protection is only available on
+   supported hardware.
+
+7. GOVERNING LAW
+   This EULA is governed by the laws of your jurisdiction. You are
+   responsible for complying with all applicable privacy, surveillance,
+   and monitoring laws.
+
+For the full Terms of Service, see:
+https://github.com/unccllin/remote-lockdown-system/blob/main/docs/TERMS_OF_SERVICE.md
+
+To object to this agreement, do not install the software. If already
+installed, use the uninstall script or Add/Remove Programs to remove it.
+`;
+}
+
+/**
+ * Phase 7: Generate a short privacy summary for the installer package.
+ * The full Privacy Policy is in docs/PRIVACY_POLICY.md.
+ */
+function generatePrivacySummary() {
+  return `Remote Lockdown Agent — Privacy Summary
+==========================================
+
+WHAT DATA IS COLLECTED?
+
+  When enrolled (always):
+  - Device hostname, owner name, MAC address, hardware UUID
+  - Check-in timestamps (when the device last contacted the server)
+
+  When flagged as stolen (only):
+  - GPS coordinates (if available)
+  - IP-based geolocation (approximate location)
+  - Wi-Fi access points (for WiFi-based positioning)
+  - City/region/country (derived from location)
+
+WHAT DATA IS NOT COLLECTED?
+
+  The agent does NOT collect:
+  - Browsing history or web activity
+  - File contents, photos, or documents
+  - Keystrokes or mouse input
+  - Audio or video recordings
+  - Email, chat, or social media activity
+  - Application usage data
+
+HOW LONG IS DATA RETAINED?
+
+  - Location reports: 90 days (configurable: 7-180 days), then auto-deleted
+  - Audit logs: 365 days
+  - Device records: Until device is released from account
+  - Encryption keys: Until device is recovered and unlocked
+
+YOUR RIGHTS
+
+  - Access: Request a copy of your data
+  - Deletion: Request deletion of your data
+  - Objection: Object to data processing
+  - Portability: Receive your data in machine-readable format
+  - Withdrawal: Remove the agent at any time (Add/Remove Programs or
+    systemctl)
+
+  To exercise these rights, contact: privacy@remotelockdown.com
+
+DATA SECURITY
+
+  - All sensitive data (encryption keys, BIOS passwords, location data)
+    is encrypted with AES-256-GCM
+  - All communication uses HTTPS/TLS
+  - Per-device API keys prevent cross-device access
+
+For the full Privacy Policy, see:
+https://github.com/unccllin/remote-lockdown-system/blob/main/docs/PRIVACY_POLICY.md
+
+For the GDPR Legitimate Interest Assessment, see:
+https://github.com/unccllin/remote-lockdown-system/blob/main/docs/GDPR_LIA.md
 `;
 }
 
@@ -583,6 +834,16 @@ router.get('/:deviceId', requireAuth, async (req, res) => {
   files.push({
     name: 'README.txt',
     data: Buffer.from(generateReadme(device.hostname, platform), 'utf8'),
+  });
+
+  // Phase 7: EULA + Privacy Policy (short versions for the installer package)
+  files.push({
+    name: 'EULA.txt',
+    data: Buffer.from(generateEula(device.hostname), 'utf8'),
+  });
+  files.push({
+    name: 'PRIVACY_POLICY.txt',
+    data: Buffer.from(generatePrivacySummary(), 'utf8'),
   });
 
   // Build ZIP

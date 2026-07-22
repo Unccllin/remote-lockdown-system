@@ -1031,6 +1031,55 @@ def delete_recovery_key() -> None:
         log.info("Recovery key file deleted (unlock successful)")
 
 # ---------------------------------------------------------------------------
+# Phase 7: User notification (ethical transparency)
+# ---------------------------------------------------------------------------
+
+def show_lockdown_notification() -> None:
+    """Show a desktop notification when the device is marked stolen.
+
+    This is an ethical transparency measure — the user is informed that
+    their device has been flagged as stolen and is being tracked.
+
+    On Windows: uses MessageBox (blocking, but the agent runs in a thread)
+    On Linux: uses notify-send if available, falls back to log
+    On macOS: uses osascript if available, falls back to log
+
+    The notification is shown AFTER lockdown is complete, so it doesn't
+    interfere with the encryption process.
+    """
+    title = "Device Security Alert"
+    message = (
+        "This device has been flagged as stolen and locked remotely.\n\n"
+        "The following security measures have been applied:\n"
+        "  - Sensitive files have been encrypted\n"
+        "  - Boot protection has been enabled (if supported)\n\n"
+        "Location data may be collected to assist in recovery.\n\n"
+        "If you are the owner and this is an error, contact your administrator\n"
+        "to recover the device."
+    )
+
+    try:
+        if sys.platform == 'win32':
+            # Use ctypes to call MessageBoxW (doesn't require any GUI framework)
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, message, title, 0x30)  # MB_ICONWARNING
+        elif sys.platform == 'darwin':
+            # macOS: use osascript
+            import subprocess
+            subprocess.Popen([
+                'osascript', '-e',
+                f'display notification "{message}" with title "{title}"'
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            # Linux: try notify-send
+            import subprocess
+            subprocess.Popen([
+                'notify-send', '--icon=dialog-warning', title, message
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        log.info("Could not show lockdown notification: %s", e)
+
+# ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
 
@@ -1158,6 +1207,14 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     del key, key_b64
     if bios_password:
         del bios_password
+
+    # Phase 7: Show user notification (ethical transparency)
+    # Non-blocking on Linux/macOS, blocking on Windows (MessageBox).
+    # The lockdown is already complete, so blocking is acceptable.
+    try:
+        show_lockdown_notification()
+    except Exception as e:
+        log.info("Lockdown notification failed: %s", e)
 
 def handle_unlock(cfg: dict, command: dict) -> None:
     log.info("UNLOCK command received")

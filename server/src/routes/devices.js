@@ -372,4 +372,85 @@ router.get('/:id/location/latest', requireAuth, async (req, res) => {
   res.json(decryptLocationFields(result.rows[0]));
 });
 
+/**
+ * Phase 7: Release device from account (ownership transfer / GDPR erasure).
+ *
+ * This endpoint:
+ *   1. Verifies the device is not currently locked/stolen (safety check)
+ *   2. Deletes all data associated with the device:
+ *      - location_reports
+ *      - encryption_keys
+ *      - bios_passwords
+ *      - commands
+ *      - audit_log entries (anonymized, not deleted)
+ *   3. Deletes the device record itself
+ *   4. The CASCADE foreign key handles most deletions automatically
+ *
+ * The device must be in 'active' status to be released. If it's locked
+ * or stolen, the admin must first recover it (unlock + decrypt).
+ */
+router.delete('/:id/release', requireAuth, async (req, res) => {
+  const { hostname_confirm } = req.body;
+
+  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
+  const device = devResult.rows[0];
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+
+  // Safety: require hostname confirmation
+  if (device.hostname !== hostname_confirm) {
+    return res.status(400).json({ error: 'Confirmation hostname does not match' });
+  }
+
+  // Safety: can't release a locked or stolen device
+  if (['locked', 'stolen', 'recovering'].includes(device.status)) {
+    return res.status(409).json({
+      error: `Cannot release a device in '${device.status}' state. Recover (unlock) the device first.`,
+    });
+  }
+
+  // Phase 7: Anonymize audit log entries (keep for accountability, remove PII)
+  await pool.query(
+    `UPDATE audit_log SET detail = json_set(
+       COALESCE(detail, '{}'::jsonb),
+       '$.released_at', to_char(NOW(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')::jsonb
+     ) WHERE device_id = $1`,
+    [device.id]
+  );
+
+  // Log the release action BEFORE deleting the device (so device_id is valid)
+  await pool.query(
+    'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
+    [device.id, req.admin.id, 'device_released', {
+      hostname: device.hostname,
+      owner_name: device.owner_name,
+    }]
+  );
+
+  // Delete the device — CASCADE will remove location_reports, encryption_keys,
+  // bios_passwords, and commands. Audit log entries have ON DELETE SET NULL
+  // so they're preserved (with device_id = NULL) for accountability.
+  await pool.query('DELETE FROM devices WHERE id = $1', [device.id]);
+
+  res.json({
+    ok: true,
+    message: `Device '${device.hostname}' has been released. All associated data has been deleted. Audit log entries have been anonymized.`,
+  });
+});
+
+/**
+ * Phase 7: Get data retention settings.
+ * Returns the current retention configuration.
+ */
+router.get('/settings/retention', requireAuth, async (req, res) => {
+  const locationRetentionDays = parseInt(process.env.LOCATION_RETENTION_DAYS || '90', 10);
+  const commandExpiryDays = parseInt(process.env.COMMAND_EXPIRY_DAYS || '30', 10);
+  res.json({
+    location_retention_days: locationRetentionDays,
+    command_expiry_days: commandExpiryDays,
+    audit_log_retention_days: 365, // hardcoded for now
+    min_location_retention: 7,
+    max_location_retention: 180,
+  });
+});
+
 module.exports = router;

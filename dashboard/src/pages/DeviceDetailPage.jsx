@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ShieldAlert, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate } from 'lucide-react';
+import { ArrowLeft, ShieldAlert, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate, UserX } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
@@ -115,6 +115,20 @@ export default function DeviceDetailPage() {
     }
   }
 
+  async function releaseDevice() {
+    setActing(true);
+    try {
+      await api.delete(`/devices/${id}/release`, { data: { hostname_confirm: device.hostname } });
+      toast.success('Device released — all associated data has been deleted');
+      setModal(null);
+      navigate('/devices');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Release failed');
+    } finally {
+      setActing(false);
+    }
+  }
+
   if (loading) return <div className="text-slate-500 text-center py-32">Loading...</div>;
   if (!device) return <div className="text-slate-500 text-center py-32">Device not found.</div>;
 
@@ -172,6 +186,17 @@ export default function DeviceDetailPage() {
           onConfirm={locateNow}
           onCancel={() => setModal(null)}
           danger={false}
+        />
+      )}
+      {modal === 'release' && (
+        <ConfirmModal
+          title="Release Device from Account"
+          description={`This will PERMANENTLY DELETE all data associated with "${device.hostname}", including location history, encryption keys, and command history. The device will need to be re-enrolled if you want to manage it again. This action cannot be undone. Type the device hostname to confirm.`}
+          confirmLabel={acting ? 'Processing…' : 'Release & Delete Data'}
+          confirmValue={device.hostname}
+          onConfirm={releaseDevice}
+          onCancel={() => setModal(null)}
+          danger
         />
       )}
 
@@ -294,6 +319,15 @@ export default function DeviceDetailPage() {
             <Loader size={11} className="animate-spin" />
             Recovery in progress — waiting for agent to decrypt
           </span>
+        )}
+        {/* Phase 7: Release device (ownership transfer / GDPR erasure) */}
+        {device.status === 'active' && (
+          <button
+            className="btn-ghost text-red-400 border-red-800/50 hover:bg-red-900/20 ml-auto"
+            onClick={() => setModal('release')}
+          >
+            <UserX size={14} /> Release Device
+          </button>
         )}
       </div>
 
