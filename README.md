@@ -45,7 +45,7 @@ Navigate to `https://your-domain.com` and create your admin account.
 ### Option C: Development Setup
 
 #### 1. Prerequisites
-- Node.js 18+, npm
+- Node.js 20+, npm
 - PostgreSQL 14+ (or use SQLite for development)
 - Python 3.10+
 
@@ -75,9 +75,11 @@ npm run dev
 # Open http://localhost:5173
 ```
 
-Create your first admin account by POSTing to `/api/auth/register`:
+Create your first admin account by POSTing to `/api/setup/create-admin`
+(this endpoint only works while no admin exists — it returns 403 once the
+first admin has been created, so it cannot be used to create rogue accounts):
 ```bash
-curl -X POST http://localhost:3001/api/auth/register \
+curl -X POST http://localhost:3001/api/setup/create-admin \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"yourpassword"}'
 ```

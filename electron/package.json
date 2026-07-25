@@ -11,21 +11,24 @@
   "scripts": {
     "start": "electron .",
     "start:dev": "ELECTRON_IS_DEV=1 electron .",
+    "install:server": "cd ../server && npm ci --omit=dev",
+    "rebuild:native": "electron-rebuild -f -w sqlite3 -m ../server/node_modules",
     "build:agent": "cd ../agent && python3 -m PyInstaller agent.spec --noconfirm && python3 -m PyInstaller watchdog.spec --noconfirm && python3 -m PyInstaller offline_recovery.spec --noconfirm",
     "build:dashboard": "cd ../dashboard && npx vite build",
-    "build": "npm run build:dashboard && npm run build:agent && electron-builder",
-    "build:win": "npm run build:dashboard && npm run build:agent && electron-builder --win",
-    "build:mac": "npm run build:dashboard && npm run build:agent && electron-builder --mac",
-    "build:linux": "npm run build:dashboard && npm run build:agent && electron-builder --linux",
-    "publish": "npm run build:dashboard && npm run build:agent && electron-builder --publish always"
+    "build": "npm run install:server && npm run rebuild:native && npm run build:dashboard && npm run build:agent && electron-builder",
+    "build:win": "npm run install:server && npm run rebuild:native && npm run build:dashboard && npm run build:agent && electron-builder --win",
+    "build:mac": "npm run install:server && npm run rebuild:native && npm run build:dashboard && npm run build:agent && electron-builder --mac",
+    "build:linux": "npm run install:server && npm run rebuild:native && npm run build:dashboard && npm run build:agent && electron-builder --linux",
+    "publish": "npm run install:server && npm run rebuild:native && npm run build:dashboard && npm run build:agent && electron-builder --publish always"
   },
   "dependencies": {
     "electron-log": "^5.2.0",
     "electron-updater": "^6.3.9"
   },
   "devDependencies": {
+    "@electron/rebuild": "3.6.1",
     "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron-builder": "25.1.8"
   },
   "build": {
     "appId": "com.remotelockdown.admin",
@@ -45,13 +48,28 @@
       "node_modules/electron-log/**/*",
       "node_modules/builder-util-runtime/**/*",
       "node_modules/js-yaml/**/*",
-      "node_modules/lazy-val/**/*",
-      "../server/src/**/*",
-      "../server/package.json",
-      "../server/node_modules/**/*",
-      "../dashboard/dist/**/*"
+      "node_modules/lazy-val/**/*"
     ],
     "extraResources": [
+      {
+        "from": "../server/src",
+        "to": "server/src",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../server/package.json",
+        "to": "server/package.json"
+      },
+      {
+        "from": "../server/node_modules",
+        "to": "server/node_modules",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../dashboard/dist",
+        "to": "dashboard/dist",
+        "filter": ["**/*"]
+      },
       {
         "from": "../agent/dist",
         "to": "agent",

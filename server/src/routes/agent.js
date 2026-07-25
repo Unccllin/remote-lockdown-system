@@ -4,6 +4,7 @@ const { withTransaction } = require('../db/withTransaction');
 const { encryptField, readDualMode } = require('../db/fieldCrypto');
 const { hashApiKey, verifyApiKey, verifySharedKey } = require('../db/apiKey');
 const { hmacVerify } = require('../middleware/hmacAuth');
+const { getAgentBinariesDir } = require('../config/paths');
 
 const router = express.Router();
 
@@ -453,23 +454,17 @@ router.get('/update', agentAuth, async (req, res) => {
   const path = require('path');
   const crypto = require('crypto');
 
-  // Binary search paths (same logic as installer.js)
-  const candidates = [];
-  if (process.resourcesPath) {
-    candidates.push(path.join(process.resourcesPath, 'agent'));
-  }
-  candidates.push(path.join(__dirname, '..', '..', '..', '..', 'agent', 'dist'));
-  candidates.push(path.join(__dirname, '..', '..', '..', 'agent', 'dist'));
+  // Use the shared path resolver from config/paths.js
+  const binariesDir = getAgentBinariesDir();
 
   const ext = agentPlatform === 'win' ? '.exe' : '';
   const agentBinName = `lockdown-agent${ext}`;
 
   let binPath = null;
-  for (const dir of candidates) {
-    const p = path.join(dir, agentBinName);
+  if (binariesDir) {
+    const p = path.join(binariesDir, agentBinName);
     if (fs.existsSync(p)) {
       binPath = p;
-      break;
     }
   }
 
@@ -518,22 +513,17 @@ router.get('/download', agentAuth, async (req, res) => {
   const fs = require('fs');
   const path = require('path');
 
-  const candidates = [];
-  if (process.resourcesPath) {
-    candidates.push(path.join(process.resourcesPath, 'agent'));
-  }
-  candidates.push(path.join(__dirname, '..', '..', '..', '..', 'agent', 'dist'));
-  candidates.push(path.join(__dirname, '..', '..', '..', 'agent', 'dist'));
+  // Use the shared path resolver from config/paths.js
+  const binariesDir = getAgentBinariesDir();
 
   const ext = agentPlatform === 'win' ? '.exe' : '';
   const agentBinName = `lockdown-agent${ext}`;
 
   let binPath = null;
-  for (const dir of candidates) {
-    const p = path.join(dir, agentBinName);
+  if (binariesDir) {
+    const p = path.join(binariesDir, agentBinName);
     if (fs.existsSync(p)) {
       binPath = p;
-      break;
     }
   }
 

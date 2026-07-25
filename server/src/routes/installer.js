@@ -46,47 +46,16 @@ const https = require('https');
 const pool = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { hashApiKey } = require('../db/apiKey');
+const { getAgentBinariesDir } = require('../config/paths');
 
 const router = express.Router();
 
 // ---------------------------------------------------------------------------
 // Agent binary discovery
 // ---------------------------------------------------------------------------
-
-/**
- * Find the directory containing the pre-built agent binaries.
- *
- * In production (Electron packaged): process.resourcesPath/agent/
- * In development: agent/dist/ relative to the server directory
- */
-function getAgentBinariesDir() {
-  const candidates = [];
-
-  if (process.resourcesPath) {
-    candidates.push(path.join(process.resourcesPath, 'agent'));
-  }
-
-  // Dev mode: agent/dist relative to repo root
-  // server/src/routes/installer.js → ../../../../agent/dist
-  candidates.push(path.join(__dirname, '..', '..', '..', '..', 'agent', 'dist'));
-
-  // Also check relative to electron directory (when running via Electron dev)
-  candidates.push(path.join(__dirname, '..', '..', '..', 'agent', 'dist'));
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      // Verify at least one agent binary exists
-      const hasBinary =
-        fs.existsSync(path.join(candidate, 'lockdown-agent')) ||
-        fs.existsSync(path.join(candidate, 'lockdown-agent.exe'));
-      if (hasBinary) {
-        return candidate;
-      }
-    }
-  }
-
-  return null;
-}
+// getAgentBinariesDir is imported from config/paths.js — the shared path
+// resolver that handles both Electron production (resourcesPath/agent/) and
+// dev mode (repo-root/agent/dist/) lookup.
 
 /**
  * Determine the target platform from query param or default to the server's platform.

@@ -21,7 +21,15 @@ const crypto = require('crypto');
 // server/node_modules (express, helmet, cors, etc.). We use Module.createRequire
 // to create a require function rooted at the server directory, so all module
 // resolution happens as if we were running from inside the server directory.
-const serverDir = path.join(__dirname, '..', 'server');
+//
+// In dev: server files are at ../server relative to this file (repo layout).
+// In production (packaged): server files are in extraResources at
+//   process.resourcesPath/server/ — the ../server relative path does NOT
+//   work because electron-builder 25 silently drops ../ globs from the
+//   files config, so server code is placed in extraResources instead.
+const serverDir = process.resourcesPath && fs.existsSync(path.join(process.resourcesPath, 'server'))
+  ? path.join(process.resourcesPath, 'server')
+  : path.join(__dirname, '..', 'server');
 const Module = require('module');
 const requireFromServer = Module.createRequire
   ? Module.createRequire(path.join(serverDir, 'package.json'))
@@ -65,11 +73,11 @@ function setupEnv(isDev) {
 
 // --- Database setup ---
 async function setupDatabase() {
-  const sqlitePool = require('../server/src/db/sqlitePool');
-  const { runMigrations } = require('../server/src/db/migrationRunner');
+  const sqlitePool = require(path.join(serverDir, 'src/db/sqlitePool'));
+  const { runMigrations } = require(path.join(serverDir, 'src/db/migrationRunner'));
 
   // Override the pool module so all route modules use SQLite
-  const poolPath = require.resolve('../server/src/db/pool');
+  const poolPath = require.resolve(path.join(serverDir, 'src/db/pool'));
   require.cache[poolPath] = {
     exports: sqlitePool,
     id: poolPath,
@@ -130,12 +138,12 @@ async function startServer(options = {}) {
   app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
 
   // API routes
-  app.use('/api/auth', require('../server/src/routes/auth'));
-  app.use('/api/devices', require('../server/src/routes/devices'));
-  app.use('/api/agent', require('../server/src/routes/agent'));
-  app.use('/api/audit', require('../server/src/routes/audit'));
-  app.use('/api/setup', require('../server/src/routes/setup'));
-  app.use('/api/installer', require('../server/src/routes/installer'));
+  app.use('/api/auth', require(path.join(serverDir, 'src/routes/auth')));
+  app.use('/api/devices', require(path.join(serverDir, 'src/routes/devices')));
+  app.use('/api/agent', require(path.join(serverDir, 'src/routes/agent')));
+  app.use('/api/audit', require(path.join(serverDir, 'src/routes/audit')));
+  app.use('/api/setup', require(path.join(serverDir, 'src/routes/setup')));
+  app.use('/api/installer', require(path.join(serverDir, 'src/routes/installer')));
 
   // Health check
   app.get('/api/health', async (req, res) => {

@@ -11,6 +11,7 @@ const devicesRoutes = require('./routes/devices');
 const agentRoutes = require('./routes/agent');
 const auditRoutes = require('./routes/audit');
 const installerRoutes = require('./routes/installer');
+const setupRoutes = require('./routes/setup');
 
 const app = express();
 
@@ -44,6 +45,7 @@ const agentLimiter = rateLimit({
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/setup', setupRoutes);
 app.use('/api/devices', devicesRoutes);
 app.use('/api/agent', agentLimiter, agentRoutes);
 app.use('/api/audit', auditRoutes);

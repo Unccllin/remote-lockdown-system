@@ -32,9 +32,19 @@ async function runRetentionPurge() {
 
   try {
     // Try to acquire an advisory lock — non-blocking
-    // If another instance is already running the purge, skip
+    // If another instance is already running the purge, skip.
+    //
+    // On PostgreSQL/PGlite: pg_try_advisory_lock returns a boolean column.
+    // On SQLite: the SQL is translated to SELECT 1, so the result column
+    // is named '1' (or 'pg_try_advisory_lock' is absent). SQLite is
+    // single-process, so the JS-level runInFlight guard already prevents
+    // concurrent runs within the same process — the advisory lock is only
+    // needed for multi-process Postgres deployments. If the column is
+    // absent, treat the lock as acquired.
     const lockResult = await client.query('SELECT pg_try_advisory_lock($1)', [ADVISORY_LOCK_KEY]);
-    if (!lockResult.rows[0].pg_try_advisory_lock) {
+    const lockAcquired = lockResult.rows[0].pg_try_advisory_lock !== false &&
+                         lockResult.rows[0].pg_try_advisory_lock !== 0;
+    if (!lockAcquired) {
       console.log('[retention] Another instance is running the purge — skipping');
       return { rowsDeleted: 0, skipped: true };
     }
@@ -50,10 +60,14 @@ async function runRetentionPurge() {
 
     // Write audit log entry
     if (rowsDeleted > 0) {
+      // SQLite doesn't accept JS objects as JSON parameters — stringify.
+      const detail = typeof pool.query === 'function' && pool._isSqlite
+        ? JSON.stringify({ rowsDeleted, retentionDays })
+        : { rowsDeleted, retentionDays };
       await client.query(
         `INSERT INTO audit_log (action, detail)
          VALUES ($1, $2)`,
-        ['retention_purge', { rowsDeleted, retentionDays }]
+        ['retention_purge', detail]
       );
     }
 

@@ -81,7 +81,9 @@ router.post('/create-admin', async (req, res) => {
     }
 
     // Create the admin account
-    const hash = bcrypt.hashSync(password, 10);
+    // bcrypt cost 12 — matches the cost the old /api/auth/register route used
+    // before it was deleted in favor of this single admin-creation endpoint.
+    const hash = bcrypt.hashSync(password, 12);
     const adminId = crypto.randomUUID();
 
     await pool.query(

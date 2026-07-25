@@ -19,29 +19,10 @@ beforeEach(() => {
   mockPool.query.reset();
 });
 
-describe('POST /api/auth/register', () => {
-  const app = createApp();
-
-  test('creates a new admin account', async () => {
-    const admin = { id: 'admin-1', username: 'admin', created_at: '2025-01-01T00:00:00Z' };
-    mockPool.query.setResult('INSERT INTO admins', { rows: [admin] });
-
-    const res = await request(app)
-      .post('/api/auth/register')
-      .send({ username: 'admin', password: 'password123' });
-
-    expect(res.status).toBe(201);
-    expect(res.body.username).toBe('admin');
-  });
-
-  test('returns 400 if username or password missing', async () => {
-    const res = await request(app)
-      .post('/api/auth/register')
-      .send({ username: 'admin' });
-
-    expect(res.status).toBe(400);
-  });
-});
+// NOTE: /api/auth/register was removed — admin creation now lives at
+// POST /api/setup/create-admin, which enforces a first-admin-only guard.
+// See setup.routes.test.js for coverage of that endpoint, including the
+// 403-on-second-admin case that proves the guard works.
 
 describe('POST /api/auth/login', () => {
   const app = createApp();

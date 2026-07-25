@@ -13,7 +13,7 @@
 # Example docker-compose with secrets:
 #   see docker-compose.yml
 
-FROM node:22-slim
+FROM node:20-slim
 
 WORKDIR /app
 

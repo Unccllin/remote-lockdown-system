@@ -1,9 +1,9 @@
 /**
  * Dev startup script — uses SQLite (in-process, via `sqlite3` native module)
- * instead of PGlite or a real PostgreSQL server.
+ * instead of a real PostgreSQL server.
  *
- * This is the same as dev-start.js but uses SQLite. It's the precursor to
- * the Electron admin app, which will use the same SQLite pool.
+ * This is the precursor to the Electron admin app, which uses the same
+ * SQLite pool. Mounts the same routes as src/index.js (production).
  *
  * Usage: node dev-start-sqlite.js
  *        SQLITE_PATH=/path/to/db.sqlite node dev-start-sqlite.js
@@ -145,6 +145,7 @@ async function main() {
   app.use('/api/agent', require('./src/routes/agent'));
   app.use('/api/audit', require('./src/routes/audit'));
   app.use('/api/setup', require('./src/routes/setup'));
+  app.use('/api/installer', require('./src/routes/installer'));
 
   // FA6: Extended health check — DB probe + scheduler status, reject agent-key probing
   app.get('/api/health', async (req, res) => {

@@ -5,22 +5,11 @@ const pool = require('../db/pool');
 
 const router = express.Router();
 
-router.post('/register', async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) return res.status(400).json({ error: 'username and password required' });
-
-  const hash = await bcrypt.hash(password, 12);
-  try {
-    const result = await pool.query(
-      'INSERT INTO admins (username, password_hash) VALUES ($1, $2) RETURNING id, username, created_at',
-      [username, hash]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: 'Username already taken' });
-    throw err;
-  }
-});
+// NOTE: Admin account creation lives at POST /api/setup/create-admin
+// (see routes/setup.js). That endpoint enforces a "first-admin-only" guard
+// (403 once any admin exists), input validation, and an audit_log entry.
+// Do NOT re-add an open /register route here — it would reintroduce the
+// unauthenticated-admin-creation vulnerability fixed in this patch.
 
 router.post('/login', async (req, res) => {
   const { username, password } = req.body;

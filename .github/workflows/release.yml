@@ -5,6 +5,15 @@ on:
     tags:
       - 'v*'
 
+# All jobs in this workflow publish to GitHub Releases (either directly via
+# electron-builder --publish, or via softprops/action-gh-release). That
+# requires contents: write. Without an explicit permissions block, the
+# GITHUB_TOKEN's scopes depend on the repo/org default — which may be
+# "restricted" (contents: read only), causing 403 errors on publish.
+# Pinning it here ensures the workflow works regardless of repo settings.
+permissions:
+  contents: write
+
 jobs:
   # ---------------------------------------------------------------------------
   # Run tests before releasing
@@ -23,6 +32,16 @@ jobs:
 
       - run: cd server && npm ci && npm test
 
+      # Dashboard tests — same suite ci.yml runs on PRs.
+      # Without this, a dashboard regression can ship in a tagged release.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - run: cd dashboard && npm ci && npm test
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -31,7 +50,7 @@ jobs:
       - run: cd agent && pip install -r requirements.txt && pip install pytest && pytest tests/ -v
 
   # ---------------------------------------------------------------------------
-  # Build agent binaries on all 3 platforms and publish to GitHub Release.
+  # Build agent binaries on all platforms/arches and publish to GitHub Release.
   #
   # These binaries are separate from the Electron app. They allow the admin
   # app's installer endpoint to download cross-platform agent binaries on
@@ -43,6 +62,9 @@ jobs:
   #   lockdown-recovery-{platform}-{arch}{ext}
   #
   # Plus a SHA256SUMS file for checksum verification.
+  #
+  # NOTE: macos-latest is arm64 (Apple Silicon). We build darwin-arm64 there
+  # natively, and darwin-x64 on macos-13 (the last Intel macOS runner).
   # ---------------------------------------------------------------------------
   publish-agent-binaries:
     name: Agent Binaries (${{ matrix.label }})
@@ -61,10 +83,15 @@ jobs:
             platform: linux
             arch: x64
             ext: ""
-          - os: macos-latest
+          - os: macos-13
             label: darwin-x64
             platform: darwin
             arch: x64
+            ext: ""
+          - os: macos-latest
+            label: darwin-arm64
+            platform: darwin
+            arch: arm64
             ext: ""
 
     runs-on: ${{ matrix.os }}
@@ -169,13 +196,30 @@ jobs:
           cache: npm
           cache-dependency-path: electron/package-lock.json
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+
       - run: npm ci
+
+      # Install server production deps (bundled into the Electron app)
+      - run: cd ../server && npm ci --omit=dev
+
+      # Rebuild native modules (sqlite3) against Electron's ABI
+      - run: npx electron-rebuild -f -w sqlite3 -m ../server/node_modules
 
       # Build dashboard (needed by Electron app)
       - run: cd ../dashboard && npm ci && npm run build
 
-      # Build agent binaries (Windows)
-      - run: cd ../agent && pip install -r requirements.txt pyinstaller && python -m PyInstaller agent.spec --noconfirm && python -m PyInstaller watchdog.spec --noconfirm && python -m PyInstaller offline_recovery.spec --noconfirm
+      # Build agent binaries (Windows) — use build.sh for per-spec error
+      # handling, build summary, and output verification (finding #9).
+      # shell: bash is required because windows-latest defaults to pwsh,
+      # which can't execute a .sh file. Git Bash is available on all
+      # GitHub Windows runners.
+      - run: cd ../agent && pip install -r requirements.txt pyinstaller && ./build.sh
+        shell: bash
 
       # Build + publish Electron app
       - run: npx electron-builder --win --publish always
@@ -187,12 +231,38 @@ jobs:
           # AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
 
   # ---------------------------------------------------------------------------
-  # Build + publish Electron app for macOS
+  # Build Electron app for macOS (per-arch, native runners)
+  #
+  # Uses a matrix to build each arch on its native runner:
+  #   - macos-latest (arm64): builds arm64 agent + arm64 sqlite3 → arm64 DMG
+  #   - macos-13 (x64):       builds x64 agent   + x64 sqlite3   → x64 DMG
+  #
+  # This avoids the arch-mismatch bug where a single runner builds one arch
+  # of agent binary and sqlite3, then bundles it into both DMGs. Both the
+  # agent binary (via build.sh → PyInstaller) and sqlite3 (via electron-rebuild)
+  # are arch-specific — PyInstaller bundles the Python interpreter, and
+  # electron-rebuild compiles against the host ABI. Cross-compiling either
+  # on the wrong runner produces a binary that crashes on launch.
+  #
+  # NOTE: We build with --publish never here. Each leg produces its own
+  # latest-mac.yml listing only its own arch. If both legs published
+  # independently (--publish always), the second to finish would overwrite
+  # the first's latest-mac.yml on the GitHub Release, breaking auto-updates
+  # for the other arch (electron-builder issue #5592). The publish-macos
+  # job below merges the per-arch manifests and publishes everything.
   # ---------------------------------------------------------------------------
-  release-macos:
-    name: Release (macOS)
+  build-macos:
+    name: Build (macOS ${{ matrix.arch }})
     needs: test
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-13
+            arch: x64
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: electron
@@ -206,21 +276,173 @@ jobs:
           cache: npm
           cache-dependency-path: electron/package-lock.json
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+
       - run: npm ci
+
+      # Install server production deps (bundled into the Electron app)
+      - run: cd ../server && npm ci --omit=dev
+
+      # Rebuild sqlite3 against Electron's ABI for this runner's native arch.
+      # No cross-compilation, no stash/restore — the host arch matches the
+      # electron-builder --arch flag below.
+      - run: npx electron-rebuild -f -w sqlite3 -m ../server/node_modules
 
       - run: cd ../dashboard && npm ci && npm run build
 
+      # Build agent binaries (native arch — PyInstaller bundles the host's
+      # Python interpreter, so the output arch matches the runner arch).
       - run: cd ../agent && pip install -r requirements.txt pyinstaller && ./build.sh
 
-      - run: npx electron-builder --mac --publish always
+      # Build DMG for this arch only. --publish never: the publish-macos
+      # job handles publishing + manifest merging.
+      - run: npx electron-builder --mac --${{ matrix.arch }} --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Apple Developer signing (uncomment when configured):
           # CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           # CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           # APPLE_ID: ${{ secrets.APPLE_ID }}
           # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      # Upload DMG + per-arch latest-mac.yml for the publish job to merge.
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-dmg-${{ matrix.arch }}
+          path: electron/dist-electron/*.dmg
+          retention-days: 1
+
+      - name: Upload update manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-manifest-${{ matrix.arch }}
+          path: electron/dist-electron/latest-mac.yml
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Publish macOS DMGs + merged update manifest
+  #
+  # Downloads both arch DMGs and per-arch latest-mac.yml files, merges the
+  # manifests into a single latest-mac.yml listing both arches (so electron-
+  # updater can resolve updates for either architecture), and publishes
+  # everything to the GitHub Release.
+  # ---------------------------------------------------------------------------
+  publish-macos:
+    name: Publish (macOS)
+    needs: build-macos
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mac-*
+          merge-multiple: false
+          path: artifacts
+
+      - name: Stage DMGs and manifests
+        run: |
+          mkdir -p publish
+          # Stage DMGs
+          cp artifacts/mac-dmg-arm64/*.dmg publish/
+          cp artifacts/mac-dmg-x64/*.dmg publish/
+          echo "=== DMGs to publish ==="
+          ls -la publish/*.dmg
+
+      - name: Merge per-arch latest-mac.yml into a single manifest
+        run: |
+          node <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+
+          // Simple YAML parser/writer for the latest-mac.yml format.
+          // The format is flat enough that we don't need a full YAML library:
+          //   version: 1.0.0
+          //   files:
+          //     - url: AppName-1.0.0.dmg
+          //       sha512: ...
+          //       size: 12345
+          //   path: AppName-1.0.0.dmg
+          //   sha512: ...
+          //   releaseDate: '...'
+
+          function parseManifest(filePath) {
+            const text = fs.readFileSync(filePath, 'utf8');
+            const lines = text.split('\n');
+            const manifest = { files: [] };
+            let currentFile = null;
+            for (const line of lines) {
+              const urlMatch = line.match(/^\s*- url: (.+)$/);
+              const shaMatch = line.match(/^\s+sha512: (.+)$/);
+              const sizeMatch = line.match(/^\s+size: (.+)$/);
+              const blockMapSizeMatch = line.match(/^\s+blockMapSize: (.+)$/);
+              const versionMatch = line.match(/^version: (.+)$/);
+              const pathMatch = line.match(/^path: (.+)$/);
+              const topShaMatch = line.match(/^sha512: (.+)$/);
+              const releaseDateMatch = line.match(/^releaseDate: (.+)$/);
+
+              if (urlMatch) { currentFile = { url: urlMatch[1] }; manifest.files.push(currentFile); }
+              else if (shaMatch && currentFile) { currentFile.sha512 = shaMatch[1]; }
+              else if (sizeMatch && currentFile) { currentFile.size = parseInt(sizeMatch[1]); }
+              else if (blockMapSizeMatch && currentFile) { currentFile.blockMapSize = parseInt(blockMapSizeMatch[1]); }
+              else if (versionMatch) { manifest.version = versionMatch[1]; }
+              else if (pathMatch) { manifest.path = pathMatch[1]; }
+              // topShaMatch has no leading whitespace (^sha512:), shaMatch has
+              // leading whitespace (^\s+sha512:) — they're mutually exclusive,
+              // so no need for a currentFile guard here.
+              else if (topShaMatch) { manifest.sha512 = topShaMatch[1]; }
+              else if (releaseDateMatch) { manifest.releaseDate = releaseDateMatch[1]; }
+            }
+            return manifest;
+          }
+
+          function writeManifest(manifest, filePath) {
+            let out = `version: ${manifest.version}\nfiles:\n`;
+            for (const f of manifest.files) {
+              out += `  - url: ${f.url}\n    sha512: ${f.sha512}\n    size: ${f.size}`;
+              if (f.blockMapSize !== undefined) {
+                out += `\n    blockMapSize: ${f.blockMapSize}`;
+              }
+              out += `\n`;
+            }
+            out += `path: ${manifest.path}\nsha512: ${manifest.sha512}\nreleaseDate: ${manifest.releaseDate}\n`;
+            fs.writeFileSync(filePath, out);
+          }
+
+          const arm64 = parseManifest('artifacts/mac-manifest-arm64/latest-mac.yml');
+          const x64 = parseManifest('artifacts/mac-manifest-x64/latest-mac.yml');
+
+          // Merge: combine files arrays, use x64 as the "default" arch for
+          // top-level path/sha512 (matching electron-builder's convention
+          // where x64 gets the un-suffixed filename).
+          const merged = {
+            version: x64.version,
+            files: [...x64.files, ...arm64.files],
+            path: x64.path,
+            sha512: x64.sha512,
+            releaseDate: x64.releaseDate,
+          };
+
+          writeManifest(merged, 'publish/latest-mac.yml');
+          console.log('=== Merged latest-mac.yml ===');
+          console.log(fs.readFileSync('publish/latest-mac.yml', 'utf8'));
+          EOF
+
+      - name: Publish DMGs + merged manifest to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            publish/*.dmg
+            publish/latest-mac.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ---------------------------------------------------------------------------
   # Build + publish Electron app for Linux
@@ -242,7 +464,19 @@ jobs:
           cache: npm
           cache-dependency-path: electron/package-lock.json
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+
       - run: npm ci
+
+      # Install server production deps (bundled into the Electron app)
+      - run: cd ../server && npm ci --omit=dev
+
+      # Rebuild native modules (sqlite3) against Electron's ABI
+      - run: npx electron-rebuild -f -w sqlite3 -m ../server/node_modules
 
       - run: cd ../dashboard && npm ci && npm run build
 

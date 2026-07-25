@@ -171,7 +171,20 @@ async function openDb(dbPath, opts = {}) {
 async function query(sql, params) {
   const db = await getDb();
   const translated = translateSql(sql);
-  const cleanParams = params || [];
+  let cleanParams = params || [];
+
+  // The advisory lock functions are the only translation that strips
+  // placeholders: pg_try_advisory_lock($1) → SELECT 1. The $1 inside the
+  // function call gets replaced by the literal '1', but the caller still
+  // passes the param, which would cause SQLITE_RANGE on strict drivers.
+  //
+  // This is a targeted fix for that specific rewrite — NOT a blanket
+  // "truncate extra params" rule. Any other param/placeholder mismatch
+  // is a real bug (typo, missing param, over-matching translation rule)
+  // and should throw SQLITE_RANGE as the loud signal that catches it.
+  if (/pg_(try_)?advisory_(un)?lock\s*\(/i.test(sql) && !translated.includes('?')) {
+    cleanParams = [];
+  }
 
   if (returnsRows(translated)) {
     const rows = await db.all(translated, cleanParams);
@@ -313,6 +326,10 @@ const sqlitePool = {
   _translateSql: translateSql,
   _hasReturning: hasReturning,
   _returnsRows: returnsRows,
+  // Identifies this as the SQLite pool — used by code that needs to
+  // adjust parameter formatting (e.g. JSON objects must be stringified
+  // for SQLite, but passed as-is for pg/PGlite which handle it natively).
+  _isSqlite: true,
 };
 
 module.exports = sqlitePool;
