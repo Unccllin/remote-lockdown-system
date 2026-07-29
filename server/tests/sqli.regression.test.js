@@ -49,7 +49,10 @@ describe('FA7: SQLi regression smoke test', () => {
     mockPool.query.reset();
   });
 
-  test('device enrollment: SQLi in hostname/owner_name is parameterized', async () => {
+  test('device enrollment: SQLi in hostname is rejected at input validation; SQLi in owner_name is parameterized', async () => {
+    // hostname is now charset-validated at the input boundary (see
+    // validateHostname in routes/devices.js) — SQLi payloads contain chars
+    // outside [a-zA-Z0-9-] and must be rejected (400) before any INSERT.
     for (const payload of SQLI_PAYLOADS) {
       mockPool.query.reset();
       mockPool.query.setResult('INSERT INTO devices', { rows: [{ id: 'dev-1', hostname: payload, owner_name: payload }] });
@@ -57,7 +60,27 @@ describe('FA7: SQLi regression smoke test', () => {
       const res = await request(app)
         .post('/api/devices')
         .set('Authorization', `Bearer ${makeToken()}`)
-        .send({ hostname: payload, owner_name: payload });
+        .send({ hostname: payload, owner_name: 'valid-owner' });
+
+      // Input validation rejects the malicious hostname — no INSERT issued.
+      expect(res.status).toBe(400);
+      const insertCall = mockPool.query.mock.calls.find(
+        c => c[0].includes('INSERT INTO devices')
+      );
+      expect(insertCall).toBeUndefined();
+    }
+
+    // owner_name remains a free-text field and still relies on DB
+    // parameterization — verify a SQLi payload there is parameterized, not
+    // concatenated into the SQL string.
+    for (const payload of SQLI_PAYLOADS) {
+      mockPool.query.reset();
+      mockPool.query.setResult('INSERT INTO devices', { rows: [{ id: 'dev-1', hostname: 'DEV-001', owner_name: payload }] });
+
+      const res = await request(app)
+        .post('/api/devices')
+        .set('Authorization', `Bearer ${makeToken()}`)
+        .send({ hostname: 'DEV-001', owner_name: payload });
 
       // The request should succeed (mock returns a row)
       expect(res.status).toBe(201);

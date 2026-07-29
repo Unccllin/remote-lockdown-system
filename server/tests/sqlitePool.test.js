@@ -93,6 +93,32 @@ describe('sqlitePool SQL translation', () => {
     expect(result).toBe('SELECT 1');
   });
 
+  test('query() with pg_try_advisory_lock resolves without SQLITE_RANGE (real SQLite)', async () => {
+    // The advisory-lock translation strips the $1 placeholder (the whole
+    // function call becomes literal `1`), but the caller still passes a
+    // param. Without the targeted param-clearing in query(), sqlite3 would
+    // throw SQLITE_RANGE (more params than placeholders). This exercises the
+    // real query() path against a live SQLite connection — not just
+    // _translateSql — to confirm the bind succeeds.
+    const result = await sqlitePool.query(
+      'SELECT pg_try_advisory_lock($1)',
+      ['test-lock-key']
+    );
+    expect(result).toBeDefined();
+    expect(result.rows).toHaveLength(1);
+    expect(result.command).toBe('SELECT');
+  });
+
+  test('query() with pg_advisory_unlock resolves without SQLITE_RANGE (real SQLite)', async () => {
+    const result = await sqlitePool.query(
+      'SELECT pg_advisory_unlock($1)',
+      ['test-lock-key']
+    );
+    expect(result).toBeDefined();
+    expect(result.rows).toHaveLength(1);
+    expect(result.command).toBe('SELECT');
+  });
+
   test('translates gen_random_uuid()', () => {
     const result = sqlitePool._translateSql('SELECT gen_random_uuid() AS id');
     expect(result).toContain('lower(hex(randomblob(16)))');

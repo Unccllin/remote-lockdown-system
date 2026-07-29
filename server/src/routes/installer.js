@@ -227,8 +227,14 @@ async function fetchReleaseInfo() {
 async function fetchChecksums(release) {
   const checksumsAsset = release.assets.find(a => a.name === 'SHA256SUMS');
   if (!checksumsAsset) {
-    console.warn('[installer] No SHA256SUMS file in release — checksum verification disabled');
-    return {};
+    // Security: fail closed. A release without SHA256SUMS cannot be verified,
+    // so we refuse to install a binary from it rather than silently skipping
+    // verification (which would allow a tampered/replace binary to be cached
+    // and shipped to every device an installer touches).
+    throw new Error(
+      `Release ${release.tag_name || '(unknown tag)'} has no SHA256SUMS asset — ` +
+      `checksum verification is required, refusing to install unverified binary.`
+    );
   }
 
   const { data } = await httpsGet(checksumsAsset.browser_download_url, {
@@ -280,15 +286,23 @@ async function downloadBinaryFromGitHub(internalPlatform, binaryName) {
     token: getGitHubReleaseConfig().token,
   });
 
-  // Verify checksum
+  // Verify checksum (fail closed — never cache/ship an unverified binary)
   const checksums = await fetchChecksums(release);
-  if (checksums[assetName]) {
-    const hash = crypto.createHash('sha256').update(data).digest('hex');
-    if (hash !== checksums[assetName]) {
-      throw new Error(`Checksum mismatch for ${assetName}: expected ${checksums[assetName]}, got ${hash}`);
-    }
-    console.log(`[installer] Checksum verified for ${assetName}`);
+  const expected = checksums[assetName];
+  if (!expected) {
+    // Security: the SHA256SUMS file exists but does not list this asset.
+    // Refuse rather than silently skipping, so a release that drops or
+    // renames an asset entry cannot bypass verification.
+    throw new Error(
+      `No checksum recorded for ${assetName} in SHA256SUMS of release ` +
+      `${release.tag_name || '(unknown tag)'} — refusing to install unverified binary.`
+    );
   }
+  const hash = crypto.createHash('sha256').update(data).digest('hex');
+  if (hash !== expected) {
+    throw new Error(`Checksum mismatch for ${assetName}: expected ${expected}, got ${hash}`);
+  }
+  console.log(`[installer] Checksum verified for ${assetName}`);
 
   // Cache the binary
   const cacheDir = getCacheDir();
@@ -357,6 +371,45 @@ async function resolveAgentBinary(internalPlatform, binaryName, binaryBaseName) 
 }
 
 // ---------------------------------------------------------------------------
+// Shell escaping helpers
+// ---------------------------------------------------------------------------
+//
+// Security: device.hostname and config.server_url are interpolated into the
+// generated install scripts. Even though devices.js now validates the hostname
+// charset at creation, defense-in-depth requires correct shell-appropriate
+// quoting at every use site — a legacy row, a bypassed validator, or another
+// interpolated field (server_url is derived from the request Host header)
+// must never be able to break out of its string and execute arbitrary code.
+//
+// We use single-quote based escaping, which is the robust approach for both
+// shells (no blocklist of "dangerous" characters — every byte is literal
+// inside single quotes except the single quote itself).
+
+/**
+ * Escape a value for safe embedding into a POSIX (bash) script.
+ * Wraps the value in single quotes and escapes any embedded single quote
+ * using the standard `'\''` idiom (close quote, escaped quote, reopen quote).
+ * @param {string} value
+ * @returns {string} a single-quoted, shell-safe string literal
+ */
+function escapeSh(value) {
+  const s = String(value == null ? '' : value);
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Escape a value for safe embedding into a PowerShell script.
+ * Wraps the value in single quotes and doubles any embedded single quote
+ * (PowerShell's single-quoted-string escape rule: `''` represents one `'`).
+ * @param {string} value
+ * @returns {string} a single-quoted, PowerShell-safe string literal
+ */
+function escapePs1(value) {
+  const s = String(value == null ? '' : value);
+  return `'${s.replace(/'/g, `''`)}'`;
+}
+
+// ---------------------------------------------------------------------------
 // Install script templates
 // ---------------------------------------------------------------------------
 
@@ -369,9 +422,13 @@ function generateInstallPs1(config, hostname) {
   const serviceName = 'LockdownAgent';
   const watchdogServiceName = 'LockdownWatchdog';
   const installDir = 'C:\\Program Files\\LockdownAgent';
+  // Security: single-quote-escape interpolated device/request fields so they
+  // can never break out of their string literal in the generated script.
+  const safeHostname = escapePs1(hostname);
+  const safeServerUrl = escapePs1(config.server_url);
 
   return `# PowerShell install script for Remote Lockdown Agent
-# Device: ${hostname}
+# Device: $deviceHostname
 # Generated: ${new Date().toISOString()}
 #
 # Run as Administrator: Right-click → Run with PowerShell
@@ -383,10 +440,13 @@ $ErrorActionPreference = "Stop"
 $serviceName = "${serviceName}"
 $watchdogServiceName = "${watchdogServiceName}"
 $installDir = "${installDir}"
+# Escaped device/request fields — use these variables, never interpolate raw.
+$deviceHostname = ${safeHostname}
+$serverUrl = ${safeServerUrl}
 
 # --- Phase 7: EULA + Tracking Disclosure ---
 Write-Host "=== Remote Lockdown Agent Installer ===" -ForegroundColor Green
-Write-Host "Device: ${hostname}"
+Write-Host "Device: $deviceHostname"
 Write-Host ""
 Write-Host "IMPORTANT — PLEASE READ CAREFULLY" -ForegroundColor Yellow
 Write-Host ""
@@ -468,7 +528,7 @@ if ($nssmPath) {
     # Install agent service
     & $nssmPath install $serviceName "$installDir\\lockdown-agent.exe" --config "$installDir\\config.json"
     & $nssmPath set $serviceName DisplayName "Remote Lockdown Agent"
-    & $nssmPath set $serviceName Description "Anti-theft agent for ${hostname}"
+    & $nssmPath set $serviceName Description "Anti-theft agent for $deviceHostname"
     & $nssmPath set $serviceName Start SERVICE_AUTO_START
     & $nssmPath set $serviceName AppStdout "$installDir\\agent.log"
     & $nssmPath set $serviceName AppStderr "$installDir\\agent.log"
@@ -527,7 +587,7 @@ Write-Host "Uninstaller registered in Add/Remove Programs." -ForegroundColor Gre
 
 Write-Host ""
 Write-Host "Installation complete!" -ForegroundColor Green
-Write-Host "The agent will check in with the server at: ${config.server_url}"
+Write-Host "The agent will check in with the server at: $serverUrl"
 Write-Host "Verify checkin in the admin dashboard."
 Write-Host ""
 Write-Host "To uninstall: Use Add/Remove Programs or run: $uninstallerPath"
@@ -544,10 +604,14 @@ function generateInstallSh(config, hostname) {
   const watchdogServiceName = 'lockdown-watchdog';
   const installDir = '/opt/lockdown-agent';
   const configDir = '/etc/lockdown-agent';
+  // Security: single-quote-escape interpolated device/request fields so they
+  // can never break out of their string literal in the generated script.
+  const safeHostname = escapeSh(hostname);
+  const safeServerUrl = escapeSh(config.server_url);
 
   return `#!/bin/bash
 # Install script for Remote Lockdown Agent
-# Device: ${hostname}
+# Device: $DEVICE_HOSTNAME
 # Generated: ${new Date().toISOString()}
 #
 # Run as root: sudo ./install.sh
@@ -558,9 +622,12 @@ SERVICE_NAME="${serviceName}"
 WATCHDOG_SERVICE_NAME="${watchdogServiceName}"
 INSTALL_DIR="${installDir}"
 CONFIG_DIR="${configDir}"
+# Escaped device/request fields — use these variables, never interpolate raw.
+DEVICE_HOSTNAME=${safeHostname}
+SERVER_URL=${safeServerUrl}
 
 echo "=== Remote Lockdown Agent Installer ==="
-echo "Device: ${hostname}"
+echo "Device: $DEVICE_HOSTNAME"
 echo ""
 echo "IMPORTANT — PLEASE READ CAREFULLY"
 echo ""
@@ -665,7 +732,7 @@ systemctl start $WATCHDOG_SERVICE_NAME
 echo "Services installed and started."
 echo ""
 echo "Installation complete!"
-echo "The agent will check in with the server at: ${config.server_url}"
+echo "The agent will check in with the server at: $SERVER_URL"
 echo "Verify checkin in the admin dashboard."
 echo ""
 echo "Manage the service:"
@@ -1153,5 +1220,13 @@ router.get('/agent-version', requireAuth, async (req, res) => {
     source: agentBinPath.includes('agent-cache') ? 'cache' : 'local',
   });
 });
+
+// Exported for unit testing (additive — non-breaking for route usage).
+// The router remains the default export shape via the same object.
+router.generateInstallPs1 = generateInstallPs1;
+router.generateInstallSh = generateInstallSh;
+router.fetchChecksums = fetchChecksums;
+router.escapeSh = escapeSh;
+router.escapePs1 = escapePs1;
 
 module.exports = router;
