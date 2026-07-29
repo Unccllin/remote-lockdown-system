@@ -15,6 +15,8 @@ process.env.NODE_ENV = process.env.NODE_ENV || 'development';
 process.env.AGENT_SHARED_KEY = process.env.AGENT_SHARED_KEY || 'dev-agent-shared-key-not-a-placeholder-24';
 process.env.AGENT_KEY_PEPPER = process.env.AGENT_KEY_PEPPER || 'dev-pepper-key-not-a-placeholder-32';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret-not-a-placeholder-32';
+process.env.FIELD_ENCRYPTION_KEY = process.env.FIELD_ENCRYPTION_KEY || 'a'.repeat(64);
+process.env.LOCATION_FIELD_KEY = process.env.LOCATION_FIELD_KEY || 'b'.repeat(64);
 process.env.CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
 process.env.USE_SQLITE = 'true';
 // Default to file-based DB (persists between restarts, unlike :memory:)
@@ -59,11 +61,11 @@ async function seedData(pool) {
 
   console.log('Seeding demo data...');
 
-  // Create admin user
+  // Create admin user (super-admin role)
   const hash = bcrypt.hashSync('admin123', 10);
   await pool.query(
-    'INSERT INTO admins (id, username, password_hash) VALUES ($1, $2, $3)',
-    [uuid(), 'admin', hash]
+    'INSERT INTO admins (id, username, password_hash, role) VALUES ($1, $2, $3, $4)',
+    [uuid(), 'admin', hash, 'super-admin']
   );
 
   // Create demo devices
@@ -137,7 +139,11 @@ async function main() {
 
   app.use(helmet());
   app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173' }));
-  app.use(express.json());
+  app.use(express.json({
+    verify: (req, _res, buf) => {
+      req.rawBody = buf.toString('utf8');
+    },
+  }));
   app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 200 }));
 
   app.use('/api/auth', require('./src/routes/auth'));
@@ -146,29 +152,9 @@ async function main() {
   app.use('/api/audit', require('./src/routes/audit'));
   app.use('/api/setup', require('./src/routes/setup'));
   app.use('/api/installer', require('./src/routes/installer'));
-
-  // FA6: Extended health check — DB probe + scheduler status, reject agent-key probing
-  app.get('/api/health', async (req, res) => {
-    if (req.headers['x-agent-key']) {
-      return res.status(400).json({ error: 'Health endpoint is not for agent use' });
-    }
-    try {
-      await sqlitePool.query('SELECT 1');
-      res.json({
-        status: 'ok',
-        db: 'sqlite',
-        scheduler: 'running',
-        timestamp: new Date().toISOString(),
-      });
-    } catch (err) {
-      res.status(503).json({
-        status: 'degraded',
-        db: 'disconnected',
-        error: err.message,
-        timestamp: new Date().toISOString(),
-      });
-    }
-  });
+  app.use('/api/admins', require('./src/routes/admins'));
+  app.use('/api/health', require('./src/routes/health'));
+  app.use('/metrics', require('./src/routes/metrics'));
 
   app.use((err, req, res, _next) => {
     console.error(err);
