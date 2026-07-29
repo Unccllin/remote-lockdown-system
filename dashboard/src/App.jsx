@@ -9,6 +9,8 @@ import DeviceDetailPage from './pages/DeviceDetailPage';
 import AuditPage from './pages/AuditPage';
 import EnrollPage from './pages/EnrollPage';
 import MapPage from './pages/MapPage';
+import HealthPage from './pages/HealthPage';
+import AdminsPage from './pages/AdminsPage';
 
 function PrivateRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -33,6 +35,8 @@ export default function App() {
         <Route path="devices/enroll" element={<EnrollPage />} />
         <Route path="map" element={<MapPage />} />
         <Route path="audit" element={<AuditPage />} />
+        <Route path="health" element={<HealthPage />} />
+        <Route path="admins" element={<AdminsPage />} />
       </Route>
     </Routes>
   );

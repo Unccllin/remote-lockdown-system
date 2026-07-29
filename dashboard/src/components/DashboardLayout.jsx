@@ -2,13 +2,42 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   ShieldAlert, Monitor, ClipboardList, LogOut, Plus, Map as MapIcon,
-  LayoutDashboard, Menu, X, Activity,
+  LayoutDashboard, Menu, X, Activity, UserCog,
 } from 'lucide-react';
+
+/**
+ * Decode the JWT payload from localStorage to get the current user's
+ * id and role for role-based navigation.
+ */
+function getCurrentUser() {
+  try {
+    const token = localStorage.getItem('token');
+    if (!token) return null;
+    const payload = token.split('.')[1];
+    const decoded = JSON.parse(atob(payload));
+    return { id: decoded.id, username: decoded.username, role: decoded.role };
+  } catch {
+    return null;
+  }
+}
+
+const ROLE_LABEL = {
+  viewer: 'Viewer',
+  operator: 'Operator',
+  'super-admin': 'Super Admin',
+};
+
+const ROLE_BADGE = {
+  viewer: 'text-slate-400',
+  operator: 'text-blue-400',
+  'super-admin': 'text-red-400',
+};
 
 export default function DashboardLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState(getCurrentUser());
 
   function logout() {
     localStorage.removeItem('token');
@@ -20,6 +49,13 @@ export default function DashboardLayout() {
     setSidebarOpen(false);
   }, [location.pathname]);
 
+  // Refresh current user when token changes (e.g. after login)
+  useEffect(() => {
+    setCurrentUser(getCurrentUser());
+  }, [location.pathname]);
+
+  const isSuperAdmin = currentUser?.role === 'super-admin';
+
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: 'Overview', end: true },
     { to: '/devices', icon: Monitor, label: 'Devices' },
@@ -27,6 +63,11 @@ export default function DashboardLayout() {
     { to: '/devices/enroll', icon: Plus, label: 'Enroll Device' },
     { to: '/audit', icon: ClipboardList, label: 'Audit Log' },
   ];
+
+  // Admins link is only visible to super-admins
+  if (isSuperAdmin) {
+    navItems.push({ to: '/admins', icon: UserCog, label: 'Admins' });
+  }
 
   const navItemClass = ({ isActive }) =>
     `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
@@ -92,6 +133,21 @@ export default function DashboardLayout() {
 
         {/* Logout */}
         <div className="p-4 border-t border-slate-800/60">
+          {currentUser && (
+            <div className="flex items-center gap-2 px-3 py-2 mb-2 rounded-lg bg-slate-800/40 border border-slate-700/30">
+              <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-200">
+                {(currentUser.id || '?').charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-slate-300 truncate">
+                  {currentUser.username || 'admin'}
+                </div>
+                <div className={`text-[10px] font-medium uppercase tracking-wider ${ROLE_BADGE[currentUser.role] || 'text-slate-400'}`}>
+                  {ROLE_LABEL[currentUser.role] || currentUser.role || 'viewer'}
+                </div>
+              </div>
+            </div>
+          )}
           <button
             onClick={logout}
             className="flex items-center gap-2 text-slate-400 hover:text-red-400 text-sm w-full transition-colors px-3 py-2 rounded-lg hover:bg-red-500/5"

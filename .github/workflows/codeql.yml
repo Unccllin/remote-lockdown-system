@@ -1,0 +1,44 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  schedule:
+    # Weekly scan every Sunday at 00:00 UTC.
+    - cron: '0 0 * * 0'
+
+permissions:
+  security-events: write
+  actions: read
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript, python
+          # JavaScript/TypeScript analysis covers server/, dashboard/, electron/.
+          # Python analysis covers agent/.
+          config: |
+            paths:
+              - server/
+              - dashboard/
+              - electron/
+              - agent/
+            paths-ignore:
+              - node_modules/
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3

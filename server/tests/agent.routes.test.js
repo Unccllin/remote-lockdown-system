@@ -639,7 +639,7 @@ describe('FA3: Key rotation (POST /api/devices/:id/rotate-key)', () => {
 
   const JWT_SECRET = process.env.JWT_SECRET || 'test-secret-key-that-is-long-enough-for-validation-32';
   function adminToken(adminId = 'admin-1') {
-    return jwt.sign({ id: adminId, username: 'admin' }, JWT_SECRET);
+    return jwt.sign({ id: adminId, username: 'admin', role: 'super-admin' }, JWT_SECRET);
   }
 
   beforeEach(() => {

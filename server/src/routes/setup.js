@@ -83,12 +83,15 @@ router.post('/create-admin', async (req, res) => {
     // Create the admin account
     // bcrypt cost 12 — matches the cost the old /api/auth/register route used
     // before it was deleted in favor of this single admin-creation endpoint.
+    // Phase 16: the first admin is granted 'super-admin' so they can manage
+    // other admins. Subsequent admins are created via /api/admins with a
+    // chosen role.
     const hash = bcrypt.hashSync(password, 12);
     const adminId = crypto.randomUUID();
 
     await pool.query(
-      'INSERT INTO admins (id, username, password_hash) VALUES ($1, $2, $3)',
-      [adminId, username, hash]
+      'INSERT INTO admins (id, username, password_hash, role) VALUES ($1, $2, $3, $4)',
+      [adminId, username, hash, 'super-admin']
     );
 
     // Log the setup event (no admin_id since this is the first admin)

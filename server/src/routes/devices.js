@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../db/pool');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 const { withTransaction } = require('../db/withTransaction');
 const { generateApiKey, hashApiKey } = require('../db/apiKey');
 const { readDualMode } = require('../db/fieldCrypto');
@@ -89,7 +89,7 @@ router.get('/:id', requireAuth, async (req, res) => {
   res.json(result.rows[0]);
 });
 
-router.post('/', requireAuth, async (req, res) => {
+router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
   const { hostname, owner_name } = req.body;
   if (!hostname || !owner_name) return res.status(400).json({ error: 'hostname and owner_name required' });
 
@@ -171,7 +171,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/:id/flag-stolen', requireAuth, async (req, res) => {
+router.post('/:id/flag-stolen', requireAuth, requireRole('operator'), async (req, res) => {
   const { hostname_confirm } = req.body;
 
   const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
@@ -201,7 +201,7 @@ router.post('/:id/flag-stolen', requireAuth, async (req, res) => {
   res.json({ device: { ...device, status: 'stolen' }, command: cmd });
 });
 
-router.post('/:id/recover', requireAuth, async (req, res) => {
+router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, res) => {
   const { hostname_confirm } = req.body;
 
   const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
@@ -259,7 +259,7 @@ router.post('/:id/recover', requireAuth, async (req, res) => {
  * Generates a new per-device key, stores the new hash, returns the plaintext once.
  * The old key immediately stops working.
  */
-router.post('/:id/rotate-key', requireAuth, async (req, res) => {
+router.post('/:id/rotate-key', requireAuth, requireRole('super-admin'), async (req, res) => {
   const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
   const device = devResult.rows[0];
   if (!device) return res.status(404).json({ error: 'Device not found' });
@@ -452,9 +452,9 @@ router.delete('/:id/release', requireAuth, async (req, res) => {
 
   // Phase 7: Anonymize audit log entries (keep for accountability, remove PII)
   await pool.query(
-    `UPDATE audit_log SET detail = json_set(
+    `UPDATE audit_log SET detail = jsonb_set(
        COALESCE(detail, '{}'::jsonb),
-       '$.released_at', to_char(NOW(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')::jsonb
+       '{released_at}', to_jsonb(to_char(NOW(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
      ) WHERE device_id = $1`,
     [device.id]
   );

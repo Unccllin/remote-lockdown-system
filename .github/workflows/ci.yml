@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [master, main]
 
+# Cancel in-progress runs on the same ref when a new commit is pushed.
+# Saves CI minutes and avoids confusing stale results (skill reasoning Q5).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ---------------------------------------------------------------------------
   # Server tests (Node.js + Jest)
@@ -27,6 +33,13 @@ jobs:
           cache-dependency-path: server/package-lock.json
 
       - run: npm ci
+
+      # Security: fail the build on known high/critical vulnerabilities.
+      # --audit-level=high means only high+critical findings exit non-zero;
+      # moderate/low are reported but don't block.
+      - name: npm audit (high+)
+        run: npm audit --audit-level=high
+        continue-on-error: false
 
       - run: npm test
 
@@ -51,6 +64,11 @@ jobs:
 
       - run: npm ci
 
+      # Security: fail the build on known high/critical vulnerabilities.
+      - name: npm audit (high+)
+        run: npm audit --audit-level=high
+        continue-on-error: false
+
       - run: npm test
 
   # ---------------------------------------------------------------------------
@@ -74,5 +92,13 @@ jobs:
       - run: pip install -r requirements.txt
 
       - run: pip install pytest
+
+      # Security: audit installed Python packages for known vulnerabilities.
+      # pip-audit checks the active environment against the PyPI advisory DB.
+      - name: pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit --strict
+        continue-on-error: false
 
       - run: pytest tests/ -v

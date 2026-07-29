@@ -1,0 +1,99 @@
+# Dependabot configuration
+#
+# Creates PRs for dependency updates. Grouped minor + patch updates reduce
+# PR noise; major updates are ignored (require manual review — see skill
+# reasoning Q3). Auto-merging is intentionally NOT enabled.
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------
+  # npm — server (Node.js API)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /server
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+    # Major updates require manual review — too risky to auto-bump in a
+    # security-sensitive codebase.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  # ---------------------------------------------------------------------------
+  # npm — dashboard (React + Vitest)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /dashboard
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  # ---------------------------------------------------------------------------
+  # npm — electron (Electron app wrapper)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /electron
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  # ---------------------------------------------------------------------------
+  # pip — agent (Python)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: pip
+    directory: /agent
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      pip-minor-patch:
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  # ---------------------------------------------------------------------------
+  # github-actions — workflow action versions (actions/checkout@v4, etc.)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      github-actions-minor-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major

@@ -10,8 +10,8 @@ const devicesRoutes = require('../src/routes/devices');
 
 const JWT_SECRET = 'test-secret-key-that-is-long-enough-for-validation-32';
 
-function makeToken(adminId = 'admin-1', username = 'admin') {
-  return jwt.sign({ id: adminId, username }, JWT_SECRET, { expiresIn: '1h' });
+function makeToken(adminId = 'admin-1', username = 'admin', role = 'super-admin') {
+  return jwt.sign({ id: adminId, username, role }, JWT_SECRET, { expiresIn: '1h' });
 }
 
 function createApp() {

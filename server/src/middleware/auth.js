@@ -18,4 +18,24 @@ function requireAuth(req, res, next) {
   }
 }
 
-module.exports = { requireAuth };
+// Phase 16: RBAC role hierarchy.
+// viewer (0) < operator (1) < super-admin (2).
+// requireRole(minRole) returns middleware that rejects requests whose
+// authenticated admin (set by requireAuth on req.admin.role) is below
+// the required level. Must be mounted AFTER requireAuth so req.admin is
+// populated.
+const ROLE_HIERARCHY = { viewer: 0, operator: 1, 'super-admin': 2 };
+
+function requireRole(minRole) {
+  return (req, res, next) => {
+    if (!req.admin) return res.status(401).json({ error: 'Unauthorized' });
+    const userLevel = ROLE_HIERARCHY[req.admin.role] ?? 0;
+    const requiredLevel = ROLE_HIERARCHY[minRole] ?? 99;
+    if (userLevel < requiredLevel) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    next();
+  };
+}
+
+module.exports = { requireAuth, requireRole, ROLE_HIERARCHY };

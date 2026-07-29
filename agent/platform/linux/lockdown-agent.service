@@ -1,0 +1,37 @@
+# lockdown-agent.service
+# systemd unit for the Remote Lockdown Agent
+# Install to: /etc/systemd/system/lockdown-agent.service
+# Then: systemctl daemon-reload && systemctl enable --now lockdown-agent
+
+[Unit]
+Description=Remote Lockdown Agent
+Documentation=https://github.com/your-org/remote-lockdown-system
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/lockdown-agent/lockdown-agent
+WorkingDirectory=/opt/lockdown-agent
+EnvironmentFile=/etc/lockdown-agent/config.ini.env
+
+# Run as root — required for lock screen, file encryption, and boot lockdown
+User=root
+
+# Restart policy — always restart, back off 10s between attempts
+Restart=always
+RestartSec=10
+
+# Hardening — moderate. The agent needs network, filesystem (LOCKDOWN_FOLDER),
+# and process control (lock screen). ProtectSystem=strict with explicit
+# ReadWritePaths for the agent state dir and user home directories.
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lockdown-agent /home
+NoNewPrivileges=yes
+
+# Resource limits — prevent runaway agent from exhausting the host
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

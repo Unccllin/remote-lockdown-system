@@ -202,6 +202,98 @@ npm test
 
 ---
 
+## Automated E2E Tests
+
+In addition to the manual test flow above, the project ships an automated,
+API-level E2E suite that exercises the full lockdown → recovery lifecycle
+against a real Express app backed by an isolated SQLite temp database. No
+browser, agent binary, or external services are required — the suite
+simulates the agent via HTTP calls against the same route handlers used in
+production.
+
+### Files
+
+- `tests/e2e/setup.js` — boots the Express app with a temp SQLite DB, runs
+  migrations, creates the admin account, logs in for a JWT, and exposes
+  helper functions (`createDevice`, `agentCheckin`, `flagStolen`, `recover`,
+  `ackCommand`, `getDevice`, `getAuditLog`).
+- `tests/e2e/lockdown-flow.test.js` — full lockdown flow: enroll → checkin →
+  flag stolen → lockdown command → agent ACK → encryption key stored → audit
+  log → status transitions (`active → stolen → locked`).
+- `tests/e2e/recovery-flow.test.js` — full recovery flow: locked → recover →
+  unlock command + key released → agent ACK → device active → audit log,
+  plus edge cases (recover without prior lockdown, double-recover).
+- `scripts/run-e2e.sh` — E2E test runner script.
+
+### Running locally
+
+The E2E suite uses the server's `jest` / `supertest` dev dependencies, so
+make sure they are installed first:
+
+```bash
+cd server && npm install && cd ..
+```
+
+Run the entire E2E suite from the repository root:
+
+```bash
+./scripts/run-e2e.sh
+```
+
+Run a single suite:
+
+```bash
+./scripts/run-e2e.sh --suite lockdown
+./scripts/run-e2e.sh --suite recovery
+```
+
+Show full per-test output:
+
+```bash
+./scripts/run-e2e.sh --verbose
+```
+
+The script exits `0` if all tests pass and `1` if any fail, making it
+suitable for use as a CI gate.
+
+### How it works
+
+1. Each test file mocks `server/src/db/pool` to use the in-process SQLite
+   pool (`server/src/db/sqlitePool`), exactly like `server/dev-start-sqlite.js`.
+2. `bootstrap()` creates a fresh temp SQLite DB file under `$TMPDIR`, runs
+   the migrations against it, creates the initial admin via
+   `POST /api/setup/create-admin`, and logs in to obtain a JWT.
+3. Tests drive the flow with `supertest` against the real Express app —
+   enrolling devices, simulating agent checkins/ACKs, flagging devices
+   stolen, and recovering them — then verify state via the API and direct
+   DB queries.
+4. `shutdown()` closes the SQLite pool and deletes the temp DB file (and
+   its `-wal`/`-shm` sidecars), so no test artifacts persist.
+
+### CI integration
+
+Add an `e2e` job to your CI workflow that installs server dependencies and
+runs the runner script:
+
+```yaml
+e2e:
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    - name: Install server dependencies
+      working-directory: server
+      run: npm install
+    - name: Run E2E tests
+      run: ./scripts/run-e2e.sh --verbose
+```
+
+The job fails (non-zero exit) if any E2E test fails.
+
+---
+
 ## Troubleshooting
 
 ### Agent not checking in

@@ -38,7 +38,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'test-secret-key-that-is-long-enoug
 const ADMIN_ID = crypto.randomUUID();
 
 function makeToken() {
-  return jwt.sign({ id: ADMIN_ID, username: 'admin' }, JWT_SECRET, { expiresIn: '1h' });
+  return jwt.sign({ id: ADMIN_ID, username: 'admin', role: 'super-admin' }, JWT_SECRET, { expiresIn: '1h' });
 }
 
 function createApp() {

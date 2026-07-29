@@ -23,7 +23,7 @@ const agentRoutes = require('../src/routes/agent');
 const JWT_SECRET = process.env.JWT_SECRET || 'test-secret-key-that-is-long-enough-for-validation-32';
 
 function makeToken() {
-  return jwt.sign({ id: '00000000-0000-0000-0000-000000000001', username: 'admin' }, JWT_SECRET, { expiresIn: '1h' });
+  return jwt.sign({ id: '00000000-0000-0000-0000-000000000001', username: 'admin', role: 'super-admin' }, JWT_SECRET, { expiresIn: '1h' });
 }
 
 function createApp() {

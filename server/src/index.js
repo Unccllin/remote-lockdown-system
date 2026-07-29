@@ -12,6 +12,10 @@ const agentRoutes = require('./routes/agent');
 const auditRoutes = require('./routes/audit');
 const installerRoutes = require('./routes/installer');
 const setupRoutes = require('./routes/setup');
+const healthRoutes = require('./routes/health');
+const metricsRoutes = require('./routes/metrics');
+const adminsRoutes = require('./routes/admins');
+const { startAlertScheduler } = require('./jobs/alertScheduler');
 
 const app = express();
 
@@ -50,6 +54,9 @@ app.use('/api/devices', devicesRoutes);
 app.use('/api/agent', agentLimiter, agentRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/installer', installerRoutes);
+app.use('/api/health', healthRoutes);
+app.use('/metrics', metricsRoutes);
+app.use('/api/admins', adminsRoutes);
 
 app.get('/api/health', async (req, res) => {
   // FA6: Extended health check — DB probe + scheduler status
@@ -105,6 +112,8 @@ async function stopSchedulerTracked(timeoutMs) {
 
 // FA5: Start the retention scheduler
 startSchedulerTracked();
+// Phase 13: Start the alert scheduler (stale-device + health-degradation checks)
+startAlertScheduler();
 
 const server = app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);

@@ -1,0 +1,109 @@
+name: Lint
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+# Cancel stale runs on the same branch when a new commit is pushed.
+# Saves CI minutes and avoids confusing stale results.
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # ESLint — server (Node.js API)
+  # ---------------------------------------------------------------------------
+  lint-server:
+    name: Lint Server (ESLint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        # ESLint + security plugin are now declared in devDependencies,
+        # so npm ci installs them from the lockfile (no --no-save needed).
+        run: npm ci
+
+      - name: Run ESLint
+        run: npx eslint src/ tests/ --max-warnings=0
+
+  # ---------------------------------------------------------------------------
+  # ESLint — dashboard (React + Vitest)
+  # ---------------------------------------------------------------------------
+  lint-dashboard:
+    name: Lint Dashboard (ESLint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        # ESLint + React plugins are now declared in devDependencies,
+        # so npm ci installs them from the lockfile (no --no-save needed).
+        run: npm ci
+
+      - name: Run ESLint
+        run: npx eslint src/ tests/ --max-warnings=0
+
+  # ---------------------------------------------------------------------------
+  # ruff — agent (Python)
+  # ---------------------------------------------------------------------------
+  lint-agent:
+    name: Lint Agent (ruff)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff check
+        run: ruff check *.py tests/
+
+  # ---------------------------------------------------------------------------
+  # actionlint — GitHub Actions workflow validation
+  # ---------------------------------------------------------------------------
+  lint-workflows:
+    name: Lint Workflows (actionlint)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run actionlint
+        # Pin to a specific version for reproducibility.
+        run: |
+          # Download actionlint binary for the runner's arch.
+          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color

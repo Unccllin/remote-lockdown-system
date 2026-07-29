@@ -93,6 +93,16 @@ function translateSql(sql) {
   // 5. Strip other ::type casts (::text, ::int, ::jsonb, etc.)
   out = out.replace(/::[a-zA-Z_]+/g, '');
 
+  // 5b. jsonb_set → json_set (SQLite uses json_set, PG uses jsonb_set)
+  out = out.replace(/\bjsonb_set\s*\(/gi, 'json_set(');
+
+  // 5c. to_jsonb(X) → json_quote(X) (wraps value as JSON string in SQLite)
+  out = out.replace(/\bto_jsonb\s*\(/gi, 'json_quote(');
+
+  // 5d. to_char(X, fmt) → X (SQLite has no to_char; drop the format arg.
+  //     datetime('now') already produces a readable timestamp string.)
+  out = out.replace(/\bto_char\s*\(([^,)]+),\s*[^)]+\)/gi, '$1');
+
   // 6. pg_try_advisory_lock / pg_advisory_unlock → return 1 (success)
   //    SQLite doesn't have advisory locks. In single-process Electron,
   //    in-memory JS locks suffice. We translate to SELECT 1 so the

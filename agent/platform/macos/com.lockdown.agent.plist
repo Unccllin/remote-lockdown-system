@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.lockdown.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/libexec/lockdown-agent/lockdown-agent</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/usr/local/libexec/lockdown-agent</string>
+
+    <!-- Start at boot (LaunchDaemon loads before user login) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on crash -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- Back off 10 seconds between restart attempts -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Run as root (LaunchDaemons run as root by default) -->
+    <key>UserName</key>
+    <string>root</string>
+
+    <!-- Environment variables — read by agent.py load_config().
+         Override values via the config file or edit this dict. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SERVER_URL</key>
+        <string>https://lockdown.example.com</string>
+        <key>DEVICE_API_KEY</key>
+        <string>change_this_to_match_server_AGENT_SHARED_KEY</string>
+        <key>DEVICE_HOSTNAME</key>
+        <string>DEVICE-HOSTNAME-001</string>
+    </dict>
+
+    <!-- Logging -->
+    <key>StandardOutPath</key>
+    <string>/var/log/lockdown-agent/agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/lockdown-agent/agent_error.log</string>
+</dict>
+</plist>

@@ -277,12 +277,68 @@ def load_config(config_path=None) -> dict:
         ).lower() != "false",
     }
 
+
+def validate_config(cfg: dict) -> None:
+    """Validate critical config values at startup.
+
+    Raises ValueError (or calls sys.exit) if the config is unsafe:
+      - server_url must be a valid https:// URL (TLS required for key transport)
+      - lockdown_folder must be an absolute path (relative paths risk
+        encrypting unintended directories depending on CWD)
+
+    Called from main() after load_config(). This is a startup guard —
+    it does not modify the config, only validates it.
+    """
+    from urllib.parse import urlparse
+
+    server_url = cfg.get("server_url", "")
+    if not server_url:
+        raise ValueError("SERVER_URL is not set — cannot start agent without a server URL")
+    parsed = urlparse(server_url)
+    if parsed.scheme not in ("https",):
+        # Allow http:// only when verify_tls is False (explicit dev override)
+        if parsed.scheme == "http" and not cfg.get("verify_tls", True):
+            pass  # dev mode: http allowed when TLS verification is explicitly disabled
+        else:
+            raise ValueError(
+                f"SERVER_URL must use https:// (got '{server_url}') — "
+                f"key material must be transported over TLS"
+            )
+    if not parsed.netloc:
+        raise ValueError(f"SERVER_URL is missing a host (got '{server_url}')")
+
+    lockdown_folder = cfg.get("lockdown_folder")
+    if lockdown_folder is not None:
+        lockdown_folder = Path(lockdown_folder)
+        if not lockdown_folder.is_absolute():
+            raise ValueError(
+                f"LOCKDOWN_FOLDER must be an absolute path (got '{lockdown_folder}') — "
+                f"relative paths risk encrypting unintended directories"
+            )
+
+
 # ---------------------------------------------------------------------------
 # Encryption helpers (Fernet = AES-128-CBC + HMAC-SHA256)
 # ---------------------------------------------------------------------------
 
 def generate_key() -> bytes:
     return Fernet.generate_key()
+
+
+def wipe_key(key: bytearray) -> None:
+    """Securely zero a bytearray key in memory.
+
+    Python ``bytes`` and ``str`` are immutable, so the key must be held as a
+    ``bytearray`` (mutable) for in-place wiping. Uses ``ctypes.memset`` to
+    overwrite the buffer with zeros so the key material does not linger in
+    memory after it is no longer needed.
+    """
+    if not isinstance(key, bytearray):
+        return
+    import ctypes
+    buf = (ctypes.c_char * len(key)).from_buffer(key)
+    ctypes.memset(buf, 0, len(key))
+
 
 def encrypt_folder(folder: Path, key: bytes) -> None:
     """Encrypt all files inside `folder` in-place. Never touches files outside it.
@@ -348,7 +404,8 @@ def _lock_workstation() -> None:
             try:
                 subprocess.run(cmd, check=True, timeout=5)
                 break
-            except Exception:
+            except Exception as e:
+                log.debug("Lock command %s failed: %s", cmd[0], e)
                 continue
     elif system == "Darwin":
         try:
@@ -786,7 +843,8 @@ def _queue_size() -> int:
         row = conn.execute('SELECT COUNT(*) FROM offline_queue').fetchone()
         conn.close()
         return row[0] if row else 0
-    except Exception:
+    except Exception as e:
+        log.warning("Could not query offline queue size: %s", e)
         return 0
 
 
@@ -1535,8 +1593,8 @@ def download_update(cfg: dict, url: str, expected_sha256: str, version: str) -> 
         # Clean up partial download
         try:
             tmp_file.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Could not clean up partial update download: %s", e)
 
 
 def clear_update_signal() -> None:
@@ -1578,6 +1636,13 @@ def main() -> None:
         log.error("Set DEVICE_API_KEY env var, or provide a config file with --config")
         sys.exit(1)
 
+    # Phase 3: Validate critical config values at startup (server URL, lockdown folder)
+    try:
+        validate_config(cfg)
+    except ValueError as e:
+        log.error("Invalid configuration: %s", e)
+        sys.exit(1)
+
     # --silent flag: suppress stdout logging for covert operation
     if args.silent:
         logging.disable(logging.INFO)
@@ -1600,8 +1665,8 @@ def main() -> None:
         # Update heartbeat so watchdog knows agent is alive
         try:
             HEARTBEAT_FILE.touch()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Could not update heartbeat file: %s", e)
 
         # Check dead man's switch before attempting network
         check_deadman(cfg)

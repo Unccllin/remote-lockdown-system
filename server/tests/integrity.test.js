@@ -27,7 +27,7 @@ const AGENT_KEY = 'test-agent-key-that-is-long-enough-24';
 const JWT_SECRET = 'test-secret-key-that-is-long-enough-for-validation-32';
 
 function makeToken(adminId = 'admin-1', username = 'admin') {
-  return jwt.sign({ id: adminId, username }, JWT_SECRET, { expiresIn: '1h' });
+  return jwt.sign({ id: adminId, username, role: 'super-admin' }, JWT_SECRET, { expiresIn: '1h' });
 }
 
 beforeEach(() => {

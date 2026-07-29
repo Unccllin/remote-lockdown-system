@@ -1,0 +1,40 @@
+# ruff configuration for the lockdown agent (Python)
+#
+# Enables a broad set of lint rules including security-relevant ones (S =
+# flake8-bandit). Rules that are too noisy for this codebase are disabled
+# individually with comments.
+
+target-version = "py312"
+line-length = 100
+
+[lint]
+# E  = pycodestyle errors
+# W  = pycodestyle warnings
+# F  = pyflakes (unused imports, undefined names, etc.)
+# I  = isort (import ordering)
+# B  = flake8-bugbear (likely-bugs / design problems)
+# S  = flake8-bandit (security checks)
+# UP = pyupgrade (modernize syntax)
+select = ["E", "W", "F", "I", "B", "S", "UP"]
+
+ignore = [
+  # assert statements are fine in tests + this codebase uses them intentionally
+  "S101",
+  # hardcoded passwords/secrets are flagged too aggressively for this codebase
+  "S105", "S106", "S107",
+  # subprocess usage is intentional (agent launches processes); reviewed manually
+  "S603",
+  # allow shell=False with partial paths; agent controls its own invocation
+  "S607",
+  # allow try/except/pass where the silence is intentional
+  "B904",  # would require `raise ... from err` — enabled later if desired
+]
+
+[lint.per-file-ignores]
+# Tests: relax security rules that conflict with test fixtures.
+"tests/**/*.py" = ["S101", "S105", "S106", "S311"]
+
+[format]
+# Use double quotes + trailing commas to match existing style.
+quote-style = "double"
+indent-style = "space"

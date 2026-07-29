@@ -1,0 +1,38 @@
+{
+  "root": true,
+  "env": {
+    "node": true,
+    "es2022": true,
+    "jest": true
+  },
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "commonjs"
+  },
+  "extends": [
+    "eslint:recommended",
+    "plugin:security/recommended"
+  ],
+  "plugins": [
+    "security"
+  ],
+  "rules": {
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_"
+      }
+    ],
+    "no-console": "off",
+    "security/detect-object-injection": "off",
+    "security/detect-non-literal-regexp": "off",
+    "security/detect-unsafe-regex": "off"
+  },
+  "ignorePatterns": [
+    "node_modules/",
+    "dist/",
+    "build/",
+    "coverage/"
+  ]
+}

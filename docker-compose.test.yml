@@ -1,0 +1,48 @@
+# docker-compose.test.yml — Quick local test stack (SQLite mode)
+#
+# A minimal compose file for validating the admin server without standing up
+# PostgreSQL or Caddy. The server runs in SQLite mode with a persistent volume
+# for the database file. Useful for smoke tests, CI, and local development.
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up --build
+#   curl http://localhost:3001/api/health
+#   docker compose -f docker-compose.test.yml down -v
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      # SQLite mode — no external database required
+      USE_SQLITE: "true"
+      SQLITE_PATH: /data/lockdown.db
+      # Security keys (use weak test values; NEVER use in production)
+      JWT_SECRET: test_jwt_secret_do_not_use_in_production_64hex_0000000000000000
+      AGENT_SHARED_KEY: test_agent_shared_key_do_not_use_in_prod_48
+      AGENT_KEY_PEPPER: test_agent_key_pepper_do_not_use_in_prod_64hex_00
+      FIELD_ENCRYPTION_KEY: test_field_encryption_key_do_not_use_prod_64_00
+      LOCATION_FIELD_KEY: test_location_field_key_do_not_use_prod_64_00
+      # CORS — allow the test origin
+      CORS_ORIGIN: http://localhost:3001
+      # Port
+      PORT: "3001"
+      # Retention (short for tests)
+      LOCATION_RETENTION_DAYS: "7"
+      COMMAND_EXPIRY_DAYS: "7"
+    volumes:
+      - sqlite_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  sqlite_data:

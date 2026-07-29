@@ -225,3 +225,241 @@ npm run build:win  # Produces unsigned installer
 - Auto-update will NOT work for unsigned Windows builds (electron-updater
   requires signature verification by default; set `verifyUpdateCodeSignature: false`
   in the build config to disable this)
+
+---
+
+## Automated Signing
+
+The repository ships two helper scripts that automate signing configuration and
+verification:
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/setup-signing.sh` | Interactively collect signing credentials and write them to a gitignored `.signing.env` file |
+| `scripts/verify-signing.sh` | Verify the signature on a built Electron app/installer or agent binary |
+
+### Configuring your environment with `setup-signing.sh`
+
+`setup-signing.sh` walks you through collecting the credentials required for
+your target platform(s) and writes them to `.signing.env` (mode 600, gitignored).
+The generated file can be `source`d before a local build, and the same values
+can be added as GitHub Secrets for CI/CD.
+
+```bash
+# Configure both Windows (Azure Trusted Signing) and macOS
+./scripts/setup-signing.sh --platform both --method azure
+
+# Configure Windows only, using a local PFX certificate
+./scripts/setup-signing.sh --platform windows --method pfx
+
+# Configure macOS only (Apple Developer ID + notarization)
+./scripts/setup-signing.sh --platform macos --method developer-id
+```
+
+Options:
+- `--platform <windows|macos|both>` — which platform to configure (default: `both`)
+- `--method <azure|pfx|developer-id>` — signing method
+  - `azure` (Windows): Azure Trusted Signing
+  - `pfx` (Windows): local PFX code-signing certificate
+  - `developer-id` (macOS): Apple Developer ID + notarization
+- `--non-interactive` — read values from env/stdin without a TTY (useful in CI)
+
+After running the script:
+
+```bash
+source .signing.env
+cd electron && npm run build:win   # or build:mac
+```
+
+The script validates that all required env vars are set and prints the exact
+GitHub Secret names to configure for CI.
+
+---
+
+## Azure Trusted Signing
+
+Azure Trusted Signing (formerly Azure Code Signing) is the recommended approach
+for CI/CD Windows signing because it does not require a USB hardware token.
+
+### Required environment variables
+
+| Variable | Description |
+| --- | --- |
+| `AZURE_TRUSTED_SIGNING_TENANT_ID` | Azure AD tenant ID |
+| `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME` | Trusted Signing account name |
+| `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE` | Certificate profile name |
+| `AZURE_TRUSTED_SIGNING_CLIENT_ID` | Service principal (app) client ID |
+| `AZURE_TRUSTED_SIGNING_CLIENT_SECRET` | Service principal client secret |
+
+> Note: `setup-signing.sh` collects the first three interactively. The client
+> ID/secret are only needed for unattended (CI) signing and should be configured
+> as GitHub Secrets.
+
+### CI configuration (GitHub Actions)
+
+Add the following repository secrets
+(`Settings → Secrets and variables → Actions`):
+
+- `AZURE_TRUSTED_SIGNING_TENANT_ID`
+- `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`
+- `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE`
+- `AZURE_TRUSTED_SIGNING_CLIENT_ID`
+- `AZURE_TRUSTED_SIGNING_CLIENT_SECRET`
+
+Then in the workflow:
+
+```yaml
+- name: Build and sign Windows installer
+  env:
+    AZURE_TRUSTED_SIGNING_TENANT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+    AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+    AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+    AZURE_TRUSTED_SIGNING_CLIENT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+    AZURE_TRUSTED_SIGNING_CLIENT_SECRET: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_SECRET }}
+  run: cd electron && npm run build:win
+```
+
+electron-builder detects these env vars automatically and signs the installer
+with Azure Trusted Signing — no additional `package.json` config is required.
+
+---
+
+## Agent Binary Signing
+
+The agent is distributed as PyInstaller-built binaries (`lockdown-agent`,
+`lockdown-watchdog`, `lockdown-recovery`). PyInstaller does not sign binaries
+by default, so unsigned agent binaries may be flagged by Windows Defender /
+SmartScreen and macOS Gatekeeper.
+
+### Windows
+
+Sign each built `.exe` with `signtool.exe` (or `AzureSignTool` for Azure
+Trusted Signing):
+
+```powershell
+# Traditional PFX
+signtool sign /fd SHA256 /a /f cert.pfx /p <password> agent\dist\lockdown-agent.exe
+
+# Azure Trusted Signing (requires AzureSignTool)
+AzureSignTool sign -kvu "https://<account>.eus.codesigning.azure.net/" \
+  -kvi "$AZURE_TRUSTED_SIGNING_CLIENT_ID" \
+  -kvt "$AZURE_TRUSTED_SIGNING_TENANT_ID" \
+  -kvs "$AZURE_TRUSTED_SIGNING_CLIENT_SECRET" \
+  -kvc "$AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE" \
+  -tr "http://timestamp.digicert.com" -v agent\dist\lockdown-agent.exe
+```
+
+### macOS
+
+Sign the agent binary with your Developer ID Application certificate:
+
+```bash
+codesign --sign "Developer ID Application: <Your Name> (<TEAM_ID>)" \
+  --options runtime --timestamp agent/dist/lockdown-agent
+```
+
+For notarization, submit the signed binary with `xcrun notarytool submit` and
+staple the ticket with `xcrun stapler staple`.
+
+### Verifying agent signatures
+
+```bash
+./scripts/verify-signing.sh --agent agent/dist/lockdown-agent.exe
+./scripts/verify-signing.sh --agent agent/dist/lockdown-agent
+```
+
+---
+
+## Auto-Update Verification
+
+electron-updater verifies the code signature of update packages before
+installing them. For this to work:
+
+1. **The initial install must be signed.** If the installed app is unsigned,
+   electron-updater cannot verify the publisher of the downloaded update and
+   will refuse to install it (or, if `verifyUpdateCodeSignature` is `false`,
+   install it without verification — which is insecure).
+2. **The update package must be signed with the same certificate.** A
+   certificate mismatch causes the update to be rejected.
+3. **The `latest.yml` / `latest-mac.yml` manifests** published to GitHub
+   Releases contain the SHA512 checksum and signature metadata that
+   electron-updater uses for verification.
+
+### Verifying before release
+
+Run `verify-signing.sh` against every artifact you intend to publish:
+
+```bash
+# Electron installer
+./scripts/verify-signing.sh --app electron/dist-electron/"Remote Lockdown Admin Setup 1.0.0.exe"
+
+# macOS DMG / app bundle
+./scripts/verify-signing.sh --app electron/dist-electron/"Remote Lockdown Admin-1.0.0.dmg"
+
+# Agent binary (optional but recommended)
+./scripts/verify-signing.sh --agent agent/dist/lockdown-agent.exe
+```
+
+Exit codes:
+- `0` — signed and valid
+- `1` — unsigned
+- `2` — signature present but invalid
+
+### Manifest sanity check
+
+Confirm that `latest.yml` (Windows) and `latest-mac.yml` (macOS) are present in
+the GitHub Release and that the `sha512` field matches the published installer.
+electron-builder generates these automatically when publishing with
+`--publish always`.
+
+---
+
+## Troubleshooting
+
+### "signtool not found" (Windows)
+Install the Windows SDK, or run `verify-signing.sh` on a Windows host. The
+script searches common Windows Kits paths and `PATH` for `signtool.exe`.
+
+### "Azure Trusted Signing" build fails with auth error
+- Verify the service principal has been granted the **Trusted Signing Certificate
+  Profile Signer** role on the certificate profile.
+- Confirm `AZURE_TRUSTED_SIGNING_CLIENT_SECRET` has not expired.
+- Ensure the tenant ID, account name, and certificate profile name match
+  exactly (case-sensitive).
+
+### electron-builder does not sign on Windows
+- Ensure `CSC_LINK` (PFX) **or** the `AZURE_TRUSTED_SIGNING_*` env vars are set
+  — not both. Having both can confuse the signer.
+- For PFX, `CSC_LINK` may be a file path or a base64-encoded string. If using a
+  path, ensure it is readable by the build process.
+- Check `win.signingHashAlgorithms` includes `sha256`.
+
+### macOS build is not notarized
+- Confirm `mac.notarize: true` is set in `electron/package.json`.
+- Ensure `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` are all
+  set. Notarization fails silently (or warns) if any are missing.
+- The app-specific password is generated at
+  https://appleid.apple.com → Sign-In and Security → App-Specific Passwords.
+- After notarization, electron-builder staples the ticket automatically. Verify
+  with `spctl --assess --type execute <path>`.
+
+### "codesign verification FAILED" on macOS
+- The signature may have been broken by post-build modification (e.g. editing
+  the `.app` bundle). Rebuild from a clean `dist-electron/`.
+- Deep verification (`--deep --strict`) can fail if an embedded framework is
+  unsigned. Ensure all bundled frameworks are signed with the same Developer ID.
+- Run `codesign -dv --verbose=4 <path>` for detailed identity information.
+
+### Auto-update rejected with "signature verification failed"
+- The update was signed with a different certificate than the installed app.
+  Use the same certificate for every release.
+- If you are migrating certificates, ship one release signed with **both** the
+  old and new certificates, then drop the old one in the following release.
+- As a last resort for development, `verifyUpdateCodeSignature: false` disables
+  verification — **never use this in production**.
+
+### `.signing.env` not loaded
+- The file is gitignored and must be `source`d explicitly:
+  `source .signing.env`.
+- In CI, do not commit `.signing.env`; configure the same values as GitHub
+  Secrets instead.
