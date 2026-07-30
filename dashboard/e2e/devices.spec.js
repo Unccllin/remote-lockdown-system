@@ -106,7 +106,10 @@ test.describe('Device management', () => {
       await modal.getByRole('button', { name: /recover device/i }).click();
 
       // Status badge should now read "recovering".
-      await expect(page.locator('span.badge-recovering')).toHaveText(/recovering/i, {
+      // Use .first() — the page has two badge-recovering elements: the status
+      // badge (showing just "recovering") and a "Recovery in progress —"
+      // notice below it.
+      await expect(page.locator('span.badge-recovering').first()).toHaveText(/recovering/i, {
         timeout: 10_000,
       });
     } finally {
