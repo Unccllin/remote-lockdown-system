@@ -196,3 +196,61 @@ jobs:
           name: playwright-report
           path: dashboard/playwright-report/
           retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Environment verification (agent build, NSIS, signing, Docker, Electron)
+  # ---------------------------------------------------------------------------
+  # Runs scripts/verify-environment.sh to test items that were previously
+  # "cannot verify in WSL": PyInstaller build, NSIS installer compilation,
+  # platform installer syntax, code signing dry-run, Docker config validation,
+  # and Electron packaging config. Requires NSIS (apt install nsis).
+  env-verify:
+    name: Environment Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # Install NSIS for installer compilation testing
+      - name: Install NSIS
+        run: sudo apt-get update && sudo apt-get install -y nsis
+
+      # Server dependencies (for NSIS installer module)
+      - name: Install server dependencies
+        run: npm ci
+        working-directory: server
+
+      # Agent dependencies (for PyInstaller build)
+      - name: Install agent dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+        working-directory: agent
+
+      # Electron dependencies (for packaging config validation)
+      - name: Install electron dependencies
+        run: npm ci
+        working-directory: electron
+
+      - name: Run environment verification
+        run: scripts/verify-environment.sh --json
+        env:
+          # Provide test secrets so the server module can load
+          JWT_SECRET: 'ci-test-secret-key-that-is-long-enough-32'
+          AGENT_SHARED_KEY: 'ci-test-agent-key-that-is-long-enough-24'
+          AGENT_KEY_PEPPER: 'ci-test-pepper-key-that-is-long-enough-32'
+          FIELD_ENCRYPTION_KEY: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+          LOCATION_FIELD_KEY: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+          USE_SQLITE: 'true'
+          ALLOW_NON_PROD: '1'

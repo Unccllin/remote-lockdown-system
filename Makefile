@@ -39,6 +39,7 @@ help:
 	@echo "Other:"
 	@echo "  make check-artifacts      verify build outputs (strict)"
 	@echo "  make check-structure      check dist dirs exist (non-fatal)"
+	@echo "  make verify-env           verify all environment items (agent, NSIS, Docker, signing, etc.)"
 	@echo "  make clean                remove all dist/ directories"
 
 # ---------------------------------------------------------------------------
@@ -96,6 +97,18 @@ check-artifacts:
 
 check-structure:
 	@$(CHECK_SCRIPT) --check-structure
+
+# ---------------------------------------------------------------------------
+# Environment verification — wraps scripts/verify-environment.sh
+# Tests items that were previously "cannot verify in WSL": agent PyInstaller
+# build, NSIS installer compilation, platform installer syntax, code signing
+# dry-run, Docker validation, and Electron packaging.
+# ---------------------------------------------------------------------------
+
+.PHONY: verify-env
+
+verify-env:
+	@scripts/verify-environment.sh
 
 # ---------------------------------------------------------------------------
 # Clean — remove all build outputs.

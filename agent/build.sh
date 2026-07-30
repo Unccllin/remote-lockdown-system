@@ -41,24 +41,49 @@ echo ""
 CLEAN=false
 INSTALL=false
 AGENT_ONLY=false
+USE_VENV=true  # Use venv by default to avoid PEP 668 (externally-managed-environment)
 for arg in "$@"; do
     case $arg in
         --clean)  CLEAN=true ;;
         --install) INSTALL=true ;;
         --agent-only) AGENT_ONLY=true ;;
+        --no-venv) USE_VENV=false ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
 done
 
+# --- Virtual environment setup ---
+# PEP 668 (Debian/Ubuntu 23+) blocks pip install on system Python.
+# We create/use a venv in .venv/ to isolate build dependencies.
+PIP="pip3"
+PYTHON="python3"
+
+if [ "$USE_VENV" = true ]; then
+    VENV_DIR="$SCRIPT_DIR/.venv"
+    if [ ! -d "$VENV_DIR" ]; then
+        echo -e "${YELLOW}Creating virtual environment in .venv/...${NC}"
+        # Try with pip first; fall back to --without-pip + get-pip.py
+        if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
+            echo -e "${YELLOW}venv without pip (ensurepip missing) — bootstrapping pip...${NC}"
+            python3 -m venv --without-pip "$VENV_DIR"
+            curl -sS https://bootstrap.pypa.io/get-pip.py | "$VENV_DIR/bin/python"
+        fi
+    fi
+    PIP="$VENV_DIR/bin/pip"
+    PYTHON="$VENV_DIR/bin/python"
+    echo "Using venv: $VENV_DIR"
+    echo ""
+fi
+
 # Install PyInstaller if requested
 if [ "$INSTALL" = true ]; then
     echo -e "${YELLOW}Installing PyInstaller...${NC}"
-    pip3 install pyinstaller
+    $PIP install pyinstaller
     echo ""
 fi
 
 # Check PyInstaller is available
-if ! python3 -c "import PyInstaller" 2>/dev/null; then
+if ! $PYTHON -c "import PyInstaller" 2>/dev/null; then
     echo -e "${RED}Error: PyInstaller is not installed.${NC}"
     echo "Run: ./build.sh --install"
     exit 1
@@ -66,7 +91,7 @@ fi
 
 # Install agent dependencies
 echo -e "${YELLOW}Installing agent dependencies...${NC}"
-pip3 install -r requirements.txt --quiet
+$PIP install -r requirements.txt --quiet
 echo ""
 
 # Clean build directories if requested
@@ -88,7 +113,7 @@ BUILT_FAIL=()
 for spec in "${SPECS[@]}"; do
     name=$(basename "$spec" .spec)
     echo -e "${YELLOW}Building ${name} with PyInstaller...${NC}"
-    if python3 -m PyInstaller "$spec" --noconfirm; then
+    if $PYTHON -m PyInstaller "$spec" --noconfirm; then
         BUILT_OK+=("$name")
     else
         BUILT_FAIL+=("$name")
