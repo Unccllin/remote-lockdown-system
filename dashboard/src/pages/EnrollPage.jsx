@@ -174,6 +174,38 @@ echo "Done!"
     }
   }
 
+  async function downloadOneClickInstaller() {
+    setDownloadingInstaller(true);
+    try {
+      const response = await api.get(`/installer/${enrolled.device.id}/nsis`, {
+        responseType: 'blob',
+      });
+      const blob = new Blob([response.data], { type: 'application/vnd.microsoft.portable-executable' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `LockdownAgent-Setup-${enrolled.device.hostname.toLowerCase().replace(/[^a-z0-9]/g, '-')}.exe`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('One-click installer downloaded — just double-click the .exe on the target device');
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message || 'Installer download failed';
+      if (err.response?.data instanceof Blob) {
+        try {
+          const text = await err.response.data.text();
+          const parsed = JSON.parse(text);
+          toast.error(parsed.error || 'Installer download failed');
+        } catch {
+          toast.error('Installer download failed');
+        }
+      } else {
+        toast.error(msg);
+      }
+    } finally {
+      setDownloadingInstaller(false);
+    }
+  }
+
   // --- Enrollment success view ---
   if (enrolled) {
     return (
@@ -273,43 +305,64 @@ echo "Done!"
           </div>
         </div>
 
-        {/* Agent installer (pre-built binary + config + install script) */}
-        <div className="card mb-6">
-          <h3 className="text-sm font-medium text-slate-300 mb-4">Agent Installer (Recommended)</h3>
+        {/* One-click installer (primary — for non-IT users) */}
+        <div className="card mb-6 border-emerald-700/30 bg-emerald-950/10">
+          <h3 className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
+            <Package size={14} className="text-emerald-400" />
+            One-Click Installer (Recommended)
+          </h3>
           <p className="text-xs text-slate-500 mb-4">
-            Download a complete installer package containing the pre-built agent binary,
-            device-specific config, and an install script. Just run on the target device.
+            Download a single .exe file. The user just double-clicks it and follows the
+            wizard — no PowerShell, no ZIP extraction, no command line needed.
+          </p>
+          <button
+            onClick={downloadOneClickInstaller}
+            disabled={downloadingInstaller}
+            className="w-full flex items-center gap-3 px-4 py-4 rounded-lg bg-emerald-900/30 hover:bg-emerald-900/50 border border-emerald-700/50 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Download size={20} className="text-emerald-400" />
+            <div className="text-left">
+              <div className="font-medium">Download Windows Installer (.exe)</div>
+              <div className="text-xs text-slate-500">
+                {downloadingInstaller ? 'Compiling installer... (this takes a few seconds)' : 'GUI wizard — just double-click on the target device'}
+              </div>
+            </div>
+          </button>
+        </div>
+
+        {/* Advanced installer options (ZIP — for IT admins) */}
+        <div className="card mb-6">
+          <h3 className="text-sm font-medium text-slate-300 mb-2">Advanced: ZIP Installer</h3>
+          <p className="text-xs text-slate-500 mb-4">
+            For IT administrators who prefer manual installation. Contains the raw binary,
+            config, and install script in a ZIP file.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               onClick={() => downloadAgentInstaller('win')}
               disabled={downloadingInstaller}
-              className="flex items-center gap-2 px-4 py-3 rounded-lg bg-indigo-900/30 hover:bg-indigo-900/50 border border-indigo-700/50 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Package size={16} className="text-indigo-400" />
               <div className="text-left">
-                <div className="font-medium">Windows Installer</div>
-                <div className="text-xs text-slate-500">
-                  {downloadingInstaller ? 'Preparing...' : 'ZIP with .exe + install.ps1'}
-                </div>
+                <div className="font-medium">Windows ZIP</div>
+                <div className="text-xs text-slate-500">.exe + install.ps1</div>
               </div>
             </button>
             <button
               onClick={() => downloadAgentInstaller('linux')}
               disabled={downloadingInstaller}
-              className="flex items-center gap-2 px-4 py-3 rounded-lg bg-indigo-900/30 hover:bg-indigo-900/50 border border-indigo-700/50 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Package size={16} className="text-indigo-400" />
               <div className="text-left">
-                <div className="font-medium">Linux Installer</div>
-                <div className="text-xs text-slate-500">
-                  {downloadingInstaller ? 'Preparing...' : 'ZIP with binary + install.sh'}
-                </div>
+                <div className="font-medium">Linux ZIP</div>
+                <div className="text-xs text-slate-500">binary + install.sh</div>
               </div>
             </button>
           </div>
           <p className="text-xs text-amber-500/60 mt-3">
-            Note: The installer generates a new API key for this device. The old key will stop working.
+            Note: Each installer download generates a new API key for this device. The old key will stop working.
           </p>
         </div>
 
