@@ -18,7 +18,14 @@ import path from 'path';
 import crypto from 'crypto';
 import axios from 'axios';
 
+// Require anchored to this file — used for relative server module imports.
 const require = createRequire(import.meta.url);
+// Require anchored to the server's source tree so bare specifiers (e.g.
+// 'express', 'bcryptjs') resolve from server/node_modules rather than
+// dashboard/node_modules (which doesn't contain server-only deps).
+const serverRequire = createRequire(
+  path.join(path.dirname(new URL(import.meta.url).pathname), '../../server/src/index.js')
+);
 
 // ---------------------------------------------------------------------------
 // Env setup — MUST run before any server module that touches the DB pool.
@@ -65,7 +72,7 @@ const TEST_DEVICES = [
  * rate limiter / scheduler, which are unnecessary for E2E).
  */
 function createApp() {
-  const express = require('express');
+  const express = serverRequire('express');
   const app = express();
   app.use(
     express.json({
