@@ -94,15 +94,15 @@ export function handleSummary(data) {
 // Minimal text summary helper (k6 provides a default summary; this augments it).
 function textSummary(data) {
   const metrics = data.metrics || {};
-  const duration = metrics.http_req_duration || {};
-  const failed = metrics.http_req_failed || {};
-  const reqs = metrics.http_reqs || {};
+  const duration = metrics.http_req_duration?.values || {};
+  const failed = metrics.http_req_failed?.values || {};
+  const reqs = metrics.http_reqs?.values || {};
   return (
     `\n--- Baseline Load Test Summary ---\n` +
     `VUs: ${VUS} | Duration: ${DURATION} | Poll interval: ${POLL_INTERVAL}s\n` +
     `Requests: ${reqs.count || 0} (${(reqs.rate || 0).toFixed(2)} req/s)\n` +
-    `http_req_duration p95: ${((duration['p(95)'] || 0) / 1000).toFixed(2)}ms\n` +
-    `http_req_duration p99: ${((duration['p(99)'] || 0) / 1000).toFixed(2)}ms\n` +
+    `http_req_duration p95: ${(duration['p(95)'] || 0).toFixed(2)}ms\n` +
+    `http_req_duration p99: ${(duration['p(99)'] || 0).toFixed(2)}ms\n` +
     `http_req_failed rate: ${((failed.rate || 0) * 100).toFixed(2)}%\n` +
     `Thresholds: ${data.thresholds ? 'evaluated' : 'n/a'}\n`
   );

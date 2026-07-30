@@ -144,7 +144,11 @@ async function main() {
       req.rawBody = buf.toString('utf8');
     },
   }));
-  app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 200 }));
+  // Rate limit — configurable for load testing (set RATE_LIMIT_MAX=0 to disable)
+  const rateLimitMax = parseInt(process.env.RATE_LIMIT_MAX || '200', 10);
+  if (rateLimitMax > 0) {
+    app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: rateLimitMax }));
+  }
 
   app.use('/api/auth', require('./src/routes/auth'));
   app.use('/api/devices', require('./src/routes/devices'));

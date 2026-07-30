@@ -10,26 +10,27 @@
  * the request distribution matches the target percentages.
  *
  * Configuration (env vars):
- *   K6_VUS            — total virtual users (default 500)
- *   K6_DURATION       — total test duration (default 3m)
+ *   MIXED_VUS         — total virtual users (default 500)
+ *   MIXED_DURATION    — total test duration (default 3m)
  *   K6_BASE_URL       — target server base URL (default http://localhost:3001)
  *   K6_AGENT_KEY      — agent API key (x-agent-key header)
  *   K6_ADMIN_TOKEN    — admin bearer token for dashboard endpoints
+ *   K6_POLL_INTERVAL  — seconds between checkins per polling VU (default 30)
  *
  * Thresholds:
  *   p95 < 800ms, error rate < 2%
  *
  * Usage:
  *   k6 run tests/load/k6-mixed.js
- *   K6_VUS=1000 K6_DURATION=5m K6_ADMIN_TOKEN=xxx k6 run tests/load/k6-mixed.js
+ *   MIXED_VUS=1000 MIXED_DURATION=5m K6_ADMIN_TOKEN=xxx k6 run tests/load/k6-mixed.js
  */
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
 const BASE_URL = __ENV.K6_BASE_URL || 'http://localhost:3001';
-const VUS = parseInt(__ENV.K6_VUS || '500', 10);
-const DURATION = __ENV.K6_DURATION || '3m';
+const VUS = parseInt(__ENV.MIXED_VUS || '500', 10);
+const DURATION = __ENV.MIXED_DURATION || '3m';
 const AGENT_KEY = __ENV.K6_AGENT_KEY || 'test-agent-key';
 const ADMIN_TOKEN = __ENV.K6_ADMIN_TOKEN || 'test-admin-token';
 const POLL_INTERVAL = parseFloat(__ENV.K6_POLL_INTERVAL || '30');
