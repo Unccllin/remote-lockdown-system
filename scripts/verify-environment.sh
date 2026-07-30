@@ -217,8 +217,10 @@ check_secrets() {
     record_fail "secrets-script-syntax" "syntax error in generate-secrets.sh"
   fi
 
-  # Dry-run: generate to stdout (if script supports --stdout)
-  if "$gen_script" --stdout --dry-run 2>/dev/null | grep -q "JWT_SECRET\|jwt"; then
+  # Dry-run: generate to stdout (if script supports --stdout --dry-run)
+  # Note: in --dry-run mode, generate-secrets.sh sends all output to stderr,
+  # so we check stderr (2>&1) rather than stdout only.
+  if "$gen_script" --stdout --dry-run 2>&1 | grep -q "JWT_SECRET\|jwt"; then
     record_pass "secrets-dry-run" "dry-run generates valid secret names"
   else
     record_skip "secrets-dry-run" "script doesn't support --stdout --dry-run"
@@ -385,6 +387,50 @@ check_nsis() {
     fi
     rm -f "$tmpexe"
   fi
+
+  # Test certutil base64 decode on Windows (if WSL interop is available)
+  local win_ps="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+  if [[ -x "$win_ps" ]]; then
+    # Create a test base64 file and decode it with certutil
+    local wtemp="/mnt/c/Users"
+    local win_user
+    win_user=$(whoami 2>/dev/null || echo "CLLIN")
+    for tp in "/mnt/c/Users/$win_user/AppData/Local/Temp" "/mnt/c/Windows/Temp"; do
+      if [[ -d "$tp" ]]; then wtemp="$tp"; break; fi
+    done
+
+    # Create a known JSON config, base64-encode it
+    local test_json='{"server_url":"https://verify-certutil-test.example.com","device_hostname":"CERTUTIL_TEST","api_key":"key123"}'
+    local test_b64
+    test_b64=$(echo -n "$test_json" | base64 -w0)
+    # Use a unique filename to avoid stale files
+    local b64_file="$wtemp/lockdown-verify-certutil-$$.b64"
+    local json_file="$wtemp/lockdown-verify-certutil-$$.json"
+    echo -n "$test_b64" > "$b64_file"
+    # Remove stale json file if it exists
+    rm -f "$json_file" 2>/dev/null
+
+    local win_b64 win_json
+    win_b64=$(wslpath -w "$b64_file" 2>/dev/null)
+    win_json=$(wslpath -w "$json_file" 2>/dev/null)
+
+    local decode_result
+    decode_result=$("$win_ps" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "
+      certutil -decode '$win_b64' '$win_json' 2>&1 | Out-Null
+      Get-Content '$win_json' -ErrorAction SilentlyContinue
+    " 2>&1 || true)
+
+    if echo "$decode_result" | grep -q "verify-certutil-test"; then
+      record_pass "nsis-certutil-decode" "certutil base64 decode works on Windows"
+    else
+      record_fail "nsis-certutil-decode" "certutil decode failed: $(echo "$decode_result" | head -c 80)"
+    fi
+
+    # Clean up
+    rm -f "$b64_file" "$json_file" 2>/dev/null
+  else
+    record_skip "nsis-certutil-decode" "Windows not available (certutil is Windows-only)"
+  fi
 }
 
 # ===========================================================================
@@ -424,7 +470,7 @@ check_installers() {
     fi
   done
 
-  # Windows PowerShell script — can't run pwsh, but can check for obvious issues
+  # Windows PowerShell script — use WSL interop if available, else structural checks
   local ps1="$AGENT_DIR/platform/windows/install-service-enhanced.ps1"
   if [[ -f "$ps1" ]]; then
     record_pass "installer-windows-exists" "$(wc -l < "$ps1") lines"
@@ -436,17 +482,84 @@ check_installers() {
       record_fail "installer-windows-service" "no service creation found"
     fi
 
-    if grep -q "Start-Service\|sc.exe start" "$ps1" 2>/dev/null; then
+    if grep -q "Start-Service\|sc.exe start\|NSSMPath start" "$ps1" 2>/dev/null; then
       record_pass "installer-windows-start" "starts service after install"
     else
       record_fail "installer-windows-start" "no service start found"
     fi
 
-    # Check for common PowerShell issues
+    # Check for non-ASCII characters that break PowerShell 5.1 without BOM
+    if grep -P '[^\x00-\x7F]' "$ps1" >/dev/null 2>&1; then
+      # Check if file has UTF-8 BOM
+      local bom
+      bom=$(xxd -l 3 "$ps1" 2>/dev/null | head -1)
+      if echo "$bom" | grep -q "efbb bf"; then
+        record_pass "installer-windows-encoding" "UTF-8 with BOM (non-ASCII safe)"
+      else
+        record_fail "installer-windows-encoding" "non-ASCII chars without BOM — PowerShell 5.1 will fail to parse"
+      fi
+    else
+      record_pass "installer-windows-encoding" "ASCII-only (encoding-safe)"
+    fi
+
+    # PowerShell syntax check via WSL interop (if Windows PowerShell is available)
+    local win_ps="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    if [[ -x "$win_ps" ]]; then
+      # Write a temp checker script to Windows temp
+      local wtemp="/mnt/c/Users"
+      local win_user
+      win_user=$(whoami 2>/dev/null || echo "CLLIN")
+      # Try common temp paths
+      for tp in "/mnt/c/Users/$win_user/AppData/Local/Temp" "/mnt/c/Windows/Temp"; do
+        if [[ -d "$tp" ]]; then wtemp="$tp"; break; fi
+      done
+
+      # Write the checker script
+      cat > "$wtemp/ps1-check.ps1" << 'PSCHECK'
+param([string]$Path)
+$tokens = $null
+$errors = $null
+$null = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors)
+if ($errors.Count -gt 0) {
+    Write-Host "FAIL: $($errors.Count) syntax error(s)"
+    foreach ($e in $errors) {
+        Write-Host "  Line $($e.Extent.StartLineNumber): $($e.Message)"
+    }
+} else {
+    Write-Host "PASS: PowerShell syntax OK (0 errors)"
+}
+PSCHECK
+
+      # Copy the PS1 to Windows temp (avoids WSL path issues)
+      cp "$ps1" "$wtemp/ps1-target.ps1" 2>/dev/null
+
+      # Convert paths to Windows format
+      local win_checker win_target
+      win_checker=$(wslpath -w "$wtemp/ps1-check.ps1" 2>/dev/null || echo "C:\\Windows\\Temp\\ps1-check.ps1")
+      win_target=$(wslpath -w "$wtemp/ps1-target.ps1" 2>/dev/null || echo "C:\\Windows\\Temp\\ps1-target.ps1")
+
+      local ps_result
+      ps_result=$("$win_ps" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$win_checker" -Path "$win_target" 2>&1 || true)
+
+      if echo "$ps_result" | grep -q "PASS"; then
+        record_pass "installer-windows-ps-syntax" "PowerShell parser: 0 errors"
+      elif echo "$ps_result" | grep -q "FAIL"; then
+        record_fail "installer-windows-ps-syntax" "$(echo "$ps_result" | head -2 | tail -1)"
+      else
+        record_skip "installer-windows-ps-syntax" "PowerShell check failed: $(echo "$ps_result" | head -c 80)"
+      fi
+
+      # Clean up temp files
+      rm -f "$wtemp/ps1-check.ps1" "$wtemp/ps1-target.ps1" 2>/dev/null
+    else
+      record_skip "installer-windows-ps-syntax" "Windows PowerShell not available (not WSL)"
+    fi
+
+    # Check for ExecutionPolicy
     if grep -q "ExecutionPolicy" "$ps1" 2>/dev/null; then
       record_pass "installer-windows-execpolicy" "sets ExecutionPolicy"
     else
-      record_skip "installer-windows-execpolicy" "no ExecutionPolicy (may rely on user)"
+      record_skip "installer-windows-execpolicy" "no ExecutionPolicy (script should be run with -ExecutionPolicy Bypass)"
     fi
   else
     record_fail "installer-windows-exists" "install-service-enhanced.ps1 not found"
@@ -587,12 +700,12 @@ check_docker() {
   fi
 
   # Run non-live validation (doesn't require Docker daemon)
-  if "$validate_script" --all 2>&1 | grep -qi "pass\|ok\|valid"; then
+  local docker_output
+  docker_output=$("$validate_script" --all 2>&1 || true)
+  if echo "$docker_output" | grep -qi "pass\|ok\|valid"; then
     record_pass "docker-config-validation" "config validation passed"
   else
-    local output
-    output=$("$validate_script" --all 2>&1 || true)
-    record_skip "docker-config-validation" "$(echo "$output" | tail -1 | head -c 80)"
+    record_skip "docker-config-validation" "$(echo "$docker_output" | tail -1 | head -c 80)"
   fi
 
   # Check if Docker daemon is available for live testing

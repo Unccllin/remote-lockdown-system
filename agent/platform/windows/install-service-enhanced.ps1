@@ -81,7 +81,7 @@ if (-not (Test-Path $AgentBinary)) {
         # Fall back to python agent.py
         $AgentScript = Join-Path $AgentDir "agent.py"
         if ((Test-Path $AgentScript) -and $PythonExe -and (Test-Path $PythonExe)) {
-            Write-Step "No binary found — will run agent.py via Python: $PythonExe"
+            Write-Step "No binary found -- will run agent.py via Python: $PythonExe"
             $RunViaPython = $true
         } else {
             Abort "No agent binary (dist\lockdown-agent.exe) and no Python+agent.py found under $AgentDir."
@@ -90,7 +90,7 @@ if (-not (Test-Path $AgentBinary)) {
 }
 
 # ---------------------------------------------------------------------------
-# Ensure NSSM is available — auto-download if missing
+# Ensure NSSM is available -- auto-download if missing
 # ---------------------------------------------------------------------------
 if (-not (Test-Path $NSSMPath)) {
     # Pinned SHA-256 of nssm-2.24.zip from https://nssm.cc/release/nssm-2.24.zip
@@ -98,7 +98,7 @@ if (-not (Test-Path $NSSMPath)) {
     $NSSMZip     = Join-Path $env:TEMP "nssm-2.24.zip"
     $NSSMExtract = Join-Path $env:TEMP "nssm_extract"
 
-    Write-Step "NSSM not found at $NSSMPath — downloading NSSM 2.24..."
+    Write-Step "NSSM not found at $NSSMPath -- downloading NSSM 2.24..."
     try {
         Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile $NSSMZip -UseBasicParsing
 
@@ -167,14 +167,14 @@ Write-Step "Configuring service properties..."
 & $NSSMPath set $ServiceName ObjectName   LocalSystem | Out-Null
 
 # ---------------------------------------------------------------------------
-# Restart policy — restart on failure, back off, up to MaxRestarts attempts
+# Restart policy -- restart on failure, back off, up to MaxRestarts attempts
 # ---------------------------------------------------------------------------
 Write-Step "Setting restart policy (delay=${RestartDelay}s, max attempts=${MaxRestarts})..."
 & $NSSMPath set $ServiceName AppRestartDelay ($RestartDelay * 1000) | Out-Null
 & $NSSMPath set $ServiceName AppThrottle     10000 | Out-Null
 & $NSSMPath set $ServiceName AppExit         Default Restart | Out-Null
 
-# Windows native service recovery actions (sc.exe) — restart on failure
+# Windows native service recovery actions (sc.exe) -- restart on failure
 # 3 attempts within 1 day (86400s), each delayed RestartDelay seconds.
 $recoveryConfig = "$RestartDelay/$RestartDelay/$RestartDelay/86400"
 & sc.exe failure "$ServiceName" reset= 86400 actions= restart/$RestartDelay restart/$RestartDelay restart/$RestartDelay | Out-Null
