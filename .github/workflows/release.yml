@@ -16,38 +16,79 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Run tests before releasing
+  # Run all CI gates before releasing.
+  #
+  # This job mirrors the gates in ci.yml + lint.yml: unit tests, npm audit,
+  # ESLint, ruff, pip-audit, and API E2E. Without these, a tagged release
+  # could ship with lint/audit/E2E failures that CI would have caught on PRs.
+  #
+  # Dashboard Playwright E2E and env-verify are NOT duplicated here — they
+  # are slow (Chromium install, NSIS) and are covered by ci.yml on the master
+  # push that should precede any tag. Tags should only be cut from master
+  # after CI is green.
   # ---------------------------------------------------------------------------
   test:
-    name: Tests
+    name: Tests + Lint + Audit + E2E
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # --- Server: deps + audit + lint + test ---
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: server/package-lock.json
 
-      - run: cd server && npm ci && npm test
+      - name: Server — npm audit (high+)
+        run: cd server && npm ci && npm audit --audit-level=high
 
-      # Dashboard tests — same suite ci.yml runs on PRs.
-      # Without this, a dashboard regression can ship in a tagged release.
+      - name: Server — ESLint
+        run: cd server && npx eslint src/ tests/ --max-warnings=0
+
+      - name: Server — tests
+        run: cd server && npm test
+
+      # --- Dashboard: deps + audit + lint + test ---
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
 
-      - run: cd dashboard && npm ci && npm test
+      - name: Dashboard — npm audit (with documented exceptions)
+        run: cd dashboard && npm ci && ../scripts/audit-with-exceptions.sh
 
+      - name: Dashboard — ESLint
+        run: cd dashboard && npx eslint src/ tests/ --max-warnings=0
+
+      - name: Dashboard — tests
+        run: cd dashboard && npm test
+
+      # --- Agent: deps + pip-audit + ruff + test ---
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
+          cache-dependency-path: agent/requirements.txt
 
-      - run: cd agent && pip install -r requirements.txt && pip install pytest && pytest tests/ -v
+      - name: Agent — install deps
+        run: cd agent && pip install -r requirements.txt pytest ruff pip-audit
+
+      - name: Agent — pip-audit
+        run: cd agent && pip-audit --strict
+
+      - name: Agent — ruff
+        run: cd agent && ruff check *.py tests/
+
+      - name: Agent — tests
+        run: cd agent && pytest tests/ -v
+
+      # --- API E2E (lockdown + recovery + agent integration) ---
+      # Needs server deps (jest, supertest, sqlite3) + agent deps (cryptography,
+      # requests) — both installed above. Runs against isolated SQLite temp DB.
+      - name: API E2E
+        run: scripts/run-e2e.sh --agent-integration --verbose
 
   # ---------------------------------------------------------------------------
   # Build agent binaries on all platforms/arches and publish to GitHub Release.
