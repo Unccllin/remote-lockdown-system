@@ -19,29 +19,30 @@ What this simulates:
 Usage:
   python3 simulate_lockdown.py
 """
-import sys
-import os
+
 import json
-import tempfile
+import os
 import shutil
+import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Enable dry-run mode BEFORE importing the modules
-import hp_uefi_lockdown
 import bcd_lockdown
+import hp_uefi_lockdown
 
 hp_uefi_lockdown.set_dry_run(True)
 bcd_lockdown.set_dry_run(True)
 
 # Now import the agent (it will use the dry-run modules)
-import agent
-
+import agent  # noqa: E402 -- must come after sys.path.insert above
 
 # ---------------------------------------------------------------------------
 # Simulated server state
 # ---------------------------------------------------------------------------
+
 
 class SimulatedServer:
     """Mimics the server's device/command/key/bios-password storage."""
@@ -50,11 +51,12 @@ class SimulatedServer:
         self.devices = {}
         self.commands = []
         self.encryption_keys = {}  # device_id → [keys]
-        self.bios_passwords = {}   # device_id → [passwords]
+        self.bios_passwords = {}  # device_id → [passwords]
         self.audit_log = []
 
     def register_device(self, hostname, owner_name):
         import uuid as uuid_mod
+
         dev_id = str(uuid_mod.uuid4())
         self.devices[dev_id] = {
             "id": dev_id,
@@ -70,6 +72,7 @@ class SimulatedServer:
         """Admin flags device as stolen → queues lockdown command."""
         self.devices[device_id]["status"] = "stolen"
         import uuid as uuid_mod
+
         cmd = {
             "id": str(uuid_mod.uuid4()),
             "device_id": device_id,
@@ -84,6 +87,7 @@ class SimulatedServer:
         """Admin clicks Recover → queues unlock command."""
         self.devices[device_id]["status"] = "recovering"
         import uuid as uuid_mod
+
         cmd = {
             "id": str(uuid_mod.uuid4()),
             "device_id": device_id,
@@ -136,9 +140,16 @@ class SimulatedServer:
             "command": command_response,
         }
 
-    def command_ack(self, hostname, command_id, result_status,
-                    key_material=None, bios_password=None,
-                    mac_address=None, hardware_uuid=None):
+    def command_ack(
+        self,
+        hostname,
+        command_id,
+        result_status,
+        key_material=None,
+        bios_password=None,
+        mac_address=None,
+        hardware_uuid=None,
+    ):
         """Agent ACKs a command → server stores key + bios_password, updates status."""
         device = None
         for d in self.devices.values():
@@ -172,12 +183,14 @@ class SimulatedServer:
             elif cmd_type == "unlock":
                 device["status"] = "active"
 
-        self.audit_log.append({
-            "action": f"agent_{cmd_type}_confirmed",
-            "device_id": device["id"],
-            "key_stored": bool(key_material),
-            "bios_password_stored": bool(bios_password),
-        })
+        self.audit_log.append(
+            {
+                "action": f"agent_{cmd_type}_confirmed",
+                "device_id": device["id"],
+                "key_stored": bool(key_material),
+                "bios_password_stored": bool(bios_password),
+            }
+        )
 
         return {"ok": True}
 
@@ -193,6 +206,7 @@ class SimulatedServer:
 # ---------------------------------------------------------------------------
 # Simulated agent (mocks network calls, uses real boot-lock modules in dry-run)
 # ---------------------------------------------------------------------------
+
 
 class SimulatedAgent:
     """Wraps the real agent logic but intercepts network calls."""
@@ -268,11 +282,12 @@ class SimulatedAgent:
         # ACK with key + bios_password
         key_b64 = key.decode()
         self.ack_command(
-            command["id"], "executed",
+            command["id"],
+            "executed",
             key_material=key_b64,
             bios_password=bios_password,
         )
-        print(f"  ACK sent to server (key + bios_password transmitted)")
+        print("  ACK sent to server (key + bios_password transmitted)")
         del key, key_b64
 
     def run_unlock(self, command):
@@ -302,7 +317,7 @@ class SimulatedAgent:
         # Remove sentinel
         if sentinel.exists():
             sentinel.unlink()
-            print(f"  Sentinel removed")
+            print("  Sentinel removed")
 
         # Remove BCD lockdown
         print("  Removing BCD lockdown...")
@@ -311,14 +326,14 @@ class SimulatedAgent:
 
         # Remove UEFI lockdown
         if bios_password:
-            print(f"  Removing UEFI lockdown (using bios_password from server)...")
+            print("  Removing UEFI lockdown (using bios_password from server)...")
             uefi_result = hp_uefi_lockdown.remove_boot_lockdown(bios_password)
             print(f"  UEFI lockdown removal: {'SUCCESS' if uefi_result else 'FAILED'}")
         else:
             print("  [WARN] No BIOS password in unlock command — cannot remove UEFI lockdown")
 
         self.ack_command(command["id"], "executed")
-        print(f"  ACK sent to server")
+        print("  ACK sent to server")
 
     def poll_and_execute(self):
         """One polling cycle — checkin and execute any pending command."""
@@ -327,7 +342,10 @@ class SimulatedAgent:
             print(f"  [CHECKIN] {data}")
             return data
 
-        print(f"  [CHECKIN] status={data['status']}, command={'pending' if data.get('command') else 'none'}")
+        print(
+            f"  [CHECKIN] status={data['status']}, "
+            f"command={'pending' if data.get('command') else 'none'}"
+        )
 
         command = data.get("command")
         if command:
@@ -345,6 +363,7 @@ class SimulatedAgent:
 # ---------------------------------------------------------------------------
 # Simulation runner
 # ---------------------------------------------------------------------------
+
 
 def simulate_reboot():
     """Simulate a reboot — show what boot paths are available."""
@@ -436,7 +455,9 @@ def run_simulation():
         print(f"  PXE Boot: {hp_uefi_lockdown._read_setting('Network (PXE) Boot')}")
         print(f"  WinRE enabled: {bcd_lockdown._is_winre_enabled()}")
         assert not hp_uefi_lockdown._is_setup_password_set(), "Password should not be set initially"
-        assert hp_uefi_lockdown._read_setting("USB Boot") == "Enable", "USB should be enabled initially"
+        assert hp_uefi_lockdown._read_setting("USB Boot") == "Enable", (
+            "USB should be enabled initially"
+        )
         print("  ✓ Initial state correct (everything unlocked)")
 
         # --- Phase 3: Admin flags device as stolen ---
@@ -452,8 +473,11 @@ def run_simulation():
         print("\n[Phase 5] Verifying lockdown state...")
         print(f"  Device status: {server.devices[device['id']]['status']}")
         print(f"  Encryption key stored on server: {bool(server.get_stored_key(device['id']))}")
-        print(f"  BIOS password stored on server: {bool(server.get_stored_bios_password(device['id']))}")
-        stored_pw = server.get_stored_bios_password(device['id'])
+        print(
+            f"  BIOS password stored on server: "
+            f"{bool(server.get_stored_bios_password(device['id']))}"
+        )
+        stored_pw = server.get_stored_bios_password(device["id"])
         print(f"  Stored BIOS password: {stored_pw}")
 
         assert server.devices[device["id"]]["status"] == "locked", "Device should be locked"
@@ -469,7 +493,10 @@ def run_simulation():
         print("\n[Phase 7] Admin clicks RECOVER DEVICE...")
         cmd = server.recover_device(device["id"])
         print(f"  Unlock command queued: {cmd['id']}")
-        print(f"  Server will send BIOS password with unlock: {server.get_stored_bios_password(device['id'])}")
+        print(
+            f"  Server will send BIOS password with unlock: "
+            f"{server.get_stored_bios_password(device['id'])}"
+        )
 
         # --- Phase 8: Agent polls and executes unlock ---
         print("\n[Phase 8] Agent checks in and executes unlock...")
@@ -535,6 +562,7 @@ def run_simulation():
     except Exception as e:
         print(f"\n  ✗ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
     finally:

@@ -91,6 +91,7 @@ def set_dry_run(enabled: bool) -> None:
 # Admin check (Phase 4.1 — fail-fast before any state writes)
 # ---------------------------------------------------------------------------
 
+
 def _is_admin() -> bool:
     """Check if the current process has admin/elevation privileges.
 
@@ -121,6 +122,7 @@ def _is_admin() -> bool:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _run(cmd: list[str], timeout: int = 15) -> tuple[int, str, str]:
     """Run a command, return (returncode, stdout, stderr)."""
@@ -180,14 +182,13 @@ def _is_windows() -> bool:
 # BCD setting read/verify (Phase 4.5 — verification re-reads)
 # ---------------------------------------------------------------------------
 
+
 def _read_bcd_setting(setting: str) -> str | None:
     """Read the current value of a BCD setting from {default} loader.
 
     Returns the value string, or None if the read fails.
     """
-    rc, stdout, stderr = _run([
-        "bcdedit", "/query", "{default}", setting
-    ])
+    rc, stdout, stderr = _run(["bcdedit", "/query", "{default}", setting])
     if rc != 0:
         log.debug("bcdedit /query %s failed: %s", setting, stderr)
         return None
@@ -209,9 +210,7 @@ def _set_bcd_setting(setting: str, value: str) -> bool:
 
     Returns True if the setting was applied AND verified, False otherwise.
     """
-    rc, _, stderr = _run([
-        "bcdedit", "/set", "{default}", setting, value
-    ])
+    rc, _, stderr = _run(["bcdedit", "/set", "{default}", setting, value])
     if rc != 0:
         log.warning("bcdedit /set %s %s failed: %s", setting, value, stderr)
         return False
@@ -223,8 +222,7 @@ def _set_bcd_setting(setting: str, value: str) -> bool:
         return False
     if current.lower() != value.lower():
         log.warning(
-            "BCD setting %s verification failed: expected '%s', got '%s'",
-            setting, value, current
+            "BCD setting %s verification failed: expected '%s', got '%s'", setting, value, current
         )
         return False
 
@@ -271,6 +269,7 @@ BCD_RESTORE_COMMANDS = [
 # WinRE control
 # ---------------------------------------------------------------------------
 
+
 def _disable_winre() -> bool:
     """Disable Windows Recovery Environment."""
     rc, _, stderr = _run(["reagentc", "/disable"])
@@ -305,6 +304,7 @@ def _is_winre_enabled() -> bool:
 # BCD state save/restore (Phase 4.2)
 # ---------------------------------------------------------------------------
 
+
 def save_bcd_state() -> dict:
     """Save pre-lockdown BCD state to a file for later restoration.
 
@@ -320,10 +320,9 @@ def save_bcd_state() -> dict:
     }
 
     # Save current values of all settings we modify
-    all_settings = (
-        [s for s, _, _ in BCD_CRITICAL_COMMANDS] +
-        [s for s, _, _ in BCD_BEST_EFFORT_COMMANDS]
-    )
+    all_settings = [s for s, _, _ in BCD_CRITICAL_COMMANDS] + [
+        s for s, _, _ in BCD_BEST_EFFORT_COMMANDS
+    ]
     for setting in all_settings:
         current = _read_bcd_setting(setting)
         if current is not None:
@@ -356,6 +355,7 @@ def clear_bcd_state() -> None:
 # Rollback (CC18 — on critical failure, restore BCD to pre-lockdown state)
 # ---------------------------------------------------------------------------
 
+
 def _rollback_bcd(state: dict) -> bool:
     """Restore BCD settings to pre-lockdown values.
 
@@ -379,15 +379,15 @@ def _rollback_bcd(state: dict) -> bool:
     # Restore BCD settings to their original values
     saved_settings = state.get("settings", {})
     for setting, original_value in saved_settings.items():
-        rc, _, stderr = _run([
-            "bcdedit", "/set", "{default}", setting, original_value
-        ])
+        rc, _, stderr = _run(["bcdedit", "/set", "{default}", setting, original_value])
         if rc == 0:
             log.info("Rollback: %s → %s (restored)", setting, original_value)
         else:
             log.error(
                 "Rollback: failed to restore %s to '%s': %s — non-fatal, continuing",
-                setting, original_value, stderr
+                setting,
+                original_value,
+                stderr,
             )
             all_ok = False
 
@@ -404,6 +404,7 @@ def _rollback_bcd(state: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Public API: apply / remove BCD lockdown
 # ---------------------------------------------------------------------------
+
 
 def apply_bcd_lockdown() -> dict:
     """Apply BCD hardening to prevent Safe Mode / WinRE / recovery bypass.
@@ -473,7 +474,7 @@ def apply_bcd_lockdown() -> dict:
     if critical_failed > 0:
         log.error(
             "BCD lockdown: %d critical setting(s) failed — rolling back all changes",
-            critical_failed
+            critical_failed,
         )
         _rollback_bcd(state)  # non-fatal rollback
         result["rolled_back"] = True
@@ -495,7 +496,9 @@ def apply_bcd_lockdown() -> dict:
     BCD_LOCK_SENTINEL.write_text("locked")
     log.info(
         "BCD lockdown applied: %d critical, %d best-effort succeeded, %d best-effort failed",
-        critical_applied, best_effort_applied, best_effort_failed
+        critical_applied,
+        best_effort_applied,
+        best_effort_failed,
     )
 
     result["success"] = True
@@ -539,9 +542,7 @@ def remove_bcd_lockdown() -> bool:
 
         # Restore BCD settings to their original values
         for setting, original_value in saved_settings.items():
-            rc, _, stderr = _run([
-                "bcdedit", "/set", "{default}", setting, original_value
-            ])
+            rc, _, stderr = _run(["bcdedit", "/set", "{default}", setting, original_value])
             if rc == 0:
                 restored += 1
                 log.info("BCD restored: %s → %s", setting, original_value)
@@ -561,9 +562,7 @@ def remove_bcd_lockdown() -> bool:
         # No saved state — use safe defaults
         log.warning("No saved BCD state — restoring to safe defaults")
         for setting, value, description in BCD_RESTORE_COMMANDS:
-            rc, _, stderr = _run([
-                "bcdedit", "/set", "{default}", setting, value
-            ])
+            rc, _, stderr = _run(["bcdedit", "/set", "{default}", setting, value])
             if rc == 0:
                 restored += 1
                 log.info("BCD restored: %s", description)

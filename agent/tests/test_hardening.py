@@ -16,24 +16,25 @@ Tests import functions directly from agent.py — no running server required.
 import json
 import os
 import shutil
+
+# agent.py lives in the parent directory
+import sys
 import tempfile
 import threading
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
 
-# agent.py lives in the parent directory
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import agent
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def tmp_folder():
@@ -90,6 +91,7 @@ def cleanup_guardian():
 # Fernet key generation
 # ---------------------------------------------------------------------------
 
+
 class TestKeyGeneration:
     def test_generate_key_produces_valid_fernet_key(self):
         """generate_key() must return a valid Fernet key (not raw os.urandom)."""
@@ -113,6 +115,7 @@ class TestKeyGeneration:
         decoded = Fernet._fernet_from_key.__self__ if False else None  # noqa
         # Decode the base64 key to verify it's 32 bytes
         import base64
+
         raw = base64.urlsafe_b64decode(key)
         assert len(raw) == 32
 
@@ -120,6 +123,7 @@ class TestKeyGeneration:
 # ---------------------------------------------------------------------------
 # Key wipe
 # ---------------------------------------------------------------------------
+
 
 class TestKeyWipe:
     def test_wipe_key_zeroes_bytearray(self):
@@ -146,15 +150,18 @@ class TestKeyWipe:
 # Concurrent lockdown idempotency
 # ---------------------------------------------------------------------------
 
+
 class TestConcurrentLockdownIdempotency:
     def test_handle_lockdown_skips_if_sentinel_exists(self, cfg, tmp_sentinel):
         """If sentinel already exists, handle_lockdown must NOT re-encrypt."""
         # Simulate a prior lockdown: sentinel exists
         tmp_sentinel.write_text(json.dumps({"locked": True}))
 
-        with patch.object(agent, 'ack_command') as mock_ack, \
-             patch.object(agent, 'encrypt_folder') as mock_encrypt, \
-             patch.object(agent, 'apply_lock_screen') as mock_lock:
+        with (
+            patch.object(agent, "ack_command") as mock_ack,
+            patch.object(agent, "encrypt_folder") as mock_encrypt,
+            patch.object(agent, "apply_lock_screen") as mock_lock,
+        ):
             agent.handle_lockdown(cfg, {"id": "cmd-1"})
 
             # Should ACK as executed without encrypting or locking
@@ -162,7 +169,9 @@ class TestConcurrentLockdownIdempotency:
             mock_encrypt.assert_not_called()
             mock_lock.assert_not_called()
 
-    def test_concurrent_handle_lockdown_does_not_double_encrypt(self, cfg, tmp_folder, tmp_sentinel):
+    def test_concurrent_handle_lockdown_does_not_double_encrypt(
+        self, cfg, tmp_folder, tmp_sentinel
+    ):
         """Two concurrent handle_lockdown calls must not both encrypt.
 
         The sentinel guard ensures only the first call encrypts; the second
@@ -173,8 +182,6 @@ class TestConcurrentLockdownIdempotency:
 
         def counting_encrypt(folder, key):
             call_count["encrypt"] += 1
-            # Simulate the real encrypt_folder behavior for the first call
-            real_encrypt = agent.__dict__.get('encrypt_folder')
             # Call the original via Fernet directly (avoid recursion)
             fernet = Fernet(key)
             for filepath in folder.rglob("*"):
@@ -185,12 +192,14 @@ class TestConcurrentLockdownIdempotency:
                         enc_path.write_bytes(fernet.encrypt(data))
                         filepath.unlink()
 
-        with patch.object(agent, 'ack_command', return_value=True), \
-             patch.object(agent, 'apply_lock_screen'), \
-             patch.object(agent, 'start_lock_guardian'), \
-             patch.object(agent, 'write_pending_ack'), \
-             patch.object(agent, 'write_recovery_key'), \
-             patch.object(agent, 'encrypt_folder', side_effect=counting_encrypt):
+        with (
+            patch.object(agent, "ack_command", return_value=True),
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "write_pending_ack"),
+            patch.object(agent, "write_recovery_key"),
+            patch.object(agent, "encrypt_folder", side_effect=counting_encrypt),
+        ):
             # First lockdown — should encrypt
             agent.handle_lockdown(cfg, {"id": "cmd-1"})
             assert call_count["encrypt"] == 1
@@ -216,12 +225,14 @@ class TestConcurrentLockdownIdempotency:
             # Write sentinel immediately to simulate the guard
             tmp_sentinel.write_text(json.dumps({"locked": True}))
 
-        with patch.object(agent, 'ack_command', return_value=True), \
-             patch.object(agent, 'apply_lock_screen'), \
-             patch.object(agent, 'start_lock_guardian'), \
-             patch.object(agent, 'write_pending_ack'), \
-             patch.object(agent, 'write_recovery_key'), \
-             patch.object(agent, 'encrypt_folder', side_effect=tracking_encrypt):
+        with (
+            patch.object(agent, "ack_command", return_value=True),
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "write_pending_ack"),
+            patch.object(agent, "write_recovery_key"),
+            patch.object(agent, "encrypt_folder", side_effect=tracking_encrypt),
+        ):
             threads = []
             for i in range(5):
                 t = threading.Thread(
@@ -242,6 +253,7 @@ class TestConcurrentLockdownIdempotency:
 # ---------------------------------------------------------------------------
 # Decryption with wrong key
 # ---------------------------------------------------------------------------
+
 
 class TestDecryptionWrongKey:
     def test_decrypt_folder_with_wrong_key_raises_invalid_token(self, tmp_folder):
@@ -285,6 +297,7 @@ class TestDecryptionWrongKey:
 # Config validation
 # ---------------------------------------------------------------------------
 
+
 class TestConfigValidation:
     def test_invalid_server_url_raises_error(self, cfg):
         """validate_config must reject an invalid SERVER_URL."""
@@ -319,6 +332,7 @@ class TestConfigValidation:
 # ---------------------------------------------------------------------------
 # File encryption partial failure tracking (resumable encryption)
 # ---------------------------------------------------------------------------
+
 
 class TestPartialFailureTracking:
     def test_encrypt_folder_resumes_after_partial_failure(self, tmp_folder):

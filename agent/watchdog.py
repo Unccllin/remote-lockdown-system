@@ -15,20 +15,22 @@ INSTALL AS SERVICE:
   Use install_watchdog_service.ps1 (run as Administrator)
 """
 
+import logging
 import os
+import signal
+import subprocess
 import sys
 import time
-import logging
-import subprocess
-import signal
 from pathlib import Path
+
 
 # ---------------------------------------------------------------------------
 # Frozen-mode detection (PyInstaller bundle)
 # ---------------------------------------------------------------------------
 def _is_frozen():
     """Check if the watchdog is running as a PyInstaller bundle."""
-    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+    return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -37,7 +39,7 @@ def _is_frozen():
 # When running from source, we launch agent.py via the Python interpreter.
 if _is_frozen():
     _EXE_DIR = Path(sys.executable).parent
-    AGENT_BIN = _EXE_DIR / ('lockdown-agent.exe' if sys.platform == 'win32' else 'lockdown-agent')
+    AGENT_BIN = _EXE_DIR / ("lockdown-agent.exe" if sys.platform == "win32" else "lockdown-agent")
     AGENT_SCRIPT = AGENT_BIN  # Unified name (binary path either way)
     LAUNCH_VIA_PYTHON = False
 else:
@@ -48,17 +50,17 @@ else:
 # agent.py uses _STATE_DIR (platform-specific system dir when frozen,
 # script dir when running from source). We replicate that logic here.
 if _is_frozen():
-    if sys.platform == 'win32':
-        _STATE_DIR = Path(os.environ.get('PROGRAMDATA', 'C:\\ProgramData')) / 'LockdownAgent'
+    if sys.platform == "win32":
+        _STATE_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
     else:
-        _STATE_DIR = Path('/var/lib/lockdown-agent')
+        _STATE_DIR = Path("/var/lib/lockdown-agent")
 else:
     _STATE_DIR = Path(__file__).parent
 HEARTBEAT_FILE = _STATE_DIR / ".heartbeat"
 
-HEARTBEAT_MAX_AGE_SEC = 120   # Restart agent if no heartbeat for 2 minutes
-CHECK_INTERVAL_SEC    = 30    # How often watchdog checks the heartbeat
-PYTHON_EXE      = sys.executable
+HEARTBEAT_MAX_AGE_SEC = 120  # Restart agent if no heartbeat for 2 minutes
+CHECK_INTERVAL_SEC = 30  # How often watchdog checks the heartbeat
+PYTHON_EXE = sys.executable
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -74,6 +76,7 @@ log = logging.getLogger("watchdog")
 # Agent process management
 # ---------------------------------------------------------------------------
 _agent_proc: subprocess.Popen | None = None
+
 
 def start_agent() -> subprocess.Popen:
     if LAUNCH_VIA_PYTHON:
@@ -91,6 +94,7 @@ def start_agent() -> subprocess.Popen:
     log.info("Agent started — PID %d", proc.pid)
     return proc
 
+
 def stop_agent(proc: subprocess.Popen) -> None:
     if proc and proc.poll() is None:
         log.warning("Stopping agent PID %d", proc.pid)
@@ -101,11 +105,13 @@ def stop_agent(proc: subprocess.Popen) -> None:
             proc.kill()
             log.warning("Agent killed (did not terminate gracefully)")
 
+
 def is_heartbeat_stale() -> bool:
     if not HEARTBEAT_FILE.exists():
         return False  # Agent hasn't written one yet (just started)
     age = time.time() - HEARTBEAT_FILE.stat().st_mtime
     return age > HEARTBEAT_MAX_AGE_SEC
+
 
 # ---------------------------------------------------------------------------
 # Auto-update support (Phase 4)
@@ -114,8 +120,8 @@ def is_heartbeat_stale() -> bool:
 # The agent downloads a new binary and writes .update_pending + .update_downloaded.
 # The watchdog detects this, stops the agent, replaces the binary, and restarts.
 
-UPDATE_PENDING_FILE = _STATE_DIR / '.update_pending'
-UPDATE_DOWNLOAD_FILE = _STATE_DIR / '.update_downloaded'
+UPDATE_PENDING_FILE = _STATE_DIR / ".update_pending"
+UPDATE_DOWNLOAD_FILE = _STATE_DIR / ".update_downloaded"
 
 
 def check_and_apply_update() -> bool:
@@ -123,10 +129,12 @@ def check_and_apply_update() -> bool:
 
     Returns True if an update was applied (agent was stopped and restarted).
     """
+    global _agent_proc
     if not UPDATE_PENDING_FILE.exists():
         return False
 
     import json
+
     try:
         signal = json.loads(UPDATE_PENDING_FILE.read_text())
     except Exception as e:
@@ -134,8 +142,8 @@ def check_and_apply_update() -> bool:
         UPDATE_PENDING_FILE.unlink(missing_ok=True)
         return False
 
-    download_path = signal.get('download_path', str(UPDATE_DOWNLOAD_FILE))
-    version = signal.get('version', 'unknown')
+    download_path = signal.get("download_path", str(UPDATE_DOWNLOAD_FILE))
+    version = signal.get("version", "unknown")
 
     log.info("Update pending: version %s, binary at %s", version, download_path)
 
@@ -153,8 +161,9 @@ def check_and_apply_update() -> bool:
         # On Windows, we can't overwrite a running .exe, but we already
         # stopped the process above. On Linux, this is straightforward.
         import shutil
+
         target = AGENT_SCRIPT
-        backup = AGENT_SCRIPT.with_suffix('.bak')
+        backup = AGENT_SCRIPT.with_suffix(".bak")
 
         # Back up the current binary
         if target.exists():
@@ -164,18 +173,20 @@ def check_and_apply_update() -> bool:
         shutil.move(str(download_path), str(target))
 
         # Make it executable (Linux/macOS)
-        if sys.platform != 'win32':
+        if sys.platform != "win32":
             import os
-            os.chmod(str(target), 0o755)
+
+            os.chmod(str(target), 0o755)  # noqa: S103 -- 0o755 is the correct permission for an executable binary
 
         log.info("Agent binary updated to version %s", version)
 
     except Exception as e:
         log.error("Failed to apply update: %s — restoring backup", e)
         # Try to restore the backup
-        backup = AGENT_SCRIPT.with_suffix('.bak')
+        backup = AGENT_SCRIPT.with_suffix(".bak")
         if backup.exists():
             import shutil
+
             shutil.move(str(backup), str(AGENT_SCRIPT))
         UPDATE_PENDING_FILE.unlink(missing_ok=True)
         _agent_proc = start_agent()
@@ -183,23 +194,26 @@ def check_and_apply_update() -> bool:
 
     # Clean up signal and backup
     UPDATE_PENDING_FILE.unlink(missing_ok=True)
-    backup = AGENT_SCRIPT.with_suffix('.bak')
+    backup = AGENT_SCRIPT.with_suffix(".bak")
     if backup.exists():
         backup.unlink(missing_ok=True)
 
     log.info("Update applied successfully — starting new agent")
     return True
 
+
 # ---------------------------------------------------------------------------
 # Main watchdog loop
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     global _agent_proc
 
     log.info("Watchdog starting — monitoring %s", AGENT_SCRIPT)
-    log.info("Heartbeat timeout: %ds | Check interval: %ds",
-             HEARTBEAT_MAX_AGE_SEC, CHECK_INTERVAL_SEC)
+    log.info(
+        "Heartbeat timeout: %ds | Check interval: %ds", HEARTBEAT_MAX_AGE_SEC, CHECK_INTERVAL_SEC
+    )
 
     if not AGENT_SCRIPT.exists():
         log.error("Agent not found at %s — exiting", AGENT_SCRIPT)
@@ -241,6 +255,7 @@ def main() -> None:
             continue
 
         log.info("Agent healthy — PID %d", _agent_proc.pid)
+
 
 if __name__ == "__main__":
     main()

@@ -15,24 +15,22 @@ Phase 4 tests cover:
 """
 
 import json
+import sys
 import tempfile
-import shutil
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call
-from unittest import mock
+from unittest.mock import patch
 
 import pytest
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import hp_uefi_lockdown
 import bcd_lockdown
-
+import hp_uefi_lockdown
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def tmp_state_file():
@@ -80,8 +78,8 @@ def tmp_bcd_files(tmp_bcd_sentinel, tmp_bcd_state_file):
 # HP UEFI Lockdown Tests
 # ---------------------------------------------------------------------------
 
-class TestHpUefiLockdown:
 
+class TestHpUefiLockdown:
     def test_generate_bios_password_length(self):
         pw = hp_uefi_lockdown.generate_bios_password()
         assert len(pw) == 12
@@ -100,51 +98,51 @@ class TestHpUefiLockdown:
         pw2 = hp_uefi_lockdown.generate_bios_password()
         assert pw1 != pw2  # extremely unlikely to collide
 
-    @patch('hp_uefi_lockdown.platform.system', return_value='Linux')
+    @patch("hp_uefi_lockdown.platform.system", return_value="Linux")
     def test_is_hp_machine_not_windows(self, _):
         assert hp_uefi_lockdown.is_hp_machine() is False
 
-    @patch('hp_uefi_lockdown.platform.system', return_value='Windows')
-    @patch('hp_uefi_lockdown._run_powershell', return_value='')
+    @patch("hp_uefi_lockdown.platform.system", return_value="Windows")
+    @patch("hp_uefi_lockdown._run_powershell", return_value="")
     def test_is_hp_machine_no_wmi(self, mock_ps, _):
         assert hp_uefi_lockdown.is_hp_machine() is False
 
-    @patch('hp_uefi_lockdown.platform.system', return_value='Windows')
-    @patch('hp_uefi_lockdown._run_powershell', return_value='Fast Boot')
+    @patch("hp_uefi_lockdown.platform.system", return_value="Windows")
+    @patch("hp_uefi_lockdown._run_powershell", return_value="Fast Boot")
     def test_is_hp_machine_with_wmi(self, mock_ps, _):
         assert hp_uefi_lockdown.is_hp_machine() is True
 
-    @patch('hp_uefi_lockdown._run_powershell')
+    @patch("hp_uefi_lockdown._run_powershell")
     def test_read_setting_found_in_enumeration(self, mock_ps):
         mock_ps.return_value = "Disable"
         result = hp_uefi_lockdown._read_setting("Network (PXE) Boot")
         assert result == "Disable"
 
-    @patch('hp_uefi_lockdown._run_powershell')
+    @patch("hp_uefi_lockdown._run_powershell")
     def test_read_setting_not_found(self, mock_ps):
         mock_ps.return_value = ""
         result = hp_uefi_lockdown._read_setting("Nonexistent Setting")
         assert result is None
 
-    @patch('hp_uefi_lockdown._run_powershell')
+    @patch("hp_uefi_lockdown._run_powershell")
     def test_set_setting_success(self, mock_ps):
         # _set_setting returns the WMI return code
         mock_ps.return_value = "0"
         rc = hp_uefi_lockdown._set_setting("Fast Boot", "Enable", "mypassword")
         assert rc == 0
 
-    @patch('hp_uefi_lockdown._run_powershell')
+    @patch("hp_uefi_lockdown._run_powershell")
     def test_set_setting_access_denied(self, mock_ps):
         mock_ps.return_value = "6"
         rc = hp_uefi_lockdown._set_setting("Fast Boot", "Enable", "wrongpassword")
         assert rc == 6
 
-    @patch('hp_uefi_lockdown._run_powershell')
+    @patch("hp_uefi_lockdown._run_powershell")
     def test_is_setup_password_set_true(self, mock_ps):
         mock_ps.return_value = "1"
         assert hp_uefi_lockdown._is_setup_password_set() is True
 
-    @patch('hp_uefi_lockdown._run_powershell')
+    @patch("hp_uefi_lockdown._run_powershell")
     def test_is_setup_password_set_false(self, mock_ps):
         mock_ps.return_value = "0"
         assert hp_uefi_lockdown._is_setup_password_set() is False
@@ -169,8 +167,8 @@ class TestHpUefiLockdown:
 
     # --- Phase 4: _is_admin() check ---
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=False)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
+    @patch("hp_uefi_lockdown._is_admin", return_value=False)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
     def test_apply_boot_lockdown_not_admin_fail_fast(self, _, __):
         """Phase 4.1: Admin check fails fast before any state writes."""
         result = hp_uefi_lockdown.apply_boot_lockdown()
@@ -180,26 +178,26 @@ class TestHpUefiLockdown:
 
     # --- Phase 4: dict return type ---
 
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=False)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=False)
     def test_apply_boot_lockdown_not_hp(self, _):
         result = hp_uefi_lockdown.apply_boot_lockdown()
         assert result["not_hp"] is True
         assert result["success"] is True  # not an error
         assert result["bios_password"] is None
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=True)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
-    @patch('hp_uefi_lockdown._is_setup_password_set', return_value=True)
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=True)
     def test_apply_boot_lockdown_password_set_but_not_provided(self, _, __, ___):
         result = hp_uefi_lockdown.apply_boot_lockdown(existing_password=None)
         assert result["success"] is False
         assert result["bios_password"] is None  # can't proceed
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=True)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
-    @patch('hp_uefi_lockdown._is_setup_password_set', return_value=False)
-    @patch('hp_uefi_lockdown._set_setting')
-    @patch('hp_uefi_lockdown._read_setting')
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=False)
+    @patch("hp_uefi_lockdown._set_setting")
+    @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_generates_password(
         self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
     ):
@@ -209,8 +207,11 @@ class TestHpUefiLockdown:
         mock_set.return_value = 0
         # Track read calls: state save + apply loop = old value, verification = lockdown value
         read_counts = {}
+
         def smart_read(name):
-            for sname, sval in hp_uefi_lockdown.HP_CRITICAL_SETTINGS + hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS:
+            for sname, sval in (
+                hp_uefi_lockdown.HP_CRITICAL_SETTINGS + hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS
+            ):
                 if name == sname:
                     count = read_counts.get(name, 0)
                     read_counts[name] = count + 1
@@ -218,6 +219,7 @@ class TestHpUefiLockdown:
                         return "Enable" if sval == "Disable" else "Disable"
                     return sval
             return None
+
         mock_read.side_effect = smart_read
 
         result = hp_uefi_lockdown.apply_boot_lockdown(existing_password=None)
@@ -229,11 +231,11 @@ class TestHpUefiLockdown:
         first_call = mock_set.call_args_list[0]
         assert first_call.args[0] == "Setup Password"
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=True)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
-    @patch('hp_uefi_lockdown._is_setup_password_set', return_value=True)
-    @patch('hp_uefi_lockdown._set_setting')
-    @patch('hp_uefi_lockdown._read_setting')
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=True)
+    @patch("hp_uefi_lockdown._set_setting")
+    @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_with_existing_password(
         self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
     ):
@@ -243,8 +245,11 @@ class TestHpUefiLockdown:
         # Call 1: apply loop check → return old value (so _set_and_verify is called)
         # Call 2+: verification re-read → return lockdown value
         read_counts = {}
+
         def smart_read(name):
-            for sname, sval in hp_uefi_lockdown.HP_CRITICAL_SETTINGS + hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS:
+            for sname, sval in (
+                hp_uefi_lockdown.HP_CRITICAL_SETTINGS + hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS
+            ):
                 if name == sname:
                     count = read_counts.get(name, 0)
                     read_counts[name] = count + 1
@@ -255,6 +260,7 @@ class TestHpUefiLockdown:
                         # Verification re-read: return lockdown value
                         return sval
             return None
+
         mock_read.side_effect = smart_read
 
         result = hp_uefi_lockdown.apply_boot_lockdown(existing_password="existingpw")
@@ -265,18 +271,21 @@ class TestHpUefiLockdown:
         first_call = mock_set.call_args_list[0]
         assert first_call.args[0] != "Setup Password"
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=True)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
-    @patch('hp_uefi_lockdown._is_setup_password_set', return_value=False)
-    @patch('hp_uefi_lockdown._set_setting')
-    @patch('hp_uefi_lockdown._read_setting')
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=False)
+    @patch("hp_uefi_lockdown._set_setting")
+    @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_saves_state(
         self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
     ):
         mock_set.return_value = 0
         read_counts = {}
+
         def smart_read(name):
-            for sname, sval in hp_uefi_lockdown.HP_CRITICAL_SETTINGS + hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS:
+            for sname, sval in (
+                hp_uefi_lockdown.HP_CRITICAL_SETTINGS + hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS
+            ):
                 if name == sname:
                     count = read_counts.get(name, 0)
                     read_counts[name] = count + 1
@@ -284,6 +293,7 @@ class TestHpUefiLockdown:
                         return "Enable" if sval == "Disable" else "Disable"
                     return sval
             return None
+
         mock_read.side_effect = smart_read
 
         hp_uefi_lockdown.apply_boot_lockdown(existing_password=None)
@@ -293,21 +303,25 @@ class TestHpUefiLockdown:
         assert state["setup_password_was_set"] is False
         assert "settings" in state
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=True)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
-    @patch('hp_uefi_lockdown._is_setup_password_set', return_value=False)
-    @patch('hp_uefi_lockdown._set_setting')
-    @patch('hp_uefi_lockdown._read_setting')
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=False)
+    @patch("hp_uefi_lockdown._set_setting")
+    @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_skips_already_correct_settings(
         self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
     ):
         mock_set.return_value = 0
+
         # All settings already in lockdown state — return lockdown value on ALL reads
         def read_side_effect(name):
-            for sname, sval in hp_uefi_lockdown.HP_CRITICAL_SETTINGS + hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS:
+            for sname, sval in (
+                hp_uefi_lockdown.HP_CRITICAL_SETTINGS + hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS
+            ):
                 if name == sname:
                     return sval
             return None
+
         mock_read.side_effect = read_side_effect
 
         result = hp_uefi_lockdown.apply_boot_lockdown(existing_password=None)
@@ -317,20 +331,22 @@ class TestHpUefiLockdown:
 
     # --- Phase 4: Critical failure + rollback (CC18) ---
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=True)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
-    @patch('hp_uefi_lockdown._is_setup_password_set', return_value=False)
-    @patch('hp_uefi_lockdown._set_setting')
-    @patch('hp_uefi_lockdown._read_setting')
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=False)
+    @patch("hp_uefi_lockdown._set_setting")
+    @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_critical_failure_triggers_rollback(
         self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
     ):
         """CC18: Critical failure triggers rollback of all BIOS changes."""
+
         # Setup Password succeeds (returns 0)
         # Critical settings: _set_setting returns 0 but _read_setting returns
         # the OLD value (verification fails) → critical failure
         def set_side_effect(name, value, password):
             return 0  # set always "succeeds" at the WMI level
+
         mock_set.side_effect = set_side_effect
 
         def read_side_effect(name):
@@ -344,6 +360,7 @@ class TestHpUefiLockdown:
                 if name == sname:
                     return sval  # best-effort verifies OK
             return None
+
         mock_read.side_effect = read_side_effect
 
         result = hp_uefi_lockdown.apply_boot_lockdown(existing_password=None)
@@ -354,18 +371,20 @@ class TestHpUefiLockdown:
         assert result["bios_password"] is not None
         assert len(result["bios_password"]) == 12
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=True)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
-    @patch('hp_uefi_lockdown._is_setup_password_set', return_value=False)
-    @patch('hp_uefi_lockdown._set_setting')
-    @patch('hp_uefi_lockdown._read_setting')
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=False)
+    @patch("hp_uefi_lockdown._set_setting")
+    @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_rollback_does_not_clear_password(
         self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
     ):
         """CC18: Rollback must NOT clear the freshly-set Setup Password."""
+
         # Make all critical settings fail verification
         def set_side_effect(name, value, password):
             return 0
+
         mock_set.side_effect = set_side_effect
 
         def read_side_effect(name):
@@ -375,6 +394,7 @@ class TestHpUefiLockdown:
                 if name == sname:
                     return "Enable" if sval == "Disable" else "Disable"
             return None
+
         mock_read.side_effect = read_side_effect
 
         hp_uefi_lockdown.apply_boot_lockdown(existing_password=None)
@@ -387,11 +407,11 @@ class TestHpUefiLockdown:
         assert len(setup_pw_calls) == 1
         assert setup_pw_calls[0].args[1] != ""  # setting, not clearing
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=True)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
-    @patch('hp_uefi_lockdown._is_setup_password_set', return_value=False)
-    @patch('hp_uefi_lockdown._set_setting')
-    @patch('hp_uefi_lockdown._read_setting')
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=False)
+    @patch("hp_uefi_lockdown._set_setting")
+    @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_best_effort_failure_no_rollback(
         self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
     ):
@@ -410,6 +430,7 @@ class TestHpUefiLockdown:
                 if name == sname:
                     return "Enable" if sval == "Disable" else "Disable"
             return None
+
         mock_read.side_effect = read_side_effect
 
         result = hp_uefi_lockdown.apply_boot_lockdown(existing_password=None)
@@ -421,23 +442,23 @@ class TestHpUefiLockdown:
 
     # --- Phase 4: Verification re-reads ---
 
-    @patch('hp_uefi_lockdown._set_setting', return_value=0)
-    @patch('hp_uefi_lockdown._read_setting')
+    @patch("hp_uefi_lockdown._set_setting", return_value=0)
+    @patch("hp_uefi_lockdown._read_setting")
     def test_set_and_verify_success(self, mock_read, _):
         """Phase 4.5: _set_and_verify returns True when verification matches."""
         mock_read.return_value = "Disable"
         result = hp_uefi_lockdown._set_and_verify("USB Boot", "Disable", "password")
         assert result is True
 
-    @patch('hp_uefi_lockdown._set_setting', return_value=0)
-    @patch('hp_uefi_lockdown._read_setting')
+    @patch("hp_uefi_lockdown._set_setting", return_value=0)
+    @patch("hp_uefi_lockdown._read_setting")
     def test_set_and_verify_failure(self, mock_read, _):
         """Phase 4.5: _set_and_verify returns False when verification fails."""
         mock_read.return_value = "Enable"  # didn't change
         result = hp_uefi_lockdown._set_and_verify("USB Boot", "Disable", "password")
         assert result is False
 
-    @patch('hp_uefi_lockdown._set_setting', return_value=6)
+    @patch("hp_uefi_lockdown._set_setting", return_value=6)
     def test_set_and_verify_set_fails(self, _):
         """Phase 4.5: _set_and_verify returns False when _set_setting fails."""
         result = hp_uefi_lockdown._set_and_verify("USB Boot", "Disable", "password")
@@ -445,8 +466,8 @@ class TestHpUefiLockdown:
 
     # --- Phase 4: Rollback is non-fatal ---
 
-    @patch('hp_uefi_lockdown._set_setting')
-    @patch('hp_uefi_lockdown._read_setting')
+    @patch("hp_uefi_lockdown._set_setting")
+    @patch("hp_uefi_lockdown._read_setting")
     def test_rollback_non_fatal(self, mock_read, mock_set, tmp_state_file):
         """CC18: Rollback failures are non-fatal (no raise)."""
         # _set_setting fails during rollback
@@ -460,11 +481,11 @@ class TestHpUefiLockdown:
 
     # --- Phase 4: Key file survives rollback ---
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=True)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
-    @patch('hp_uefi_lockdown._is_setup_password_set', return_value=False)
-    @patch('hp_uefi_lockdown._set_setting')
-    @patch('hp_uefi_lockdown._read_setting')
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=False)
+    @patch("hp_uefi_lockdown._set_setting")
+    @patch("hp_uefi_lockdown._read_setting")
     def test_key_file_survives_rollback(
         self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
     ):
@@ -475,6 +496,7 @@ class TestHpUefiLockdown:
 
         # Make critical settings fail
         mock_set.return_value = 0
+
         def read_side_effect(name):
             if name == "Setup Password":
                 return None
@@ -482,6 +504,7 @@ class TestHpUefiLockdown:
                 if name == sname:
                     return "Enable" if sval == "Disable" else "Disable"
             return None
+
         mock_read.side_effect = read_side_effect
 
         hp_uefi_lockdown.apply_boot_lockdown(existing_password=None)
@@ -493,14 +516,12 @@ class TestHpUefiLockdown:
 
     # --- remove_boot_lockdown tests ---
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=True)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
-    @patch('hp_uefi_lockdown.load_boot_state')
-    @patch('hp_uefi_lockdown._set_setting')
-    @patch('hp_uefi_lockdown._read_setting')
-    def test_remove_boot_lockdown_restores_settings(
-        self, mock_read, mock_set, mock_state, _, __
-    ):
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown.load_boot_state")
+    @patch("hp_uefi_lockdown._set_setting")
+    @patch("hp_uefi_lockdown._read_setting")
+    def test_remove_boot_lockdown_restores_settings(self, mock_read, mock_set, mock_state, _, __):
         mock_state.return_value = {
             "setup_password_was_set": False,
             "settings": {"Fast Boot": "Disable", "USB Boot": "Enable"},
@@ -514,10 +535,10 @@ class TestHpUefiLockdown:
         last_call = mock_set.call_args_list[-1]
         assert last_call.args[0] == "Setup Password"
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=True)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
-    @patch('hp_uefi_lockdown.load_boot_state')
-    @patch('hp_uefi_lockdown._set_setting')
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown.load_boot_state")
+    @patch("hp_uefi_lockdown._set_setting")
     def test_remove_boot_lockdown_does_not_clear_preexisting_password(
         self, mock_set, mock_state, _, __
     ):
@@ -533,14 +554,14 @@ class TestHpUefiLockdown:
         for c in mock_set.call_args_list:
             assert c.args[0] != "Setup Password"
 
-    @patch('hp_uefi_lockdown._is_admin', return_value=False)
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=True)
+    @patch("hp_uefi_lockdown._is_admin", return_value=False)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
     def test_remove_boot_lockdown_not_admin(self, _, __):
         """Phase 4.1: Admin check for removal too."""
         result = hp_uefi_lockdown.remove_boot_lockdown("password")
         assert result is False
 
-    @patch('hp_uefi_lockdown.is_hp_machine', return_value=False)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=False)
     def test_remove_boot_lockdown_not_hp(self, _):
         result = hp_uefi_lockdown.remove_boot_lockdown("password")
         assert result is True  # nothing to remove
@@ -550,12 +571,12 @@ class TestHpUefiLockdown:
 # BCD Lockdown Tests
 # ---------------------------------------------------------------------------
 
-class TestBcdLockdown:
 
+class TestBcdLockdown:
     # --- Phase 4: _is_admin() check ---
 
-    @patch('bcd_lockdown._is_admin', return_value=False)
-    @patch('bcd_lockdown.platform.system', return_value='Windows')
+    @patch("bcd_lockdown._is_admin", return_value=False)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
     def test_apply_bcd_lockdown_not_admin_fail_fast(self, _, __, tmp_bcd_files):
         """Phase 4.1: Admin check fails fast before any state writes."""
         result = bcd_lockdown.apply_bcd_lockdown()
@@ -568,20 +589,21 @@ class TestBcdLockdown:
 
     # --- Phase 4: dict return type ---
 
-    @patch('bcd_lockdown._is_admin', return_value=True)
-    @patch('bcd_lockdown.platform.system', return_value='Linux')
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Linux")
     def test_apply_bcd_lockdown_not_windows(self, _, __, tmp_bcd_files):
         result = bcd_lockdown.apply_bcd_lockdown()
         assert result["success"] is True  # nothing to do
 
-    @patch('bcd_lockdown._is_admin', return_value=True)
-    @patch('bcd_lockdown.platform.system', return_value='Windows')
-    @patch('bcd_lockdown._run')
-    @patch('bcd_lockdown._read_bcd_setting')
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
+    @patch("bcd_lockdown._run")
+    @patch("bcd_lockdown._read_bcd_setting")
     def test_apply_bcd_lockdown_success(self, mock_read, mock_run, _, __, tmp_bcd_files):
         """All critical + best-effort settings succeed."""
         # reagentc /disable succeeds, bcdedit /set succeeds
         mock_run.return_value = (0, "", "")
+
         # _read_bcd_setting returns the lockdown value (verification passes)
         def read_side_effect(setting):
             for sname, sval, _ in bcd_lockdown.BCD_CRITICAL_COMMANDS:
@@ -591,6 +613,7 @@ class TestBcdLockdown:
                 if setting == sname:
                     return sval
             return None
+
         mock_read.side_effect = read_side_effect
 
         result = bcd_lockdown.apply_bcd_lockdown()
@@ -600,10 +623,10 @@ class TestBcdLockdown:
         assert result["rolled_back"] is False
         assert tmp_bcd_files["sentinel"].exists()
 
-    @patch('bcd_lockdown._is_admin', return_value=True)
-    @patch('bcd_lockdown.platform.system', return_value='Windows')
-    @patch('bcd_lockdown._run')
-    @patch('bcd_lockdown._read_bcd_setting')
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
+    @patch("bcd_lockdown._run")
+    @patch("bcd_lockdown._read_bcd_setting")
     def test_apply_bcd_lockdown_all_critical_fail(self, mock_read, mock_run, _, __, tmp_bcd_files):
         """All critical settings fail → rollback, no sentinel."""
         # reagentc /disable fails, bcdedit /set fails
@@ -616,12 +639,15 @@ class TestBcdLockdown:
         assert result["rolled_back"] is True
         assert not tmp_bcd_files["sentinel"].exists()  # sentinel not written
 
-    @patch('bcd_lockdown._is_admin', return_value=True)
-    @patch('bcd_lockdown.platform.system', return_value='Windows')
-    @patch('bcd_lockdown._run')
-    @patch('bcd_lockdown._read_bcd_setting')
-    def test_apply_bcd_lockdown_best_effort_failure_no_rollback(self, mock_read, mock_run, _, __, tmp_bcd_files):
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
+    @patch("bcd_lockdown._run")
+    @patch("bcd_lockdown._read_bcd_setting")
+    def test_apply_bcd_lockdown_best_effort_failure_no_rollback(
+        self, mock_read, mock_run, _, __, tmp_bcd_files
+    ):
         """Best-effort failure does NOT trigger rollback."""
+
         # reagentc succeeds, critical bcdedit succeeds, best-effort fails
         def run_side_effect(cmd):
             # reagentc /disable succeeds
@@ -629,10 +655,11 @@ class TestBcdLockdown:
                 return (0, "", "")
             # bcdedit /set — check if it's a best-effort setting
             cmd_str = " ".join(cmd)
-            for sname, sval, _ in bcd_lockdown.BCD_BEST_EFFORT_COMMANDS:
+            for sname, _sval, _ in bcd_lockdown.BCD_BEST_EFFORT_COMMANDS:
                 if sname in cmd_str:
                     return (1, "", "OEM-locked")  # best-effort fails
             return (0, "", "")  # critical succeeds
+
         mock_run.side_effect = run_side_effect
 
         def read_side_effect(setting):
@@ -644,6 +671,7 @@ class TestBcdLockdown:
                 if setting == sname:
                     return "Legacy" if sval == "Standard" else "DisplayAllFailures"
             return None
+
         mock_read.side_effect = read_side_effect
 
         result = bcd_lockdown.apply_bcd_lockdown()
@@ -654,15 +682,16 @@ class TestBcdLockdown:
         assert result["best_effort_failed"] > 0
         assert tmp_bcd_files["sentinel"].exists()
 
-    @patch('bcd_lockdown._is_admin', return_value=True)
-    @patch('bcd_lockdown.platform.system', return_value='Windows')
-    @patch('bcd_lockdown._run')
-    @patch('bcd_lockdown._read_bcd_setting')
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
+    @patch("bcd_lockdown._run")
+    @patch("bcd_lockdown._read_bcd_setting")
     def test_apply_bcd_lockdown_partial_critical_failure_triggers_rollback(
         self, mock_read, mock_run, _, __, tmp_bcd_files
     ):
         """One critical setting fails → rollback ALL changes."""
         call_count = [0]
+
         def run_side_effect(cmd):
             call_count[0] += 1
             # reagentc /disable succeeds (critical 1)
@@ -678,6 +707,7 @@ class TestBcdLockdown:
             if "displaybootmenu" in " ".join(cmd):
                 return (1, "", "Access denied")
             return (0, "", "")
+
         mock_run.side_effect = run_side_effect
 
         def read_side_effect(setting):
@@ -687,6 +717,7 @@ class TestBcdLockdown:
                 return "Yes"  # verification fails (expected "No")
             # For state save (before apply): return original values
             return "Yes"
+
         mock_read.side_effect = read_side_effect
 
         result = bcd_lockdown.apply_bcd_lockdown()
@@ -695,14 +726,17 @@ class TestBcdLockdown:
         assert result["rolled_back"] is True
         assert not tmp_bcd_files["sentinel"].exists()
 
-    @patch('bcd_lockdown._is_admin', return_value=True)
-    @patch('bcd_lockdown.platform.system', return_value='Windows')
-    @patch('bcd_lockdown._run')
-    @patch('bcd_lockdown._read_bcd_setting')
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
+    @patch("bcd_lockdown._run")
+    @patch("bcd_lockdown._read_bcd_setting")
     def test_remove_bcd_lockdown_success(self, mock_read, mock_run, _, __, tmp_bcd_files):
         # Create sentinel + state file first
         tmp_bcd_files["sentinel"].write_text("locked")
-        state = {"winre_enabled": True, "settings": {"recoveryenabled": "Yes", "displaybootmenu": "Yes"}}
+        state = {
+            "winre_enabled": True,
+            "settings": {"recoveryenabled": "Yes", "displaybootmenu": "Yes"},
+        }
         tmp_bcd_files["state"].write_text(json.dumps(state))
         mock_run.return_value = (0, "", "")
 
@@ -712,45 +746,45 @@ class TestBcdLockdown:
         assert not tmp_bcd_files["sentinel"].exists()
         assert not tmp_bcd_files["state"].exists()
 
-    @patch('bcd_lockdown._is_admin', return_value=True)
-    @patch('bcd_lockdown.platform.system', return_value='Windows')
-    @patch('bcd_lockdown._run')
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
+    @patch("bcd_lockdown._run")
     def test_remove_bcd_lockdown_no_sentinel(self, mock_run, _, __, tmp_bcd_files):
         result = bcd_lockdown.remove_bcd_lockdown()
         assert result is True
         assert mock_run.call_count == 0  # no commands run
 
-    @patch('bcd_lockdown._is_admin', return_value=False)
-    @patch('bcd_lockdown.platform.system', return_value='Windows')
+    @patch("bcd_lockdown._is_admin", return_value=False)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
     def test_remove_bcd_lockdown_not_admin(self, _, __, tmp_bcd_files):
         """Phase 4.1: Admin check for removal too."""
         tmp_bcd_files["sentinel"].write_text("locked")
         result = bcd_lockdown.remove_bcd_lockdown()
         assert result is False
 
-    @patch('bcd_lockdown._run')
+    @patch("bcd_lockdown._run")
     def test_disable_winre_success(self, mock_run):
         mock_run.return_value = (0, "", "")
         assert bcd_lockdown._disable_winre() is True
         assert mock_run.call_args.args[0] == ["reagentc", "/disable"]
 
-    @patch('bcd_lockdown._run')
+    @patch("bcd_lockdown._run")
     def test_disable_winre_already_disabled(self, mock_run):
         mock_run.return_value = (1, "", "already disabled")
         assert bcd_lockdown._disable_winre() is False
 
-    @patch('bcd_lockdown._run')
+    @patch("bcd_lockdown._run")
     def test_enable_winre_success(self, mock_run):
         mock_run.return_value = (0, "", "")
         assert bcd_lockdown._enable_winre() is True
         assert mock_run.call_args.args[0] == ["reagentc", "/enable"]
 
-    @patch('bcd_lockdown._run')
+    @patch("bcd_lockdown._run")
     def test_is_winre_enabled_true(self, mock_run):
         mock_run.return_value = (0, "Windows RE status: Enabled", "")
         assert bcd_lockdown._is_winre_enabled() is True
 
-    @patch('bcd_lockdown._run')
+    @patch("bcd_lockdown._run")
     def test_is_winre_enabled_false(self, mock_run):
         mock_run.return_value = (0, "Windows RE status: Disabled", "")
         assert bcd_lockdown._is_winre_enabled() is False
@@ -767,8 +801,8 @@ class TestBcdLockdown:
 
     # --- Phase 4: BCD state save/restore round-trip ---
 
-    @patch('bcd_lockdown._is_winre_enabled', return_value=True)
-    @patch('bcd_lockdown._read_bcd_setting')
+    @patch("bcd_lockdown._is_winre_enabled", return_value=True)
+    @patch("bcd_lockdown._read_bcd_setting")
     def test_bcd_state_save_and_restore_round_trip(self, mock_read, mock_winre, tmp_bcd_state_file):
         """Phase 4.2: BCD state save/restore round-trip via .bcd_state file."""
         # Simulate current BCD values
@@ -795,16 +829,16 @@ class TestBcdLockdown:
 
     # --- Phase 4: Verification re-reads ---
 
-    @patch('bcd_lockdown._read_bcd_setting', return_value="No")
-    @patch('bcd_lockdown._run')
+    @patch("bcd_lockdown._read_bcd_setting", return_value="No")
+    @patch("bcd_lockdown._run")
     def test_set_bcd_setting_verify_success(self, mock_run, mock_read):
         """Phase 4.5: _set_bcd_setting returns True when verification matches."""
         mock_run.return_value = (0, "", "")
         result = bcd_lockdown._set_bcd_setting("recoveryenabled", "No")
         assert result is True
 
-    @patch('bcd_lockdown._read_bcd_setting', return_value="Yes")
-    @patch('bcd_lockdown._run')
+    @patch("bcd_lockdown._read_bcd_setting", return_value="Yes")
+    @patch("bcd_lockdown._run")
     def test_set_bcd_setting_verify_failure(self, mock_run, mock_read):
         """Phase 4.5: _set_bcd_setting returns False when verification fails."""
         mock_run.return_value = (0, "", "")  # set succeeded
@@ -812,7 +846,7 @@ class TestBcdLockdown:
         result = bcd_lockdown._set_bcd_setting("recoveryenabled", "No")
         assert result is False
 
-    @patch('bcd_lockdown._run')
+    @patch("bcd_lockdown._run")
     def test_set_bcd_setting_set_fails(self, mock_run):
         """Phase 4.5: _set_bcd_setting returns False when bcdedit fails."""
         mock_run.return_value = (1, "", "Access denied")
@@ -821,8 +855,8 @@ class TestBcdLockdown:
 
     # --- Phase 4: Rollback is non-fatal ---
 
-    @patch('bcd_lockdown._enable_winre', return_value=False)
-    @patch('bcd_lockdown._run')
+    @patch("bcd_lockdown._enable_winre", return_value=False)
+    @patch("bcd_lockdown._run")
     def test_rollback_non_fatal(self, mock_run, mock_winre):
         """CC18: Rollback failures are non-fatal (no raise)."""
         # bcdedit /set fails during rollback
@@ -835,13 +869,11 @@ class TestBcdLockdown:
 
     # --- Phase 4: Key file survives rollback ---
 
-    @patch('bcd_lockdown._is_admin', return_value=True)
-    @patch('bcd_lockdown.platform.system', return_value='Windows')
-    @patch('bcd_lockdown._run')
-    @patch('bcd_lockdown._read_bcd_setting')
-    def test_key_file_survives_bcd_rollback(
-        self, mock_read, mock_run, _, __, tmp_bcd_files
-    ):
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
+    @patch("bcd_lockdown._run")
+    @patch("bcd_lockdown._read_bcd_setting")
+    def test_key_file_survives_bcd_rollback(self, mock_read, mock_run, _, __, tmp_bcd_files):
         """Rollback is scoped to boot-state files — must NOT touch key files."""
         key_file = Path(tempfile.mktemp())
         key_file.write_text("fake-key-material")

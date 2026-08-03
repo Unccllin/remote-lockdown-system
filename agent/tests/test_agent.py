@@ -6,27 +6,28 @@ double-lock guard, config loading, hardware identity.
 
 import json
 import os
-import time
-import tempfile
 import shutil
-import threading
-from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
-from unittest import mock
-
-import pytest
 
 # We need to import agent.py which is in the parent directory
 import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import agent
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
+import agent
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def tmp_folder():
@@ -85,6 +86,7 @@ def cleanup_guardian():
 # Encryption / Decryption
 # ---------------------------------------------------------------------------
 
+
 class TestEncryption:
     def test_encrypt_folder_creates_enc_files(self, tmp_folder):
         key = agent.generate_key()
@@ -127,7 +129,7 @@ class TestEncryption:
         agent.encrypt_folder(tmp_folder, key)
 
         wrong_key = agent.generate_key()
-        with pytest.raises(Exception):
+        with pytest.raises(InvalidToken):
             agent.decrypt_folder(tmp_folder, wrong_key)
 
     def test_encrypt_empty_folder(self):
@@ -145,6 +147,7 @@ class TestEncryption:
 # Lock Guardian
 # ---------------------------------------------------------------------------
 
+
 class TestLockGuardian:
     def test_start_and_stop_lock_guardian(self):
         """Guardian thread starts and stops cleanly."""
@@ -156,13 +159,15 @@ class TestLockGuardian:
         def mock_lock_fn():
             lock_called.set()
 
-        with patch.object(agent, '_lock_workstation', side_effect=mock_lock_fn):
+        with patch.object(agent, "_lock_workstation", side_effect=mock_lock_fn):
             agent.start_lock_guardian()
             assert agent._lock_guardian_thread is not None
             assert agent._lock_guardian_thread.is_alive()
 
             # Wait for the guardian thread to call _lock_workstation (deterministic)
-            assert lock_called.wait(timeout=2.0), "Guardian did not call _lock_workstation within 2s"
+            assert lock_called.wait(timeout=2.0), (
+                "Guardian did not call _lock_workstation within 2s"
+            )
 
             agent.stop_lock_guardian()
             assert agent._lock_guardian_thread is None
@@ -181,16 +186,18 @@ class TestLockGuardian:
             call_count[0] += 1
             lock_called.set()
 
-        with patch.object(agent, '_lock_workstation', side_effect=mock_lock_fn):
+        with patch.object(agent, "_lock_workstation", side_effect=mock_lock_fn):
             agent.start_lock_guardian()
             # Wait for at least one call (deterministic, no sleep)
-            assert lock_called.wait(timeout=2.0), "Guardian did not call _lock_workstation within 2s"
+            assert lock_called.wait(timeout=2.0), (
+                "Guardian did not call _lock_workstation within 2s"
+            )
             assert call_count[0] >= 1
             agent.stop_lock_guardian()
 
     def test_remove_lock_screen_stops_guardian(self):
         """remove_lock_screen should stop the guardian."""
-        with patch.object(agent, '_lock_workstation'):
+        with patch.object(agent, "_lock_workstation"):
             agent.start_lock_guardian()
             assert agent._lock_guardian_thread is not None
 
@@ -202,15 +209,18 @@ class TestLockGuardian:
 # Double-lock guard (handle_lockdown with existing sentinel)
 # ---------------------------------------------------------------------------
 
+
 class TestDoubleLockGuard:
     def test_handle_lockdown_skips_if_sentinel_exists(self, cfg, tmp_sentinel):
         """If sentinel already exists (deadman locked), handle_lockdown should just ACK."""
         # Create sentinel to simulate deadman already locked
         tmp_sentinel.write_text(json.dumps({"locked": True, "deadman": True}))
 
-        with patch.object(agent, 'ack_command') as mock_ack, \
-             patch.object(agent, 'encrypt_folder') as mock_encrypt, \
-             patch.object(agent, 'apply_lock_screen') as mock_lock:
+        with (
+            patch.object(agent, "ack_command") as mock_ack,
+            patch.object(agent, "encrypt_folder") as mock_encrypt,
+            patch.object(agent, "apply_lock_screen") as mock_lock,
+        ):
             agent.handle_lockdown(cfg, {"id": "cmd-1"})
 
             # Should ACK as executed without encrypting
@@ -220,18 +230,20 @@ class TestDoubleLockGuard:
 
     def test_handle_lockdown_encrypts_when_no_sentinel(self, cfg, tmp_folder, tmp_sentinel):
         """Normal lockdown should encrypt and start guardian."""
-        with patch.object(agent, 'ack_command', return_value=True) as mock_ack, \
-             patch.object(agent, 'apply_lock_screen'), \
-             patch.object(agent, 'start_lock_guardian'), \
-             patch.object(agent, 'encrypt_folder') as mock_encrypt, \
-             patch.object(agent, 'write_pending_ack') as mock_write_ack, \
-             patch.object(agent, 'write_recovery_key'):
+        with (
+            patch.object(agent, "ack_command", return_value=True) as mock_ack,
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "encrypt_folder") as mock_encrypt,
+            patch.object(agent, "write_pending_ack") as mock_write_ack,
+            patch.object(agent, "write_recovery_key"),
+        ):
             agent.handle_lockdown(cfg, {"id": "cmd-1"})
 
             mock_encrypt.assert_called_once()
             mock_ack.assert_called_once()
             # Key material should be passed to ack
-            assert mock_ack.call_args[1].get('key_material') is not None
+            assert mock_ack.call_args[1].get("key_material") is not None
             # Sentinel should be written
             assert tmp_sentinel.exists()
             # A1: pending ACK file should be written BEFORE encryption
@@ -242,20 +254,27 @@ class TestDoubleLockGuard:
 # Deadman key recovery
 # ---------------------------------------------------------------------------
 
+
 class TestDeadmanKey:
     def test_deadman_stores_key_locally(self, cfg, tmp_folder, tmp_sentinel):
         """When deadman triggers, key should be stored in DEADMAN_KEY_FILE."""
         # Set up deadman file with stolen status and old timestamp
-        agent.DEADMAN_FILE.write_text(json.dumps({
-            "last_seen": time.time() - (25 * 3600),  # 25 hours ago
-            "status": "stolen",
-        }))
+        agent.DEADMAN_FILE.write_text(
+            json.dumps(
+                {
+                    "last_seen": time.time() - (25 * 3600),  # 25 hours ago
+                    "status": "stolen",
+                }
+            )
+        )
 
         try:
-            with patch.object(agent, 'apply_lock_screen'), \
-                 patch.object(agent, 'start_lock_guardian'), \
-                 patch.object(agent, 'write_pending_ack'), \
-                 patch.object(agent, 'write_recovery_key'):
+            with (
+                patch.object(agent, "apply_lock_screen"),
+                patch.object(agent, "start_lock_guardian"),
+                patch.object(agent, "write_pending_ack"),
+                patch.object(agent, "write_recovery_key"),
+            ):
                 agent.check_deadman(cfg)
 
                 # Sentinel should exist
@@ -271,13 +290,17 @@ class TestDeadmanKey:
 
     def test_deadman_does_not_trigger_if_not_stolen(self, cfg):
         """Deadman should not trigger if status is not 'stolen'."""
-        agent.DEADMAN_FILE.write_text(json.dumps({
-            "last_seen": time.time() - (48 * 3600),
-            "status": "active",
-        }))
+        agent.DEADMAN_FILE.write_text(
+            json.dumps(
+                {
+                    "last_seen": time.time() - (48 * 3600),
+                    "status": "active",
+                }
+            )
+        )
 
         try:
-            with patch.object(agent, 'encrypt_folder') as mock_encrypt:
+            with patch.object(agent, "encrypt_folder") as mock_encrypt:
                 agent.check_deadman(cfg)
                 mock_encrypt.assert_not_called()
         finally:
@@ -286,13 +309,17 @@ class TestDeadmanKey:
 
     def test_deadman_does_not_trigger_if_recent(self, cfg):
         """Deadman should not trigger if last_seen is recent."""
-        agent.DEADMAN_FILE.write_text(json.dumps({
-            "last_seen": time.time() - (1 * 3600),  # 1 hour ago
-            "status": "stolen",
-        }))
+        agent.DEADMAN_FILE.write_text(
+            json.dumps(
+                {
+                    "last_seen": time.time() - (1 * 3600),  # 1 hour ago
+                    "status": "stolen",
+                }
+            )
+        )
 
         try:
-            with patch.object(agent, 'encrypt_folder') as mock_encrypt:
+            with patch.object(agent, "encrypt_folder") as mock_encrypt:
                 agent.check_deadman(cfg)
                 mock_encrypt.assert_not_called()
         finally:
@@ -303,13 +330,17 @@ class TestDeadmanKey:
         """Deadman should not re-encrypt if sentinel already exists."""
         tmp_sentinel.write_text(json.dumps({"locked": True}))
 
-        agent.DEADMAN_FILE.write_text(json.dumps({
-            "last_seen": time.time() - (25 * 3600),
-            "status": "stolen",
-        }))
+        agent.DEADMAN_FILE.write_text(
+            json.dumps(
+                {
+                    "last_seen": time.time() - (25 * 3600),
+                    "status": "stolen",
+                }
+            )
+        )
 
         try:
-            with patch.object(agent, 'encrypt_folder') as mock_encrypt:
+            with patch.object(agent, "encrypt_folder") as mock_encrypt:
                 agent.check_deadman(cfg)
                 mock_encrypt.assert_not_called()
         finally:
@@ -322,7 +353,7 @@ class TestDeadmanKey:
         agent.DEADMAN_KEY_FILE.write_text("test-fernet-key==")
 
         try:
-            with patch.object(agent, 'requests') as mock_requests:
+            with patch.object(agent, "requests") as mock_requests:
                 mock_resp = MagicMock()
                 mock_resp.raise_for_status = MagicMock()
                 mock_requests.post.return_value = mock_resp
@@ -332,10 +363,10 @@ class TestDeadmanKey:
                 # Should have POSTed to deadman-report
                 mock_requests.post.assert_called_once()
                 call_args = mock_requests.post.call_args
-                assert 'deadman-report' in call_args[0][0]
+                assert "deadman-report" in call_args[0][0]
                 # Phase 0: _signed_post sends JSON as data= (not json=) for HMAC signing
-                body = json.loads(call_args[1]['data'])
-                assert body['key_material'] == 'test-fernet-key=='
+                body = json.loads(call_args[1]["data"])
+                assert body["key_material"] == "test-fernet-key=="
 
                 # Local key file should be deleted
                 assert not agent.DEADMAN_KEY_FILE.exists()
@@ -348,7 +379,7 @@ class TestDeadmanKey:
         if agent.DEADMAN_KEY_FILE.exists():
             agent.DEADMAN_KEY_FILE.unlink()
 
-        with patch.object(agent, 'requests') as mock_requests:
+        with patch.object(agent, "requests") as mock_requests:
             agent.report_deadman_key(cfg)
             mock_requests.post.assert_not_called()
 
@@ -357,8 +388,9 @@ class TestDeadmanKey:
         agent.DEADMAN_KEY_FILE.write_text("test-fernet-key==")
 
         try:
-            with patch.object(agent, 'requests') as mock_requests:
+            with patch.object(agent, "requests") as mock_requests:
                 import requests as real_requests
+
                 mock_requests.post.side_effect = real_requests.RequestException("Network error")
                 mock_requests.RequestException = real_requests.RequestException
 
@@ -374,6 +406,7 @@ class TestDeadmanKey:
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
+
 
 class TestConfig:
     def test_load_config_defaults(self):
@@ -407,25 +440,28 @@ class TestConfig:
 # Hardware identity
 # ---------------------------------------------------------------------------
 
+
 class TestHardwareIdentity:
     def test_get_mac_address_format(self):
         mac = agent.get_mac_address()
         # Should be colon-separated hex pairs
-        parts = mac.split(':')
+        parts = mac.split(":")
         assert len(parts) == 6
         for part in parts:
             assert len(part) == 2
             int(part, 16)  # Should be valid hex
 
     def test_get_hardware_uuid_returns_string(self):
-        with patch('platform.system', return_value='Linux'):
-            with patch('subprocess.check_output', return_value=b'12345678-1234-1234-1234-123456789abc\n'):
+        with patch("platform.system", return_value="Linux"):
+            with patch(
+                "subprocess.check_output", return_value=b"12345678-1234-1234-1234-123456789abc\n"
+            ):
                 uuid_val = agent.get_hardware_uuid()
-                assert uuid_val == '12345678-1234-1234-1234-123456789abc'
+                assert uuid_val == "12345678-1234-1234-1234-123456789abc"
 
     def test_get_hardware_uuid_fallback(self):
-        with patch('platform.system', return_value='Linux'):
-            with patch('subprocess.check_output', side_effect=Exception("No DMI")):
+        with patch("platform.system", return_value="Linux"):
+            with patch("subprocess.check_output", side_effect=Exception("No DMI")):
                 uuid_val = agent.get_hardware_uuid()
                 # Should fall back to uuid.getnode()
                 assert len(uuid_val) > 0
@@ -434,6 +470,7 @@ class TestHardwareIdentity:
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
+
 
 class TestHandleUnlock:
     def test_handle_unlock_decrypts_and_removes_sentinel(self, cfg, tmp_folder, tmp_sentinel):
@@ -444,8 +481,10 @@ class TestHandleUnlock:
         tmp_sentinel.write_text(json.dumps({"locked": True}))
         key_b64 = key.decode()
 
-        with patch.object(agent, 'ack_command', return_value=True) as mock_ack, \
-             patch.object(agent, 'remove_lock_screen'):
+        with (
+            patch.object(agent, "ack_command", return_value=True) as mock_ack,
+            patch.object(agent, "remove_lock_screen"),
+        ):
             agent.handle_unlock(cfg, {"id": "cmd-1", "key_material": key_b64})
 
             # Folder should be decrypted
@@ -458,7 +497,7 @@ class TestHandleUnlock:
 
     def test_handle_unlock_fails_without_key(self, cfg, tmp_sentinel):
         """Unlock should fail if no key_material provided."""
-        with patch.object(agent, 'ack_command') as mock_ack:
+        with patch.object(agent, "ack_command") as mock_ack:
             agent.handle_unlock(cfg, {"id": "cmd-1"})
             mock_ack.assert_called_once_with(cfg, "cmd-1", "failed")
 
@@ -467,14 +506,17 @@ class TestHandleUnlock:
 # Startup check
 # ---------------------------------------------------------------------------
 
+
 class TestStartupCheck:
     def test_startup_check_reasserts_lock_if_sentinel_exists(self, cfg, tmp_sentinel):
         """If sentinel exists on startup, lock screen should be re-asserted."""
         tmp_sentinel.write_text(json.dumps({"locked": True}))
 
         try:
-            with patch.object(agent, 'apply_lock_screen') as mock_lock, \
-                 patch.object(agent, 'start_lock_guardian') as mock_guardian:
+            with (
+                patch.object(agent, "apply_lock_screen") as mock_lock,
+                patch.object(agent, "start_lock_guardian") as mock_guardian,
+            ):
                 agent.startup_check(cfg)
                 mock_lock.assert_called_once()
                 mock_guardian.assert_called_once()
@@ -484,7 +526,7 @@ class TestStartupCheck:
 
     def test_startup_check_noop_if_no_sentinel(self, cfg, tmp_sentinel):
         """If no sentinel, startup check should do nothing."""
-        with patch.object(agent, 'apply_lock_screen') as mock_lock:
+        with patch.object(agent, "apply_lock_screen") as mock_lock:
             agent.startup_check(cfg)
             mock_lock.assert_not_called()
 
@@ -493,9 +535,10 @@ class TestStartupCheck:
 # Check-in communication
 # ---------------------------------------------------------------------------
 
+
 class TestCheckin:
     def test_checkin_returns_data_on_success(self, cfg):
-        with patch.object(agent, 'requests') as mock_requests:
+        with patch.object(agent, "requests") as mock_requests:
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"status": "active", "command": None}
             mock_resp.raise_for_status = MagicMock()
@@ -507,8 +550,9 @@ class TestCheckin:
             assert result["status"] == "active"
 
     def test_checkin_returns_none_on_failure(self, cfg):
-        with patch.object(agent, 'requests') as mock_requests:
+        with patch.object(agent, "requests") as mock_requests:
             import requests as real_requests
+
             mock_requests.post.side_effect = real_requests.RequestException("Network error")
             mock_requests.RequestException = real_requests.RequestException
 
@@ -520,10 +564,11 @@ class TestCheckin:
 # Geolocation
 # ---------------------------------------------------------------------------
 
+
 class TestGeolocation:
     def test_get_ip_geolocation_returns_location(self):
         """IP geolocation should return lat/long from ip-api.com."""
-        with patch.object(agent, 'requests') as mock_requests:
+        with patch.object(agent, "requests") as mock_requests:
             mock_resp = MagicMock()
             mock_resp.json.return_value = {
                 "status": "success",
@@ -545,7 +590,7 @@ class TestGeolocation:
             assert result["city"] == "San Francisco"
 
     def test_get_ip_geolocation_returns_none_on_failure(self):
-        with patch.object(agent, 'requests') as mock_requests:
+        with patch.object(agent, "requests") as mock_requests:
             mock_requests.get.side_effect = Exception("Network error")
             result = agent.get_ip_geolocation()
             assert result is None
@@ -553,7 +598,7 @@ class TestGeolocation:
     def test_get_geolocation_falls_back_to_ip_without_api_key(self, cfg):
         """Without a Google API key, should fall back to IP geolocation."""
         cfg["google_api_key"] = ""
-        with patch.object(agent, 'get_ip_geolocation') as mock_ip:
+        with patch.object(agent, "get_ip_geolocation") as mock_ip:
             mock_ip.return_value = {"latitude": 1, "longitude": 2, "source": "ip"}
             result = agent.get_geolocation(cfg)
             assert result["source"] == "ip"
@@ -562,8 +607,10 @@ class TestGeolocation:
     def test_get_geolocation_uses_wifi_with_api_key(self, cfg):
         """With a Google API key and WiFi networks, should use WiFi triangulation."""
         cfg["google_api_key"] = "test-key"
-        with patch.object(agent, 'scan_wifi_networks') as mock_scan, \
-             patch.object(agent, 'requests') as mock_requests:
+        with (
+            patch.object(agent, "scan_wifi_networks") as mock_scan,
+            patch.object(agent, "requests") as mock_requests,
+        ):
             mock_scan.return_value = [{"bssid": "AA:BB:CC:DD:EE:FF", "signal": 80}]
             mock_resp = MagicMock()
             mock_resp.json.return_value = {
@@ -580,8 +627,10 @@ class TestGeolocation:
             assert result["accuracy_meters"] == 25
 
     def test_report_location_sends_to_server(self, cfg):
-        with patch.object(agent, 'get_geolocation') as mock_geo, \
-             patch.object(agent, 'requests') as mock_requests:
+        with (
+            patch.object(agent, "get_geolocation") as mock_geo,
+            patch.object(agent, "requests") as mock_requests,
+        ):
             mock_geo.return_value = {
                 "latitude": 37.77,
                 "longitude": -122.41,
@@ -598,14 +647,17 @@ class TestGeolocation:
             mock_requests.post.assert_called_once()
             call_args = mock_requests.post.call_args
             # Phase 0: _signed_post sends JSON as data= (not json=) for HMAC signing
-            body = json.loads(call_args[1]['data'])
-            assert 'location' in body
+            body = json.loads(call_args[1]["data"])
+            assert "location" in body
 
     def test_report_location_returns_none_on_failure(self, cfg):
-        with patch.object(agent, 'get_geolocation') as mock_geo, \
-             patch.object(agent, 'requests') as mock_requests:
+        with (
+            patch.object(agent, "get_geolocation") as mock_geo,
+            patch.object(agent, "requests") as mock_requests,
+        ):
             mock_geo.return_value = {"latitude": 1, "longitude": 2, "source": "ip"}
             import requests as real_requests
+
             mock_requests.post.side_effect = real_requests.RequestException("Network error")
             mock_requests.RequestException = real_requests.RequestException
 
@@ -617,16 +669,19 @@ class TestGeolocation:
 # Track command handlers
 # ---------------------------------------------------------------------------
 
+
 class TestTrackHandlers:
     def test_handle_track_reports_location_and_acks(self, cfg):
-        with patch.object(agent, 'report_location') as mock_loc, \
-             patch.object(agent, 'ack_command') as mock_ack:
+        with (
+            patch.object(agent, "report_location") as mock_loc,
+            patch.object(agent, "ack_command") as mock_ack,
+        ):
             agent.handle_track(cfg, {"id": "cmd-1"})
             mock_loc.assert_called_once_with(cfg)
             mock_ack.assert_called_once_with(cfg, "cmd-1", "executed")
 
     def test_handle_stop_track_acks(self, cfg):
-        with patch.object(agent, 'ack_command') as mock_ack:
+        with patch.object(agent, "ack_command") as mock_ack:
             agent.handle_stop_track(cfg, {"id": "cmd-1"})
             mock_ack.assert_called_once_with(cfg, "cmd-1", "executed")
 
@@ -641,10 +696,11 @@ class TestTrackHandlers:
 # Pending ACK persistence (A1 + A4)
 # ---------------------------------------------------------------------------
 
+
 class TestPendingAck:
     def test_ack_command_returns_true_on_success(self, cfg):
         """ack_command should return True on HTTP 2xx."""
-        with patch.object(agent, 'requests') as mock_requests:
+        with patch.object(agent, "requests") as mock_requests:
             mock_resp = MagicMock()
             mock_resp.raise_for_status = MagicMock()
             mock_requests.post.return_value = mock_resp
@@ -655,8 +711,9 @@ class TestPendingAck:
 
     def test_ack_command_returns_false_on_failure(self, cfg):
         """ack_command should return False on network error."""
-        with patch.object(agent, 'requests') as mock_requests:
+        with patch.object(agent, "requests") as mock_requests:
             import requests as real_requests
+
             mock_requests.post.side_effect = real_requests.RequestException("Network error")
             mock_requests.RequestException = real_requests.RequestException
 
@@ -698,7 +755,7 @@ class TestPendingAck:
         ack_file = cfg["pending_ack_file"]
         if ack_file.exists():
             ack_file.unlink()
-        with patch.object(agent, 'ack_command') as mock_ack:
+        with patch.object(agent, "ack_command") as mock_ack:
             agent.drain_pending_ack(cfg)
             mock_ack.assert_not_called()
 
@@ -708,7 +765,7 @@ class TestPendingAck:
         try:
             agent.write_pending_ack(ack_file, "cmd-1", "executed", key_material="test-key==")
 
-            with patch.object(agent, 'ack_command', return_value=True) as mock_ack:
+            with patch.object(agent, "ack_command", return_value=True) as mock_ack:
                 agent.drain_pending_ack(cfg)
 
                 mock_ack.assert_called_once()
@@ -726,7 +783,7 @@ class TestPendingAck:
         try:
             agent.write_pending_ack(ack_file, "cmd-1", "executed", key_material="test-key==")
 
-            with patch.object(agent, 'ack_command', return_value=False):
+            with patch.object(agent, "ack_command", return_value=False):
                 agent.drain_pending_ack(cfg)
 
                 # File should still exist for retry
@@ -735,7 +792,9 @@ class TestPendingAck:
             if ack_file.exists():
                 ack_file.unlink()
 
-    def test_handle_lockdown_writes_pending_ack_before_encryption(self, cfg, tmp_folder, tmp_sentinel):
+    def test_handle_lockdown_writes_pending_ack_before_encryption(
+        self, cfg, tmp_folder, tmp_sentinel
+    ):
         """A1: pending ACK file should be written BEFORE encrypt_folder is called."""
         call_order = []
 
@@ -745,12 +804,14 @@ class TestPendingAck:
         def mock_encrypt(*args, **kwargs):
             call_order.append("encrypt_folder")
 
-        with patch.object(agent, 'ack_command', return_value=True), \
-             patch.object(agent, 'apply_lock_screen'), \
-             patch.object(agent, 'start_lock_guardian'), \
-             patch.object(agent, 'write_pending_ack', side_effect=mock_write_ack), \
-             patch.object(agent, 'write_recovery_key'), \
-             patch.object(agent, 'encrypt_folder', side_effect=mock_encrypt):
+        with (
+            patch.object(agent, "ack_command", return_value=True),
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "write_pending_ack", side_effect=mock_write_ack),
+            patch.object(agent, "write_recovery_key"),
+            patch.object(agent, "encrypt_folder", side_effect=mock_encrypt),
+        ):
             agent.handle_lockdown(cfg, {"id": "cmd-1"})
 
             # write_pending_ack should come before encrypt_folder
@@ -762,11 +823,13 @@ class TestPendingAck:
         """A4: if ACK fails, pending ACK file should be preserved for retry."""
         ack_file = cfg["pending_ack_file"]
         try:
-            with patch.object(agent, 'ack_command', return_value=False), \
-                 patch.object(agent, 'apply_lock_screen'), \
-                 patch.object(agent, 'start_lock_guardian'), \
-                 patch.object(agent, 'write_recovery_key'), \
-                 patch.object(agent, 'encrypt_folder'):
+            with (
+                patch.object(agent, "ack_command", return_value=False),
+                patch.object(agent, "apply_lock_screen"),
+                patch.object(agent, "start_lock_guardian"),
+                patch.object(agent, "write_recovery_key"),
+                patch.object(agent, "encrypt_folder"),
+            ):
                 agent.handle_lockdown(cfg, {"id": "cmd-1"})
 
                 # Pending ACK file should still exist (ACK failed)
@@ -782,11 +845,13 @@ class TestPendingAck:
         """On ACK success, pending ACK file should be deleted."""
         ack_file = cfg["pending_ack_file"]
         try:
-            with patch.object(agent, 'ack_command', return_value=True), \
-                 patch.object(agent, 'apply_lock_screen'), \
-                 patch.object(agent, 'start_lock_guardian'), \
-                 patch.object(agent, 'write_recovery_key'), \
-                 patch.object(agent, 'encrypt_folder'):
+            with (
+                patch.object(agent, "ack_command", return_value=True),
+                patch.object(agent, "apply_lock_screen"),
+                patch.object(agent, "start_lock_guardian"),
+                patch.object(agent, "write_recovery_key"),
+                patch.object(agent, "encrypt_folder"),
+            ):
                 agent.handle_lockdown(cfg, {"id": "cmd-1"})
 
                 # Pending ACK file should be deleted (ACK succeeded)
@@ -799,6 +864,7 @@ class TestPendingAck:
 # ---------------------------------------------------------------------------
 # Resumable encryption (CC20)
 # ---------------------------------------------------------------------------
+
 
 class TestResumableEncryption:
     def test_encrypt_folder_skips_already_encrypted_files(self, tmp_folder):
@@ -859,6 +925,7 @@ class TestResumableEncryption:
 # Recovery key file (A8)
 # ---------------------------------------------------------------------------
 
+
 class TestRecoveryKey:
     def test_write_recovery_key_skips_if_no_public_key(self, cfg):
         """If no recovery_public_key is configured, write_recovery_key should skip."""
@@ -874,8 +941,8 @@ class TestRecoveryKey:
 
     def test_write_recovery_key_creates_wrapped_file(self, cfg, tmp_folder):
         """With a valid RSA public key, write_recovery_key should create a wrapped blob."""
-        from cryptography.hazmat.primitives.asymmetric import rsa
         from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
 
         # Generate a test RSA keypair
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -893,7 +960,9 @@ class TestRecoveryKey:
 
         try:
             fernet_key = agent.generate_key().decode()
-            agent.write_recovery_key(recovery_file, "cmd-1", fernet_key, bios_password="bios-pw", cfg=cfg)
+            agent.write_recovery_key(
+                recovery_file, "cmd-1", fernet_key, bios_password="bios-pw", cfg=cfg
+            )
 
             assert recovery_file.exists()
             state = json.loads(recovery_file.read_text())
@@ -902,9 +971,10 @@ class TestRecoveryKey:
             assert "wrapped_bios_password" in state
 
             # Verify we can unwrap with the private key
-            from cryptography.hazmat.primitives.asymmetric import padding
-            from cryptography.hazmat.primitives import hashes
             import base64
+
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import padding
 
             wrapped = base64.b64decode(state["wrapped_key"])
             unwrapped = private_key.decrypt(
@@ -946,8 +1016,10 @@ class TestRecoveryKey:
         key_b64 = key.decode()
 
         try:
-            with patch.object(agent, 'ack_command', return_value=True), \
-                 patch.object(agent, 'remove_lock_screen'):
+            with (
+                patch.object(agent, "ack_command", return_value=True),
+                patch.object(agent, "remove_lock_screen"),
+            ):
                 agent.handle_unlock(cfg, {"id": "cmd-1", "key_material": key_b64})
 
                 # Recovery key file should be deleted
@@ -961,14 +1033,16 @@ class TestRecoveryKey:
 # Offline recovery tool (A8)
 # ---------------------------------------------------------------------------
 
+
 class TestOfflineRecovery:
     def test_offline_recovery_round_trip(self, tmp_folder):
         """Full round-trip: encrypt → write recovery key → offline recover → decrypt."""
         import subprocess
 
+        from cryptography.hazmat.primitives import serialization
+
         # Generate RSA keypair
         from cryptography.hazmat.primitives.asymmetric import rsa
-        from cryptography.hazmat.primitives import serialization
 
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         public_key_pem = private_key.public_key().public_bytes(
@@ -1007,11 +1081,19 @@ class TestOfflineRecovery:
         # Run offline_recovery.py
         offline_script = Path(__file__).parent.parent / "offline_recovery.py"
         result = subprocess.run(
-            [sys.executable, str(offline_script),
-             "--recovery-key", str(priv_key_file),
-             "--recovery-file", str(recovery_file),
-             "--folder", str(tmp_folder)],
-            capture_output=True, text=True, timeout=30,
+            [
+                sys.executable,
+                str(offline_script),
+                "--recovery-key",
+                str(priv_key_file),
+                "--recovery-file",
+                str(recovery_file),
+                "--folder",
+                str(tmp_folder),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
 
         assert result.returncode == 0, f"offline_recovery.py failed: {result.stderr}"

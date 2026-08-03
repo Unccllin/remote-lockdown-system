@@ -41,13 +41,14 @@ import json
 import sys
 from pathlib import Path
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 
 
-def decrypt_with_recovery_file(recovery_key_path: str, recovery_file_path: str, folder: Path) -> str | None:
+def decrypt_with_recovery_file(
+    recovery_key_path: str, recovery_file_path: str, folder: Path
+) -> str | None:
     """Decrypt folder using RSA-wrapped recovery key file."""
     # Load IT's private key
     private_key = serialization.load_pem_private_key(
@@ -115,24 +116,23 @@ def main():
         description="Offline recovery tool for Remote Device Lockdown System"
     )
     parser.add_argument(
-        "--recovery-key", type=str,
-        help="Path to IT's RSA private key (PEM format)"
+        "--recovery-key", type=str, help="Path to IT's RSA private key (PEM format)"
     )
     parser.add_argument(
-        "--recovery-file", type=str,
-        help="Path to the .recovery_key file from the locked device"
+        "--recovery-file", type=str, help="Path to the .recovery_key file from the locked device"
     )
     parser.add_argument(
-        "--deadman-key", type=str,
-        help="Path to the .deadman_key file (plaintext Fernet key, alternative to --recovery-key)"
+        "--deadman-key",
+        type=str,
+        help="Path to the .deadman_key file (plaintext Fernet key, alternative to --recovery-key)",
     )
     parser.add_argument(
-        "--folder", type=str, required=True,
-        help="Path to the encrypted folder to decrypt"
+        "--folder", type=str, required=True, help="Path to the encrypted folder to decrypt"
     )
     parser.add_argument(
-        "--show-bios-password", action="store_true",
-        help="Print the BIOS password if it was wrapped in the recovery file"
+        "--show-bios-password",
+        action="store_true",
+        help="Print the BIOS password if it was wrapped in the recovery file",
     )
 
     args = parser.parse_args()
@@ -149,9 +149,7 @@ def main():
         decrypt_with_deadman_key(args.deadman_key, folder)
     elif args.recovery_key and args.recovery_file:
         # RSA-wrapped recovery key mode
-        bios_password = decrypt_with_recovery_file(
-            args.recovery_key, args.recovery_file, folder
-        )
+        bios_password = decrypt_with_recovery_file(args.recovery_key, args.recovery_file, folder)
     else:
         print("ERROR: must specify either --recovery-key + --recovery-file OR --deadman-key")
         sys.exit(1)
@@ -160,7 +158,10 @@ def main():
         print(f"\nBIOS Password (for manual UEFI/BCD lockdown removal): {bios_password}")
         print("NOTE: You must manually clear the BIOS password in UEFI setup.")
     elif bios_password:
-        print("\nBIOS password was wrapped in the recovery file. Use --show-bios-password to display it.")
+        print(
+            "\nBIOS password was wrapped in the recovery file. "
+            "Use --show-bios-password to display it."
+        )
 
 
 if __name__ == "__main__":

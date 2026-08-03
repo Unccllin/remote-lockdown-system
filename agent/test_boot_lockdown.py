@@ -24,37 +24,41 @@ Usage:
 
 IMPORTANT: In real mode, run as Administrator. BCD and BIOS changes require elevation.
 """
-import sys
+
 import os
+import sys
 
 # Parse --dry-run flag
 DRY_RUN = "--dry-run" in sys.argv
 if DRY_RUN:
     sys.argv.remove("--dry-run")
 
+
 # Ensure we're running as admin on Windows (skip check in dry-run mode)
 def check_admin():
     if DRY_RUN:
         print("=== DRY RUN MODE — no actual changes will be made ===\n")
         return
-    if os.name != 'nt':
+    if os.name != "nt":
         print("WARNING: Not running on Windows — some features won't work")
         print("Use --dry-run to simulate without a real Windows machine.\n")
         return
     try:
         import ctypes
+
         if not ctypes.windll.shell32.IsUserAnAdmin():
             print("ERROR: This script must be run as Administrator!")
             print("Right-click → Run as administrator, or run from an elevated cmd.")
             sys.exit(1)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"WARNING: Could not check admin status: {e}")
+
 
 check_admin()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import hp_uefi_lockdown
-import bcd_lockdown
+import bcd_lockdown  # noqa: E402 -- must come after sys.path.insert above
+import hp_uefi_lockdown  # noqa: E402 -- must come after sys.path.insert above
 
 # Enable dry-run mode in the modules
 if DRY_RUN:
@@ -72,7 +76,7 @@ def cmd_status():
     print(f"Boot state file: {hp_uefi_lockdown.BOOT_STATE_FILE.exists()}")
 
     if hp_uefi_lockdown.is_hp_machine():
-        print(f"\n--- Current BIOS Settings ---")
+        print("\n--- Current BIOS Settings ---")
         for name, _ in hp_uefi_lockdown.LOCKDOWN_SETTINGS:
             val = hp_uefi_lockdown._read_setting(name)
             if val is not None:
@@ -83,12 +87,12 @@ def cmd_status():
     if hp_uefi_lockdown.BOOT_STATE_FILE.exists():
         state = hp_uefi_lockdown.load_boot_state()
         if state:
-            print(f"\n--- Saved Boot State ---")
+            print("\n--- Saved Boot State ---")
             print(f"  Password was pre-existing: {state.get('setup_password_was_set')}")
-            for name, val in state.get('settings', {}).items():
+            for name, val in state.get("settings", {}).items():
                 print(f"  {name}: {val}")
 
-    print(f"\n--- WinRE Status ---")
+    print("\n--- WinRE Status ---")
     print(f"  WinRE enabled: {bcd_lockdown._is_winre_enabled()}")
 
 

@@ -31,22 +31,22 @@ USAGE:
     pythonw agent.py --silent
 """
 
-import os
-import sys
-import time
-import json
-import base64
-import logging
-import platform
-import subprocess
-import socket
-import uuid
-import configparser
 import argparse
-import threading
+import base64
+import configparser
 import hashlib
 import hmac
+import json
+import logging
+import os
+import platform
 import secrets
+import socket
+import subprocess
+import sys
+import threading
+import time
+import uuid
 from pathlib import Path
 
 import requests
@@ -54,8 +54,9 @@ from cryptography.fernet import Fernet
 
 # Boot lockdown modules (imported lazily on Windows to avoid import errors on Linux)
 try:
-    import hp_uefi_lockdown
     import bcd_lockdown
+    import hp_uefi_lockdown
+
     _boot_lock_modules_available = True
 except ImportError:
     _boot_lock_modules_available = False
@@ -80,10 +81,12 @@ AGENT_VERSION = "1.0.0"
 # Config
 # ---------------------------------------------------------------------------
 
+
 # Determine if running as a PyInstaller-bundled executable
 def _is_frozen():
     """Check if the agent is running as a PyInstaller bundle."""
-    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+    return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+
 
 # Base directory: PyInstaller bundle dir, or script dir
 _BASE_DIR = Path(sys._MEIPASS) if _is_frozen() else Path(__file__).parent
@@ -92,10 +95,10 @@ _BASE_DIR = Path(sys._MEIPASS) if _is_frozen() else Path(__file__).parent
 _EXE_DIR = Path(sys.executable).parent if _is_frozen() else Path(__file__).parent
 
 # System config directory (for bundled agent)
-if sys.platform == 'win32':
-    _SYSTEM_CONFIG_DIR = Path(os.environ.get('PROGRAMDATA', 'C:\\ProgramData')) / 'LockdownAgent'
+if sys.platform == "win32":
+    _SYSTEM_CONFIG_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
 else:
-    _SYSTEM_CONFIG_DIR = Path('/etc/lockdown-agent')
+    _SYSTEM_CONFIG_DIR = Path("/etc/lockdown-agent")
 
 # State directory: persistent writable location for runtime state files.
 # When frozen (PyInstaller bundle): use platform-specific system directory
@@ -103,29 +106,29 @@ else:
 # When running from source (dev/test): use the script directory so existing
 # tests and dev workflows keep working without root/admin privileges.
 if _is_frozen():
-    if sys.platform == 'win32':
-        _STATE_DIR = Path(os.environ.get('PROGRAMDATA', 'C:\\ProgramData')) / 'LockdownAgent'
+    if sys.platform == "win32":
+        _STATE_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
     else:
-        _STATE_DIR = Path('/var/lib/lockdown-agent')
+        _STATE_DIR = Path("/var/lib/lockdown-agent")
 else:
     _STATE_DIR = Path(__file__).parent
 
 # Default config file locations (searched in order)
 _CONFIG_SEARCH_PATHS = [
-    _EXE_DIR / 'config.json',
-    _EXE_DIR / 'config.ini',
-    _SYSTEM_CONFIG_DIR / 'agent-config.json',
-    _SYSTEM_CONFIG_DIR / 'config.ini',
-    _BASE_DIR / 'config.ini',  # legacy fallback (script directory)
+    _EXE_DIR / "config.json",
+    _EXE_DIR / "config.ini",
+    _SYSTEM_CONFIG_DIR / "agent-config.json",
+    _SYSTEM_CONFIG_DIR / "config.ini",
+    _BASE_DIR / "config.ini",  # legacy fallback (script directory)
 ]
 
 # Runtime state files (all live in _STATE_DIR so they persist across reboots
 # when bundled, and stay in the script directory during dev/test).
-PENDING_ACK_FILE  = _STATE_DIR / '.pending_ack'
-RECOVERY_KEY_FILE = _STATE_DIR / '.recovery_key'
-DEADMAN_FILE      = _STATE_DIR / '.deadman'
-HEARTBEAT_FILE    = _STATE_DIR / '.heartbeat'
-DEADMAN_KEY_FILE  = _STATE_DIR / '.deadman_key'
+PENDING_ACK_FILE = _STATE_DIR / ".pending_ack"
+RECOVERY_KEY_FILE = _STATE_DIR / ".recovery_key"
+DEADMAN_FILE = _STATE_DIR / ".deadman"
+HEARTBEAT_FILE = _STATE_DIR / ".heartbeat"
+DEADMAN_KEY_FILE = _STATE_DIR / ".deadman_key"
 
 
 def _find_config_file(cli_config_path=None):
@@ -153,42 +156,48 @@ def _load_json_config(config_path):
     load_config() can fall back to its built-in defaults for missing keys.
     JSON keys are mapped to the internal config dict key names.
     """
-    with open(config_path, 'r') as f:
+    with open(config_path) as f:
         data = json.load(f)
 
     section = {}
 
     # server_url — direct mapping
-    if 'server_url' in data:
-        section['server_url'] = data['server_url']
+    if "server_url" in data:
+        section["server_url"] = data["server_url"]
 
     # agent_key — JSON may use any of several key names (api_key, agent_key,
     # device_api_key) depending on when the enrollment page was last updated.
-    for json_key in ('api_key', 'agent_key', 'device_api_key'):
+    for json_key in ("api_key", "agent_key", "device_api_key"):
         if json_key in data and data[json_key]:
-            section['agent_key'] = data[json_key]
+            section["agent_key"] = data[json_key]
             break
 
     # hostname — JSON may use device_hostname or hostname
-    for json_key in ('device_hostname', 'hostname'):
+    for json_key in ("device_hostname", "hostname"):
         if json_key in data and data[json_key]:
-            section['hostname'] = data[json_key]
+            section["hostname"] = data[json_key]
             break
 
     # Numeric/string settings — convert to string for consistency with INI
-    for json_key in ('poll_interval', 'location_interval'):
+    for json_key in ("poll_interval", "location_interval"):
         if json_key in data:
             section[json_key] = str(data[json_key])
 
     # Boolean settings — convert to lowercase string ("true"/"false")
-    for json_key in ('verify_tls', 'boot_lock_enabled', 'server_supports_ack_dedup'):
+    for json_key in ("verify_tls", "boot_lock_enabled", "server_supports_ack_dedup"):
         if json_key in data:
             section[json_key] = str(data[json_key]).lower()
 
     # String settings — direct mapping (only if non-empty)
-    for json_key in ('lockdown_folder', 'lock_sentinel', 'google_api_key',
-                     'uefi_password', 'pending_ack_file', 'recovery_key_file',
-                     'recovery_public_key'):
+    for json_key in (
+        "lockdown_folder",
+        "lock_sentinel",
+        "google_api_key",
+        "uefi_password",
+        "pending_ack_file",
+        "recovery_key_file",
+        "recovery_public_key",
+    ):
         if json_key in data and data[json_key]:
             section[json_key] = data[json_key]
 
@@ -217,7 +226,7 @@ def load_config(config_path=None) -> dict:
     # Find and load the config file
     found_path = _find_config_file(config_path)
 
-    if found_path and found_path.suffix == '.json':
+    if found_path and found_path.suffix == ".json":
         section = _load_json_config(found_path)
         log.info("Loaded JSON config from: %s", found_path)
     elif found_path:
@@ -228,32 +237,44 @@ def load_config(config_path=None) -> dict:
         section = {}
 
     return {
-        "server_url": os.environ.get("SERVER_URL", section.get("server_url", "https://localhost:3001")),
+        "server_url": os.environ.get(
+            "SERVER_URL", section.get("server_url", "https://localhost:3001")
+        ),
         # FA3: Per-device API key (preferred) with AGENT_SHARED_KEY legacy fallback.
         # The per-device key is provisioned at enrollment and unique to this device.
         # The legacy shared key is used only for devices that haven't been
         # re-enrolled with a per-device key yet (CC5 per-device fallback).
-        "agent_key": os.environ.get("DEVICE_API_KEY", os.environ.get(
-            "AGENT_SHARED_KEY", section.get("agent_key", section.get("device_api_key", ""))
-        )),
-        "hostname": os.environ.get("DEVICE_HOSTNAME", section.get("hostname", socket.gethostname())),
+        "agent_key": os.environ.get(
+            "DEVICE_API_KEY",
+            os.environ.get(
+                "AGENT_SHARED_KEY", section.get("agent_key", section.get("device_api_key", ""))
+            ),
+        ),
+        "hostname": os.environ.get(
+            "DEVICE_HOSTNAME", section.get("hostname", socket.gethostname())
+        ),
         "poll_interval": int(os.environ.get("POLL_INTERVAL", section.get("poll_interval", "30"))),
         "lockdown_folder": Path(
-            os.environ.get("LOCKDOWN_FOLDER", section.get("lockdown_folder", str(Path.home() / "SecureData")))
+            os.environ.get(
+                "LOCKDOWN_FOLDER", section.get("lockdown_folder", str(Path.home() / "SecureData"))
+            )
         ),
         "lock_sentinel": Path(
             os.environ.get("LOCK_SENTINEL", section.get("lock_sentinel", str(_EXE_DIR / ".locked")))
         ),
         "verify_tls": section.get("verify_tls", "true").lower() != "false",
         "google_api_key": os.environ.get("GOOGLE_API_KEY", section.get("google_api_key", "")),
-        "location_interval": int(os.environ.get("LOCATION_INTERVAL", section.get("location_interval", "300"))),
+        "location_interval": int(
+            os.environ.get("LOCATION_INTERVAL", section.get("location_interval", "300"))
+        ),
         # Boot lockdown: when True, the agent locks the UEFI/BIOS and BCD
         # on lockdown commands and reverts them on unlock. Requires Windows
         # + HP WMI BIOS interface (for UEFI lockdown). BCD lockdown works
         # on any Windows machine.
         "boot_lock_enabled": os.environ.get(
             "BOOT_LOCK_ENABLED", section.get("boot_lock_enabled", "true")
-        ).lower() != "false",
+        ).lower()
+        != "false",
         # Pre-existing BIOS Setup password (if the machine already has one).
         # If empty and no password is set, the agent generates a random one.
         # If empty and a password IS set, UEFI lockdown is skipped (can't
@@ -261,11 +282,15 @@ def load_config(config_path=None) -> dict:
         "uefi_password": os.environ.get("UEFI_PASSWORD", section.get("uefi_password", "")),
         # A1/A4: Pending ACK state file (transient, deleted on ACK success)
         "pending_ack_file": Path(
-            os.environ.get("PENDING_ACK_FILE", section.get("pending_ack_file", str(PENDING_ACK_FILE)))
+            os.environ.get(
+                "PENDING_ACK_FILE", section.get("pending_ack_file", str(PENDING_ACK_FILE))
+            )
         ),
         # A8: Recovery key file (long-lived, RSA-wrapped, deleted on unlock)
         "recovery_key_file": Path(
-            os.environ.get("RECOVERY_KEY_FILE", section.get("recovery_key_file", str(RECOVERY_KEY_FILE)))
+            os.environ.get(
+                "RECOVERY_KEY_FILE", section.get("recovery_key_file", str(RECOVERY_KEY_FILE))
+            )
         ),
         # A8: IT's offline master recovery PUBLIC key (PEM). Private key never on device.
         "recovery_public_key": os.environ.get(
@@ -274,7 +299,8 @@ def load_config(config_path=None) -> dict:
         # A4: Flip to true once server supports command_id dedup on encryption_keys
         "server_supports_ack_dedup": os.environ.get(
             "SERVER_SUPPORTS_ACK_DEDUP", section.get("server_supports_ack_dedup", "false")
-        ).lower() != "false",
+        ).lower()
+        != "false",
     }
 
 
@@ -321,6 +347,7 @@ def validate_config(cfg: dict) -> None:
 # Encryption helpers (Fernet = AES-128-CBC + HMAC-SHA256)
 # ---------------------------------------------------------------------------
 
+
 def generate_key() -> bytes:
     return Fernet.generate_key()
 
@@ -336,6 +363,7 @@ def wipe_key(key: bytearray) -> None:
     if not isinstance(key, bytearray):
         return
     import ctypes
+
     buf = (ctypes.c_char * len(key)).from_buffer(key)
     ctypes.memset(buf, 0, len(key))
 
@@ -363,6 +391,7 @@ def encrypt_folder(folder: Path, key: bytes) -> None:
             filepath.unlink()
             log.info("Encrypted: %s", filepath.name)
 
+
 def decrypt_folder(folder: Path, key: bytes) -> None:
     """Decrypt all .enc files inside `folder`. Never touches files outside it."""
     folder = folder.resolve()
@@ -375,6 +404,7 @@ def decrypt_folder(folder: Path, key: bytes) -> None:
             original_path.write_bytes(decrypted)
             enc_path.unlink()
             log.info("Decrypted: %s", original_path.name)
+
 
 # ---------------------------------------------------------------------------
 # Lock screen (platform-specific, best-effort)
@@ -390,12 +420,14 @@ _BANNER = (
     "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n"
 )
 
+
 def _lock_workstation() -> None:
     """Platform-specific workstation lock. Best-effort, no banner."""
     system = platform.system()
     if system == "Windows":
         try:
             import ctypes
+
             ctypes.windll.user32.LockWorkStation()
         except Exception as e:
             log.warning("Windows lock failed: %s", e)
@@ -409,14 +441,23 @@ def _lock_workstation() -> None:
                 continue
     elif system == "Darwin":
         try:
-            subprocess.run(["/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession", "-suspend"], timeout=5)
+            subprocess.run(
+                [
+                    "/System/Library/CoreServices/Menu Extras/"
+                    "User.menu/Contents/Resources/CGSession",
+                    "-suspend",
+                ],
+                timeout=5,
+            )
         except Exception as e:
             log.warning("macOS lock failed: %s", e)
+
 
 def apply_lock_screen() -> None:
     """Lock the workstation and display the stolen banner."""
     _lock_workstation()
     print(_BANNER)
+
 
 # ---------------------------------------------------------------------------
 # Lock guardian — background thread that re-asserts the lock screen so a
@@ -426,6 +467,7 @@ def apply_lock_screen() -> None:
 LOCK_GUARDIAN_INTERVAL = 10  # seconds between re-lock attempts
 _lock_guardian_stop: threading.Event | None = None
 _lock_guardian_thread: threading.Thread | None = None
+
 
 def start_lock_guardian() -> None:
     """Start (or restart) the background thread that re-locks the screen."""
@@ -438,6 +480,7 @@ def start_lock_guardian() -> None:
     _lock_guardian_thread.start()
     log.info("Lock guardian started — re-asserting lock every %ds", LOCK_GUARDIAN_INTERVAL)
 
+
 def stop_lock_guardian() -> None:
     """Stop the lock guardian thread if one is running."""
     global _lock_guardian_stop, _lock_guardian_thread
@@ -448,45 +491,58 @@ def stop_lock_guardian() -> None:
     _lock_guardian_stop = None
     _lock_guardian_thread = None
 
+
 def _lock_guardian_loop(stop_event: threading.Event) -> None:
     """Background loop — re-lock the screen at regular intervals."""
     while not stop_event.is_set():
         _lock_workstation()
         stop_event.wait(LOCK_GUARDIAN_INTERVAL)
 
+
 def remove_lock_screen() -> None:
     stop_lock_guardian()
     log.info("Lock screen removed — normal login restored")
+
 
 # ---------------------------------------------------------------------------
 # Hardware identity
 # ---------------------------------------------------------------------------
 
+
 def get_mac_address() -> str:
     """Return the primary MAC address as a colon-separated string."""
     mac = uuid.getnode()
-    return ':'.join(('%012X' % mac)[i:i+2] for i in range(0, 12, 2))
+    return ":".join(f"{mac:012X}"[i : i + 2] for i in range(0, 12, 2))
+
 
 def get_hardware_uuid() -> str:
     """Return a stable hardware UUID from the OS."""
     system = platform.system()
     try:
         if system == "Windows":
-            result = subprocess.check_output(
-                ["wmic", "csproduct", "get", "UUID"],
-                timeout=10, stderr=subprocess.DEVNULL
-            ).decode().strip().split()
+            result = (
+                subprocess.check_output(
+                    ["wmic", "csproduct", "get", "UUID"], timeout=10, stderr=subprocess.DEVNULL
+                )
+                .decode()
+                .strip()
+                .split()
+            )
             return result[-1] if result else str(uuid.getnode())
         elif system == "Linux":
-            result = subprocess.check_output(
-                ["cat", "/sys/class/dmi/id/product_uuid"],
-                timeout=10, stderr=subprocess.DEVNULL
-            ).decode().strip()
+            result = (
+                subprocess.check_output(
+                    ["cat", "/sys/class/dmi/id/product_uuid"], timeout=10, stderr=subprocess.DEVNULL
+                )
+                .decode()
+                .strip()
+            )
             return result
         elif system == "Darwin":
             result = subprocess.check_output(
                 ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
-                timeout=10, stderr=subprocess.DEVNULL
+                timeout=10,
+                stderr=subprocess.DEVNULL,
             ).decode()
             for line in result.splitlines():
                 if "IOPlatformUUID" in line:
@@ -495,9 +551,11 @@ def get_hardware_uuid() -> str:
         log.warning("Could not get hardware UUID: %s", e)
     return str(uuid.getnode())
 
+
 # ---------------------------------------------------------------------------
 # Geolocation — WiFi-based triangulation + IP fallback
 # ---------------------------------------------------------------------------
+
 
 def scan_wifi_networks() -> list[dict]:
     """Scan nearby WiFi networks. Returns list of {bssid, ssid, signal, channel}.
@@ -505,7 +563,8 @@ def scan_wifi_networks() -> list[dict]:
     Uses platform-native tools:
       - Windows: netsh wlan show networks mode=bssid
       - Linux:   nmcli dev wifi list
-      - macOS:   /System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s
+      - macOS:   /System/Library/PrivateFrameworks/Apple80211.framework/
+                 Versions/Current/Resources/airport -s
     """
     networks = []
     system = platform.system()
@@ -513,7 +572,8 @@ def scan_wifi_networks() -> list[dict]:
         if system == "Windows":
             output = subprocess.check_output(
                 ["netsh", "wlan", "show", "networks", "mode=bssid"],
-                timeout=10, stderr=subprocess.DEVNULL
+                timeout=10,
+                stderr=subprocess.DEVNULL,
             ).decode("utf-8", errors="replace")
             # Parse netsh output — blocks separated by BSSID lines
             current_ssid = None
@@ -532,7 +592,8 @@ def scan_wifi_networks() -> list[dict]:
         elif system == "Linux":
             output = subprocess.check_output(
                 ["nmcli", "-t", "-f", "BSSID,SSID,SIGNAL,FREQ", "dev", "wifi", "list"],
-                timeout=10, stderr=subprocess.DEVNULL
+                timeout=10,
+                stderr=subprocess.DEVNULL,
             ).decode("utf-8", errors="replace")
             for line in output.splitlines():
                 parts = line.split(":")
@@ -541,16 +602,28 @@ def scan_wifi_networks() -> list[dict]:
                     ssid = parts[6] if len(parts) > 6 else ""
                     signal = int(parts[-2]) if parts[-2].isdigit() else 0
                     freq = parts[-1]
-                    networks.append({"ssid": ssid, "bssid": bssid, "signal": signal, "frequency": freq})
+                    networks.append(
+                        {"ssid": ssid, "bssid": bssid, "signal": signal, "frequency": freq}
+                    )
         elif system == "Darwin":
             output = subprocess.check_output(
-                ["/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport", "-s"],
-                timeout=10, stderr=subprocess.DEVNULL
+                [
+                    "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport",
+                    "-s",
+                ],
+                timeout=10,
+                stderr=subprocess.DEVNULL,
             ).decode("utf-8", errors="replace")
             for line in output.splitlines()[1:]:
                 parts = line.split()
                 if len(parts) >= 5:
-                    networks.append({"ssid": parts[0], "bssid": parts[1], "signal": int(parts[2]) if parts[2].isdigit() else 0})
+                    networks.append(
+                        {
+                            "ssid": parts[0],
+                            "bssid": parts[1],
+                            "signal": int(parts[2]) if parts[2].isdigit() else 0,
+                        }
+                    )
     except Exception as e:
         log.warning("WiFi scan failed: %s", e)
     return networks
@@ -653,20 +726,24 @@ def report_location(cfg: dict) -> dict | None:
             verify=cfg["verify_tls"],
         )
         resp.raise_for_status()
-        log.info("Location reported: %.4f, %.4f (%s, ~%sm)",
-                 location.get("latitude", 0),
-                 location.get("longitude", 0),
-                 location.get("source", "unknown"),
-                 location.get("accuracy_meters", location.get("accuracy", "?")))
+        log.info(
+            "Location reported: %.4f, %.4f (%s, ~%sm)",
+            location.get("latitude", 0),
+            location.get("longitude", 0),
+            location.get("source", "unknown"),
+            location.get("accuracy_meters", location.get("accuracy", "?")),
+        )
         return location
     except requests.RequestException as e:
         log.warning("Location report failed: %s — queuing offline", e)
-        queue_offline('/api/agent/location', payload)
+        queue_offline("/api/agent/location", payload)
         return None
+
 
 # ---------------------------------------------------------------------------
 # HMAC request signing (Phase 0 security hardening)
 # ---------------------------------------------------------------------------
+
 
 def sign_headers(agent_key: str, body_bytes: bytes) -> dict:
     """Build HMAC-signed headers for a request to the server.
@@ -713,12 +790,13 @@ def _signed_post(url: str, cfg: dict, json_body: dict, **kwargs) -> requests.Res
     # Merge any caller-provided headers (e.g., none currently, but future-proof)
     headers.update(kwargs.pop("headers", {}))
     headers.setdefault("Content-Type", "application/json")
-    return requests.post(url, data=body_bytes, headers=headers, **kwargs)
+    return requests.post(url, data=body_bytes, headers=headers, **kwargs)  # noqa: S113 -- timeout is passed by all callers via **kwargs
 
 
 # ---------------------------------------------------------------------------
 # Server communication
 # ---------------------------------------------------------------------------
+
 
 def checkin(cfg: dict) -> dict | None:
     try:
@@ -738,6 +816,7 @@ def checkin(cfg: dict) -> dict | None:
     except requests.RequestException as e:
         log.warning("Check-in failed: %s", e)
         return None
+
 
 def ack_command(
     cfg: dict,
@@ -784,7 +863,9 @@ def ack_command(
             verify=cfg["verify_tls"],
         )
         resp.raise_for_status()
-        log.info("ACK sent: command=%s status=%s uuid=%s", command_id, result_status, command_uuid[:8])
+        log.info(
+            "ACK sent: command=%s status=%s uuid=%s", command_id, result_status, command_uuid[:8]
+        )
         return True
     except requests.RequestException as e:
         log.error("ACK failed: %s", e)
@@ -799,16 +880,16 @@ def ack_command(
 # data are queued locally and synced when connectivity returns.
 # ACKs are already handled by the pending ACK mechanism (A1/A4).
 
-import sqlite3
+import sqlite3  # noqa: E402 -- imported after sys.path setup for offline queue module
 
 # Offline queue database (in _STATE_DIR)
-OFFLINE_QUEUE_DB = _STATE_DIR / '.offline_queue.db'
+OFFLINE_QUEUE_DB = _STATE_DIR / ".offline_queue.db"
 
 
 def _get_queue_db() -> sqlite3.Connection:
     """Get a connection to the offline queue database."""
     conn = sqlite3.connect(str(OFFLINE_QUEUE_DB))
-    conn.execute('''
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS offline_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             endpoint TEXT NOT NULL,
@@ -816,7 +897,7 @@ def _get_queue_db() -> sqlite3.Connection:
             created_at REAL NOT NULL,
             attempts INTEGER DEFAULT 0
         )
-    ''')
+    """)
     conn.commit()
     return conn
 
@@ -826,8 +907,8 @@ def queue_offline(endpoint: str, payload: dict) -> None:
     try:
         conn = _get_queue_db()
         conn.execute(
-            'INSERT INTO offline_queue (endpoint, payload, created_at) VALUES (?, ?, ?)',
-            (endpoint, json.dumps(payload), time.time())
+            "INSERT INTO offline_queue (endpoint, payload, created_at) VALUES (?, ?, ?)",
+            (endpoint, json.dumps(payload), time.time()),
         )
         conn.commit()
         conn.close()
@@ -840,7 +921,7 @@ def _queue_size() -> int:
     """Return the number of items in the offline queue."""
     try:
         conn = _get_queue_db()
-        row = conn.execute('SELECT COUNT(*) FROM offline_queue').fetchone()
+        row = conn.execute("SELECT COUNT(*) FROM offline_queue").fetchone()
         conn.close()
         return row[0] if row else 0
     except Exception as e:
@@ -860,7 +941,8 @@ def drain_offline_queue(cfg: dict) -> None:
     try:
         conn = _get_queue_db()
         rows = conn.execute(
-            'SELECT id, endpoint, payload, attempts FROM offline_queue ORDER BY created_at ASC LIMIT 50'
+            "SELECT id, endpoint, payload, attempts "
+            "FROM offline_queue ORDER BY created_at ASC LIMIT 50"
         ).fetchall()
 
         sent = 0
@@ -875,17 +957,18 @@ def drain_offline_queue(cfg: dict) -> None:
                     verify=cfg["verify_tls"],
                 )
                 resp.raise_for_status()
-                conn.execute('DELETE FROM offline_queue WHERE id = ?', (row_id,))
+                conn.execute("DELETE FROM offline_queue WHERE id = ?", (row_id,))
                 sent += 1
-            except Exception as e:
+            except Exception:
                 # Increment attempt count; give up after 10 attempts
                 conn.execute(
-                    'UPDATE offline_queue SET attempts = attempts + 1 WHERE id = ?',
-                    (row_id,)
+                    "UPDATE offline_queue SET attempts = attempts + 1 WHERE id = ?", (row_id,)
                 )
                 if attempts >= 10:
-                    log.warning("Dropping offline queue item after %d attempts: %s", attempts, endpoint)
-                    conn.execute('DELETE FROM offline_queue WHERE id = ?', (row_id,))
+                    log.warning(
+                        "Dropping offline queue item after %d attempts: %s", attempts, endpoint
+                    )
+                    conn.execute("DELETE FROM offline_queue WHERE id = ?", (row_id,))
                 break  # Stop on first failure (server might be down again)
 
         conn.commit()
@@ -900,11 +983,13 @@ def drain_offline_queue(cfg: dict) -> None:
 # Pending ACK persistence (A1 + A4)
 # ---------------------------------------------------------------------------
 
+
 def _fsync_file(path: Path) -> None:
     """Ensure file contents are flushed to disk (crash safety)."""
     import contextlib
+
     with contextlib.suppress(Exception):
-        with open(path, 'r+b') as f:
+        with open(path, "r+b") as f:
             f.flush()
             os.fsync(f.fileno())
 
@@ -999,6 +1084,7 @@ def drain_pending_ack(cfg: dict) -> None:
 # Recovery key persistence (A8) — RSA-wrapped, long-lived
 # ---------------------------------------------------------------------------
 
+
 def _get_recovery_public_key(cfg: dict):
     """Load the RSA public key for wrapping recovery keys.
 
@@ -1013,8 +1099,7 @@ def _get_recovery_public_key(cfg: dict):
         return None
     try:
         from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import padding
-        from cryptography.hazmat.primitives import hashes
+
         pem_data = pem_path.read_bytes()
         public_key = serialization.load_pem_public_key(pem_data)
         return public_key
@@ -1043,8 +1128,8 @@ def write_recovery_key(
         log.info("No recovery public key configured — skipping recovery key file")
         return
     try:
-        from cryptography.hazmat.primitives.asymmetric import padding
         from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
 
         # Wrap the Fernet key (bytes) with RSA-OAEP
         wrapped_key = public_key.encrypt(
@@ -1087,9 +1172,11 @@ def delete_recovery_key() -> None:
         RECOVERY_KEY_FILE.unlink()
         log.info("Recovery key file deleted (unlock successful)")
 
+
 # ---------------------------------------------------------------------------
 # Phase 7: User notification (ethical transparency)
 # ---------------------------------------------------------------------------
+
 
 def show_lockdown_notification() -> None:
     """Show a desktop notification when the device is marked stolen.
@@ -1116,29 +1203,37 @@ def show_lockdown_notification() -> None:
     )
 
     try:
-        if sys.platform == 'win32':
+        if sys.platform == "win32":
             # Use ctypes to call MessageBoxW (doesn't require any GUI framework)
             import ctypes
+
             ctypes.windll.user32.MessageBoxW(0, message, title, 0x30)  # MB_ICONWARNING
-        elif sys.platform == 'darwin':
+        elif sys.platform == "darwin":
             # macOS: use osascript
             import subprocess
-            subprocess.Popen([
-                'osascript', '-e',
-                f'display notification "{message}" with title "{title}"'
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            subprocess.Popen(
+                ["osascript", "-e", f'display notification "{message}" with title "{title}"'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         else:
             # Linux: try notify-send
             import subprocess
-            subprocess.Popen([
-                'notify-send', '--icon=dialog-warning', title, message
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            subprocess.Popen(
+                ["notify-send", "--icon=dialog-warning", title, message],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
     except Exception as e:
         log.info("Could not show lockdown notification: %s", e)
+
 
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
+
 
 def handle_lockdown(cfg: dict, command: dict) -> None:
     log.warning("LOCKDOWN command received — executing")
@@ -1226,7 +1321,10 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
             if hp_result.get("not_hp"):
                 log.info("UEFI boot lockdown skipped (not an HP machine)")
             elif hp_result.get("rolled_back"):
-                log.error("UEFI lockdown critically failed and was rolled back — BIOS password retained for operator action")
+                log.error(
+                    "UEFI lockdown critically failed and was rolled back "
+                    "— BIOS password retained for operator action"
+                )
                 boot_lock_status = "partial"
             elif hp_result.get("partial"):
                 log.warning("UEFI lockdown applied with some best-effort failures")
@@ -1243,11 +1341,15 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                 boot_lock_status = "partial"
 
     # Update File A with bios_password + boot_lock_status for ACK retry
-    update_pending_ack(pending_ack_file, bios_password=bios_password, boot_lock_status=boot_lock_status)
+    update_pending_ack(
+        pending_ack_file, bios_password=bios_password, boot_lock_status=boot_lock_status
+    )
 
     # --- A4: ACK with return value. On success, delete File A (NOT File B). ---
     ok = ack_command(
-        cfg, command["id"], "executed",
+        cfg,
+        command["id"],
+        "executed",
         key_material=key_b64,
         bios_password=bios_password,
         boot_lock_status=boot_lock_status,
@@ -1272,6 +1374,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         show_lockdown_notification()
     except Exception as e:
         log.info("Lockdown notification failed: %s", e)
+
 
 def handle_unlock(cfg: dict, command: dict) -> None:
     log.info("UNLOCK command received")
@@ -1323,16 +1426,22 @@ def handle_unlock(cfg: dict, command: dict) -> None:
                 log.info("UEFI boot lockdown removed — BIOS restored to pre-lockdown state")
                 del bios_password
             except Exception as e:
-                log.error("UEFI lockdown removal failed: %s — admin may need to clear BIOS manually", e)
+                log.error(
+                    "UEFI lockdown removal failed: %s — admin may need to clear BIOS manually", e
+                )
         else:
-            log.warning("No BIOS password in unlock command — cannot remove UEFI lockdown automatically")
+            log.warning(
+                "No BIOS password in unlock command — cannot remove UEFI lockdown automatically"
+            )
 
     del key
     ack_command(cfg, command["id"], "executed")
 
+
 def handle_status(cfg: dict, command: dict) -> None:
     log.info("STATUS command received — reporting OK")
     ack_command(cfg, command["id"], "executed")
+
 
 def handle_track(cfg: dict, command: dict) -> None:
     """Switch to covert tracking mode. No visible action — just report location."""
@@ -1342,16 +1451,19 @@ def handle_track(cfg: dict, command: dict) -> None:
     # ACK as executed — server will set status to 'tracking'
     ack_command(cfg, command["id"], "executed")
 
+
 def handle_stop_track(cfg: dict, command: dict) -> None:
     """Exit covert tracking mode — return to normal active status."""
     log.info("STOP_TRACK command received — exiting tracking mode")
     ack_command(cfg, command["id"], "executed")
+
 
 def handle_locate(cfg: dict, command: dict) -> None:
     """One-time location ping. Reports current geolocation without changing mode."""
     log.info("LOCATE command received — reporting one-time location")
     report_location(cfg)
     ack_command(cfg, command["id"], "executed")
+
 
 COMMAND_HANDLERS = {
     "lockdown": handle_lockdown,
@@ -1366,12 +1478,14 @@ COMMAND_HANDLERS = {
 # Startup check (persist lock across reboots)
 # ---------------------------------------------------------------------------
 
+
 def startup_check(cfg: dict) -> None:
     sentinel = cfg["lock_sentinel"]
     if sentinel.exists():
         log.warning("Device was previously locked — re-asserting lock screen")
         apply_lock_screen()
         start_lock_guardian()
+
 
 # ---------------------------------------------------------------------------
 # Dead man's switch
@@ -1395,12 +1509,18 @@ DEADMAN_TIMEOUT_HOURS = 24  # Lock if flagged-stolen and offline for this long
 # Survives ACK success, reboots, and server loss — enables offline recovery.
 # (Path defined at top of module via _STATE_DIR.)
 
+
 def update_deadman_timer(status: str) -> None:
     """Write current time + device status to the dead man's file."""
-    DEADMAN_FILE.write_text(json.dumps({
-        "last_seen": time.time(),
-        "status": status,
-    }))
+    DEADMAN_FILE.write_text(
+        json.dumps(
+            {
+                "last_seen": time.time(),
+                "status": status,
+            }
+        )
+    )
+
 
 def check_deadman(cfg: dict) -> None:
     """If device was flagged stolen and hasn't reached server in DEADMAN_TIMEOUT_HOURS, lock it."""
@@ -1414,7 +1534,7 @@ def check_deadman(cfg: dict) -> None:
         if elapsed_hours >= DEADMAN_TIMEOUT_HOURS:
             log.warning(
                 "DEAD MAN SWITCH: device was stolen and offline for %.1fh — triggering lockdown",
-                elapsed_hours
+                elapsed_hours,
             )
             sentinel = cfg["lock_sentinel"]
             if not sentinel.exists():
@@ -1434,10 +1554,13 @@ def check_deadman(cfg: dict) -> None:
                 # network connectivity is restored — without this the device
                 # would be permanently unrecoverable.
                 DEADMAN_KEY_FILE.write_text(key_b64)
-                log.warning("Deadman lockdown complete — key stored locally for upload on reconnection")
+                log.warning(
+                    "Deadman lockdown complete — key stored locally for upload on reconnection"
+                )
                 del key, key_b64
     except Exception as e:
         log.error("Dead man check failed: %s", e)
+
 
 def report_deadman_key(cfg: dict) -> None:
     """If a deadman key is stored locally, upload it to the server and wipe the local copy."""
@@ -1466,6 +1589,7 @@ def report_deadman_key(cfg: dict) -> None:
     except Exception as e:
         log.error("Deadman key upload failed: %s", e)
 
+
 # ---------------------------------------------------------------------------
 # Auto-update (Phase 4)
 # ---------------------------------------------------------------------------
@@ -1485,9 +1609,9 @@ def report_deadman_key(cfg: dict) -> None:
 # while the binary is running) and lets the watchdog handle the swap.
 
 # Update signal file (watchdog watches for this)
-UPDATE_PENDING_FILE = _STATE_DIR / '.update_pending'
+UPDATE_PENDING_FILE = _STATE_DIR / ".update_pending"
 # Downloaded binary (watchdog moves this to replace the current binary)
-UPDATE_DOWNLOAD_FILE = _STATE_DIR / '.update_downloaded'
+UPDATE_DOWNLOAD_FILE = _STATE_DIR / ".update_downloaded"
 
 # Check for updates at most once per hour (not every checkin)
 UPDATE_CHECK_INTERVAL = 3600  # seconds
@@ -1522,8 +1646,7 @@ def check_for_update(cfg: dict) -> None:
         download_url = data.get("download_url", "")
         size = data.get("size", 0)
 
-        log.info("Update available: %s → %s (%s bytes)",
-                 AGENT_VERSION, latest_version, size)
+        log.info("Update available: %s → %s (%s bytes)", AGENT_VERSION, latest_version, size)
 
         # Download the new binary
         if not download_url:
@@ -1550,16 +1673,17 @@ def download_update(cfg: dict, url: str, expected_sha256: str, version: str) -> 
         headers = sign_headers(cfg["agent_key"], b"")
         headers["X-Agent-Platform"] = "win" if sys.platform == "win32" else "linux"
 
-        resp = requests.get(url, headers=headers, stream=True,
-                            timeout=120, verify=cfg["verify_tls"])
+        resp = requests.get(
+            url, headers=headers, stream=True, timeout=120, verify=cfg["verify_tls"]
+        )
         resp.raise_for_status()
 
         # Download to temp file first, then rename (atomic)
-        tmp_file = UPDATE_DOWNLOAD_FILE.with_suffix('.tmp')
+        tmp_file = UPDATE_DOWNLOAD_FILE.with_suffix(".tmp")
         sha256 = hashlib.sha256()
         total = 0
 
-        with open(tmp_file, 'wb') as f:
+        with open(tmp_file, "wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):
                 if chunk:
                     f.write(chunk)
@@ -1568,8 +1692,9 @@ def download_update(cfg: dict, url: str, expected_sha256: str, version: str) -> 
 
         actual_sha256 = sha256.hexdigest()
         if actual_sha256 != expected_sha256:
-            log.error("Update SHA-256 mismatch: expected %s, got %s",
-                      expected_sha256, actual_sha256)
+            log.error(
+                "Update SHA-256 mismatch: expected %s, got %s", expected_sha256, actual_sha256
+            )
             tmp_file.unlink(missing_ok=True)
             return
 
@@ -1579,6 +1704,7 @@ def download_update(cfg: dict, url: str, expected_sha256: str, version: str) -> 
 
         # Write signal file for watchdog
         import json as _json
+
         signal = {
             "version": version,
             "sha256": actual_sha256,
@@ -1615,15 +1741,17 @@ def clear_update_signal() -> None:
 # Main polling loop
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     # Parse command-line arguments
-    parser = argparse.ArgumentParser(description='Remote Device Lockdown Agent')
-    parser.add_argument('--config', '-c', type=str, default=None,
-                        help='Path to config file (JSON or INI format)')
-    parser.add_argument('--silent', action='store_true',
-                        help='Suppress stdout logging for covert operation')
-    parser.add_argument('--version', '-v', action='store_true',
-                        help='Show version and exit')
+    parser = argparse.ArgumentParser(description="Remote Device Lockdown Agent")
+    parser.add_argument(
+        "--config", "-c", type=str, default=None, help="Path to config file (JSON or INI format)"
+    )
+    parser.add_argument(
+        "--silent", action="store_true", help="Suppress stdout logging for covert operation"
+    )
+    parser.add_argument("--version", "-v", action="store_true", help="Show version and exit")
     args, _ = parser.parse_known_args()
 
     if args.version:
@@ -1648,8 +1776,12 @@ def main() -> None:
         logging.disable(logging.INFO)
         log.info("Running in silent mode — stdout logging suppressed")
 
-    log.info("Agent starting — hostname=%s server=%s poll=%ss",
-             cfg["hostname"], cfg["server_url"], cfg["poll_interval"])
+    log.info(
+        "Agent starting — hostname=%s server=%s poll=%ss",
+        cfg["hostname"],
+        cfg["server_url"],
+        cfg["poll_interval"],
+    )
     startup_check(cfg)
 
     # Clear any stale update signal from a previous run
@@ -1696,8 +1828,12 @@ def main() -> None:
             server_poll = data.get("poll_interval")
             if server_poll and isinstance(server_poll, (int, float)) and server_poll > 0:
                 if server_poll != effective_poll_interval:
-                    log.info("Adaptive polling: %ss → %ss (status=%s)",
-                             effective_poll_interval, int(server_poll), current_status)
+                    log.info(
+                        "Adaptive polling: %ss → %ss (status=%s)",
+                        effective_poll_interval,
+                        int(server_poll),
+                        current_status,
+                    )
                 effective_poll_interval = int(server_poll)
 
             command = data.get("command")
@@ -1729,6 +1865,7 @@ def main() -> None:
                 last_update_check = now
 
         time.sleep(effective_poll_interval)
+
 
 if __name__ == "__main__":
     main()

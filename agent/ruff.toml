@@ -32,7 +32,11 @@ ignore = [
 
 [lint.per-file-ignores]
 # Tests: relax security rules that conflict with test fixtures.
-"tests/**/*.py" = ["S101", "S105", "S106", "S311"]
+# - S306 (mktemp): test fixtures use mktemp() to generate unique non-existent
+#   sentinel paths; the race-condition risk is irrelevant in test context.
+# - S108 (hardcoded /tmp): test fixtures use /tmp/test-lockdown as a known
+#   temp directory; safe in isolated test environments.
+"tests/**/*.py" = ["S101", "S105", "S106", "S306", "S108", "S311"]
 
 [format]
 # Use double quotes + trailing commas to match existing style.

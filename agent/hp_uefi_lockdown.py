@@ -63,9 +63,9 @@ WMI interface reference:
 import json
 import logging
 import platform
-import subprocess
 import secrets
 import string
+import subprocess
 from pathlib import Path
 
 log = logging.getLogger("lockdown-agent")
@@ -105,6 +105,7 @@ def set_dry_run(enabled: bool) -> None:
 # ---------------------------------------------------------------------------
 # Admin check (Phase 4.1 — fail-fast before any state writes)
 # ---------------------------------------------------------------------------
+
 
 def _is_admin() -> bool:
     """Check if the current process has admin/elevation privileges.
@@ -185,6 +186,7 @@ SET_BIOS_RETURN_CODES = {
 # ---------------------------------------------------------------------------
 # PowerShell / WMI helpers
 # ---------------------------------------------------------------------------
+
 
 def _run_powershell(script: str, timeout: int = 30) -> str:
     """Run a PowerShell command and return stdout. Raises on failure."""
@@ -271,8 +273,8 @@ def _read_setting(name: str) -> str | None:
         )
         if output:
             return output
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("HP_BIOSEnumeration query failed for '%s': %s", name, e)
     # Fall back to HP_BIOSSetting
     try:
         output = _run_powershell(
@@ -281,8 +283,8 @@ def _read_setting(name: str) -> str | None:
         )
         if output:
             return output
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("HP_BIOSSetting query failed for '%s': %s", name, e)
     return None
 
 
@@ -320,7 +322,9 @@ def _set_and_verify(name: str, value: str, password: str) -> bool:
     if rc != 0:
         log.warning(
             "BIOS setting '%s' → '%s' failed: %s",
-            name, value, SET_BIOS_RETURN_CODES.get(rc, f"code {rc}")
+            name,
+            value,
+            SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
         )
         return False
 
@@ -331,8 +335,7 @@ def _set_and_verify(name: str, value: str, password: str) -> bool:
         return False
     if current.lower() != value.lower():
         log.warning(
-            "BIOS setting '%s' verification failed: expected '%s', got '%s'",
-            name, value, current
+            "BIOS setting '%s' verification failed: expected '%s', got '%s'", name, value, current
         )
         return False
 
@@ -358,6 +361,7 @@ def _is_setup_password_set() -> bool:
 # Password generation
 # ---------------------------------------------------------------------------
 
+
 def generate_bios_password(length: int = 12) -> str:
     """Generate a random BIOS-compatible password.
 
@@ -366,12 +370,13 @@ def generate_bios_password(length: int = 12) -> str:
     cause keyboard layout issues in pre-boot environment).
     """
     alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 # ---------------------------------------------------------------------------
 # State save / restore
 # ---------------------------------------------------------------------------
+
 
 def save_boot_state(password_was_set: bool, settings: dict) -> None:
     """Save pre-lockdown BIOS state to a file for later restoration."""
@@ -405,6 +410,7 @@ def clear_boot_state() -> None:
 # Rollback (CC18 — on critical failure, restore BIOS to pre-lockdown state)
 # ---------------------------------------------------------------------------
 
+
 def _rollback_bios_settings(saved_settings: dict, bios_password: str) -> bool:
     """Restore BIOS settings to pre-lockdown values.
 
@@ -430,7 +436,9 @@ def _rollback_bios_settings(saved_settings: dict, bios_password: str) -> bool:
         else:
             log.error(
                 "Rollback: failed to restore '%s' to '%s': %s — non-fatal, continuing",
-                setting_name, original_value, SET_BIOS_RETURN_CODES.get(rc, f"code {rc}")
+                setting_name,
+                original_value,
+                SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
             )
             all_ok = False
 
@@ -447,6 +455,7 @@ def _rollback_bios_settings(saved_settings: dict, bios_password: str) -> bool:
 # ---------------------------------------------------------------------------
 # Public API: apply / remove boot lockdown
 # ---------------------------------------------------------------------------
+
 
 def apply_boot_lockdown(existing_password: str | None = None) -> dict:
     """Apply UEFI/BIOS lockdown on an HP machine.
@@ -514,7 +523,9 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
         log.info("Setting new BIOS Setup password...")
         rc = _set_setting("Setup Password", bios_password, None)
         if rc != 0:
-            log.error("Failed to set Setup password: %s", SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"))
+            log.error(
+                "Failed to set Setup password: %s", SET_BIOS_RETURN_CODES.get(rc, f"code {rc}")
+            )
             return result
         log.info("BIOS Setup password set successfully")
     else:
@@ -556,7 +567,7 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
     if critical_failed > 0:
         log.error(
             "UEFI lockdown: %d critical setting(s) failed — rolling back BIOS changes",
-            critical_failed
+            critical_failed,
         )
         # CC18: Rollback does NOT clear the Setup Password
         _rollback_bios_settings(saved_settings, bios_password)
@@ -584,7 +595,9 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
 
     log.info(
         "UEFI lockdown applied: %d critical, %d best-effort succeeded, %d best-effort failed",
-        critical_applied, best_effort_applied, best_effort_failed
+        critical_applied,
+        best_effort_applied,
+        best_effort_failed,
     )
 
     result["success"] = True
@@ -622,7 +635,6 @@ def remove_boot_lockdown(bios_password: str) -> bool:
             restore_settings[setting_name] = None  # None = set to safe default
     else:
         restore_settings = state.get("settings", {})
-        password_was_set = state.get("setup_password_was_set", False)
 
     # Restore each setting to its original value (or safe default)
     safe_defaults = {
@@ -657,7 +669,9 @@ def remove_boot_lockdown(bios_password: str) -> bool:
         else:
             log.warning(
                 "Failed to restore '%s' to '%s': %s",
-                setting_name, original, SET_BIOS_RETURN_CODES.get(rc, f"code {rc}")
+                setting_name,
+                original,
+                SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
             )
 
     log.info("Restored %d BIOS settings to pre-lockdown state", restored)
@@ -670,9 +684,8 @@ def remove_boot_lockdown(bios_password: str) -> bool:
             log.info("BIOS Setup password cleared successfully")
         else:
             log.warning(
-                "Failed to clear Setup password: %s — "
-                "admin may need to clear it manually in BIOS",
-                SET_BIOS_RETURN_CODES.get(rc, f"code {rc}")
+                "Failed to clear Setup password: %s — admin may need to clear it manually in BIOS",
+                SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
             )
     else:
         log.info("Setup password was pre-existing — not clearing (admin manages it)")
