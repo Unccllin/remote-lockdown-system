@@ -81,7 +81,7 @@ test-server:
 	@cd server && npm test
 
 test-agent:
-	@cd agent && python3 -m pytest -q || echo "agent: no pytest tests or pytest not installed"
+	@cd agent && python3 -m pytest tests/ -q
 
 test-dashboard:
 	@cd dashboard && npm test

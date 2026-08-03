@@ -65,8 +65,10 @@ jobs:
       - run: npm ci
 
       # Security: fail the build on known high/critical vulnerabilities.
-      - name: npm audit (high+)
-        run: npm audit --audit-level=high
+      # Uses audit-with-exceptions.sh to allow documented false positives
+      # (e.g. npm advisory database lag on react-router 7.18.2).
+      - name: npm audit (high+, with documented exceptions)
+        run: ../scripts/audit-with-exceptions.sh
         continue-on-error: false
 
       - run: npm test

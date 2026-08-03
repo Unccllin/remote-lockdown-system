@@ -23,12 +23,15 @@
   },
   "dependencies": {
     "electron-log": "^5.2.0",
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
-    "@electron/rebuild": "3.6.1",
-    "electron": "^33.0.0",
-    "electron-builder": "25.1.8"
+    "@electron/rebuild": "3.7.2",
+    "electron": "^41.7.1",
+    "electron-builder": "^26.15.3"
+  },
+  "overrides": {
+    "tar": "^7.5.21"
   },
   "build": {
     "appId": "com.remotelockdown.admin",
@@ -103,7 +106,9 @@
         }
       ],
       "icon": "build/icon.ico",
-      "publisherName": "Remote Lockdown",
+      "signtoolOptions": {
+        "publisherName": "Remote Lockdown"
+      },
       "verifyUpdateCodeSignature": false
     },
     "mac": {

@@ -73,7 +73,7 @@ describe('withTransaction', () => {
   });
 
   test('releases client after success', async () => {
-    const client = await mockPool.connect();
+    const _client = await mockPool.connect();
     await withTransaction(async (c) => {
       await c.query('SELECT 1');
     });
@@ -83,7 +83,7 @@ describe('withTransaction', () => {
 
   test('releases client after error', async () => {
     await expect(
-      withTransaction(async (c) => {
+      withTransaction(async (_c) => {
         throw new Error('fail');
       })
     ).rejects.toThrow('fail');

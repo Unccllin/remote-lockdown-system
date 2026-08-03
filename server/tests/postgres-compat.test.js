@@ -36,8 +36,8 @@ const { clearKeyCache } = require('../src/db/crypto');
 // Test setup: run migrations against in-memory PGlite
 // ---------------------------------------------------------------------------
 
-let adminId;
-let deviceId;
+let _adminId;
+let _deviceId;
 
 beforeAll(async () => {
   // PGlite WASM init is slow — allow up to 30s
@@ -84,7 +84,7 @@ describe('Admin CRUD (PostgreSQL)', () => {
     expect(await bcrypt.compare(password, result.rows[0].password_hash)).toBe(true);
     expect(await bcrypt.compare('wrong-password', result.rows[0].password_hash)).toBe(false);
 
-    adminId = id;
+    _adminId = id;
   });
 
   test('username UNIQUE constraint raises 23505 on duplicate', async () => {
@@ -140,7 +140,7 @@ describe('Device CRUD (PostgreSQL)', () => {
     const stolen = await pglitePool.query('SELECT status FROM devices WHERE id = $1', [device.id]);
     expect(stolen.rows[0].status).toBe('stolen');
 
-    deviceId = device.id;
+    _deviceId = device.id;
   });
 
   test('DELETE device with RETURNING id (devices.js delete route)', async () => {

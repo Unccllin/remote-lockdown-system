@@ -19,7 +19,6 @@
 
 const sqlite = require('sqlite');
 const sqlite3 = require('sqlite3');
-const crypto = require('crypto');
 const path = require('path');
 
 let _db = null;
@@ -146,7 +145,7 @@ function returnsRows(sql) {
  * @param {string} dbPath — path to .db file, or ':memory:'
  * @param {object} opts — { verbose: fn } for SQL logging
  */
-async function openDb(dbPath, opts = {}) {
+async function openDb(dbPath) {
   if (_db) return _db;
 
   // Enable WAL mode for better concurrent read performance

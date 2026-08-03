@@ -301,6 +301,7 @@ async function downloadBinaryFromGitHub(internalPlatform, binaryName) {
     );
   }
   const hash = crypto.createHash('sha256').update(data).digest('hex');
+  // eslint-disable-next-line security/detect-possible-timing-attacks -- comparing a public checksum, not a secret
   if (hash !== expected) {
     throw new Error(`Checksum mismatch for ${assetName}: expected ${expected}, got ${hash}`);
   }
@@ -314,7 +315,6 @@ async function downloadBinaryFromGitHub(internalPlatform, binaryName) {
   }
 
   // Use the local platform's naming convention for the cached file
-  const plat = getPlatformConfig(internalPlatform);
   const localName = internalPlatform === 'win'
     ? `${binaryName}.exe`
     : binaryName;
@@ -430,7 +430,7 @@ function findNsis() {
   try {
     const which = execFileSync("which", ["makensis"], { encoding: "utf8" }).trim();
     if (which && fs.existsSync(which)) return { bin: which, dataDir: "/usr/share/nsis" };
-  } catch (_) {}
+  } catch (_) { /* makensis not found via which — fall through */ }
   return null;
 }
 function generateNsisScript(config, hostname, agentBinPath, watchdogBinPath) {

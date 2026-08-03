@@ -1,7 +1,6 @@
 const request = require('supertest');
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
 
 const { mockPool } = require('./mockPool');
 jest.mock('../src/db/pool', () => mockPool);
@@ -543,7 +542,6 @@ describe('FA3: Per-device API key authentication', () => {
   test('rejects with invalid per-device key', async () => {
     const { device } = provisionDevice({ hostname: 'PD-002' });
     // Override: hash lookup checks the hash param — only return device for correct hash
-    const { hashApiKey } = require('../src/db/apiKey');
     const correctHash = device.api_key_hash;
     mockPool.query.setResult('SELECT * FROM devices WHERE api_key_hash', (sql, params) => {
       if (params[0] === correctHash) return { rows: [device] };
@@ -603,7 +601,7 @@ describe('FA3: Per-device API key authentication', () => {
   });
 
   test('per-device key works across all agent routes', async () => {
-    const { device, apiKey } = provisionDevice({ hostname: 'ALLROUTES-001', status: 'stolen' });
+    const { apiKey } = provisionDevice({ hostname: 'ALLROUTES-001', status: 'stolen' });
     const cmd = { id: 'cmd-1', command_type: 'lockdown' };
     mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
 

@@ -110,7 +110,7 @@ describe('FA7: SQLi regression smoke test', () => {
       mockPool.query.setResult('SELECT * FROM devices WHERE hostname', { rows: [device] });
       mockPool.query.setResult('SELECT * FROM commands', { rows: [] });
 
-      const res = await request(app)
+      const _res = await request(app)
         .post('/api/agent/checkin')
         .set('x-agent-key', process.env.AGENT_SHARED_KEY)
         .send({ hostname: payload });
@@ -138,7 +138,7 @@ describe('FA7: SQLi regression smoke test', () => {
       mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
       mockPool.query.setResult('INSERT INTO commands', { rows: [{ id: 'cmd-1' }] });
 
-      const res = await request(app)
+      const _res = await request(app)
         .post(`/api/devices/${payload}/flag-stolen`)
         .set('Authorization', `Bearer ${makeToken()}`)
         .send({ hostname_confirm: 'DEV-001' });

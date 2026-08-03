@@ -70,7 +70,6 @@ function splitSqlStatements(sql) {
     // Handle dollar-quoted blocks ($$tag$$ or $tag$...$tag$)
     if (!inString && ch === '$') {
       // Try to read a dollar tag
-      const dollarStart = i;
       let j = i + 1;
       let tag = '';
       while (j < sql.length && sql[j] !== '$' && /[a-zA-Z0-9_]/.test(sql[j])) {

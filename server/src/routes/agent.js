@@ -2,7 +2,7 @@ const express = require('express');
 const pool = require('../db/pool');
 const { withTransaction } = require('../db/withTransaction');
 const { encryptField, readDualMode } = require('../db/fieldCrypto');
-const { hashApiKey, verifyApiKey, verifySharedKey } = require('../db/apiKey');
+const { hashApiKey, verifySharedKey } = require('../db/apiKey');
 const { hmacVerify } = require('../middleware/hmacAuth');
 const { getAgentBinariesDir } = require('../config/paths');
 

@@ -1,7 +1,6 @@
 const request = require('supertest');
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
 
 const { mockPool } = require('./mockPool');
 jest.mock('../src/db/pool', () => mockPool);
@@ -627,9 +626,9 @@ describe('FA5: Retention scheduler', () => {
 
   test('runRetentionPurge deletes old location reports and writes audit log', async () => {
     // Mock: advisory lock succeeds, DELETE returns 5 rows, audit insert succeeds
-    let callIdx = 0;
+    let _callIdx = 0;
     mockPool.query.mockImplementation(async (sql) => {
-      callIdx++;
+      _callIdx++;
       if (sql.includes('pg_try_advisory_lock')) {
         return { rows: [{ pg_try_advisory_lock: true }] };
       }

@@ -17,7 +17,6 @@ process.env.LOCATION_FIELD_KEY = 'b'.repeat(64);
 process.env.SQLITE_PATH = ':memory:';
 
 const crypto = require('crypto');
-const path = require('path');
 
 // Helper to generate UUIDs (SQLite doesn't have gen_random_uuid at runtime)
 function uuid() {
