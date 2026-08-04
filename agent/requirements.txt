@@ -1,5 +1,5 @@
 # Pinned dependencies for the Remote Device Lockdown Agent.
 # FA6: Use == pins for reproducible installs. Update with pip-tools/hashin
 # for hash-pinning in a follow-up.
-cryptography==43.0.1
-requests==2.32.3
+cryptography==50.0.0
+requests==2.34.2

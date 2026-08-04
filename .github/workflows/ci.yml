@@ -100,10 +100,11 @@ jobs:
       - name: pip-audit
         run: |
           pip install pip-audit
-          # --strict fails on Ubuntu system packages (command-not-found,
-          # python-apt, etc.) that aren't on PyPI. Without --strict, pip-audit
-          # still reports vulnerabilities but exits 0 for unresolvable deps.
-          pip-audit
+          # Audit only the project's dependencies (not system packages like
+          # python-apt, command-not-found, etc. which have their own vulns
+          # that aren't our responsibility). We use -r to audit the pinned
+          # requirements in an isolated venv.
+          pip-audit -r requirements.txt
         continue-on-error: false
 
       - run: pytest tests/ -v

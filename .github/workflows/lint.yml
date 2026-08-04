@@ -104,6 +104,8 @@ jobs:
       - name: Run actionlint
         # Pin to a specific version for reproducibility.
         run: |
-          # Download actionlint binary for the runner's arch.
-          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          # Download actionlint v1.7.12 binary directly (the download-actionlint.bash
+          # script uses process substitution which can fail under set -e in CI).
+          curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz | tar xz actionlint
+          chmod +x actionlint
           ./actionlint -color

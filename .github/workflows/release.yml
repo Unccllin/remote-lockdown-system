@@ -76,7 +76,7 @@ jobs:
         run: cd agent && pip install -r requirements.txt pytest ruff pip-audit
 
       - name: Agent — pip-audit
-        run: cd agent && pip-audit
+        run: cd agent && pip-audit -r requirements.txt
 
       - name: Agent — ruff
         run: cd agent && ruff check *.py tests/
