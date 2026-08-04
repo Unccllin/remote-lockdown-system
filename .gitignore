@@ -39,6 +39,8 @@ electron/node_modules/
 # Generated secrets and recovery keys (never commit)
 secrets/
 keys/
+# Electron runtime config (generated at runtime, contains secrets)
+electron/config.json
 # SQLite dev database
 server/.sqlite-data/
 server/lockdown.db
