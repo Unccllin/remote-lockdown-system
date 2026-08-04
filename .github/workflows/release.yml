@@ -76,7 +76,7 @@ jobs:
         run: cd agent && pip install -r requirements.txt pytest ruff pip-audit
 
       - name: Agent — pip-audit
-        run: cd agent && pip-audit --strict
+        run: cd agent && pip-audit
 
       - name: Agent — ruff
         run: cd agent && ruff check *.py tests/
@@ -124,7 +124,7 @@ jobs:
             platform: linux
             arch: x64
             ext: ""
-          - os: macos-13
+          - os: macos-15-intel
             label: darwin-x64
             platform: darwin
             arch: x64
@@ -301,7 +301,7 @@ jobs:
         include:
           - os: macos-latest
             arch: arm64
-          - os: macos-13
+          - os: macos-15-intel
             arch: x64
     runs-on: ${{ matrix.os }}
     defaults:
@@ -342,13 +342,13 @@ jobs:
       # Build DMG for this arch only. --publish never: the publish-macos
       # job handles publishing + manifest merging.
       - run: npx electron-builder --mac --${{ matrix.arch }} --publish never
-        env:
-          # Apple Developer signing (uncomment when configured):
-          # CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          # CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # Apple Developer signing (uncomment env block when configured):
+        # env:
+        #   CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+        #   CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        #   APPLE_ID: ${{ secrets.APPLE_ID }}
+        #   APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        #   APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       # Upload DMG + per-arch latest-mac.yml for the publish job to merge.
       - name: Upload DMG artifact
