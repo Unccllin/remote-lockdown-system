@@ -712,13 +712,20 @@ check_docker() {
   # Check if Docker daemon is available for live testing
   if has docker && docker info >/dev/null 2>&1; then
     record_pass "docker-daemon" "Docker daemon available"
-    echo "  Running live Docker validation (this takes ~60s)..."
-    local live_output
-    live_output=$("$validate_script" --live 2>&1 || true)
-    if echo "$live_output" | grep -qi "pass\|ok\|healthy"; then
-      record_pass "docker-live" "live validation passed"
+
+    # Live validation requires .env.prod (gitignored — not present in CI).
+    # Skip gracefully rather than failing when it's absent.
+    if [[ ! -f "$PROJECT_ROOT/.env.prod" ]]; then
+      record_skip "docker-live" ".env.prod not present (live validation requires it)"
     else
-      record_fail "docker-live" "live validation failed: $(echo "$live_output" | tail -3 | tr '\n' ' ')"
+      echo "  Running live Docker validation (this takes ~60s)..."
+      local live_output
+      live_output=$("$validate_script" --live 2>&1 || true)
+      if echo "$live_output" | grep -qi "pass\|ok\|healthy"; then
+        record_pass "docker-live" "live validation passed"
+      else
+        record_fail "docker-live" "live validation failed: $(echo "$live_output" | tail -3 | tr '\n' ' ')"
+      fi
     fi
   else
     record_skip "docker-daemon" "Docker not installed or daemon not running"
