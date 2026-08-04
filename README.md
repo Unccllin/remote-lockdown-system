@@ -4,13 +4,18 @@ Anti-theft system for field devices. Lets IT admins remotely flag a stolen devic
 
 ```
 remote-lockdown-system/
-├── server/          # Node.js / Express API + PostgreSQL
-├── dashboard/       # React + Vite + Tailwind admin UI
+├── server/          # Node.js / Express API + PostgreSQL + serves dashboard
+├── dashboard/       # React + Vite + Tailwind admin UI (built, served by server)
 ├── agent/           # Python background agent (runs on managed device)
 ├── electron/        # Electron desktop app (packaged admin + agent installer)
 ├── docs/            # Legal, security, and testing documentation
 └── docker-compose.prod.yml  # Cloud deployment (Postgres + Caddy + server)
 ```
+
+The server serves both the API (`/api/*`) and the built dashboard (static
+files + SPA fallback) from a single Express process on one origin. This
+eliminates CORS configuration and ensures the dashboard loads even when
+the database is down — the React app handles API failures via error toasts.
 
 ---
 
@@ -36,7 +41,7 @@ See [electron/README.md](electron/README.md) for build + sign instructions.
 ```bash
 cp .env.prod.example .env.prod
 # Edit .env.prod with your domain, DB password, JWT secret, etc.
-docker compose -f docker-compose.prod.yml up -d
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 ```
 
 This starts PostgreSQL, the admin server, and Caddy (auto-HTTPS).
@@ -99,10 +104,10 @@ python agent.py
 ## Architecture
 
 ```
-Admin Dashboard (React)
-        │  JWT auth
+Admin Dashboard (React SPA)
+        │  same-origin, JWT auth
         ▼
-  Express API (Node)
+  Express API (Node) ── also serves dashboard/dist (static + SPA fallback)
         │  Reads/writes
         ▼
   PostgreSQL
@@ -150,7 +155,7 @@ Admin Dashboard (React)
 | `JWT_SECRET` | Long random secret for signing tokens |
 | `JWT_EXPIRES_IN` | Token lifetime (default `8h`) |
 | `AGENT_SHARED_KEY` | Pre-shared key the agent uses to authenticate |
-| `CORS_ORIGIN` | Dashboard origin (default `http://localhost:5173`) |
+| `CORS_ORIGIN` | Optional. Dashboard origin for dev (e.g., `http://localhost:5173` for Vite). When unset, CORS is disabled (production same-origin). |
 
 ### Agent (env vars or `config.ini`)
 | Variable | Description |

@@ -41,6 +41,7 @@ secrets/
 keys/
 # SQLite dev database
 server/.sqlite-data/
+server/lockdown.db
 # Python venv
 .venv/
 # k6 binary (downloaded locally)

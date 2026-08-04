@@ -44,15 +44,18 @@ services:
       NODE_ENV: production
       # Database
       DATABASE_URL: postgres://${POSTGRES_USER:-lockdown}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-lockdown}
-      DB_SSL_VERIFY: "false"  # Internal network, no SSL needed between containers
+      DB_SSL: "false"  # Internal network, no SSL needed between containers
+      DB_SSL_VERIFY: "false"  # Would allow self-signed if SSL were enabled
       # Security keys (from .env.prod)
       JWT_SECRET: ${JWT_SECRET}
       AGENT_SHARED_KEY: ${AGENT_SHARED_KEY}
       AGENT_KEY_PEPPER: ${AGENT_KEY_PEPPER}
       FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
       LOCATION_FIELD_KEY: ${LOCATION_FIELD_KEY}
-      # CORS
-      CORS_ORIGIN: ${CORS_ORIGIN:-https://your-domain.com}
+      # CORS — optional: only needed if serving the dashboard from a different
+      # origin (e.g., Vite dev server on :5173). When unset, CORS is disabled
+      # (the dashboard is same-origin in production, so CORS is unnecessary).
+      # CORS_ORIGIN: ${CORS_ORIGIN}
       # Port
       PORT: "3001"
       # Location retention (days)

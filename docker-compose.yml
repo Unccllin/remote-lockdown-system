@@ -23,7 +23,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3001
-      - CORS_ORIGIN=http://localhost:5173
+      - CORS_ORIGIN=http://localhost:5173  # Vite dev server (separate port)
       # Secrets via _FILE convention (CC12) — mount as Docker secrets
       # For dev/test without secrets, set these directly in .env:
       # - FIELD_ENCRYPTION_KEY=...
@@ -47,15 +47,9 @@ services:
       - agent_key_pepper
     restart: unless-stopped
 
-  # Frontend dashboard (optional — uncomment if you have a frontend build)
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   ports:
-  #     - "5173:5173"
-  #   depends_on:
-  #     - server
+  # The dashboard is served by the server itself (same origin) in production.
+  # For dev with hot-reload, run `cd dashboard && npm run dev` (Vite on :5173)
+  # with the proxy in vite.config.js forwarding /api to this server on :3001.
 
 volumes:
   pglite-data:

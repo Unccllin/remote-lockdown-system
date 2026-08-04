@@ -10,9 +10,10 @@
  * without needing a module mock (jest.mock is unavailable outside Jest,
  * e.g. in Playwright).
  *
- * FA6: SSL configuration is controlled by DB_SSL_VERIFY env var.
- * - DB_SSL_VERIFY=true (default): reject unauthorized SSL connections
- * - DB_SSL_VERIFY=false: allow self-signed certs (dev/test only — warns in prod)
+ * FA6: SSL configuration is controlled by DB_SSL and DB_SSL_VERIFY env vars.
+ * - DB_SSL=false: disable SSL entirely (internal networks, e.g. docker-compose)
+ * - DB_SSL=true (default) + DB_SSL_VERIFY=true (default): reject unauthorized
+ * - DB_SSL=true (default) + DB_SSL_VERIFY=false: allow self-signed certs (dev/test)
  *
  * Previously, ssl: { rejectUnauthorized: false } was hardcoded, which silently
  * accepted any SSL certificate — a MITM risk in production.
@@ -29,9 +30,10 @@ function createPgPool() {
   const { Pool } = require('pg');
 
   const sslVerify = process.env.DB_SSL_VERIFY !== 'false'; // default: true (secure)
+  const sslEnabled = process.env.DB_SSL !== 'false'; // default: true (use SSL)
 
   const sslConfig = process.env.DATABASE_URL
-    ? { rejectUnauthorized: sslVerify }
+    ? (sslEnabled ? { rejectUnauthorized: sslVerify } : undefined)
     : undefined; // individual vars mode: SSL only if explicitly configured
 
   if (process.env.DATABASE_URL && !sslVerify && process.env.NODE_ENV === 'production') {

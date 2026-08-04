@@ -5,6 +5,8 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
+const fs = require('fs');
 
 const authRoutes = require('./routes/auth');
 const devicesRoutes = require('./routes/devices');
@@ -20,7 +22,13 @@ const { startAlertScheduler } = require('./jobs/alertScheduler');
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173' }));
+
+// CORS: only enable when CORS_ORIGIN is explicitly set (e.g., dev with Vite
+// on port 5173). In production the dashboard is served from the same origin,
+// so CORS is unnecessary and is omitted for a tighter security posture.
+if (process.env.CORS_ORIGIN) {
+  app.use(cors({ origin: process.env.CORS_ORIGIN }));
+}
 
 // Phase 0: capture raw body for HMAC signature verification.
 // express.json() parses the body but we also need the raw bytes to compute
@@ -82,6 +90,55 @@ app.get('/api/health', async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   }
+});
+
+// --- Static dashboard serving + SPA fallback ---
+// Serves the built Vite SPA from the same Express process as the API.
+// This merges frontend + backend into one origin, eliminating CORS config
+// and ensuring the dashboard loads even when the DB is down (static files
+// are filesystem-based, independent of DB state — the React app handles
+// API failures via error toasts).
+//
+// Path resolution: from server/src/ this reaches repo-root/dashboard/dist.
+// In the Docker image (WORKDIR /app) it resolves to /app/dashboard/dist.
+const dashboardDistPath = path.join(__dirname, '../../dashboard/dist');
+
+if (fs.existsSync(dashboardDistPath)) {
+  const indexPath = path.resolve(dashboardDistPath, 'index.html');
+
+  // Hashed assets (assets/*) get immutable 1-year caching — filenames change
+  // on content change, so stale caches never serve wrong content.
+  // index.html is never cached so users always get the latest asset hashes.
+  app.use(express.static(dashboardDistPath, {
+    index: false, // don't auto-serve index.html — SPA fallback handles it
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }));
+
+  // SPA fallback: serve index.html for any non-API, non-metrics route.
+  // This supports client-side routing (react-router) — e.g., /devices/123
+  // loads index.html which boots React and renders the right page.
+  // Excludes /api/* (returns 404 JSON above) and /metrics (Prometheus endpoint).
+  // index.html is never cached so users always get the latest asset hashes.
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/') || req.path === '/metrics') return next();
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.sendFile(indexPath);
+  });
+} else if (process.env.NODE_ENV === 'production') {
+  console.warn('[startup] dashboard/dist not found — dashboard will not be served.');
+  console.warn(`[startup] looked for: ${dashboardDistPath}`);
+}
+
+// 404 JSON for unmatched API routes — prevents API clients from receiving
+// index.html (the SPA fallback) for non-existent endpoints.
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: 'Not found' });
 });
 
 app.use((err, req, res, _next) => {

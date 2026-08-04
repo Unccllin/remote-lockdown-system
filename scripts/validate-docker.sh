@@ -258,7 +258,10 @@ check_live() {
     return
   fi
 
-  local compose_cmd=(docker compose -f "$COMPOSE_FILE")
+  # --env-file loads .env.prod for ${VAR} interpolation in the compose file.
+  # Docker Compose only auto-loads .env (not .env.prod), so this is required
+  # for POSTGRES_PASSWORD, JWT_SECRET, etc. to reach the containers.
+  local compose_cmd=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
   echo "  building and starting stack..."
   if ! "${compose_cmd[@]}" up -d --build >/dev/null 2>&1; then
     fail "docker compose up failed"

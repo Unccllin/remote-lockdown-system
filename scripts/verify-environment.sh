@@ -267,8 +267,9 @@ check_nsis() {
     return
   fi
 
-  # Compile a test installer via the server's NSIS functions
-  if ! has node; then
+  # Compile a test installer via the server's NSIS functions.
+  # Accept node on PATH OR the known fallback location used below.
+  if ! has node && [[ ! -f "$HOME/.local/node/bin/node" ]]; then
     record_skip "nsis-compile" "node not found"
     return
   fi
@@ -712,10 +713,12 @@ check_docker() {
   if has docker && docker info >/dev/null 2>&1; then
     record_pass "docker-daemon" "Docker daemon available"
     echo "  Running live Docker validation (this takes ~60s)..."
-    if "$validate_script" --live 2>&1 | grep -qi "pass\|ok\|healthy"; then
+    local live_output
+    live_output=$("$validate_script" --live 2>&1 || true)
+    if echo "$live_output" | grep -qi "pass\|ok\|healthy"; then
       record_pass "docker-live" "live validation passed"
     else
-      record_fail "docker-live" "live validation failed"
+      record_fail "docker-live" "live validation failed: $(echo "$live_output" | tail -3 | tr '\n' ' ')"
     fi
   else
     record_skip "docker-daemon" "Docker not installed or daemon not running"
