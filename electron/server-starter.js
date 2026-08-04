@@ -102,8 +102,8 @@ async function seedInitialAdmin(pool, username, password) {
 
   const hash = bcrypt.hashSync(password, 10);
   await pool.query(
-    'INSERT INTO admins (id, username, password_hash) VALUES ($1, $2, $3)',
-    [crypto.randomUUID(), username, hash]
+    'INSERT INTO admins (id, username, password_hash, role) VALUES ($1, $2, $3, $4)',
+    [crypto.randomUUID(), username, hash, 'super-admin']
   );
   console.log(`[server-starter] Created initial admin: ${username}`);
   return true;

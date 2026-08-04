@@ -172,6 +172,24 @@ startSchedulerTracked();
 // Phase 13: Start the alert scheduler (stale-device + health-degradation checks)
 startAlertScheduler();
 
+// Run database migrations before starting the server.
+// In Electron mode, server-starter.js handles this separately (SQLite).
+// In cloud/Docker mode, this ensures the schema is initialized on first boot
+// and updated on subsequent deploys — no manual migration step needed.
+const { runMigrations } = require('./db/migrationRunner');
+const migrationDialect = process.env.USE_SQLITE === 'true' ? 'sqlite' : 'pg';
+
+runMigrations(pool, { dialect: migrationDialect })
+  .then(() => {
+    console.log('Migrations complete.');
+    startServer();
+  })
+  .catch((err) => {
+    console.error('Migration failed — server will start anyway (API may be degraded):', err.message);
+    startServer();
+  });
+
+function startServer() {
 const server = app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`DB mode: ${process.env.DATABASE_URL ? 'DATABASE_URL (cloud)' : 'individual vars (local)'}`);
@@ -185,6 +203,7 @@ const server = app.listen(PORT, async () => {
     console.error('DB error detail:', JSON.stringify(err));
   }
 });
+} // end startServer()
 
 // FA6: Graceful shutdown — 503 → stop scheduler → server.close → pool.end → hard exit
 // 10s total budget to prevent hanging on stuck connections.

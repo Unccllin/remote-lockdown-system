@@ -1,12 +1,36 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import api from '../api/client';
 import toast from 'react-hot-toast';
-import { MapPin, RefreshCw, Crosshair, ShieldOff, Wifi, Loader, WifiOff } from 'lucide-react';
+import { MapPin, RefreshCw, Crosshair, ShieldOff, Wifi, Loader, WifiOff, Satellite, Map as MapIcon } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+
+// Google Maps tile layer URLs
+const GOOGLE_TILES = {
+  streets:   'https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=en',
+  satellite: 'https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}&hl=en',
+  hybrid:    'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=en',
+  terrain:   'https://mt{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&hl=en',
+};
+
+// Swap tile layers dynamically without recreating the map
+function TileLayerSwitcher({ layerType }) {
+  const map = useMap();
+  useEffect(() => {
+    map.eachLayer((layer) => {
+      if (layer instanceof L.TileLayer) map.removeLayer(layer);
+    });
+    L.tileLayer(GOOGLE_TILES[layerType] || GOOGLE_TILES.streets, {
+      subdomains: ['0', '1', '2', '3'],
+      maxZoom: 21,
+      attribution: '&copy; Google Maps',
+    }).addTo(map);
+  }, [layerType, map]);
+  return null;
+}
 
 const STATUS_COLORS = {
   active: '#10b981',
@@ -58,6 +82,7 @@ export default function MapPage() {
   const navigate = useNavigate();
   const [points, setPoints] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [mapStyle, setMapStyle] = useState('streets'); // streets | satellite | hybrid | terrain
 
   async function load() {
     setLoading(true);
@@ -100,6 +125,13 @@ export default function MapPage() {
     count: counts[status] || 0,
   }));
 
+  const mapStyleButtons = [
+    { key: 'streets', label: 'Map', icon: <MapIcon size={14} /> },
+    { key: 'satellite', label: 'Satellite', icon: <Satellite size={14} /> },
+    { key: 'hybrid', label: 'Hybrid', icon: <Satellite size={14} /> },
+    { key: 'terrain', label: 'Terrain', icon: <MapIcon size={14} /> },
+  ];
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -109,10 +141,30 @@ export default function MapPage() {
             {points.length} device{points.length === 1 ? '' : 's'} with location data
           </p>
         </div>
-        <button className="btn-ghost" onClick={load}>
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Map style switcher */}
+          <div className="flex items-center gap-1 bg-slate-800/80 rounded-lg p-1 border border-slate-700">
+            {mapStyleButtons.map((btn) => (
+              <button
+                key={btn.key}
+                onClick={() => setMapStyle(btn.key)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  mapStyle === btn.key
+                    ? 'bg-blue-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                }`}
+                title={btn.label}
+              >
+                {btn.icon}
+                {btn.label}
+              </button>
+            ))}
+          </div>
+          <button className="btn-ghost" onClick={load}>
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -137,10 +189,7 @@ export default function MapPage() {
               style={{ height: '100%', width: '100%' }}
               className="h-[calc(100vh-200px)] rounded-xl"
             >
-              <TileLayer
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                attribution="&copy; OpenStreetMap contributors"
-              />
+              <TileLayerSwitcher layerType={mapStyle} />
               {points.map(({ device, location }) => {
                 const color = STATUS_COLORS[device.status] || STATUS_COLORS.inactive;
                 const icon = makeIcon(device.status);
