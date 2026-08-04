@@ -79,7 +79,7 @@ jobs:
         run: cd agent && pip-audit -r requirements.txt
 
       - name: Agent — ruff
-        run: cd agent && ruff check *.py tests/
+        run: cd agent && ruff check ./*.py tests/
 
       - name: Agent — tests
         run: cd agent && pytest tests/ -v
