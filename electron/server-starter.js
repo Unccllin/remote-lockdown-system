@@ -134,46 +134,55 @@ async function startServer(options = {}) {
     crossOriginEmbedderPolicy: false,
   }));
   app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
-  app.use(express.json());
-  app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
 
-  // API routes
+  // Raw body capture for HMAC signature verification (same as index.js)
+  app.use(express.json({
+    verify: (req, _res, buf) => {
+      req.rawBody = buf.toString('utf8');
+    },
+  }));
+
+  // Rate limiter on agent endpoint (same as index.js)
+  const agentLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  // API routes — kept in sync with server/src/index.js
   app.use('/api/auth', require(path.join(serverDir, 'src/routes/auth')));
-  app.use('/api/devices', require(path.join(serverDir, 'src/routes/devices')));
-  app.use('/api/agent', require(path.join(serverDir, 'src/routes/agent')));
-  app.use('/api/audit', require(path.join(serverDir, 'src/routes/audit')));
   app.use('/api/setup', require(path.join(serverDir, 'src/routes/setup')));
+  app.use('/api/devices', require(path.join(serverDir, 'src/routes/devices')));
+  app.use('/api/agent', agentLimiter, require(path.join(serverDir, 'src/routes/agent')));
+  app.use('/api/audit', require(path.join(serverDir, 'src/routes/audit')));
   app.use('/api/installer', require(path.join(serverDir, 'src/routes/installer')));
+  app.use('/api/health', require(path.join(serverDir, 'src/routes/health')));
+  app.use('/api/admins', require(path.join(serverDir, 'src/routes/admins')));
 
-  // Health check
-  app.get('/api/health', async (req, res) => {
-    if (req.headers['x-agent-key']) {
-      return res.status(400).json({ error: 'Health endpoint is not for agent use' });
-    }
-    try {
-      await pool.query('SELECT 1');
-      res.json({
-        status: 'ok',
-        db: 'sqlite',
-        timestamp: new Date().toISOString(),
-      });
-    } catch (err) {
-      res.status(503).json({
-        status: 'degraded',
-        db: 'disconnected',
-        error: err.message,
-        timestamp: new Date().toISOString(),
-      });
-    }
+  // 404 JSON for unmatched API routes — prevents API clients from
+  // receiving index.html (the SPA fallback) for non-existent endpoints.
+  app.all('/api/*', (req, res) => {
+    res.status(404).json({ error: 'Not found' });
   });
 
   // Serve built dashboard (production mode)
   if (dashboardDistPath && fs.existsSync(dashboardDistPath)) {
     const indexPath = path.resolve(dashboardDistPath, 'index.html');
-    app.use(express.static(dashboardDistPath));
+    app.use(express.static(dashboardDistPath, {
+      index: false,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('index.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      },
+    }));
     // SPA fallback: serve index.html for any non-API route
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api/')) return next();
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(indexPath);
     });
   }
