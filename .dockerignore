@@ -1,0 +1,14 @@
+# Exclude heavy/unnecessary paths from Docker build context.
+# node_modules are installed inside the container to avoid host/container
+# platform mismatches (especially for native modules like sqlite3).
+**/node_modules
+agent/.venv
+agent/dist
+agent/build
+dashboard/dist
+electron/dist-electron
+.git
+.sqlite-data
+*.db
+*.db-shm
+*.db-wal

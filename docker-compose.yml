@@ -51,8 +51,65 @@ services:
   # For dev with hot-reload, run `cd dashboard && npm run dev` (Vite on :5173)
   # with the proxy in vite.config.js forwarding /api to this server on :3001.
 
+  # ────────────────────────────────────────────────────────────────────────
+  # node-tester: Node.js test runner on the same Docker network as `server`.
+  #
+  # Mounts the project root so code changes are reflected without rebuilding.
+  # Default command installs deps and runs the server Jest suite. Override
+  # with the TEST_COMMAND env var or by passing a command to `docker compose run`.
+  #
+  # No ports are exposed — tests reach `server` internally at http://server:3001.
+  # ────────────────────────────────────────────────────────────────────────
+  node-tester:
+    image: node:20
+    working_dir: /app
+    volumes:
+      - .:/app
+      # Named volumes for node_modules so deps persist between runs.
+      # Without this, --rm containers discard installed deps and reinstall
+      # from scratch every time (30-60s wasted per run). Named volumes
+      # survive container removal — npm install becomes a fast no-op when
+      # package.json hasn't changed.
+      # These also shadow the host's node_modules (avoids platform mismatches
+      # with native modules like sqlite3).
+      - server-deps:/app/server/node_modules
+      - dashboard-deps:/app/dashboard/node_modules
+      - root-deps:/app/node_modules
+    environment:
+      - NODE_ENV=test
+      - ALLOW_NON_PROD=1
+      # Reach the `server` service by Docker Compose service name (same network)
+      - SERVER_URL=http://server:3001
+      - API_BASE_URL=http://server:3001/api
+      # Secrets — same Docker secrets as `server`, for integration tests that
+      # need to authenticate agent endpoints. Read via _FILE convention.
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+      - AGENT_KEY_PEPPER_FILE=/run/secrets/agent_key_pepper
+      - FIELD_ENCRYPTION_KEY_FILE=/run/secrets/field_encryption_key
+      - LOCATION_FIELD_KEY_FILE=/run/secrets/location_field_key
+      # Override this to change what runs, e.g.:
+      #   TEST_COMMAND="cd dashboard && npx vitest run" docker compose run --rm node-tester
+      - TEST_COMMAND=${TEST_COMMAND:-npm install && cd server && npm install && cd .. && npm run test:server}
+    secrets:
+      - field_encryption_key
+      - location_field_key
+      - jwt_secret
+      - agent_key_pepper
+    # No ports: — tests run inside the container and reach `server` via the
+    # Docker Compose default network.
+    # Entrypoint + command: the shell reads $TEST_COMMAND (set in environment:
+    # above) and evaluates it. $$ is used so Compose doesn't expand it on the
+    # host — the container's sh does the expansion at runtime.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["eval \"$$TEST_COMMAND\""]
+    profiles: ["test"]  # Only starts when explicitly requested (--profile test)
+
 volumes:
   pglite-data:
+  # node-tester: persistent dep caches so npm install is a no-op on reruns.
+  server-deps:
+  dashboard-deps:
+  root-deps:
 
 secrets:
   field_encryption_key:

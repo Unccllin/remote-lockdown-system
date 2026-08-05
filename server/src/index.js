@@ -21,6 +21,13 @@ const { startAlertScheduler } = require('./jobs/alertScheduler');
 
 const app = express();
 
+// Trust proxy headers (X-Forwarded-For, X-Forwarded-Proto) when running behind
+// a reverse proxy (Caddy, Nginx, etc.). Without this, express-rate-limit can't
+// identify clients correctly and throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+// 'loopback' trusts only localhost proxies (safe for single-proxy deployments).
+// For multi-proxy setups, use a specific number (e.g. 1) or CIDR range.
+app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
+
 app.use(helmet());
 
 // CORS: only enable when CORS_ORIGIN is explicitly set (e.g., dev with Vite
@@ -40,31 +47,73 @@ app.use(express.json({
   },
 }));
 
-// Global rate limiter (admin/dashboard endpoints)
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
-app.use(limiter);
+// Per-route rate limiters — different endpoints have different threat models:
+//
+//   authLimiter:      /api/auth/* — strict (200 req/15min per IP)
+//                     Protects login from brute-force / credential stuffing.
+//                     A human admin logs in once; automated attempts get blocked.
+//
+//   dashboardLimiter: /api/devices, /api/audit, /api/admins, /api/installer
+//                     — moderate (2000 req/15min per IP)
+//                     Read-heavy dashboard endpoints accessed by admins and
+//                     monitoring tools. 2000/15min = ~2 req/s sustained, enough
+//                     for a dashboard auto-refreshing every 5s + manual browsing.
+//
+//   agentLimiter:     /api/agent/* — per-device (600 req/15min per device)
+//                     Agents poll every 30s; 600/15min = 40/min headroom for
+//                     retries + command acks. Keyed on device ID or shared-key
+//                     + hostname to give each device its own bucket.
+//
+// Health endpoints (/api/health, /metrics) are not rate-limited — they're
+// used by Docker/Caddy health checks and Prometheus scraping, which need
+// reliable access regardless of traffic patterns.
 
-// Phase 0: Per-device rate limiter for agent endpoints.
-// Applied only to /api/agent/* — keyed on device ID (set by agentAuth) or
-// x-agent-key header (pre-auth). Stricter than the global limiter since
-// agents check in frequently.
+// Strict limiter for auth endpoints (brute-force protection).
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  message: { error: 'Too many login attempts — please try again later' },
+});
+
+// Moderate limiter for dashboard/API endpoints (read-heavy, admin-paced).
+const dashboardLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 2000,
+  standardHeaders: true,
+  message: { error: 'Too many requests — please slow down' },
+});
+
+// Per-device limiter for agent endpoints.
+// When devices share a legacy AGENT_SHARED_KEY, the key alone would collapse
+// all devices into one rate-limit bucket. To prevent that, we also include
+// the hostname from the request body (available because express.json() runs
+// before route-level middleware) in the key when a shared key is used.
 const agentLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 600, // 600 req / 15 min per device (40/min — enough for 30s polling + retries)
-  keyGenerator: (req) => req.device?.id || req.headers['x-agent-key'] || req.ip,
+  keyGenerator: (req) => {
+    // Prefer per-device ID (set by agentAuth middleware on later routes)
+    if (req.device?.id) return req.device.id;
+    // Pre-auth: use x-agent-key + hostname to distinguish devices sharing a key
+    const agentKey = req.headers['x-agent-key'] || req.ip;
+    const hostname = req.body?.hostname;
+    return hostname ? `${agentKey}:${hostname}` : agentKey;
+  },
   standardHeaders: true,
   message: { error: 'Too many agent requests — rate limited per device' },
 });
 
-app.use('/api/auth', authRoutes);
-app.use('/api/setup', setupRoutes);
-app.use('/api/devices', devicesRoutes);
+// Apply limiters per route group.
+app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/setup', authLimiter, setupRoutes); // setup is one-time, keep strict
+app.use('/api/devices', dashboardLimiter, devicesRoutes);
 app.use('/api/agent', agentLimiter, agentRoutes);
-app.use('/api/audit', auditRoutes);
-app.use('/api/installer', installerRoutes);
-app.use('/api/health', healthRoutes);
-app.use('/metrics', metricsRoutes);
-app.use('/api/admins', adminsRoutes);
+app.use('/api/audit', dashboardLimiter, auditRoutes);
+app.use('/api/installer', dashboardLimiter, installerRoutes);
+app.use('/api/health', healthRoutes); // No rate limit — health checks
+app.use('/metrics', metricsRoutes);    // No rate limit — Prometheus scraping
+app.use('/api/admins', dashboardLimiter, adminsRoutes);
 
 app.get('/api/health', async (req, res) => {
   // FA6: Extended health check — DB probe + scheduler status
@@ -152,6 +201,7 @@ const PORT = process.env.PORT || 3001;
 
 // FA6: Track scheduler state for health check
 let intervalIdActive = false;
+let server = null; // Hoisted from startServer() so gracefulShutdown() can access it
 const _origStart = startScheduler;
 const _origStop = stopScheduler;
 
@@ -190,7 +240,7 @@ runMigrations(pool, { dialect: migrationDialect })
   });
 
 function startServer() {
-const server = app.listen(PORT, async () => {
+server = app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`DB mode: ${process.env.DATABASE_URL ? 'DATABASE_URL (cloud)' : 'individual vars (local)'}`);
   console.log(`DATABASE_URL prefix: ${process.env.DATABASE_URL ? process.env.DATABASE_URL.substring(0, 30) : 'NOT SET'}`);

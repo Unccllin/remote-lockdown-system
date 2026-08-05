@@ -119,6 +119,30 @@ function translateSql(sql) {
 }
 
 /**
+ * Expand the params array to match duplicate $N references in the original SQL.
+ *
+ * PostgreSQL allows the same $N placeholder to appear multiple times in a
+ * query — the driver binds the same value to each occurrence. SQLite uses
+ * positional ? placeholders (one value per ?), so we must duplicate the
+ * param value for each occurrence of $N.
+ *
+ * Example:
+ *   SQL:    WHERE (mac = $1 AND $1 IS NOT NULL) OR (uuid = $2 AND $2 IS NOT NULL)
+ *   params: [mac, uuid]
+ *   → expanded: [mac, mac, uuid, uuid]
+ *
+ * @param {string} originalSql — PG SQL with $N placeholders
+ * @param {Array} params — bind parameters (PG convention: one per unique $N)
+ * @returns {Array} expanded params (one per ? in translated SQL)
+ */
+function expandParams(originalSql, params) {
+  if (!params || params.length === 0) return [];
+  const matches = [...originalSql.matchAll(/\$(\d+)/g)];
+  if (matches.length === 0) return params;
+  return matches.map((m) => params[parseInt(m[1], 10) - 1]);
+}
+
+/**
  * Detect whether a SQL string contains a RETURNING clause.
  * If so, we must use all()/get() instead of run() to get the rows.
  */
@@ -180,19 +204,14 @@ async function openDb(dbPath) {
 async function query(sql, params) {
   const db = await getDb();
   const translated = translateSql(sql);
-  let cleanParams = params || [];
+  let cleanParams = expandParams(sql, params || []);
 
-  // The advisory lock functions are the only translation that strips
-  // placeholders: pg_try_advisory_lock($1) → SELECT 1. The $1 inside the
-  // function call gets replaced by the literal '1', but the caller still
-  // passes the param, which would cause SQLITE_RANGE on strict drivers.
-  //
-  // This is a targeted fix for that specific rewrite — NOT a blanket
-  // "truncate extra params" rule. Any other param/placeholder mismatch
-  // is a real bug (typo, missing param, over-matching translation rule)
-  // and should throw SQLITE_RANGE as the loud signal that catches it.
-  if (/pg_(try_)?advisory_(un)?lock\s*\(/i.test(sql) && !translated.includes('?')) {
-    cleanParams = [];
+  // Some translations strip placeholders (e.g. pg_try_advisory_lock($1) →
+  // SELECT 1). If the translated SQL has fewer ? placeholders than we have
+  // params, trim to match — otherwise sqlite3 throws SQLITE_RANGE.
+  const placeholderCount = (translated.match(/\?/g) || []).length;
+  if (cleanParams.length > placeholderCount) {
+    cleanParams = cleanParams.slice(0, placeholderCount);
   }
 
   if (returnsRows(translated)) {
@@ -333,6 +352,7 @@ const sqlitePool = {
   useInMemory,
   // Exposed for testing
   _translateSql: translateSql,
+  _expandParams: expandParams,
   _hasReturning: hasReturning,
   _returnsRows: returnsRows,
   // Identifies this as the SQLite pool — used by code that needs to

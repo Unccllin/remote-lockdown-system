@@ -127,6 +127,87 @@ describe('sqlitePool SQL translation', () => {
     const result = sqlitePool._translateSql('INSERT INTO t VALUES ($1, $2, $10, $25)');
     expect(result).toBe('INSERT INTO t VALUES (?, ?, ?, ?)');
   });
+
+  test('expandParams duplicates values for repeated $N', () => {
+    const expanded = sqlitePool._expandParams(
+      'WHERE (mac = $1 AND $1 IS NOT NULL) OR (uuid = $2 AND $2 IS NOT NULL)',
+      ['mac-val', 'uuid-val']
+    );
+    expect(expanded).toEqual(['mac-val', 'mac-val', 'uuid-val', 'uuid-val']);
+  });
+
+  test('expandParams preserves order for non-repeated $N', () => {
+    const expanded = sqlitePool._expandParams(
+      'INSERT INTO t VALUES ($1, $2, $3)',
+      ['a', 'b', 'c']
+    );
+    expect(expanded).toEqual(['a', 'b', 'c']);
+  });
+
+  test('expandParams handles out-of-order $N', () => {
+    const expanded = sqlitePool._expandParams(
+      'SELECT $2, $1, $2',
+      ['first', 'second']
+    );
+    expect(expanded).toEqual(['second', 'first', 'second']);
+  });
+
+  test('expandParams returns empty for empty params', () => {
+    const expanded = sqlitePool._expandParams('SELECT $1', []);
+    expect(expanded).toEqual([]);
+  });
+
+  test('expandParams passes through when no $N in SQL', () => {
+    const expanded = sqlitePool._expandParams('SELECT 1', ['unused']);
+    expect(expanded).toEqual(['unused']);
+  });
+});
+
+describe('sqlitePool duplicate $N query (real SQLite)', () => {
+  test('query with repeated $N binds correctly', async () => {
+    // This is the exact pattern from agentAuth/findDevice that exposed the bug:
+    //   WHERE (mac_address = $1 AND $1 IS NOT NULL)
+    //   OR (hardware_uuid = $2 AND $2 IS NOT NULL)
+    const id = uuid();
+    const mac = '02:00:00:00:00:AA';
+    const hwuuid = '00000000-0000-4000-8000-00000000AA01';
+    await sqlitePool.query(
+      'INSERT INTO devices (id, hostname, mac_address, hardware_uuid, owner_name, status) VALUES ($1, $2, $3, $4, $5, $6)',
+      [id, 'DUP-PARAM-LAPTOP', mac, hwuuid, 'Owner', 'active']
+    );
+
+    // Query using duplicate $N — must find the device by mac_address
+    const result = await sqlitePool.query(
+      `SELECT * FROM devices
+       WHERE (mac_address = $1 AND $1 IS NOT NULL)
+          OR (hardware_uuid = $2 AND $2 IS NOT NULL)
+       LIMIT 1`,
+      [mac, hwuuid]
+    );
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].id).toBe(id);
+    expect(result.rows[0].mac_address).toBe(mac);
+  });
+
+  test('query with repeated $N finds by hardware_uuid when mac is null', async () => {
+    const id = uuid();
+    const hwuuid = '00000000-0000-4000-8000-00000000BB02';
+    await sqlitePool.query(
+      'INSERT INTO devices (id, hostname, hardware_uuid, owner_name, status) VALUES ($1, $2, $3, $4, $5)',
+      [id, 'DUP-PARAM-LAPTOP-2', hwuuid, 'Owner', 'active']
+    );
+
+    // mac is null — must find by hardware_uuid via the second clause
+    const result = await sqlitePool.query(
+      `SELECT * FROM devices
+       WHERE (mac_address = $1 AND $1 IS NOT NULL)
+          OR (hardware_uuid = $2 AND $2 IS NOT NULL)
+       LIMIT 1`,
+      [null, hwuuid]
+    );
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].id).toBe(id);
+  });
 });
 
 describe('sqlitePool query interface', () => {

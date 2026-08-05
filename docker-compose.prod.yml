@@ -42,6 +42,9 @@ services:
         condition: service_healthy
     environment:
       NODE_ENV: production
+      # Trust the Caddy reverse proxy (1 hop) so express-rate-limit sees the
+      # real client IP via X-Forwarded-For instead of Caddy's internal IP.
+      TRUST_PROXY: "1"
       # Database
       DATABASE_URL: postgres://${POSTGRES_USER:-lockdown}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-lockdown}
       DB_SSL: "false"  # Internal network, no SSL needed between containers
