@@ -97,17 +97,18 @@ function verifyHmac(deviceKey, headers, rawBody) {
 async function checkAndRecordNonce(nonce, ttlMs, pool) {
   if (USE_DB_NONCE_CACHE && pool) {
     try {
-      await pool.query(
+      // INSERT ... ON CONFLICT DO NOTHING returns rowCount=1 if the row was
+      // freshly inserted (nonce is new → not a replay) and rowCount=0 if the
+      // nonce already existed (ON CONFLICT suppressed the insert → replay).
+      // The previous code re-queried with SELECT, which could not distinguish
+      // "just inserted" from "already existed" — both return a row, so replays
+      // were silently accepted.
+      const result = await pool.query(
         `INSERT INTO nonce_cache (nonce, expires_at) VALUES ($1, NOW() + ($2 || ' milliseconds')::interval)
          ON CONFLICT (nonce) DO NOTHING`,
         [nonce, String(ttlMs)]
       );
-      // Re-query to confirm we actually inserted (not a conflict)
-      const r = await pool.query('SELECT 1 FROM nonce_cache WHERE nonce = $1 AND expires_at > NOW()', [nonce]);
-      // If the row exists and was just inserted, it's fresh. If it pre-existed, it's a replay.
-      // The ON CONFLICT DO NOTHING means if it already existed, we didn't insert.
-      // To distinguish, check created_at ≈ now. Simpler: try insert, if rowCount=1 it's fresh.
-      return r.rows.length > 0;
+      return (result.rowCount ?? 0) > 0;
     } catch (err) {
       // If nonce_cache table doesn't exist, fall back to in-memory
       console.warn('hmacAuth: DB nonce cache failed, falling back to in-memory:', err.message);

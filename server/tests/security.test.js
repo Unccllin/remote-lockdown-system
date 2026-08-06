@@ -152,6 +152,55 @@ describe('HMAC replay protection', () => {
     expect(replay).toBe(false);
   });
 
+  test('DB nonce cache: replayed nonce is rejected via rowCount', async () => {
+    // Regression test for a bug where checkAndRecordNonce used a re-query
+    // (SELECT) instead of checking the INSERT's rowCount. The re-query
+    // returned a row for both fresh and replayed nonces, so replays were
+    // silently accepted when USE_DB_NONCE_CACHE=true.
+    //
+    // This test uses a stateful mock that simulates ON CONFLICT DO NOTHING:
+    // the first INSERT returns rowCount=1 (inserted), the second returns
+    // rowCount=0 (conflict, no insert).
+    //
+    // We must re-require hmacAuth with USE_DB_NONCE_CACHE=true because the
+    // module reads it at require time as a constant.
+    const nonce = crypto.randomBytes(16).toString('hex');
+    let callCount = 0;
+    const statefulMockPool = {
+      query: jest.fn(async () => {
+        callCount++;
+        // First INSERT: row inserted (rowCount=1). Second INSERT: ON
+        // CONFLICT DO NOTHING suppressed the insert (rowCount=0).
+        return { rows: [], rowCount: callCount === 1 ? 1 : 0 };
+      }),
+    };
+
+    const oldVal = process.env.USE_DB_NONCE_CACHE;
+    process.env.USE_DB_NONCE_CACHE = 'true';
+    try {
+      const isolatedCheckAndRecordNonce = await new Promise((resolve) => {
+        jest.isolateModules(() => {
+          const mod = require('../src/middleware/hmacAuth');
+          resolve(mod.checkAndRecordNonce);
+        });
+      });
+
+      // First call: fresh nonce → INSERT returns rowCount=1 → true
+      const fresh = await isolatedCheckAndRecordNonce(nonce, 60000, statefulMockPool);
+      expect(fresh).toBe(true);
+
+      // Second call: same nonce → INSERT returns rowCount=0 → false (replay)
+      const replay = await isolatedCheckAndRecordNonce(nonce, 60000, statefulMockPool);
+      expect(replay).toBe(false);
+
+      // Verify the INSERT was called twice (no SELECT — the fix removed it)
+      expect(statefulMockPool.query).toHaveBeenCalledTimes(2);
+    } finally {
+      if (oldVal === undefined) delete process.env.USE_DB_NONCE_CACHE;
+      else process.env.USE_DB_NONCE_CACHE = oldVal;
+    }
+  });
+
   test('stale timestamp is rejected by verifyHmac', () => {
     const body = 'test-body-stale';
     const oldTs = String(Math.floor(Date.now() / 1000) - 600); // 10 min ago
