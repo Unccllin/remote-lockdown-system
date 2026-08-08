@@ -1240,12 +1240,24 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     folder = cfg["lockdown_folder"]
     sentinel = cfg["lock_sentinel"]
 
-    # If the deadman switch already locked the device, the folder is already
-    # encrypted and the key was uploaded via report_deadman_key. Just ACK.
-    if sentinel.exists():
+    # Atomically create the sentinel to prevent a TOCTOU race when multiple
+    # threads (or the deadman switch) call handle_lockdown concurrently.
+    # O_CREAT | O_EXCL fails atomically if the file already exists — only one
+    # caller can win the race. This replaces the non-atomic sentinel.exists()
+    # check that previously allowed multiple threads to proceed past the guard
+    # before any of them wrote the sentinel.
+    try:
+        fd = os.open(str(sentinel), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
         log.warning("Sentinel already exists — device already locked, skipping encryption")
         ack_command(cfg, command["id"], "executed")
         return
+
+    # Write initial sentinel data immediately so other callers see it.
+    # The sentinel is updated with the full payload after encryption succeeds.
+    os.write(fd, json.dumps({"locked": True, "command_id": command["id"]}).encode())
+    os.close(fd)
+    log.info("Sentinel created (atomic): %s", sentinel)
 
     if not folder.exists():
         log.info("Lockdown folder does not exist, creating empty one: %s", folder)
@@ -1266,6 +1278,11 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         encrypt_folder(folder, key)
     except Exception as e:
         log.error("Encryption failed: %s", e)
+        # Remove the sentinel so a retry can re-attempt encryption.
+        try:
+            sentinel.unlink()
+        except OSError:
+            pass
         # Update pending ACK to 'failed' so the server knows. Do NOT delete File A.
         write_pending_ack(pending_ack_file, command["id"], "failed", key_material=key_b64)
         ack_command(cfg, command["id"], "failed")
@@ -1274,8 +1291,9 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     apply_lock_screen()
     start_lock_guardian()
 
+    # Update sentinel with final payload (already created atomically above).
     sentinel.write_text(json.dumps({"locked": True, "command_id": command["id"]}))
-    log.info("Sentinel written: %s", sentinel)
+    log.info("Sentinel updated: %s", sentinel)
 
     # --- Boot lockdown: lock UEFI/BIOS + BCD to prevent bypass via boot ---
     # CC17: Key files (A + B) are already on disk. Boot lockdown rollback
