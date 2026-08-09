@@ -1,3 +1,4 @@
+require('express-async-errors');
 require('dotenv').config();
 const { validateEnv } = require('./config/env');
 validateEnv(); // CC2/CC11: fail fast on bad config before anything else loads
@@ -190,8 +191,17 @@ app.all('/api/*', (req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-app.use((err, req, res, _next) => {
-  console.error(err);
+app.use((err, _req, res, _next) => {
+  // DB unique constraint violation
+  if (err.code === '23505') {
+    return res.status(409).json({ error: 'Conflict — resource already exists' });
+  }
+  // Custom status code (e.g., from err.status or err.statusCode)
+  if (err.status) {
+    return res.status(err.status).json({ error: err.message });
+  }
+  // Log and return generic 500 (no stack traces leaked to client)
+  console.error('[unhandled]', err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
 
