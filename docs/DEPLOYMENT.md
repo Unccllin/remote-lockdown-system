@@ -162,8 +162,7 @@ curl -X POST https://lockdown.example.com/api/setup/create-admin \
   -H "Content-Type: application/json" \
   -d '{
     "username": "admin",
-    "password": "YOUR_STRONG_PASSWORD",
-    "email": "admin@example.com"
+    "password": "YOUR_STRONG_PASSWORD"
   }'
 ```
 
@@ -256,7 +255,7 @@ git pull origin main
 If the release includes schema migrations, run them before restarting:
 
 ```bash
-docker compose -f docker-compose.prod.yml exec server node server/src/migrate.js
+docker compose -f docker-compose.prod.yml exec server node server/src/db/migrate.js
 ```
 
 > Check the release notes for each version to see whether a migration is
@@ -374,7 +373,7 @@ curl http://localhost:3001/api/health
 # Create an admin (only available before any admin exists)
 curl -X POST http://localhost:3001/api/setup/create-admin \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"TestPass123!","email":"admin@test.local"}'
+  -d '{"username":"admin","password":"TestPass123!"}'
 
 # Clean up
 docker compose -f docker-compose.test.yml down -v
