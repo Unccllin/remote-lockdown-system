@@ -7,6 +7,7 @@ import {
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
+import { useCurrentUser } from '../hooks/useCurrentUser';
 
 const STATUS_BADGE = {
   active: 'badge-active',
@@ -36,6 +37,7 @@ export default function DevicesPage() {
   const [sortField, setSortField] = useState('enrolled_at');
   const [sortDir, setSortDir] = useState('desc');
   const navigate = useNavigate();
+  const currentUser = useCurrentUser();
 
   async function load() {
     setLoading(true);
@@ -116,10 +118,12 @@ export default function DevicesPage() {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             Refresh
           </button>
-          <button className="btn-primary" onClick={() => navigate('/devices/enroll')}>
-            <Plus size={14} />
-            Enroll Device
-          </button>
+          {currentUser?.isOperator && (
+            <button className="btn-primary" onClick={() => navigate('/devices/enroll')}>
+              <Plus size={14} />
+              Enroll Device
+            </button>
+          )}
         </div>
       </div>
 

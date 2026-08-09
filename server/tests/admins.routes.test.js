@@ -451,6 +451,83 @@ describe('Role enforcement on device routes', () => {
 
     expect(res.status).toBe(200);
   });
+
+  // --- Newly protected routes (track, locate, stop-track, release, patch, delete) ---
+
+  test('viewer gets 403 on track', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+
+    const res = await request(createDevicesApp())
+      .post('/api/devices/dev-1/track')
+      .set('Authorization', `Bearer ${makeToken('viewer')}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  test('viewer gets 403 on locate', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+
+    const res = await request(createDevicesApp())
+      .post('/api/devices/dev-1/locate')
+      .set('Authorization', `Bearer ${makeToken('viewer')}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  test('viewer gets 403 on stop-track', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'tracking' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+
+    const res = await request(createDevicesApp())
+      .post('/api/devices/dev-1/stop-track')
+      .set('Authorization', `Bearer ${makeToken('viewer')}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  test('viewer gets 403 on release', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+
+    const res = await request(createDevicesApp())
+      .delete('/api/devices/dev-1/release')
+      .set('Authorization', `Bearer ${makeToken('viewer')}`)
+      .send({ hostname_confirm: 'DEV-001' });
+
+    expect(res.status).toBe(403);
+  });
+
+  test('viewer gets 403 on PATCH device', async () => {
+    const res = await request(createDevicesApp())
+      .patch('/api/devices/dev-1')
+      .set('Authorization', `Bearer ${makeToken('viewer')}`)
+      .send({ owner_name: 'New Owner' });
+
+    expect(res.status).toBe(403);
+  });
+
+  test('viewer gets 403 on DELETE device', async () => {
+    const res = await request(createDevicesApp())
+      .delete('/api/devices/dev-1')
+      .set('Authorization', `Bearer ${makeToken('viewer')}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  test('operator can PATCH device', async () => {
+    mockPool.query.setResult('UPDATE devices SET owner_name', {
+      rows: [{ id: 'dev-1', hostname: 'DEV-001', owner_name: 'New Owner', status: 'active' }],
+    });
+
+    const res = await request(createDevicesApp())
+      .patch('/api/devices/dev-1')
+      .set('Authorization', `Bearer ${makeToken('operator')}`)
+      .send({ owner_name: 'New Owner' });
+
+    expect(res.status).toBe(200);
+  });
 });
 
 // ---------------------------------------------------------------------------

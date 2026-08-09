@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import DeviceDetailPage from '../src/pages/DeviceDetailPage';
+import { setupUser } from './setup';
 
 // Mock the API client
 vi.mock('../src/api/client', () => ({
@@ -35,6 +36,7 @@ const baseDevice = {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  setupUser('operator');
 });
 
 describe('DeviceDetailPage', () => {

@@ -129,7 +129,7 @@ router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
   }
 });
 
-router.patch('/:id', requireAuth, async (req, res) => {
+router.patch('/:id', requireAuth, requireRole('operator'), async (req, res) => {
   const { owner_name } = req.body;
   if (owner_name !== undefined && (typeof owner_name !== 'string' || owner_name.length > 200)) {
     return res.status(400).json({ error: 'owner_name must be a string of 200 characters or less' });
@@ -142,7 +142,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
   res.json(result.rows[0]);
 });
 
-router.delete('/:id', requireAuth, async (req, res) => {
+router.delete('/:id', requireAuth, requireRole('operator'), async (req, res) => {
   const { force } = req.query;
   try {
     // A6/CC14: The guard_device_delete trigger prevents deleting devices
@@ -310,7 +310,7 @@ router.post('/:id/rotate-key', requireAuth, requireRole('super-admin'), async (r
  * distressed state (stolen, locked, recovering). Covert tracking of an
  * active/healthy device is unjustified.
  */
-router.post('/:id/track', requireAuth, async (req, res) => {
+router.post('/:id/track', requireAuth, requireRole('operator'), async (req, res) => {
   const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   if (device.status === 'tracking') {
@@ -350,7 +350,7 @@ router.post('/:id/track', requireAuth, async (req, res) => {
  * collection). Locate on an active/healthy device is the real over-collection
  * hole — it allows one-shot location of a healthy device with no justification.
  */
-router.post('/:id/locate', requireAuth, async (req, res) => {
+router.post('/:id/locate', requireAuth, requireRole('operator'), async (req, res) => {
   const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   // FA5: Gate locate to distressed + tracking states
@@ -381,7 +381,7 @@ router.post('/:id/locate', requireAuth, async (req, res) => {
 /**
  * Stop covert tracking — sends a 'stop_track' command to the agent.
  */
-router.post('/:id/stop-track', requireAuth, async (req, res) => {
+router.post('/:id/stop-track', requireAuth, requireRole('operator'), async (req, res) => {
   const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   if (device.status !== 'tracking') {
@@ -450,7 +450,7 @@ router.get('/:id/location/latest', requireAuth, async (req, res) => {
  * The device must be in 'active' status to be released. If it's locked
  * or stolen, the admin must first recover it (unlock + decrypt).
  */
-router.delete('/:id/release', requireAuth, async (req, res) => {
+router.delete('/:id/release', requireAuth, requireRole('operator'), async (req, res) => {
   const { hostname_confirm } = req.body;
 
   const device = await getDeviceById(req.params.id);

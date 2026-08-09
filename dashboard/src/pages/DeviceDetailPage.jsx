@@ -5,6 +5,7 @@ import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
 import ConfirmModal from '../components/ConfirmModal';
+import { useCurrentUser } from '../hooks/useCurrentUser';
 
 const STATUS_BADGE = {
   active: 'badge-active',
@@ -18,6 +19,7 @@ const STATUS_BADGE = {
 export default function DeviceDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const currentUser = useCurrentUser();
   const [device, setDevice] = useState(null);
   const [audit, setAudit] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -132,6 +134,7 @@ export default function DeviceDetailPage() {
   if (loading) return <div className="text-slate-500 text-center py-32">Loading...</div>;
   if (!device) return <div className="text-slate-500 text-center py-32">Device not found.</div>;
 
+  const isOperator = currentUser?.isOperator;
   const latestLocation = locations[0];
 
   return (
@@ -289,27 +292,27 @@ export default function DeviceDetailPage() {
         <button className="btn-ghost" onClick={load}>
           <RefreshCw size={14} /> Refresh
         </button>
-        {device.status !== 'stolen' && device.status !== 'locked' && device.status !== 'recovering' && (
+        {isOperator && device.status !== 'stolen' && device.status !== 'locked' && device.status !== 'recovering' && (
           <button className="btn-danger" onClick={() => setModal('flag')}>
             <ShieldAlert size={14} /> Flag as Stolen
           </button>
         )}
-        {device.status !== 'tracking' && device.status !== 'stolen' && device.status !== 'locked' && device.status !== 'recovering' && (
+        {isOperator && device.status !== 'tracking' && device.status !== 'stolen' && device.status !== 'locked' && device.status !== 'recovering' && (
           <button className="btn-ghost text-cyan-400 border-cyan-700/50 hover:bg-cyan-900/20" onClick={() => setModal('track')}>
             <Crosshair size={14} /> Start Tracking
           </button>
         )}
-        {device.status === 'tracking' && (
+        {isOperator && device.status === 'tracking' && (
           <button className="btn-ghost text-cyan-400 border-cyan-700/50 hover:bg-cyan-900/20" onClick={() => setModal('stop_track')}>
             <Square size={14} /> Stop Tracking
           </button>
         )}
-        {device.status !== 'recovering' && (
+        {isOperator && device.status !== 'recovering' && (
           <button className="btn-ghost text-blue-400 border-blue-700/50 hover:bg-blue-900/20" onClick={() => setModal('locate')}>
             <Locate size={14} /> Locate Now
           </button>
         )}
-        {(device.status === 'stolen' || device.status === 'locked') && (
+        {isOperator && (device.status === 'stolen' || device.status === 'locked') && (
           <button className="btn-success" onClick={() => setModal('recover')}>
             <Unlock size={14} /> Recover Device
           </button>
@@ -321,7 +324,7 @@ export default function DeviceDetailPage() {
           </span>
         )}
         {/* Phase 7: Release device (ownership transfer / GDPR erasure) */}
-        {device.status === 'active' && (
+        {isOperator && device.status === 'active' && (
           <button
             className="btn-ghost text-red-400 border-red-800/50 hover:bg-red-900/20 ml-auto"
             onClick={() => setModal('release')}

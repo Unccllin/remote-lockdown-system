@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { RefreshCw, Plus, Trash2, ShieldCheck, UserCog } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { listAdmins, createAdmin, deleteAdmin, updateAdminRole } from '../api/admins';
+import { useCurrentUser } from '../hooks/useCurrentUser';
 
 const ROLE_BADGE = {
   viewer: 'badge-inactive',
@@ -17,26 +18,10 @@ const ROLE_LABEL = {
 
 const ROLE_OPTIONS = ['viewer', 'operator', 'super-admin'];
 
-/**
- * Decode the JWT payload from localStorage to get the current user's
- * id and role. Returns { id, role } or null if the token is missing/invalid.
- */
-function getCurrentUser() {
-  try {
-    const token = localStorage.getItem('token');
-    if (!token) return null;
-    const payload = token.split('.')[1];
-    const decoded = JSON.parse(atob(payload));
-    return { id: decoded.id, role: decoded.role };
-  } catch {
-    return null;
-  }
-}
-
 export default function AdminsPage() {
   const [admins, setAdmins] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [currentUser, setCurrentUser] = useState(getCurrentUser());
+  const currentUser = useCurrentUser();
 
   // Create-admin form state
   const [showForm, setShowForm] = useState(false);
@@ -57,7 +42,6 @@ export default function AdminsPage() {
 
   useEffect(() => {
     load();
-    setCurrentUser(getCurrentUser());
   }, []);
 
   async function handleCreate(e) {

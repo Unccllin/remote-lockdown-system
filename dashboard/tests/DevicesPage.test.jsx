@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import DevicesPage from '../src/pages/DevicesPage';
+import { setupUser } from './setup';
 
 // Mock the API client
 vi.mock('../src/api/client', () => ({
@@ -24,6 +25,7 @@ function renderWithRouter() {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  setupUser('operator');
 });
 
 describe('DevicesPage', () => {
