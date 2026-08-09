@@ -1,9 +1,11 @@
 const express = require('express');
 const pool = require('../db/pool');
+const { getDeviceById } = require('../db/deviceQueries');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { withTransaction } = require('../db/withTransaction');
 const { generateApiKey, hashApiKey } = require('../db/apiKey');
 const { readDualMode } = require('../db/fieldCrypto');
+const { sendNotification } = require('../notifications/notify');
 
 const router = express.Router();
 
@@ -84,9 +86,9 @@ router.get('/', requireAuth, async (req, res) => {
 });
 
 router.get('/:id', requireAuth, async (req, res) => {
-  const result = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
-  if (!result.rows[0]) return res.status(404).json({ error: 'Device not found' });
-  res.json(result.rows[0]);
+  const device = await getDeviceById(req.params.id);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+  res.json(device);
 });
 
 router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
@@ -129,6 +131,9 @@ router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
 
 router.patch('/:id', requireAuth, async (req, res) => {
   const { owner_name } = req.body;
+  if (owner_name !== undefined && (typeof owner_name !== 'string' || owner_name.length > 200)) {
+    return res.status(400).json({ error: 'owner_name must be a string of 200 characters or less' });
+  }
   const result = await pool.query(
     'UPDATE devices SET owner_name = COALESCE($1, owner_name) WHERE id = $2 RETURNING *',
     [owner_name, req.params.id]
@@ -174,8 +179,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
 router.post('/:id/flag-stolen', requireAuth, requireRole('operator'), async (req, res) => {
   const { hostname_confirm } = req.body;
 
-  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
-  const device = devResult.rows[0];
+  const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   if (device.hostname !== hostname_confirm) {
     return res.status(400).json({ error: 'Confirmation hostname does not match' });
@@ -198,14 +202,23 @@ router.post('/:id/flag-stolen', requireAuth, requireRole('operator'), async (req
     return cmdResult.rows[0];
   });
 
+  // Fire-and-forget notification — admin gets alerted the instant a device
+  // is flagged stolen, even if they're not watching the dashboard.
+  sendNotification('device_flagged_stolen', {
+    deviceId: device.id,
+    hostname: device.hostname,
+    ownerName: device.owner_name,
+    adminId: req.admin.id,
+    commandId: cmd.id,
+  });
+
   res.json({ device: { ...device, status: 'stolen' }, command: cmd });
 });
 
 router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, res) => {
   const { hostname_confirm } = req.body;
 
-  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
-  const device = devResult.rows[0];
+  const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   if (device.hostname !== hostname_confirm) {
     return res.status(400).json({ error: 'Confirmation hostname does not match' });
@@ -246,6 +259,16 @@ router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, re
     key, 'key_material', 'key_material_encrypted', 'key_enc_nonce', 'key_enc_tag'
   ) : null;
 
+  // Fire-and-forget notification — admin gets confirmation that recovery
+  // has been initiated and the unlock key has been released to the agent.
+  sendNotification('device_recovery_initiated', {
+    deviceId: device.id,
+    hostname: device.hostname,
+    ownerName: device.owner_name,
+    adminId: req.admin.id,
+    keyReleased: !!key,
+  });
+
   res.json({
     device: { ...device, status: 'recovering' },
     command: cmd,
@@ -260,8 +283,7 @@ router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, re
  * The old key immediately stops working.
  */
 router.post('/:id/rotate-key', requireAuth, requireRole('super-admin'), async (req, res) => {
-  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
-  const device = devResult.rows[0];
+  const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
 
   const newApiKey = generateApiKey();
@@ -289,8 +311,7 @@ router.post('/:id/rotate-key', requireAuth, requireRole('super-admin'), async (r
  * active/healthy device is unjustified.
  */
 router.post('/:id/track', requireAuth, async (req, res) => {
-  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
-  const device = devResult.rows[0];
+  const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   if (device.status === 'tracking') {
     return res.status(409).json({ error: 'Device is already being tracked' });
@@ -330,8 +351,7 @@ router.post('/:id/track', requireAuth, async (req, res) => {
  * hole — it allows one-shot location of a healthy device with no justification.
  */
 router.post('/:id/locate', requireAuth, async (req, res) => {
-  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
-  const device = devResult.rows[0];
+  const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   // FA5: Gate locate to distressed + tracking states
   const locateAllowed = ['stolen', 'locked', 'recovering', 'tracking'];
@@ -362,8 +382,7 @@ router.post('/:id/locate', requireAuth, async (req, res) => {
  * Stop covert tracking — sends a 'stop_track' command to the agent.
  */
 router.post('/:id/stop-track', requireAuth, async (req, res) => {
-  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
-  const device = devResult.rows[0];
+  const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   if (device.status !== 'tracking') {
     return res.status(409).json({ error: 'Device is not being tracked' });
@@ -434,8 +453,7 @@ router.get('/:id/location/latest', requireAuth, async (req, res) => {
 router.delete('/:id/release', requireAuth, async (req, res) => {
   const { hostname_confirm } = req.body;
 
-  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
-  const device = devResult.rows[0];
+  const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
 
   // Safety: require hostname confirmation
