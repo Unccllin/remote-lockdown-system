@@ -21,6 +21,7 @@
  */
 
 const crypto = require('crypto');
+const logger = require('../logger');
 
 const TIMESTAMP_WINDOW_SECONDS = parseInt(process.env.HMAC_TIMESTAMP_WINDOW_SECONDS || '300', 10);
 const NONCE_TTL_MS = parseInt(process.env.HMAC_NONCE_TTL_MS || '600000', 10);
@@ -111,7 +112,7 @@ async function checkAndRecordNonce(nonce, ttlMs, pool) {
       return (result.rowCount ?? 0) > 0;
     } catch (err) {
       // If nonce_cache table doesn't exist, fall back to in-memory
-      console.warn('hmacAuth: DB nonce cache failed, falling back to in-memory:', err.message);
+      logger.warn({ err }, 'hmacAuth: DB nonce cache failed, falling back to in-memory');
     }
   }
 
@@ -145,9 +146,10 @@ function hmacVerify(opts = {}) {
         return res.status(401).json({ error: 'HMAC signature required' });
       }
       // Transition period: allow unsigned requests with warning
-      console.warn(
-        `hmacAuth: unsigned request from device ${req.device?.id || 'unknown'} ` +
-        `at ${req.path} — upgrade agent to support HMAC signing`
+      logger.warn(
+        'hmacAuth: unsigned request from device %s at %s — upgrade agent to support HMAC signing',
+        req.device?.id || 'unknown',
+        req.path
       );
       return next();
     }
@@ -156,7 +158,7 @@ function hmacVerify(opts = {}) {
       // Can't verify HMAC without the device key. This happens if auth succeeded
       // via legacy shared key (we don't have the per-device key in that case).
       // Allow during transition.
-      console.warn(`hmacAuth: HMAC present but no device key for device ${req.device?.id} — allowing (legacy)`);
+      logger.warn('hmacAuth: HMAC present but no device key for device %s — allowing (legacy)', req.device?.id);
       return next();
     }
 

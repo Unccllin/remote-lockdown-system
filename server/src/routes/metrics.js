@@ -20,6 +20,7 @@
 const express = require('express');
 const promClient = require('prom-client');
 const pool = require('../db/pool');
+const logger = require('../logger');
 
 const router = express.Router();
 
@@ -103,7 +104,7 @@ async function collectMetrics() {
     await pool.query('SELECT 1');
     dbOk = true;
   } catch (err) {
-    console.error('[metrics] DB probe failed:', err.message);
+    logger.error({ err }, '[metrics] DB probe failed');
   }
   dbQueryDurationSeconds.observe((Date.now() - probeStart) / 1000);
 
@@ -123,7 +124,7 @@ async function collectMetrics() {
       devicesTotal.set({ status: row.status }, parseInt(row.count, 10) || 0);
     }
   } catch (err) {
-    console.error('[metrics] device status query failed:', err.message);
+    logger.error({ err }, '[metrics] device status query failed');
   }
 
   // Pending commands (gauge).
@@ -133,7 +134,7 @@ async function collectMetrics() {
     );
     commandsPendingTotal.set(parseInt(pendingResult.rows[0]?.pending, 10) || 0);
   } catch (err) {
-    console.error('[metrics] pending commands query failed:', err.message);
+    logger.error({ err }, '[metrics] pending commands query failed');
   }
 
   // Completed commands (counter — inc by positive delta only).
@@ -149,7 +150,7 @@ async function collectMetrics() {
     }
     lastCompletedCount = completed;
   } catch (err) {
-    console.error('[metrics] completed commands query failed:', err.message);
+    logger.error({ err }, '[metrics] completed commands query failed');
   }
 
   // Agent checkins (counter — proxy: count of devices that have ever checked
@@ -166,7 +167,7 @@ async function collectMetrics() {
     }
     lastCheckinCount = checkins;
   } catch (err) {
-    console.error('[metrics] checkin count query failed:', err.message);
+    logger.error({ err }, '[metrics] checkin count query failed');
   }
 
   // Stale devices — last_checkin older than 2x the default active poll
@@ -182,7 +183,7 @@ async function collectMetrics() {
     );
     staleDevicesTotal.set(parseInt(staleResult.rows[0]?.stale, 10) || 0);
   } catch (err) {
-    console.error('[metrics] stale devices query failed:', err.message);
+    logger.error({ err }, '[metrics] stale devices query failed');
   }
 }
 
@@ -199,7 +200,7 @@ router.get('/', async (_req, res) => {
     res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.send(metrics);
   } catch (err) {
-    console.error('[metrics] failed to collect metrics:', err.message);
+    logger.error({ err }, '[metrics] failed to collect metrics');
     // Still return default metrics if possible, otherwise 500.
     try {
       const metrics = await registry.metrics();

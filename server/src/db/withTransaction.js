@@ -22,6 +22,7 @@
  */
 
 const pool = require('./pool');
+const logger = require('../logger');
 
 async function withTransaction(callback) {
   const client = await pool.connect();
@@ -35,7 +36,7 @@ async function withTransaction(callback) {
       await client.query('ROLLBACK');
     } catch (rollbackErr) {
       // Log rollback failure but throw the original error
-      console.error('ROLLBACK failed:', rollbackErr.message);
+      logger.error({ err: rollbackErr }, 'ROLLBACK failed');
     }
     throw err;
   } finally {

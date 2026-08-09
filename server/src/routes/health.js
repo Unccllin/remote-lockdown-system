@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const logger = require('../logger');
 
 const router = express.Router();
 
@@ -135,7 +136,7 @@ router.get('/detailed', requireAuth, async (_req, res) => {
       fleet.total = parseInt(row.total, 10) || 0;
     } catch (err) {
       // Non-fatal — fleet stats just stay at zero.
-      console.error('[health] fleet stats query failed:', err.message);
+      logger.error({ err }, '[health] fleet stats query failed');
     }
 
     // Pending command queue depth.
@@ -145,7 +146,7 @@ router.get('/detailed', requireAuth, async (_req, res) => {
       );
       queueDepth = parseInt(queueResult.rows[0]?.pending, 10) || 0;
     } catch (err) {
-      console.error('[health] queue depth query failed:', err.message);
+      logger.error({ err }, '[health] queue depth query failed');
     }
 
     // Recent health alerts from audit_log.
@@ -159,7 +160,7 @@ router.get('/detailed', requireAuth, async (_req, res) => {
       );
       recentAlerts = alertsResult.rows || [];
     } catch (err) {
-      console.error('[health] recent alerts query failed:', err.message);
+      logger.error({ err }, '[health] recent alerts query failed');
     }
   }
 

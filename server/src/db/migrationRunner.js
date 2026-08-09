@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const logger = require('../logger');
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 const MIGRATIONS_SQLITE_DIR = path.join(__dirname, 'migrations-sqlite');
@@ -192,7 +193,7 @@ async function runMigrations(poolOrClient, { closePool = false, dialect = 'pg' }
     if (appliedSet.has(version)) continue;
 
     const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
-    console.log(`  Applying migration: ${version}`);
+    logger.info({ version }, 'Applying migration');
 
     // Split into individual statements (PGlite/SQLite don't support multi-statement queries)
     const statements = splitSqlStatements(sql);
@@ -204,9 +205,9 @@ async function runMigrations(poolOrClient, { closePool = false, dialect = 'pg' }
   }
 
   if (count === 0) {
-    console.log('  No new migrations to apply.');
+    logger.info('No new migrations to apply.');
   } else {
-    console.log(`  Applied ${count} migration(s).`);
+    logger.info({ count }, 'Applied migrations');
   }
 
   if (closePool && typeof poolOrClient.end === 'function') {

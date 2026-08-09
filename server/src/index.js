@@ -8,6 +8,8 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
+const pinoHttp = require('pino-http');
+const logger = require('./logger');
 
 const authRoutes = require('./routes/auth');
 const devicesRoutes = require('./routes/devices');
@@ -28,6 +30,9 @@ const app = express();
 // 'loopback' trusts only localhost proxies (safe for single-proxy deployments).
 // For multi-proxy setups, use a specific number (e.g. 1) or CIDR range.
 app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
+
+// Structured request logging with request IDs (pino-http).
+app.use(pinoHttp({ logger }));
 
 app.use(helmet());
 
@@ -181,8 +186,7 @@ if (fs.existsSync(dashboardDistPath)) {
     res.sendFile(indexPath);
   });
 } else if (process.env.NODE_ENV === 'production') {
-  console.warn('[startup] dashboard/dist not found — dashboard will not be served.');
-  console.warn(`[startup] looked for: ${dashboardDistPath}`);
+  logger.warn({ path: dashboardDistPath }, '[startup] dashboard/dist not found — dashboard will not be served.');
 }
 
 // 404 JSON for unmatched API routes — prevents API clients from receiving
@@ -201,7 +205,7 @@ app.use((err, _req, res, _next) => {
     return res.status(err.status).json({ error: err.message });
   }
   // Log and return generic 500 (no stack traces leaked to client)
-  console.error('[unhandled]', err.message);
+  logger.error({ err }, 'Unhandled error');
   res.status(500).json({ error: 'Internal server error' });
 });
 
@@ -241,26 +245,23 @@ const migrationDialect = process.env.USE_SQLITE === 'true' ? 'sqlite' : 'pg';
 
 runMigrations(pool, { dialect: migrationDialect })
   .then(() => {
-    console.log('Migrations complete.');
+    logger.info('Migrations complete.');
     startServer();
   })
   .catch((err) => {
-    console.error('Migration failed — server will start anyway (API may be degraded):', err.message);
+    logger.error({ err }, 'Migration failed — server will start anyway (API may be degraded)');
     startServer();
   });
 
 function startServer() {
 server = app.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`DB mode: ${process.env.DATABASE_URL ? 'DATABASE_URL (cloud)' : 'individual vars (local)'}`);
-  console.log(`DATABASE_URL prefix: ${process.env.DATABASE_URL ? process.env.DATABASE_URL.substring(0, 30) : 'NOT SET'}`);
+  logger.info({ port: PORT }, 'Server running');
+  logger.info({ dbMode: process.env.DATABASE_URL ? 'DATABASE_URL (cloud)' : 'individual vars (local)' }, 'DB mode');
   try {
     await pool.query('SELECT 1');
-    console.log('DB connection: OK');
+    logger.info('DB connection: OK');
   } catch (err) {
-    console.error('DB connection FAILED:', err.message);
-    console.error('DB error code:', err.code);
-    console.error('DB error detail:', JSON.stringify(err));
+    logger.error({ err }, 'DB connection FAILED');
   }
 });
 } // end startServer()
@@ -273,7 +274,7 @@ async function gracefulShutdown(signal) {
   if (shuttingDown) return; // Prevent double-shutdown
   shuttingDown = true;
 
-  console.log(`\n[${signal}] Starting graceful shutdown...`);
+  logger.info({ signal }, 'Starting graceful shutdown...');
   const shutdownStart = Date.now();
   const HARD_EXIT_BUDGET_MS = 10000;
 
@@ -281,15 +282,15 @@ async function gracefulShutdown(signal) {
   intervalIdActive = false;
 
   // 1. Stop the retention scheduler (no new runs)
-  console.log('[shutdown] Stopping retention scheduler...');
+  logger.info('[shutdown] Stopping retention scheduler...');
   const schedulerBudget = Math.max(1000, HARD_EXIT_BUDGET_MS - (Date.now() - shutdownStart));
   await stopSchedulerTracked(schedulerBudget);
 
   // 2. Close HTTP server (stop accepting new connections)
-  console.log('[shutdown] Closing HTTP server...');
+  logger.info('[shutdown] Closing HTTP server...');
   const closePromise = new Promise((resolve) => {
     server.close(() => {
-      console.log('[shutdown] HTTP server closed');
+      logger.info('[shutdown] HTTP server closed');
       resolve();
     });
   });
@@ -301,18 +302,18 @@ async function gracefulShutdown(signal) {
   ]);
 
   // 3. Close the DB pool
-  console.log('[shutdown] Closing DB pool...');
+  logger.info('[shutdown] Closing DB pool...');
   try {
     await Promise.race([
       pool.end(),
       new Promise((resolve) => setTimeout(resolve, 2000)),
     ]);
-    console.log('[shutdown] DB pool closed');
+    logger.info('[shutdown] DB pool closed');
   } catch (err) {
-    console.error('[shutdown] Error closing DB pool:', err.message);
+    logger.error({ err }, '[shutdown] Error closing DB pool');
   }
 
-  console.log(`[shutdown] Graceful shutdown complete in ${Date.now() - shutdownStart}ms`);
+  logger.info({ durationMs: Date.now() - shutdownStart }, '[shutdown] Graceful shutdown complete');
   process.exit(0);
 }
 

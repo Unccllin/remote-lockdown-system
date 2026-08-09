@@ -50,6 +50,7 @@ const { requireAuth } = require('../middleware/auth');
 const { generateApiKey, hashApiKey } = require('../db/apiKey');
 const { getAgentBinariesDir } = require('../config/paths');
 const { getDeviceById } = require('../db/deviceQueries');
+const logger = require('../logger');
 
 const router = express.Router();
 
@@ -271,7 +272,7 @@ async function downloadBinaryFromGitHub(internalPlatform, binaryName) {
   const ext = internalPlatform === 'win' ? '.exe' : '';
   const assetName = `${binaryName}-${releasePlatform}-${arch}${ext}`;
 
-  console.log(`[installer] Downloading ${assetName} from GitHub Releases...`);
+  logger.info('[installer] Downloading %s from GitHub Releases...', assetName);
 
   // Fetch release info
   const release = await fetchReleaseInfo();
@@ -306,7 +307,7 @@ async function downloadBinaryFromGitHub(internalPlatform, binaryName) {
   if (hash !== expected) {
     throw new Error(`Checksum mismatch for ${assetName}: expected ${expected}, got ${hash}`);
   }
-  console.log(`[installer] Checksum verified for ${assetName}`);
+  logger.info('[installer] Checksum verified for %s', assetName);
 
   // Cache the binary
   const cacheDir = getCacheDir();
@@ -327,7 +328,7 @@ async function downloadBinaryFromGitHub(internalPlatform, binaryName) {
     fs.chmodSync(cachedPath, 0o755);
   }
 
-  console.log(`[installer] Cached ${assetName} → ${cachedPath} (${(data.length / 1024 / 1024).toFixed(1)}MB)`);
+  logger.info('[installer] Cached %s → %s (%sMB)', assetName, cachedPath, (data.length / 1024 / 1024).toFixed(1));
   return cachedPath;
 }
 
@@ -359,7 +360,7 @@ async function resolveAgentBinary(internalPlatform, binaryName, binaryBaseName) 
   const platformCacheDir = path.join(cacheDir, internalPlatform);
   const cachedPath = path.join(platformCacheDir, binaryName);
   if (fs.existsSync(cachedPath)) {
-    console.log(`[installer] Using cached binary: ${cachedPath}`);
+    logger.info('[installer] Using cached binary: %s', cachedPath);
     return cachedPath;
   }
 
@@ -368,7 +369,7 @@ async function resolveAgentBinary(internalPlatform, binaryName, binaryBaseName) 
     const downloadedPath = await downloadBinaryFromGitHub(internalPlatform, binaryBaseName);
     return downloadedPath;
   } catch (err) {
-    console.error(`[installer] Failed to download ${binaryBaseName} for ${internalPlatform}:`, err.message);
+    logger.error({ err }, '[installer] Failed to download %s for %s', binaryBaseName, internalPlatform);
     return null;
   }
 }
@@ -1598,7 +1599,7 @@ router.get('/:deviceId/nsis', requireAuth, async (req, res) => {
     res.setHeader('Content-Length', exeBuffer.length);
     res.send(exeBuffer);
   } catch (err) {
-    console.error('[installer] NSIS compilation failed:', err.message);
+    logger.error({ err }, '[installer] NSIS compilation failed');
     return res.status(500).json({
       error: 'Failed to compile NSIS installer',
       fallback: `Use the ZIP installer at /api/installer/${deviceId}?platform=win instead`,

@@ -14,6 +14,7 @@
  */
 
 const pool = require('../db/pool');
+const logger = require('../logger');
 
 const DEFAULT_INTERVAL_MS = parseInt(process.env.RETENTION_SCHEDULER_INTERVAL_MS || '86400000', 10);
 const ADVISORY_LOCK_KEY = 54321; // arbitrary fixed key for retention job
@@ -45,7 +46,7 @@ async function runRetentionPurge() {
     const lockAcquired = lockResult.rows[0].pg_try_advisory_lock !== false &&
                          lockResult.rows[0].pg_try_advisory_lock !== 0;
     if (!lockAcquired) {
-      console.log('[retention] Another instance is running the purge — skipping');
+      logger.info('[retention] Another instance is running the purge — skipping');
       return { rowsDeleted: 0, skipped: true };
     }
 
@@ -71,7 +72,7 @@ async function runRetentionPurge() {
       );
     }
 
-    console.log(`[retention] Purged ${rowsDeleted} location reports older than ${retentionDays} days`);
+    logger.info('[retention] Purged %s location reports older than %s days', rowsDeleted, retentionDays);
     return { rowsDeleted, skipped: false };
   } finally {
     // Release the advisory lock
@@ -87,22 +88,22 @@ async function runRetentionPurge() {
  */
 function startScheduler(intervalMs = DEFAULT_INTERVAL_MS) {
   if (intervalId) {
-    console.warn('[retention] Scheduler already started — ignoring');
+    logger.warn('[retention] Scheduler already started — ignoring');
     return;
   }
 
   // Run once immediately on startup, then on interval
   runInFlight = runRetentionPurge().catch((err) => {
-    console.error('[retention] Initial purge failed:', err.message);
+    logger.error({ err }, '[retention] Initial purge failed');
   }).finally(() => { runInFlight = null; });
 
   intervalId = setInterval(() => {
     runInFlight = runRetentionPurge().catch((err) => {
-      console.error('[retention] Scheduled purge failed:', err.message);
+      logger.error({ err }, '[retention] Scheduled purge failed');
     }).finally(() => { runInFlight = null; });
   }, intervalMs);
 
-  console.log(`[retention] Scheduler started (interval: ${intervalMs}ms, retention: ${process.env.LOCATION_RETENTION_DAYS || 90} days)`);
+  logger.info('[retention] Scheduler started (interval: %sms, retention: %s days)', intervalMs, process.env.LOCATION_RETENTION_DAYS || 90);
 }
 
 /**
@@ -115,17 +116,17 @@ async function stopScheduler(timeoutMs = 3000) {
   if (intervalId) {
     clearInterval(intervalId);
     intervalId = null;
-    console.log('[retention] Scheduler stopped');
+    logger.info('[retention] Scheduler stopped');
   }
 
   // Wait for any in-flight run to complete
   if (runInFlight) {
-    console.log('[retention] Waiting for in-flight purge to complete...');
+    logger.info('[retention] Waiting for in-flight purge to complete...');
     await Promise.race([
       runInFlight,
       new Promise((resolve) => setTimeout(resolve, timeoutMs)),
     ]);
-    console.log('[retention] In-flight purge completed or timed out');
+    logger.info('[retention] In-flight purge completed or timed out');
   }
 }
 

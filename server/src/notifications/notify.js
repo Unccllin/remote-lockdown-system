@@ -28,6 +28,8 @@ try {
   nodemailer = null;
 }
 
+const logger = require('../logger');
+
 /**
  * Send a notification to the generic webhook (NOTIFICATION_WEBHOOK_URL).
  * @returns {Promise<boolean>} true if sent
@@ -51,7 +53,7 @@ async function sendWebhook(eventType, payload) {
         body,
       });
       if (!res.ok) {
-        console.error(`[notify] webhook returned ${res.status} ${res.statusText}`);
+        logger.error('[notify] webhook returned %s %s', res.status, res.statusText);
       }
     } else {
       // Fallback for environments without global fetch.
@@ -61,13 +63,13 @@ async function sendWebhook(eventType, payload) {
           headers: { 'Content-Type': 'application/json' },
         });
       } else {
-        console.error('[notify] no HTTP client available for webhook');
+        logger.error('[notify] no HTTP client available for webhook');
         return false;
       }
     }
     return true;
   } catch (err) {
-    console.error('[notify] webhook send failed:', err.message);
+    logger.error({ err }, '[notify] webhook send failed');
     return false;
   }
 }
@@ -91,15 +93,15 @@ async function sendSlack(eventType, payload) {
         body,
       });
       if (!res.ok) {
-        console.error(`[notify] slack webhook returned ${res.status} ${res.statusText}`);
+        logger.error('[notify] slack webhook returned %s %s', res.status, res.statusText);
       }
     } else {
-      console.error('[notify] no HTTP client available for slack webhook');
+      logger.error('[notify] no HTTP client available for slack webhook');
       return false;
     }
     return true;
   } catch (err) {
-    console.error('[notify] slack send failed:', err.message);
+    logger.error({ err }, '[notify] slack send failed');
     return false;
   }
 }
@@ -125,7 +127,7 @@ async function sendEmail(eventType, payload) {
   }
 
   if (!nodemailer) {
-    console.error('[notify] nodemailer not installed — skipping email notification');
+    logger.error('[notify] nodemailer not installed — skipping email notification');
     return false;
   }
 
@@ -148,7 +150,7 @@ async function sendEmail(eventType, payload) {
     });
     return true;
   } catch (err) {
-    console.error('[notify] email send failed:', err.message);
+    logger.error({ err }, '[notify] email send failed');
     return false;
   }
 }
@@ -177,7 +179,7 @@ async function sendNotification(eventType, payload) {
   );
 
   if (!hasWebhook && !hasSlack && !hasEmail) {
-    console.log(`[notify] no channels configured — event: ${eventType}`, payload);
+    logger.info({ payload }, '[notify] no channels configured — event: %s', eventType);
     return false;
   }
 

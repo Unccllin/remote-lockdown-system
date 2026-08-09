@@ -19,6 +19,8 @@
  * accepted any SSL certificate — a MITM risk in production.
  */
 
+const logger = require('../logger');
+
 // SQLite mode: export the SQLite pool wrapper and skip Postgres entirely.
 if (process.env.USE_SQLITE === 'true') {
   module.exports = require('./sqlitePool');
@@ -37,8 +39,7 @@ function createPgPool() {
     : undefined; // individual vars mode: SSL only if explicitly configured
 
   if (process.env.DATABASE_URL && !sslVerify && process.env.NODE_ENV === 'production') {
-    console.warn('WARNING: DB_SSL_VERIFY=false in production — SSL certificate verification is disabled.');
-    console.warn('This is insecure and should only be used in development.');
+    logger.warn('DB_SSL_VERIFY=false in production — SSL certificate verification is disabled. This is insecure and should only be used in development.');
   }
 
   return process.env.DATABASE_URL

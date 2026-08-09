@@ -16,13 +16,13 @@
 
 const pool = require('../db/pool');
 const { sendNotification } = require('../notifications/notify');
+const logger = require('../logger');
 
 const DEFAULT_INTERVAL_MS = parseInt(process.env.ALERT_SCHEDULER_INTERVAL_MS || '60000', 10);
 
-// Default poll interval (seconds) used as the staleness baseline. The agent
-// route sends adaptive poll intervals per status; here we use the active
-// default (300s) as the reference. A device is "stale" when its last_checkin
-// is older than 2x this baseline (10 minutes).
+// A device is "stale" when its last_checkin is older than the stale threshold
+// (default 600s = 10 minutes). The baseline poll interval (ALERT_POLL_INTERVAL_SEC,
+// default 300s) is documented in .env.example and validated in env.js.
 const STALE_THRESHOLD_SEC = parseInt(process.env.STALE_DEVICE_THRESHOLD_SEC || '600', 10);
 
 let intervalId = null;
@@ -85,7 +85,7 @@ async function checkStaleDevices() {
         [device.id, 'health_alert', detail]
       );
     } catch (err) {
-      console.error('[alerts] failed to write audit_log for stale device:', err.message);
+      logger.error({ err }, '[alerts] failed to write audit_log for stale device');
     }
 
     // Fire notification (fire-and-forget, never throws).
@@ -96,7 +96,7 @@ async function checkStaleDevices() {
         lastCheckin: device.last_checkin,
       });
     } catch (err) {
-      console.error('[alerts] stale-device notification failed:', err.message);
+      logger.error({ err }, '[alerts] stale-device notification failed');
     }
 
     alertedDeviceIds.add(device.id);
@@ -134,7 +134,7 @@ async function checkServerHealth() {
           reason: err.message,
         });
       } catch (notifyErr) {
-        console.error('[alerts] health_degraded notification failed:', notifyErr.message);
+        logger.error({ err: notifyErr }, '[alerts] health_degraded notification failed');
       }
     }
     return { ok: false, error: err.message };
@@ -150,7 +150,7 @@ async function runAlertCheck() {
   // just fail) but still attempt the health notification.
   const health = await checkServerHealth();
   if (!health.ok) {
-    console.error('[alerts] DB unavailable — skipping stale-device check:', health.error);
+    logger.error({ error: health.error }, '[alerts] DB unavailable — skipping stale-device check');
     return;
   }
 
@@ -164,22 +164,22 @@ async function runAlertCheck() {
  */
 function startAlertScheduler(intervalMs = DEFAULT_INTERVAL_MS) {
   if (intervalId) {
-    console.warn('[alerts] Scheduler already started — ignoring');
+    logger.warn('[alerts] Scheduler already started — ignoring');
     return;
   }
 
   // Run once immediately on startup, then on interval.
   runInFlight = runAlertCheck().catch((err) => {
-    console.error('[alerts] Initial check failed:', err.message);
+    logger.error({ err }, '[alerts] Initial check failed');
   }).finally(() => { runInFlight = null; });
 
   intervalId = setInterval(() => {
     runInFlight = runAlertCheck().catch((err) => {
-      console.error('[alerts] Scheduled check failed:', err.message);
+      logger.error({ err }, '[alerts] Scheduled check failed');
     }).finally(() => { runInFlight = null; });
   }, intervalMs);
 
-  console.log(`[alerts] Scheduler started (interval: ${intervalMs}ms)`);
+  logger.info('[alerts] Scheduler started (interval: %sms)', intervalMs);
 }
 
 /**
@@ -191,16 +191,16 @@ async function stopAlertScheduler(timeoutMs = 3000) {
   if (intervalId) {
     clearInterval(intervalId);
     intervalId = null;
-    console.log('[alerts] Scheduler stopped');
+    logger.info('[alerts] Scheduler stopped');
   }
 
   if (runInFlight) {
-    console.log('[alerts] Waiting for in-flight check to complete...');
+    logger.info('[alerts] Waiting for in-flight check to complete...');
     await Promise.race([
       runInFlight,
       new Promise((resolve) => setTimeout(resolve, timeoutMs)),
     ]);
-    console.log('[alerts] In-flight check completed or timed out');
+    logger.info('[alerts] In-flight check completed or timed out');
   }
 }
 

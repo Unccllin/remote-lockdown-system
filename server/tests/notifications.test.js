@@ -39,7 +39,8 @@ describe('notify.js', () => {
 
   test('no channels configured -> logs, no error, returns false', async () => {
     sendNotification = require('../src/notifications/notify').sendNotification;
-    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const logger = require('../src/logger');
+    const logSpy = jest.spyOn(logger, 'info').mockImplementation(() => {});
 
     const result = await sendNotification('device_stale', { deviceId: 'd1' });
 
@@ -77,7 +78,8 @@ describe('notify.js', () => {
     // fetch throws.
     const fetchMock = jest.fn().mockRejectedValue(new Error('network down'));
     global.fetch = fetchMock;
-    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const logger = require('../src/logger');
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
     sendNotification = require('../src/notifications/notify').sendNotification;
 

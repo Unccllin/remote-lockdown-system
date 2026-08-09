@@ -1,13 +1,14 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 const pool = require('./pool');
 const { runMigrations } = require('./migrationRunner');
+const logger = require('../logger');
 
 async function migrate() {
   const client = await pool.connect();
   try {
-    console.log('Running migrations...');
+    logger.info('Running migrations...');
     await runMigrations(client);
-    console.log('Migrations complete.');
+    logger.info('Migrations complete.');
   } finally {
     client.release();
     await pool.end();
@@ -15,6 +16,6 @@ async function migrate() {
 }
 
 migrate().catch((err) => {
-  console.error('Migration failed:', err);
+  logger.error({ err }, 'Migration failed');
   process.exit(1);
 });

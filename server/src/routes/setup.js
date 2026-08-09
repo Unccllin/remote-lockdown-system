@@ -19,6 +19,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const pool = require('../db/pool');
+const logger = require('../logger');
 
 /**
  * GET /api/setup/status
@@ -100,7 +101,7 @@ router.post('/create-admin', async (req, res) => {
       [crypto.randomUUID(), null, adminId, 'initial_setup', JSON.stringify({ username })]
     );
 
-    console.log(`[setup] Initial admin created: ${username}`);
+    logger.info('[setup] Initial admin created: %s', username);
 
     res.status(201).json({
       success: true,
@@ -108,7 +109,7 @@ router.post('/create-admin', async (req, res) => {
       username,
     });
   } catch (err) {
-    console.error('[setup] Failed to create admin:', err.message);
+    logger.error({ err }, '[setup] Failed to create admin');
 
     // Handle duplicate username
     if (err.message && err.message.includes('UNIQUE')) {

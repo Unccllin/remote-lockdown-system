@@ -13,6 +13,8 @@
  * Consensus: CC2 (one central validator), CC11 (no silent dev defaults in prod).
  */
 
+const logger = require('../logger');
+
 const PLACEHOLDERS = [
   'change_this_to_a_long_random_secret',
   'change_this_to_a_long_random_key',
@@ -122,16 +124,6 @@ function validateEnv({ dev = false } = {}) {
     }
   }
 
-  // --- FA6: DB config ---
-  if (!process.env.DATABASE_URL) {
-    // Individual DB vars needed
-    for (const v of ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD']) {
-      if (!process.env[v] && isProd) {
-        errors.push(`${v} is required when DATABASE_URL is not set (production)`);
-      }
-    }
-  }
-
   // --- Batch E: numeric tunables (only validate if explicitly set) ---
   function checkNumeric(name, min, max) {
     if (process.env[name] === undefined) return; // all have defaults
@@ -163,6 +155,16 @@ function validateEnv({ dev = false } = {}) {
   // Retention scheduler
   checkNumeric('RETENTION_SCHEDULER_INTERVAL_MS', 3600000, 604800000);
 
+  // --- FA6: DB config ---
+  if (!process.env.DATABASE_URL) {
+    // Individual DB vars needed
+    for (const v of ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD']) {
+      if (!process.env[v] && isProd) {
+        errors.push(`${v} is required when DATABASE_URL is not set (production)`);
+      }
+    }
+  }
+
   // --- DB_SSL_VERIFY (FA6) ---
   const sslVerify = process.env.DB_SSL_VERIFY;
   if (sslVerify !== undefined && sslVerify !== 'true' && sslVerify !== 'false') {
@@ -171,14 +173,11 @@ function validateEnv({ dev = false } = {}) {
 
   // --- Output ---
   for (const w of warnings) {
-    console.warn(`WARNING: ${w}`);
+    logger.warn({ warning: w }, 'Configuration warning');
   }
 
   if (errors.length > 0) {
-    console.error('FATAL: invalid configuration:');
-    for (const e of errors) {
-      console.error(`  - ${e}`);
-    }
+    logger.error({ errors }, 'FATAL: invalid configuration');
     process.exit(1);
   }
 }
