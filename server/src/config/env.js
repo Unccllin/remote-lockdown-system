@@ -132,6 +132,37 @@ function validateEnv({ dev = false } = {}) {
     }
   }
 
+  // --- Batch E: numeric tunables (only validate if explicitly set) ---
+  function checkNumeric(name, min, max) {
+    if (process.env[name] === undefined) return; // all have defaults
+    const val = parseInt(process.env[name], 10);
+    if (isNaN(val) || val < min || val > max) {
+      warnings.push(
+        `${name} should be between ${min} and ${max} (got ${process.env[name]})`
+      );
+    }
+  }
+
+  // HMAC security tunables
+  checkNumeric('HMAC_TIMESTAMP_WINDOW_SECONDS', 10, 3600);
+  checkNumeric('HMAC_NONCE_TTL_MS', 60000, 3600000);
+  checkNumeric('HMAC_CLEANUP_INTERVAL_MS', 1000, 3600000);
+
+  // Agent adaptive polling (seconds)
+  checkNumeric('ADAPTIVE_POLL_STOLEN_SEC', 5, 3600);
+  checkNumeric('ADAPTIVE_POLL_TRACKING_SEC', 5, 3600);
+  checkNumeric('ADAPTIVE_POLL_RECOVERING_SEC', 5, 3600);
+  checkNumeric('ADAPTIVE_POLL_LOCKED_SEC', 5, 3600);
+  checkNumeric('ADAPTIVE_POLL_ACTIVE_SEC', 5, 3600);
+
+  // Alert scheduler
+  checkNumeric('ALERT_SCHEDULER_INTERVAL_MS', 1000, 3600000);
+  checkNumeric('ALERT_POLL_INTERVAL_SEC', 5, 3600);
+  checkNumeric('STALE_DEVICE_THRESHOLD_SEC', 60, 86400);
+
+  // Retention scheduler
+  checkNumeric('RETENTION_SCHEDULER_INTERVAL_MS', 3600000, 604800000);
+
   // --- DB_SSL_VERIFY (FA6) ---
   const sslVerify = process.env.DB_SSL_VERIFY;
   if (sslVerify !== undefined && sslVerify !== 'true' && sslVerify !== 'false') {

@@ -22,9 +22,9 @@
 
 const crypto = require('crypto');
 
-const TIMESTAMP_WINDOW_SECONDS = 300;
-const NONCE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const TIMESTAMP_WINDOW_SECONDS = parseInt(process.env.HMAC_TIMESTAMP_WINDOW_SECONDS || '300', 10);
+const NONCE_TTL_MS = parseInt(process.env.HMAC_NONCE_TTL_MS || '600000', 10);
+const CLEANUP_INTERVAL_MS = parseInt(process.env.HMAC_CLEANUP_INTERVAL_MS || '300000', 10);
 const REQUIRE_HMAC = process.env.REQUIRE_HMAC === 'true';
 const USE_DB_NONCE_CACHE = process.env.USE_DB_NONCE_CACHE === 'true';
 

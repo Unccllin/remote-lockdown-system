@@ -5,6 +5,8 @@ const { encryptField, readDualMode } = require('../db/fieldCrypto');
 const { hashApiKey, verifySharedKey } = require('../db/apiKey');
 const { hmacVerify } = require('../middleware/hmacAuth');
 const { getAgentBinariesDir } = require('../config/paths');
+const { sendNotification } = require('../notifications/notify');
+const { getDeviceByApiKeyHash, getDeviceByHostname, getDeviceByHardwareIdentity } = require('../db/deviceQueries');
 
 const router = express.Router();
 
@@ -34,13 +36,10 @@ async function agentAuth(req, res, next) {
   // Step 1: Try per-device key authentication (hash lookup)
   const providedHash = hashApiKey(key);
   try {
-    const result = await pool.query(
-      'SELECT * FROM devices WHERE api_key_hash = $1 LIMIT 1',
-      [providedHash]
-    );
-    if (result.rows[0]) {
+    const device = await getDeviceByApiKeyHash(providedHash);
+    if (device) {
       // Per-device key verified — attach device to request
-      req.device = result.rows[0];
+      req.device = device;
       req.authMethod = 'per_device_key';
       // Phase 0: capture plaintext key for HMAC verification (downstream middleware)
       req.deviceKey = key;
@@ -58,21 +57,7 @@ async function agentAuth(req, res, next) {
     // eligible for legacy fallback (api_key_hash IS NULL).
     // We identify the device from the request body.
     const { hostname, mac_address, hardware_uuid } = req.body || {};
-    let device = null;
-    if (mac_address || hardware_uuid) {
-      const r = await pool.query(
-        `SELECT * FROM devices
-         WHERE (mac_address = $1 AND $1 IS NOT NULL)
-            OR (hardware_uuid = $2 AND $2 IS NOT NULL)
-         LIMIT 1`,
-        [mac_address || null, hardware_uuid || null]
-      );
-      device = r.rows[0];
-    }
-    if (!device && hostname) {
-      const r = await pool.query('SELECT * FROM devices WHERE hostname = $1', [hostname]);
-      device = r.rows[0];
-    }
+    const device = await getDeviceByHardwareIdentity(hostname, mac_address, hardware_uuid);
     if (device && !device.api_key_hash) {
       // CC5: Legacy fallback succeeds only for devices without per-device key
       req.device = device;
@@ -90,20 +75,110 @@ async function agentAuth(req, res, next) {
  * Returns the device row or null.
  */
 async function findDevice(hostname, mac_address, hardware_uuid) {
-  let devResult;
   if (mac_address || hardware_uuid) {
-    devResult = await pool.query(
-      `SELECT * FROM devices
-       WHERE (mac_address = $1 AND $1 IS NOT NULL)
-          OR (hardware_uuid = $2 AND $2 IS NOT NULL)
-       LIMIT 1`,
-      [mac_address || null, hardware_uuid || null]
+    // Try hardware identity first (mac/uuid, then hostname fallback)
+    return getDeviceByHardwareIdentity(hostname, mac_address, hardware_uuid);
+  }
+  // No hardware identity — just use hostname
+  return getDeviceByHostname(hostname);
+}
+
+/**
+ * Update device check-in timestamp and populate hardware identity if missing.
+ */
+async function updateDeviceCheckin(deviceId, hostname, macAddress, hardwareUuid) {
+  await pool.query(
+    `UPDATE devices
+       SET last_checkin   = NOW(),
+           hostname       = $1,
+           mac_address    = COALESCE($2, mac_address),
+           hardware_uuid  = COALESCE($3, hardware_uuid)
+     WHERE id = $4`,
+    [hostname, macAddress || null, hardwareUuid || null, deviceId]
+  );
+}
+
+/**
+ * Expire stale pending commands older than COMMAND_EXPIRY_DAYS.
+ * Lightweight cleanup — runs on each checkin but only affects the current device.
+ */
+async function expireStaleCommands(deviceId) {
+  const COMMAND_EXPIRY_DAYS = parseInt(process.env.COMMAND_EXPIRY_DAYS || '30', 10);
+  await pool.query(
+    `UPDATE commands SET status = 'expired', executed_at = NOW()
+     WHERE device_id = $1 AND status = 'pending'
+       AND created_at < NOW() - INTERVAL '${COMMAND_EXPIRY_DAYS} days'`,
+    [deviceId]
+  );
+}
+
+/**
+ * Fetch the next pending command for a device (oldest first).
+ * Uses the (device_id, status) index for efficiency.
+ */
+async function fetchPendingCommand(deviceId) {
+  const cmdResult = await pool.query(
+    `SELECT * FROM commands WHERE device_id = $1 AND status = 'pending' ORDER BY created_at ASC LIMIT 1`,
+    [deviceId]
+  );
+  return cmdResult.rows[0] || null;
+}
+
+/**
+ * Fetch encryption key and BIOS password for an unlock command.
+ * Uses CC16 dual-mode reads (decrypt if encrypted, fall back to plaintext).
+ * @returns {{ keyMaterial: string|null, biosPassword: string|null }}
+ */
+async function fetchUnlockMaterials(deviceId) {
+  let keyMaterial = null;
+  const keyResult = await pool.query(
+    `SELECT * FROM encryption_keys WHERE device_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [deviceId]
+  );
+  if (keyResult.rows[0]) {
+    // CC16: Dual-mode read — decrypt if encrypted, fall back to plaintext
+    keyMaterial = readDualMode(
+      keyResult.rows[0],
+      'key_material',
+      'key_material_encrypted',
+      'key_enc_nonce',
+      'key_enc_tag'
     );
   }
-  if (!devResult || !devResult.rows[0]) {
-    devResult = await pool.query('SELECT * FROM devices WHERE hostname = $1', [hostname]);
+
+  // Fetch BIOS password for unlock — the agent needs it to revert UEFI lockdown
+  let biosPassword = null;
+  const pwResult = await pool.query(
+    `SELECT * FROM bios_passwords WHERE device_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [deviceId]
+  );
+  if (pwResult.rows[0]) {
+    // CC16: Dual-mode read for bios_password
+    biosPassword = readDualMode(
+      pwResult.rows[0],
+      'password',
+      'password_encrypted',
+      'pw_enc_nonce',
+      'pw_enc_tag'
+    );
   }
-  return devResult.rows[0] || null;
+
+  return { keyMaterial, biosPassword };
+}
+
+/**
+ * Calculate the adaptive poll interval for a device based on its status.
+ * Values are configurable via ADAPTIVE_POLL_*_SEC env vars (defaults shown).
+ */
+function calculatePollInterval(deviceStatus) {
+  const ADAPTIVE_POLL = {
+    stolen: parseInt(process.env.ADAPTIVE_POLL_STOLEN_SEC || '30', 10),
+    tracking: parseInt(process.env.ADAPTIVE_POLL_TRACKING_SEC || '30', 10),
+    recovering: parseInt(process.env.ADAPTIVE_POLL_RECOVERING_SEC || '30', 10),
+    locked: parseInt(process.env.ADAPTIVE_POLL_LOCKED_SEC || '60', 10),
+    active: parseInt(process.env.ADAPTIVE_POLL_ACTIVE_SEC || '300', 10),
+  };
+  return ADAPTIVE_POLL[deviceStatus] || 300;
 }
 
 router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
@@ -116,88 +191,26 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   if (!device) return res.status(404).json({ error: 'Device not registered' });
 
   // --- Update phase: record check-in and populate hardware identity if missing ---
-  await pool.query(
-    `UPDATE devices
-       SET last_checkin   = NOW(),
-           hostname       = $1,
-           mac_address    = COALESCE($2, mac_address),
-           hardware_uuid  = COALESCE($3, hardware_uuid)
-     WHERE id = $4`,
-    [hostname, mac_address || null, hardware_uuid || null, device.id]
-  );
+  await updateDeviceCheckin(device.id, hostname, mac_address, hardware_uuid);
 
-  // Phase 5: Expire stale pending commands (older than 30 days).
-  // This is a lightweight cleanup — runs on each checkin but only affects
-  // the current device. The 30-day default is configurable via env var.
-  const COMMAND_EXPIRY_DAYS = parseInt(process.env.COMMAND_EXPIRY_DAYS || '30', 10);
-  await pool.query(
-    `UPDATE commands SET status = 'expired', executed_at = NOW()
-     WHERE device_id = $1 AND status = 'pending'
-       AND created_at < NOW() - INTERVAL '${COMMAND_EXPIRY_DAYS} days'`,
-    [device.id]
-  );
+  // Phase 5: Expire stale pending commands (older than COMMAND_EXPIRY_DAYS).
+  await expireStaleCommands(device.id);
 
   // Phase 5: Fetch the next pending command (if any).
-  // Uses the (device_id, status) index for efficiency.
-  const cmdResult = await pool.query(
-    `SELECT * FROM commands WHERE device_id = $1 AND status = 'pending' ORDER BY created_at ASC LIMIT 1`,
-    [device.id]
-  );
-  const command = cmdResult.rows[0] || null;
+  const command = await fetchPendingCommand(device.id);
 
   let keyMaterial = null;
-  if (command && command.command_type === 'unlock') {
-    const keyResult = await pool.query(
-      `SELECT * FROM encryption_keys WHERE device_id = $1 ORDER BY created_at DESC LIMIT 1`,
-      [device.id]
-    );
-    if (keyResult.rows[0]) {
-      // CC16: Dual-mode read — decrypt if encrypted, fall back to plaintext
-      keyMaterial = readDualMode(
-        keyResult.rows[0],
-        'key_material',
-        'key_material_encrypted',
-        'key_enc_nonce',
-        'key_enc_tag'
-      );
-    }
-  }
-
-  // Fetch BIOS password for unlock — the agent needs it to revert UEFI lockdown
   let biosPassword = null;
   if (command && command.command_type === 'unlock') {
-    const pwResult = await pool.query(
-      `SELECT * FROM bios_passwords WHERE device_id = $1 ORDER BY created_at DESC LIMIT 1`,
-      [device.id]
-    );
-    if (pwResult.rows[0]) {
-      // CC16: Dual-mode read for bios_password
-      biosPassword = readDualMode(
-        pwResult.rows[0],
-        'password',
-        'password_encrypted',
-        'pw_enc_nonce',
-        'pw_enc_tag'
-      );
-    }
+    const materials = await fetchUnlockMaterials(device.id);
+    keyMaterial = materials.keyMaterial;
+    biosPassword = materials.biosPassword;
   }
 
   // Phase 5: Adaptive polling — tell the agent how often to check in.
-  //   - stolen/tracking: 30s (need rapid response for anti-theft)
-  //   - recovering: 30s (need to confirm unlock quickly)
-  //   - locked: 60s (agent is locked, but may need new commands)
-  //   - active/normal: 300s (5 min — reduces server load)
-  //
   // The agent uses this value if present, falling back to its config
   // default (poll_interval from config file or env var).
-  const ADAPTIVE_POLL = {
-    stolen: 30,
-    tracking: 30,
-    recovering: 30,
-    locked: 60,
-    active: 300,
-  };
-  const serverPollInterval = ADAPTIVE_POLL[device.status] || 300;
+  const serverPollInterval = calculatePollInterval(device.status);
 
   res.json({
     device_id: device.id,
@@ -320,6 +333,26 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
       // or the admin can cancel it. No device status change.
     });
 
+    // Fire-and-forget notifications for critical command confirmations.
+    // These are the events an admin needs to know about in real-time:
+    //   - lockdown confirmed → device is now encrypted and locked down
+    //   - unlock confirmed   → device has been successfully recovered
+    if (result_status === 'executed') {
+      const cmdTypeRow = await pool.query('SELECT command_type FROM commands WHERE id = $1', [command_id]);
+      const cmdType = cmdTypeRow.rows[0]?.command_type;
+      if (cmdType === 'lockdown') {
+        sendNotification('agent_lockdown_confirmed', {
+          deviceId: device.id, hostname: device.hostname,
+          commandId: command_id, bootLockStatus: boot_lock_status,
+        });
+      } else if (cmdType === 'unlock') {
+        sendNotification('agent_unlock_confirmed', {
+          deviceId: device.id, hostname: device.hostname,
+          commandId: command_id,
+        });
+      }
+    }
+
     res.json({ ok: true });
   } catch (err) {
     // A4: Idempotent retry — if the conflict is from a duplicate insert, treat as success
@@ -362,6 +395,14 @@ router.post('/deadman-report', agentAuth, hmacVerify(), async (req, res) => {
         'INSERT INTO audit_log (device_id, action, detail) VALUES ($1, $2, $3)',
         [device.id, 'agent_deadman_lockdown_confirmed', { source: 'deadman_switch' }]
       );
+    });
+
+    // Fire-and-forget notification — the deadman switch fired, meaning the
+    // agent hasn't been able to reach the server for the configured grace
+    // period. The device has self-locked as a failsafe.
+    sendNotification('agent_deadman_lockdown_confirmed', {
+      deviceId: device.id, hostname: device.hostname,
+      source: 'deadman_switch',
     });
 
     res.json({ ok: true });

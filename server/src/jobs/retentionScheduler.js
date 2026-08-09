@@ -15,7 +15,7 @@
 
 const pool = require('../db/pool');
 
-const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const DEFAULT_INTERVAL_MS = parseInt(process.env.RETENTION_SCHEDULER_INTERVAL_MS || '86400000', 10);
 const ADVISORY_LOCK_KEY = 54321; // arbitrary fixed key for retention job
 
 let intervalId = null;

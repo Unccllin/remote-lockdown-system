@@ -17,14 +17,13 @@
 const pool = require('../db/pool');
 const { sendNotification } = require('../notifications/notify');
 
-const DEFAULT_INTERVAL_MS = 60 * 1000; // 60 seconds
+const DEFAULT_INTERVAL_MS = parseInt(process.env.ALERT_SCHEDULER_INTERVAL_MS || '60000', 10);
 
 // Default poll interval (seconds) used as the staleness baseline. The agent
 // route sends adaptive poll intervals per status; here we use the active
 // default (300s) as the reference. A device is "stale" when its last_checkin
 // is older than 2x this baseline (10 minutes).
-const DEFAULT_POLL_INTERVAL_SEC = 300;
-const STALE_THRESHOLD_SEC = DEFAULT_POLL_INTERVAL_SEC * 2; // 600s = 10 minutes
+const STALE_THRESHOLD_SEC = parseInt(process.env.STALE_DEVICE_THRESHOLD_SEC || '600', 10);
 
 let intervalId = null;
 let runInFlight = null;
