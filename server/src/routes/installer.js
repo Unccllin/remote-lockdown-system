@@ -47,8 +47,9 @@ const https = require('https');
 const { execFileSync } = require('child_process');
 const pool = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
-const { hashApiKey } = require('../db/apiKey');
+const { generateApiKey, hashApiKey } = require('../db/apiKey');
 const { getAgentBinariesDir } = require('../config/paths');
+const { getDeviceById } = require('../db/deviceQueries');
 
 const router = express.Router();
 
@@ -409,6 +410,172 @@ function escapeSh(value) {
 function escapePs1(value) {
   const s = String(value == null ? '' : value);
   return `'${s.replace(/'/g, `''`)}'`;
+}
+
+// ---------------------------------------------------------------------------
+// Shared installer-setup helpers (used by both ZIP and NSIS routes)
+// ---------------------------------------------------------------------------
+//
+// The ZIP (GET /:deviceId) and NSIS (GET /:deviceId/nsis) routes share four
+// pieces of setup logic: device lookup, binary resolution, API key
+// generation/update, and config building. These helpers eliminate that
+// duplication while keeping each route's response format intact.
+
+/**
+ * Look up a device by ID (via getDeviceById) and resolve the agent + watchdog
+ * binary paths for the requested platform.
+ *
+ * @param {string} deviceId
+ * @param {string} platform - 'win' or 'linux'
+ * @returns {Promise<{device: object, agentBinPath: string, watchdogBinPath: string|null, plat: object}>}
+ * @throws {Error} with err.code 'DEVICE_NOT_FOUND' if the device doesn't exist,
+ *                 or err.code 'BINARY_NOT_FOUND' if the agent binary can't be resolved.
+ */
+async function resolveDeviceAndBinaries(deviceId, platform) {
+  const device = await getDeviceById(deviceId);
+  if (!device) {
+    const err = new Error('Device not found');
+    err.code = 'DEVICE_NOT_FOUND';
+    throw err;
+  }
+
+  const plat = getPlatformConfig(platform);
+  const agentBinPath = await resolveAgentBinary(platform, plat.agentName, 'lockdown-agent');
+  if (!agentBinPath) {
+    const err = new Error(
+      `Agent binary not found for platform "${platform}". ` +
+      `Tried: local bundle, cache, and GitHub Releases download. ` +
+      `Ensure agent binaries are built and published to GitHub Releases.`
+    );
+    err.code = 'BINARY_NOT_FOUND';
+    throw err;
+  }
+
+  const watchdogBinPath = await resolveAgentBinary(platform, plat.watchdogName, 'lockdown-watchdog');
+  return { device, agentBinPath, watchdogBinPath, plat };
+}
+
+/**
+ * Generate a new API key, hash it, update the device record, and write an
+ * audit-log entry. Returns the plaintext key for embedding in the installer
+ * config (the plaintext is never stored — only its hash).
+ *
+ * @param {string} deviceId
+ * @param {string} adminId - req.admin.id from the authenticated request
+ * @param {string} action - audit-log action ('installer_generated' or 'nsis_installer_generated')
+ * @param {object} detail - audit-log detail payload
+ * @returns {Promise<string>} plaintext API key
+ */
+async function generateApiKeyAndUpdateDevice(deviceId, adminId, action, detail) {
+  const apiKey = generateApiKey();
+  const apiKeyHash = hashApiKey(apiKey);
+
+  await pool.query('UPDATE devices SET api_key_hash = $1 WHERE id = $2', [apiKeyHash, deviceId]);
+  await pool.query(
+    'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
+    [deviceId, adminId, action, detail]
+  );
+
+  return apiKey;
+}
+
+/**
+ * Build the config.json object that gets embedded in the installer.
+ * Includes google_api_key from process.env.GOOGLE_API_KEY if set.
+ *
+ * @param {object} device - device record from the database
+ * @param {string} serverUrl - the server URL the agent should check in with
+ * @param {string} apiKey - plaintext API key for the device
+ * @returns {object} config object
+ */
+function buildDeviceConfig(device, serverUrl, apiKey) {
+  const config = {
+    server_url: serverUrl,
+    device_hostname: device.hostname,
+    api_key: apiKey,
+    poll_interval: 30,
+    sign_requests: true,
+    server_supports_ack_dedup: true,
+    boot_lock_enabled: true,
+    enrolled_at: new Date().toISOString(),
+  };
+
+  // Optionally include Google Geolocation API key for WiFi triangulation.
+  // Set GOOGLE_API_KEY on the server to provision it in all generated installers.
+  const googleKey = process.env.GOOGLE_API_KEY;
+  if (googleKey) {
+    config.google_api_key = googleKey;
+  }
+
+  return config;
+}
+
+/**
+ * Assemble the list of files for the ZIP installer package.
+ * Includes the agent binary, watchdog binary (if available), config.json,
+ * platform-appropriate install script, README, EULA, and privacy summary.
+ *
+ * @param {object} config - device config object
+ * @param {object} device - device record
+ * @param {string} platform - 'win' or 'linux'
+ * @param {string} agentBinPath - path to the resolved agent binary
+ * @param {string|null} watchdogBinPath - path to the watchdog binary (or null)
+ * @param {object} plat - platform config from getPlatformConfig()
+ * @returns {Array<{name: string, data: Buffer}>}
+ */
+function assembleZipFiles(config, device, platform, agentBinPath, watchdogBinPath, plat) {
+  const files = [];
+
+  // Agent binary
+  files.push({
+    name: plat.agentName,
+    data: fs.readFileSync(agentBinPath),
+  });
+
+  // Watchdog binary (if it exists)
+  if (watchdogBinPath && fs.existsSync(watchdogBinPath)) {
+    files.push({
+      name: plat.watchdogName,
+      data: fs.readFileSync(watchdogBinPath),
+    });
+  }
+
+  // Config JSON
+  files.push({
+    name: 'config.json',
+    data: Buffer.from(JSON.stringify(config, null, 2), 'utf8'),
+  });
+
+  // Install script
+  if (platform === 'win') {
+    files.push({
+      name: 'install.ps1',
+      data: Buffer.from(generateInstallPs1(config, device.hostname), 'utf8'),
+    });
+  } else {
+    files.push({
+      name: 'install.sh',
+      data: Buffer.from(generateInstallSh(config, device.hostname), 'utf8'),
+    });
+  }
+
+  // README
+  files.push({
+    name: 'README.txt',
+    data: Buffer.from(generateReadme(device.hostname, platform), 'utf8'),
+  });
+
+  // Phase 7: EULA + Privacy Policy (short versions for the installer package)
+  files.push({
+    name: 'EULA.txt',
+    data: Buffer.from(generateEula(device.hostname), 'utf8'),
+  });
+  files.push({
+    name: 'PRIVACY_POLICY.txt',
+    data: Buffer.from(generatePrivacySummary(), 'utf8'),
+  });
+
+  return files;
 }
 
 // ---------------------------------------------------------------------------
@@ -1329,45 +1496,27 @@ router.get('/:deviceId', requireAuth, async (req, res) => {
   const { deviceId } = req.params;
   const platform = req.query.platform === 'linux' ? 'linux' : 'win';
 
-  // Look up the device
-  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [deviceId]);
-  const device = devResult.rows[0];
-  if (!device) {
-    return res.status(404).json({ error: 'Device not found' });
+  // Look up the device and resolve agent binaries (shared helper)
+  let device, agentBinPath, watchdogBinPath, plat;
+  try {
+    ({ device, agentBinPath, watchdogBinPath, plat } = await resolveDeviceAndBinaries(deviceId, platform));
+  } catch (err) {
+    if (err.code === 'DEVICE_NOT_FOUND') {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+    if (err.code === 'BINARY_NOT_FOUND') {
+      return res.status(503).json({
+        error: `Agent binary not found for platform "${platform}". ` +
+          `Tried: local bundle, cache, and GitHub Releases download. ` +
+          `Ensure agent binaries are built and published to GitHub Releases.`,
+      });
+    }
+    throw err;
   }
 
-  // Resolve agent binaries (local → cache → GitHub Releases download)
-  const plat = getPlatformConfig(platform);
-
-  // Determine the base names (without extension) for GitHub Releases lookup
-  const agentBaseName = 'lockdown-agent';
-  const watchdogBaseName = 'lockdown-watchdog';
-
-  // Resolve the agent binary
-  const agentBinPath = await resolveAgentBinary(platform, plat.agentName, agentBaseName);
-  if (!agentBinPath) {
-    return res.status(503).json({
-      error: `Agent binary not found for platform "${platform}". ` +
-        `Tried: local bundle, cache, and GitHub Releases download. ` +
-        `Ensure agent binaries are built and published to GitHub Releases.`,
-    });
-  }
-
-  // Resolve the watchdog binary (non-fatal if missing)
-  const watchdogBinPath = await resolveAgentBinary(platform, plat.watchdogName, watchdogBaseName);
-
-  // Build the device-specific config
-  // Note: We can't return the plaintext API key here (it's not stored).
-  // The admin must use the key from the enrollment step, or rotate the key.
-  // For the installer, we generate a new key and store its hash.
-  const { generateApiKey } = require('../db/apiKey');
-  const apiKey = generateApiKey();
-  const apiKeyHash = hashApiKey(apiKey);
-
-  await pool.query('UPDATE devices SET api_key_hash = $1 WHERE id = $2', [apiKeyHash, device.id]);
-  await pool.query(
-    'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
-    [device.id, req.admin.id, 'installer_generated', { platform }]
+  // Generate a new API key and update the device record (shared helper)
+  const apiKey = await generateApiKeyAndUpdateDevice(
+    device.id, req.admin.id, 'installer_generated', { platform }
   );
 
   // Determine server URL — use the request origin (what the admin browser sees)
@@ -1375,68 +1524,11 @@ router.get('/:deviceId', requireAuth, async (req, res) => {
   const host = req.get('host');
   const serverUrl = `${protocol}://${host}`;
 
-  const config = {
-    server_url: serverUrl,
-    device_hostname: device.hostname,
-    api_key: apiKey,
-    poll_interval: 30,
-    sign_requests: true,
-    server_supports_ack_dedup: true,
-    boot_lock_enabled: true,
-    enrolled_at: new Date().toISOString(),
-  };
+  // Build the device-specific config (shared helper)
+  const config = buildDeviceConfig(device, serverUrl, apiKey);
 
-  // Build the files for the ZIP
-  const files = [];
-
-  // Agent binary
-  files.push({
-    name: plat.agentName,
-    data: fs.readFileSync(agentBinPath),
-  });
-
-  // Watchdog binary (if it exists)
-  if (watchdogBinPath && fs.existsSync(watchdogBinPath)) {
-    files.push({
-      name: plat.watchdogName,
-      data: fs.readFileSync(watchdogBinPath),
-    });
-  }
-
-  // Config JSON
-  files.push({
-    name: 'config.json',
-    data: Buffer.from(JSON.stringify(config, null, 2), 'utf8'),
-  });
-
-  // Install script
-  if (platform === 'win') {
-    files.push({
-      name: 'install.ps1',
-      data: Buffer.from(generateInstallPs1(config, device.hostname), 'utf8'),
-    });
-  } else {
-    files.push({
-      name: 'install.sh',
-      data: Buffer.from(generateInstallSh(config, device.hostname), 'utf8'),
-    });
-  }
-
-  // README
-  files.push({
-    name: 'README.txt',
-    data: Buffer.from(generateReadme(device.hostname, platform), 'utf8'),
-  });
-
-  // Phase 7: EULA + Privacy Policy (short versions for the installer package)
-  files.push({
-    name: 'EULA.txt',
-    data: Buffer.from(generateEula(device.hostname), 'utf8'),
-  });
-  files.push({
-    name: 'PRIVACY_POLICY.txt',
-    data: Buffer.from(generatePrivacySummary(), 'utf8'),
-  });
+  // Assemble the files for the ZIP (shared helper)
+  const files = assembleZipFiles(config, device, platform, agentBinPath, watchdogBinPath, plat);
 
   // Build ZIP
   const zip = buildZip(files);
@@ -1465,31 +1557,25 @@ router.get('/:deviceId/nsis', requireAuth, async (req, res) => {
     });
   }
 
-  // Look up the device
-  const devResult = await pool.query('SELECT * FROM devices WHERE id = $1', [deviceId]);
-  const device = devResult.rows[0];
-  if (!device) {
-    return res.status(404).json({ error: 'Device not found' });
+  // Look up the device and resolve agent binaries (shared helper)
+  let device, agentBinPath, watchdogBinPath;
+  try {
+    ({ device, agentBinPath, watchdogBinPath } = await resolveDeviceAndBinaries(deviceId, platform));
+  } catch (err) {
+    if (err.code === 'DEVICE_NOT_FOUND') {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+    if (err.code === 'BINARY_NOT_FOUND') {
+      return res.status(503).json({
+        error: 'Agent binary not found for Windows. Ensure agent binaries are built and published.',
+      });
+    }
+    throw err;
   }
 
-  // Resolve agent binaries (local → cache → GitHub Releases download)
-  const plat = getPlatformConfig(platform);
-  const agentBinPath = await resolveAgentBinary(platform, plat.agentName, 'lockdown-agent');
-  if (!agentBinPath) {
-    return res.status(503).json({
-      error: 'Agent binary not found for Windows. Ensure agent binaries are built and published.',
-    });
-  }
-  const watchdogBinPath = await resolveAgentBinary(platform, plat.watchdogName, 'lockdown-watchdog');
-
-  // Generate a new API key for this device
-  const { generateApiKey } = require('../db/apiKey');
-  const apiKey = generateApiKey();
-  const apiKeyHash = hashApiKey(apiKey);
-  await pool.query('UPDATE devices SET api_key_hash = $1 WHERE id = $2', [apiKeyHash, device.id]);
-  await pool.query(
-    'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
-    [device.id, req.admin.id, 'nsis_installer_generated', { platform }]
+  // Generate a new API key for this device (shared helper)
+  const apiKey = await generateApiKeyAndUpdateDevice(
+    device.id, req.admin.id, 'nsis_installer_generated', { platform }
   );
 
   // Determine server URL
@@ -1497,16 +1583,8 @@ router.get('/:deviceId/nsis', requireAuth, async (req, res) => {
   const host = req.get('host');
   const serverUrl = `${protocol}://${host}`;
 
-  const config = {
-    server_url: serverUrl,
-    device_hostname: device.hostname,
-    api_key: apiKey,
-    poll_interval: 30,
-    sign_requests: true,
-    server_supports_ack_dedup: true,
-    boot_lock_enabled: true,
-    enrolled_at: new Date().toISOString(),
-  };
+  // Build the device-specific config (shared helper)
+  const config = buildDeviceConfig(device, serverUrl, apiKey);
 
   // Generate and compile the NSIS installer
   try {
@@ -1523,7 +1601,6 @@ router.get('/:deviceId/nsis', requireAuth, async (req, res) => {
     console.error('[installer] NSIS compilation failed:', err.message);
     return res.status(500).json({
       error: 'Failed to compile NSIS installer',
-      detail: err.message,
       fallback: `Use the ZIP installer at /api/installer/${deviceId}?platform=win instead`,
     });
   }
