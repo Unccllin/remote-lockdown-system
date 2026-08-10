@@ -78,6 +78,10 @@ _DRY_RUN_BCD_STATE = {
     "recoveryenabled": "Yes",
 }
 
+# D-008: Simulated BitLocker state for dry-run
+_DRY_RUN_BITLOCKER_ENABLED = False
+_DRY_RUN_BITLOCKER_SUSPENDED = False
+
 
 def set_dry_run(enabled: bool) -> None:
     """Enable or disable dry-run mode."""
@@ -301,6 +305,137 @@ def _is_winre_enabled() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# BitLocker awareness (D-008)
+# ---------------------------------------------------------------------------
+# If BitLocker is enabled on the system drive, changing BCD settings can
+# trigger a BitLocker recovery key prompt on next boot. The agent should
+# suspend BitLocker protectors before applying BCD changes, and resume
+# them after. This is the standard Windows approach for making BCD changes
+# on BitLocker-protected systems.
+#
+# Close criteria for D-008: Agent checks BitLocker and either handles or
+# warns before bcdedit. This code implements the "handle" path: suspend
+# before, resume after. The "warn" path is covered by the bitlocker_status
+# field in the result dict, which the agent includes in the ACK.
+
+
+def _check_bitlocker() -> dict:
+    """Check BitLocker status on the system drive (C:).
+
+    D-008: Returns a dict with:
+      - enabled: bool — True if BitLocker is ON
+      - suspended: bool — True if BitLocker protectors are suspended
+      - percentage: str — encryption percentage (e.g., "100%")
+      - error: str | None — error message if the check failed
+    """
+    if _DRY_RUN:
+        return {
+            "enabled": _DRY_RUN_BITLOCKER_ENABLED,
+            "suspended": _DRY_RUN_BITLOCKER_SUSPENDED,
+            "percentage": "100%" if _DRY_RUN_BITLOCKER_ENABLED else "0%",
+            "error": None,
+        }
+    if platform.system() != "Windows":
+        return {"enabled": False, "suspended": False, "percentage": "0%", "error": None}
+    try:
+        rc, stdout, stderr = _run(["manage-bde", "-status", "C:"], timeout=10)
+        if rc != 0:
+            # manage-bde not available or no BitLocker — treat as not enabled
+            return {
+                "enabled": False,
+                "suspended": False,
+                "percentage": "0%",
+                "error": f"manage-bde failed: {stderr}",
+            }
+        # Parse output for Protection Status and Conversion Status
+        enabled = False
+        suspended = False
+        percentage = "0%"
+        for line in stdout.split("\n"):
+            line_lower = line.strip().lower()
+            if "protection status" in line_lower and "protection on" in line_lower:
+                enabled = True
+            if "protection status" in line_lower and "protection off" in line_lower:
+                # Could be suspended or disabled
+                suspended = "suspended" in line_lower
+            if "conversion status" in line_lower:
+                # e.g., "    Conversion Status:    100% Encrypted"
+                parts = line.strip().split()
+                for part in parts:
+                    if "%" in part:
+                        percentage = part
+                        break
+        return {
+            "enabled": enabled,
+            "suspended": suspended,
+            "percentage": percentage,
+            "error": None,
+        }
+    except Exception as e:
+        return {"enabled": False, "suspended": False, "percentage": "0%", "error": str(e)}
+
+
+def _suspend_bitlocker() -> bool:
+    """Suspend BitLocker protectors on the system drive (D-008).
+
+    This temporarily disables BitLocker protection so BCD changes don't
+    trigger a recovery key prompt on next boot. Protectors auto-resume
+    after a reboot, but we also explicitly resume them after BCD changes.
+
+    Returns True if suspension succeeded (or BitLocker was not enabled).
+    """
+    if _DRY_RUN:
+        global _DRY_RUN_BITLOCKER_SUSPENDED
+        if _DRY_RUN_BITLOCKER_ENABLED:
+            _DRY_RUN_BITLOCKER_SUSPENDED = True
+            log.info("[DRY-RUN] BitLocker protectors suspended on C:")
+        return True
+    if platform.system() != "Windows":
+        return True
+    try:
+        # Suspend protectors with 1 reboot count (auto-resume after 1 reboot)
+        rc, _, stderr = _run(
+            ["manage-bde", "-protectors", "-disable", "C:", "-rebootcount", "1"], timeout=10
+        )
+        if rc == 0:
+            log.info("BitLocker protectors suspended on C: (auto-resume after 1 reboot)")
+            return True
+        log.warning("Failed to suspend BitLocker protectors: %s", stderr)
+        return False
+    except Exception as e:
+        log.warning("Failed to suspend BitLocker protectors: %s", e)
+        return False
+
+
+def _resume_bitlocker() -> bool:
+    """Resume BitLocker protectors on the system drive (D-008).
+
+    Called after BCD changes are complete. Re-enables protection so the
+    drive is protected again immediately (without waiting for a reboot).
+
+    Returns True if resumption succeeded (or BitLocker was not enabled).
+    """
+    if _DRY_RUN:
+        global _DRY_RUN_BITLOCKER_SUSPENDED
+        _DRY_RUN_BITLOCKER_SUSPENDED = False
+        if _DRY_RUN_BITLOCKER_ENABLED:
+            log.info("[DRY-RUN] BitLocker protectors resumed on C:")
+        return True
+    if platform.system() != "Windows":
+        return True
+    try:
+        rc, _, stderr = _run(["manage-bde", "-protectors", "-enable", "C:"], timeout=10)
+        if rc == 0:
+            log.info("BitLocker protectors resumed on C:")
+            return True
+        log.warning("Failed to resume BitLocker protectors: %s", stderr)
+        return False
+    except Exception as e:
+        log.warning("Failed to resume BitLocker protectors: %s", e)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # BCD state save/restore (Phase 4.2)
 # ---------------------------------------------------------------------------
 
@@ -426,6 +561,8 @@ def apply_bcd_lockdown() -> dict:
           - critical_applied: int — number of critical settings applied
           - best_effort_applied: int — number of best-effort settings applied
           - best_effort_failed: int — number of best-effort settings that failed
+          - bitlocker_status: dict | None — D-008: BitLocker status (enabled,
+            suspended, percentage, error) if checked, None if not Windows
     """
     result = {
         "success": False,
@@ -435,6 +572,7 @@ def apply_bcd_lockdown() -> dict:
         "critical_applied": 0,
         "best_effort_applied": 0,
         "best_effort_failed": 0,
+        "bitlocker_status": None,  # D-008: BitLocker awareness
     }
 
     if not _is_windows():
@@ -446,6 +584,23 @@ def apply_bcd_lockdown() -> dict:
     if not _is_admin():
         log.error("BCD lockdown requires admin privileges — aborting (fail-fast)")
         return result
+
+    # D-008: Check BitLocker status before applying BCD changes.
+    # If BitLocker is enabled, suspend protectors to prevent recovery key
+    # prompt on next boot. Resume after BCD changes are complete.
+    bitlocker = _check_bitlocker()
+    result["bitlocker_status"] = bitlocker
+    bitlocker_was_suspended = False
+    if bitlocker["enabled"]:
+        log.warning(
+            "BitLocker is enabled (%s encrypted) — suspending protectors before BCD changes",
+            bitlocker["percentage"],
+        )
+        if _suspend_bitlocker():
+            bitlocker_was_suspended = True
+        else:
+            log.error("Failed to suspend BitLocker — BCD changes may trigger recovery key prompt")
+            # Proceed anyway — the operator is warned via the ACK's bitlocker_status
 
     # Phase 4.2: Save BCD state BEFORE applying any changes (for rollback)
     state = save_bcd_state()
@@ -479,6 +634,9 @@ def apply_bcd_lockdown() -> dict:
         _rollback_bcd(state)  # non-fatal rollback
         result["rolled_back"] = True
         result["success"] = False
+        # D-008: Resume BitLocker if we suspended it
+        if bitlocker_was_suspended:
+            _resume_bitlocker()
         # Do NOT write the sentinel — boot lockdown was not applied
         return result
 
@@ -500,6 +658,10 @@ def apply_bcd_lockdown() -> dict:
         best_effort_applied,
         best_effort_failed,
     )
+
+    # D-008: Resume BitLocker protectors after BCD changes are complete
+    if bitlocker_was_suspended:
+        _resume_bitlocker()
 
     result["success"] = True
     result["partial"] = best_effort_failed > 0

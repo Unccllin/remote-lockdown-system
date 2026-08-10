@@ -916,3 +916,199 @@ class TestBcdLockdown:
         """CC19: Fast Boot is BEST-EFFORT for HP."""
         settings = [s for s, _ in hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS]
         assert "Fast Boot" in settings
+
+    # --- D-008: BitLocker awareness ---
+
+    def test_d008_check_bitlocker_not_windows(self):
+        """D-008: _check_bitlocker returns disabled on non-Windows."""
+        with patch("bcd_lockdown.platform.system", return_value="Linux"):
+            with patch("bcd_lockdown._DRY_RUN", False):
+                result = bcd_lockdown._check_bitlocker()
+        assert result["enabled"] is False
+        assert result["error"] is None
+
+    def test_d008_check_bitlocker_dry_run_disabled(self):
+        """D-008: _check_bitlocker in dry-run with BitLocker disabled."""
+        with patch("bcd_lockdown._DRY_RUN", True):
+            with patch("bcd_lockdown._DRY_RUN_BITLOCKER_ENABLED", False):
+                result = bcd_lockdown._check_bitlocker()
+        assert result["enabled"] is False
+        assert result["percentage"] == "0%"
+
+    def test_d008_check_bitlocker_dry_run_enabled(self):
+        """D-008: _check_bitlocker in dry-run with BitLocker enabled."""
+        with patch("bcd_lockdown._DRY_RUN", True):
+            with patch("bcd_lockdown._DRY_RUN_BITLOCKER_ENABLED", True):
+                result = bcd_lockdown._check_bitlocker()
+        assert result["enabled"] is True
+        assert result["percentage"] == "100%"
+
+    def test_d008_check_bitlocker_parses_protection_on(self):
+        """D-008: _check_bitlocker parses manage-bde output with Protection On."""
+        fake_output = (
+            "BitLocker Drive Encryption: Configuration Tool version 10.0.19041\n"
+            "Copyright (C) Microsoft Corporation. All rights reserved.\n\n"
+            "Volume C:\n"
+            "    Conversion Status:    100% Encrypted\n"
+            "    Percentage Encrypted: 100%\n"
+            "    Encryption Method:    XTS-AES 128\n"
+            "    Protection Status:    Protection On\n"
+            "    Lock Status:          Unlocked\n"
+            "    Key Protectors:\n"
+            "        Numerical Password\n"
+        )
+        with patch("bcd_lockdown.platform.system", return_value="Windows"):
+            with patch("bcd_lockdown._DRY_RUN", False):
+                with patch("bcd_lockdown._run", return_value=(0, fake_output, "")):
+                    result = bcd_lockdown._check_bitlocker()
+        assert result["enabled"] is True
+        assert result["percentage"] == "100%"
+        assert result["error"] is None
+
+    def test_d008_check_bitlocker_parses_protection_off(self):
+        """D-008: _check_bitlocker parses manage-bde output with Protection Off."""
+        fake_output = (
+            "Volume C:\n"
+            "    Conversion Status:    Fully Decrypted\n"
+            "    Protection Status:    Protection Off\n"
+        )
+        with patch("bcd_lockdown.platform.system", return_value="Windows"):
+            with patch("bcd_lockdown._DRY_RUN", False):
+                with patch("bcd_lockdown._run", return_value=(0, fake_output, "")):
+                    result = bcd_lockdown._check_bitlocker()
+        assert result["enabled"] is False
+
+    def test_d008_suspend_bitlocker_dry_run(self):
+        """D-008: _suspend_bitlocker in dry-run mode."""
+        with patch("bcd_lockdown._DRY_RUN", True):
+            with patch("bcd_lockdown._DRY_RUN_BITLOCKER_ENABLED", True):
+                result = bcd_lockdown._suspend_bitlocker()
+        assert result is True
+
+    def test_d008_resume_bitlocker_dry_run(self):
+        """D-008: _resume_bitlocker in dry-run mode."""
+        with patch("bcd_lockdown._DRY_RUN", True):
+            with patch("bcd_lockdown._DRY_RUN_BITLOCKER_ENABLED", True):
+                result = bcd_lockdown._resume_bitlocker()
+        assert result is True
+
+    def test_d008_suspend_bitlocker_not_windows(self):
+        """D-008: _suspend_bitlocker returns True on non-Windows."""
+        with patch("bcd_lockdown.platform.system", return_value="Linux"):
+            with patch("bcd_lockdown._DRY_RUN", False):
+                result = bcd_lockdown._suspend_bitlocker()
+        assert result is True
+
+    def test_d008_resume_bitlocker_not_windows(self):
+        """D-008: _resume_bitlocker returns True on non-Windows."""
+        with patch("bcd_lockdown.platform.system", return_value="Linux"):
+            with patch("bcd_lockdown._DRY_RUN", False):
+                result = bcd_lockdown._resume_bitlocker()
+        assert result is True
+
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
+    @patch("bcd_lockdown._resume_bitlocker")
+    @patch("bcd_lockdown._suspend_bitlocker", return_value=True)
+    @patch("bcd_lockdown._check_bitlocker")
+    @patch("bcd_lockdown._run")
+    @patch("bcd_lockdown._read_bcd_setting")
+    def test_d008_apply_suspends_and_resumes_bitlocker(
+        self, mock_read, mock_run, mock_check, mock_suspend, mock_resume, _, __, tmp_bcd_files
+    ):
+        """D-008: apply_bcd_lockdown suspends BitLocker before, resumes after."""
+        # BitLocker is enabled
+        mock_check.return_value = {
+            "enabled": True,
+            "suspended": False,
+            "percentage": "100%",
+            "error": None,
+        }
+        # All BCD settings succeed
+        mock_run.return_value = (0, "", "")
+
+        def read_side_effect(setting):
+            for sname, sval, _ in bcd_lockdown.BCD_CRITICAL_COMMANDS:
+                if setting == sname:
+                    return sval
+            for sname, sval, _ in bcd_lockdown.BCD_BEST_EFFORT_COMMANDS:
+                if setting == sname:
+                    return sval
+            return None
+
+        mock_read.side_effect = read_side_effect
+
+        result = bcd_lockdown.apply_bcd_lockdown()
+
+        assert result["success"] is True
+        assert result["bitlocker_status"]["enabled"] is True
+        # BitLocker should have been suspended and resumed
+        mock_suspend.assert_called_once()
+        mock_resume.assert_called_once()
+
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
+    @patch("bcd_lockdown._resume_bitlocker")
+    @patch("bcd_lockdown._suspend_bitlocker", return_value=True)
+    @patch("bcd_lockdown._check_bitlocker")
+    @patch("bcd_lockdown._run")
+    @patch("bcd_lockdown._read_bcd_setting")
+    def test_d008_apply_resumes_bitlocker_on_rollback(
+        self, mock_read, mock_run, mock_check, mock_suspend, mock_resume, _, __, tmp_bcd_files
+    ):
+        """D-008: BitLocker is resumed even when critical failure triggers rollback."""
+        mock_check.return_value = {
+            "enabled": True,
+            "suspended": False,
+            "percentage": "100%",
+            "error": None,
+        }
+        # All BCD settings fail
+        mock_run.return_value = (1, "", "error")
+        mock_read.return_value = "Yes"  # verification fails
+
+        result = bcd_lockdown.apply_bcd_lockdown()
+
+        assert result["success"] is False
+        assert result["rolled_back"] is True
+        # BitLocker should still have been resumed
+        mock_suspend.assert_called_once()
+        mock_resume.assert_called_once()
+
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
+    @patch("bcd_lockdown._resume_bitlocker")
+    @patch("bcd_lockdown._suspend_bitlocker")
+    @patch("bcd_lockdown._check_bitlocker")
+    @patch("bcd_lockdown._run")
+    @patch("bcd_lockdown._read_bcd_setting")
+    def test_d008_apply_no_bitlocker_no_suspend(
+        self, mock_read, mock_run, mock_check, mock_suspend, mock_resume, _, __, tmp_bcd_files
+    ):
+        """D-008: BitLocker not enabled → no suspend/resume calls."""
+        mock_check.return_value = {
+            "enabled": False,
+            "suspended": False,
+            "percentage": "0%",
+            "error": None,
+        }
+        mock_run.return_value = (0, "", "")
+
+        def read_side_effect(setting):
+            for sname, sval, _ in bcd_lockdown.BCD_CRITICAL_COMMANDS:
+                if setting == sname:
+                    return sval
+            for sname, sval, _ in bcd_lockdown.BCD_BEST_EFFORT_COMMANDS:
+                if setting == sname:
+                    return sval
+            return None
+
+        mock_read.side_effect = read_side_effect
+
+        result = bcd_lockdown.apply_bcd_lockdown()
+
+        assert result["success"] is True
+        assert result["bitlocker_status"]["enabled"] is False
+        # No suspend/resume when BitLocker is not enabled
+        mock_suspend.assert_not_called()
+        mock_resume.assert_not_called()
