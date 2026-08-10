@@ -925,6 +925,85 @@ pre-existing postgres-compat/e2e.lockdown test issue with
 
 ---
 
+## Session — 2026-08-10T20:17Z (D-003 hardware test harness)
+
+### Work done
+
+**D-003 — Hardware test harness scaffolding** (commit 20b3827):
+- agent/hw_test_harness.py: Standalone test runner for enforcement paths
+  - 5 tests: E-ENCRYPT, E-LOCK-SCREEN, E-GUARDIAN, E-BCD, E-HP-UEFI
+  - Environment detection: platform, HP model, admin, session context, BitLocker
+  - Run artifact generation (JSON with per-test PASS/FAIL/SKIP/ERROR)
+  - --dry-run and --only flags for selective execution
+  - Gracefully skips tests on non-Windows/non-HP environments
+  - E-ENCRYPT test passes on any platform (Fernet + filesystem)
+- agent/tests/test_hw_harness.py: 14 unit tests for harness logic
+- .gitignore: Added hw_test_artifact.json (test output)
+
+Also discovered that the "pre-existing postgres-compat/e2e.lockdown test
+issue" was actually just me running `npx jest` directly instead of
+`npm test` (which uses --experimental-vm-modules). All 332 server tests
+pass with `npm test`.
+
+### Verification results
+```
+Agent:     196 tests pass (was 182, +14 new), ruff clean
+Server:    332 tests pass (all 21 suites), eslint clean
+Dashboard:  34 tests pass, eslint clean
+Graph:     All 7 invariants pass
+```
+
+### Session-end status block
+
+**Fog cleared this session**:
+- D-003: No hardware test harness existed — now has a complete scaffolding
+  with 5 enforcement path tests, environment detection, and run artifact
+  generation (traced through hw_test_harness.py detect_environment →
+  test_encrypt_roundtrip → test_lock_screen → test_bcd_lockdown →
+  test_hp_uefi_lockdown → run_harness artifact output)
+- Server test "issue" was a false alarm — `npm test` uses
+  --experimental-vm-modules correctly, all 332 tests pass
+
+**Fog remaining**:
+- D-003 still needs real Windows/HP hardware to close — run the harness
+  on real hardware and verify at least one enforcement path passes
+- D-007 through D-011 all need real hardware to close
+- All 6 remaining debt items now have software components implemented
+
+**Debt items closed**:
+None fully closed — all 6 remaining debt items still require real hardware.
+However, all 6 now have software components implemented and unit-tested:
+- D-003: Hardware test harness scaffolding (needs real hardware run)
+- D-007: Session 0 detection + tsdiscon (needs hardware verification)
+- D-008: BitLocker check (needs hardware verification)
+- D-009: HP setting names (needs hardware verification)
+- D-010: Sure Admin detection (needs hardware verification)
+- D-011: Open-file encryption (needs hardware verification)
+
+**Debt items still open** (6, all require real hardware):
+- D-003: Hardware test harness (scaffolding done, needs real hardware run)
+- D-007: Session 0 lock isolation (software done, needs hardware verification)
+- D-008: BitLocker check (software done, needs hardware verification)
+- D-009: HP setting names (software done, needs hardware verification)
+- D-010: Sure Admin detection (software done, needs hardware verification)
+- D-011: Open-file encryption (software done, needs hardware verification)
+
+**Blockers**:
+- All 6 remaining open debt items require real hardware. All software
+  components are now complete.
+
+**Next session opens with**:
+All 6 open debt items now have software implemented, unit-tested, and
+(where applicable) surfaced in the dashboard UI. The hardware test harness
+(agent/hw_test_harness.py) is ready to run on real Windows/HP hardware.
+To close any debt item: run the harness on real hardware, verify the
+relevant enforcement path passes, and update DEBT-LEDGER.md with the
+commit ref + artifact ref. If no hardware is available, all remaining
+work requires hardware — consider this project's software development
+complete pending hardware verification.
+
+---
+
 ## Orchestrator session-end — 2026-08-10T17:57:49Z
 
 **Status**: FAILURE

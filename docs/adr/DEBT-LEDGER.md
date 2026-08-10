@@ -34,13 +34,21 @@
   + artifact reference
 
 ### D-003 — No hardware-in-the-loop test harness for enforcement paths
-- **Status**: OPEN
+- **Status**: OPEN (scaffolding built, needs real hardware to close)
 - **Close criteria**: At least one enforcement path verified on real hardware with run artifact
 - **Blocks**: E-LOCK-SCREEN, E-GUARDIAN, E-BCD, E-HP-UEFI
 - **Notes**: Every enforcement path is tested only through mocks. No test in the repo
   has ever executed a real enforcement action against real Windows or real HP firmware.
   The E2E harness (`tests/e2e/agent-helpers.js`) explicitly disables boot lockdown
   (`boot_lock_enabled = false` at line 278).
+- **Progress (2026-08-10)**: Built agent/hw_test_harness.py — a standalone test
+  runner that executes each enforcement path (E-ENCRYPT, E-LOCK-SCREEN, E-GUARDIAN,
+  E-BCD, E-HP-UEFI) against real OS/firmware APIs. Detects environment (platform,
+  HP model, admin, session context, BitLocker). Generates JSON run artifact with
+  per-test PASS/FAIL/SKIP/ERROR status. Gracefully skips tests on non-Windows/non-HP.
+  The E-ENCRYPT test passes on any platform. 14 unit tests for harness logic.
+  To close D-003: run `python3 hw_test_harness.py` on real Windows/HP hardware
+  and verify at least one enforcement path passes.
 
 ### D-004 — HP UEFI lockdown reports false success when critical_applied=0
 - **Status**: CLOSED
