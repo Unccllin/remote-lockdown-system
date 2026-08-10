@@ -478,12 +478,14 @@ def _detect_session_context() -> dict:
     Returns a dict with:
       - is_session_zero: bool — True if running in Session 0 (service context)
       - session_id: int | None — the current session ID (Windows only)
+      - console_session_id: int | None — the active console session ID (Windows only)
       - platform: str — the OS platform
     """
     system = platform.system()
     result = {
         "is_session_zero": False,
         "session_id": None,
+        "console_session_id": None,
         "platform": system,
     }
     if system != "Windows" or _DRY_RUN:
@@ -502,6 +504,7 @@ def _detect_session_context() -> dict:
         our_session_id = ctypes.c_ulong(0)
         kernel32.ProcessIdToSessionId(current_pid, ctypes.byref(our_session_id))
         result["session_id"] = our_session_id.value
+        result["console_session_id"] = console_session_id
         result["is_session_zero"] = (
             our_session_id.value == 0 or our_session_id.value != console_session_id
         )
@@ -531,8 +534,15 @@ def _lock_workstation() -> None:
                 ctx["session_id"],
             )
             try:
+                # Use the actual console session ID instead of hardcoding 1.
+                # The console session may not be Session 1 in Fast User
+                # Switching or RDP reconnection scenarios.
+                console_id = ctx.get("console_session_id")
+                tsdiscon_args = ["tsdiscon"]
+                if console_id is not None:
+                    tsdiscon_args.append(str(console_id))
                 subprocess.run(
-                    ["tsdiscon", "1"],  # Session 1 = user's interactive session
+                    tsdiscon_args,
                     check=True,
                     timeout=5,
                     capture_output=True,

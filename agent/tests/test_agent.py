@@ -466,20 +466,70 @@ class TestSessionZeroDetection:
 
     def test_d007_lock_workstation_uses_tsdiscon_in_session_zero(self):
         """D-007: _lock_workstation uses tsdiscon when in Session 0."""
-        ctx = {"is_session_zero": True, "session_id": 0, "platform": "Windows"}
+        ctx = {
+            "is_session_zero": True,
+            "session_id": 0,
+            "console_session_id": 1,
+            "platform": "Windows",
+        }
         with patch.object(agent, "platform") as mock_platform:
             mock_platform.system.return_value = "Windows"
             with patch.object(agent, "_detect_session_context", return_value=ctx):
                 with patch.object(agent, "subprocess") as mock_subprocess:
                     agent._lock_workstation()
-                    # Should have called tsdiscon
+                    # Should have called tsdiscon with the console session ID
                     mock_subprocess.run.assert_called_once()
                     args = mock_subprocess.run.call_args[0][0]
                     assert args[0] == "tsdiscon"
+                    assert args[1] == "1"  # console_session_id
+
+    def test_d007_lock_workstation_tsdiscon_uses_actual_console_session_id(self):
+        """D-007: tsdiscon uses the actual console_session_id, not hardcoded 1.
+
+        In Fast User Switching or RDP reconnection, the console session
+        may be Session 2, 3, etc. — not always Session 1.
+        """
+        ctx = {
+            "is_session_zero": True,
+            "session_id": 0,
+            "console_session_id": 3,  # Console is Session 3, not 1
+            "platform": "Windows",
+        }
+        with patch.object(agent, "platform") as mock_platform:
+            mock_platform.system.return_value = "Windows"
+            with patch.object(agent, "_detect_session_context", return_value=ctx):
+                with patch.object(agent, "subprocess") as mock_subprocess:
+                    agent._lock_workstation()
+                    mock_subprocess.run.assert_called_once()
+                    args = mock_subprocess.run.call_args[0][0]
+                    assert args[0] == "tsdiscon"
+                    assert args[1] == "3"  # Uses actual console_session_id
+
+    def test_d007_lock_workstation_tsdiscon_no_console_id(self):
+        """D-007: tsdiscon called without session ID when console_session_id is None."""
+        ctx = {
+            "is_session_zero": True,
+            "session_id": 0,
+            "console_session_id": None,
+            "platform": "Windows",
+        }
+        with patch.object(agent, "platform") as mock_platform:
+            mock_platform.system.return_value = "Windows"
+            with patch.object(agent, "_detect_session_context", return_value=ctx):
+                with patch.object(agent, "subprocess") as mock_subprocess:
+                    agent._lock_workstation()
+                    mock_subprocess.run.assert_called_once()
+                    args = mock_subprocess.run.call_args[0][0]
+                    assert args == ["tsdiscon"]  # No session ID arg
 
     def test_d007_lock_workstation_falls_back_on_tsdiscon_failure(self):
         """D-007: Falls back to LockWorkStation when tsdiscon fails."""
-        ctx = {"is_session_zero": True, "session_id": 0, "platform": "Windows"}
+        ctx = {
+            "is_session_zero": True,
+            "session_id": 0,
+            "console_session_id": 1,
+            "platform": "Windows",
+        }
         with patch.object(agent, "platform") as mock_platform:
             mock_platform.system.return_value = "Windows"
             with patch.object(agent, "_detect_session_context", return_value=ctx):
@@ -492,7 +542,12 @@ class TestSessionZeroDetection:
 
     def test_d007_lock_workstation_uses_lockworkstation_in_interactive(self):
         """D-007: Uses LockWorkStation directly when not in Session 0."""
-        ctx = {"is_session_zero": False, "session_id": 1, "platform": "Windows"}
+        ctx = {
+            "is_session_zero": False,
+            "session_id": 1,
+            "console_session_id": 1,
+            "platform": "Windows",
+        }
         with patch.object(agent, "platform") as mock_platform:
             mock_platform.system.return_value = "Windows"
             with patch.object(agent, "_detect_session_context", return_value=ctx):
@@ -508,7 +563,12 @@ class TestSessionZeroDetection:
         self, cfg, tmp_folder, tmp_sentinel
     ):
         """D-007: handle_lockdown passes lock_session_context to ack_command."""
-        ctx = {"is_session_zero": True, "session_id": 0, "platform": "Windows"}
+        ctx = {
+            "is_session_zero": True,
+            "session_id": 0,
+            "console_session_id": 1,
+            "platform": "Windows",
+        }
         with (
             patch.object(agent, "ack_command", return_value=True) as mock_ack,
             patch.object(agent, "apply_lock_screen"),
