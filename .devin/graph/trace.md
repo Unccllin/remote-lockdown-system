@@ -744,6 +744,102 @@ the graph integration is complete.
 
 ---
 
+## Session — 2026-08-10T19:08Z (debt item software components)
+
+### Work done
+Committed the graph integration work (70 files, commit fc3d243), then
+tackled 4 of the 6 open debt items that have software components
+implementable without real hardware:
+
+**D-011 — File encryption fails silently on open files** (commit a67a14f):
+- encrypt_folder() now catches PermissionError, retries 3x with 1s delay
+- Returns list[str] of blocked files instead of failing silently
+- ack_command() accepts encryption_blocked_files param
+- Server audit log stores encryption_blocked_files
+- 4 new unit tests
+
+**D-008 — BCD lockdown does not check BitLocker status** (commit e58b9aa):
+- _check_bitlocker() parses manage-bde output
+- _suspend_bitlocker() / _resume_bitlocker() manage protectors
+- apply_bcd_lockdown() suspends before, resumes after (success + rollback)
+- Result dict includes bitlocker_status field
+- 12 new unit tests
+
+**D-009 — HP UEFI setting names are hardcoded** (commit 2e691a0):
+- CONCEPTS dict defines canonical identifiers (network_boot, usb_boot, etc.)
+- DEFAULT_SETTING_NAMES provides alias lists per concept (tried in order)
+- _detect_hp_model() via WMI, _load_model_overrides() from JSON file
+- _resolve_setting_names() picks first candidate that exists on the machine
+- Sample hp_model_overrides.json for model-specific overrides
+- 9 new unit tests + mock_resolve_settings fixture for existing tests
+
+**D-010 — No HP Sure Admin / Sure Run / Sure Start awareness** (commit 20314f2):
+- _check_sure_admin() queries WMI for Sure Admin/Run/Start settings
+- apply_boot_lockdown() includes sure_admin_status in result dict
+- Warning message when any Sure feature is detected
+- 7 new unit tests
+
+### Verification results
+```
+Agent:    174 tests pass (was 137, +37 new), ruff clean
+Server:   330 tests pass, eslint clean
+Dashboard: 26 tests pass, eslint clean
+Graph:    All 7 invariants pass
+```
+
+### Session-end status block
+
+**Fog cleared this session**:
+- D-011: encrypt_folder() was silently failing on PermissionError — now retries
+  and reports blocked files (traced through agent.py handle_lockdown →
+  encrypt_folder → ack_command → server audit log)
+- D-008: bcd_lockdown.py had zero BitLocker awareness — now checks, suspends,
+  and resumes protectors (traced through manage-bde CLI output parsing)
+- D-009: HP BIOS setting names were hardcoded — now model-aware via
+  CONCEPTS + DEFAULT_SETTING_NAMES + hp_model_overrides.json
+  (traced through hp_uefi_lockdown.py apply_boot_lockdown → _resolve_setting_names)
+- D-010: No Sure Admin detection — now detects and reports via WMI
+  (traced through hp_uefi_lockdown.py _check_sure_admin → _read_setting)
+
+**Fog remaining**:
+- All 4 debt items (D-008, D-009, D-010, D-011) have software implemented
+  but need real hardware to fully close (status: "OPEN (software implemented,
+  needs hardware verification)")
+- D-007 (Session 0 lock isolation) and D-003 (hardware test harness) were
+  not addressed this session — D-007 requires Windows service context
+  testing, D-003 requires building a hardware-in-the-loop test harness
+- The encryption_blocked_files field in the ACK is stored in the audit log
+  but not yet surfaced in the dashboard UI (could be a future enhancement)
+
+**Debt items closed**:
+None fully closed — all 6 remaining debt items still require real hardware.
+However, 4 of 6 (D-008, D-009, D-010, D-011) now have software components
+implemented and unit-tested, leaving only hardware verification as the
+remaining close criteria.
+
+**Debt items still open** (6, all require real hardware):
+- D-003: No hardware test harness (needs real HP machine)
+- D-007: Session 0 lock isolation (needs real Windows hardware)
+- D-008: BitLocker check (software done, needs hardware verification)
+- D-009: HP setting names (software done, needs hardware verification)
+- D-010: Sure Admin detection (software done, needs hardware verification)
+- D-011: Open-file encryption (software done, needs hardware verification)
+
+**Blockers**:
+- All 6 remaining open debt items require real hardware. The software
+  components for 4 of 6 are now complete.
+
+**Next session opens with**:
+4 of 6 open debt items now have software implemented and unit-tested
+(D-008, D-009, D-010, D-011). The remaining 2 (D-003, D-007) need
+Windows service context or hardware-in-the-loop testing. If hardware is
+available, the next session should verify D-008/D-009/D-010/D-011 on real
+HP hardware and close them. If not, consider surfacing
+encryption_blocked_files and sure_admin_status in the dashboard UI, or
+addressing D-007 by testing the lock screen from a Windows service context.
+
+---
+
 ## Orchestrator session-end — 2026-08-10T17:57:49Z
 
 **Status**: FAILURE

@@ -78,15 +78,20 @@
   as a service, so the lock screen path may be a no-op in production.
 
 ### D-008 — BCD lockdown does not check BitLocker status
-- **Status**: OPEN
+- **Status**: OPEN (software implemented, needs hardware verification)
 - **Close criteria**: Agent checks BitLocker and either handles or warns before `bcdedit`
 - **Blocks**: E-BCD
 - **Notes**: If the HP machine has BitLocker enabled (common on enterprise HPs), changing
   BCD settings can trigger a BitLocker recovery key prompt on next boot. The code has
   no BitLocker awareness.
+- **Progress (2026-08-10)**: Added _check_bitlocker(), _suspend_bitlocker(),
+  _resume_bitlocker() to bcd_lockdown.py. apply_bcd_lockdown() now suspends
+  BitLocker protectors before BCD changes and resumes after (both success and
+  rollback paths). Result dict includes bitlocker_status field. 12 unit tests
+  pass. Needs real Windows hardware with BitLocker to fully close.
 
 ### D-009 — HP UEFI setting names are hardcoded
-- **Status**: OPEN
+- **Status**: OPEN (software implemented, needs hardware verification)
 - **Close criteria**: Setting names are dynamically discovered or model-aware
 - **Blocks**: E-HP-UEFI
 - **Notes**: Setting names like `"Network (PXE) Boot"`, `"USB Boot"`, `"Legacy Support"`
@@ -94,24 +99,41 @@
   same setting names as an EliteBook 840 G7. The code handles "setting not found" by
   skipping, so on many real HPs zero critical settings get applied and the result is
   reported as `success: True` with `critical_applied: 0`.
+- **Progress (2026-08-10)**: Added CONCEPTS dict, DEFAULT_SETTING_NAMES (alias lists
+  per concept), _detect_hp_model() via WMI, _load_model_overrides() from JSON file,
+  and _resolve_setting_names() which picks the first candidate name that exists on
+  the machine. apply_boot_lockdown() now uses resolved names. Sample
+  hp_model_overrides.json provided. 9 unit tests pass. Needs real HP hardware to
+  verify setting name resolution works correctly.
 
 ### D-010 — No HP Sure Admin / Sure Run / Sure Start awareness
-- **Status**: OPEN
+- **Status**: OPEN (software implemented, needs hardware verification)
 - **Close criteria**: Agent detects Sure Admin and either works with it or reports blocked
 - **Blocks**: E-HP-UEFI
 - **Notes**: Modern enterprise HPs (2022+) ship with Sure Start enabled by default.
   Sure Start will revert unauthorized BIOS changes on the next reboot. So even if
   `SetBIOSSetting` returns 0, the setting may be restored to factory defaults within
   one boot cycle.
+- **Progress (2026-08-10)**: Added _check_sure_admin() to hp_uefi_lockdown.py which
+  queries WMI for Sure Admin, Sure Run, and Sure Start settings.
+  apply_boot_lockdown() now calls _check_sure_admin() and includes
+  sure_admin_status in the result dict with per-feature detection flags and a
+  warning message. 7 unit tests pass. Needs real HP hardware with Sure Admin
+  to verify detection works correctly.
 
 ### D-011 — File encryption fails silently on open files
-- **Status**: OPEN
+- **Status**: OPEN (software implemented, needs hardware verification)
 - **Close criteria**: Agent retries with file-closed detection or reports which files blocked encryption
 - **Blocks**: E-ENCRYPT
 - **Notes**: If a user has an Office doc or Outlook PST open in LOCKDOWN_FOLDER, Fernet's
   `Path.read_bytes()` / `write_bytes()` will throw `PermissionError` on Windows. The code
   catches it and rolls back the sentinel, which means lockdown silently fails on the most
   common real-world scenario.
+- **Progress (2026-08-10)**: encrypt_folder() now catches PermissionError, retries 3
+  times with 1-second delay, and returns a list of blocked files. handle_lockdown()
+  passes blocked files to ack_command() via the encryption_blocked_files param.
+  Server stores encryption_blocked_files in the audit log. 4 unit tests pass.
+  Needs real Windows hardware with open files to fully close.
 
 ### D-012 — Dashboard does not surface lockdown-effectiveness to operator
 - **Status**: CLOSED
