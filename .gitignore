@@ -48,3 +48,4 @@ server/lockdown.db
 .venv/
 # k6 binary (downloaded locally)
 k6
+agent/hw_test_artifact.json
