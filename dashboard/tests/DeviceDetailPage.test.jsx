@@ -364,6 +364,278 @@ describe('DeviceDetailPage', () => {
       expect(screen.getByText('BOOT LOCKDOWN INEFFECTIVE')).toBeInTheDocument();
     }, { timeout: 3000 });
   });
+
+  // D-011: Encryption blocked files panel tests
+
+  it('D-011: shows Encryption Blocked Files panel when files are blocked', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              boot_lock_status: null,
+              lockdown_effective: true,
+              boot_lock_detail: {
+                boot_lock_attempted: true,
+                bcd: { critical_applied: 3, best_effort_applied: 2, best_effort_failed: 0 },
+                hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+                critical_applied_total: 3,
+              },
+              encryption_blocked_files: ['docs/secret.xlsx', 'data/outlook.pst'],
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('Encryption Blocked Files')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.getByText('2 file(s) not encrypted')).toBeInTheDocument();
+    expect(screen.getByText('docs/secret.xlsx')).toBeInTheDocument();
+    expect(screen.getByText('data/outlook.pst')).toBeInTheDocument();
+  });
+
+  it('D-011: does not show Encryption Blocked Files panel when no files blocked', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              boot_lock_status: null,
+              lockdown_effective: true,
+              boot_lock_detail: {
+                boot_lock_attempted: true,
+                bcd: { critical_applied: 3, best_effort_applied: 2, best_effort_failed: 0 },
+                hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+                critical_applied_total: 3,
+              },
+              encryption_blocked_files: [],
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('DEV-001')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.queryByText('Encryption Blocked Files')).not.toBeInTheDocument();
+  });
+
+  // D-010: Sure Admin detection panel tests
+
+  it('D-010: shows HP Sure Admin Detected panel when sure_admin_status is present', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              boot_lock_status: null,
+              lockdown_effective: true,
+              boot_lock_detail: {
+                boot_lock_attempted: true,
+                bcd: { critical_applied: 3, best_effort_applied: 2, best_effort_failed: 0 },
+                hp_uefi: {
+                  not_hp: false,
+                  critical_applied: 5,
+                  best_effort_applied: 1,
+                  best_effort_failed: 0,
+                  sure_admin_status: {
+                    sure_admin_detected: true,
+                    sure_run_detected: false,
+                    sure_start_detected: true,
+                    any_sure_feature: true,
+                    warning: 'HP Sure Admin+Sure Start detected. BIOS changes may be reverted on next boot.',
+                  },
+                },
+                critical_applied_total: 8,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('HP Sure Admin Detected')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.getByText(/Sure Admin\+Sure Start detected/i)).toBeInTheDocument();
+    expect(screen.getByText('Sure Admin')).toBeInTheDocument();
+    expect(screen.getByText('Sure Start')).toBeInTheDocument();
+  });
+
+  it('D-010: does not show Sure Admin panel when no Sure features detected', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              boot_lock_status: null,
+              lockdown_effective: true,
+              boot_lock_detail: {
+                boot_lock_attempted: true,
+                bcd: { critical_applied: 3, best_effort_applied: 2, best_effort_failed: 0 },
+                hp_uefi: {
+                  not_hp: false,
+                  critical_applied: 5,
+                  best_effort_applied: 1,
+                  best_effort_failed: 0,
+                  sure_admin_status: {
+                    sure_admin_detected: false,
+                    sure_run_detected: false,
+                    sure_start_detected: false,
+                    any_sure_feature: false,
+                    warning: null,
+                  },
+                },
+                critical_applied_total: 8,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('DEV-001')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.queryByText('HP Sure Admin Detected')).not.toBeInTheDocument();
+  });
+
+  // D-008: BitLocker status panel tests
+
+  it('D-008: shows BitLocker Active panel when bitlocker is enabled', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              boot_lock_status: null,
+              lockdown_effective: true,
+              boot_lock_detail: {
+                boot_lock_attempted: true,
+                bcd: {
+                  critical_applied: 3,
+                  best_effort_applied: 2,
+                  best_effort_failed: 0,
+                  bitlocker_status: {
+                    enabled: true,
+                    suspended: false,
+                    percentage: '100%',
+                    error: null,
+                  },
+                },
+                hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+                critical_applied_total: 3,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('BitLocker Active')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.getByText('100% encrypted')).toBeInTheDocument();
+  });
+
+  it('D-008: does not show BitLocker panel when bitlocker is not enabled', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              boot_lock_status: null,
+              lockdown_effective: true,
+              boot_lock_detail: {
+                boot_lock_attempted: true,
+                bcd: {
+                  critical_applied: 3,
+                  best_effort_applied: 2,
+                  best_effort_failed: 0,
+                  bitlocker_status: {
+                    enabled: false,
+                    suspended: false,
+                    percentage: '0%',
+                    error: null,
+                  },
+                },
+                hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+                critical_applied_total: 3,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('DEV-001')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.queryByText('BitLocker Active')).not.toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------

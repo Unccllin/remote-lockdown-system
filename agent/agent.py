@@ -1482,6 +1482,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                 "critical_applied": bcd_crit,
                 "best_effort_applied": bcd_be_ok,
                 "best_effort_failed": bcd_be_fail,
+                "bitlocker_status": bcd_result.get("bitlocker_status") if bcd_result else None,
             },
             "hp_uefi": {
                 "not_hp": hp_result.get("not_hp", False) if hp_result else False,
@@ -1491,6 +1492,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                 "critical_applied": hp_crit,
                 "best_effort_applied": hp_be_ok,
                 "best_effort_failed": hp_be_fail,
+                "sure_admin_status": hp_result.get("sure_admin_status") if hp_result else None,
             },
             "critical_applied_total": bcd_crit + hp_crit,
             "best_effort_applied_total": bcd_be_ok + hp_be_ok,

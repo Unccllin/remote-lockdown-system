@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ShieldAlert, ShieldCheck, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate, UserX, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, ShieldAlert, ShieldCheck, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate, UserX, AlertTriangle, FileWarning, Lock } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
@@ -173,6 +173,14 @@ export default function DeviceDetailPage() {
   const lockdownEffective = lockdownDetail?.lockdown_effective;
   const bootLockDetail = lockdownDetail?.boot_lock_detail;
   const showLockdownPanel = isLockedOrStolen && lockdownDetail && lockdownEffective !== null && lockdownEffective !== undefined;
+
+  // D-008/D-010/D-011: Extract new status fields from the lockdown detail
+  const encryptionBlockedFiles = lockdownDetail?.encryption_blocked_files;
+  const bitlockerStatus = bootLockDetail?.bcd?.bitlocker_status;
+  const sureAdminStatus = bootLockDetail?.hp_uefi?.sure_admin_status;
+  const hasBlockedFiles = Array.isArray(encryptionBlockedFiles) && encryptionBlockedFiles.length > 0;
+  const hasBitlocker = bitlockerStatus?.enabled === true;
+  const hasSureAdmin = sureAdminStatus?.any_sure_feature === true;
 
   return (
     <div>
@@ -347,6 +355,86 @@ export default function DeviceDetailPage() {
             {' · '}
             Total critical: <span className={`font-mono ${lockdownEffective ? 'text-green-400' : 'text-red-400'}`}>{bootLockDetail?.critical_applied_total ?? 0}</span>
           </div>
+        </div>
+      )}
+
+      {/* D-011: Encryption blocked files warning.
+          Shows when some files couldn't be encrypted because they were
+          locked/open by another process (e.g., Office docs, Outlook PSTs). */}
+      {isLockedOrStolen && hasBlockedFiles && (
+        <div className="card mb-6 border-l-4 border-l-yellow-500">
+          <div className="flex items-center gap-2 mb-3">
+            <FileWarning size={16} className="text-yellow-400" />
+            <h2 className="font-semibold text-slate-200 text-sm">
+              Encryption Blocked Files
+            </h2>
+            <span className="text-xs font-medium ml-auto text-yellow-400">
+              {encryptionBlockedFiles.length} file(s) not encrypted
+            </span>
+          </div>
+          <p className="text-xs text-yellow-300/80 mb-3 leading-relaxed">
+            These files were locked/open by another process during lockdown
+            and could not be encrypted. The lockdown proceeded, but these
+            files remain in plaintext on the device.
+          </p>
+          <ul className="space-y-1">
+            {encryptionBlockedFiles.map((file, i) => (
+              <li key={i} className="text-xs font-mono text-yellow-200/70 bg-yellow-950/20 px-2 py-1 rounded">
+                {file}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* D-010: HP Sure Admin / Sure Run / Sure Start warning.
+          Shows when any Sure feature is detected, warning that BIOS changes
+          may be reverted on next boot. */}
+      {isLockedOrStolen && hasSureAdmin && (
+        <div className="card mb-6 border-l-4 border-l-orange-500">
+          <div className="flex items-center gap-2 mb-3">
+            <ShieldAlert size={16} className="text-orange-400" />
+            <h2 className="font-semibold text-slate-200 text-sm">
+              HP Sure Admin Detected
+            </h2>
+          </div>
+          <p className="text-xs text-orange-300/80 mb-3 leading-relaxed">
+            {sureAdminStatus.warning}
+          </p>
+          <div className="flex gap-3 text-xs">
+            {sureAdminStatus.sure_admin_detected && (
+              <span className="text-orange-400">Sure Admin</span>
+            )}
+            {sureAdminStatus.sure_run_detected && (
+              <span className="text-orange-400">Sure Run</span>
+            )}
+            {sureAdminStatus.sure_start_detected && (
+              <span className="text-orange-400">Sure Start</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* D-008: BitLocker status info.
+          Shows when BitLocker is enabled, indicating that protectors were
+          suspended during BCD lockdown and resumed after. */}
+      {isLockedOrStolen && hasBitlocker && (
+        <div className="card mb-6 border-l-4 border-l-blue-500">
+          <div className="flex items-center gap-2 mb-3">
+            <Lock size={16} className="text-blue-400" />
+            <h2 className="font-semibold text-slate-200 text-sm">
+              BitLocker Active
+            </h2>
+            <span className="text-xs font-medium ml-auto text-blue-400">
+              {bitlockerStatus.percentage} encrypted
+            </span>
+          </div>
+          <p className="text-xs text-blue-300/80 leading-relaxed">
+            BitLocker was enabled on this device. Protectors were suspended
+            during BCD lockdown to prevent recovery key prompts, then resumed.
+            If BCD changes were rolled back, verify BitLocker protection is
+            active.
+          </p>
         </div>
       )}
 
