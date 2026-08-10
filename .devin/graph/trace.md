@@ -840,6 +840,91 @@ addressing D-007 by testing the lock screen from a Windows service context.
 
 ---
 
+## Session — 2026-08-10T20:05Z (dashboard UI + D-007)
+
+### Work done
+
+**Dashboard UI surfacing** (commit 6492f79):
+- agent/agent.py: boot_lock_detail now includes bitlocker_status in the bcd
+  section and sure_admin_status in the hp_uefi section
+- dashboard/src/pages/DeviceDetailPage.jsx: Three new warning panels:
+  1. Encryption Blocked Files (yellow) — lists files that couldn't be
+     encrypted because they were locked/open by another process (D-011)
+  2. HP Sure Admin Detected (orange) — warns that BIOS changes may be
+     reverted on next boot when Sure Admin/Run/Start is enabled (D-010)
+  3. BitLocker Active (blue) — shows BitLocker encryption percentage and
+     notes that protectors were suspended/resumed during BCD lockdown (D-008)
+- 6 new dashboard tests (2 per panel: shown when present, hidden when absent)
+
+**D-007 — Session 0 lock isolation** (commit f4ccf26):
+- agent/agent.py: _detect_session_context() uses WTSGetActiveConsoleSessionId
+  + ProcessIdToSessionId to detect if running in Session 0 (service context)
+- agent/agent.py: _lock_workstation() uses tsdiscon to disconnect the active
+  console session when in Session 0, falls back to LockWorkStation if tsdiscon
+  fails
+- agent/agent.py: handle_lockdown() captures lock_session_context and passes
+  it to ack_command()
+- server/src/routes/agent.js: Stores lock_session_context in audit log detail
+- dashboard/src/pages/DeviceDetailPage.jsx: "Lock Applied from Service
+  Session" panel (purple) shows when is_session_zero=true
+- 12 new tests (8 agent + 2 server + 2 dashboard)
+
+### Verification results
+```
+Agent:     182 tests pass (was 174, +8 new), ruff clean
+Server:    310 tests pass (was 308, +2 new), eslint clean
+Dashboard:  34 tests pass (was 32, +2 new), eslint clean
+Graph:     All 7 invariants pass
+```
+
+### Session-end status block
+
+**Fog cleared this session**:
+- D-011/D-010/D-008/D-007 data was being collected by the agent but not
+  surfaced to the operator — now all four have dedicated dashboard panels
+  (traced through agent.py handle_lockdown → ack_command → server agent.js
+  audit_log → dashboard DeviceDetailPage.jsx)
+- D-007: LockWorkStation from Session 0 was a no-op — now detects session
+  context and uses tsdiscon to disconnect the active console session
+  (traced through agent.py _detect_session_context → _lock_workstation →
+  tsdiscon subprocess call)
+
+**Fog remaining**:
+- All 5 debt items with software components (D-007, D-008, D-009, D-010,
+  D-011) need real Windows/HP hardware to fully close
+- D-003 (hardware test harness) was not addressed — needs real HP machine
+- The postgres-compat and e2e.lockdown server tests have a pre-existing
+  issue with --experimental-vm-modules in Node 20.18.1 (unrelated to this
+  session's changes)
+
+**Debt items closed**:
+None fully closed — all 6 remaining debt items still require real hardware.
+However, 5 of 6 now have software components implemented and unit-tested.
+
+**Debt items still open** (6, all require real hardware):
+- D-003: No hardware test harness (needs real HP machine)
+- D-007: Session 0 lock isolation (software done, needs hardware verification)
+- D-008: BitLocker check (software done, needs hardware verification)
+- D-009: HP setting names (software done, needs hardware verification)
+- D-010: Sure Admin detection (software done, needs hardware verification)
+- D-011: Open-file encryption (software done, needs hardware verification)
+
+**Blockers**:
+- All 6 remaining open debt items require real hardware. The software
+  components for 5 of 6 are now complete (D-007 through D-011).
+
+**Next session opens with**:
+5 of 6 open debt items now have software implemented, unit-tested, and
+surfaced in the dashboard UI (D-007, D-008, D-009, D-010, D-011). The
+remaining 1 (D-003) needs a hardware-in-the-loop test harness. If hardware
+is available, verify D-007 through D-011 on real Windows/HP hardware and
+close them. If not, consider building the D-003 hardware test harness
+scaffolding (the parts that don't need real hardware), or addressing the
+pre-existing postgres-compat/e2e.lockdown test issue with
+--experimental-vm-modules.
+
+---
+
 ## Orchestrator session-end — 2026-08-10T17:57:49Z
 
 **Status**: FAILURE

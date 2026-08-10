@@ -69,13 +69,22 @@
 - **Close criteria met**: GRAPH-SPEC.yaml + graph_loader.py + graph_assert.py exist and enforce transitions
 
 ### D-007 — Lock guardian uses LockWorkStation from service session (Session 0 isolation)
-- **Status**: OPEN
+- **Status**: OPEN (software implemented, needs hardware verification)
 - **Close criteria**: Lock guardian works from service context OR documented as requiring interactive session
 - **Blocks**: E-LOCK-SCREEN, E-GUARDIAN
 - **Notes**: `ctypes.windll.user32.LockWorkStation()` from a Windows service (Session 0)
   cannot lock a user's interactive desktop (Session 1). This is a classic Windows
   session-isolation gap. The agent's `install-service-enhanced.ps1` sets up the agent
   as a service, so the lock screen path may be a no-op in production.
+- **Progress (2026-08-10)**: Added _detect_session_context() which uses
+  WTSGetActiveConsoleSessionId + ProcessIdToSessionId to detect Session 0.
+  _lock_workstation() now uses tsdiscon to disconnect the active console session
+  when running in Session 0, falling back to LockWorkStation if tsdiscon fails.
+  handle_lockdown() captures lock_session_context and passes it to ack_command().
+  Server stores lock_session_context in audit log. Dashboard shows "Lock Applied
+  from Service Session" panel when is_session_zero=true. 12 unit tests pass
+  (8 agent + 2 server + 2 dashboard). Needs real Windows hardware with service
+  context to verify tsdiscon actually locks the user's desktop.
 
 ### D-008 — BCD lockdown does not check BitLocker status
 - **Status**: OPEN (software implemented, needs hardware verification)
