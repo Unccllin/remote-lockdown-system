@@ -61,6 +61,9 @@ try:
 except ImportError:
     _boot_lock_modules_available = False
 
+# D-007: Dry-run mode flag (set by tests or config to skip real Windows API calls)
+_DRY_RUN = False
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -464,10 +467,88 @@ _BANNER = (
 )
 
 
+def _detect_session_context() -> dict:
+    """D-007: Detect whether the agent is running in Session 0 (service) or
+    an interactive session.
+
+    On Windows, services run in Session 0, which is isolated from user
+    sessions (Session 1+). LockWorkStation() called from Session 0 only
+    locks Session 0, not the user's desktop.
+
+    Returns a dict with:
+      - is_session_zero: bool — True if running in Session 0 (service context)
+      - session_id: int | None — the current session ID (Windows only)
+      - platform: str — the OS platform
+    """
+    system = platform.system()
+    result = {
+        "is_session_zero": False,
+        "session_id": None,
+        "platform": system,
+    }
+    if system != "Windows" or _DRY_RUN:
+        return result
+    try:
+        import ctypes
+
+        # WTSGetActiveConsoleSessionId returns the session ID of the active
+        # console session (the user's interactive session). If the agent
+        # is running in that session, LockWorkStation will work. If not,
+        # we're in Session 0 (service) and need an alternate approach.
+        kernel32 = ctypes.windll.kernel32
+        console_session_id = kernel32.WTSGetActiveConsoleSessionId()
+        # GetCurrentProcessId → ProcessIdToSessionId gives our session
+        current_pid = kernel32.GetCurrentProcessId()
+        our_session_id = ctypes.c_ulong(0)
+        kernel32.ProcessIdToSessionId(current_pid, ctypes.byref(our_session_id))
+        result["session_id"] = our_session_id.value
+        result["is_session_zero"] = (
+            our_session_id.value == 0 or our_session_id.value != console_session_id
+        )
+    except Exception as e:
+        log.debug("D-007: Session detection failed: %s", e)
+    return result
+
+
 def _lock_workstation() -> None:
-    """Platform-specific workstation lock. Best-effort, no banner."""
+    """Platform-specific workstation lock. Best-effort, no banner.
+
+    D-007: On Windows, if the agent is running in Session 0 (service context),
+    LockWorkStation() only locks Session 0 — not the user's interactive
+    desktop. In that case, we use `tsdiscon` to disconnect the active console
+    session, which effectively forces the lock screen on the user's desktop.
+    """
     system = platform.system()
     if system == "Windows":
+        ctx = _detect_session_context()
+        if ctx["is_session_zero"]:
+            # D-007: Running as a service in Session 0.
+            # LockWorkStation() would only lock Session 0 (invisible).
+            # Use tsdiscon to disconnect the active console session instead.
+            log.info(
+                "D-007: Session 0 detected (session_id=%s) — using tsdiscon "
+                "to disconnect active console session",
+                ctx["session_id"],
+            )
+            try:
+                subprocess.run(
+                    ["tsdiscon", "1"],  # Session 1 = user's interactive session
+                    check=True,
+                    timeout=5,
+                    capture_output=True,
+                )
+                return
+            except FileNotFoundError:
+                log.warning("D-007: tsdiscon not found — falling back to LockWorkStation")
+            except subprocess.CalledProcessError as e:
+                log.warning(
+                    "D-007: tsdiscon failed (rc=%d) — falling back to LockWorkStation: %s",
+                    e.returncode,
+                    e.stderr.decode(errors="replace").strip() if e.stderr else "",
+                )
+            except Exception as e:
+                log.warning("D-007: tsdiscon error — falling back to LockWorkStation: %s", e)
+        # Either not Session 0, or tsdiscon failed — try LockWorkStation
         try:
             import ctypes
 
@@ -871,6 +952,7 @@ def ack_command(
     command_uuid: str | None = None,
     boot_lock_detail: dict | None = None,
     encryption_blocked_files: list[str] | None = None,
+    lock_session_context: dict | None = None,
 ) -> bool:
     """Send command ACK to server. Returns True on success, False on failure.
 
@@ -891,6 +973,10 @@ def ack_command(
     not be encrypted because they were locked/open by another process.
     The server stores this in the audit log so the operator knows which
     files weren't encrypted.
+
+    D-007: lock_session_context reports whether the lock screen was
+    applied from Session 0 (service) or an interactive session. If
+    Session 0, the agent used tsdiscon instead of LockWorkStation.
     """
     # Phase 5: Generate a command_uuid if not provided.
     # This ensures idempotent retries — the server won't process the same ACK twice.
@@ -915,6 +1001,8 @@ def ack_command(
         payload["boot_lock_detail"] = boot_lock_detail
     if encryption_blocked_files:
         payload["encryption_blocked_files"] = encryption_blocked_files
+    if lock_session_context:
+        payload["lock_session_context"] = lock_session_context
     try:
         resp = _signed_post(
             f"{cfg['server_url']}/api/agent/command-ack",
@@ -1368,6 +1456,11 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     apply_lock_screen()
     start_lock_guardian()
 
+    # D-007: Capture session context for the ACK so the operator knows
+    # whether the lock screen was applied from Session 0 (service) or
+    # an interactive session. If Session 0, the lock used tsdiscon.
+    lock_session_context = _detect_session_context()
+
     # Update sentinel with final payload (already created atomically above).
     sentinel.write_text(json.dumps({"locked": True, "command_id": command["id"]}))
     log.info("Sentinel updated: %s", sentinel)
@@ -1517,6 +1610,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         boot_lock_status=boot_lock_status,
         boot_lock_detail=boot_lock_detail,
         encryption_blocked_files=blocked_files if blocked_files else None,
+        lock_session_context=lock_session_context,
     )
     if ok:
         if pending_ack_file.exists():

@@ -472,6 +472,75 @@ describe('POST /api/agent/command-ack — idempotency (A4)', () => {
     // Non-lockdown command — lockdown_effective should be null
     expect(detail.lockdown_effective).toBeNull();
   });
+
+  // D-007: lock_session_context stored in audit log
+  test('D-007: stores lock_session_context in audit log detail', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    const cmd = { id: 'cmd-d007', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-d007',
+        result_status: 'executed',
+        key_material: 'k=',
+        boot_lock_status: null,
+        boot_lock_detail: {
+          boot_lock_attempted: true,
+          bcd: { critical_applied: 3, best_effort_applied: 2, best_effort_failed: 0 },
+          hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+          critical_applied_total: 3,
+        },
+        lock_session_context: {
+          is_session_zero: true,
+          session_id: 0,
+          platform: 'Windows',
+        },
+      });
+
+    expect(res.status).toBe(200);
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1].includes('agent_lockdown_confirmed')
+    );
+    expect(auditCall).toBeDefined();
+    const detail = auditCall[1][2];
+    expect(detail.lock_session_context).toBeDefined();
+    expect(detail.lock_session_context.is_session_zero).toBe(true);
+    expect(detail.lock_session_context.session_id).toBe(0);
+  });
+
+  test('D-007: audit log detail has lock_session_context undefined when not provided', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    const cmd = { id: 'cmd-d007b', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-d007b',
+        result_status: 'executed',
+        key_material: 'k=',
+      });
+
+    expect(res.status).toBe(200);
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1].includes('agent_lockdown_confirmed')
+    );
+    expect(auditCall).toBeDefined();
+    const detail = auditCall[1][2];
+    expect(detail.lock_session_context).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

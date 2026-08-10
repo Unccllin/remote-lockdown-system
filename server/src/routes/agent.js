@@ -235,7 +235,7 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
   const {
     hostname, command_id, result_status, key_material, bios_password,
     mac_address, hardware_uuid, boot_lock_status, command_uuid,
-    boot_lock_detail, encryption_blocked_files,
+    boot_lock_detail, encryption_blocked_files, lock_session_context,
   } = req.body;
   if (!hostname || !command_id || !result_status) {
     return res.status(400).json({ error: 'hostname, command_id, result_status required' });
@@ -338,6 +338,7 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
             boot_lock_detail: boot_lock_detail || undefined,
             lockdown_effective: lockdownEffective,
             encryption_blocked_files: encryption_blocked_files || undefined,
+            lock_session_context: lock_session_context || undefined,
           }]
         );
 

@@ -178,9 +178,11 @@ export default function DeviceDetailPage() {
   const encryptionBlockedFiles = lockdownDetail?.encryption_blocked_files;
   const bitlockerStatus = bootLockDetail?.bcd?.bitlocker_status;
   const sureAdminStatus = bootLockDetail?.hp_uefi?.sure_admin_status;
+  const lockSessionContext = lockdownDetail?.lock_session_context;
   const hasBlockedFiles = Array.isArray(encryptionBlockedFiles) && encryptionBlockedFiles.length > 0;
   const hasBitlocker = bitlockerStatus?.enabled === true;
   const hasSureAdmin = sureAdminStatus?.any_sure_feature === true;
+  const isSessionZero = lockSessionContext?.is_session_zero === true;
 
   return (
     <div>
@@ -434,6 +436,31 @@ export default function DeviceDetailPage() {
             during BCD lockdown to prevent recovery key prompts, then resumed.
             If BCD changes were rolled back, verify BitLocker protection is
             active.
+          </p>
+        </div>
+      )}
+
+      {/* D-007: Session 0 lock context warning.
+          Shows when the agent is running as a Windows service (Session 0),
+          indicating that tsdiscon was used instead of LockWorkStation. */}
+      {isLockedOrStolen && isSessionZero && (
+        <div className="card mb-6 border-l-4 border-l-purple-500">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle size={16} className="text-purple-400" />
+            <h2 className="font-semibold text-slate-200 text-sm">
+              Lock Applied from Service Session
+            </h2>
+            <span className="text-xs font-medium ml-auto text-purple-400">
+              Session 0 (ID: {lockSessionContext.session_id})
+            </span>
+          </div>
+          <p className="text-xs text-purple-300/80 leading-relaxed">
+            The agent is running as a Windows service in Session 0. The lock
+            screen was applied via <span className="font-mono">tsdiscon</span>
+            instead of <span className="font-mono">LockWorkStation</span> to
+            disconnect the active console session. If the lock does not take
+            effect, the agent may need to run in an interactive session
+            instead of as a service.
           </p>
         </div>
       )}

@@ -636,6 +636,91 @@ describe('DeviceDetailPage', () => {
     }, { timeout: 3000 });
     expect(screen.queryByText('BitLocker Active')).not.toBeInTheDocument();
   });
+
+  // D-007: Session 0 lock context panel tests
+
+  it('D-007: shows Lock Applied from Service Session panel when is_session_zero=true', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              boot_lock_status: null,
+              lockdown_effective: true,
+              boot_lock_detail: {
+                boot_lock_attempted: true,
+                bcd: { critical_applied: 3, best_effort_applied: 2, best_effort_failed: 0 },
+                hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+                critical_applied_total: 3,
+              },
+              lock_session_context: {
+                is_session_zero: true,
+                session_id: 0,
+                platform: 'Windows',
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('Lock Applied from Service Session')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.getByText(/Session 0 \(ID: 0\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/tsdiscon/i)).toBeInTheDocument();
+  });
+
+  it('D-007: does not show Session 0 panel when is_session_zero=false', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              boot_lock_status: null,
+              lockdown_effective: true,
+              boot_lock_detail: {
+                boot_lock_attempted: true,
+                bcd: { critical_applied: 3, best_effort_applied: 2, best_effort_failed: 0 },
+                hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+                critical_applied_total: 3,
+              },
+              lock_session_context: {
+                is_session_zero: false,
+                session_id: 1,
+                platform: 'Windows',
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('DEV-001')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.queryByText('Lock Applied from Service Session')).not.toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------

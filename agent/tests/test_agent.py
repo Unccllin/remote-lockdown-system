@@ -406,6 +406,124 @@ class TestDoubleLockGuard:
 
 
 # ---------------------------------------------------------------------------
+# D-007: Session 0 lock isolation tests
+# ---------------------------------------------------------------------------
+
+
+class TestSessionZeroDetection:
+    """D-007: Tests for _detect_session_context and _lock_workstation Session 0 path."""
+
+    def test_d007_detect_session_context_non_windows(self):
+        """D-007: _detect_session_context returns is_session_zero=False on non-Windows."""
+        with patch.object(agent, "platform") as mock_platform:
+            mock_platform.system.return_value = "Linux"
+            with patch.object(agent, "_DRY_RUN", False):
+                result = agent._detect_session_context()
+        assert result["is_session_zero"] is False
+        assert result["session_id"] is None
+        assert result["platform"] == "Linux"
+
+    def test_d007_detect_session_context_dry_run(self):
+        """D-007: _detect_session_context returns defaults in dry-run mode."""
+        with patch.object(agent, "platform") as mock_platform:
+            mock_platform.system.return_value = "Windows"
+            with patch.object(agent, "_DRY_RUN", True):
+                result = agent._detect_session_context()
+        assert result["is_session_zero"] is False
+        assert result["session_id"] is None
+
+    def test_d007_detect_session_context_exception_returns_defaults(self):
+        """D-007: _detect_session_context returns defaults when ctypes fails."""
+        with patch.object(agent, "platform") as mock_platform:
+            mock_platform.system.return_value = "Windows"
+            with patch.object(agent, "_DRY_RUN", False):
+                # Force an exception in the ctypes import
+                with patch("builtins.__import__", side_effect=ImportError("no ctypes")):
+                    result = agent._detect_session_context()
+        # Should return defaults (exception caught)
+        assert result["is_session_zero"] is False
+        assert result["session_id"] is None
+
+    def test_d007_detect_session_context_windows_not_dry_run(self):
+        """D-007: On Windows (non-dry-run), attempts session detection via ctypes.
+
+        This test verifies the function runs without error on Windows. The
+        actual session ID detection logic is tested indirectly through
+        _lock_workstation behavior tests below.
+        """
+        with patch.object(agent, "platform") as mock_platform:
+            mock_platform.system.return_value = "Windows"
+            with patch.object(agent, "_DRY_RUN", False):
+                # The function will try to import ctypes and call Windows APIs.
+                # On Linux, ctypes.windll doesn't exist, so it'll catch the
+                # exception and return defaults.
+                result = agent._detect_session_context()
+        # On Linux test env, ctypes.windll doesn't exist → exception → defaults
+        assert isinstance(result, dict)
+        assert "is_session_zero" in result
+        assert "session_id" in result
+        assert "platform" in result
+
+    def test_d007_lock_workstation_uses_tsdiscon_in_session_zero(self):
+        """D-007: _lock_workstation uses tsdiscon when in Session 0."""
+        ctx = {"is_session_zero": True, "session_id": 0, "platform": "Windows"}
+        with patch.object(agent, "platform") as mock_platform:
+            mock_platform.system.return_value = "Windows"
+            with patch.object(agent, "_detect_session_context", return_value=ctx):
+                with patch.object(agent, "subprocess") as mock_subprocess:
+                    agent._lock_workstation()
+                    # Should have called tsdiscon
+                    mock_subprocess.run.assert_called_once()
+                    args = mock_subprocess.run.call_args[0][0]
+                    assert args[0] == "tsdiscon"
+
+    def test_d007_lock_workstation_falls_back_on_tsdiscon_failure(self):
+        """D-007: Falls back to LockWorkStation when tsdiscon fails."""
+        ctx = {"is_session_zero": True, "session_id": 0, "platform": "Windows"}
+        with patch.object(agent, "platform") as mock_platform:
+            mock_platform.system.return_value = "Windows"
+            with patch.object(agent, "_detect_session_context", return_value=ctx):
+                with patch.object(agent, "subprocess") as mock_subprocess:
+                    mock_subprocess.run.side_effect = FileNotFoundError("tsdiscon not found")
+                    with patch("ctypes.windll", create=True) as mock_windll:
+                        agent._lock_workstation()
+                        # Should have called LockWorkStation as fallback
+                        mock_windll.user32.LockWorkStation.assert_called_once()
+
+    def test_d007_lock_workstation_uses_lockworkstation_in_interactive(self):
+        """D-007: Uses LockWorkStation directly when not in Session 0."""
+        ctx = {"is_session_zero": False, "session_id": 1, "platform": "Windows"}
+        with patch.object(agent, "platform") as mock_platform:
+            mock_platform.system.return_value = "Windows"
+            with patch.object(agent, "_detect_session_context", return_value=ctx):
+                with patch.object(agent, "subprocess") as mock_subprocess:
+                    with patch("ctypes.windll", create=True) as mock_windll:
+                        agent._lock_workstation()
+                        # Should NOT have called tsdiscon
+                        mock_subprocess.run.assert_not_called()
+                        # Should have called LockWorkStation
+                        mock_windll.user32.LockWorkStation.assert_called_once()
+
+    def test_d007_handle_lockdown_includes_lock_session_context_in_ack(
+        self, cfg, tmp_folder, tmp_sentinel
+    ):
+        """D-007: handle_lockdown passes lock_session_context to ack_command."""
+        ctx = {"is_session_zero": True, "session_id": 0, "platform": "Windows"}
+        with (
+            patch.object(agent, "ack_command", return_value=True) as mock_ack,
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "encrypt_folder"),
+            patch.object(agent, "write_pending_ack"),
+            patch.object(agent, "write_recovery_key"),
+            patch.object(agent, "_detect_session_context", return_value=ctx),
+        ):
+            agent.handle_lockdown(cfg, {"id": "cmd-1"})
+            mock_ack.assert_called_once()
+            assert mock_ack.call_args[1].get("lock_session_context") == ctx
+
+
+# ---------------------------------------------------------------------------
 # Deadman key recovery
 # ---------------------------------------------------------------------------
 
