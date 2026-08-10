@@ -1,0 +1,21 @@
+{
+  "_comment": "D-009: Model-specific HP BIOS setting name overrides. Each key is an HP model name (as reported by Win32_ComputerSystem.Model), and each value maps canonical concepts to the setting names used by that specific model. The concepts are: network_boot, usb_boot, legacy_boot, boot_menu, fast_boot, f12_password. If a model is not listed here, the DEFAULT_SETTING_NAMES in hp_uefi_lockdown.py are used. To find the correct setting names for a new HP model, run: powershell \"Get-WmiObject -Namespace root\\hp\\InstrumentedBIOS -Class HP_BIOSEnumeration | Select-Object Name, CurrentValue | Format-Table -AutoSize\"",
+  "_example": {
+    "HP EliteDesk 800 G9": {
+      "network_boot": ["Network (PXE) Boot"],
+      "usb_boot": ["USB Boot", "USB Storage Boot"],
+      "legacy_boot": ["Legacy Support"],
+      "boot_menu": ["F12 Boot Menu"],
+      "fast_boot": ["Fast Boot"],
+      "f12_password": ["Prompt for Admin password on F12 (Network Boot)"]
+    },
+    "HP EliteBook 840 G10": {
+      "network_boot": ["PXE ROM Boot"],
+      "usb_boot": ["USB Device Boot"],
+      "legacy_boot": ["CSM Support"],
+      "boot_menu": ["Boot Menu"],
+      "fast_boot": ["FastBoot"],
+      "f12_password": ["F12 Boot Menu Password"]
+    }
+  }
+}

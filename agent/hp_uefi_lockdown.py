@@ -136,32 +136,172 @@ def _is_admin() -> bool:
 # ---------------------------------------------------------------------------
 # BIOS settings: critical vs. best-effort (CC19)
 # ---------------------------------------------------------------------------
+# D-009: Setting names are now model-aware. The CONCEPTS (what we want to
+# disable) are defined here as canonical identifiers. The actual setting
+# names vary by HP model and are resolved via _resolve_setting_names(),
+# which checks a model-specific override file first, then falls back to
+# the DEFAULT_SETTING_NAMES below.
+#
+# Each concept maps to a list of possible setting names (tried in order).
+# The first name that exists on the machine is used. This handles the case
+# where different HP models use different names for the same BIOS feature.
 
-# Critical settings: close direct bypass vectors.
-# If ANY of these fail after the Setup Password is set, ALL BIOS changes are
-# rolled back (but the Setup Password is NOT cleared — CC18).
-# Each entry: (setting_name, lockdown_value)
+# Canonical concepts (stable identifiers, not displayed to users)
+CONCEPTS = {
+    "network_boot": "Disable",  # Disable PXE/network boot
+    "usb_boot": "Disable",  # Disable USB boot
+    "legacy_boot": "Disable",  # Force UEFI-only (no CSM)
+    "boot_menu": "Disable",  # Disable F12/one-time boot menu
+    "fast_boot": "Enable",  # Enable Fast Boot (best-effort)
+    "f12_password": "Enable",  # Require password for F12 (best-effort)
+}
+
+# Default setting name aliases per concept (tried in order).
+# These cover the most common HP EliteBook/ProBook/EliteDesk models.
+# D-009: A model-specific override file (hp_model_overrides.json) can
+# provide alternative names for models that use different naming.
+DEFAULT_SETTING_NAMES = {
+    "network_boot": ["Network (PXE) Boot", "Network Boot", "PXE Boot", "PXE ROM Boot"],
+    "usb_boot": ["USB Boot", "USB Storage Boot", "USB Floppy/CD Boot", "USB Device Boot"],
+    "legacy_boot": ["Legacy Boot Options", "Legacy Support", "CSM Support", "Compatibility Mode"],
+    "boot_menu": ["F12 Boot Menu", "One-Time Boot Menu", "Boot Menu", "F12 Hot Key"],
+    "fast_boot": ["Fast Boot", "FastBoot", "Quick Boot"],
+    "f12_password": [
+        "Prompt for Admin password on F12 (Network Boot)",
+        "F12 Boot Menu Password",
+        "Prompt for Setup Password on F12",
+    ],
+}
+
+# Model-specific overrides (loaded from hp_model_overrides.json if present).
+# Format: {"EliteBook 840 G7": {"network_boot": ["Custom PXE Name"], ...}}
+_MODEL_OVERRIDES: dict | None = None
+
+# Path to the model-specific override file
+MODEL_OVERRIDES_FILE = Path(__file__).parent / "hp_model_overrides.json"
+
+
+def _load_model_overrides() -> dict:
+    """Load model-specific setting name overrides from JSON file.
+
+    D-009: The override file is optional. If present, it maps HP model
+    names (from WMI query) to dicts of concept → list of setting names.
+    This allows supporting HP models that use non-standard BIOS setting
+    names without modifying the source code.
+    """
+    global _MODEL_OVERRIDES
+    if _MODEL_OVERRIDES is not None:
+        return _MODEL_OVERRIDES
+    if not MODEL_OVERRIDES_FILE.exists():
+        _MODEL_OVERRIDES = {}
+        return _MODEL_OVERRIDES
+    try:
+        _MODEL_OVERRIDES = json.loads(MODEL_OVERRIDES_FILE.read_text())
+        log.info("Loaded HP model overrides from %s", MODEL_OVERRIDES_FILE)
+    except Exception as e:
+        log.warning("Failed to load HP model overrides: %s", e)
+        _MODEL_OVERRIDES = {}
+    return _MODEL_OVERRIDES
+
+
+def _detect_hp_model() -> str | None:
+    """Detect the HP model name via WMI.
+
+    D-009: Queries Win32_ComputerSystem for the model name (e.g.,
+    "HP EliteBook 840 G7"). Returns None if not available.
+    """
+    if _DRY_RUN:
+        return "HP EliteBook 840 G7"  # Simulated model for dry-run
+    if platform.system() != "Windows":
+        return None
+    try:
+        output = _run_powershell("(Get-WmiObject -Class Win32_ComputerSystem).Model")
+        return output.strip() if output else None
+    except Exception as e:
+        log.debug("Failed to detect HP model: %s", e)
+        return None
+
+
+def _resolve_setting_names() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Resolve canonical concepts to actual BIOS setting names for this machine.
+
+    D-009: This is the core of model-awareness. For each concept:
+    1. Check if the detected HP model has overrides in hp_model_overrides.json
+    2. If yes, use the override's setting name list
+    3. If no, use DEFAULT_SETTING_NAMES
+    4. For each candidate name, check if it exists on this machine via _read_setting()
+    5. Use the first name that exists
+
+    Returns:
+        (critical_settings, best_effort_settings) — each is a list of
+        (setting_name, lockdown_value) tuples, same format as the old
+        HP_CRITICAL_SETTINGS / HP_BEST_EFFORT_SETTINGS.
+    """
+    model = _detect_hp_model()
+    overrides = _load_model_overrides()
+    model_overrides = {}
+    if model and model in overrides:
+        model_overrides = overrides[model]
+        log.info("Using model-specific setting names for %s", model)
+
+    critical_concepts = ["network_boot", "usb_boot", "legacy_boot", "boot_menu"]
+    best_effort_concepts = ["fast_boot", "f12_password"]
+
+    def resolve_concept(concept: str) -> list[str]:
+        """Get the list of candidate setting names for a concept."""
+        if concept in model_overrides:
+            names = model_overrides[concept]
+            if isinstance(names, str):
+                names = [names]
+            return names
+        return DEFAULT_SETTING_NAMES.get(concept, [])
+
+    critical_settings = []
+    best_effort_settings = []
+
+    for concept in critical_concepts:
+        lockdown_value = CONCEPTS[concept]
+        candidates = resolve_concept(concept)
+        for name in candidates:
+            current = _read_setting(name)
+            if current is not None:
+                critical_settings.append((name, lockdown_value))
+                break  # Use the first matching name
+        else:
+            log.debug("Concept '%s': no matching setting found on this model", concept)
+
+    for concept in best_effort_concepts:
+        lockdown_value = CONCEPTS[concept]
+        candidates = resolve_concept(concept)
+        for name in candidates:
+            current = _read_setting(name)
+            if current is not None:
+                best_effort_settings.append((name, lockdown_value))
+                break
+        else:
+            log.debug("Concept '%s': no matching setting found on this model", concept)
+
+    return critical_settings, best_effort_settings
+
+
+# Backward-compatible constants (used by tests and remove_boot_lockdown).
+# These are the DEFAULT settings — apply_boot_lockdown() now uses
+# _resolve_setting_names() for model-awareness, but these remain as
+# the fallback/default list.
 HP_CRITICAL_SETTINGS = [
-    # --- Disable external boot paths ---
     ("Network (PXE) Boot", "Disable"),
     ("Network Boot", "Disable"),
     ("USB Boot", "Disable"),
     ("USB Storage Boot", "Disable"),
     ("USB Floppy/CD Boot", "Disable"),
-    # --- Force UEFI only (no legacy/CSM) ---
     ("Legacy Boot Options", "Disable"),
     ("Legacy Support", "Disable"),
-    # --- Disable F12 / one-time boot menu (CC19: added to critical) ---
     ("F12 Boot Menu", "Disable"),
     ("One-Time Boot Menu", "Disable"),
 ]
 
-# Best-effort settings: defense-in-depth.
-# Failure is logged but does not trigger rollback.
 HP_BEST_EFFORT_SETTINGS = [
-    # --- Enable Fast Boot (prevents F-key interruption during POST) ---
     ("Fast Boot", "Enable"),
-    # --- Require setup password for F12 boot menu ---
     ("Prompt for Admin password on F12 (Network Boot)", "Enable"),
 ]
 
@@ -536,9 +676,22 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
     # Always return the password, even on critical failure (CC18)
     result["bios_password"] = bios_password
 
+    # D-009: Resolve setting names for this specific HP model.
+    # This replaces the hardcoded HP_CRITICAL_SETTINGS / HP_BEST_EFFORT_SETTINGS
+    # with model-aware setting names.
+    critical_settings, best_effort_settings = _resolve_setting_names()
+    all_settings = critical_settings + best_effort_settings
+
+    if not critical_settings:
+        log.warning(
+            "D-009: No critical BIOS settings found for this HP model. "
+            "The model may use non-standard setting names. "
+            "Add an override in hp_model_overrides.json."
+        )
+
     # Save current state of all settings we're about to change (for rollback)
     saved_settings = {}
-    for setting_name, _ in ALL_LOCKDOWN_SETTINGS:
+    for setting_name, _ in all_settings:
         current = _read_setting(setting_name)
         if current is not None:
             saved_settings[setting_name] = current
@@ -548,7 +701,7 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
     # --- Apply critical settings (with verification re-reads) ---
     critical_applied = 0
     critical_failed = 0
-    for setting_name, lockdown_value in HP_CRITICAL_SETTINGS:
+    for setting_name, lockdown_value in critical_settings:
         current = _read_setting(setting_name)
         if current is None:
             # Setting doesn't exist on this model — skip (not a failure)
@@ -579,7 +732,7 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
     # --- Apply best-effort settings (failure does not trigger rollback) ---
     best_effort_applied = 0
     best_effort_failed = 0
-    for setting_name, lockdown_value in HP_BEST_EFFORT_SETTINGS:
+    for setting_name, lockdown_value in best_effort_settings:
         current = _read_setting(setting_name)
         if current is None:
             log.debug("Setting '%s' not supported on this model — skipping", setting_name)

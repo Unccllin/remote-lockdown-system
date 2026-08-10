@@ -74,6 +74,25 @@ def tmp_bcd_files(tmp_bcd_sentinel, tmp_bcd_state_file):
     return {"sentinel": tmp_bcd_sentinel, "state": tmp_bcd_state_file}
 
 
+@pytest.fixture
+def mock_resolve_settings():
+    """D-009: Mock _resolve_setting_names to return the hardcoded lists.
+
+    This bypasses the model-aware resolution so existing tests that mock
+    _read_setting continue to work without the extra reads from
+    _resolve_setting_names() consuming their read count budget.
+    """
+    with patch.object(
+        hp_uefi_lockdown,
+        "_resolve_setting_names",
+        return_value=(
+            hp_uefi_lockdown.HP_CRITICAL_SETTINGS,
+            hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS,
+        ),
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # HP UEFI Lockdown Tests
 # ---------------------------------------------------------------------------
@@ -199,7 +218,7 @@ class TestHpUefiLockdown:
     @patch("hp_uefi_lockdown._set_setting")
     @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_generates_password(
-        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
+        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file, mock_resolve_settings
     ):
         # _set_setting for Setup Password returns 0 (success)
         # For other settings, _set_and_verify calls _set_setting then _read_setting
@@ -237,7 +256,7 @@ class TestHpUefiLockdown:
     @patch("hp_uefi_lockdown._set_setting")
     @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_with_existing_password(
-        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
+        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file, mock_resolve_settings
     ):
         mock_set.return_value = 0
         # Track read calls per setting:
@@ -277,7 +296,7 @@ class TestHpUefiLockdown:
     @patch("hp_uefi_lockdown._set_setting")
     @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_saves_state(
-        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
+        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file, mock_resolve_settings
     ):
         mock_set.return_value = 0
         read_counts = {}
@@ -309,7 +328,7 @@ class TestHpUefiLockdown:
     @patch("hp_uefi_lockdown._set_setting")
     @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_skips_already_correct_settings(
-        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
+        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file, mock_resolve_settings
     ):
         mock_set.return_value = 0
 
@@ -337,7 +356,7 @@ class TestHpUefiLockdown:
     @patch("hp_uefi_lockdown._set_setting")
     @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_critical_failure_triggers_rollback(
-        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
+        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file, mock_resolve_settings
     ):
         """CC18: Critical failure triggers rollback of all BIOS changes."""
 
@@ -377,7 +396,7 @@ class TestHpUefiLockdown:
     @patch("hp_uefi_lockdown._set_setting")
     @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_rollback_does_not_clear_password(
-        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
+        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file, mock_resolve_settings
     ):
         """CC18: Rollback must NOT clear the freshly-set Setup Password."""
 
@@ -413,7 +432,7 @@ class TestHpUefiLockdown:
     @patch("hp_uefi_lockdown._set_setting")
     @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_best_effort_failure_no_rollback(
-        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file
+        self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file, mock_resolve_settings
     ):
         """Best-effort failure does NOT trigger rollback."""
         mock_set.return_value = 0
@@ -565,6 +584,148 @@ class TestHpUefiLockdown:
     def test_remove_boot_lockdown_not_hp(self, _):
         result = hp_uefi_lockdown.remove_boot_lockdown("password")
         assert result is True  # nothing to remove
+
+    # --- D-009: Model-aware setting name resolution ---
+
+    def test_d009_concepts_defined(self):
+        """D-009: All canonical concepts are defined."""
+        expected = {
+            "network_boot",
+            "usb_boot",
+            "legacy_boot",
+            "boot_menu",
+            "fast_boot",
+            "f12_password",
+        }
+        assert set(hp_uefi_lockdown.CONCEPTS.keys()) == expected
+
+    def test_d009_default_setting_names_cover_all_concepts(self):
+        """D-009: DEFAULT_SETTING_NAMES has entries for all concepts."""
+        for concept in hp_uefi_lockdown.CONCEPTS:
+            assert concept in hp_uefi_lockdown.DEFAULT_SETTING_NAMES
+            assert len(hp_uefi_lockdown.DEFAULT_SETTING_NAMES[concept]) > 0
+
+    def test_d009_detect_hp_model_dry_run(self):
+        """D-009: _detect_hp_model returns a model name in dry-run mode."""
+        with patch("hp_uefi_lockdown._DRY_RUN", True):
+            model = hp_uefi_lockdown._detect_hp_model()
+        assert model is not None
+        assert "HP" in model or "EliteBook" in model or "EliteDesk" in model
+
+    def test_d009_detect_hp_model_not_windows(self):
+        """D-009: _detect_hp_model returns None on non-Windows."""
+        with patch("hp_uefi_lockdown._DRY_RUN", False):
+            with patch("hp_uefi_lockdown.platform.system", return_value="Linux"):
+                model = hp_uefi_lockdown._detect_hp_model()
+        assert model is None
+
+    def test_d009_load_model_overrides_no_file(self):
+        """D-009: _load_model_overrides returns empty dict when no override file."""
+        import hp_uefi_lockdown as mod
+
+        original = mod._MODEL_OVERRIDES
+        mod._MODEL_OVERRIDES = None  # Reset cache
+        with patch.object(mod, "MODEL_OVERRIDES_FILE", Path("/nonexistent/file.json")):
+            result = mod._load_model_overrides()
+        assert result == {}
+        mod._MODEL_OVERRIDES = original  # Restore
+
+    def test_d009_resolve_setting_names_uses_first_match(self):
+        """D-009: _resolve_setting_names picks the first candidate that exists."""
+
+        # Mock _read_setting to return non-None only for specific names
+        def mock_read(name):
+            # Only "PXE Boot" exists (not "Network (PXE) Boot")
+            if name == "PXE Boot":
+                return "Enable"
+            if name == "USB Storage Boot":
+                return "Enable"
+            if name == "CSM Support":
+                return "Enable"
+            if name == "Boot Menu":
+                return "Enable"
+            if name == "FastBoot":
+                return "Disable"
+            return None
+
+        with patch("hp_uefi_lockdown._DRY_RUN", True):
+            with patch("hp_uefi_lockdown._read_setting", side_effect=mock_read):
+                with patch("hp_uefi_lockdown._load_model_overrides", return_value={}):
+                    critical, best_effort = hp_uefi_lockdown._resolve_setting_names()
+
+        # Should have picked the non-default names
+        critical_names = [s[0] for s in critical]
+        assert "PXE Boot" in critical_names  # 3rd candidate for network_boot
+        assert "USB Storage Boot" in critical_names  # 2nd candidate for usb_boot
+        assert "CSM Support" in critical_names  # 3rd candidate for legacy_boot
+        assert "Boot Menu" in critical_names  # 3rd candidate for boot_menu
+
+        best_effort_names = [s[0] for s in best_effort]
+        assert "FastBoot" in best_effort_names  # 2nd candidate for fast_boot
+
+    def test_d009_resolve_setting_names_with_model_override(self):
+        """D-009: _resolve_setting_names uses model-specific overrides when available."""
+        model_overrides = {
+            "HP EliteBook 840 G7": {
+                "network_boot": ["Custom PXE Name"],
+                "usb_boot": ["Custom USB Name"],
+                "legacy_boot": ["Custom Legacy Name"],
+                "boot_menu": ["Custom Boot Menu Name"],
+                "fast_boot": ["Custom Fast Boot Name"],
+                "f12_password": ["Custom F12 Password Name"],
+            }
+        }
+
+        def mock_read(name):
+            # All custom names exist
+            custom_names = {
+                "Custom PXE Name",
+                "Custom USB Name",
+                "Custom Legacy Name",
+                "Custom Boot Menu Name",
+                "Custom Fast Boot Name",
+                "Custom F12 Password Name",
+            }
+            if name in custom_names:
+                return "Enable"
+            return None
+
+        with patch("hp_uefi_lockdown._DRY_RUN", True):
+            with patch("hp_uefi_lockdown._detect_hp_model", return_value="HP EliteBook 840 G7"):
+                with patch("hp_uefi_lockdown._load_model_overrides", return_value=model_overrides):
+                    with patch("hp_uefi_lockdown._read_setting", side_effect=mock_read):
+                        critical, best_effort = hp_uefi_lockdown._resolve_setting_names()
+
+        critical_names = [s[0] for s in critical]
+        assert "Custom PXE Name" in critical_names
+        assert "Custom USB Name" in critical_names
+        assert "Custom Legacy Name" in critical_names
+        assert "Custom Boot Menu Name" in critical_names
+
+        best_effort_names = [s[0] for s in best_effort]
+        assert "Custom Fast Boot Name" in best_effort_names
+        assert "Custom F12 Password Name" in best_effort_names
+
+    def test_d009_resolve_setting_names_no_matches(self):
+        """D-009: _resolve_setting_names returns empty lists when no settings match."""
+        with patch("hp_uefi_lockdown._DRY_RUN", True):
+            with patch("hp_uefi_lockdown._read_setting", return_value=None):
+                with patch("hp_uefi_lockdown._load_model_overrides", return_value={}):
+                    critical, best_effort = hp_uefi_lockdown._resolve_setting_names()
+
+        assert critical == []
+        assert best_effort == []
+
+    def test_d009_model_overrides_file_is_valid_json(self):
+        """D-009: The sample hp_model_overrides.json is valid JSON."""
+        import json
+
+        overrides_path = Path(hp_uefi_lockdown.__file__).parent / "hp_model_overrides.json"
+        if overrides_path.exists():
+            data = json.loads(overrides_path.read_text())
+            # Should have _comment and _example keys
+            assert "_comment" in data
+            assert "_example" in data
 
 
 # ---------------------------------------------------------------------------
