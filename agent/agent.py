@@ -368,16 +368,30 @@ def wipe_key(key: bytearray) -> None:
     ctypes.memset(buf, 0, len(key))
 
 
-def encrypt_folder(folder: Path, key: bytes) -> None:
+def encrypt_folder(folder: Path, key: bytes) -> list[str]:
     """Encrypt all files inside `folder` in-place. Never touches files outside it.
 
     CC20: Resumable — skips files that already have a .enc counterpart
     (from a previous interrupted run). This allows handle_lockdown to
     resume encryption with the same persisted key after a crash, rather
     than generating a new key and leaving a mix of .enc and plaintext files.
+
+    D-011: Catches PermissionError on open files (e.g., Office docs, Outlook
+    PSTs on Windows). Retries up to 3 times with 1-second delay. If still
+    locked, skips the file and adds it to the blocked_files list. The caller
+    can report blocked files to the server so the operator knows which files
+    weren't encrypted.
+
+    Returns:
+        List of file paths (relative to folder) that could not be encrypted
+        because they were locked/open. Empty list if all files encrypted.
     """
     folder = folder.resolve()
     fernet = Fernet(key)
+    blocked_files: list[str] = []
+    max_retries = 3
+    retry_delay = 1.0  # seconds
+
     for filepath in folder.rglob("*"):
         if filepath.is_file() and not filepath.name.endswith(".enc"):
             enc_path = filepath.with_suffix(filepath.suffix + ".enc")
@@ -385,11 +399,40 @@ def encrypt_folder(folder: Path, key: bytes) -> None:
             if enc_path.exists():
                 log.info("Already encrypted, skipping: %s", filepath.name)
                 continue
-            data = filepath.read_bytes()
-            encrypted = fernet.encrypt(data)
-            enc_path.write_bytes(encrypted)
-            filepath.unlink()
-            log.info("Encrypted: %s", filepath.name)
+
+            # D-011: Retry on PermissionError (file may be open by another process)
+            success = False
+            for attempt in range(max_retries):
+                try:
+                    data = filepath.read_bytes()
+                    encrypted = fernet.encrypt(data)
+                    enc_path.write_bytes(encrypted)
+                    filepath.unlink()
+                    success = True
+                    log.info("Encrypted: %s", filepath.name)
+                    break
+                except PermissionError:
+                    if attempt < max_retries - 1:
+                        log.warning(
+                            "File locked (attempt %d/%d): %s — retrying in %.1fs",
+                            attempt + 1,
+                            max_retries,
+                            filepath.name,
+                            retry_delay,
+                        )
+                        time.sleep(retry_delay)
+                    else:
+                        log.error(
+                            "File locked after %d attempts, skipping: %s",
+                            max_retries,
+                            filepath.name,
+                        )
+
+            if not success:
+                rel_path = str(filepath.relative_to(folder))
+                blocked_files.append(rel_path)
+
+    return blocked_files
 
 
 def decrypt_folder(folder: Path, key: bytes) -> None:
@@ -827,6 +870,7 @@ def ack_command(
     boot_lock_status: str | None = None,
     command_uuid: str | None = None,
     boot_lock_detail: dict | None = None,
+    encryption_blocked_files: list[str] | None = None,
 ) -> bool:
     """Send command ACK to server. Returns True on success, False on failure.
 
@@ -842,6 +886,11 @@ def ack_command(
     lockdown silently no-op'd". This closes the dangerous gap where
     boot_lock_status="partial" with critical_applied=0 was reported as
     a successful lockdown to the operator.
+
+    D-011: encryption_blocked_files is a list of file paths that could
+    not be encrypted because they were locked/open by another process.
+    The server stores this in the audit log so the operator knows which
+    files weren't encrypted.
     """
     # Phase 5: Generate a command_uuid if not provided.
     # This ensures idempotent retries — the server won't process the same ACK twice.
@@ -864,6 +913,8 @@ def ack_command(
         payload["boot_lock_status"] = boot_lock_status
     if boot_lock_detail:
         payload["boot_lock_detail"] = boot_lock_detail
+    if encryption_blocked_files:
+        payload["encryption_blocked_files"] = encryption_blocked_files
     try:
         resp = _signed_post(
             f"{cfg['server_url']}/api/agent/command-ack",
@@ -1293,7 +1344,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     write_recovery_key(recovery_key_file, command["id"], key_b64, cfg=cfg)
 
     try:
-        encrypt_folder(folder, key)
+        blocked_files = encrypt_folder(folder, key)
     except Exception as e:
         log.error("Encryption failed: %s", e)
         # Remove the sentinel so a retry can re-attempt encryption.
@@ -1305,6 +1356,14 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         write_pending_ack(pending_ack_file, command["id"], "failed", key_material=key_b64)
         ack_command(cfg, command["id"], "failed")
         return
+
+    # D-011: If some files were locked/open, log a warning and report to server.
+    if blocked_files:
+        log.warning(
+            "Encryption completed with %d blocked file(s): %s",
+            len(blocked_files),
+            ", ".join(blocked_files),
+        )
 
     apply_lock_screen()
     start_lock_guardian()
@@ -1455,6 +1514,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         bios_password=bios_password,
         boot_lock_status=boot_lock_status,
         boot_lock_detail=boot_lock_detail,
+        encryption_blocked_files=blocked_files if blocked_files else None,
     )
     if ok:
         if pending_ack_file.exists():
@@ -1648,7 +1708,13 @@ def check_deadman(cfg: dict) -> None:
                 # A8: Write recovery key file (RSA-wrapped, for offline recovery)
                 recovery_key_file = cfg.get("recovery_key_file", RECOVERY_KEY_FILE)
                 write_recovery_key(recovery_key_file, "deadman", key_b64, cfg=cfg)
-                encrypt_folder(cfg["lockdown_folder"], key)
+                blocked = encrypt_folder(cfg["lockdown_folder"], key)
+                if blocked:
+                    log.warning(
+                        "Deadman encryption completed with %d blocked file(s): %s",
+                        len(blocked),
+                        ", ".join(blocked),
+                    )
                 apply_lock_screen()
                 start_lock_guardian()
                 sentinel.write_text(json.dumps({"locked": True, "deadman": True}))

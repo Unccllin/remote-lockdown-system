@@ -136,11 +136,67 @@ class TestEncryption:
         d = Path(tempfile.mkdtemp())
         try:
             key = agent.generate_key()
-            agent.encrypt_folder(d, key)
+            result = agent.encrypt_folder(d, key)
             # No files to encrypt, should not raise
             assert len(list(d.rglob("*.enc"))) == 0
+            assert result == []  # D-011: empty list = no blocked files
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+    def test_encrypt_returns_empty_list_when_all_succeed(self, tmp_folder):
+        """D-011: encrypt_folder returns empty list when all files encrypted."""
+        key = agent.generate_key()
+        result = agent.encrypt_folder(tmp_folder, key)
+        assert result == []
+        assert isinstance(result, list)
+
+    def test_encrypt_returns_blocked_files_on_permission_error(self, tmp_folder):
+        """D-011: encrypt_folder returns list of blocked files on PermissionError."""
+        key = agent.generate_key()
+        # Mock read_bytes to raise PermissionError on one file
+        original_read = Path.read_bytes
+        blocked_file = "file1.txt"
+
+        def mock_read_bytes(self):
+            if self.name == blocked_file:
+                raise PermissionError(f"File locked: {self.name}")
+            return original_read(self)
+
+        with patch.object(Path, "read_bytes", mock_read_bytes):
+            result = agent.encrypt_folder(tmp_folder, key)
+
+        # file1.txt should be in blocked_files
+        assert blocked_file in result
+        # file2.txt should still have been encrypted
+        assert (tmp_folder / "file2.txt.enc").exists()
+        assert not (tmp_folder / "file2.txt").exists()
+        # file1.txt should still exist (not encrypted, not deleted)
+        assert (tmp_folder / "file1.txt").exists()
+
+    def test_encrypt_retries_on_permission_error(self, tmp_folder):
+        """D-011: encrypt_folder retries on PermissionError before giving up."""
+        key = agent.generate_key()
+        blocked_file = "file1.txt"
+        call_count = {"n": 0}
+        original_read = Path.read_bytes
+
+        def mock_read_bytes_with_retry(self):
+            if self.name == blocked_file:
+                call_count["n"] += 1
+                if call_count["n"] < 3:  # Fail first 2 attempts, succeed on 3rd
+                    raise PermissionError(f"File locked: {self.name}")
+            return original_read(self)
+
+        with patch.object(Path, "read_bytes", mock_read_bytes_with_retry):
+            with patch.object(agent.time, "sleep"):  # Don't actually sleep
+                result = agent.encrypt_folder(tmp_folder, key)
+
+        # Should have retried and eventually succeeded
+        assert call_count["n"] == 3
+        assert result == []  # No blocked files — retry succeeded
+        # file1.txt should be encrypted
+        assert not (tmp_folder / "file1.txt").exists()
+        assert (tmp_folder / "file1.txt.enc").exists()
 
 
 # ---------------------------------------------------------------------------
