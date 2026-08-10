@@ -1,0 +1,675 @@
+# GRAPH-SPEC.yaml — The Node Graph for Remote Lockdown System
+#
+# This is the center and heart of the project. Every agent session, every
+# phase, every verification, and every enforcement path flows through this
+# graph. The graph defines:
+#   - What nodes exist (the work to be done and the gates that guard it)
+#   - What edges are allowed (which nodes can transition to which)
+#   - What conditions must be met to traverse an edge
+#   - What verification gates must pass before a node is "closed"
+#
+# The graph is enforced by graph_assert.py. Violations raise
+# GraphViolationError and halt the pipeline. No node can be skipped.
+#
+# Inspired by the ICT trading bot orchestration pattern: multi-session
+# context persistence, Rule Zero (read before code), run artifacts as
+# gates, and structured session-end handoff.
+
+# ---------------------------------------------------------------------------
+# NODE TYPES
+# ---------------------------------------------------------------------------
+#
+# SESSION  — lifecycle nodes that frame each agent session
+# GATE     — mandatory checkpoints that must pass before proceeding
+# PHASE    — production-readiness phases (P0-P16), each with a skill file
+# VERIFY   — verification nodes (tests, lint, build, env checks)
+# ENFORCE  — enforcement path nodes (the actual lockdown features)
+# COMPONENT — buildable components (server, dashboard, agent, electron)
+# DEBT     — debt items tracked in DEBT-LEDGER.md
+# EVIDENCE — run artifacts that prove a node actually executed
+
+# ---------------------------------------------------------------------------
+# SESSION LIFECYCLE NODES
+# ---------------------------------------------------------------------------
+# These nodes frame every agent session. They are the entry and exit points.
+# No work happens outside this lifecycle.
+
+session_nodes:
+  - id: SESSION-START
+    type: SESSION
+    description: >
+      Session begins. Agent reads trace.md, DEBT-LEDGER.md, and GRAPH-SPEC.yaml.
+      Identifies the next open debt item or next phase to work on.
+      Sets the session objective.
+    entry_conditions: []
+    exit_conditions:
+      - "trace.md read and understood"
+      - "DEBT-LEDGER.md read — open items identified"
+      - "GRAPH-SPEC.yaml read — current node located"
+      - "session objective stated in one sentence"
+
+  - id: RULE-ZERO
+    type: GATE
+    description: >
+      Read before you code. For the current work item, read the relevant
+      skill file(s), the source code that will be changed, and any ADRs.
+      Log understanding to trace.md before touching any file.
+      This is NOT optional. Code written before Rule Zero is complete
+      will be wrong in ways that are hard to find later.
+    entry_conditions:
+      - "SESSION-START complete"
+    exit_conditions:
+      - "relevant skill file(s) read"
+      - "source code to be changed read"
+      - "understanding logged to trace.md"
+      - "implementation gaps identified (if any)"
+
+  - id: IMPLEMENT
+    type: SESSION
+    description: >
+      Write code changes. Only after RULE-ZERO is complete.
+      Follow existing conventions (AGENTS.md). Do not duplicate detection
+      logic — only port entry/execution wiring.
+    entry_conditions:
+      - "RULE-ZERO complete"
+    exit_conditions:
+      - "code changes written"
+      - "diff visible (every line accountable)"
+
+  - id: VERIFY
+    type: SESSION
+    description: >
+      Run the verification suite. This is not optional — a passing sandbox
+      test is NOT a close. A description of what the code does is NOT a close.
+      A printed log from actual execution is a close.
+    entry_conditions:
+      - "IMPLEMENT complete"
+    exit_conditions:
+      - "relevant VERIFY nodes pass"
+      - "lint clean"
+      - "build succeeds (if applicable)"
+
+  - id: ARTIFACT
+    type: EVIDENCE
+    description: >
+      Capture a run artifact — actual printed output from live execution
+      proving the code works. For verification nodes, this is the test
+      output. For enforcement paths, this is the decision chain log.
+      "No setup detected" with condition values printed IS an artifact.
+      A timeout with no output is NOT.
+    entry_conditions:
+      - "VERIFY complete"
+    exit_conditions:
+      - "run artifact captured and referenced in trace.md"
+
+  - id: CLOSE-DEBT
+    type: SESSION
+    description: >
+      Update DEBT-LEDGER.md (OPEN -> CLOSED with commit hash + artifact ref).
+      Update trace.md with session-end status block. This is the only node
+      that can mark a debt item as closed.
+    entry_conditions:
+      - "ARTIFACT complete"
+    exit_conditions:
+      - "DEBT-LEDGER.md updated (if a debt item was closed)"
+      - "trace.md updated with session-end status block"
+      - "next session opening stated in one sentence"
+
+# ---------------------------------------------------------------------------
+# SESSION LIFECYCLE EDGES
+# ---------------------------------------------------------------------------
+# The only allowed path through a session. No shortcuts.
+
+session_edges:
+  - from: SESSION-START
+    to: RULE-ZERO
+    condition: "session objective identified"
+  - from: RULE-ZERO
+    to: IMPLEMENT
+    condition: "understanding logged to trace.md"
+  - from: IMPLEMENT
+    to: VERIFY
+    condition: "code changes written"
+  - from: VERIFY
+    to: ARTIFACT
+    condition: "verification nodes pass"
+  - from: ARTIFACT
+    to: CLOSE-DEBT
+    condition: "run artifact captured"
+  - from: CLOSE-DEBT
+    to: SESSION-START
+    condition: "next session opens (cross-session cycle)"
+    cross_session: true
+
+# ---------------------------------------------------------------------------
+# PHASE NODES (P0-P16)
+# ---------------------------------------------------------------------------
+# Each phase has: skill file, config, file ownership, test gate, deps.
+# The orchestrator must know about ALL 17 phases (current bug: only 0-7).
+
+phase_nodes:
+  - id: P0
+    name: build-foundation
+    skill: .devin/skills/phase-0-build-foundation/SKILL.md
+    config: .devin/orchestration/phases/phase-0.conf
+    files_owned: "scripts/build-all.sh,scripts/check-artifacts.sh,Makefile"
+    deps: []
+    status: COMPLETE
+
+  - id: P1
+    name: secrets-config
+    skill: .devin/skills/phase-1-secrets-config/SKILL.md
+    config: .devin/orchestration/phases/phase-1.conf
+    files_owned: "scripts/generate-secrets.sh,scripts/generate-recovery-keys.sh,scripts/validate-env.sh"
+    deps: []
+    status: COMPLETE
+
+  - id: P2
+    name: platform-services
+    skill: .devin/skills/phase-2-platform-services/SKILL.md
+    config: .devin/orchestration/phases/phase-2.conf
+    files_owned: "agent/platform/linux/*,agent/platform/macos/*,agent/platform/windows/*"
+    deps: []
+    status: COMPLETE
+
+  - id: P3
+    name: hardening
+    skill: .devin/skills/phase-3-hardening/SKILL.md
+    config: .devin/orchestration/phases/phase-3.conf
+    files_owned: "server/src/**/*.js,agent/*.py (targeted fixes only)"
+    deps: [P0, P1, P2]
+    status: COMPLETE
+
+  - id: P4
+    name: cicd
+    skill: .devin/skills/phase-4-cicd/SKILL.md
+    config: .devin/orchestration/phases/phase-4.conf
+    files_owned: ".github/workflows/*.yml,.github/dependabot.yml"
+    deps: [P0, P1, P2, P3]
+    status: COMPLETE
+
+  - id: P5
+    name: signing-autoupdate
+    skill: .devin/skills/phase-5-signing-autoupdate/SKILL.md
+    config: .devin/orchestration/phases/phase-5.conf
+    files_owned: "scripts/setup-signing.sh,docs/CODE_SIGNING.md,electron/package.json"
+    deps: [P4]
+    status: COMPLETE
+
+  - id: P6
+    name: monitoring
+    skill: .devin/skills/phase-6-monitoring/SKILL.md
+    config: .devin/orchestration/phases/phase-6.conf
+    files_owned: "server/src/routes/health.js,dashboard/src/pages/HealthPage.jsx,scripts/monitor.sh"
+    deps: [P3]
+    status: COMPLETE
+
+  - id: P7
+    name: e2e-testing
+    skill: .devin/skills/phase-7-e2e-testing/SKILL.md
+    config: .devin/orchestration/phases/phase-7.conf
+    files_owned: "tests/e2e/*.test.js,scripts/run-e2e.sh,docs/E2E_TEST.md"
+    deps: [P0, P1, P2, P3, P4, P5, P6]
+    status: COMPLETE
+
+  - id: P8
+    name: deps-sast
+    skill: .devin/skills/phase-8-deps-sast/SKILL.md
+    config: .devin/orchestration/phases/phase-8.conf
+    files_owned: "server/package.json,dashboard/package.json,agent/requirements-dev.txt,.github/workflows/codeql.yml,.github/workflows/lint.yml"
+    deps: [P4]
+    status: COMPLETE
+
+  - id: P9
+    name: agent-e2e
+    skill: .devin/skills/phase-9-agent-e2e/SKILL.md
+    config: .devin/orchestration/phases/phase-9.conf
+    files_owned: "tests/e2e/agent-helpers.js,tests/e2e/agent-integration.test.js,scripts/run-e2e.sh"
+    deps: [P7]
+    status: COMPLETE
+
+  - id: P10
+    name: dashboard-e2e
+    skill: .devin/skills/phase-10-dashboard-e2e/SKILL.md
+    config: .devin/orchestration/phases/phase-10.conf
+    files_owned: "dashboard/playwright.config.js,dashboard/e2e/*.js,dashboard/package.json"
+    deps: [P7]
+    status: COMPLETE
+
+  - id: P11
+    name: postgres
+    skill: .devin/skills/phase-11-postgres/SKILL.md
+    config: .devin/orchestration/phases/phase-11.conf
+    files_owned: "server/tests/postgres-compat.test.js"
+    deps: [P7]
+    status: COMPLETE
+
+  - id: P12
+    name: docker
+    skill: .devin/skills/phase-12-docker/SKILL.md
+    config: .devin/orchestration/phases/phase-12.conf
+    files_owned: "scripts/validate-docker.sh,docker-compose.test.yml,docs/DEPLOYMENT.md"
+    deps: [P11]
+    status: COMPLETE
+
+  - id: P13
+    name: notifications-metrics
+    skill: .devin/skills/phase-13-notifications-metrics/SKILL.md
+    config: .devin/orchestration/phases/phase-13.conf
+    files_owned: "server/src/routes/metrics.js,server/src/notifications/notify.js,server/src/jobs/alertScheduler.js"
+    deps: [P6]
+    status: COMPLETE
+
+  - id: P14
+    name: backup-restore
+    skill: .devin/skills/phase-14-backup-restore/SKILL.md
+    config: .devin/orchestration/phases/phase-14.conf
+    files_owned: "scripts/backup.sh,scripts/restore.sh,docs/BACKUP.md"
+    deps: [P11]
+    status: COMPLETE
+
+  - id: P15
+    name: load-testing
+    skill: .devin/skills/phase-15-load-testing/SKILL.md
+    config: .devin/orchestration/phases/phase-15.conf
+    files_owned: "tests/load/k6-*.js,scripts/run-load-test.sh,docs/LOAD_TESTING.md"
+    deps: [P13]
+    status: COMPLETE
+
+  - id: P16
+    name: rbac
+    skill: .devin/skills/phase-16-rbac/SKILL.md
+    config: .devin/orchestration/phases/phase-16.conf
+    files_owned: "server/src/routes/admins.js,server/src/db/migrations/007_rbac.sql,dashboard/src/pages/AdminsPage.jsx"
+    deps: [P3]
+    status: COMPLETE
+
+# ---------------------------------------------------------------------------
+# VERIFICATION NODES
+# ---------------------------------------------------------------------------
+# These are the gates that must pass before any node can be marked complete.
+# Each has a command and an expected result. The graph_assert engine runs
+# these and checks the output.
+
+verification_nodes:
+  - id: V-SERVER
+    name: server-jest
+    command: "cd server && npm test"
+    expected_exit: 0
+    expected_output_contains: "passed"
+    component: C-SERVER
+
+  - id: V-AGENT
+    name: agent-pytest
+    command: "cd agent && python3 -m pytest tests/ -q"
+    expected_exit: 0
+    expected_output_contains: "passed"
+    component: C-AGENT
+
+  - id: V-DASHBOARD
+    name: dashboard-vitest
+    command: "cd dashboard && npx vitest run"
+    expected_exit: 0
+    expected_output_contains: "passed"
+    component: C-DASHBOARD
+
+  - id: V-LINT-SERVER
+    name: server-eslint
+    command: "cd server && npx eslint ."
+    expected_exit: 0
+    component: C-SERVER
+
+  - id: V-LINT-DASHBOARD
+    name: dashboard-eslint
+    command: "cd dashboard && npx eslint ."
+    expected_exit: 0
+    component: C-DASHBOARD
+
+  - id: V-LINT-AGENT
+    name: agent-ruff
+    command: "cd agent && python3 -m ruff check . && python3 -m ruff format --check ."
+    expected_exit: 0
+    component: C-AGENT
+
+  - id: V-BUILD-DASHBOARD
+    name: dashboard-vite-build
+    command: "cd dashboard && npx vite build"
+    expected_exit: 0
+    expected_output_contains: "built"
+    component: C-DASHBOARD
+
+  - id: V-SYNTAX-SWEEP
+    name: js-syntax-sweep
+    command: "find server/src electron -name '*.js' | grep -v node_modules | xargs -I{} node --check {}"
+    expected_exit: 0
+    component: C-SERVER
+
+  - id: V-SHELL-SYNTAX
+    name: shell-syntax-check
+    command: "bash -n scripts/*.sh"
+    expected_exit: 0
+    component: C-SERVER
+
+  - id: V-ENV
+    name: environment-verification
+    command: "make verify-env"
+    expected_exit: 0
+    expected_output_contains: "PASS"
+    component: C-SERVER
+
+  - id: V-DOCKER
+    name: docker-validation
+    command: "scripts/validate-docker.sh"
+    expected_exit: 0
+    component: C-SERVER
+
+  - id: V-ELECTRON-SYNTAX
+    name: electron-syntax-check
+    command: "cd electron && node --check main.js preload.js server-starter.js config.js updater.js"
+    expected_exit: 0
+    component: C-ELECTRON
+
+# ---------------------------------------------------------------------------
+# ENFORCEMENT PATH NODES
+# ---------------------------------------------------------------------------
+# These are the actual lockdown features — the core of the system.
+# Each path has a status that tracks how verified it is:
+#   verified-in-unit-test  — mocked tests pass
+#   verified-in-sandbox    — E2E/sandbox tests pass (no real hardware)
+#   verified-on-hardware   — run artifact from real machine (NOT YET ACHIEVED)
+#   unverified             — no test coverage at all
+
+enforcement_paths:
+  - id: E-ENCRYPT
+    name: file-encryption
+    description: "Fernet encryption of LOCKDOWN_FOLDER"
+    component: C-AGENT
+    entry_function: "agent.encrypt_folder"
+    verified_by: [V-AGENT]
+    status: verified-in-unit-test
+    risk_notes: "File locking on Windows (open files cause PermissionError)"
+
+  - id: E-DECRYPT
+    name: file-decryption
+    description: "Fernet decryption of LOCKDOWN_FOLDER on recovery"
+    component: C-AGENT
+    entry_function: "agent.decrypt_folder"
+    verified_by: [V-AGENT]
+    status: verified-in-unit-test
+    risk_notes: "Wrong-key handling (InvalidToken)"
+
+  - id: E-LOCK-SCREEN
+    name: workstation-lock
+    description: "LockWorkStation (Windows) / dm-tool (Linux) / CGSession (macOS)"
+    component: C-AGENT
+    entry_function: "agent._lock_workstation"
+    verified_by: [V-AGENT]
+    status: verified-in-unit-test
+    risk_notes: "Session 0 isolation — service can't lock interactive desktop"
+
+  - id: E-GUARDIAN
+    name: lock-guardian
+    description: "Background thread re-asserting lock every 10s"
+    component: C-AGENT
+    entry_function: "agent.start_lock_guardian"
+    verified_by: [V-AGENT]
+    status: verified-in-unit-test
+    risk_notes: "Process-killable; same session isolation as E-LOCK-SCREEN"
+
+  - id: E-BCD
+    name: bcd-lockdown
+    description: "bcdedit /set {default} to disable WinRE, boot menu, F8"
+    component: C-AGENT
+    entry_function: "bcd_lockdown.apply_bcd_lockdown"
+    verified_by: [V-AGENT]
+    status: verified-in-unit-test
+    risk_notes: "BitLocker interaction; {default} loader assumption; reagentc false success"
+
+  - id: E-HP-UEFI
+    name: hp-uefi-lockdown
+    description: "HP WMI SetBIOSSetting for USB boot, PXE, legacy, F12"
+    component: C-AGENT
+    entry_function: "hp_uefi_lockdown.apply_boot_lockdown"
+    verified_by: [V-AGENT]
+    status: verified-in-unit-test
+    risk_notes: "WMI namespace variance; setting-name mismatch; HP Sure Admin revert; false success on critical_applied=0"
+
+  - id: E-ACK
+    name: command-ack
+    description: "ACK with key_material + bios_password + boot_lock_detail to server"
+    component: C-AGENT
+    entry_function: "agent.ack_command"
+    verified_by: [V-AGENT, V-SERVER]
+    status: verified-in-unit-test
+    risk_notes: "Network failure retries via pending ACK file"
+
+  - id: E-RECOVERY
+    name: unlock-recovery
+    description: "Server releases key, agent decrypts, removes sentinel"
+    component: C-AGENT
+    entry_function: "agent.handle_unlock"
+    verified_by: [V-AGENT, V-SERVER]
+    status: verified-in-unit-test
+    risk_notes: "Key release security; sentinel cleanup"
+
+  - id: E-TRACK
+    name: covert-tracking
+    description: "Silent geolocation reporting (wifi scan + IP geo)"
+    component: C-AGENT
+    entry_function: "agent.handle_track"
+    verified_by: [V-AGENT]
+    status: verified-in-unit-test
+    risk_notes: "Platform-specific wifi scanning; geolocation API rate limits"
+
+  - id: E-DEADMAN
+    name: deadman-switch
+    description: "Auto-lockdown if no server contact for 24h"
+    component: C-AGENT
+    entry_function: "agent.check_deadman"
+    verified_by: [V-AGENT]
+    status: verified-in-unit-test
+    risk_notes: "Clock skew; false trigger on network outage"
+
+  - id: E-EFFECTIVENESS
+    name: lockdown-effectiveness
+    description: "boot_lock_detail + lockdown_effective reporting (Phase 17)"
+    component: C-AGENT
+    entry_function: "agent.handle_lockdown (boot_lock_detail aggregation)"
+    verified_by: [V-AGENT, V-SERVER, V-DASHBOARD]
+    status: verified-in-unit-test
+    risk_notes: "Closes the dangerous gap where critical_applied=0 was reported as success"
+
+  - id: E-OFFLINE-QUEUE
+    name: offline-queue
+    description: "SQLite queue for location reports when offline"
+    component: C-AGENT
+    entry_function: "agent.queue_offline / agent.drain_offline_queue"
+    verified_by: [V-AGENT]
+    status: verified-in-unit-test
+    risk_notes: "Queue growth on extended offline; SQLite corruption"
+
+  - id: E-AUTO-UPDATE
+    name: agent-auto-update
+    description: "Download + verify + apply signed agent updates"
+    component: C-AGENT
+    entry_function: "agent.check_for_update / agent.download_update"
+    verified_by: [V-AGENT]
+    status: verified-in-unit-test
+    risk_notes: "Update server availability; signature verification on Windows"
+
+# ---------------------------------------------------------------------------
+# COMPONENT NODES
+# ---------------------------------------------------------------------------
+# The buildable components. Each has a build command and a set of
+# verification nodes that must pass.
+
+component_nodes:
+  - id: C-SERVER
+    name: server
+    path: server/
+    build_command: "cd server && npm install"
+    verify_nodes: [V-SERVER, V-LINT-SERVER, V-SYNTAX-SWEEP]
+
+  - id: C-DASHBOARD
+    name: dashboard
+    path: dashboard/
+    build_command: "cd dashboard && npm install"
+    verify_nodes: [V-DASHBOARD, V-LINT-DASHBOARD, V-BUILD-DASHBOARD]
+
+  - id: C-AGENT
+    name: agent
+    path: agent/
+    build_command: "cd agent && python3 -m pip install -r requirements.txt"
+    verify_nodes: [V-AGENT, V-LINT-AGENT]
+
+  - id: C-ELECTRON
+    name: electron
+    path: electron/
+    build_command: "cd electron && npm install"
+    verify_nodes: [V-ELECTRON-SYNTAX]
+
+# ---------------------------------------------------------------------------
+# DEBT ITEMS
+# ---------------------------------------------------------------------------
+# Tracked in docs/adr/DEBT-LEDGER.md. Each debt item has:
+#   - id, description, close_criteria, status, commit_ref, artifact_ref
+# The graph asserts that a debt item cannot be CLOSED without:
+#   1. A run artifact (EVIDENCE node output)
+#   2. A commit hash
+#   3. DEBT-LEDGER.md updated
+
+debt_items:
+  - id: D-001
+    description: "Orchestrator only knows phases 0-7, not 8-16"
+    close_criteria: "orchestrator.sh updated with all 17 phases + dependency graph"
+    status: CLOSED
+    commit_ref: "2026-08-10 session"
+    artifact_ref: "orchestrator.sh status shows all 17 phases; test 16 and test 8 pass; I6 resolved"
+
+  - id: D-002
+    description: "Phase completion markers are empty 0-byte files with no artifact references"
+    close_criteria: "Each phase-N.complete file contains commit hash + artifact reference"
+    status: CLOSED
+    commit_ref: "2026-08-10 session"
+    artifact_ref: "All 17 .complete files populated with commit+artifact+date+tests (4597 bytes total); I7 resolved"
+
+  - id: D-003
+    description: "No hardware-in-the-loop test harness for enforcement paths"
+    close_criteria: "At least one enforcement path verified on real hardware with run artifact"
+    status: OPEN
+    blocks: [E-LOCK-SCREEN, E-GUARDIAN, E-BCD, E-HP-UEFI]
+
+  - id: D-004
+    description: "HP UEFI lockdown reports false success when critical_applied=0"
+    close_criteria: "Server treats critical_applied=0 as lockdown_effective=false; dashboard shows warning"
+    status: CLOSED
+    commit_ref: "Phase 17 (this session)"
+    artifact_ref: "330 server tests + 143 agent tests + 26 dashboard tests pass"
+
+  - id: D-005
+    description: "No cross-session context persistence (no trace.md)"
+    close_criteria: "trace.md exists and is updated at session end with status block"
+    status: CLOSED
+    commit_ref: "2026-08-10 graph session"
+    artifact_ref: ".devin/graph/trace.md created with two session entries; I4 enforced by graph_assert.py"
+
+  - id: D-006
+    description: "No formal graph spec or assertion engine"
+    close_criteria: "GRAPH-SPEC.yaml + graph_loader.py + graph_assert.py exist and enforce transitions"
+    status: CLOSED
+    commit_ref: "2026-08-10 graph session"
+    artifact_ref: "GRAPH-SPEC.yaml + graph_loader.py + graph_assert.py created; 2 violations correctly detected (I6, I7); deliberate I1 violation test passes"
+
+  - id: D-007
+    description: "Lock guardian uses LockWorkStation from service session (Session 0 isolation)"
+    close_criteria: "Lock guardian works from service context OR documented as requiring interactive session"
+    status: OPEN
+    blocks: [E-LOCK-SCREEN, E-GUARDIAN]
+
+  - id: D-008
+    description: "BCD lockdown does not check BitLocker status before modifying BCD"
+    close_criteria: "Agent checks BitLocker and either handles or warns before bcdedit"
+    status: OPEN
+    blocks: [E-BCD]
+
+  - id: D-009
+    description: "HP UEFI setting names are hardcoded — vary across HP models/BIOS versions"
+    close_criteria: "Setting names are dynamically discovered or model-aware"
+    status: OPEN
+    blocks: [E-HP-UEFI]
+
+  - id: D-010
+    description: "No HP Sure Admin / Sure Run / Sure Start awareness in UEFI lockdown"
+    close_criteria: "Agent detects Sure Admin and either works with it or reports blocked"
+    status: OPEN
+    blocks: [E-HP-UEFI]
+
+  - id: D-011
+    description: "File encryption fails silently on open files (PermissionError on Windows)"
+    close_criteria: "Agent retries with file-closed detection or reports which files blocked encryption"
+    status: OPEN
+    blocks: [E-ENCRYPT]
+
+  - id: D-012
+    description: "Dashboard does not surface lockdown-effectiveness to operator (FIXED this session)"
+    close_criteria: "DeviceDetailPage shows boot_lock_detail panel with red flagging"
+    status: CLOSED
+    commit_ref: "Phase 17 (this session)"
+    artifact_ref: "5 new dashboard tests pass; panel renders for locked/stolen devices"
+
+# ---------------------------------------------------------------------------
+# GRAPH INVARIANTS (asserted by graph_assert.py)
+# ---------------------------------------------------------------------------
+#
+# These are the rules the graph enforces. Violations raise GraphViolationError.
+#
+# I1: No phase can run before its dependencies are COMPLETE.
+# I2: No debt item can be CLOSED without a commit_ref and artifact_ref.
+# I3: No enforcement path can be marked "verified-on-hardware" without a
+#     run artifact from real hardware (not WSL, not mock).
+# I4: No session can close without updating trace.md with the session-end
+#     status block.
+# I5: No code changes can be made before RULE-ZERO is complete for the
+#     current work item.
+# I6: The orchestrator must know about ALL phases in the graph (currently
+#     violates — orchestrator.sh only has 0-7).
+# I7: Every phase marked COMPLETE must have a non-empty artifact reference
+#     (currently violates — all .complete files are 0 bytes).
+
+invariants:
+  - id: I1
+    rule: "phase_deps_must_be_complete"
+    description: "No phase can run before its dependencies are COMPLETE"
+    check: "for each phase P with deps D, all D must have status COMPLETE before P runs"
+
+  - id: I2
+    rule: "debt_close_requires_evidence"
+    description: "No debt item can be CLOSED without commit_ref and artifact_ref"
+    check: "for each debt item with status CLOSED, commit_ref and artifact_ref must be non-empty"
+
+  - id: I3
+    rule: "hardware_verification_requires_real_artifact"
+    description: "No enforcement path can be marked verified-on-hardware without real hardware artifact"
+    check: "for each enforcement path with status verified-on-hardware, artifact_ref must reference real hardware (not WSL, not mock)"
+
+  - id: I4
+    rule: "session_close_requires_trace_update"
+    description: "No session can close without updating trace.md"
+    check: "trace.md must have a new entry with session-end status block after CLOSE-DEBT"
+
+  - id: I5
+    rule: "rule_zero_before_code"
+    description: "No code changes before RULE-ZERO is complete"
+    check: "RULE-ZERO exit_conditions must be met before IMPLEMENT entry_conditions are checked"
+
+  - id: I6
+    rule: "orchestrator_knows_all_phases"
+    description: "Orchestrator must know about ALL phases in the graph"
+    check: "orchestrator.sh PHASE_DEPS and PHASE_NAMES must include all 17 phases (0-16)"
+    currently_violated: false
+
+  - id: I7
+    rule: "complete_phases_have_artifacts"
+    description: "Every phase marked COMPLETE must have a non-empty artifact reference"
+    check: "each results/phase-N.complete file must contain commit hash + artifact reference"
+    currently_violated: false

@@ -9,7 +9,82 @@ Project-specific guidance for AI agents working in this repo.
 - `agent/` — Python background agent (pytest, ruff)
 - `electron/` — Electron desktop app bundling server + dashboard + agent
 - `scripts/` — single source of truth for build/verify logic (wrapped by Makefile)
-- `.devin/skills/phase-N-*` — knowledge base for the 16 production-readiness phases
+- `.devin/skills/phase-N-*` — knowledge base for the 17 production-readiness phases
+- `.devin/graph/` — **the node graph** (center and heart of the project)
+- `docs/adr/` — architecture decision records + debt ledger
+
+## The Node Graph (mandatory read at session start)
+
+The node graph is the center and heart of this project. Every agent session,
+every phase transition, every verification gate, and every enforcement path
+validation flows through the graph. The graph defines what work exists, what
+order it must be done in, and what evidence is required to call something "done."
+
+**Mandatory reads at session start, before any work:**
+
+1. `.devin/graph/GRAPH-SPEC.yaml` — all nodes, edges, and invariants
+2. `.devin/graph/trace.md` — last session's context and next session opening
+3. `docs/adr/DEBT-LEDGER.md` — open debt items and close criteria
+4. `docs/adr/GRAPH-SPEC.md` — human-readable ADR for the graph
+
+**Mandatory node types (a node of each type MUST exist in the graph):**
+
+| Type | Purpose | Example nodes |
+|------|---------|---------------|
+| SESSION | Lifecycle nodes framing each agent session | SESSION-START, IMPLEMENT, CLOSE-DEBT |
+| GATE | Mandatory checkpoints | RULE-ZERO, VERIFY |
+| PHASE | Production-readiness phases (P0-P16) | 17 phase nodes |
+| VERIFY | Verification gates (tests, lint, build) | V-SERVER, V-AGENT, V-DASHBOARD, ... |
+| ENFORCE | Enforcement paths (the lockdown features) | E-ENCRYPT, E-BCD, E-HP-UEFI, ... |
+| COMPONENT | Buildable components | C-SERVER, C-DASHBOARD, C-AGENT, C-ELECTRON |
+| EVIDENCE | Run artifacts proving execution | ARTIFACT |
+
+**Session lifecycle (the only allowed path — no shortcuts):**
+
+```
+SESSION-START → RULE-ZERO → IMPLEMENT → VERIFY → ARTIFACT → CLOSE-DEBT
+                                                              │
+                                                              ▼
+                                                         SESSION-START (next session)
+```
+
+**Graph invariants (enforced by graph_assert.py):**
+
+- I1: No phase runs before its dependencies are COMPLETE
+- I2: No debt item CLOSED without commit_ref + artifact_ref
+- I3: No enforcement path marked "verified-on-hardware" without real hardware artifact
+- I4: No session close without trace.md status block update
+- I5: No code changes before RULE-ZERO is complete
+- I6: Orchestrator must know about ALL 17 phases (currently violated — only 0-7)
+- I7: Every COMPLETE phase has non-empty artifact reference (currently violated — all empty)
+
+**Rule Zero (read before you code):**
+
+Before writing a single line of code for any work item:
+1. Read the relevant skill file(s) in `.devin/skills/`
+2. Read the source code that will be changed
+3. Read any ADRs in `docs/adr/` related to the work
+4. Log your understanding to `.devin/graph/trace.md`
+5. Only then open any source file for editing
+
+Code written before Rule Zero is complete will be wrong in ways that are hard
+to find later. This is not optional.
+
+**Run artifacts (the only acceptable proof of completion):**
+
+A passing test is NOT a close. A description of what code does is NOT a close.
+A printed log from actual execution IS a close. "No setup detected" with
+condition values printed IS an artifact. A timeout with no output is NOT.
+
+**Session-end status block (mandatory at session close):**
+
+Every session must end by appending to `.devin/graph/trace.md`:
+- Fog cleared this session (with source citations)
+- Fog remaining (genuinely not in source, with files checked listed)
+- Debt items closed (commit refs + artifacts)
+- Debt items still open
+- Blockers named and status
+- Next session opening — one sentence, specific, no ambiguity
 
 ## Environment
 

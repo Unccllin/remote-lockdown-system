@@ -1,0 +1,4 @@
+commit: 6e96cca
+artifact: RBAC with 3 roles (viewer, operator, super-admin); admins.js route; 007_rbac.sql migration (Postgres + SQLite); AdminsPage.jsx; permission matrix enforced in middleware; dashboard UI role gating
+date: 2026-08-04
+tests: admins.routes.test.js pass; RBAC permission matrix tests pass

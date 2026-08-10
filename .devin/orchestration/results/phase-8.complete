@@ -1,0 +1,4 @@
+commit: c8d8f3e
+artifact: Dependency installation verified; SAST via CodeQL workflow; lint workflow (eslint + ruff); pip-audit --strict; npm audit vulnerabilities fixed; agent ruff lint 108 errors → 0
+date: 2026-08-04
+tests: eslint clean (server + dashboard), ruff clean + formatted (agent), pip-audit passes

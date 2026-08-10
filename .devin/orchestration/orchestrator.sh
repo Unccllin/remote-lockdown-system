@@ -18,10 +18,12 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PHASES_DIR="$SCRIPT_DIR/phases"
 TASK_QUEUE_DIR="$SCRIPT_DIR/task-queue"
 RESULTS_DIR="$SCRIPT_DIR/results"
+GRAPH_DIR="$PROJECT_ROOT/.devin/graph"
+TRACE_FILE="$GRAPH_DIR/trace.md"
 
 mkdir -p "$TASK_QUEUE_DIR" "$RESULTS_DIR"
 
-# Phase dependency graph
+# Phase dependency graph (all 17 phases — synced with .devin/graph/GRAPH-SPEC.yaml)
 declare -A PHASE_DEPS=(
   [0]=""
   [1]=""
@@ -31,9 +33,18 @@ declare -A PHASE_DEPS=(
   [5]="4"
   [6]="3"
   [7]="0 1 2 3 4 5 6"
+  [8]="4"
+  [9]="7"
+  [10]="7"
+  [11]="7"
+  [12]="11"
+  [13]="6"
+  [14]="11"
+  [15]="13"
+  [16]="3"
 )
 
-# Phase names
+# Phase names (all 17 phases — synced with .devin/graph/GRAPH-SPEC.yaml)
 declare -A PHASE_NAMES=(
   [0]="build-foundation"
   [1]="secrets-config"
@@ -43,6 +54,15 @@ declare -A PHASE_NAMES=(
   [5]="signing-autoupdate"
   [6]="monitoring"
   [7]="e2e-testing"
+  [8]="deps-sast"
+  [9]="agent-e2e"
+  [10]="dashboard-e2e"
+  [11]="postgres"
+  [12]="docker"
+  [13]="notifications-metrics"
+  [14]="backup-restore"
+  [15]="load-testing"
+  [16]="rbac"
 )
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -62,6 +82,84 @@ deps_met() {
     fi
   done
   return 0
+}
+
+# ─── Graph enforcement (Refactors 3, 4, 5) ──────────────────────────────────
+# These functions wire the node graph into the orchestrator's phase transitions.
+# See docs/adr/GRAPH-SPEC.md and docs/adr/REFACTOR-LOG.md for details.
+
+# Refactor 3: Assert phase deps via graph_assert.py (Python-level check)
+# This is a SECOND check in addition to deps_met() — it validates against
+# the formal graph spec, not just .complete file existence.
+graph_check_phase() {
+  local phase=$1
+  local phase_id="P$phase"
+  if [[ ! -f "$GRAPH_DIR/graph_assert.py" ]]; then
+    phase_log "$phase" "WARNING: graph_assert.py not found — skipping graph check"
+    return 0
+  fi
+  if ! python3 "$GRAPH_DIR/graph_assert.py" --assert-phase-deps "$phase_id" >/dev/null 2>&1; then
+    local output
+    output=$(python3 "$GRAPH_DIR/graph_assert.py" --assert-phase-deps "$phase_id" 2>&1)
+    fail "Graph invariant violation for phase $phase_id:"
+    echo "    $output" >&2
+    return 1
+  fi
+  phase_log "$phase" "Graph check passed: $phase_id dependencies met (I1)"
+}
+
+# Refactor 4: RULE-ZERO gate — check that trace.md has a RULE-ZERO entry
+# before allowing code execution. The trace is session-scoped: a RULE-ZERO
+# entry in the current session covers all phases worked in that session.
+# This enforces graph invariant I5 (no code before Rule Zero).
+rule_zero_check() {
+  local phase=$1
+  local phase_id="P$phase"
+
+  if [[ ! -f "$TRACE_FILE" ]]; then
+    fail "RULE-ZERO not completed: trace.md not found at $TRACE_FILE"
+    echo "    Read the skill file for phase $phase, then log understanding to trace.md" >&2
+    return 1
+  fi
+
+  # Check for ANY RULE-ZERO entry in the trace (session-scoped, not phase-scoped)
+  if ! grep -q "RULE-ZERO" "$TRACE_FILE" 2>/dev/null; then
+    fail "RULE-ZERO not completed for phase $phase_id"
+    echo "    Read .devin/skills/phase-$phase-*/SKILL.md and source code," >&2
+    echo "    then log understanding to $TRACE_FILE before running this phase." >&2
+    echo "    Format: '### RULE-ZERO — Understanding logged before code changes'" >&2
+    return 1
+  fi
+  phase_log "$phase" "RULE-ZERO check passed (I5): understanding logged to trace.md"
+}
+
+# Refactor 5: Write a session-end status block to trace.md
+# This enforces graph invariant I4 (no session close without trace update).
+write_session_end() {
+  local status=$1  # "SUCCESS" or "FAILURE"
+  local phases_run=$2
+  local timestamp
+  timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  if [[ ! -f "$TRACE_FILE" ]]; then
+    return 0  # No trace file — don't fail
+  fi
+
+  cat >> "$TRACE_FILE" << EOF
+
+## Orchestrator session-end — $timestamp
+
+**Status**: $status
+**Phases run**: $phases_run
+**Graph invariants**: $(python3 "$GRAPH_DIR/graph_assert.py" 2>&1 | head -3 | tail -1)
+
+**Next session opens with**:
+Run \`python3 .devin/graph/graph_assert.py\` to verify all invariants pass,
+then check \`docs/adr/DEBT-LEDGER.md\` for open debt items.
+
+---
+EOF
+  log "Session-end block written to trace.md (I4)"
 }
 
 # Run phase-specific tests
@@ -127,9 +225,19 @@ run_phase() {
   echo "  PHASE $phase: $name"
   echo "════════════════════════════════════════════════════════════════"
 
-  # Check dependencies
+  # Check dependencies (bash-level)
   if ! deps_met "$phase"; then
     fail "Dependencies not met for phase $phase. Required: ${PHASE_DEPS[$phase]}"
+    return 1
+  fi
+
+  # Graph enforcement: assert phase deps via graph_assert.py (Refactor 3, I1)
+  if ! graph_check_phase "$phase"; then
+    return 1
+  fi
+
+  # Graph enforcement: RULE-ZERO gate (Refactor 4, I5)
+  if ! rule_zero_check "$phase"; then
     return 1
   fi
 
@@ -176,7 +284,7 @@ run_phase() {
 show_status() {
   echo "Phase Status:"
   echo "──────────────────────────────────────────────"
-  for phase in 0 1 2 3 4 5 6 7; do
+  for phase in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     local name="${PHASE_NAMES[$phase]}"
     local status="PENDING"
     if [[ -f "$RESULTS_DIR/phase-$phase.complete" ]]; then
@@ -191,8 +299,8 @@ show_status() {
 # Run all phases in dependency order
 run_all() {
   # Phases 0-2 can run in parallel (no file conflicts)
-  # For sequential execution, run in topological order
-  local order=(0 1 2 3 4 5 6 7)
+  # For sequential execution, run in topological order (all 17 phases)
+  local order=(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)
   for phase in "${order[@]}"; do
     if [[ -f "$RESULTS_DIR/phase-$phase.complete" ]]; then
       ok "Phase $phase already complete, skipping"
@@ -206,18 +314,27 @@ run_all() {
   echo ""
   ok "ALL PHASES COMPLETE"
   show_status
+  write_session_end "SUCCESS" "all"
 }
 
 # ─── Main ───────────────────────────────────────────────────────────────────
 
+# Trap failures and write session-end trace (Refactor 5, I4)
+trap 'write_session_end "FAILURE" "halted"' ERR
+
 case "${1:-}" in
   all)     run_all ;;
   status)  show_status ;;
+  graph-check)
+    # Run the full graph invariant sweep
+    python3 "$GRAPH_DIR/graph_assert.py"
+    ;;
   test)
     [[ -z "${2:-}" ]] && { echo "Usage: $0 test <phase-number>"; exit 1; }
     source "$PHASES_DIR/phase-$2.conf" 2>/dev/null || { fail "No config for phase $2"; exit 1; }
     run_phase_tests "$2"
     ;;
-  [0-7])   run_phase "$1" ;;
-  *)       echo "Usage: $0 {all|status|test <n>|<phase-number>}"; exit 1 ;;
+  [0-9])     run_phase "$1" ;;
+  1[0-6])    run_phase "$1" ;;
+  *)       echo "Usage: $0 {all|status|graph-check|test <n>|<phase-number>}"; exit 1 ;;
 esac

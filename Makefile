@@ -40,6 +40,7 @@ help:
 	@echo "  make check-artifacts      verify build outputs (strict)"
 	@echo "  make check-structure      check dist dirs exist (non-fatal)"
 	@echo "  make verify-env           verify all environment items (agent, NSIS, Docker, signing, etc.)"
+	@echo "  make graph-check          run graph invariant sweep (I1-I7)"
 	@echo "  make clean                remove all dist/ directories"
 
 # ---------------------------------------------------------------------------
@@ -109,6 +110,17 @@ check-structure:
 
 verify-env:
 	@scripts/verify-environment.sh
+
+# ---------------------------------------------------------------------------
+# Graph invariant sweep — checks all 7 graph invariants (I1-I7)
+# Run before starting work to verify the project is in a consistent state.
+# See .devin/graph/GRAPH-SPEC.yaml for the full spec.
+# ---------------------------------------------------------------------------
+
+.PHONY: graph-check
+
+graph-check:
+	@python3 .devin/graph/graph_assert.py
 
 # ---------------------------------------------------------------------------
 # Clean — remove all build outputs.

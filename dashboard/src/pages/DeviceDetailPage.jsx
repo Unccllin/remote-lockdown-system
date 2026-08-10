@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ShieldAlert, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate, UserX } from 'lucide-react';
+import { ArrowLeft, ShieldAlert, ShieldCheck, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate, UserX, AlertTriangle } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
@@ -15,6 +15,34 @@ const STATUS_BADGE = {
   tracking: 'badge-tracking',
   inactive: 'badge-inactive',
 };
+
+/**
+ * Parse an audit log detail field.
+ * Postgres returns JSONB as a parsed object; SQLite returns TEXT as a string.
+ * Returns null if the field is absent or unparseable.
+ */
+function parseAuditDetail(detail) {
+  if (!detail) return null;
+  if (typeof detail === 'object') return detail;
+  if (typeof detail === 'string') {
+    try { return JSON.parse(detail); } catch { return null; }
+  }
+  return null;
+}
+
+/**
+ * Find the most recent lockdown-confirmed audit entry and return its parsed
+ * detail. Used to surface lockdown-effectiveness status to the operator.
+ */
+function getLatestLockdownDetail(audit) {
+  if (!Array.isArray(audit)) return null;
+  for (const entry of audit) {
+    if (entry.action === 'agent_lockdown_confirmed') {
+      return parseAuditDetail(entry.detail);
+    }
+  }
+  return null;
+}
 
 export default function DeviceDetailPage() {
   const { id } = useParams();
@@ -137,6 +165,15 @@ export default function DeviceDetailPage() {
   const isOperator = currentUser?.isOperator;
   const latestLocation = locations[0];
 
+  // Phase 17: Lockdown-effectiveness analysis from the most recent lockdown
+  // confirmation. This surfaces the dangerous case where the device shows
+  // "locked" but boot lockdown silently no-op'd (critical_applied=0).
+  const lockdownDetail = getLatestLockdownDetail(audit);
+  const isLockedOrStolen = device.status === 'locked' || device.status === 'stolen';
+  const lockdownEffective = lockdownDetail?.lockdown_effective;
+  const bootLockDetail = lockdownDetail?.boot_lock_detail;
+  const showLockdownPanel = isLockedOrStolen && lockdownDetail && lockdownEffective !== null && lockdownEffective !== undefined;
+
   return (
     <div>
       {modal === 'flag' && (
@@ -216,6 +253,102 @@ export default function DeviceDetailPage() {
           {device.status}
         </span>
       </div>
+
+      {/* Phase 17: Lockdown-effectiveness panel.
+          Surfaces the dangerous case where the device shows "locked" but
+          boot lockdown silently no-op'd (critical_applied=0). Without this
+          panel, the operator has no way to distinguish "fully locked +
+          BIOS locked + BCD locked" from "encrypted-only, boots from USB". */}
+      {showLockdownPanel && (
+        <div className={`card mb-6 border-l-4 ${lockdownEffective ? 'border-l-green-500' : 'border-l-red-500'}`}>
+          <div className="flex items-center gap-2 mb-3">
+            {lockdownEffective ? (
+              <ShieldCheck size={16} className="text-green-400" />
+            ) : (
+              <AlertTriangle size={16} className="text-red-400" />
+            )}
+            <h2 className="font-semibold text-slate-200 text-sm">
+              Lockdown Effectiveness
+            </h2>
+            <span className={`text-xs font-medium ml-auto ${lockdownEffective ? 'text-green-400' : 'text-red-400'}`}>
+              {lockdownEffective ? 'Boot lockdown applied' : 'BOOT LOCKDOWN INEFFECTIVE'}
+            </span>
+          </div>
+
+          {!lockdownEffective && (
+            <p className="text-xs text-red-300 mb-3 leading-relaxed">
+              The device is encrypted, but <strong>zero critical boot-lockdown
+              settings</strong> were applied. The machine can likely boot from
+              USB/network and bypass the lock screen. The encryption key is the
+              only remaining barrier. Manual BIOS lockdown may be required.
+            </p>
+          )}
+
+          {bootLockDetail && (
+            <div className="grid grid-cols-2 gap-4">
+              {/* BCD layer */}
+              <div>
+                <p className="text-xs text-slate-400 mb-1">BCD Lockdown</p>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Critical applied</span>
+                    <span className={`font-mono ${bootLockDetail.bcd?.critical_applied > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {bootLockDetail.bcd?.critical_applied ?? '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Best-effort applied</span>
+                    <span className="font-mono text-slate-300">{bootLockDetail.bcd?.best_effort_applied ?? '—'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Best-effort failed</span>
+                    <span className="font-mono text-slate-300">{bootLockDetail.bcd?.best_effort_failed ?? '—'}</span>
+                  </div>
+                  {bootLockDetail.bcd?.rolled_back && (
+                    <div className="text-red-400 text-xs pt-1">Rolled back (critical failure)</div>
+                  )}
+                </div>
+              </div>
+
+              {/* HP UEFI layer */}
+              <div>
+                <p className="text-xs text-slate-400 mb-1">HP UEFI / BIOS</p>
+                <div className="space-y-1 text-xs">
+                  {bootLockDetail.hp_uefi?.not_hp ? (
+                    <div className="text-slate-500 text-xs">Not an HP machine — skipped</div>
+                  ) : (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Critical applied</span>
+                        <span className={`font-mono ${bootLockDetail.hp_uefi?.critical_applied > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {bootLockDetail.hp_uefi?.critical_applied ?? '—'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Best-effort applied</span>
+                        <span className="font-mono text-slate-300">{bootLockDetail.hp_uefi?.best_effort_applied ?? '—'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Best-effort failed</span>
+                        <span className="font-mono text-slate-300">{bootLockDetail.hp_uefi?.best_effort_failed ?? '—'}</span>
+                      </div>
+                      {bootLockDetail.hp_uefi?.rolled_back && (
+                        <div className="text-red-400 text-xs pt-1">Rolled back (critical failure)</div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-3 pt-3 border-t border-slate-800/50 text-xs text-slate-500">
+            Boot lock status: <span className="font-mono text-slate-400">{lockdownDetail.boot_lock_status || 'full'}</span>
+            {' · '}
+            Total critical: <span className={`font-mono ${lockdownEffective ? 'text-green-400' : 'text-red-400'}`}>{bootLockDetail?.critical_applied_total ?? 0}</span>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="card">

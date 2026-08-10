@@ -76,3 +76,28 @@ All server tests use SQLite (via sqlitePool mock or sqlitePool directly). The pr
 ## File Boundaries
 - CREATE: `server/tests/postgres-compat.test.js`
 - DO NOT EDIT: existing test files, source code, migration files
+
+## Graph Integration
+
+**Phase node**: `P11` in `.devin/graph/GRAPH-SPEC.yaml`
+
+This phase is part of the node graph — the center and heart of the project.
+Before working on this phase, an agent MUST:
+
+1. Read `.devin/graph/GRAPH-SPEC.yaml` — locate the `P11` node
+2. Read `.devin/graph/trace.md` — check last session's context
+3. Read `docs/adr/DEBT-LEDGER.md` — check for open debt items blocking this phase
+4. Complete RULE-ZERO (read this skill file + source code before coding)
+5. At session end, append a status block to `trace.md`
+
+**Verification nodes gating this phase**: V-SERVER
+
+**Enforcement paths touched by this phase**: —
+
+**Debt items related to this phase**: —
+
+**Graph invariants that apply**:
+- I1: Phase dependencies must be COMPLETE before this phase runs
+- I5: RULE-ZERO must be complete before any code changes
+- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref
+

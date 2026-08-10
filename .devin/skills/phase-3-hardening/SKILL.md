@@ -112,3 +112,28 @@ Test cases:
 - EDIT (targeted fixes only): `server/src/routes/agent.js`, `server/src/routes/devices.js`, `server/src/middleware/hmacAuth.js`, `agent/agent.py`
 - DO NOT REWRITE: any existing route logic, crypto implementation, or auth flow
 - DO NOT EDIT: `server/src/db/fieldCrypto.js`, `server/src/db/migrations/`, `agent/hp_uefi_lockdown.py`, `agent/bcd_lockdown.py`
+
+## Graph Integration
+
+**Phase node**: `P3` in `.devin/graph/GRAPH-SPEC.yaml`
+
+This phase is part of the node graph — the center and heart of the project.
+Before working on this phase, an agent MUST:
+
+1. Read `.devin/graph/GRAPH-SPEC.yaml` — locate the `P3` node
+2. Read `.devin/graph/trace.md` — check last session's context
+3. Read `docs/adr/DEBT-LEDGER.md` — check for open debt items blocking this phase
+4. Complete RULE-ZERO (read this skill file + source code before coding)
+5. At session end, append a status block to `trace.md`
+
+**Verification nodes gating this phase**: V-SERVER,V-AGENT,V-LINT-SERVER,V-LINT-AGENT
+
+**Enforcement paths touched by this phase**: E-ENCRYPT,E-DECRYPT,E-LOCK-SCREEN,E-GUARDIAN,E-BCD,E-HP-UEFI,E-ACK,E-RECOVERY,E-TRACK,E-DEADMAN
+
+**Debt items related to this phase**: D-007,D-008,D-009,D-010,D-011
+
+**Graph invariants that apply**:
+- I1: Phase dependencies must be COMPLETE before this phase runs
+- I5: RULE-ZERO must be complete before any code changes
+- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref
+

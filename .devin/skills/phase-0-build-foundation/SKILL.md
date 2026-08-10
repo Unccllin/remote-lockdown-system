@@ -82,3 +82,28 @@ The remote-lockdown-system has three buildable components:
 - CREATE: `scripts/build-all.sh`, `scripts/check-artifacts.sh`, `Makefile`
 - DO NOT EDIT: `agent/build.sh`, `agent/build.ps1`, `dashboard/package.json`, `electron/package.json`
 - DO NOT EDIT: any source files in `server/src/`, `dashboard/src/`, `agent/*.py`
+
+## Graph Integration
+
+**Phase node**: `P0` in `.devin/graph/GRAPH-SPEC.yaml`
+
+This phase is part of the node graph — the center and heart of the project.
+Before working on this phase, an agent MUST:
+
+1. Read `.devin/graph/GRAPH-SPEC.yaml` — locate the `P0` node
+2. Read `.devin/graph/trace.md` — check last session's context
+3. Read `docs/adr/DEBT-LEDGER.md` — check for open debt items blocking this phase
+4. Complete RULE-ZERO (read this skill file + source code before coding)
+5. At session end, append a status block to `trace.md`
+
+**Verification nodes gating this phase**: V-BUILD-DASHBOARD,V-SYNTAX-SWEEP,V-SHELL-SYNTAX
+
+**Enforcement paths touched by this phase**: —
+
+**Debt items related to this phase**: —
+
+**Graph invariants that apply**:
+- I1: Phase dependencies must be COMPLETE before this phase runs
+- I5: RULE-ZERO must be complete before any code changes
+- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref
+

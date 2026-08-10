@@ -1,0 +1,4 @@
+commit: a50fcf0
+artifact: Notifications (email/webhook/Slack); metrics endpoint; alert scheduler; retention scheduler; structured pino logging; graceful shutdown
+date: 2026-08-04
+tests: notifications.test.js, metrics.test.js pass; retention scheduler tests pass

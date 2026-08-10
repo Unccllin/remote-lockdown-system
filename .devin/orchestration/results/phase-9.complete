@@ -1,0 +1,4 @@
+commit: a50fcf0
+artifact: Agent integration E2E tests (agent-helpers.js, agent-integration.test.js); scripts/run-e2e.sh updated with agent-integration flag; agent checkin/ACK/location E2E flows
+date: 2026-08-04
+tests: agent-integration.test.js syntax valid; run-e2e.sh includes agent-integration

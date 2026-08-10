@@ -1,0 +1,4 @@
+commit: 9a3104c
+artifact: k6 load tests (k6-baseline.js, k6-lockdown-spike.js, k6-mixed.js); scripts/run-load-test.sh; docs/LOAD_TESTING.md; rate limit config + k6 v2 summary fixes
+date: 2026-08-04
+tests: k6 load test scripts syntax valid; run-load-test.sh passes

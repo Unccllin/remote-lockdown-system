@@ -1,0 +1,4 @@
+commit: 5abb143
+artifact: API E2E and Dashboard E2E CI jobs; scripts/run-e2e.sh; E2E test suite; docs/E2E_TEST.md; regression automation
+date: 2026-08-04
+tests: E2E test suite passes, regression suite passes

@@ -1,0 +1,4 @@
+commit: 34de5e7
+artifact: Dashboard Playwright E2E (auth.spec.js, devices.spec.js); playwright.config.js; e2e/fixtures.js; express resolution + SQLite pool mode fixes
+date: 2026-08-04
+tests: Playwright config valid, E2E specs syntax checked

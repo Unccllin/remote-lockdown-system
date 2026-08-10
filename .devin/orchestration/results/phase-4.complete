@@ -1,0 +1,4 @@
+commit: f645ac9
+artifact: GitHub Actions workflows for testing + release; release.yml hardened with audit, lint, ruff, pip-audit, E2E gates; dependabot.yml configured; actionlint validation passes
+date: 2026-08-04
+tests: actionlint validation, workflow syntax checks pass

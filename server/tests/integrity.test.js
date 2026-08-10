@@ -346,6 +346,132 @@ describe('POST /api/agent/command-ack — idempotency (A4)', () => {
     const detail = auditCall[1][2];
     expect(detail).toMatchObject({ command_id: 'cmd-1', boot_lock_status: 'partial' });
   });
+
+  // Phase 17: boot_lock_detail + lockdown_effective tests
+
+  test('stores boot_lock_detail and lockdown_effective=false when critical_applied_total=0', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-1', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-1',
+        result_status: 'executed',
+        key_material: 'fernet-key==',
+        boot_lock_status: 'partial',
+        boot_lock_detail: {
+          boot_lock_attempted: true,
+          bcd: { critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+          hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+          critical_applied_total: 0,
+          best_effort_applied_total: 0,
+          best_effort_failed_total: 0,
+        },
+      });
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1].includes('agent_lockdown_confirmed')
+    );
+    expect(auditCall).toBeDefined();
+    const detail = auditCall[1][2];
+    expect(detail.boot_lock_detail).toBeDefined();
+    expect(detail.boot_lock_detail.critical_applied_total).toBe(0);
+    expect(detail.lockdown_effective).toBe(false);
+  });
+
+  test('stores lockdown_effective=true when critical_applied_total > 0', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-1', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-1',
+        result_status: 'executed',
+        key_material: 'fernet-key==',
+        boot_lock_status: null, // full success
+        boot_lock_detail: {
+          boot_lock_attempted: true,
+          bcd: { critical_applied: 3, best_effort_applied: 2, best_effort_failed: 0 },
+          hp_uefi: { not_hp: false, critical_applied: 5, best_effort_applied: 1, best_effort_failed: 0 },
+          critical_applied_total: 8,
+          best_effort_applied_total: 3,
+          best_effort_failed_total: 0,
+        },
+      });
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1].includes('agent_lockdown_confirmed')
+    );
+    expect(auditCall).toBeDefined();
+    const detail = auditCall[1][2];
+    expect(detail.lockdown_effective).toBe(true);
+    expect(detail.boot_lock_detail.critical_applied_total).toBe(8);
+  });
+
+  test('lockdown_effective is null when boot_lock_detail is absent', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-1', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-1',
+        result_status: 'executed',
+        key_material: 'fernet-key==',
+        // No boot_lock_status, no boot_lock_detail — boot lock disabled
+      });
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1].includes('agent_lockdown_confirmed')
+    );
+    expect(auditCall).toBeDefined();
+    const detail = auditCall[1][2];
+    expect(detail.lockdown_effective).toBeNull();
+    expect(detail.boot_lock_detail).toBeUndefined();
+  });
+
+  test('lockdown_effective is null for non-lockdown commands even with boot_lock_detail', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    const cmd = { id: 'cmd-1', command_type: 'track' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-1',
+        result_status: 'executed',
+        boot_lock_detail: { boot_lock_attempted: true, critical_applied_total: 5 },
+      });
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1].includes('agent_track_confirmed')
+    );
+    expect(auditCall).toBeDefined();
+    const detail = auditCall[1][2];
+    // Non-lockdown command — lockdown_effective should be null
+    expect(detail.lockdown_effective).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

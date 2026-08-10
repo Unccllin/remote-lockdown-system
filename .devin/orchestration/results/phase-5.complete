@@ -1,0 +1,4 @@
+commit: b94b497
+artifact: Code signing scripts (setup-signing.sh, verify-signing.sh); auto-update manifest verification; electron-builder config with signing; NSIS installer for Windows
+date: 2026-08-04
+tests: Signing config validation, auto-update manifest verification pass

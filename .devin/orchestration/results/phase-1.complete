@@ -1,0 +1,4 @@
+commit: bf4bde8
+artifact: HMAC request signing + replay protection; scripts/generate-secrets.sh, generate-recovery-keys.sh, validate-env.sh created; secret format and entropy validated
+date: 2026-08-04
+tests: scripts/test-secrets.sh validates secret format, entropy, completeness

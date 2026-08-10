@@ -81,3 +81,28 @@ verify_tls = false
 - CREATE: `tests/e2e/agent-helpers.js`, `tests/e2e/agent-integration.test.js`
 - EDIT: `scripts/run-e2e.sh` (add `--agent-integration` flag)
 - DO NOT EDIT: agent/agent.py, existing E2E test files, server source
+
+## Graph Integration
+
+**Phase node**: `P9` in `.devin/graph/GRAPH-SPEC.yaml`
+
+This phase is part of the node graph — the center and heart of the project.
+Before working on this phase, an agent MUST:
+
+1. Read `.devin/graph/GRAPH-SPEC.yaml` — locate the `P9` node
+2. Read `.devin/graph/trace.md` — check last session's context
+3. Read `docs/adr/DEBT-LEDGER.md` — check for open debt items blocking this phase
+4. Complete RULE-ZERO (read this skill file + source code before coding)
+5. At session end, append a status block to `trace.md`
+
+**Verification nodes gating this phase**: V-SERVER,V-AGENT
+
+**Enforcement paths touched by this phase**: E-ENCRYPT,E-ACK,E-RECOVERY,E-OFFLINE-QUEUE
+
+**Debt items related to this phase**: D-003
+
+**Graph invariants that apply**:
+- I1: Phase dependencies must be COMPLETE before this phase runs
+- I5: RULE-ZERO must be complete before any code changes
+- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref
+

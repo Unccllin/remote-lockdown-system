@@ -186,6 +186,184 @@ describe('DeviceDetailPage', () => {
       expect(screen.getByText('Latest Location')).toBeInTheDocument();
     }, { timeout: 3000 });
   });
+
+  // Phase 17: Lockdown-effectiveness panel tests
+
+  it('shows BOOT LOCKDOWN INEFFECTIVE warning when lockdown_effective=false', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              boot_lock_status: 'partial',
+              lockdown_effective: false,
+              boot_lock_detail: {
+                boot_lock_attempted: true,
+                bcd: { critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0, rolled_back: true },
+                hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+                critical_applied_total: 0,
+                best_effort_applied_total: 0,
+                best_effort_failed_total: 0,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('BOOT LOCKDOWN INEFFECTIVE')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    // Should also show the warning explanation
+    expect(screen.getByText(/zero critical boot-lockdown/i)).toBeInTheDocument();
+  });
+
+  it('shows Boot lockdown applied when lockdown_effective=true', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              boot_lock_status: null,
+              lockdown_effective: true,
+              boot_lock_detail: {
+                boot_lock_attempted: true,
+                bcd: { critical_applied: 3, best_effort_applied: 2, best_effort_failed: 0 },
+                hp_uefi: { not_hp: false, critical_applied: 5, best_effort_applied: 1, best_effort_failed: 0 },
+                critical_applied_total: 8,
+                best_effort_applied_total: 3,
+                best_effort_failed_total: 0,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('Boot lockdown applied')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    // Should NOT show the ineffective warning
+    expect(screen.queryByText(/zero critical boot-lockdown/i)).not.toBeInTheDocument();
+  });
+
+  it('does not show lockdown panel when lockdown_effective is null', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              boot_lock_status: null,
+              lockdown_effective: null,
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    // Wait for the page to load
+    await waitFor(() => {
+      expect(screen.getByText('DEV-001')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    // Should NOT show the lockdown panel
+    expect(screen.queryByText('Lockdown Effectiveness')).not.toBeInTheDocument();
+  });
+
+  it('does not show lockdown panel for active (non-locked) devices', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: baseDevice }); // status: active
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              command_id: 'cmd-1',
+              lockdown_effective: false,
+              boot_lock_detail: { boot_lock_attempted: true, critical_applied_total: 0 },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('DEV-001')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.queryByText('Lockdown Effectiveness')).not.toBeInTheDocument();
+  });
+
+  it('handles detail as JSON string (SQLite compatibility)', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            // SQLite returns detail as a JSON string, not a parsed object
+            detail: JSON.stringify({
+              command_id: 'cmd-1',
+              boot_lock_status: 'partial',
+              lockdown_effective: false,
+              boot_lock_detail: {
+                boot_lock_attempted: true,
+                bcd: { critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+                hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+                critical_applied_total: 0,
+              },
+            }),
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('BOOT LOCKDOWN INEFFECTIVE')).toBeInTheDocument();
+    }, { timeout: 3000 });
+  });
 });
 
 // ---------------------------------------------------------------------------

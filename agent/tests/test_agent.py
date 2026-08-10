@@ -249,6 +249,105 @@ class TestDoubleLockGuard:
             # A1: pending ACK file should be written BEFORE encryption
             mock_write_ack.assert_called()
 
+    def test_handle_lockdown_sends_boot_lock_detail(self, cfg, tmp_folder, tmp_sentinel):
+        """Phase 17: handle_lockdown should pass boot_lock_detail to ack_command."""
+        with (
+            patch.object(agent, "ack_command", return_value=True) as mock_ack,
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "encrypt_folder"),
+            patch.object(agent, "write_pending_ack"),
+            patch.object(agent, "write_recovery_key"),
+            patch.object(agent, "bcd_lockdown") as mock_bcd,
+            patch.object(agent, "hp_uefi_lockdown") as mock_hp,
+        ):
+            # Simulate BCD success with 2 critical applied, HP not-HP skip
+            mock_bcd.apply_bcd_lockdown.return_value = {
+                "success": True,
+                "partial": False,
+                "rolled_back": False,
+                "critical_applied": 2,
+                "best_effort_applied": 1,
+                "best_effort_failed": 0,
+            }
+            mock_hp.apply_boot_lockdown.return_value = {
+                "bios_password": None,
+                "success": True,
+                "partial": False,
+                "rolled_back": False,
+                "not_hp": True,
+                "critical_applied": 0,
+                "best_effort_applied": 0,
+                "best_effort_failed": 0,
+            }
+
+            agent.handle_lockdown(cfg, {"id": "cmd-1"})
+
+            mock_ack.assert_called_once()
+            detail = mock_ack.call_args[1].get("boot_lock_detail")
+            assert detail is not None
+            assert detail["boot_lock_attempted"] is True
+            assert detail["critical_applied_total"] == 2
+            assert detail["bcd"]["critical_applied"] == 2
+            assert detail["hp_uefi"]["not_hp"] is True
+
+    def test_handle_lockdown_boot_lock_detail_zero_critical(self, cfg, tmp_folder, tmp_sentinel):
+        """Phase 17: boot_lock_detail with critical_applied_total=0 (the dangerous case)."""
+        with (
+            patch.object(agent, "ack_command", return_value=True) as mock_ack,
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "encrypt_folder"),
+            patch.object(agent, "write_pending_ack"),
+            patch.object(agent, "write_recovery_key"),
+            patch.object(agent, "bcd_lockdown") as mock_bcd,
+            patch.object(agent, "hp_uefi_lockdown") as mock_hp,
+        ):
+            # Simulate the dangerous case: BCD failed, HP WMI not found
+            mock_bcd.apply_bcd_lockdown.return_value = {
+                "success": False,
+                "partial": False,
+                "rolled_back": True,
+                "critical_applied": 0,
+                "best_effort_applied": 0,
+                "best_effort_failed": 0,
+            }
+            mock_hp.apply_boot_lockdown.return_value = {
+                "bios_password": None,
+                "success": True,
+                "partial": False,
+                "rolled_back": False,
+                "not_hp": True,
+                "critical_applied": 0,
+                "best_effort_applied": 0,
+                "best_effort_failed": 0,
+            }
+
+            agent.handle_lockdown(cfg, {"id": "cmd-1"})
+
+            mock_ack.assert_called_once()
+            detail = mock_ack.call_args[1].get("boot_lock_detail")
+            assert detail is not None
+            assert detail["critical_applied_total"] == 0
+            assert detail["bcd"]["rolled_back"] is True
+            # boot_lock_status should be "partial" (BCD rolled_back)
+            assert mock_ack.call_args[1].get("boot_lock_status") == "partial"
+
+    def test_handle_lockdown_no_boot_lock_detail_when_disabled(self, cfg, tmp_folder, tmp_sentinel):
+        """Phase 17: boot_lock_detail should be None when boot_lock_enabled=False."""
+        cfg["boot_lock_enabled"] = False
+        with (
+            patch.object(agent, "ack_command", return_value=True) as mock_ack,
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "encrypt_folder"),
+            patch.object(agent, "write_pending_ack"),
+            patch.object(agent, "write_recovery_key"),
+        ):
+            agent.handle_lockdown(cfg, {"id": "cmd-1"})
+            mock_ack.assert_called_once()
+            assert mock_ack.call_args[1].get("boot_lock_detail") is None
+
 
 # ---------------------------------------------------------------------------
 # Deadman key recovery
@@ -746,6 +845,68 @@ class TestPendingAck:
             state = json.loads(ack_file.read_text())
             assert state["bios_password"] == "bios-pw"
             assert state["boot_lock_status"] == "partial"
+        finally:
+            if ack_file.exists():
+                ack_file.unlink()
+
+    def test_write_pending_ack_includes_boot_lock_detail(self, cfg):
+        """write_pending_ack should persist boot_lock_detail for ACK retry."""
+        ack_file = cfg["pending_ack_file"]
+        try:
+            detail = {
+                "boot_lock_attempted": True,
+                "critical_applied_total": 0,
+                "best_effort_applied_total": 1,
+                "best_effort_failed_total": 0,
+            }
+            agent.write_pending_ack(
+                ack_file,
+                "cmd-1",
+                "executed",
+                key_material="test-key==",
+                boot_lock_status="partial",
+                boot_lock_detail=detail,
+            )
+            state = json.loads(ack_file.read_text())
+            assert state["boot_lock_detail"] == detail
+            assert state["boot_lock_status"] == "partial"
+        finally:
+            if ack_file.exists():
+                ack_file.unlink()
+
+    def test_update_pending_ack_adds_boot_lock_detail(self, cfg):
+        """update_pending_ack should add boot_lock_detail to existing file."""
+        ack_file = cfg["pending_ack_file"]
+        try:
+            agent.write_pending_ack(ack_file, "cmd-1", "executed", key_material="test-key==")
+            detail = {"boot_lock_attempted": True, "critical_applied_total": 2}
+            agent.update_pending_ack(ack_file, boot_lock_status="partial", boot_lock_detail=detail)
+
+            state = json.loads(ack_file.read_text())
+            assert state["boot_lock_detail"] == detail
+            assert state["boot_lock_status"] == "partial"
+        finally:
+            if ack_file.exists():
+                ack_file.unlink()
+
+    def test_drain_pending_ack_retries_with_boot_lock_detail(self, cfg):
+        """drain_pending_ack should re-send boot_lock_detail from the saved state."""
+        ack_file = cfg["pending_ack_file"]
+        try:
+            detail = {"boot_lock_attempted": True, "critical_applied_total": 0}
+            agent.write_pending_ack(
+                ack_file,
+                "cmd-1",
+                "executed",
+                key_material="test-key==",
+                boot_lock_status="partial",
+                boot_lock_detail=detail,
+            )
+            with patch.object(agent, "ack_command", return_value=True) as mock_ack:
+                agent.drain_pending_ack(cfg)
+                mock_ack.assert_called_once()
+                assert mock_ack.call_args[1]["boot_lock_detail"] == detail
+                assert mock_ack.call_args[1]["boot_lock_status"] == "partial"
         finally:
             if ack_file.exists():
                 ack_file.unlink()

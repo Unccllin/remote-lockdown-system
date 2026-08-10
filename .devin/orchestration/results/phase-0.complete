@@ -1,0 +1,4 @@
+commit: c8b0db1
+artifact: Environment verification script (61 checks) + PyInstaller build verified; Makefile with build/test/clean targets; scripts/build-all.sh and scripts/check-artifacts.sh created
+date: 2026-08-04
+tests: verify-environment.sh 61 PASS / 0 FAIL / 1 SKIP

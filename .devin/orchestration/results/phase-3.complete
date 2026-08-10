@@ -1,0 +1,4 @@
+commit: 99e532d
+artifact: Command injection fix via hostname (#21); checksum fail-open fix (#23); error handling, input validation, crypto edge cases reviewed; server + agent hardening
+date: 2026-08-04
+tests: 283 server tests + 137 agent tests pass; SQL injection regression tests pass

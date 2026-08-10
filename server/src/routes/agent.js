@@ -235,6 +235,7 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
   const {
     hostname, command_id, result_status, key_material, bios_password,
     mac_address, hardware_uuid, boot_lock_status, command_uuid,
+    boot_lock_detail,
   } = req.body;
   if (!hostname || !command_id || !result_status) {
     return res.status(400).json({ error: 'hostname, command_id, result_status required' });
@@ -307,9 +308,36 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
       if (result_status === 'executed') {
         const cmdResult = await client.query('SELECT command_type FROM commands WHERE id = $1', [command_id]);
         const cmdType = cmdResult.rows[0]?.command_type;
+
+        // Phase 17: Compute lockdown_effective for lockdown commands.
+        // This flags the dangerous case where the agent ACKed "executed" but
+        // boot lockdown silently no-op'd (critical_applied=0 with partial status).
+        // Without this, the dashboard shows "locked" while the machine boots
+        // normally from USB — the encryption key is the only remaining barrier.
+        //
+        // Semantics:
+        //   - null: not a lockdown command, or boot lock was not attempted
+        //     (boot_lock_enabled=false in agent config) — not applicable
+        //   - true: boot lockdown was attempted AND at least one critical
+        //     setting was applied across BCD + HP UEFI layers
+        //   - false: boot lockdown was attempted BUT zero critical settings
+        //     were applied — the device is encrypted-only, not boot-locked
+        let lockdownEffective = null;
+        if (cmdType === 'lockdown' && boot_lock_detail) {
+          const attempted = boot_lock_detail.boot_lock_attempted === true;
+          const critTotal = boot_lock_detail.critical_applied_total || 0;
+          if (attempted) {
+            lockdownEffective = critTotal > 0;
+          }
+        }
+
         await client.query(
           'INSERT INTO audit_log (device_id, action, detail) VALUES ($1, $2, $3)',
-          [device.id, `agent_${cmdType}_confirmed`, { command_id, command_uuid, boot_lock_status }]
+          [device.id, `agent_${cmdType}_confirmed`, {
+            command_id, command_uuid, boot_lock_status,
+            boot_lock_detail: boot_lock_detail || undefined,
+            lockdown_effective: lockdownEffective,
+          }]
         );
 
         if (cmdType === 'lockdown') {
@@ -341,9 +369,21 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
       const cmdTypeRow = await pool.query('SELECT command_type FROM commands WHERE id = $1', [command_id]);
       const cmdType = cmdTypeRow.rows[0]?.command_type;
       if (cmdType === 'lockdown') {
+        // Phase 17: Include lockdown_effective + boot_lock_detail in the
+        // notification so notification channels (email/Slack) can flag
+        // ineffective lockdowns, not just the dashboard.
+        let lockdownEffective = null;
+        if (boot_lock_detail) {
+          const attempted = boot_lock_detail.boot_lock_attempted === true;
+          const critTotal = boot_lock_detail.critical_applied_total || 0;
+          if (attempted) {
+            lockdownEffective = critTotal > 0;
+          }
+        }
         sendNotification('agent_lockdown_confirmed', {
           deviceId: device.id, hostname: device.hostname,
           commandId: command_id, bootLockStatus: boot_lock_status,
+          lockdownEffective, bootLockDetail: boot_lock_detail || undefined,
         });
       } else if (cmdType === 'unlock') {
         sendNotification('agent_unlock_confirmed', {

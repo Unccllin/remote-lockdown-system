@@ -1,0 +1,4 @@
+commit: a50fcf0
+artifact: Backup script (scripts/backup.sh); restore script (scripts/restore.sh); docs/BACKUP.md; pg_dump + sqlite3 .backup support; encrypted backup option
+date: 2026-08-04
+tests: backup.sh + restore.sh syntax valid; backup/restore dry-run verified

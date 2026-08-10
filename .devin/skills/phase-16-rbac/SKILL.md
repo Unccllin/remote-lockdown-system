@@ -132,3 +132,28 @@ function requireRole(minRole) {
 - CREATE: `server/src/routes/admins.js`, `server/src/db/migrations/007_rbac.sql`, `server/src/db/migrations-sqlite/007_rbac.sql`, `server/tests/admins.routes.test.js`, `dashboard/src/pages/AdminsPage.jsx`, `dashboard/src/api/admins.js`
 - EDIT: `server/src/middleware/auth.js` (add requireRole), `server/src/routes/setup.js` (set super-admin), `server/src/routes/auth.js` (role in JWT), `server/src/routes/devices.js` (add role middleware), `server/src/index.js` (register admins route), `dashboard/src/App.jsx` (add route), `dashboard/src/components/DashboardLayout.jsx` (role-based nav)
 - DO NOT REWRITE: existing route logic, auth flow
+
+## Graph Integration
+
+**Phase node**: `P16` in `.devin/graph/GRAPH-SPEC.yaml`
+
+This phase is part of the node graph — the center and heart of the project.
+Before working on this phase, an agent MUST:
+
+1. Read `.devin/graph/GRAPH-SPEC.yaml` — locate the `P16` node
+2. Read `.devin/graph/trace.md` — check last session's context
+3. Read `docs/adr/DEBT-LEDGER.md` — check for open debt items blocking this phase
+4. Complete RULE-ZERO (read this skill file + source code before coding)
+5. At session end, append a status block to `trace.md`
+
+**Verification nodes gating this phase**: V-SERVER,V-DASHBOARD,V-LINT-SERVER,V-LINT-DASHBOARD
+
+**Enforcement paths touched by this phase**: —
+
+**Debt items related to this phase**: —
+
+**Graph invariants that apply**:
+- I1: Phase dependencies must be COMPLETE before this phase runs
+- I5: RULE-ZERO must be complete before any code changes
+- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref
+

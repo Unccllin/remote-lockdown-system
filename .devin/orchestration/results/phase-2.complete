@@ -1,0 +1,4 @@
+commit: bd2aa97
+artifact: Agent watchdog process with heartbeat monitoring; systemd unit (Linux), launchd plist (macOS), NSSM enhancement (Windows); platform installers syntax-verified
+date: 2026-08-04
+tests: systemd-analyze verify, plutil -lint, PowerShell syntax check

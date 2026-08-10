@@ -826,6 +826,7 @@ def ack_command(
     bios_password: str | None = None,
     boot_lock_status: str | None = None,
     command_uuid: str | None = None,
+    boot_lock_detail: dict | None = None,
 ) -> bool:
     """Send command ACK to server. Returns True on success, False on failure.
 
@@ -834,6 +835,13 @@ def ack_command(
 
     Phase 5: command_uuid is a client-generated UUID for idempotent ACKs.
     If the server receives the same UUID twice, it deduplicates.
+
+    Phase 17: boot_lock_detail carries per-layer enforcement counts
+    (critical_applied, best_effort_applied, best_effort_failed) so the
+    server can distinguish "full lockdown" from "encryption-only, boot
+    lockdown silently no-op'd". This closes the dangerous gap where
+    boot_lock_status="partial" with critical_applied=0 was reported as
+    a successful lockdown to the operator.
     """
     # Phase 5: Generate a command_uuid if not provided.
     # This ensures idempotent retries — the server won't process the same ACK twice.
@@ -854,6 +862,8 @@ def ack_command(
         payload["bios_password"] = bios_password
     if boot_lock_status:
         payload["boot_lock_status"] = boot_lock_status
+    if boot_lock_detail:
+        payload["boot_lock_detail"] = boot_lock_detail
     try:
         resp = _signed_post(
             f"{cfg['server_url']}/api/agent/command-ack",
@@ -1002,11 +1012,13 @@ def write_pending_ack(
     bios_password: str | None = None,
     boot_lock_status: str | None = None,
     command_uuid: str | None = None,
+    boot_lock_detail: dict | None = None,
 ) -> None:
     """Write the pending ACK state to disk (fsync'd).
 
     Called BEFORE encrypt_folder() so a crash doesn't lose the key.
     Phase 5: includes command_uuid for idempotent retries.
+    Phase 17: includes boot_lock_detail for enforcement-quality reporting.
     """
     state = {
         "command_id": command_id,
@@ -1021,6 +1033,8 @@ def write_pending_ack(
         state["boot_lock_status"] = boot_lock_status
     if command_uuid:
         state["command_uuid"] = command_uuid
+    if boot_lock_detail:
+        state["boot_lock_detail"] = boot_lock_detail
     file_path.write_text(json.dumps(state))
     _fsync_file(file_path)
 
@@ -1029,9 +1043,10 @@ def update_pending_ack(
     file_path: Path,
     bios_password: str | None = None,
     boot_lock_status: str | None = None,
+    boot_lock_detail: dict | None = None,
 ) -> None:
-    """Update the pending ACK file with bios_password / boot_lock_status
-    after boot lockdown completes."""
+    """Update the pending ACK file with bios_password / boot_lock_status /
+    boot_lock_detail after boot lockdown completes."""
     if not file_path.exists():
         return
     state = json.loads(file_path.read_text())
@@ -1039,6 +1054,8 @@ def update_pending_ack(
         state["bios_password"] = bios_password
     if boot_lock_status:
         state["boot_lock_status"] = boot_lock_status
+    if boot_lock_detail:
+        state["boot_lock_detail"] = boot_lock_detail
     file_path.write_text(json.dumps(state))
     _fsync_file(file_path)
 
@@ -1070,6 +1087,7 @@ def drain_pending_ack(cfg: dict) -> None:
             bios_password=state.get("bios_password"),
             boot_lock_status=state.get("boot_lock_status"),
             command_uuid=state.get("command_uuid"),
+            boot_lock_detail=state.get("boot_lock_detail"),
         )
         if ok:
             pending_ack_file.unlink()
@@ -1308,9 +1326,18 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     #     rolled back due to critical failure (device is encrypted but not
     #     boot-locked — operator may need to manually clear BIOS)
     #   - "applied": all critical settings applied (best-effort may have failed)
+    #
+    # Phase 17: boot_lock_detail carries per-layer enforcement counts so the
+    # server can detect the dangerous case where boot_lock_status="partial"
+    # but critical_applied=0 (boot lockdown silently no-op'd). Without this,
+    # the dashboard shows "locked" while the machine boots normally from USB.
     bios_password = None
     boot_lock_status = None
+    boot_lock_detail = None
     if cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available:
+        bcd_result = None
+        hp_result = None
+
         try:
             # BCD lockdown (works on any Windows machine)
             # Phase 4: returns dict with success/partial/rolled_back
@@ -1329,6 +1356,15 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         except Exception as e:
             log.error("BCD lockdown failed: %s", e)
             boot_lock_status = "partial"
+            bcd_result = {
+                "success": False,
+                "partial": False,
+                "rolled_back": False,
+                "critical_applied": 0,
+                "best_effort_applied": 0,
+                "best_effort_failed": 0,
+                "error": str(e),
+            }
 
         try:
             # UEFI lockdown (HP-specific via WMI)
@@ -1357,10 +1393,57 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
             log.error("UEFI lockdown failed: %s", e)
             if boot_lock_status is None:
                 boot_lock_status = "partial"
+            hp_result = {
+                "bios_password": None,
+                "success": False,
+                "partial": False,
+                "rolled_back": False,
+                "not_hp": False,
+                "critical_applied": 0,
+                "best_effort_applied": 0,
+                "best_effort_failed": 0,
+                "error": str(e),
+            }
 
-    # Update File A with bios_password + boot_lock_status for ACK retry
+        # Phase 17: Aggregate per-layer counts into boot_lock_detail.
+        # This lets the server distinguish "full lockdown" from
+        # "encryption-only, boot lockdown silently no-op'd".
+        bcd_crit = bcd_result.get("critical_applied", 0) if bcd_result else 0
+        bcd_be_ok = bcd_result.get("best_effort_applied", 0) if bcd_result else 0
+        bcd_be_fail = bcd_result.get("best_effort_failed", 0) if bcd_result else 0
+        hp_crit = hp_result.get("critical_applied", 0) if hp_result else 0
+        hp_be_ok = hp_result.get("best_effort_applied", 0) if hp_result else 0
+        hp_be_fail = hp_result.get("best_effort_failed", 0) if hp_result else 0
+        boot_lock_detail = {
+            "boot_lock_attempted": True,
+            "bcd": {
+                "success": bcd_result.get("success", False) if bcd_result else False,
+                "partial": bcd_result.get("partial", False) if bcd_result else False,
+                "rolled_back": bcd_result.get("rolled_back", False) if bcd_result else False,
+                "critical_applied": bcd_crit,
+                "best_effort_applied": bcd_be_ok,
+                "best_effort_failed": bcd_be_fail,
+            },
+            "hp_uefi": {
+                "not_hp": hp_result.get("not_hp", False) if hp_result else False,
+                "success": hp_result.get("success", False) if hp_result else False,
+                "partial": hp_result.get("partial", False) if hp_result else False,
+                "rolled_back": hp_result.get("rolled_back", False) if hp_result else False,
+                "critical_applied": hp_crit,
+                "best_effort_applied": hp_be_ok,
+                "best_effort_failed": hp_be_fail,
+            },
+            "critical_applied_total": bcd_crit + hp_crit,
+            "best_effort_applied_total": bcd_be_ok + hp_be_ok,
+            "best_effort_failed_total": bcd_be_fail + hp_be_fail,
+        }
+
+    # Update File A with bios_password + boot_lock_status + boot_lock_detail for ACK retry
     update_pending_ack(
-        pending_ack_file, bios_password=bios_password, boot_lock_status=boot_lock_status
+        pending_ack_file,
+        bios_password=bios_password,
+        boot_lock_status=boot_lock_status,
+        boot_lock_detail=boot_lock_detail,
     )
 
     # --- A4: ACK with return value. On success, delete File A (NOT File B). ---
@@ -1371,6 +1454,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         key_material=key_b64,
         bios_password=bios_password,
         boot_lock_status=boot_lock_status,
+        boot_lock_detail=boot_lock_detail,
     )
     if ok:
         if pending_ack_file.exists():

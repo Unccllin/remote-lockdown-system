@@ -155,3 +155,28 @@ For each step, verify:
 - EDIT: `docs/E2E_TEST.md` (add automated testing section)
 - DO NOT EDIT: existing test files, source code, or CI workflows
 - DO NOT EDIT: `server/tests/e2e.lockdown.test.js` (existing server-side E2E — leave as-is)
+
+## Graph Integration
+
+**Phase node**: `P7` in `.devin/graph/GRAPH-SPEC.yaml`
+
+This phase is part of the node graph — the center and heart of the project.
+Before working on this phase, an agent MUST:
+
+1. Read `.devin/graph/GRAPH-SPEC.yaml` — locate the `P7` node
+2. Read `.devin/graph/trace.md` — check last session's context
+3. Read `docs/adr/DEBT-LEDGER.md` — check for open debt items blocking this phase
+4. Complete RULE-ZERO (read this skill file + source code before coding)
+5. At session end, append a status block to `trace.md`
+
+**Verification nodes gating this phase**: V-SERVER,V-AGENT,V-DASHBOARD
+
+**Enforcement paths touched by this phase**: E-ENCRYPT,E-ACK,E-RECOVERY
+
+**Debt items related to this phase**: D-003
+
+**Graph invariants that apply**:
+- I1: Phase dependencies must be COMPLETE before this phase runs
+- I5: RULE-ZERO must be complete before any code changes
+- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref
+
