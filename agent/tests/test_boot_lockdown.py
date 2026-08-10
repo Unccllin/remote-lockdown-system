@@ -727,6 +727,144 @@ class TestHpUefiLockdown:
             assert "_comment" in data
             assert "_example" in data
 
+    # --- D-010: HP Sure Admin / Sure Run / Sure Start awareness ---
+
+    def test_d010_check_sure_admin_none_detected(self):
+        """D-010: _check_sure_admin returns all-False when no Sure features exist."""
+        with patch("hp_uefi_lockdown._read_setting", return_value=None):
+            result = hp_uefi_lockdown._check_sure_admin()
+        assert result["sure_admin_detected"] is False
+        assert result["sure_run_detected"] is False
+        assert result["sure_start_detected"] is False
+        assert result["any_sure_feature"] is False
+        assert result["warning"] is None
+
+    def test_d010_check_sure_admin_detected(self):
+        """D-010: _check_sure_admin detects Sure Admin enabled."""
+
+        def mock_read(name):
+            if name in ("Sure Admin", "HP Sure Admin"):
+                return "Enable"
+            return None
+
+        with patch("hp_uefi_lockdown._read_setting", side_effect=mock_read):
+            result = hp_uefi_lockdown._check_sure_admin()
+        assert result["sure_admin_detected"] is True
+        assert result["sure_run_detected"] is False
+        assert result["sure_start_detected"] is False
+        assert result["any_sure_feature"] is True
+        assert result["warning"] is not None
+        assert "Sure Admin" in result["warning"]
+
+    def test_d010_check_sure_start_detected(self):
+        """D-010: _check_sure_admin detects Sure Start enabled."""
+
+        def mock_read(name):
+            if name in ("Sure Start", "HP Sure Start"):
+                return "Enable"
+            return None
+
+        with patch("hp_uefi_lockdown._read_setting", side_effect=mock_read):
+            result = hp_uefi_lockdown._check_sure_admin()
+        assert result["sure_admin_detected"] is False
+        assert result["sure_start_detected"] is True
+        assert result["any_sure_feature"] is True
+        assert "Sure Start" in result["warning"]
+
+    def test_d010_check_sure_run_detected(self):
+        """D-010: _check_sure_admin detects Sure Run enabled."""
+
+        def mock_read(name):
+            if name in ("Sure Run", "HP Sure Run"):
+                return "Enable"
+            return None
+
+        with patch("hp_uefi_lockdown._read_setting", side_effect=mock_read):
+            result = hp_uefi_lockdown._check_sure_admin()
+        assert result["sure_run_detected"] is True
+        assert result["any_sure_feature"] is True
+        assert "Sure Run" in result["warning"]
+
+    def test_d010_check_sure_admin_disabled(self):
+        """D-010: Sure Admin setting exists but is disabled → not detected."""
+
+        def mock_read(name):
+            if name in ("Sure Admin", "HP Sure Admin"):
+                return "Disable"
+            return None
+
+        with patch("hp_uefi_lockdown._read_setting", side_effect=mock_read):
+            result = hp_uefi_lockdown._check_sure_admin()
+        assert result["sure_admin_detected"] is False
+        assert result["any_sure_feature"] is False
+        assert result["warning"] is None
+
+    def test_d010_check_all_sure_features_detected(self):
+        """D-010: All three Sure features detected simultaneously."""
+
+        def mock_read(name):
+            if name in ("Sure Admin", "HP Sure Admin"):
+                return "Enable"
+            if name in ("Sure Run", "HP Sure Run"):
+                return "Enable"
+            if name in ("Sure Start", "HP Sure Start"):
+                return "Enable"
+            return None
+
+        with patch("hp_uefi_lockdown._read_setting", side_effect=mock_read):
+            result = hp_uefi_lockdown._check_sure_admin()
+        assert result["sure_admin_detected"] is True
+        assert result["sure_run_detected"] is True
+        assert result["sure_start_detected"] is True
+        assert result["any_sure_feature"] is True
+        assert "Sure Admin" in result["warning"]
+        assert "Sure Run" in result["warning"]
+        assert "Sure Start" in result["warning"]
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=True)
+    @patch("hp_uefi_lockdown._check_sure_admin")
+    @patch("hp_uefi_lockdown._set_setting")
+    @patch("hp_uefi_lockdown._read_setting")
+    def test_d010_apply_includes_sure_admin_status(
+        self,
+        mock_read,
+        mock_set,
+        mock_sure,
+        mock_pw_set,
+        _,
+        __,
+        tmp_state_file,
+        mock_resolve_settings,
+    ):
+        """D-010: apply_boot_lockdown includes sure_admin_status in result."""
+        mock_sure.return_value = {
+            "sure_admin_detected": True,
+            "sure_run_detected": False,
+            "sure_start_detected": True,
+            "any_sure_feature": True,
+            "warning": "HP Sure Admin+Sure Start detected. BIOS changes may be reverted.",
+        }
+        mock_set.return_value = 0
+
+        def smart_read(name):
+            for sname, sval in (
+                hp_uefi_lockdown.HP_CRITICAL_SETTINGS + hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS
+            ):
+                if name == sname:
+                    return sval  # Already in lockdown state
+            return None
+
+        mock_read.side_effect = smart_read
+
+        result = hp_uefi_lockdown.apply_boot_lockdown(existing_password="testpw")
+
+        assert result["sure_admin_status"] is not None
+        assert result["sure_admin_status"]["sure_admin_detected"] is True
+        assert result["sure_admin_status"]["sure_start_detected"] is True
+        assert result["sure_admin_status"]["any_sure_feature"] is True
+
 
 # ---------------------------------------------------------------------------
 # BCD Lockdown Tests

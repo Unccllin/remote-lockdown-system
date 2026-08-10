@@ -398,6 +398,93 @@ def is_hp_machine() -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# HP Sure Admin / Sure Run / Sure Start awareness (D-010)
+# ---------------------------------------------------------------------------
+# Modern enterprise HPs (2022+) ship with HP Sure Start enabled by default.
+# Sure Start will revert unauthorized BIOS changes on the next reboot.
+# So even if SetBIOSSetting returns 0, the setting may be restored to
+# factory defaults within one boot cycle.
+#
+# HP Sure Admin is a hardware root-of-trust feature that requires BIOS
+# changes to be signed by an authorized key. If Sure Admin is enabled,
+# our unsigned SetBIOSSetting calls will be accepted by WMI but rejected
+# by the hardware on next boot.
+#
+# Close criteria for D-010: Agent detects Sure Admin and either works
+# with it or reports blocked. This code implements the "detect and report"
+# path — the agent checks for Sure Admin/Sure Run/Sure Start and includes
+# the status in the boot lockdown result dict. The operator can then
+# decide whether to proceed (knowing changes may be reverted) or to
+# disable Sure Admin in BIOS first.
+#
+# Detection is done via:
+# 1. WMI query for HP_BIOSSetting with names containing "Sure Admin",
+#    "Sure Run", or "Sure Start"
+# 2. If any of these settings exist and are enabled, the agent reports
+#    sure_admin_detected: True in the result dict
+
+
+def _check_sure_admin() -> dict:
+    """Check for HP Sure Admin / Sure Run / Sure Start features.
+
+    D-010: Returns a dict with:
+      - sure_admin_detected: bool — True if Sure Admin is enabled
+      - sure_run_detected: bool — True if Sure Run is enabled
+      - sure_start_detected: bool — True if Sure Start is enabled
+      - any_sure_feature: bool — True if ANY Sure feature is enabled
+      - warning: str | None — warning message if a Sure feature may
+        revert BIOS changes
+    """
+    result = {
+        "sure_admin_detected": False,
+        "sure_run_detected": False,
+        "sure_start_detected": False,
+        "any_sure_feature": False,
+        "warning": None,
+    }
+
+    # Check each Sure feature via WMI
+    sure_features = {
+        "sure_admin_detected": ["Sure Admin", "HP Sure Admin"],
+        "sure_run_detected": ["Sure Run", "HP Sure Run"],
+        "sure_start_detected": ["Sure Start", "HP Sure Start"],
+    }
+
+    for result_key, setting_names in sure_features.items():
+        for name in setting_names:
+            value = _read_setting(name)
+            if value is not None:
+                # Check if the feature is enabled
+                value_lower = value.lower().strip()
+                if value_lower in ("enable", "enabled", "on", "true", "1"):
+                    result[result_key] = True
+                    log.warning("D-010: %s is enabled — BIOS changes may be reverted", name)
+                break  # Found the setting, no need to check aliases
+
+    result["any_sure_feature"] = (
+        result["sure_admin_detected"]
+        or result["sure_run_detected"]
+        or result["sure_start_detected"]
+    )
+
+    if result["any_sure_feature"]:
+        features = []
+        if result["sure_admin_detected"]:
+            features.append("Sure Admin")
+        if result["sure_run_detected"]:
+            features.append("Sure Run")
+        if result["sure_start_detected"]:
+            features.append("Sure Start")
+        result["warning"] = (
+            f"HP {'+'.join(features)} detected. BIOS changes may be reverted "
+            f"on next boot. Consider disabling these features in BIOS before "
+            f"applying lockdown, or use HP Sure Admin signed commands."
+        )
+
+    return result
+
+
 def _read_setting(name: str) -> str | None:
     """Read the current value of a BIOS setting. Returns None if not found."""
     if _DRY_RUN:
@@ -624,6 +711,9 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
           - best_effort_applied: int — number of best-effort settings applied
           - best_effort_failed: int — number of best-effort settings that failed
           - not_hp: bool — True if not an HP machine (nothing done)
+          - sure_admin_status: dict | None — D-010: Sure Admin/Sure Run/Sure
+            Start detection status (sure_admin_detected, sure_run_detected,
+            sure_start_detected, any_sure_feature, warning)
     """
     result = {
         "bios_password": None,
@@ -634,6 +724,7 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
         "best_effort_applied": 0,
         "best_effort_failed": 0,
         "not_hp": False,
+        "sure_admin_status": None,  # D-010: Sure Admin/Sure Run/Sure Start
     }
 
     if not is_hp_machine():
@@ -641,6 +732,14 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
         result["not_hp"] = True
         result["success"] = True  # Not an error — just nothing to do
         return result
+
+    # D-010: Check for HP Sure Admin / Sure Run / Sure Start.
+    # If any of these are enabled, BIOS changes may be reverted on next boot.
+    # The agent proceeds but reports the status so the operator is warned.
+    sure_admin_status = _check_sure_admin()
+    result["sure_admin_status"] = sure_admin_status
+    if sure_admin_status["any_sure_feature"]:
+        log.warning("D-010: %s", sure_admin_status["warning"])
 
     # Phase 4.1: Admin check — fail-fast before any state writes
     if not _is_admin():
