@@ -584,6 +584,100 @@ class TestSessionZeroDetection:
 
 
 # ---------------------------------------------------------------------------
+# D-011: encryption_blocked_files in ACK payload tests
+# ---------------------------------------------------------------------------
+
+
+class TestEncryptionBlockedFilesAck:
+    """D-011: Tests for encryption_blocked_files flowing through to ack_command."""
+
+    def test_d011_handle_lockdown_includes_blocked_files_in_ack(
+        self, cfg, tmp_folder, tmp_sentinel
+    ):
+        """D-011: handle_lockdown passes encryption_blocked_files to ack_command."""
+        with (
+            patch.object(agent, "ack_command", return_value=True) as mock_ack,
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "encrypt_folder", return_value=["Outlook.pst", "secret.docx"]),
+            patch.object(agent, "write_pending_ack"),
+            patch.object(agent, "write_recovery_key"),
+        ):
+            agent.handle_lockdown(cfg, {"id": "cmd-1"})
+            mock_ack.assert_called_once()
+            blocked = mock_ack.call_args[1].get("encryption_blocked_files")
+            assert blocked is not None
+            assert "Outlook.pst" in blocked
+            assert "secret.docx" in blocked
+
+    def test_d011_handle_lockdown_empty_blocked_files_not_in_ack(
+        self, cfg, tmp_folder, tmp_sentinel
+    ):
+        """D-011: Empty blocked_files list should not be included in ACK payload."""
+        with (
+            patch.object(agent, "ack_command", return_value=True) as mock_ack,
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "encrypt_folder", return_value=[]),
+            patch.object(agent, "write_pending_ack"),
+            patch.object(agent, "write_recovery_key"),
+        ):
+            agent.handle_lockdown(cfg, {"id": "cmd-1"})
+            mock_ack.assert_called_once()
+            # ack_command uses `if encryption_blocked_files:` so empty list is not included
+            blocked = mock_ack.call_args[1].get("encryption_blocked_files")
+            # The param is passed as [] but ack_command doesn't put it in payload
+            assert blocked == []
+
+    def test_d011_ack_command_includes_blocked_files_in_payload(self):
+        """D-011: ack_command includes encryption_blocked_files in payload when non-empty."""
+        cfg = {
+            "hostname": "DEV-001",
+            "server_url": "http://test",
+            "agent_key": "k",
+            "verify_tls": False,
+        }
+        with (
+            patch.object(agent, "_signed_post") as mock_signed_post,
+            patch.object(agent, "get_mac_address", return_value="00:00"),
+            patch.object(agent, "get_hardware_uuid", return_value="uuid"),
+        ):
+            agent.ack_command(
+                cfg=cfg,
+                command_id="cmd-1",
+                result_status="executed",
+                key_material="k=",
+                encryption_blocked_files=["file1.txt", "file2.txt"],
+            )
+            payload = mock_signed_post.call_args[0][2]
+            assert "encryption_blocked_files" in payload
+            assert payload["encryption_blocked_files"] == ["file1.txt", "file2.txt"]
+
+    def test_d011_ack_command_excludes_empty_blocked_files_from_payload(self):
+        """D-011: ack_command does not include encryption_blocked_files when empty."""
+        cfg = {
+            "hostname": "DEV-001",
+            "server_url": "http://test",
+            "agent_key": "k",
+            "verify_tls": False,
+        }
+        with (
+            patch.object(agent, "_signed_post") as mock_signed_post,
+            patch.object(agent, "get_mac_address", return_value="00:00"),
+            patch.object(agent, "get_hardware_uuid", return_value="uuid"),
+        ):
+            agent.ack_command(
+                cfg=cfg,
+                command_id="cmd-1",
+                result_status="executed",
+                key_material="k=",
+                encryption_blocked_files=[],
+            )
+            payload = mock_signed_post.call_args[0][2]
+            assert "encryption_blocked_files" not in payload
+
+
+# ---------------------------------------------------------------------------
 # Deadman key recovery
 # ---------------------------------------------------------------------------
 

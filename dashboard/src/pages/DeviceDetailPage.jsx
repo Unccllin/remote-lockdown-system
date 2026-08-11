@@ -401,7 +401,8 @@ export default function DeviceDetailPage() {
             </h2>
           </div>
           <p className="text-xs text-orange-300/80 mb-3 leading-relaxed">
-            {sureAdminStatus.warning}
+            {sureAdminStatus.warning ||
+              'HP Sure features detected. BIOS changes may be reverted on next boot.'}
           </p>
           <div className="flex gap-3 text-xs">
             {sureAdminStatus.sure_admin_detected && (
@@ -428,7 +429,9 @@ export default function DeviceDetailPage() {
               BitLocker Active
             </h2>
             <span className="text-xs font-medium ml-auto text-blue-400">
-              {bitlockerStatus.percentage} encrypted
+              {bitlockerStatus.percentage != null
+                ? `${bitlockerStatus.percentage} encrypted`
+                : 'Encryption active'}
             </span>
           </div>
           <p className="text-xs text-blue-300/80 leading-relaxed">

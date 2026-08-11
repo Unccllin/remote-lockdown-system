@@ -1619,7 +1619,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         bios_password=bios_password,
         boot_lock_status=boot_lock_status,
         boot_lock_detail=boot_lock_detail,
-        encryption_blocked_files=blocked_files if blocked_files else None,
+        encryption_blocked_files=blocked_files if blocked_files is not None else None,
         lock_session_context=lock_session_context,
     )
     if ok:

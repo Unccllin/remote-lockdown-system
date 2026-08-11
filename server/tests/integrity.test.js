@@ -541,6 +541,164 @@ describe('POST /api/agent/command-ack — idempotency (A4)', () => {
     const detail = auditCall[1][2];
     expect(detail.lock_session_context).toBeUndefined();
   });
+
+  // D-008: bitlocker_status stored in boot_lock_detail in audit log
+  test('D-008: stores bitlocker_status in boot_lock_detail in audit log', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-d008', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-d008',
+        result_status: 'executed',
+        key_material: 'k=',
+        boot_lock_status: 'full',
+        boot_lock_detail: {
+          boot_lock_attempted: true,
+          bcd: {
+            critical_applied: 3,
+            best_effort_applied: 2,
+            best_effort_failed: 0,
+            bitlocker_status: {
+              enabled: true,
+              percentage: 100,
+              suspended: true,
+              resumed: true,
+            },
+          },
+          hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+          critical_applied_total: 3,
+        },
+      });
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1].includes('agent_lockdown_confirmed')
+    );
+    expect(auditCall).toBeDefined();
+    const detail = auditCall[1][2];
+    expect(detail.boot_lock_detail).toBeDefined();
+    expect(detail.boot_lock_detail.bcd.bitlocker_status).toBeDefined();
+    expect(detail.boot_lock_detail.bcd.bitlocker_status.enabled).toBe(true);
+    expect(detail.boot_lock_detail.bcd.bitlocker_status.percentage).toBe(100);
+  });
+
+  // D-010: sure_admin_status stored in boot_lock_detail in audit log
+  test('D-010: stores sure_admin_status in boot_lock_detail in audit log', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-d010', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-d010',
+        result_status: 'executed',
+        key_material: 'k=',
+        boot_lock_status: 'partial',
+        boot_lock_detail: {
+          boot_lock_attempted: true,
+          bcd: { critical_applied: 3, best_effort_applied: 2, best_effort_failed: 0 },
+          hp_uefi: {
+            not_hp: false,
+            critical_applied: 2,
+            best_effort_applied: 1,
+            best_effort_failed: 0,
+            sure_admin_status: {
+              any_sure_feature: true,
+              sure_admin_detected: true,
+              sure_run_detected: false,
+              sure_start_detected: true,
+              warning: 'Sure Admin and Sure Start detected. BIOS changes may be reverted.',
+            },
+          },
+          critical_applied_total: 5,
+        },
+      });
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1].includes('agent_lockdown_confirmed')
+    );
+    expect(auditCall).toBeDefined();
+    const detail = auditCall[1][2];
+    expect(detail.boot_lock_detail).toBeDefined();
+    expect(detail.boot_lock_detail.hp_uefi.sure_admin_status).toBeDefined();
+    expect(detail.boot_lock_detail.hp_uefi.sure_admin_status.any_sure_feature).toBe(true);
+    expect(detail.boot_lock_detail.hp_uefi.sure_admin_status.sure_admin_detected).toBe(true);
+    expect(detail.boot_lock_detail.hp_uefi.sure_admin_status.sure_start_detected).toBe(true);
+  });
+
+  // D-011: encryption_blocked_files stored in audit log
+  test('D-011: stores encryption_blocked_files in audit log detail', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-d011', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-d011',
+        result_status: 'executed',
+        key_material: 'k=',
+        boot_lock_status: null,
+        boot_lock_detail: {
+          boot_lock_attempted: true,
+          bcd: { critical_applied: 3, best_effort_applied: 2, best_effort_failed: 0 },
+          hp_uefi: { not_hp: true, critical_applied: 0, best_effort_applied: 0, best_effort_failed: 0 },
+          critical_applied_total: 3,
+        },
+        encryption_blocked_files: ['Outlook.pst', 'secret.docx'],
+      });
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1].includes('agent_lockdown_confirmed')
+    );
+    expect(auditCall).toBeDefined();
+    const detail = auditCall[1][2];
+    expect(detail.encryption_blocked_files).toBeDefined();
+    expect(Array.isArray(detail.encryption_blocked_files)).toBe(true);
+    expect(detail.encryption_blocked_files).toHaveLength(2);
+    expect(detail.encryption_blocked_files).toContain('Outlook.pst');
+    expect(detail.encryption_blocked_files).toContain('secret.docx');
+  });
+
+  test('D-011: audit log detail has encryption_blocked_files undefined when not provided', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-d011b', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-d011b',
+        result_status: 'executed',
+        key_material: 'k=',
+      });
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1].includes('agent_lockdown_confirmed')
+    );
+    expect(auditCall).toBeDefined();
+    const detail = auditCall[1][2];
+    expect(detail.encryption_blocked_files).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
