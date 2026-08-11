@@ -102,9 +102,9 @@ export PATH="/home/cllin/.local/node/bin:$PATH"
 npm test
 
 # Per-component
-cd server   && npm test                       # 283 Jest tests
-cd agent    && python3 -m pytest tests/ -q    # 137 pytest tests
-cd dashboard && npx vitest run                # 21 Vitest tests
+cd server   && npm test                       # 332 Jest tests
+cd agent    && python3 -m pytest tests/ -q    # 198 pytest tests
+cd dashboard && npx vitest run                # 34 Vitest tests
 
 # Lint
 cd server    && npx eslint .                  # exit 0 = clean
@@ -163,13 +163,16 @@ make build
 - Caddyfile and `Dockerfile.server` are NOT YAML — do not YAML-validate them.
 - `server/lockdown.db` is a dev artifact — never commit it (in `.gitignore`).
 
-## Diagnostic Sweep Results (2026-08-04)
+## Diagnostic Sweep Results (2026-08-04, updated 2026-08-11)
 
-All green: 283 server tests, 137 agent tests, 21 dashboard tests, eslint clean on
+All green: 332 server tests, 198 agent tests, 34 dashboard tests, eslint clean on
 server + dashboard, ruff clean + formatted on agent, vite build OK, all shell scripts
 `bash -n` OK, all YAML configs valid, all local imports resolve, git tree clean.
 `verify-environment.sh` final: **61 PASS / 0 FAIL / 1 SKIP** (the 1 skip is the
 intentional `installer-windows-execpolicy` by-design skip).
+
+Hardware test harness (D-003): `make hw-test-dry` runs the harness in dry-run mode.
+`make hw-test` runs real enforcement path tests on Windows/HP hardware.
 
 ### Bugs found and fixed during the sweep
 

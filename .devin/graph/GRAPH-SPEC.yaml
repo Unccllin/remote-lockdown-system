@@ -369,6 +369,18 @@ verification_nodes:
     expected_exit: 0
     component: C-ELECTRON
 
+  - id: V-HW-HARNESS
+    name: hardware-test-harness
+    command: "cd agent && python3 hw_test_harness.py --dry-run"
+    expected_exit: 0
+    expected_output_contains: "Summary"
+    component: C-AGENT
+    notes: >
+      D-003: Hardware-in-the-loop test harness. Dry-run mode verifies the
+      harness runs and generates an artifact. Full mode (without --dry-run)
+      executes real enforcement paths on Windows/HP hardware. On non-Windows,
+      all tests are gracefully skipped.
+
 # ---------------------------------------------------------------------------
 # ENFORCEMENT PATH NODES
 # ---------------------------------------------------------------------------
@@ -385,9 +397,9 @@ enforcement_paths:
     description: "Fernet encryption of LOCKDOWN_FOLDER"
     component: C-AGENT
     entry_function: "agent.encrypt_folder"
-    verified_by: [V-AGENT]
+    verified_by: [V-AGENT, V-HW-HARNESS]
     status: verified-in-unit-test
-    risk_notes: "File locking on Windows (open files cause PermissionError)"
+    risk_notes: "D-011 addressed: retry + blocked file reporting. Needs hardware verification."
 
   - id: E-DECRYPT
     name: file-decryption
@@ -403,36 +415,36 @@ enforcement_paths:
     description: "LockWorkStation (Windows) / dm-tool (Linux) / CGSession (macOS)"
     component: C-AGENT
     entry_function: "agent._lock_workstation"
-    verified_by: [V-AGENT]
+    verified_by: [V-AGENT, V-HW-HARNESS]
     status: verified-in-unit-test
-    risk_notes: "Session 0 isolation — service can't lock interactive desktop"
+    risk_notes: "D-007 addressed: Session 0 detection + tsdiscon fallback. Needs hardware verification."
 
   - id: E-GUARDIAN
     name: lock-guardian
     description: "Background thread re-asserting lock every 10s"
     component: C-AGENT
     entry_function: "agent.start_lock_guardian"
-    verified_by: [V-AGENT]
+    verified_by: [V-AGENT, V-HW-HARNESS]
     status: verified-in-unit-test
-    risk_notes: "Process-killable; same session isolation as E-LOCK-SCREEN"
+    risk_notes: "Process-killable; same session isolation as E-LOCK-SCREEN (D-007)"
 
   - id: E-BCD
     name: bcd-lockdown
     description: "bcdedit /set {default} to disable WinRE, boot menu, F8"
     component: C-AGENT
     entry_function: "bcd_lockdown.apply_bcd_lockdown"
-    verified_by: [V-AGENT]
+    verified_by: [V-AGENT, V-HW-HARNESS]
     status: verified-in-unit-test
-    risk_notes: "BitLocker interaction; {default} loader assumption; reagentc false success"
+    risk_notes: "D-008 addressed: BitLocker suspend/resume. Needs hardware verification."
 
   - id: E-HP-UEFI
     name: hp-uefi-lockdown
     description: "HP WMI SetBIOSSetting for USB boot, PXE, legacy, F12"
     component: C-AGENT
     entry_function: "hp_uefi_lockdown.apply_boot_lockdown"
-    verified_by: [V-AGENT]
+    verified_by: [V-AGENT, V-HW-HARNESS]
     status: verified-in-unit-test
-    risk_notes: "WMI namespace variance; setting-name mismatch; HP Sure Admin revert; false success on critical_applied=0"
+    risk_notes: "D-009 model-aware names; D-010 Sure Admin detection; needs hardware verification."
 
   - id: E-ACK
     name: command-ack

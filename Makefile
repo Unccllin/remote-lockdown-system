@@ -35,6 +35,8 @@ help:
 	@echo "  make test-server          run server tests"
 	@echo "  make test-agent           run agent tests"
 	@echo "  make test-dashboard       run dashboard tests"
+	@echo "  make hw-test              run hardware test harness (D-003)"
+	@echo "  make hw-test-dry          dry-run hardware test harness"
 	@echo ""
 	@echo "Other:"
 	@echo "  make check-artifacts      verify build outputs (strict)"
@@ -86,6 +88,17 @@ test-agent:
 
 test-dashboard:
 	@cd dashboard && npm test
+
+# Hardware test harness (D-003) — runs enforcement path tests against
+# real Windows/HP hardware. On non-Windows/non-HP, tests are skipped.
+# Use hw-test-dry to see what would run without executing real actions.
+.PHONY: hw-test hw-test-dry
+
+hw-test:
+	@cd agent && python3 hw_test_harness.py
+
+hw-test-dry:
+	@cd agent && python3 hw_test_harness.py --dry-run
 
 # ---------------------------------------------------------------------------
 # Artifact verification — wraps scripts/check-artifacts.sh
