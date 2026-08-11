@@ -64,6 +64,14 @@ BCD_LOCK_SENTINEL = Path(__file__).parent / ".bcd_locked"
 # File to save pre-lockdown BCD state for restoration on rollback/recovery
 BCD_STATE_FILE = Path(__file__).parent / ".bcd_state"
 
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write text to a file atomically (write to temp + rename)."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content)
+    tmp.replace(path)
+
+
 # Dry-run mode: when True, all bcdedit/reagentc calls are printed
 # instead of executed. No BCD changes happen.
 # Set via set_dry_run(True) or the LOCKDOWN_DRY_RUN=1 env var.
@@ -465,7 +473,7 @@ def save_bcd_state() -> dict:
         if current is not None:
             state["settings"][setting] = current
 
-    BCD_STATE_FILE.write_text(json.dumps(state, indent=2))
+    _atomic_write_text(BCD_STATE_FILE, json.dumps(state, indent=2))
     log.info("BCD state saved to %s", BCD_STATE_FILE)
     return state
 

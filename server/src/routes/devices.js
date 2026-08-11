@@ -49,9 +49,18 @@ function validateHostname(hostname) {
  */
 const COMMAND_EXPIRY_DAYS = parseInt(process.env.COMMAND_EXPIRY_DAYS || '30', 10);
 
+// Defense-in-depth: validate that COMMAND_EXPIRY_DAYS is a positive integer.
+// parseInt with radix 10 already strips non-numeric suffixes, but we add an
+// explicit check to ensure the value is safe for SQL interpolation.
+if (!Number.isInteger(COMMAND_EXPIRY_DAYS) || COMMAND_EXPIRY_DAYS <= 0) {
+  throw new Error(`COMMAND_EXPIRY_DAYS must be a positive integer, got: ${COMMAND_EXPIRY_DAYS}`);
+}
+
 /**
  * Phase 5: Build the expires_at SQL fragment for command insertion.
- * Returns "'<timestamp>'" or "NULL" for use in INSERT.
+ * Returns a SQL expression for use in INSERT.
+ * COMMAND_EXPIRY_DAYS is validated as a positive integer at module load,
+ * so interpolation is safe here.
  */
 function commandExpirySql() {
   // Use NOW() + INTERVAL so it works with both PG and SQLite (via translation)

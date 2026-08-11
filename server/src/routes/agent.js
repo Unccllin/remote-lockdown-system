@@ -107,8 +107,8 @@ async function expireStaleCommands(deviceId) {
   await pool.query(
     `UPDATE commands SET status = 'expired', executed_at = NOW()
      WHERE device_id = $1 AND status = 'pending'
-       AND created_at < NOW() - INTERVAL '${COMMAND_EXPIRY_DAYS} days'`,
-    [deviceId]
+       AND created_at < NOW() - ($2 || ' days')::interval`,
+    [deviceId, COMMAND_EXPIRY_DAYS]
   );
 }
 

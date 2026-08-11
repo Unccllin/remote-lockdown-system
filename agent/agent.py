@@ -923,18 +923,13 @@ def sign_headers(agent_key: str, body_bytes: bytes) -> dict:
 def _signed_post(url: str, cfg: dict, json_body: dict, **kwargs) -> requests.Response:
     """Wrapper around requests.post that adds HMAC-signed headers.
 
-    Falls back to plain x-agent-key header if signing fails (shouldn't happen,
-    but keeps the agent working if there's an encoding edge case).
-
-    The body is pre-serialized to bytes and sent via data= (not json=) so the
-    server sees the exact same bytes we computed the signature over.
+    If HMAC signing fails, the request fails — we never send the agent key
+    without replay protection. The body is pre-serialized to bytes and sent
+    via data= (not json=) so the server sees the exact same bytes we
+    computed the signature over.
     """
     body_bytes = json.dumps(json_body, separators=(",", ":")).encode("utf-8")
-    try:
-        headers = sign_headers(cfg["agent_key"], body_bytes)
-    except Exception as e:
-        log.warning("HMAC signing failed, falling back to plain key: %s", e)
-        headers = {"x-agent-key": cfg["agent_key"]}
+    headers = sign_headers(cfg["agent_key"], body_bytes)
     # Merge any caller-provided headers (e.g., none currently, but future-proof)
     headers.update(kwargs.pop("headers", {}))
     headers.setdefault("Content-Type", "application/json")
@@ -1167,6 +1162,18 @@ def _fsync_file(path: Path) -> None:
             os.fsync(f.fileno())
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write text to a file atomically (write to temp + rename).
+
+    Prevents corruption if the process crashes mid-write — the file is
+    either fully old or fully new, never partially written.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content)
+    _fsync_file(tmp)
+    tmp.replace(path)
+
+
 def write_pending_ack(
     file_path: Path,
     command_id: str,
@@ -1198,8 +1205,7 @@ def write_pending_ack(
         state["command_uuid"] = command_uuid
     if boot_lock_detail:
         state["boot_lock_detail"] = boot_lock_detail
-    file_path.write_text(json.dumps(state))
-    _fsync_file(file_path)
+    _atomic_write_text(file_path, json.dumps(state))
 
 
 def update_pending_ack(
@@ -1219,8 +1225,7 @@ def update_pending_ack(
         state["boot_lock_status"] = boot_lock_status
     if boot_lock_detail:
         state["boot_lock_detail"] = boot_lock_detail
-    file_path.write_text(json.dumps(state))
-    _fsync_file(file_path)
+    _atomic_write_text(file_path, json.dumps(state))
 
 
 def drain_pending_ack(cfg: dict) -> None:
@@ -1340,8 +1345,7 @@ def write_recovery_key(
             )
             state["wrapped_bios_password"] = base64.b64encode(wrapped_bios).decode()
 
-        file_path.write_text(json.dumps(state))
-        _fsync_file(file_path)
+        _atomic_write_text(file_path, json.dumps(state))
         log.info("Recovery key file written (RSA-wrapped, command=%s)", command_id)
     except Exception as e:
         log.error("Failed to write recovery key file: %s", e)
@@ -1486,7 +1490,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     lock_session_context = _detect_session_context()
 
     # Update sentinel with final payload (already created atomically above).
-    sentinel.write_text(json.dumps({"locked": True, "command_id": command["id"]}))
+    _atomic_write_text(sentinel, json.dumps({"locked": True, "command_id": command["id"]}))
     log.info("Sentinel updated: %s", sentinel)
 
     # --- Boot lockdown: lock UEFI/BIOS + BCD to prevent bypass via boot ---
@@ -1837,7 +1841,7 @@ def check_deadman(cfg: dict) -> None:
                     )
                 apply_lock_screen()
                 start_lock_guardian()
-                sentinel.write_text(json.dumps({"locked": True, "deadman": True}))
+                _atomic_write_text(sentinel, json.dumps({"locked": True, "deadman": True}))
                 # Store key locally so it can be uploaded to the server once
                 # network connectivity is restored — without this the device
                 # would be permanently unrecoverable.

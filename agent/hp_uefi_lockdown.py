@@ -326,6 +326,14 @@ ALL_LOCKDOWN_SETTINGS = HP_CRITICAL_SETTINGS + HP_BEST_EFFORT_SETTINGS
 # File to save pre-lockdown BIOS state for restoration on recovery
 BOOT_STATE_FILE = Path(__file__).parent / ".boot_state"
 
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write text to a file atomically (write to temp + rename)."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content)
+    tmp.replace(path)
+
+
 # Return code mapping for SetBIOSSetting
 SET_BIOS_RETURN_CODES = {
     0: "Success",
@@ -626,7 +634,7 @@ def save_boot_state(password_was_set: bool, settings: dict) -> None:
         "setup_password_was_set": password_was_set,
         "settings": settings,  # {setting_name: original_value}
     }
-    BOOT_STATE_FILE.write_text(json.dumps(state, indent=2))
+    _atomic_write_text(BOOT_STATE_FILE, json.dumps(state, indent=2))
     log.info("Boot state saved to %s", BOOT_STATE_FILE)
 
 

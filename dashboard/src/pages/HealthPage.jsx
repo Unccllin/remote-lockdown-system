@@ -233,7 +233,7 @@ export default function HealthPage() {
               <div key={i} className="skeleton h-12 w-full" />
             ))}
           </div>
-        ) : data && data.recentAlerts.length > 0 ? (
+        ) : data && Array.isArray(data.recentAlerts) && data.recentAlerts.length > 0 ? (
           <div className="space-y-0">
             {data.recentAlerts.map((alert, idx) => (
               <div key={alert.id || idx} className="relative pl-6 pb-4 last:pb-0">
