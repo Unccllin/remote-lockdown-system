@@ -727,6 +727,72 @@ class TestHpUefiLockdown:
             assert "_comment" in data
             assert "_example" in data
 
+    def test_d009_model_override_case_insensitive(self):
+        """D-009: Model matching should be case-insensitive."""
+        model_overrides = {
+            "hp elitebook 840 g7": {"network_boot": ["Custom PXE"]},
+        }
+        with patch("hp_uefi_lockdown._DRY_RUN", True):
+            with patch("hp_uefi_lockdown._detect_hp_model", return_value="HP EliteBook 840 G7"):
+                with patch("hp_uefi_lockdown._load_model_overrides", return_value=model_overrides):
+                    with patch("hp_uefi_lockdown._read_setting", return_value="Enable"):
+                        critical, _ = hp_uefi_lockdown._resolve_setting_names()
+        critical_names = [s[0] for s in critical]
+        assert "Custom PXE" in critical_names
+
+    def test_d009_detect_hp_model_whitespace(self):
+        """D-009: _detect_hp_model returns None for whitespace-only output."""
+        with patch("hp_uefi_lockdown._DRY_RUN", False):
+            with patch("hp_uefi_lockdown.platform.system", return_value="Windows"):
+                with patch("hp_uefi_lockdown._run_powershell", return_value="   "):
+                    model = hp_uefi_lockdown._detect_hp_model()
+        assert model is None
+
+    def test_d009_resolve_setting_names_invalid_override_type(self):
+        """D-009: Invalid override value type (not str or list) is ignored."""
+        model_overrides = {
+            "HP EliteBook 840 G7": {"network_boot": 123},  # Invalid type
+        }
+        with patch("hp_uefi_lockdown._DRY_RUN", True):
+            with patch("hp_uefi_lockdown._detect_hp_model", return_value="HP EliteBook 840 G7"):
+                with patch("hp_uefi_lockdown._load_model_overrides", return_value=model_overrides):
+                    with patch("hp_uefi_lockdown._read_setting", return_value=None):
+                        critical, _ = hp_uefi_lockdown._resolve_setting_names()
+        # Invalid override should be ignored — no settings resolved
+        assert critical == []
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=True)
+    @patch("hp_uefi_lockdown._check_sure_admin", return_value={"any_sure_feature": False})
+    def test_d009_apply_no_critical_settings_returns_failure(self, _, __, ___, tmp_state_file):
+        """D-009: apply_boot_lockdown returns success=False when no critical settings found."""
+        with patch.object(
+            hp_uefi_lockdown,
+            "_resolve_setting_names",
+            return_value=([], []),  # No settings resolved
+        ):
+            result = hp_uefi_lockdown.apply_boot_lockdown(existing_password="testpw")
+        assert result["success"] is False
+        assert result.get("no_critical_settings") is True
+        assert result["critical_applied"] == 0
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._set_setting", return_value=0)
+    @patch("hp_uefi_lockdown._read_setting", return_value=None)
+    def test_d009_remove_uses_model_aware_resolution(self, _, __, ___, tmp_state_file):
+        """D-009: remove_boot_lockdown uses _resolve_setting_names for restoration."""
+        custom_settings = [("Custom PXE", "Disable"), ("Custom USB", "Disable")]
+        with patch.object(
+            hp_uefi_lockdown,
+            "_resolve_setting_names",
+            return_value=(custom_settings, []),
+        ):
+            with patch("hp_uefi_lockdown.load_boot_state", return_value=None):
+                result = hp_uefi_lockdown.remove_boot_lockdown(bios_password="testpw")
+        assert result is True
+
     # --- D-010: HP Sure Admin / Sure Run / Sure Start awareness ---
 
     def test_d010_check_sure_admin_none_detected(self):
@@ -820,6 +886,22 @@ class TestHpUefiLockdown:
         assert "Sure Admin" in result["warning"]
         assert "Sure Run" in result["warning"]
         assert "Sure Start" in result["warning"]
+
+    def test_d010_check_sure_admin_alternative_enabled_values(self):
+        """D-010: Sure Admin detected with alternative enabled values (Yes, Active)."""
+
+        def mock_read(name):
+            if name in ("Sure Admin", "HP Sure Admin"):
+                return "Yes"
+            if name in ("Sure Run", "HP Sure Run"):
+                return "Active"
+            return None
+
+        with patch("hp_uefi_lockdown._read_setting", side_effect=mock_read):
+            result = hp_uefi_lockdown._check_sure_admin()
+        assert result["sure_admin_detected"] is True
+        assert result["sure_run_detected"] is True
+        assert result["any_sure_feature"] is True
 
     @patch("hp_uefi_lockdown._is_admin", return_value=True)
     @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)

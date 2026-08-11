@@ -216,7 +216,8 @@ def _detect_hp_model() -> str | None:
         return None
     try:
         output = _run_powershell("(Get-WmiObject -Class Win32_ComputerSystem).Model")
-        return output.strip() if output else None
+        model = output.strip() if output else ""
+        return model if model else None
     except Exception as e:
         log.debug("Failed to detect HP model: %s", e)
         return None
@@ -240,9 +241,13 @@ def _resolve_setting_names() -> tuple[list[tuple[str, str]], list[tuple[str, str
     model = _detect_hp_model()
     overrides = _load_model_overrides()
     model_overrides = {}
-    if model and model in overrides:
-        model_overrides = overrides[model]
-        log.info("Using model-specific setting names for %s", model)
+    if model:
+        # Case-insensitive lookup — WMI may return different casing than the JSON
+        for key in overrides:
+            if key.lower() == model.lower():
+                model_overrides = overrides[key]
+                log.info("Using model-specific setting names for %s (matched %s)", model, key)
+                break
 
     critical_concepts = ["network_boot", "usb_boot", "legacy_boot", "boot_menu"]
     best_effort_concepts = ["fast_boot", "f12_password"]
@@ -253,6 +258,13 @@ def _resolve_setting_names() -> tuple[list[tuple[str, str]], list[tuple[str, str
             names = model_overrides[concept]
             if isinstance(names, str):
                 names = [names]
+            elif not isinstance(names, list):
+                log.warning(
+                    "D-009: Invalid override type for concept '%s': %s — ignoring",
+                    concept,
+                    type(names).__name__,
+                )
+                return []
             return names
         return DEFAULT_SETTING_NAMES.get(concept, [])
 
@@ -266,6 +278,7 @@ def _resolve_setting_names() -> tuple[list[tuple[str, str]], list[tuple[str, str
             current = _read_setting(name)
             if current is not None:
                 critical_settings.append((name, lockdown_value))
+                log.info("D-009: Concept '%s' resolved to setting name '%s'", concept, name)
                 break  # Use the first matching name
         else:
             log.debug("Concept '%s': no matching setting found on this model", concept)
@@ -277,6 +290,7 @@ def _resolve_setting_names() -> tuple[list[tuple[str, str]], list[tuple[str, str
             current = _read_setting(name)
             if current is not None:
                 best_effort_settings.append((name, lockdown_value))
+                log.info("D-009: Concept '%s' resolved to setting name '%s'", concept, name)
                 break
         else:
             log.debug("Concept '%s': no matching setting found on this model", concept)
@@ -457,7 +471,7 @@ def _check_sure_admin() -> dict:
             if value is not None:
                 # Check if the feature is enabled
                 value_lower = value.lower().strip()
-                if value_lower in ("enable", "enabled", "on", "true", "1"):
+                if value_lower in ("enable", "enabled", "on", "true", "1", "yes", "active"):
                     result[result_key] = True
                     log.warning("D-010: %s is enabled — BIOS changes may be reverted", name)
                 break  # Found the setting, no need to check aliases
@@ -787,6 +801,12 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
             "The model may use non-standard setting names. "
             "Add an override in hp_model_overrides.json."
         )
+        result["success"] = False
+        result["critical_applied"] = 0
+        result["best_effort_applied"] = 0
+        result["best_effort_failed"] = 0
+        result["no_critical_settings"] = True
+        return result
 
     # Save current state of all settings we're about to change (for rollback)
     saved_settings = {}
@@ -880,31 +900,29 @@ def remove_boot_lockdown(bios_password: str) -> bool:
         return False
 
     state = load_boot_state()
+    # D-009: Resolve model-specific setting names so we restore the right ones
+    critical_settings, best_effort_settings = _resolve_setting_names()
+    resolved_settings = critical_settings + best_effort_settings
+
     if not state:
         log.warning("No saved boot state — restoring BIOS settings to safe defaults")
         restore_settings = {}
-        for setting_name, _ in ALL_LOCKDOWN_SETTINGS:
+        for setting_name, _ in resolved_settings:
             restore_settings[setting_name] = None  # None = set to safe default
     else:
         restore_settings = state.get("settings", {})
 
-    # Restore each setting to its original value (or safe default)
-    safe_defaults = {
-        "Network (PXE) Boot": "Enable",
-        "Network Boot": "Enable",
-        "USB Boot": "Enable",
-        "USB Storage Boot": "Enable",
-        "USB Floppy/CD Boot": "Enable",
-        "Legacy Boot Options": "Enable",
-        "Legacy Support": "Enable",
-        "Fast Boot": "Disable",
-        "Prompt for Admin password on F12 (Network Boot)": "Disable",
-        "F12 Boot Menu": "Enable",
-        "One-Time Boot Menu": "Enable",
-    }
+    # Build safe defaults from the resolved settings (inverse of lockdown values)
+    safe_defaults = {}
+    for setting_name, lockdown_value in resolved_settings:
+        # Safe default is the opposite of the lockdown value
+        if lockdown_value == "Disable":
+            safe_defaults[setting_name] = "Enable"
+        else:
+            safe_defaults[setting_name] = "Disable"
 
     restored = 0
-    for setting_name, _ in ALL_LOCKDOWN_SETTINGS:
+    for setting_name, _ in resolved_settings:
         original = restore_settings.get(setting_name)
         if original is None:
             # Use safe default
