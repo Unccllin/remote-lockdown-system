@@ -29,6 +29,16 @@ if ($existing) {
 }
 
 # ---------------------------------------------------------------------------
+# Remove the wrapper batch file
+# ---------------------------------------------------------------------------
+$wrapperPath = "C:\ProgramData\LockdownAgent\run-dry-run.bat"
+if (Test-Path $wrapperPath) {
+    Write-Step "Removing wrapper batch file: $wrapperPath"
+    Remove-Item $wrapperPath -Force
+    Write-Ok "Wrapper batch file removed."
+}
+
+# ---------------------------------------------------------------------------
 # Remove the log file
 # ---------------------------------------------------------------------------
 if (Test-Path $LogFile) {

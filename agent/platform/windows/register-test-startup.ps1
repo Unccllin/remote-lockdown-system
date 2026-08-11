@@ -79,17 +79,32 @@ if ($existing) {
 }
 
 # ---------------------------------------------------------------------------
+# Create wrapper batch file
+# ---------------------------------------------------------------------------
+# Task Scheduler doesn't directly support setting env vars for the task
+# process. The "cmd.exe /c set X=1 && python ..." approach doesn't reliably
+# propagate the env var to the Python child process. Instead, we write a
+# wrapper .bat file that sets the env var and launches Python with output
+# redirection. This is the proven working approach.
+$wrapperPath = Join-Path $LogDir "run-dry-run.bat"
+$wrapperContent = @"
+@echo off
+set LOCKDOWN_DRY_RUN=1
+cd /d "$AgentDir"
+"$PythonExe" agent.py --config "$ConfigPath" --startup > "$LogFile" 2>&1
+"@
+Set-Content -Path $wrapperPath -Value $wrapperContent -Encoding ASCII
+Write-Step "Wrapper batch file: $wrapperPath"
+
+# ---------------------------------------------------------------------------
 # Build the scheduled task
 # ---------------------------------------------------------------------------
-$action = New-ScheduledTaskAction `
-    -Execute $PythonExe `
-    -Argument "agent.py --config `"$ConfigPath`" --startup" `
-    -WorkingDirectory $AgentDir
+$action = New-ScheduledTaskAction -Execute $wrapperPath
 
 # "At log on" trigger for the current user
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 
-# Environment variables for the task
+# Task settings
 $envSettings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -104,16 +119,9 @@ $principal = New-ScheduledTaskPrincipal `
     -LogonType Interactive `
     -RunLevel Highest
 
-# Set the LOCKDOWN_DRY_RUN=1 env var via task environment variables
-# (Task Scheduler doesn't directly support env vars, so we wrap in cmd)
-$cmdAction = New-ScheduledTaskAction `
-    -Execute "cmd.exe" `
-    -Argument "/c set LOCKDOWN_DRY_RUN=1 && `"$PythonExe`" agent.py --config `"$ConfigPath`" --startup > `"$LogFile`" 2>&1" `
-    -WorkingDirectory $AgentDir
-
 Register-ScheduledTask `
     -TaskName $TaskName `
-    -Action $cmdAction `
+    -Action $action `
     -Trigger $trigger `
     -Settings $envSettings `
     -Principal $principal `
