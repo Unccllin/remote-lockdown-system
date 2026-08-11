@@ -1077,6 +1077,81 @@ DEBT-LEDGER.md with the commit ref + artifact ref.
 
 ---
 
+## Session — 2026-08-11T04:53Z (code review fixes + test gap closure)
+
+### Work done
+
+**Code review of D-007 through D-011** (subagent review):
+Conducted a thorough code review across all 5 files (agent.py,
+hp_uefi_lockdown.py, bcd_lockdown.py, server/agent.js,
+DeviceDetailPage.jsx). No critical bugs found. 4 minor edge cases
+and 4 test coverage gaps identified.
+
+**Dashboard rendering fallbacks** (commit 690abdd):
+- DeviceDetailPage.jsx: sure_admin_status.warning now has fallback
+  text when null
+- DeviceDetailPage.jsx: bitlocker_status.percentage shows
+  "Encryption active" instead of " encrypted" when null
+
+**Agent ACK payload fix** (commit 690abdd):
+- agent.py line 1622: Changed `if blocked_files` to
+  `if blocked_files is not None` so empty lists pass through
+
+**Test gap closure** (commit 690abdd):
+- 4 new server tests: D-008 bitlocker_status, D-010 sure_admin_status,
+  D-011 encryption_blocked_files (present + absent) in audit log
+- 4 new agent tests: D-011 encryption_blocked_files in ACK payload
+  (handle_lockdown with blocked files, empty list, ack_command
+  includes non-empty, ack_command excludes empty)
+
+### Verification results
+```
+Agent:     202 tests pass (was 198, +4 new), ruff clean
+Server:    336 tests pass (was 332, +4 new), eslint clean
+Dashboard:  34 tests pass, eslint clean
+Graph:     All 7 invariants pass
+```
+
+### Session-end status block
+
+**Fog cleared this session**:
+- Code review confirmed no critical bugs in D-007 through D-011
+  implementations across the full stack (agent → server → dashboard)
+- Dashboard rendering edge cases for null warning and null percentage
+  now have fallbacks (traced through DeviceDetailPage.jsx lines 404-405
+  and 431-434)
+- Server-side test coverage now includes all four new fields
+  (lock_session_context, encryption_blocked_files, bitlocker_status,
+  sure_admin_status) in audit log storage tests
+- Agent-side test coverage now includes encryption_blocked_files flow
+  from handle_lockdown through ack_command to payload
+
+**Fog remaining**:
+- All 6 remaining debt items still need real hardware to close
+- No more known software issues or test gaps
+
+**Debt items closed**: None
+
+**Debt items still open** (6, all require real hardware):
+- D-003: Hardware test harness (scaffolding done, wired, needs real hardware run)
+- D-007: Session 0 lock isolation (software done + tsdiscon fixed, needs hardware)
+- D-008: BitLocker check (software done, needs hardware)
+- D-009: HP setting names (software done, needs hardware)
+- D-010: Sure Admin detection (software done, needs hardware)
+- D-011: Open-file encryption (software done, needs hardware)
+
+**Blockers**: All 6 remaining open debt items require real hardware.
+
+**Next session opens with**:
+All software work is complete and code-reviewed. All test coverage gaps
+are closed. 572 tests pass (202 agent + 336 server + 34 dashboard).
+No known bugs or edge cases remain in the D-007 through D-011
+implementations. To close any debt item: run `make hw-test` on real
+Windows/HP hardware, verify the relevant enforcement path passes, and
+update DEBT-LEDGER.md with the commit ref + artifact ref.
+
+---
+
 ## Orchestrator session-end — 2026-08-10T17:57:49Z
 
 **Status**: FAILURE
