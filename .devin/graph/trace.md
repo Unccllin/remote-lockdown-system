@@ -1004,6 +1004,79 @@ complete pending hardware verification.
 
 ---
 
+## Session — 2026-08-11T03:10Z (tsdiscon bugfix + harness wiring + docs)
+
+### Work done
+
+**Bugfix: tsdiscon hardcoded Session 1** (commit 56c579c):
+- The tsdiscon call in _lock_workstation() was hardcoded to disconnect
+  Session 1, but the user's console session may not be Session 1 in
+  Fast User Switching or RDP reconnection scenarios.
+- _detect_session_context() now includes console_session_id in the
+  returned dict (from WTSGetActiveConsoleSessionId).
+- _lock_workstation() uses ctx["console_session_id"] for the tsdiscon
+  call instead of hardcoding "1". Falls back to no arg if None.
+- 2 new tests: test_d007_lock_workstation_tsdiscon_uses_actual_console_session_id
+  (verifies Session 3 is used when console_session_id=3) and
+  test_d007_lock_workstation_tsdiscon_no_console_id (verifies tsdiscon
+  called without session ID when console_session_id=None).
+
+**Hardware test harness wiring** (commit 2b82d52):
+- Makefile: Added hw-test and hw-test-dry targets
+- GRAPH-SPEC.yaml: Added V-HW-HARNESS verify node. Updated all
+  enforcement path risk_notes and verified_by lists to reflect
+  D-007 through D-011 enhancements.
+- AGENTS.md: Updated stale test counts (283/137/21 → 332/198/34).
+  Added hardware test harness documentation.
+
+### Verification results
+```
+Agent:     198 tests pass (was 196, +2 new), ruff clean
+Server:    332 tests pass (all 21 suites), eslint clean
+Dashboard:  34 tests pass, eslint clean
+Graph:     All 7 invariants pass
+HW harness: make hw-test-dry works (5 skipped on Linux)
+```
+
+### Session-end status block
+
+**Fog cleared this session**:
+- tsdiscon bug: The hardcoded Session 1 would have failed on any Windows
+  system where the console session wasn't Session 1 (Fast User Switching,
+  RDP reconnection). Now uses the actual console_session_id from
+  WTSGetActiveConsoleSessionId (traced through agent.py _detect_session_context
+  → WTSGetActiveConsoleSessionId → ctx["console_session_id"] →
+  _lock_workstation tsdiscon call).
+- Hardware test harness was unwired — now accessible via `make hw-test`
+  and `make hw-test-dry`, and registered as V-HW-HARNESS in the graph spec.
+- AGENTS.md test counts were stale (283/137/21 vs actual 332/198/34).
+
+**Fog remaining**:
+- All 6 remaining debt items still need real hardware to close
+- The tsdiscon fix needs real Windows hardware with a non-Session-1
+  console to fully verify (e.g., Fast User Switching scenario)
+
+**Debt items closed**: None
+
+**Debt items still open** (6, all require real hardware):
+- D-003: Hardware test harness (scaffolding done, wired into Makefile, needs real hardware run)
+- D-007: Session 0 lock isolation (software done + tsdiscon bug fixed, needs hardware verification)
+- D-008: BitLocker check (software done, needs hardware verification)
+- D-009: HP setting names (software done, needs hardware verification)
+- D-010: Sure Admin detection (software done, needs hardware verification)
+- D-011: Open-file encryption (software done, needs hardware verification)
+
+**Blockers**: All 6 remaining open debt items require real hardware.
+
+**Next session opens with**:
+All software work is complete. The tsdiscon bug is fixed, the hardware
+test harness is wired into the Makefile and graph spec, and docs are
+updated. To close any debt item: run `make hw-test` on real Windows/HP
+hardware, verify the relevant enforcement path passes, and update
+DEBT-LEDGER.md with the commit ref + artifact ref.
+
+---
+
 ## Orchestrator session-end — 2026-08-10T17:57:49Z
 
 **Status**: FAILURE
