@@ -7,6 +7,7 @@ const { hmacVerify } = require('../middleware/hmacAuth');
 const { getAgentBinariesDir } = require('../config/paths');
 const { sendNotification } = require('../notifications/notify');
 const { getDeviceByApiKeyHash, getDeviceByHostname, getDeviceByHardwareIdentity } = require('../db/deviceQueries');
+const logger = require('../logger');
 
 const router = express.Router();
 
@@ -46,7 +47,7 @@ async function agentAuth(req, res, next) {
       return next();
     }
   } catch (err) {
-    // DB error during hash lookup — fall through to legacy
+    logger.error({ err }, 'agentAuth: DB error during hash lookup, falling through to legacy');
   }
 
   // Step 2: CC5 legacy fallback — try AGENT_SHARED_KEY

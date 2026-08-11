@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, ShieldAlert, ShieldCheck, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate, UserX, AlertTriangle, FileWarning, Lock } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
@@ -55,7 +55,7 @@ export default function DeviceDetailPage() {
   const [modal, setModal] = useState(null);
   const [acting, setActing] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [devRes, auditRes, locRes] = await Promise.all([
@@ -66,14 +66,15 @@ export default function DeviceDetailPage() {
       setDevice(devRes.data);
       setAudit(auditRes.data);
       setLocations(locRes.data);
-    } catch {
+    } catch (err) {
+      console.error('DeviceDetailPage load failed:', err);
       toast.error('Failed to load device');
     } finally {
       setLoading(false);
     }
-  }
+  }, [id]);
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [load]);
 
   async function flagStolen() {
     setActing(true);

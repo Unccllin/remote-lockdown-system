@@ -26,7 +26,8 @@ export default function AuditPage() {
     try {
       const { data } = await api.get('/audit?limit=100');
       setLogs(data);
-    } catch {
+    } catch (err) {
+      console.error('AuditPage load failed:', err);
       toast.error('Failed to load audit log');
     } finally {
       setLoading(false);

@@ -82,8 +82,8 @@ export default function AdminsPage() {
       toast.success(`${admin.username} role changed to ${ROLE_LABEL[newRole]}`);
       load();
     } catch (err) {
+      console.error('AdminsPage role change failed:', err);
       toast.error(err.response?.data?.error || 'Failed to update role');
-      load();
     }
   }
 
