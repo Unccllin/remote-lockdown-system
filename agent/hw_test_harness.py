@@ -3,7 +3,7 @@
 
 This module is designed to run on REAL Windows/HP hardware to verify that
 the enforcement paths (E-ENCRYPT, E-LOCK-SCREEN, E-GUARDIAN, E-BCD,
-E-HP-UEFI) actually work against real OS/firmware APIs — not just mocks.
+E-HP-UEFI) actually work against real OS/firmware APIs - not just mocks.
 
 When run on non-Windows or non-HP hardware, it reports which paths can
 and cannot be verified, and generates a run artifact documenting the
@@ -168,7 +168,7 @@ class TestResult:
 
 
 # ---------------------------------------------------------------------------
-# Hardware tests — each tests a real enforcement path
+# Hardware tests - each tests a real enforcement path
 # ---------------------------------------------------------------------------
 
 
@@ -178,7 +178,7 @@ def test_encrypt_roundtrip(env: dict, dry_run: bool) -> TestResult:
     result.start()
 
     if dry_run:
-        result.finish("SKIP", "Dry run — would test real Fernet encryption/decryption")
+        result.finish("SKIP", "Dry run - would test real Fernet encryption/decryption")
         return result
 
     try:
@@ -257,7 +257,7 @@ def test_lock_screen(env: dict, dry_run: bool) -> TestResult:
     if dry_run:
         ctx = env.get("session_context", {})
         method = "tsdiscon" if ctx.get("is_session_zero") else "LockWorkStation"
-        result.finish("SKIP", f"Dry run — would lock screen via {method}")
+        result.finish("SKIP", f"Dry run - would lock screen via {method}")
         return result
 
     try:
@@ -287,7 +287,7 @@ def test_lock_guardian(env: dict, dry_run: bool) -> TestResult:
         return result
 
     if dry_run:
-        result.finish("SKIP", "Dry run — would test guardian thread for 15s")
+        result.finish("SKIP", "Dry run - would test guardian thread for 15s")
         return result
 
     try:
@@ -315,12 +315,12 @@ def test_bcd_lockdown(env: dict, dry_run: bool) -> TestResult:
         return result
 
     if not env.get("is_admin"):
-        result.finish("SKIP", "Not running as admin — bcdedit requires admin")
+        result.finish("SKIP", "Not running as admin - bcdedit requires admin")
         return result
 
     if dry_run:
         bl = "enabled" if env.get("bitlocker_enabled") else "disabled"
-        result.finish("SKIP", f"Dry run — would apply BCD lockdown (BitLocker={bl})")
+        result.finish("SKIP", f"Dry run - would apply BCD lockdown (BitLocker={bl})")
         return result
 
     try:
@@ -363,12 +363,12 @@ def test_hp_uefi_lockdown(env: dict, dry_run: bool) -> TestResult:
         return result
 
     if not env.get("is_admin"):
-        result.finish("SKIP", "Not running as admin — WMI BIOS settings require admin")
+        result.finish("SKIP", "Not running as admin - WMI BIOS settings require admin")
         return result
 
     if dry_run:
         model = env.get("hp_model", "unknown")
-        result.finish("SKIP", f"Dry run — would apply HP UEFI lockdown (model={model})")
+        result.finish("SKIP", f"Dry run - would apply HP UEFI lockdown (model={model})")
         return result
 
     try:
@@ -448,7 +448,7 @@ def run_harness(
         print(f"  [{name}] ", end="", flush=True)
         result = fn(env, dry_run)
         results.append(result.to_dict())
-        status_icon = {"PASS": "✓", "FAIL": "✗", "SKIP": "⊘", "ERROR": "!"}[result.status]
+        status_icon = {"PASS": "OK", "FAIL": "FAIL", "SKIP": "SKIP", "ERROR": "ERR"}[result.status]
         print(f"{status_icon} {result.status} ({result.duration_ms}ms)")
         if result.detail:
             print(f"      {result.detail}")
