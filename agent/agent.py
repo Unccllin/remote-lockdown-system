@@ -61,8 +61,10 @@ try:
 except ImportError:
     _boot_lock_modules_available = False
 
-# D-007: Dry-run mode flag (set by tests or config to skip real Windows API calls)
-_DRY_RUN = False
+# Master dry-run switch: when True, ALL lock modules log what they would do
+# instead of executing. Set via LOCKDOWN_DRY_RUN=1 env var.
+# This propagates to bcd_lockdown and hp_uefi_lockdown at startup.
+_DRY_RUN = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -521,6 +523,9 @@ def _lock_workstation() -> None:
     desktop. In that case, we use `tsdiscon` to disconnect the active console
     session, which effectively forces the lock screen on the user's desktop.
     """
+    if _DRY_RUN:
+        log.info("[DRY-RUN] Would lock workstation (LockWorkStation/tsdiscon) — skipping")
+        return
     system = platform.system()
     if system == "Windows":
         ctx = _detect_session_context()
@@ -589,6 +594,9 @@ def _lock_workstation() -> None:
 
 def apply_lock_screen() -> None:
     """Lock the workstation and display the stolen banner."""
+    if _DRY_RUN:
+        log.info("[DRY-RUN] Would lock workstation and display stolen banner — skipping")
+        return
     _lock_workstation()
     print(_BANNER)
 
@@ -605,6 +613,12 @@ _lock_guardian_thread: threading.Thread | None = None
 
 def start_lock_guardian() -> None:
     """Start (or restart) the background thread that re-locks the screen."""
+    if _DRY_RUN:
+        log.info(
+            "[DRY-RUN] Would start lock guardian thread (re-lock every %ds) — skipping",
+            LOCK_GUARDIAN_INTERVAL,
+        )
+        return
     global _lock_guardian_stop, _lock_guardian_thread
     stop_lock_guardian()
     _lock_guardian_stop = threading.Event()
@@ -2025,6 +2039,11 @@ def main() -> None:
     parser.add_argument(
         "--silent", action="store_true", help="Suppress stdout logging for covert operation"
     )
+    parser.add_argument(
+        "--startup",
+        action="store_true",
+        help="Mark this run as startup-triggered (logs a banner, does not change behavior)",
+    )
     parser.add_argument("--version", "-v", action="store_true", help="Show version and exit")
     args, _ = parser.parse_known_args()
 
@@ -2032,7 +2051,39 @@ def main() -> None:
         print(f"lockdown-agent {AGENT_VERSION} (frozen={_is_frozen()})")
         sys.exit(0)
 
+    # Propagate master dry-run switch to all lock modules
+    if _DRY_RUN:
+        log.info("=== DRY RUN MODE === All lock actions will be logged, not executed.")
+        if _boot_lock_modules_available:
+            bcd_lockdown.set_dry_run(True)
+            hp_uefi_lockdown.set_dry_run(True)
+
+    # Log startup-triggered banner
+    if args.startup:
+        log.info("=== STARTUP-TRIGGERED RUN === Agent launched at system startup/logon.")
+
     cfg = load_config(config_path=args.config)
+
+    # In dry-run mode, skip the agent_key requirement and server validation.
+    # The agent can run startup_check() without a live server.
+    if _DRY_RUN:
+        log.info("DRY RUN: Skipping agent_key check (dry-run mode does not require server).")
+        # Still validate config, but allow http:// in dry-run mode
+        try:
+            validate_config(cfg)
+        except ValueError as e:
+            # In dry-run mode, be lenient — log but don't exit
+            log.warning("DRY RUN: Config validation warning: %s", e)
+        log.info(
+            "Agent starting (DRY RUN) — hostname=%s server=%s poll=%ss",
+            cfg["hostname"],
+            cfg["server_url"],
+            cfg["poll_interval"],
+        )
+        startup_check(cfg)
+        log.info("DRY RUN: Startup check complete. Exiting (dry-run mode).")
+        sys.exit(0)
+
     if not cfg["agent_key"]:
         log.error("AGENT_SHARED_KEY is not set. Exiting.")
         log.error("Set DEVICE_API_KEY env var, or provide a config file with --config")

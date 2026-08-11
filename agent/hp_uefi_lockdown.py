@@ -62,6 +62,7 @@ WMI interface reference:
 
 import json
 import logging
+import os
 import platform
 import secrets
 import string
@@ -74,8 +75,8 @@ HP_WMI_NAMESPACE = r"root\hp\InstrumentedBIOS"
 
 # Dry-run mode: when True, all PowerShell/WMI calls are intercepted and
 # their commands are printed instead of executed. No BIOS changes happen.
-# Set via set_dry_run(True) or the DRY_RUN env var.
-_DRY_RUN = False
+# Set via set_dry_run(True) or the LOCKDOWN_DRY_RUN=1 env var.
+_DRY_RUN = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes")
 
 # Simulated BIOS state for dry-run mode (mimics a typical HP EliteBook)
 _DRY_RUN_BIOS_STATE = {

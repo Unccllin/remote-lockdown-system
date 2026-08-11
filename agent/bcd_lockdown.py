@@ -51,6 +51,7 @@ Requirements:
 
 import json
 import logging
+import os
 import platform
 import subprocess
 from pathlib import Path
@@ -65,7 +66,8 @@ BCD_STATE_FILE = Path(__file__).parent / ".bcd_state"
 
 # Dry-run mode: when True, all bcdedit/reagentc calls are printed
 # instead of executed. No BCD changes happen.
-_DRY_RUN = False
+# Set via set_dry_run(True) or the LOCKDOWN_DRY_RUN=1 env var.
+_DRY_RUN = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes")
 
 # Simulated WinRE state for dry-run
 _DRY_RUN_WINRE_ENABLED = True

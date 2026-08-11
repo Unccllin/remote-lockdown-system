@@ -1,0 +1,10 @@
+{
+    "server_url": "http://localhost:3001",
+    "agent_key": "dry-run-test-key",
+    "hostname": "STARTUP-TEST-VM",
+    "poll_interval": "30",
+    "lockdown_folder": "C:\\Users\\Public\\LockdownTest",
+    "lock_sentinel": "C:\\ProgramData\\LockdownAgent\\.locked",
+    "verify_tls": false,
+    "boot_lock_enabled": true
+}

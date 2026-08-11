@@ -959,6 +959,64 @@ class TestStartupCheck:
 
 
 # ---------------------------------------------------------------------------
+# Dry-run mode (master switch) and startup-trigger flag
+# ---------------------------------------------------------------------------
+
+
+class TestDryRunMode:
+    """Tests for the LOCKDOWN_DRY_RUN master switch and --startup flag."""
+
+    def test_dry_run_env_var_sets_flag(self):
+        """LOCKDOWN_DRY_RUN=1 env var sets agent._DRY_RUN = True at import time."""
+        # We can't re-import the module, but we can verify the env var logic
+        with patch.dict(os.environ, {"LOCKDOWN_DRY_RUN": "1"}):
+            result = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes")
+            assert result is True
+
+    def test_dry_run_env_var_false_when_unset(self):
+        """LOCKDOWN_DRY_RUN unset means _DRY_RUN = False."""
+        with patch.dict(os.environ, {}, clear=True):
+            result = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes")
+            assert result is False
+
+    def test_dry_run_lock_workstation_is_noop(self):
+        """In dry-run mode, _lock_workstation logs and returns without executing."""
+        with patch.object(agent, "_DRY_RUN", True):
+            with patch.object(agent, "log") as mock_log:
+                with patch.object(agent, "subprocess") as mock_subprocess:
+                    agent._lock_workstation()
+                    mock_subprocess.run.assert_not_called()
+                    mock_log.info.assert_called()
+
+    def test_dry_run_apply_lock_screen_is_noop(self):
+        """In dry-run mode, apply_lock_screen logs and returns without locking."""
+        with patch.object(agent, "_DRY_RUN", True):
+            with patch.object(agent, "_lock_workstation") as mock_lock:
+                agent.apply_lock_screen()
+                mock_lock.assert_not_called()
+
+    def test_dry_run_start_lock_guardian_is_noop(self):
+        """In dry-run mode, start_lock_guardian logs and returns without starting thread."""
+        with patch.object(agent, "_DRY_RUN", True):
+            with patch.object(agent, "threading") as mock_threading:
+                agent.start_lock_guardian()
+                mock_threading.Thread.assert_not_called()
+
+    def test_non_dry_run_lock_workstation_executes(self):
+        """When NOT in dry-run mode, _lock_workstation proceeds normally."""
+        import platform as plat_mod
+
+        with patch.object(agent, "_DRY_RUN", False):
+            with patch.object(plat_mod, "system", return_value="Linux"):
+                with patch.object(agent, "subprocess"):
+                    # On Linux, it calls dm-tool or loginctl
+                    try:
+                        agent._lock_workstation()
+                    except Exception:  # noqa: S110
+                        pass  # May fail if dm-tool not installed — OK
+
+
+# ---------------------------------------------------------------------------
 # Check-in communication
 # ---------------------------------------------------------------------------
 

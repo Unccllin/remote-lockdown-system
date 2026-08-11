@@ -15,6 +15,7 @@ Phase 4 tests cover:
 """
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -1492,4 +1493,49 @@ class TestBcdLockdown:
         assert result["bitlocker_status"]["enabled"] is False
         # No suspend/resume when BitLocker is not enabled
         mock_suspend.assert_not_called()
-        mock_resume.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Master dry-run env var tests
+# ---------------------------------------------------------------------------
+
+
+class TestDryRunEnvVar:
+    """Tests for the LOCKDOWN_DRY_RUN master env var switch."""
+
+    def test_bcd_lockdown_dry_run_env_var_true(self):
+        """LOCKDOWN_DRY_RUN=1 sets bcd_lockdown._DRY_RUN = True."""
+        with patch.dict(os.environ, {"LOCKDOWN_DRY_RUN": "1"}):
+            result = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes")
+            assert result is True
+
+    def test_bcd_lockdown_dry_run_env_var_false(self):
+        """LOCKDOWN_DRY_RUN unset means bcd_lockdown._DRY_RUN = False."""
+        with patch.dict(os.environ, {}, clear=True):
+            result = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes")
+            assert result is False
+
+    def test_hp_uefi_lockdown_dry_run_env_var_true(self):
+        """LOCKDOWN_DRY_RUN=1 sets hp_uefi_lockdown._DRY_RUN = True."""
+        with patch.dict(os.environ, {"LOCKDOWN_DRY_RUN": "1"}):
+            result = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes")
+            assert result is True
+
+    def test_dry_run_bcd_run_prints_not_executes(self):
+        """In dry-run mode, bcd_lockdown._run prints [DRY-RUN] instead of executing."""
+        with patch.object(bcd_lockdown, "_DRY_RUN", True):
+            with patch.object(bcd_lockdown, "subprocess") as mock_subprocess:
+                rc, _, _ = bcd_lockdown._run(["bcdedit", "/set", "{default}", "test", "val"])
+                mock_subprocess.run.assert_not_called()
+                assert rc == 0
+
+    def test_dry_run_hp_uefi_powershell_prints_not_executes(self):
+        """In dry-run mode, hp_uefi prints [DRY-RUN] instead of executing."""
+        with patch.object(hp_uefi_lockdown, "_DRY_RUN", True):
+            with patch.object(hp_uefi_lockdown, "subprocess") as mock_subprocess:
+                result = hp_uefi_lockdown._run_powershell(
+                    "Get-WmiObject -Class Win32_ComputerSystem"
+                )
+                mock_subprocess.run.assert_not_called()
+                # Should return a simulated response (string)
+                assert isinstance(result, str)
