@@ -1326,3 +1326,128 @@ Run `python3 .devin/graph/graph_assert.py` to verify all invariants pass,
 then check `docs/adr/DEBT-LEDGER.md` for open debt items.
 
 ---
+
+## Session 2026-08-11 — Master Dry-Run Switch + Startup-Trigger Test
+
+### Session objective
+Set up a safe local test of the agent's startup-trigger behavior on a
+Windows VM, without performing any real BIOS/BCD/UEFI lock actions.
+This required a single master dry-run switch, a startup-trigger detection
+mechanism, and a Task Scheduler entry that launches the agent at logon.
+
+### RULE-ZERO — Understanding logged before code changes
+- **Read**: `agent/agent.py` (lines 65, 491, 590-639, 1750-1755, 2020-2145)
+  — found `_DRY_RUN` only affected `_detect_session_context`, never
+  propagated to boot lockdown modules, no `--startup` flag, no startup-
+  trigger detection, agent exits at line 2036 if no agent_key
+- **Read**: `agent/bcd_lockdown.py` (lines 66-90, 131-162) — has
+  `set_dry_run()` and `_DRY_RUN` but no env var check
+- **Read**: `agent/hp_uefi_lockdown.py` (lines 75-100, 345-396) —
+  comment at line 77 claims "DRY_RUN env var" but no code reads it
+- **Read**: `agent/config.test-windows.ini`, `agent/config.ini.example`
+  — understood config format for test config
+- **Read**: `agent/platform/windows/install-service-enhanced.ps1` —
+  understood production NSSM service path (NOT used for this test)
+- **Finding**: Dry-run was inconsistent across modules. No master switch.
+  No startup-trigger concept. Agent required server connectivity to start.
+
+### Implementation
+1. **Master dry-run switch** (`LOCKDOWN_DRY_RUN=1` env var): All three
+   modules (agent.py, bcd_lockdown.py, hp_uefi_lockdown.py) check this
+   env var at module load time. agent.py also calls `set_dry_run(True)`
+   on boot modules as belt-and-suspenders.
+2. **`--startup` CLI flag**: Logs "=== STARTUP-TRIGGERED RUN ===" banner.
+   Cosmetic only — does not change behavior.
+3. **Dry-run guards**: `_lock_workstation()`, `apply_lock_screen()`, and
+   `start_lock_guardian()` all check `_DRY_RUN` and log "[DRY-RUN] Would
+   do X — skipping" instead of executing.
+4. **Dry-run bypass for server requirement**: In dry-run mode, the agent
+   skips the `agent_key` check, runs `startup_check()`, logs what it
+   would do, and exits cleanly (no main loop, no server retries).
+5. **Test config**: `agent/config.test-startup.json` with http://localhost,
+   verify_tls=false, boot_lock_enabled=true.
+6. **Task Scheduler scripts**: `register-test-startup.ps1` creates an
+   "At log on" task using a wrapper batch file (proven working approach
+   — `cmd.exe /c set X=1 && python` does not reliably propagate env
+   vars in Task Scheduler context). `unregister-test-startup.ps1` does
+   teardown.
+
+### Hardware verification on Azure Windows 11 VM
+- Provisioned Standard_D2s_v7 VM in eastus with Windows 11 Pro 24H2
+- Installed Python 3.12.3 + Git, cloned repo via SSH deploy key
+- Registered Task Scheduler "At log on" task for `lockdowntest` user
+- Configured auto-logon (required for trigger to fire after reboot)
+- Captured `bcdedit /enum` before reboot
+- Rebooted VM — auto-logon fired, task triggered, agent ran in dry-run
+- Raw log output confirmed:
+  - "=== DRY RUN MODE ===" banner
+  - "DRY RUN mode enabled - no BCD changes will be made"
+  - "DRY RUN mode enabled - no BIOS changes will be made"
+  - "=== STARTUP-TRIGGERED RUN ===" banner
+  - "DRY RUN: Skipping agent_key check"
+  - "DRY RUN: Startup check complete. Exiting (dry-run mode)."
+- `bcdedit /enum` after reboot: identical to before (NO CHANGES)
+- HP WMI: not found (expected on Azure VM, not an HP machine)
+- Teardown: task removed, auto-logon removed, log files removed, VM deleted
+
+### Tests added (11 new, 219 total)
+- 6 agent tests: env var true/false, _lock_workstation/apply_lock_screen/
+  start_lock_guardian dry-run no-ops, non-dry-run executes normally
+- 5 boot lockdown tests: env var true/false for bcd and hp_uefi,
+  _run and _run_powershell dry-run no-ops
+
+### Verification results
+```
+Agent:     219 tests pass, ruff clean + formatted
+Graph:     All 7 invariants pass
+Hardware:  Startup-trigger dry-run verified on Azure Windows 11 VM
+           bcdedit /enum identical before and after reboot
+```
+
+### Session-end status block
+
+**Fog cleared this session**:
+- Dry-run mechanism was inconsistent across 3 modules — now unified
+  under a single `LOCKDOWN_DRY_RUN=1` env var master switch
+- `hp_uefi_lockdown.py` line 77 comment claimed a "DRY_RUN env var"
+  existed but no code read it — now fixed
+- `agent.py` never propagated dry-run to boot lockdown modules — now
+  calls `set_dry_run(True)` on both modules at startup
+- Agent required server connectivity to even reach `startup_check()` —
+  now in dry-run mode it skips agent_key check and exits after
+  startup_check() without entering the main loop
+- No startup-trigger detection existed — now `--startup` flag logs
+  a banner identifying the run as startup-triggered
+- Task Scheduler "At log on" trigger works with wrapper batch file
+  approach (cmd.exe /c set env var does NOT work reliably)
+- Auto-logon is required on Azure VMs for "At log on" trigger to fire
+  after reboot (no interactive logon otherwise)
+- Verified on real Windows 11 VM: agent launches at logon, logs dry-run
+  messages, exits cleanly, bcdedit unchanged
+
+**Fog remaining**:
+- D-009 (HP UEFI setting names): Requires real HP hardware with HP WMI
+  BIOS namespace. Cannot be tested in any VM.
+- D-010 (Sure Admin detection): Requires real HP hardware with Sure Admin
+  enabled. Cannot be tested in any VM.
+
+**Debt items closed this session**: None (no debt items were targeted)
+
+**Debt items still open** (2, both require real HP hardware):
+- D-009: HP UEFI setting names (software done, needs real HP BIOS)
+- D-010: Sure Admin detection (software done, needs real HP with Sure Admin)
+
+**Blockers**: D-009 and D-010 need real HP hardware with HP WMI BIOS
+namespace. No cloud VM can provide this.
+
+**Next session opens with**:
+10 of 12 debt items are CLOSED. Only 2 remain open (D-009, D-010), both
+requiring real HP hardware. All software implementations are complete and
+unit-tested. The dry-run master switch and startup-trigger test harness
+are now available for safe local testing on any Windows machine. To close
+the remaining items: obtain a physical HP machine (EliteDesk, EliteBook,
+or ProDesk) with HP WMI BIOS namespace and Sure Admin, run the hardware
+test harness, verify the enforcement paths pass, and update
+DEBT-LEDGER.md with the commit ref + artifact ref.
+
+---
