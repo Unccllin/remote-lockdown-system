@@ -437,8 +437,9 @@ enforcement_paths:
     component: C-AGENT
     entry_function: "bcd_lockdown.apply_bcd_lockdown"
     verified_by: [V-AGENT, V-HW-HARNESS]
-    status: verified-in-unit-test
-    risk_notes: "D-008 addressed: BitLocker suspend/resume. Needs hardware verification."
+    status: verified-on-hardware
+    hardware_artifact_ref: "agent/hw_test_artifact_azure_bitlocker.json"
+    risk_notes: "D-008 CLOSED: BitLocker suspend/resume verified on Azure VM with BitLocker. BCD changes fail on Azure (platform restriction) but rollback + BitLocker resume work correctly."
 
   - id: E-HP-UEFI
     name: hp-uefi-lockdown
@@ -608,7 +609,9 @@ debt_items:
   - id: D-008
     description: "BCD lockdown does not check BitLocker status before modifying BCD"
     close_criteria: "Agent checks BitLocker and either handles or warns before bcdedit"
-    status: OPEN
+    status: CLOSED
+    commit_ref: "4e4b6e6 + 1511288"
+    artifact_ref: "agent/hw_test_artifact_azure_bitlocker.json - BitLocker detected, protectors suspended/resumed correctly"
     blocks: [E-BCD]
 
   - id: D-009

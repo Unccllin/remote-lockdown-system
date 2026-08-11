@@ -1,0 +1,72 @@
+{
+  "harness_version": "1.0",
+  "timestamp": "2026-08-11T09:24:17.556678+00:00",
+  "environment": {
+    "platform": "Windows",
+    "is_hp": false,
+    "hp_model": null,
+    "is_admin": true,
+    "session_context": {
+      "is_session_zero": true,
+      "session_id": 0,
+      "console_session_id": 3,
+      "platform": "Windows"
+    },
+    "bitlocker_enabled": true,
+    "python_version": "3.12.3 (tags/v3.12.3:f6650f9, Apr  9 2024, 14:05:25) [MSC v.1938 64 bit (AMD64)]"
+  },
+  "results": [
+    {
+      "test_id": "E-ENCRYPT-01",
+      "enforcement_path": "E-ENCRYPT",
+      "name": "File encryption roundtrip",
+      "status": "PASS",
+      "duration_ms": 43,
+      "detail": "3 files encrypted and decrypted successfully",
+      "error": null
+    },
+    {
+      "test_id": "E-LOCK-SCREEN-01",
+      "enforcement_path": "E-LOCK-SCREEN",
+      "name": "Workstation lock",
+      "status": "PASS",
+      "duration_ms": 94,
+      "detail": "Lock command issued via tsdiscon (session_id=0)",
+      "error": null
+    },
+    {
+      "test_id": "E-GUARDIAN-01",
+      "enforcement_path": "E-GUARDIAN",
+      "name": "Lock guardian thread",
+      "status": "PASS",
+      "duration_ms": 12017,
+      "detail": "Guardian ran for 12s, re-locked at least once, stopped cleanly",
+      "error": null
+    },
+    {
+      "test_id": "E-BCD-01",
+      "enforcement_path": "E-BCD",
+      "name": "BCD lockdown",
+      "status": "FAIL",
+      "duration_ms": 463,
+      "detail": "BCD lockdown failed: {'success': False, 'partial': False, 'rolled_back': True, 'winre_disabled': False, 'critical_applied': 0, 'best_effort_applied': 0, 'best_effort_failed': 0, 'bitlocker_status': {'enabled': True, 'suspended': False, 'percentage': '0%', 'error': None}}",
+      "error": null
+    },
+    {
+      "test_id": "E-HP-UEFI-01",
+      "enforcement_path": "E-HP-UEFI",
+      "name": "HP UEFI/BIOS lockdown",
+      "status": "SKIP",
+      "duration_ms": 0,
+      "detail": "Not an HP machine",
+      "error": null
+    }
+  ],
+  "summary": {
+    "total": 5,
+    "passed": 3,
+    "failed": 1,
+    "skipped": 1,
+    "errors": 0
+  }
+}
