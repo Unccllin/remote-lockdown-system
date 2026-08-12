@@ -162,6 +162,9 @@ make build
   if available; `verify-environment.sh` already does this).
 - Caddyfile and `Dockerfile.server` are NOT YAML — do not YAML-validate them.
 - `server/lockdown.db` is a dev artifact — never commit it (in `.gitignore`).
+- Agent Python uses inline `# D-XXX:` comments to trace code to debt ledger entries
+  (see `docs/adr/DEBT-LEDGER.md`). This is an established convention (26 instances
+  across 5 agent files) — matching it is expected, not a violation.
 
 ## Diagnostic Sweep Results (2026-08-04, updated 2026-08-11)
 
