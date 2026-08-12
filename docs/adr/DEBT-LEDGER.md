@@ -200,6 +200,50 @@
   handles both Postgres JSONB objects and SQLite TEXT strings
 - **Close criteria met**: DeviceDetailPage shows `boot_lock_detail` panel with red flagging
 
+### D-013 — Read-back-after-write missing at 4 BIOS write sites
+- **Status**: CLOSED
+- **Commit ref**: 2026-08-12 session (D-013 + D-014 commit)
+- **Artifact ref**: 8 new agent tests pass (TestD013ReadBackVerification:
+  site1 fails/passes, site2 fails/passes, site3 fails/passes, site4
+  fails/passes). 230 agent tests total (was 219). All 4 sites now verify
+  writes via `_verify_setting` (regular settings) or `_is_setup_password_set`
+  (password set/clear). Rollback site (site 2) surfaces verification failures
+  via `all_ok = False` + log.error. Red-green discipline: 6 tests failed
+  before the fix, all 11 pass after.
+- **Close criteria met**: All 4 sites that previously called `_set_setting`
+  without read-back verification now verify the write took effect:
+  1. Setup Password set in apply_boot_lockdown — verifies via
+     `_is_setup_password_set()` returning True
+  2. Rollback restore in _rollback_bios_settings — verifies via
+     `_verify_setting()` and surfaces failure via `all_ok = False`
+  3. Restore settings in remove_boot_lockdown — verifies via
+     `_verify_setting()`, only increments `restored` counter on success
+  4. Clear Setup Password in remove_boot_lockdown — verifies via
+     `_is_setup_password_set()` returning False
+- **Notes**: The existing `_set_and_verify` function (used for critical and
+  best-effort settings in apply_boot_lockdown) already did read-back
+  verification. The read-back logic was extracted into `_verify_setting`
+  to avoid duplication (Duplicated Code smell) and is now reused at sites
+  2 and 3. Sites 1 and 4 use `_is_setup_password_set()` because passwords
+  cannot be read back — only their set/unset state can be queried.
+
+### D-014 — _read_setting does not escape single quotes in WMI filter
+- **Status**: CLOSED
+- **Commit ref**: 2026-08-12 session (D-013 + D-014 commit)
+- **Artifact ref**: 3 new agent tests pass (TestD014FilterEscaping:
+  escapes single quote, no escape needed, escapes in both WMI classes).
+  230 agent tests total. Red-green: 2 tests failed before the fix
+  (escapes_single_quote, escapes_in_both_wmi_classes), all 3 pass after.
+- **Close criteria met**: `_read_setting` now escapes single quotes in
+  the WMI filter value using `name.replace("'", "''")`, matching the
+  escaping already done in `_set_setting` (lines 553-554). The escaping
+  applies to both the HP_BIOSEnumeration and HP_BIOSSetting filter paths.
+- **Notes**: `_set_setting` already escaped quotes (lines 553-554) but
+  `_read_setting` did not — an inconsistency found during codebase
+  investigation. Setting names come from `hp_model_overrides.json`
+  (trusted), so this was not currently exploitable, but the inconsistency
+  was a defense-in-depth gap.
+
 ---
 
 ## Close criteria summary
@@ -218,3 +262,5 @@
 | D-010 | No Sure Admin awareness | OPEN | E-HP-UEFI |
 | D-011 | Open-file encryption failure | CLOSED | E-ENCRYPT |
 | D-012 | Dashboard effectiveness panel | CLOSED | — |
+| D-013 | Read-back-after-write at 4 sites | CLOSED | E-HP-UEFI |
+| D-014 | _read_setting filter escaping | CLOSED | E-HP-UEFI |

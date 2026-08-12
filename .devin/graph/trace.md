@@ -1451,3 +1451,111 @@ test harness, verify the enforcement paths pass, and update
 DEBT-LEDGER.md with the commit ref + artifact ref.
 
 ---
+
+## Session 2026-08-12 — Backfill trace for security review fixes + verify sweep
+
+### Session objective
+Two commits from the previous session (`7257390`, `e85c2f7`) addressed
+critical/medium/low findings from a codebase security review but had no
+trace.md session entry. This session backfills that entry and re-runs the
+full verification sweep to confirm the tree is still green.
+
+### RULE-ZERO — Understanding logged before code changes
+- **Read**: `git show --stat 7257390` and `git show --stat e85c2f7` to
+  enumerate every file touched by the two review-fix commits
+- **Read**: commit messages for both — they enumerate the 5 critical
+  findings (commit 7257390) and 5 medium/low findings (commit e85c2f7)
+  with file-level granularity
+- **Read**: `docs/adr/DEBT-LEDGER.md` head — confirmed no new debt items
+  were opened or closed by these commits (the work was hardening, not
+  debt closure)
+- **Finding**: No code changes were made this session. The two commits
+  under review were already on disk; this session only verifies them
+  and records their existence in the cross-session trace.
+
+### What the two commits changed (summary)
+
+**`7257390` — critical findings from codebase security review** (7 files):
+1. `agent/agent.py` — `_signed_post()` no longer falls back to sending
+   the agent key in plaintext when HMAC signing fails; the request now
+   fails instead.
+2. `agent/{agent,bcd_lockdown,hp_uefi_lockdown}.py` — all state files
+   (pending ACK, recovery key, sentinel, BCD state, boot state, deadman
+   sentinel) now use `_atomic_write_text()` (write to temp + fsync +
+   rename) instead of `write_text()`, so a crash mid-write cannot leave
+   a partially-written file.
+3. `server/src/routes/agent.js` — `expireStaleCommands()` now uses
+   parameterized SQL (`$2 || ' days')::interval`) instead of
+   interpolating `COMMAND_EXPIRY_DAYS` directly.
+4. `server/src/routes/devices.js` — `commandExpirySql()` validates at
+   module load that `COMMAND_EXPIRY_DAYS` is a positive integer.
+5. `server/src/routes/audit.js` — input validation on `device_id`
+   (UUID format), `limit` (clamped 1-1000), `offset` (non-negative).
+6. `dashboard/src/pages/HealthPage.jsx` — null safety on
+   `data.recentAlerts` via `Array.isArray(...)` guard.
+
+**`e85c2f7` — medium/low findings from codebase review** (7 files):
+1. `server/src/routes/agent.js` — DB error during `agentAuth` hash
+   lookup now logged via pino before falling through to legacy auth.
+2. `dashboard/src/pages/{DeviceDetailPage,DevicesPage,AuditPage,AdminsPage}.jsx`
+   — catch blocks now `console.error` the error in addition to toast.
+3. `dashboard/src/components/ErrorBoundary.jsx` (new) + `main.jsx` —
+   React error boundary wraps the app; render crashes now show a
+   fallback UI with a refresh button instead of white-screening.
+4. `dashboard/src/pages/AdminsPage.jsx` — removed redundant `load()`
+   in `handleRoleChange` catch block.
+5. `dashboard/src/pages/DeviceDetailPage.jsx` — `load` wrapped in
+   `useCallback([id])` to fix stale-closure risk in useEffect deps.
+
+### Verification results (run artifacts, 2026-08-12T05:49Z)
+```
+Server Jest:    336 passed (21 suites)            [shell 7d9f60]
+Agent pytest:   219 passed in 4.24s               [shell c8192b]
+Dashboard Vitest: 34 passed (3 suites)            [shell f4b2b8]
+ESLint server:  exit 0 (clean)                    [shell 61e7e1]
+ESLint dashboard: exit 0 (clean)                  [shell 61e7e1]
+Ruff check:     All checks passed                 [shell 61e7e1]
+Ruff format:    12 files already formatted        [shell 61e7e1]
+Vite build:     OK in 4.41s (528.58 kB / 159.46 kB gzip)
+                                                       [shell b7500c]
+Graph invariants: All 7 pass                      [shell fc6904]
+                Timestamp: 2026-08-12T05:49:20.992440+00:00
+Git tree:       clean (no uncommitted changes)
+```
+
+### Session-end status block
+
+**Fog cleared this session**:
+- The two unlogged security-fix commits (`7257390`, `e85c2f7`) are now
+  enumerated in the cross-session trace with file-level granularity
+  (traced through `git show --stat` for both commits)
+- The full verification sweep is green on 2026-08-12: 589 tests pass
+  (336 server + 219 agent + 34 dashboard), all lint clean, vite build
+  OK, all 7 graph invariants pass
+- No new debt items were opened or closed by the review-fix commits —
+  the work was hardening of already-closed phases, not debt closure
+
+**Fog remaining**:
+- D-009 (HP UEFI setting names): Requires real HP hardware with HP WMI
+  BIOS namespace. Cannot be tested in any VM.
+- D-010 (Sure Admin detection): Requires real HP hardware with Sure
+  Admin enabled. Cannot be tested in any VM.
+
+**Debt items closed this session**: None
+
+**Debt items still open** (2, both require real HP hardware):
+- D-009: HP UEFI setting names (software done, needs real HP BIOS)
+- D-010: Sure Admin detection (software done, needs real HP with Sure Admin)
+
+**Blockers**: D-009 and D-010 need real HP hardware with HP WMI BIOS
+namespace. No cloud VM can provide this.
+
+**Next session opens with**:
+10 of 12 debt items are CLOSED. Tree is green on 2026-08-12 (589 tests,
+all lint clean, all 7 graph invariants pass). Only D-009 and D-010
+remain open, both requiring real HP hardware. The software is
+production-ready pending hardware verification on a physical HP machine
+(EliteDesk, EliteBook, or ProDesk) with HP WMI BIOS namespace and
+Sure Admin present.
+
+---

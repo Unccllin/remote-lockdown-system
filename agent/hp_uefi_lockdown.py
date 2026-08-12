@@ -515,11 +515,13 @@ def _read_setting(name: str) -> str | None:
         if isinstance(val, dict):
             return None
         return val
+    # D-014: Escape single quotes in the filter value, matching _set_setting
+    escaped_name = name.replace("'", "''")
     # Try HP_BIOSEnumeration first (most settings are here)
     try:
         output = _run_powershell(
             f"(Get-WmiObject -Namespace '{HP_WMI_NAMESPACE}' "
-            f"-Class HP_BIOSEnumeration -Filter \"Name='{name}'\").CurrentValue"
+            f"-Class HP_BIOSEnumeration -Filter \"Name='{escaped_name}'\").CurrentValue"
         )
         if output:
             return output
@@ -529,7 +531,7 @@ def _read_setting(name: str) -> str | None:
     try:
         output = _run_powershell(
             f"(Get-WmiObject -Namespace '{HP_WMI_NAMESPACE}' "
-            f"-Class HP_BIOSSetting -Filter \"Name='{name}'\").Value"
+            f"-Class HP_BIOSSetting -Filter \"Name='{escaped_name}'\").Value"
         )
         if output:
             return output
@@ -563,6 +565,27 @@ def _set_setting(name: str, value: str, password: str | None) -> int:
     return int(output) if output.isdigit() else -1
 
 
+def _verify_setting(name: str, expected_value: str) -> bool:
+    """Verify a BIOS setting took effect by re-reading it (Phase 4.5 / D-013).
+
+    Returns True if the setting matches expected_value, False otherwise.
+    """
+    current = _read_setting(name)
+    if current is None:
+        log.warning("Could not verify BIOS setting '%s' (read failed)", name)
+        return False
+    if current.lower() != expected_value.lower():
+        log.warning(
+            "BIOS setting '%s' verification failed: expected '%s', got '%s'",
+            name,
+            expected_value,
+            current,
+        )
+        return False
+    log.info("BIOS setting '%s' → %s (verified)", name, expected_value)
+    return True
+
+
 def _set_and_verify(name: str, value: str, password: str) -> bool:
     """Set a BIOS setting and verify it took effect (Phase 4.5).
 
@@ -577,20 +600,7 @@ def _set_and_verify(name: str, value: str, password: str) -> bool:
             SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
         )
         return False
-
-    # Verification re-read: confirm the setting actually took effect
-    current = _read_setting(name)
-    if current is None:
-        log.warning("Could not verify BIOS setting '%s' (read failed)", name)
-        return False
-    if current.lower() != value.lower():
-        log.warning(
-            "BIOS setting '%s' verification failed: expected '%s', got '%s'", name, value, current
-        )
-        return False
-
-    log.info("BIOS setting '%s' → %s (verified)", name, value)
-    return True
+    return _verify_setting(name, value)
 
 
 def _is_setup_password_set() -> bool:
@@ -682,7 +692,17 @@ def _rollback_bios_settings(saved_settings: dict, bios_password: str) -> bool:
     for setting_name, original_value in saved_settings.items():
         rc = _set_setting(setting_name, original_value, bios_password)
         if rc == 0:
-            log.info("Rollback: %s → %s (restored)", setting_name, original_value)
+            # D-013: Verify rollback actually took effect (safety-net path)
+            if _verify_setting(setting_name, original_value):
+                log.info("Rollback: %s → %s (restored and verified)", setting_name, original_value)
+            else:
+                log.error(
+                    "Rollback: %s → %s verification failed — "
+                    "setting may not be restored (non-fatal, continuing)",
+                    setting_name,
+                    original_value,
+                )
+                all_ok = False
         else:
             log.error(
                 "Rollback: failed to restore '%s' to '%s': %s — non-fatal, continuing",
@@ -789,7 +809,16 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
                 "Failed to set Setup password: %s", SET_BIOS_RETURN_CODES.get(rc, f"code {rc}")
             )
             return result
-        log.info("BIOS Setup password set successfully")
+        # Return password even on verification failure (for operator manual BIOS clear)
+        result["bios_password"] = bios_password
+        # D-013: Verify the password was actually set (not just rc==0)
+        if not _is_setup_password_set():
+            log.error(
+                "BIOS Setup password verification failed — "
+                "SetBIOSSetting returned success but password is not set"
+            )
+            return result
+        log.info("BIOS Setup password set successfully (verified)")
     else:
         # Use the existing password to authorize changes
         bios_password = existing_password
@@ -941,8 +970,14 @@ def remove_boot_lockdown(bios_password: str) -> bool:
 
         rc = _set_setting(setting_name, original, bios_password)
         if rc == 0:
-            restored += 1
-            log.info("BIOS setting '%s' → %s (restored)", setting_name, original)
+            # D-013: Verify restore actually took effect
+            if _verify_setting(setting_name, original):
+                restored += 1
+            else:
+                log.warning(
+                    "BIOS setting '%s' restore verification failed — setting may not be restored",
+                    setting_name,
+                )
         elif rc == 1:
             log.debug("Setting '%s' not supported — skipping restore", setting_name)
         else:
@@ -960,7 +995,15 @@ def remove_boot_lockdown(bios_password: str) -> bool:
         log.info("Clearing BIOS Setup password (was set by lockdown agent)...")
         rc = _set_setting("Setup Password", "", bios_password)
         if rc == 0:
-            log.info("BIOS Setup password cleared successfully")
+            # D-013: Verify the password was actually cleared
+            if _is_setup_password_set():
+                log.warning(
+                    "BIOS Setup password clear verification failed — "
+                    "SetBIOSSetting returned success but password is still set. "
+                    "Admin may need to clear it manually in BIOS."
+                )
+            else:
+                log.info("BIOS Setup password cleared successfully (verified)")
         else:
             log.warning(
                 "Failed to clear Setup password: %s — admin may need to clear it manually in BIOS",
