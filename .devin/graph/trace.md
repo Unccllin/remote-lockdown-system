@@ -1708,3 +1708,142 @@ or ProDesk) with HP WMI BIOS namespace and Sure Admin present. The
 D-XXX comment convention is now documented in AGENTS.md.
 
 ---
+
+## Session 2026-08-13 — Phase 1 PBA: Boot Hardening (Wayfinder)
+
+### Session objective
+Implement Phase 1 of the PBA + boot hardening plan (wayfinder tickets T1-T6):
+SafeBoot registry entries, Secure Boot verification, VT-d/IOMMU DMA
+protection, BCD hardening extras, and BitLocker suspension for BIOS changes.
+
+### RULE-ZERO — Understanding logged before code changes
+- **Read**: `.devin/graph/GRAPH-SPEC.yaml` (all 17 phases COMPLETE, 13
+  enforcement paths, 7 invariants)
+- **Read**: `.devin/graph/trace.md` (last session: D-013/D-014 closed, 230
+  agent tests, 336 server tests)
+- **Read**: `docs/adr/DEBT-LEDGER.md` (D-009, D-010 open — both need HW)
+- **Read**: `agent/hp_uefi_lockdown.py` (full 1016 lines — apply/remove
+  lockdown, _check_sure_admin, _resolve_setting_names, _set_and_verify)
+- **Read**: `agent/bcd_lockdown.py` (full 757 lines — apply/remove, D-008
+  BitLocker suspension, critical/best-effort split)
+- **Read**: `agent/platform/windows/install-service-enhanced.ps1` (225 lines —
+  NSSM service install, no SafeBoot entries)
+- **Read**: `agent/uninstall_service.ps1` (32 lines — no SafeBoot cleanup)
+- **Read**: `.devin/skills/phase-3-hardening/SKILL.md` (hardening conventions)
+- **Read**: `~/.agents/skills/wayfinder/SKILL.md` (wayfinder planning skill)
+- **Read**: `agent/tests/test_boot_lockdown.py` (test patterns, mocking
+  conventions)
+
+### Wayfinder map
+- Created `docs/wayfinder/pba-hardening-map.md` — the wayfinder map for the
+  PBA + boot hardening effort
+- 11 decision tickets (Q1-Q11) created and CLOSED (all from grilling Round 1
+  + Round 2)
+- 10 implementation tickets (T1-T10) created across 3 phases
+- Frontier: T1-T5 (Phase 1, unblocked) → T6 (verify) → T7-T8 (Phase 2) →
+  T9-T10 (Phase 3)
+
+### Implementation (T1-T5)
+
+**T1: SafeBoot registry entries at install time**
+- `install-service-enhanced.ps1`: Added SafeBoot\Minimal and SafeBoot\Network
+  registry entries for the LockdownAgent service (Q5=A: install time, not
+  lockdown time)
+- `uninstall_service.ps1`: Added cleanup of SafeBoot registry entries
+
+**T2: Secure Boot verification via HP WMI**
+- `hp_uefi_lockdown.py`: Added `_check_secure_boot()` that queries HP WMI for
+  Secure Boot status. Verification-only (does not enable Secure Boot — that
+  requires a platform key). Included in `apply_boot_lockdown()` result dict
+  as `secure_boot_status`.
+
+**T3: VT-d/IOMMU DMA protection via HP WMI**
+- `hp_uefi_lockdown.py`: Added `dma_protection` concept to CONCEPTS and
+  DEFAULT_SETTING_NAMES. Candidate names: "DMA Protection", "VT-d",
+  "Intel VT-d", "Virtualization Technology for Directed I/O", "IOMMU".
+  Best-effort setting (not all HP models support VT-d).
+
+**T4: BCD hardening extras**
+- `bcd_lockdown.py`: Added `nointegritychecks=No` and
+  `allowprereleasesignatures=No` to BCD_BEST_EFFORT_COMMANDS. Added
+  BCD_BOOTMGR_COMMANDS with `timeout=0` for {bootmgr}. Added
+  `_clear_bootsequence()` to remove one-time boot override. Added
+  `_set_bcd_setting_bootmgr()` for {bootmgr}-level settings. Updated
+  save_bcd_state/remove_bcd_lockdown to handle {bootmgr} settings.
+
+**T5: BitLocker suspension for BIOS changes**
+- `hp_uefi_lockdown.py`: Added `_check_bitlocker()`, `_suspend_bitlocker()`,
+  `_resume_bitlocker()`, `_run_cmd()` (for manage-bde CLI). Mirrors D-008
+  pattern from bcd_lockdown.py. `apply_boot_lockdown()` suspends BitLocker
+  before BIOS changes, resumes after (both success and rollback paths).
+  `remove_boot_lockdown()` also suspends/resumes. Result dict includes
+  `bitlocker_status`.
+
+### Tests added
+- T2: 5 tests (Secure Boot enabled, disabled, not found, enum value, in
+  result dict)
+- T3: 4 tests (concept defined, setting names, best-effort classification,
+  dry-run state)
+- T4: 11 tests (nointegritychecks in best-effort, allowprereleasesignatures,
+  timeout in bootmgr, restore commands, bootmgr restore, dry-run state,
+  set_bcd_setting_bootmgr success/fail, clear_bootsequence success/not-found,
+  apply includes bootmgr)
+- T5: 10 tests (check_bitlocker dry-run disabled/enabled, suspend/resume
+  dry-run, parse Protection On/Off, suspend/resume calls manage-bde,
+  suspended before BIOS, resumed after rollback)
+- T1: 3 tests (install script has SafeBoot section, sets Service value,
+  uninstall removes SafeBoot)
+- Updated: test_d009_concepts_defined (added dma_protection to expected set)
+- Updated: test_apply_bcd_lockdown_success (handle {bootmgr} query mock)
+- Total: +33 new tests, 2 updated tests
+
+### Verification results
+- Agent pytest: 263 passed (was 230) — +33 new tests
+- Server Jest: 336 passed (no regressions)
+- Ruff: clean + formatted (agent)
+- All 263 agent tests pass, all 336 server tests pass
+
+### Session-end status block
+
+**Fog cleared this session**:
+- How the wayfinder skill works (chart map → decision tickets → work
+  through frontier one at a time). Map at `docs/wayfinder/pba-hardening-map.md`.
+- That SafeBoot registry entries must be at install time (Q5=A) — the agent
+  needs to start in Safe Mode even before lockdown is applied
+- That Secure Boot verification is verification-only (can't enable it during
+  lockdown — requires a platform key)
+- That VT-d/IOMMU is best-effort (not all HP models support it)
+- That {bootmgr} timeout=0 is a separate BCD scope from {default} settings
+- That BIOS changes can trigger BitLocker recovery (PCR measurement changes)
+  — suspension is critical, especially for PBA-protected machines
+- That `patch.object` doesn't navigate dotted paths (use `patch("module.attr")`
+  instead)
+
+**Fog remaining**:
+- D-009 (HP UEFI setting names): Requires real HP hardware
+- D-010 (Sure Admin detection): Requires real HP hardware
+- T7-T10 (Phase 2 + Phase 3): Not yet implemented — HP Power-On Password,
+  Sure Start lock-then-seal, BitLocker TPM+PIN, dashboard PBA Recovery panel
+- Hardware verification strategy for Phase 2 + 3: Can't test PBA features
+  without real HP hardware + real BitLocker
+
+**Debt items closed this session**: D-015, D-016, D-017, D-018, D-019
+
+**Debt items still open** (2, both require real HP hardware):
+- D-009: HP UEFI setting names (software done, needs real HP BIOS)
+- D-010: Sure Admin detection (software done, needs real HP with Sure Admin)
+
+**Blockers**: D-009 and D-010 need real HP hardware with HP WMI BIOS
+namespace. No cloud VM can provide this.
+
+**Next session opens with**:
+17 of 19 debt items are CLOSED. Tree is green on 2026-08-13 (263 agent
+tests, 336 server tests, 34 dashboard tests = 633 total, all lint clean).
+Phase 1 of the PBA + boot hardening plan is complete (wayfinder tickets
+T1-T6). The wayfinder map at `docs/wayfinder/pba-hardening-map.md` has
+11 decisions CLOSED and 5 implementation tickets remaining (T7-T10
+across Phase 2 and Phase 3). Next: T7 (Phase 2 — HP Power-On Password +
+Sure Start lock-then-seal + Sure Admin report-blocked) and T8 (Phase 2 —
+server schema migration + enable_pba flag).
+
+---

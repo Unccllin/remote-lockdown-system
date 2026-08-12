@@ -196,6 +196,32 @@ Write-Step "Configuring log rotation -> $LogDir"
 & $NSSMPath set $ServiceName AppRotateOnline   1     | Out-Null
 
 # ---------------------------------------------------------------------------
+# SafeBoot registry entries (T1: agent must start in Safe Mode)
+# ---------------------------------------------------------------------------
+# Add the agent service to the SafeBoot\Minimal and SafeBoot\Network
+# registry groups so it starts even when the machine boots into Safe Mode.
+# This is install-time (not lockdown-time) per Q5=A: the agent should always
+# start in Safe Mode, even before a lockdown is applied, so it can receive
+# the lockdown command if the device is already in Safe Mode when stolen.
+Write-Step "Adding SafeBoot registry entries for '$ServiceName'..."
+$safeBootMinimal = "HKLM:\SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\$ServiceName"
+$safeBootNetwork  = "HKLM:\SYSTEM\CurrentControlSet\Control\SafeBoot\Network\$ServiceName"
+try {
+    foreach ($key in @($safeBootMinimal, $safeBootNetwork)) {
+        if (-not (Test-Path $key)) {
+            New-Item -Path $key -Force | Out-Null
+        }
+        Set-ItemProperty -Path $key -Name "(Default)" -Value "Service" -Type String
+    }
+    Write-Ok "SafeBoot registry entries created (Minimal + Network)"
+} catch {
+    Write-Warn2 "Failed to create SafeBoot registry entries: $_"
+    Write-Warn2 "Agent will NOT start in Safe Mode. Manual fix:"
+    Write-Warn2 "  reg add 'HKLM\SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\$ServiceName' /ve /d Service"
+    Write-Warn2 "  reg add 'HKLM\SYSTEM\CurrentControlSet\Control\SafeBoot\Network\$ServiceName' /ve /d Service"
+}
+
+# ---------------------------------------------------------------------------
 # Start service
 # ---------------------------------------------------------------------------
 Write-Step "Starting service '$ServiceName'..."

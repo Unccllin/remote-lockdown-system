@@ -92,6 +92,16 @@ _DRY_RUN_BIOS_STATE = {
     "Prompt for Admin password on F12 (Network Boot)": "Disable",
     "F12 Boot Menu": "Enable",
     "One-Time Boot Menu": "Enable",
+    # T2: Secure Boot (dry-run default: enabled)
+    "Secure Boot": "Enable",
+    "SecureBoot": "Enable",
+    "Configure Legacy Support and Secure Boot": "Secure Boot",
+    # T3: VT-d / IOMMU / DMA Protection (dry-run default: enabled)
+    "VT-d": "Enable",
+    "Intel VT-d": "Enable",
+    "Virtualization Technology for Directed I/O": "Enable",
+    "IOMMU": "Enable",
+    "DMA Protection": "Enable",
 }
 
 
@@ -155,6 +165,8 @@ CONCEPTS = {
     "boot_menu": "Disable",  # Disable F12/one-time boot menu
     "fast_boot": "Enable",  # Enable Fast Boot (best-effort)
     "f12_password": "Enable",  # Require password for F12 (best-effort)
+    # T3: VT-d/IOMMU DMA protection (best-effort — blocks Thunderbolt/PCIe DMA attacks)
+    "dma_protection": "Enable",  # Enable DMA Protection / IOMMU
 }
 
 # Default setting name aliases per concept (tried in order).
@@ -171,6 +183,14 @@ DEFAULT_SETTING_NAMES = {
         "Prompt for Admin password on F12 (Network Boot)",
         "F12 Boot Menu Password",
         "Prompt for Setup Password on F12",
+    ],
+    # T3: VT-d / IOMMU / DMA Protection setting name aliases
+    "dma_protection": [
+        "DMA Protection",
+        "VT-d",
+        "Intel VT-d",
+        "Virtualization Technology for Directed I/O",
+        "IOMMU",
     ],
 }
 
@@ -251,7 +271,8 @@ def _resolve_setting_names() -> tuple[list[tuple[str, str]], list[tuple[str, str
                 break
 
     critical_concepts = ["network_boot", "usb_boot", "legacy_boot", "boot_menu"]
-    best_effort_concepts = ["fast_boot", "f12_password"]
+    # T3: dma_protection is best-effort — not all HP models support VT-d/IOMMU
+    best_effort_concepts = ["fast_boot", "f12_password", "dma_protection"]
 
     def resolve_concept(concept: str) -> list[str]:
         """Get the list of candidate setting names for a concept."""
@@ -508,6 +529,227 @@ def _check_sure_admin() -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Secure Boot verification (T2)
+# ---------------------------------------------------------------------------
+# Secure Boot ensures only signed, trusted bootloaders can run. If it's
+# disabled, an attacker can boot an unsigned bootloader from external media
+# (even with USB boot disabled, some DMA-based attacks can bypass this).
+# The agent verifies Secure Boot is enabled and warns if it's not.
+# This is verification-only — the agent does NOT enable Secure Boot (that
+# requires a platform key and should be done via GPO or HP CMSL, not during
+# a lockdown emergency).
+
+
+def _check_secure_boot() -> dict:
+    """Check Secure Boot status via HP WMI.
+
+    T2: Returns a dict with:
+      - enabled: bool — True if Secure Boot is enabled
+      - setting_name: str | None — the BIOS setting name that was found
+      - warning: str | None — warning message if Secure Boot is disabled
+    """
+    result = {
+        "enabled": False,
+        "setting_name": None,
+        "warning": None,
+    }
+
+    # Candidate setting names for Secure Boot across HP models
+    secure_boot_names = [
+        "Secure Boot",
+        "SecureBoot",
+        "Configure Legacy Support and Secure Boot",
+    ]
+
+    for name in secure_boot_names:
+        value = _read_setting(name)
+        if value is not None:
+            result["setting_name"] = name
+            value_lower = value.lower().strip()
+            # "Secure Boot" enum value or "Enable"/"Enabled"
+            if value_lower in ("enable", "enabled", "on", "true", "1", "secure boot"):
+                result["enabled"] = True
+                log.info("T2: Secure Boot is enabled (setting '%s' = '%s')", name, value)
+            else:
+                result["enabled"] = False
+                result["warning"] = (
+                    f"Secure Boot is disabled (setting '{name}' = '{value}'). "
+                    f"An attacker may boot an unsigned bootloader. "
+                    f"Enable Secure Boot in BIOS or via GPO."
+                )
+                log.warning("T2: %s", result["warning"])
+            break  # Found the setting, no need to check aliases
+
+    if result["setting_name"] is None:
+        result["warning"] = (
+            "Secure Boot setting not found in HP WMI. "
+            "The machine may not support Secure Boot or uses a non-standard setting name."
+        )
+        log.debug("T2: Secure Boot setting not found in WMI")
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# BitLocker awareness for BIOS changes (T5)
+# ---------------------------------------------------------------------------
+# Q8=A: BIOS setting changes can alter PCR measurements, potentially triggering
+# a BitLocker recovery prompt on the next boot. This is especially catastrophic
+# once PBA is enabled — a BitLocker recovery prompt on a PBA-protected machine
+# is a brick (the agent can't boot to receive unlock commands).
+#
+# This mirrors the D-008 pattern from bcd_lockdown.py: suspend BitLocker
+# protectors before BIOS changes, resume after. The functions are duplicated
+# here (not imported from bcd_lockdown) because the two modules use different
+# command execution patterns (this module uses _run_powershell for WMI, but
+# manage-bde is a command-line tool that's cleaner via subprocess directly).
+
+# T5: Simulated BitLocker state for dry-run
+_DRY_RUN_BITLOCKER_ENABLED = False
+_DRY_RUN_BITLOCKER_SUSPENDED = False
+
+
+def _run_cmd(cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
+    """Run a command-line tool (manage-bde) and return (rc, stdout, stderr).
+
+    T5: Used for BitLocker management commands. Not using _run_powershell
+    because manage-bde is a CLI tool, not a PowerShell cmdlet.
+    """
+    if _DRY_RUN:
+        cmd_str = " ".join(cmd)
+        print(f"  [DRY-RUN] {cmd_str}")
+        global _DRY_RUN_BITLOCKER_SUSPENDED
+        if "manage-bde" in cmd and "-status" in cmd:
+            status = "Protection On" if _DRY_RUN_BITLOCKER_ENABLED else "Protection Off"
+            return (
+                0,
+                f"    Protection Status:    {status}\n    Conversion Status:    100% Encrypted",
+                "",
+            )
+        if "manage-bde" in cmd and "-disable" in cmd:
+            if _DRY_RUN_BITLOCKER_ENABLED:
+                _DRY_RUN_BITLOCKER_SUSPENDED = True
+            return 0, "", ""
+        if "manage-bde" in cmd and "-enable" in cmd:
+            _DRY_RUN_BITLOCKER_SUSPENDED = False
+            return 0, "", ""
+        return 0, "", ""
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
+    except FileNotFoundError:
+        return -1, "", f"Command not found: {cmd[0]}"
+    except subprocess.TimeoutExpired:
+        return -2, "", f"Command timed out: {' '.join(cmd)}"
+    except Exception as e:
+        return -3, "", str(e)
+
+
+def _check_bitlocker() -> dict:
+    """Check BitLocker status on the system drive (C:).
+
+    T5: Returns a dict with:
+      - enabled: bool — True if BitLocker is ON
+      - suspended: bool — True if protectors are suspended
+      - percentage: str — encryption percentage
+      - error: str | None — error message if the check failed
+    """
+    if _DRY_RUN:
+        return {
+            "enabled": _DRY_RUN_BITLOCKER_ENABLED,
+            "suspended": _DRY_RUN_BITLOCKER_SUSPENDED,
+            "percentage": "100%" if _DRY_RUN_BITLOCKER_ENABLED else "0%",
+            "error": None,
+        }
+    if platform.system() != "Windows":
+        return {"enabled": False, "suspended": False, "percentage": "0%", "error": None}
+    try:
+        rc, stdout, stderr = _run_cmd(["manage-bde", "-status", "C:"], timeout=10)
+        if rc != 0:
+            return {
+                "enabled": False,
+                "suspended": False,
+                "percentage": "0%",
+                "error": f"manage-bde failed: {stderr}",
+            }
+        enabled = False
+        suspended = False
+        percentage = "0%"
+        for line in stdout.split("\n"):
+            line_lower = line.strip().lower()
+            if "protection status" in line_lower and "protection on" in line_lower:
+                enabled = True
+            if "protection status" in line_lower and "protection off" in line_lower:
+                suspended = "suspended" in line_lower
+            if "conversion status" in line_lower:
+                parts = line.strip().split()
+                for part in parts:
+                    if "%" in part:
+                        percentage = part
+                        break
+        return {
+            "enabled": enabled,
+            "suspended": suspended,
+            "percentage": percentage,
+            "error": None,
+        }
+    except Exception as e:
+        return {"enabled": False, "suspended": False, "percentage": "0%", "error": str(e)}
+
+
+def _suspend_bitlocker() -> bool:
+    """Suspend BitLocker protectors on C: before BIOS changes (T5).
+
+    Returns True if suspension succeeded (or BitLocker was not enabled).
+    """
+    if _DRY_RUN:
+        global _DRY_RUN_BITLOCKER_SUSPENDED
+        if _DRY_RUN_BITLOCKER_ENABLED:
+            _DRY_RUN_BITLOCKER_SUSPENDED = True
+            log.info("[DRY-RUN] BitLocker protectors suspended on C: (for BIOS changes)")
+        return True
+    if platform.system() != "Windows":
+        return True
+    try:
+        rc, _, stderr = _run_cmd(
+            ["manage-bde", "-protectors", "-disable", "C:", "-rebootcount", "1"], timeout=10
+        )
+        if rc == 0:
+            log.info("T5: BitLocker protectors suspended on C: (auto-resume after 1 reboot)")
+            return True
+        log.warning("T5: Failed to suspend BitLocker protectors: %s", stderr)
+        return False
+    except Exception as e:
+        log.warning("T5: Failed to suspend BitLocker protectors: %s", e)
+        return False
+
+
+def _resume_bitlocker() -> bool:
+    """Resume BitLocker protectors on C: after BIOS changes (T5).
+
+    Returns True if resumption succeeded (or BitLocker was not enabled).
+    """
+    if _DRY_RUN:
+        global _DRY_RUN_BITLOCKER_SUSPENDED
+        _DRY_RUN_BITLOCKER_SUSPENDED = False
+        if _DRY_RUN_BITLOCKER_ENABLED:
+            log.info("[DRY-RUN] BitLocker protectors resumed on C: (after BIOS changes)")
+        return True
+    if platform.system() != "Windows":
+        return True
+    try:
+        rc, _, stderr = _run_cmd(["manage-bde", "-protectors", "-enable", "C:"], timeout=10)
+        if rc == 0:
+            log.info("T5: BitLocker protectors resumed on C: (after BIOS changes)")
+            return True
+        log.warning("T5: Failed to resume BitLocker protectors: %s", stderr)
+        return False
+    except Exception as e:
+        log.warning("T5: Failed to resume BitLocker protectors: %s", e)
+        return False
+
+
 def _read_setting(name: str) -> str | None:
     """Read the current value of a BIOS setting. Returns None if not found."""
     if _DRY_RUN:
@@ -757,6 +999,10 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
           - sure_admin_status: dict | None — D-010: Sure Admin/Sure Run/Sure
             Start detection status (sure_admin_detected, sure_run_detected,
             sure_start_detected, any_sure_feature, warning)
+          - secure_boot_status: dict | None — T2: Secure Boot verification
+            (enabled, setting_name, warning)
+          - bitlocker_status: dict | None — T5: BitLocker status for BIOS
+            changes (enabled, suspended, percentage, error)
     """
     result = {
         "bios_password": None,
@@ -768,6 +1014,8 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
         "best_effort_failed": 0,
         "not_hp": False,
         "sure_admin_status": None,  # D-010: Sure Admin/Sure Run/Sure Start
+        "secure_boot_status": None,  # T2: Secure Boot verification
+        "bitlocker_status": None,  # T5: BitLocker awareness for BIOS changes
     }
 
     if not is_hp_machine():
@@ -784,10 +1032,37 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
     if sure_admin_status["any_sure_feature"]:
         log.warning("D-010: %s", sure_admin_status["warning"])
 
+    # T2: Verify Secure Boot is enabled. This is verification-only — the agent
+    # does NOT enable Secure Boot (that requires a platform key). If it's off,
+    # the operator is warned via the ACK's secure_boot_status field.
+    secure_boot_status = _check_secure_boot()
+    result["secure_boot_status"] = secure_boot_status
+    if not secure_boot_status["enabled"] and secure_boot_status["warning"]:
+        log.warning("T2: %s", secure_boot_status["warning"])
+
     # Phase 4.1: Admin check — fail-fast before any state writes
     if not _is_admin():
         log.error("UEFI lockdown requires admin privileges — aborting (fail-fast)")
         return result
+
+    # T5: Check BitLocker status before BIOS changes. If BitLocker is enabled,
+    # suspend protectors to prevent recovery key prompt on next boot (Q8=A).
+    # Resume after all BIOS changes are complete (both success and rollback paths).
+    bitlocker = _check_bitlocker()
+    result["bitlocker_status"] = bitlocker
+    bitlocker_was_suspended = False
+    if bitlocker["enabled"]:
+        log.warning(
+            "T5: BitLocker is enabled (%s encrypted) — suspending protectors before BIOS changes",
+            bitlocker["percentage"],
+        )
+        if _suspend_bitlocker():
+            bitlocker_was_suspended = True
+        else:
+            log.error(
+                "T5: Failed to suspend BitLocker — BIOS changes may trigger recovery key prompt"
+            )
+            # Proceed anyway — the operator is warned via the ACK's bitlocker_status
 
     # Determine the password to use
     password_already_set = _is_setup_password_set()
@@ -883,6 +1158,9 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
         _rollback_bios_settings(saved_settings, bios_password)
         result["rolled_back"] = True
         result["success"] = False
+        # T5: Resume BitLocker protectors after BIOS changes (rollback path)
+        if bitlocker_was_suspended:
+            _resume_bitlocker()
         # Password is still returned (already set above) for server-side operator action
         return result
 
@@ -915,6 +1193,9 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
     result["critical_applied"] = critical_applied
     result["best_effort_applied"] = best_effort_applied
     result["best_effort_failed"] = best_effort_failed
+    # T5: Resume BitLocker protectors after BIOS changes (success path)
+    if bitlocker_was_suspended:
+        _resume_bitlocker()
     return result
 
 
@@ -936,6 +1217,14 @@ def remove_boot_lockdown(bios_password: str) -> bool:
     if not _is_admin():
         log.error("UEFI lockdown removal requires admin privileges — aborting")
         return False
+
+    # T5: Suspend BitLocker before BIOS restore (same as apply path)
+    bitlocker = _check_bitlocker()
+    bitlocker_was_suspended = False
+    if bitlocker["enabled"]:
+        log.info("T5: BitLocker enabled — suspending protectors before BIOS restore")
+        if _suspend_bitlocker():
+            bitlocker_was_suspended = True
 
     state = load_boot_state()
     # D-009: Resolve model-specific setting names so we restore the right ones
@@ -1013,4 +1302,9 @@ def remove_boot_lockdown(bios_password: str) -> bool:
         log.info("Setup password was pre-existing — not clearing (admin manages it)")
 
     clear_boot_state()
+
+    # T5: Resume BitLocker protectors after BIOS restore
+    if bitlocker_was_suspended:
+        _resume_bitlocker()
+
     return True

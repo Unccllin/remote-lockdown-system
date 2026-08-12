@@ -29,4 +29,13 @@ Write-Host "Stopping service..."
 Write-Host "Removing service..."
 & $NSSMPath remove $ServiceName confirm
 
+# Remove SafeBoot registry entries (T1: cleanup from install)
+$safeBootMinimal = "HKLM:\SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\$ServiceName"
+$safeBootNetwork  = "HKLM:\SYSTEM\CurrentControlSet\Control\SafeBoot\Network\$ServiceName"
+foreach ($key in @($safeBootMinimal, $safeBootNetwork)) {
+    if (Test-Path $key) {
+        Remove-Item -Path $key -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host "Service '$ServiceName' removed." -ForegroundColor Green

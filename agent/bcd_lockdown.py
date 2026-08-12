@@ -86,6 +86,10 @@ _DRY_RUN_BCD_STATE = {
     "displaybootmenu": "Yes",
     "bootstatuspolicy": "DisplayAllFailures",
     "recoveryenabled": "Yes",
+    # T4: new best-effort settings
+    "nointegritychecks": "No",
+    "allowprereleasesignatures": "No",
+    "timeout": "30",
 }
 
 # D-008: Simulated BitLocker state for dry-run
@@ -244,6 +248,65 @@ def _set_bcd_setting(setting: str, value: str) -> bool:
     return True
 
 
+def _set_bcd_setting_bootmgr(setting: str, value: str) -> bool:
+    """Set a BCD setting on {bootmgr} (not {default}) and verify it took effect.
+
+    T4: Used for boot manager-level settings like timeout.
+    Returns True if the setting was applied AND verified, False otherwise.
+    """
+    rc, _, stderr = _run(["bcdedit", "/set", "{bootmgr}", setting, value])
+    if rc != 0:
+        log.warning("bcdedit /set {bootmgr} %s %s failed: %s", setting, value, stderr)
+        return False
+
+    # Verification re-read from {bootmgr}
+    rc2, stdout, stderr2 = _run(["bcdedit", "/query", "{bootmgr}", setting])
+    if rc2 != 0:
+        log.warning("Could not verify BCD {bootmgr} setting %s (read failed)", setting)
+        return False
+    lines = stdout.strip().split("\n")
+    current = None
+    for line in lines:
+        parts = line.strip().split()
+        if len(parts) >= 2:
+            current = parts[-1]
+            break
+    if current is None:
+        log.warning("Could not verify BCD {bootmgr} setting %s (parse failed)", setting)
+        return False
+    if current.lower() != value.lower():
+        log.warning(
+            "BCD {bootmgr} setting %s verification failed: expected '%s', got '%s'",
+            setting,
+            value,
+            current,
+        )
+        return False
+
+    log.info("BCD {bootmgr}: %s = %s (verified)", setting, value)
+    return True
+
+
+def _clear_bootsequence() -> bool:
+    """Clear the one-time boot sequence override.
+
+    T4: `bcdedit /bootsequence` sets a one-time boot override that takes
+    effect on the next boot only. If an attacker (or malware) set this before
+    lockdown, it would bypass our {default} lockdown on the next boot.
+    We delete the bootsequence value to ensure the next boot uses the
+    normal boot order.
+
+    Returns True if cleared (or was already empty), False on failure.
+    """
+    rc, _, stderr = _run(["bcdedit", "/deletevalue", "{bootmgr}", "bootsequence"])
+    if rc == 0:
+        log.info("T4: bootsequence cleared (one-time boot override removed)")
+        return True
+    # bootsequence may not exist — that's fine, not an error
+    log.debug("T4: bootsequence clear returned %d: %s (may not exist — OK)", rc, stderr)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # BCD commands: critical vs. best-effort (CC19)
 # ---------------------------------------------------------------------------
@@ -268,6 +331,20 @@ BCD_BEST_EFFORT_COMMANDS = [
     # Ignore all boot failures — no recovery prompt, just boot normally
     # (CC19 demoted to best-effort: bypass already closed by recoveryenabled No + WinRE disable)
     ("bootstatuspolicy", "IgnoreAllFailures", "Set bootstatuspolicy to IgnoreAllFailures"),
+    # T4: Ensure driver signature enforcement is ON (nointegritychecks=No)
+    # If nointegritychecks=Yes, Windows loads unsigned drivers — a bypass vector
+    ("nointegritychecks", "No", "Ensure driver signature enforcement"),
+    # T4: Block test-signed drivers (allowprereleasesignatures=No)
+    # If allowprereleasesignatures=Yes, test-signed drivers load — a bypass vector
+    ("allowprereleasesignatures", "No", "Block test-signed drivers"),
+]
+
+# T4: Boot manager-level settings (applied to {bootmgr}, not {default})
+# These are best-effort. The timeout=0 eliminates the boot menu wait entirely,
+# so even if displaybootmenu somehow gets re-enabled, the menu flashes too
+# fast to interact with.
+BCD_BOOTMGR_COMMANDS = [
+    ("timeout", "0", "Set boot manager timeout to 0 (no menu wait)"),
 ]
 
 # Restore commands: reverse the lockdown settings
@@ -276,6 +353,14 @@ BCD_RESTORE_COMMANDS = [
     ("displaybootmenu", "Yes", "Show boot menu"),
     ("bootstatuspolicy", "DisplayAllFailures", "Restore bootstatuspolicy"),
     ("recoveryenabled", "Yes", "Re-enable recovery menu"),
+    # T4: Restore driver signature enforcement defaults
+    ("nointegritychecks", "No", "Restore nointegritychecks"),
+    ("allowprereleasesignatures", "No", "Restore allowprereleasesignatures"),
+]
+
+# T4: Restore commands for {bootmgr} level
+BCD_BOOTMGR_RESTORE_COMMANDS = [
+    ("timeout", "30", "Restore boot manager timeout to 30s"),
 ]
 
 
@@ -473,6 +558,18 @@ def save_bcd_state() -> dict:
         if current is not None:
             state["settings"][setting] = current
 
+    # T4: Save {bootmgr}-level settings (timeout)
+    state["bootmgr_settings"] = {}
+    for setting, _, _ in BCD_BOOTMGR_COMMANDS:
+        rc, stdout, _ = _run(["bcdedit", "/query", "{bootmgr}", setting])
+        if rc == 0:
+            lines = stdout.strip().split("\n")
+            for line in lines:
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    state["bootmgr_settings"][setting] = parts[-1]
+                    break
+
     _atomic_write_text(BCD_STATE_FILE, json.dumps(state, indent=2))
     log.info("BCD state saved to %s", BCD_STATE_FILE)
     return state
@@ -660,6 +757,21 @@ def apply_bcd_lockdown() -> dict:
             best_effort_failed += 1
             log.warning("BEST-EFFORT: %s failed — continuing (not critical)", description)
 
+    # T4: Boot manager-level best-effort settings ({bootmgr}, not {default})
+    for setting, value, description in BCD_BOOTMGR_COMMANDS:
+        if _set_bcd_setting_bootmgr(setting, value):
+            best_effort_applied += 1
+        else:
+            best_effort_failed += 1
+            log.warning("BEST-EFFORT {bootmgr}: %s failed — continuing", description)
+
+    # T4: Clear one-time boot sequence override (defense-in-depth)
+    if _clear_bootsequence():
+        best_effort_applied += 1
+    else:
+        best_effort_failed += 1
+        log.warning("BEST-EFFORT: bootsequence clear failed — continuing")
+
     # --- Success: write sentinel ---
     BCD_LOCK_SENTINEL.write_text("locked")
     log.info(
@@ -730,6 +842,19 @@ def remove_bcd_lockdown() -> bool:
                 failed += 1
         else:
             log.info("WinRE was disabled before lockdown — not re-enabling")
+
+        # T4: Restore {bootmgr}-level settings (timeout)
+        saved_bootmgr = state.get("bootmgr_settings", {})
+        for setting, original_value in saved_bootmgr.items():
+            rc, _, stderr = _run(["bcdedit", "/set", "{bootmgr}", setting, original_value])
+            if rc == 0:
+                restored += 1
+                log.info("BCD {bootmgr} restored: %s → %s", setting, original_value)
+            else:
+                failed += 1
+                log.warning(
+                    "BCD {bootmgr} restore failed: %s → %s: %s", setting, original_value, stderr
+                )
     else:
         # No saved state — use safe defaults
         log.warning("No saved BCD state — restoring to safe defaults")
@@ -741,6 +866,16 @@ def remove_bcd_lockdown() -> bool:
             else:
                 failed += 1
                 log.warning("BCD restore failed: %s — %s", description, stderr)
+
+        # T4: Restore {bootmgr} safe defaults
+        for setting, value, description in BCD_BOOTMGR_RESTORE_COMMANDS:
+            rc, _, stderr = _run(["bcdedit", "/set", "{bootmgr}", setting, value])
+            if rc == 0:
+                restored += 1
+                log.info("BCD {bootmgr} restored: %s", description)
+            else:
+                failed += 1
+                log.warning("BCD {bootmgr} restore failed: %s — %s", description, stderr)
 
         # Re-enable WinRE (safe default)
         if _enable_winre():

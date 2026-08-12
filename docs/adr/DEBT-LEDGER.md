@@ -244,6 +244,63 @@
   (trusted), so this was not currently exploitable, but the inconsistency
   was a defense-in-depth gap.
 
+### D-015 — No SafeBoot registry entries (agent doesn't start in Safe Mode)
+- **Status**: CLOSED
+- **Commit ref**: 2026-08-13 Phase 1 PBA session
+- **Artifact ref**: 263 agent tests pass (was 230). install-service-enhanced.ps1
+  now creates SafeBoot\Minimal and SafeBoot\Network registry entries for the
+  LockdownAgent service. uninstall_service.ps1 removes them. 3 new tests
+  verify the install/uninstall scripts contain the correct registry paths.
+- **Close criteria met**: Agent service is added to SafeBoot registry groups
+  at install time (Q5=A), so it starts in Safe Mode even before lockdown is
+  applied.
+
+### D-016 — No Secure Boot verification
+- **Status**: CLOSED
+- **Commit ref**: 2026-08-13 Phase 1 PBA session
+- **Artifact ref**: 263 agent tests pass. _check_secure_boot() in
+  hp_uefi_lockdown.py queries HP WMI for Secure Boot status and includes
+  it in the lockdown result dict. 5 new tests (enabled, disabled, not found,
+  enum value, in result dict).
+- **Close criteria met**: Agent verifies Secure Boot is enabled and warns
+  if it's disabled. Verification-only (does not enable Secure Boot — that
+  requires a platform key).
+
+### D-017 — No VT-d/IOMMU DMA protection
+- **Status**: CLOSED
+- **Commit ref**: 2026-08-13 Phase 1 PBA session
+- **Artifact ref**: 263 agent tests pass. dma_protection concept added to
+  CONCEPTS and DEFAULT_SETTING_NAMES. VT-d/IOMMU is enabled as a best-effort
+  setting during lockdown. 4 new tests (concept defined, setting names,
+  best-effort classification, dry-run state).
+- **Close criteria met**: Agent enables VT-d/IOMMU DMA protection to block
+  Thunderbolt/PCIe DMA attacks.
+
+### D-018 — BCD lockdown missing timeout, bootsequence, integrity hardening
+- **Status**: CLOSED
+- **Commit ref**: 2026-08-13 Phase 1 PBA session
+- **Artifact ref**: 263 agent tests pass. BCD_BEST_EFFORT_COMMANDS now
+  includes nointegritychecks=No and allowprereleasesignatures=No.
+  BCD_BOOTMGR_COMMANDS sets {bootmgr} timeout=0. _clear_bootsequence()
+  removes one-time boot override. save_bcd_state/remove_bcd_lockdown
+  handle the new {bootmgr} settings. 11 new tests.
+- **Close criteria met**: BCD lockdown now hardens timeout, bootsequence,
+  driver signature enforcement, and test-signed driver blocking.
+
+### D-019 — No BitLocker suspension for BIOS changes (only BCD)
+- **Status**: CLOSED
+- **Commit ref**: 2026-08-13 Phase 1 PBA session
+- **Artifact ref**: 263 agent tests pass. _check_bitlocker(),
+  _suspend_bitlocker(), _resume_bitlocker() added to hp_uefi_lockdown.py.
+  apply_boot_lockdown() suspends BitLocker before BIOS changes, resumes
+  after (both success and rollback paths). remove_boot_lockdown() also
+  suspends/resumes. 10 new tests (dry-run, parsing, manage-bde calls,
+  suspend before BIOS, resume after rollback).
+- **Close criteria met**: BitLocker protectors are suspended before BIOS
+  setting changes and resumed after, preventing recovery key prompts on
+  next boot (Q8=A). This is especially critical for PBA-protected machines
+  where a BitLocker recovery prompt would brick the device.
+
 ---
 
 ## Close criteria summary
@@ -264,3 +321,8 @@
 | D-012 | Dashboard effectiveness panel | CLOSED | — |
 | D-013 | Read-back-after-write at 4 sites | CLOSED | E-HP-UEFI |
 | D-014 | _read_setting filter escaping | CLOSED | E-HP-UEFI |
+| D-015 | No SafeBoot registry entries | CLOSED | — |
+| D-016 | No Secure Boot verification | CLOSED | E-HP-UEFI |
+| D-017 | No VT-d/IOMMU DMA protection | CLOSED | E-HP-UEFI |
+| D-018 | BCD missing timeout/bootsequence/integrity | CLOSED | E-BCD |
+| D-019 | No BitLocker suspension for BIOS changes | CLOSED | E-HP-UEFI |
