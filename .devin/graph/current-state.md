@@ -10,37 +10,36 @@
 
 ---
 
-## Latest session: 2026-08-13 — T3: Error messages with fix instructions
+## Latest session: 2026-08-13 (later) — Commit T3 follow-up + audit device_id fix
 
 ### Fog cleared
-- 26 GENERIC error messages replaced with fix-instruction messages
-- ~24 worst DESCRIPTION-ONLY offenders fixed (Device not found, etc.)
-- 7 new pattern tests verify fix instructions are present
-- 1 existing test assertion updated to match new message text
+- The uncommitted `audit.js` change is a real bug fix, not just cosmetic:
+  the strict UUID regex rejected valid SQLite-generated device IDs (32-char
+  hex, no dashes) in the dev/test backend. Loosened regex now accepts both
+  PostgreSQL UUIDs (36 chars) and SQLite hex IDs (32 chars).
+- Verified via `migrations/001_base.sql` (UUID type) + `sqlitePool.js`
+  line 116 (gen_random_uuid → lower(hex(randomblob(16)))).
+- All 362 server tests pass before commit.
 
 ### Fog remaining
-- ~93 lower-priority DESCRIPTION-ONLY errors remain unfixed (not targeted)
-- Dashboard ESLint not run (string-only changes, no structural impact)
+- None for this change.
 
 ### Debt items closed
-None — this is harness improvement work, not debt closure.
+None — small bug fix surfaced from T3, not a debt item.
 
 ### Debt items still open
 None — all 19 debt items (D-001 through D-019) remain CLOSED.
 
 ### Blockers
-None — T3 is complete. All harness engineering tickets are now CLOSED.
+None.
 
 ### Next session opening
-All harness engineering wayfinder tickets are now CLOSED (Q1, T1, T2, T3).
-The harness improvements delivered across 3 sessions:
-- H1: trace.md restructured (current-state.md for fast startup)
-- H2: clean-state checklist (make clean-state)
-- H3: Goodhart's Law defense (I4, I5, I7 strengthened)
-- H4: error messages with fix instructions (~50 highest-impact fixed)
-- H5: failure attribution convention (5 harness layers)
-- H6: completed artifacts archived
-Next session: commit all work, then consider optional next steps.
+T3 follow-up committed (ca87de0). Tree clean. All harness engineering
+tickets CLOSED, all 19 debt items CLOSED. Optional next steps remain:
+real HP hardware testing, HP CMSL integration, addressing graph invariant
+violations I6 (orchestrator only knows phases 0-7, not all 17) and I7
+(every COMPLETE phase needs non-empty artifact reference), or new feature
+requests.
 
 ---
 

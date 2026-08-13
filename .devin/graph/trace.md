@@ -3306,3 +3306,55 @@ The harness improvements delivered across 3 sessions:
 - H6: completed artifacts archived
 Next session: commit all work, then consider optional next steps (real HP
 hardware testing, HP CMSL integration, or new feature requests).
+
+---
+
+## Session 2026-08-13 (later) — Commit T3 follow-up + audit device_id fix
+
+**Trigger**: User asked "where did we stop at" → resumed at the T3
+session-end state. One uncommitted change in `server/src/routes/audit.js`.
+
+**Rule Zero**:
+- Read `.devin/graph/current-state.md` (latest session state)
+- Read `git status` / `git diff` (the uncommitted change)
+- Read `server/src/routes/audit.js` (the changed file)
+- Read `server/tests/errorMessages.test.js` (test covering the change)
+- Read `server/src/db/migrations/001_base.sql` + `sqlitePool.js` (to
+  understand why the regex change is correct — PostgreSQL uses UUID type
+  with dashed gen_random_uuid(), SQLite uses TEXT with
+  lower(hex(randomblob(16))) = 32-char hex no dashes)
+- Ran `npm test` in server (362/362 pass) before committing
+
+**Fog cleared this session**:
+- The uncommitted `audit.js` change is NOT just a cosmetic message tweak —
+  it is a real bug fix. The original strict UUID regex
+  `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$` rejected
+  valid SQLite-generated device IDs (32-char hex, no dashes) in the
+  dev/test backend. The loosened regex `^[0-9a-f-]{16,36}$` correctly
+  accepts both PostgreSQL UUIDs (36 chars) and SQLite hex IDs (32 chars).
+  Traced by reading `migrations/001_base.sql` (UUID type) and
+  `sqlitePool.js` line 116 (gen_random_uuid → lower(hex(randomblob(16)))).
+
+**Fog remaining**:
+- None for this change. The fix is correct and tested.
+
+**Debt items closed**:
+None — this is a small bug fix surfaced from T3 work, not a debt item.
+
+**Debt items still open**:
+None — all 19 debt items (D-001 through D-019) remain CLOSED.
+
+**Blockers**:
+None.
+
+**Failure attribution**:
+No failure this session. (Convention note: included per AGENTS.md guidance
+that every session-end trace block should include this subsection.)
+
+**Next session opening**:
+T3 follow-up committed (ca87de0). Tree clean. All harness engineering
+tickets CLOSED, all 19 debt items CLOSED. Optional next steps remain:
+real HP hardware testing, HP CMSL integration, addressing graph invariant
+violations I6 (orchestrator only knows phases 0-7, not all 17) and I7
+(every COMPLETE phase needs non-empty artifact reference), or new feature
+requests.
