@@ -655,10 +655,12 @@ debt_items:
 #     status block.
 # I5: No code changes can be made before RULE-ZERO is complete for the
 #     current work item.
-# I6: The orchestrator must know about ALL phases in the graph (currently
-#     violates — orchestrator.sh only has 0-7).
+# I6: The orchestrator must know about ALL phases in the graph (resolved —
+#     D-001 CLOSED; orchestrator.sh has all 17 phases in PHASE_DEPS, PHASE_NAMES,
+#     show_status, run_all, and case statement).
 # I7: Every phase marked COMPLETE must have a non-empty artifact reference
-#     (currently violates — all .complete files are 0 bytes).
+#     (resolved — D-002 CLOSED; all 17 .complete files populated with commit
+#     hash + artifact + date + tests).
 
 invariants:
   - id: I1

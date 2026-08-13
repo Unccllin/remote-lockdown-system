@@ -35,11 +35,11 @@ None.
 
 ### Next session opening
 T3 follow-up committed (ca87de0). Tree clean. All harness engineering
-tickets CLOSED, all 19 debt items CLOSED. Optional next steps remain:
-real HP hardware testing, HP CMSL integration, addressing graph invariant
-violations I6 (orchestrator only knows phases 0-7, not all 17) and I7
-(every COMPLETE phase needs non-empty artifact reference), or new feature
-requests.
+tickets CLOSED, all 19 debt items CLOSED, all graph invariants pass
+(I6 and I7 were already resolved via D-001/D-002 — stale "currently
+violated" markers in AGENTS.md and GRAPH-SPEC.yaml comments corrected
+this session). Optional next steps remain: real HP hardware testing,
+HP CMSL integration, or new feature requests.
 
 ---
 

@@ -57,8 +57,8 @@ SESSION-START → RULE-ZERO → IMPLEMENT → VERIFY → ARTIFACT → CLOSE-DEBT
 - I3: No enforcement path marked "verified-on-hardware" without real hardware artifact
 - I4: No session close without trace.md status block update
 - I5: No code changes before RULE-ZERO is complete
-- I6: Orchestrator must know about ALL 17 phases (currently violated — only 0-7)
-- I7: Every COMPLETE phase has non-empty artifact reference (currently violated — all empty)
+- I6: Orchestrator must know about ALL 17 phases (resolved — D-001 CLOSED, all 17 phases present)
+- I7: Every COMPLETE phase has non-empty artifact reference (resolved — D-002 CLOSED, all .complete files populated)
 
 **Rule Zero (read before you code):**
 
