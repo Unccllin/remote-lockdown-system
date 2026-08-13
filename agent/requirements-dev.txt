@@ -2,3 +2,6 @@
 # Install with: pip install -r requirements-dev.txt
 ruff==0.5.0
 pytest==8.2.0
+# pyyaml is needed by test_graph_assertions.py, which imports
+# graph_assert.py → graph_loader.py (the node graph loader).
+pyyaml==6.0.3

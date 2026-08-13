@@ -16,15 +16,15 @@ Usage:
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 from typing import Any
 
 try:
     import yaml
 except ImportError:
-    print("ERROR: PyYAML is required. Install with: pip install pyyaml", file=sys.stderr)
-    sys.exit(1)
+    raise ImportError(
+        "PyYAML is required by graph_loader. Install with: pip install pyyaml"
+    )
 
 # ---------------------------------------------------------------------------
 # Graph file location

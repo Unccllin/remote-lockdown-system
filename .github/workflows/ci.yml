@@ -120,7 +120,8 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - run: pip install pytest
+      # Install dev dependencies (pytest, ruff, pyyaml for graph_assert tests)
+      - run: pip install -r requirements-dev.txt
 
       # Security: audit installed Python packages for known vulnerabilities.
       # pip-audit checks the active environment against the PyPI advisory DB.
