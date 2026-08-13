@@ -2,6 +2,7 @@ const express = require('express');
 const pool = require('../db/pool');
 const { withTransaction } = require('../db/withTransaction');
 const { encryptField, readDualMode } = require('../db/fieldCrypto');
+const { groupPbaCredentials } = require('../db/pbaCredentials');
 const { hashApiKey, verifySharedKey } = require('../db/apiKey');
 const { hmacVerify } = require('../middleware/hmacAuth');
 const { getAgentBinariesDir } = require('../config/paths');
@@ -160,27 +161,11 @@ async function fetchUnlockMaterials(deviceId) {
     `SELECT * FROM bios_passwords WHERE device_id = $1 ORDER BY created_at DESC`,
     [deviceId]
   );
-  for (const row of pwResult.rows) {
-    // CC16: Dual-mode read for bios_password
-    const pw = readDualMode(
-      row,
-      'password',
-      'password_encrypted',
-      'pw_enc_nonce',
-      'pw_enc_tag'
-    );
-    // T8: password_type discriminator (defaults to 'setup' for pre-migration rows)
-    const pwType = row.password_type || 'setup';
-    if (pwType === 'power_on' && !powerOnPassword) {
-      powerOnPassword = pw;
-    } else if (pwType === 'setup' && !biosPassword) {
-      biosPassword = pw;
-    } else if (pwType === 'bitlocker_pin' && !bitlockerPin) {
-      bitlockerPin = pw;
-    } else if (pwType === 'bitlocker_recovery' && !bitlockerRecoveryPassword) {
-      bitlockerRecoveryPassword = pw;
-    }
-  }
+  const pbaCreds = groupPbaCredentials(pwResult.rows);
+  biosPassword = pbaCreds.setup_password;
+  powerOnPassword = pbaCreds.power_on_password;
+  bitlockerPin = pbaCreds.bitlocker_pin;
+  bitlockerRecoveryPassword = pbaCreds.bitlocker_recovery_password;
 
   return { keyMaterial, biosPassword, powerOnPassword, bitlockerPin, bitlockerRecoveryPassword };
 }

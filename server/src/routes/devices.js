@@ -4,6 +4,7 @@ const { getDeviceById } = require('../db/deviceQueries');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { withTransaction } = require('../db/withTransaction');
 const { generateApiKey, hashApiKey } = require('../db/apiKey');
+const { groupPbaCredentials } = require('../db/pbaCredentials');
 const { readDualMode } = require('../db/fieldCrypto');
 const { sendNotification } = require('../notifications/notify');
 
@@ -558,32 +559,7 @@ router.get('/:id/pba-credentials', requireAuth, requireRole('super-admin'), asyn
     [id]
   );
 
-  const credentials = {
-    setup_password: null,
-    power_on_password: null,
-    bitlocker_pin: null,
-    bitlocker_recovery_password: null,
-  };
-
-  for (const row of pwResult.rows) {
-    const pw = readDualMode(
-      row,
-      'password',
-      'password_encrypted',
-      'pw_enc_nonce',
-      'pw_enc_tag'
-    );
-    const pwType = row.password_type || 'setup';
-    if (pwType === 'setup' && !credentials.setup_password) {
-      credentials.setup_password = pw;
-    } else if (pwType === 'power_on' && !credentials.power_on_password) {
-      credentials.power_on_password = pw;
-    } else if (pwType === 'bitlocker_pin' && !credentials.bitlocker_pin) {
-      credentials.bitlocker_pin = pw;
-    } else if (pwType === 'bitlocker_recovery' && !credentials.bitlocker_recovery_password) {
-      credentials.bitlocker_recovery_password = pw;
-    }
-  }
+  const credentials = groupPbaCredentials(pwResult.rows);
 
   // Audit log the credential access (security trail)
   await pool.query(
