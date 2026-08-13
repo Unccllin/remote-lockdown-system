@@ -96,13 +96,13 @@ router.get('/', requireAuth, async (req, res) => {
 
 router.get('/:id', requireAuth, async (req, res) => {
   const device = await getDeviceById(req.params.id);
-  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (!device) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
   res.json(device);
 });
 
 router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
   const { hostname, owner_name } = req.body;
-  if (!hostname || !owner_name) return res.status(400).json({ error: 'hostname and owner_name required' });
+  if (!hostname || !owner_name) return res.status(400).json({ error: 'hostname and owner_name required. Provide both fields in the request body.' });
 
   // Security: validate hostname charset at the input boundary. hostname is
   // later interpolated into generated install scripts (see routes/installer.js);
@@ -133,7 +133,7 @@ router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
       api_key: apiKey, // plaintext — capture now, never shown again
     });
   } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: 'Hostname already registered' });
+    if (err.code === '23505') return res.status(409).json({ error: 'Hostname already registered. Choose a different hostname or use the existing device.' });
     throw err;
   }
 });
@@ -141,13 +141,13 @@ router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
 router.patch('/:id', requireAuth, requireRole('operator'), async (req, res) => {
   const { owner_name } = req.body;
   if (owner_name !== undefined && (typeof owner_name !== 'string' || owner_name.length > 200)) {
-    return res.status(400).json({ error: 'owner_name must be a string of 200 characters or less' });
+    return res.status(400).json({ error: 'owner_name must be a string of 200 characters or less. Shorten the value.' });
   }
   const result = await pool.query(
     'UPDATE devices SET owner_name = COALESCE($1, owner_name) WHERE id = $2 RETURNING *',
     [owner_name, req.params.id]
   );
-  if (!result.rows[0]) return res.status(404).json({ error: 'Device not found' });
+  if (!result.rows[0]) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
   res.json(result.rows[0]);
 });
 
@@ -170,7 +170,7 @@ router.delete('/:id', requireAuth, requireRole('operator'), async (req, res) => 
     }
 
     const result = await pool.query('DELETE FROM devices WHERE id = $1 RETURNING id', [req.params.id]);
-    if (!result.rows[0]) return res.status(404).json({ error: 'Device not found' });
+    if (!result.rows[0]) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
     res.json({ deleted: result.rows[0].id });
   } catch (err) {
     // A6: Guard trigger raises a P0001 exception with a helpful message
@@ -186,27 +186,36 @@ router.delete('/:id', requireAuth, requireRole('operator'), async (req, res) => 
 });
 
 router.post('/:id/flag-stolen', requireAuth, requireRole('operator'), async (req, res) => {
-  const { hostname_confirm } = req.body;
+  const { hostname_confirm, enable_pba } = req.body;
 
   const device = await getDeviceById(req.params.id);
-  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (!device) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
   if (device.hostname !== hostname_confirm) {
-    return res.status(400).json({ error: 'Confirmation hostname does not match' });
+    return res.status(400).json({ error: 'Confirmation hostname does not match. Enter the device hostname exactly as it appears in the device list.' });
   }
   if (device.status === 'stolen') {
-    return res.status(409).json({ error: 'Device already flagged as stolen' });
+    return res.status(409).json({ error: 'Device already flagged as stolen. Use the recover endpoint to unlock it.' });
   }
+
+  // T7/T8: enable_pba is an opt-in flag (Q1=A, default false). When true,
+  // the agent sets an HP Power-On Password for Tier 1 pre-boot authentication.
+  // This sacrifices remote recoverability (a rebooted PBA device can't boot
+  // to receive unlock commands) for stronger data protection.
+  const enablePba = enable_pba === true;
 
   // A2: Wrap status update + command insert + audit log in a transaction
   const cmd = await withTransaction(async (client) => {
     await client.query('UPDATE devices SET status = $1 WHERE id = $2', ['stolen', device.id]);
     const cmdResult = await client.query(
-      `INSERT INTO commands (device_id, command_type, expires_at) VALUES ($1, $2, ${commandExpirySql()}) RETURNING *`,
-      [device.id, 'lockdown']
+      `INSERT INTO commands (device_id, command_type, expires_at, enable_pba) VALUES ($1, $2, ${commandExpirySql()}, $3) RETURNING *`,
+      [device.id, 'lockdown', enablePba]
     );
     await client.query(
       'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
-      [device.id, req.admin.id, 'flag_stolen', { command_id: cmdResult.rows[0].id }]
+      [device.id, req.admin.id, 'flag_stolen', {
+        command_id: cmdResult.rows[0].id,
+        enable_pba: enablePba,
+      }]
     );
     return cmdResult.rows[0];
   });
@@ -228,12 +237,12 @@ router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, re
   const { hostname_confirm } = req.body;
 
   const device = await getDeviceById(req.params.id);
-  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (!device) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
   if (device.hostname !== hostname_confirm) {
-    return res.status(400).json({ error: 'Confirmation hostname does not match' });
+    return res.status(400).json({ error: 'Confirmation hostname does not match. Enter the device hostname exactly as it appears in the device list.' });
   }
   if (device.status !== 'stolen' && device.status !== 'locked') {
-    return res.status(409).json({ error: 'Device is not in a locked/stolen state' });
+    return res.status(409).json({ error: "Device is not in a locked/stolen state. Only devices with status 'stolen' or 'locked' can be recovered." });
   }
 
   // A2: Wrap status update + key release + command insert + audit log in a transaction
@@ -293,7 +302,7 @@ router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, re
  */
 router.post('/:id/rotate-key', requireAuth, requireRole('super-admin'), async (req, res) => {
   const device = await getDeviceById(req.params.id);
-  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (!device) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
 
   const newApiKey = generateApiKey();
   const newHash = hashApiKey(newApiKey);
@@ -321,9 +330,9 @@ router.post('/:id/rotate-key', requireAuth, requireRole('super-admin'), async (r
  */
 router.post('/:id/track', requireAuth, requireRole('operator'), async (req, res) => {
   const device = await getDeviceById(req.params.id);
-  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (!device) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
   if (device.status === 'tracking') {
-    return res.status(409).json({ error: 'Device is already being tracked' });
+    return res.status(409).json({ error: 'Device is already being tracked. Use the stop-track endpoint before starting a new tracking session.' });
   }
   // FA5: Gate track to distressed states only
   const trackAllowed = ['stolen', 'locked', 'recovering'];
@@ -361,7 +370,7 @@ router.post('/:id/track', requireAuth, requireRole('operator'), async (req, res)
  */
 router.post('/:id/locate', requireAuth, requireRole('operator'), async (req, res) => {
   const device = await getDeviceById(req.params.id);
-  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (!device) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
   // FA5: Gate locate to distressed + tracking states
   const locateAllowed = ['stolen', 'locked', 'recovering', 'tracking'];
   if (!locateAllowed.includes(device.status)) {
@@ -392,9 +401,9 @@ router.post('/:id/locate', requireAuth, requireRole('operator'), async (req, res
  */
 router.post('/:id/stop-track', requireAuth, requireRole('operator'), async (req, res) => {
   const device = await getDeviceById(req.params.id);
-  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (!device) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
   if (device.status !== 'tracking') {
-    return res.status(409).json({ error: 'Device is not being tracked' });
+    return res.status(409).json({ error: 'Device is not being tracked. Only devices with status "tracking" can be stopped.' });
   }
 
   const cmd = await pool.query(
@@ -438,7 +447,7 @@ router.get('/:id/location/latest', requireAuth, async (req, res) => {
      LIMIT 1`,
     [req.params.id]
   );
-  if (!result.rows[0]) return res.status(404).json({ error: 'No location data' });
+  if (!result.rows[0]) return res.status(404).json({ error: 'No location data. The device has not reported any location reports yet.' });
   res.json(decryptLocationFields(result.rows[0]));
 });
 
@@ -463,11 +472,11 @@ router.delete('/:id/release', requireAuth, requireRole('operator'), async (req, 
   const { hostname_confirm } = req.body;
 
   const device = await getDeviceById(req.params.id);
-  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (!device) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
 
   // Safety: require hostname confirmation
   if (device.hostname !== hostname_confirm) {
-    return res.status(400).json({ error: 'Confirmation hostname does not match' });
+    return res.status(400).json({ error: 'Confirmation hostname does not match. Enter the device hostname exactly as it appears in the device list.' });
   }
 
   // Safety: can't release a locked or stolen device
@@ -520,6 +529,74 @@ router.get('/settings/retention', requireAuth, async (req, res) => {
     min_location_retention: 7,
     max_location_retention: 180,
   });
+});
+
+/**
+ * T10: Get PBA credentials for a device (admin-only).
+ *
+ * Returns decrypted PBA credentials for the PBA Recovery panel in the
+ * dashboard. This is the operator-facing path for recovering a rebooted
+ * PBA device — the operator needs the BitLocker PIN, 48-digit recovery
+ * password, HP Power-On Password, and HP Setup Password to enter at the
+ * pre-boot prompt.
+ *
+ * Q10=C: Both dashboard feature AND documentation. This endpoint powers
+ * the dashboard; docs/PBA_RECOVERY_RUNBOOK.md is the fallback.
+ */
+router.get('/:id/pba-credentials', requireAuth, requireRole('operator'), async (req, res) => {
+  const { id } = req.params;
+
+  // Verify device exists
+  const device = await getDeviceById(id);
+  if (!device) {
+    return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
+  }
+
+  // Fetch all bios_passwords for the device, grouped by password_type
+  const pwResult = await pool.query(
+    `SELECT * FROM bios_passwords WHERE device_id = $1 ORDER BY created_at DESC`,
+    [id]
+  );
+
+  const credentials = {
+    setup_password: null,
+    power_on_password: null,
+    bitlocker_pin: null,
+    bitlocker_recovery_password: null,
+  };
+
+  for (const row of pwResult.rows) {
+    const pw = readDualMode(
+      row,
+      'password',
+      'password_encrypted',
+      'pw_enc_nonce',
+      'pw_enc_tag'
+    );
+    const pwType = row.password_type || 'setup';
+    if (pwType === 'setup' && !credentials.setup_password) {
+      credentials.setup_password = pw;
+    } else if (pwType === 'power_on' && !credentials.power_on_password) {
+      credentials.power_on_password = pw;
+    } else if (pwType === 'bitlocker_pin' && !credentials.bitlocker_pin) {
+      credentials.bitlocker_pin = pw;
+    } else if (pwType === 'bitlocker_recovery' && !credentials.bitlocker_recovery_password) {
+      credentials.bitlocker_recovery_password = pw;
+    }
+  }
+
+  // Audit log the credential access (security trail)
+  await pool.query(
+    'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
+    [id, req.admin.id, 'pba_credentials_accessed', {
+      hostname: device.hostname,
+      credential_types: Object.entries(credentials)
+        .filter(([, v]) => v !== null)
+        .map(([k]) => k),
+    }]
+  );
+
+  res.json(credentials);
 });
 
 module.exports = router;

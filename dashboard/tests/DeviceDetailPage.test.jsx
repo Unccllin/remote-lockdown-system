@@ -852,4 +852,227 @@ describe('DeviceDetailPage — userEvent flows', () => {
       expect(api.post).toHaveBeenCalledWith('/devices/1/stop-track');
     });
   });
+
+  // T10: PBA Recovery panel tests
+
+  it('T10: shows PBA Active badge when pba_active=true in lockdown detail', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'stolen' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              lockdown_effective: true,
+              boot_lock_detail: {
+                hp_uefi: { pba_active: true, critical_applied: 2 },
+                critical_applied_total: 2,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('PBA Active')).toBeInTheDocument();
+    });
+  });
+
+  it('T10: shows PBA Recovery panel with Show Credentials button when PBA active', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'stolen' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              lockdown_effective: true,
+              boot_lock_detail: {
+                hp_uefi: { pba_active: true, critical_applied: 2 },
+                critical_applied_total: 2,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('PBA Recovery')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Show PBA Credentials/i)).toBeInTheDocument();
+    expect(screen.getByText(/Remote unlock will not work/i)).toBeInTheDocument();
+  });
+
+  it('T10: does not show PBA Recovery panel when pba_active is false', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'stolen' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              lockdown_effective: true,
+              boot_lock_detail: {
+                hp_uefi: { pba_active: false, critical_applied: 2 },
+                critical_applied_total: 2,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    // Wait for page to load
+    await waitFor(() => {
+      expect(screen.getByText('DEV-001')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('PBA Recovery')).not.toBeInTheDocument();
+    expect(screen.queryByText('PBA Active')).not.toBeInTheDocument();
+  });
+
+  it('T10: fetches and displays credentials when Show PBA Credentials clicked', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location') && !url.includes('pba-credentials')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'stolen' } });
+      }
+      if (url.includes('pba-credentials')) {
+        return Promise.resolve({
+          data: {
+            setup_password: 'SetupPw',
+            power_on_password: 'PopPw',
+            bitlocker_pin: '123456',
+            bitlocker_recovery_password: '111111-222222-333333-444444-555555-666666-777777-888888',
+          },
+        });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              lockdown_effective: true,
+              boot_lock_detail: {
+                hp_uefi: { pba_active: true, critical_applied: 2 },
+                critical_applied_total: 2,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    const showBtn = await screen.findByRole('button', { name: /Show PBA Credentials/i });
+    fireEvent.click(showBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('BitLocker PIN')).toBeInTheDocument();
+    });
+    expect(screen.getByText('BitLocker Recovery Password (48-digit)')).toBeInTheDocument();
+    expect(screen.getByText('HP Power-On Password')).toBeInTheDocument();
+    expect(screen.getByText('HP Setup Password')).toBeInTheDocument();
+  });
+
+  it('T10: shows no credentials message when all are null', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location') && !url.includes('pba-credentials')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'stolen' } });
+      }
+      if (url.includes('pba-credentials')) {
+        return Promise.resolve({
+          data: {
+            setup_password: null,
+            power_on_password: null,
+            bitlocker_pin: null,
+            bitlocker_recovery_password: null,
+          },
+        });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              lockdown_effective: true,
+              boot_lock_detail: {
+                hp_uefi: { pba_active: true, critical_applied: 2 },
+                critical_applied_total: 2,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    const showBtn = await screen.findByRole('button', { name: /Show PBA Credentials/i });
+    fireEvent.click(showBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No PBA credentials found for this device/i)).toBeInTheDocument();
+    });
+  });
+
+  it('T10: does not show PBA Recovery panel for active (non-locked) devices', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'active' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              lockdown_effective: true,
+              boot_lock_detail: {
+                hp_uefi: { pba_active: true, critical_applied: 2 },
+                critical_applied_total: 2,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('DEV-001')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('PBA Recovery')).not.toBeInTheDocument();
+  });
 });

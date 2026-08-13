@@ -2,3 +2,5 @@ commit: 1b9e587
 artifact: Docker Compose prod stack validation; scripts/validate-docker.sh; docker-compose.test.yml; --env-file .env.prod fix; Caddyfile syntax; Dockerfile.server syntax
 date: 2026-08-04
 tests: validate-docker.sh passes; compose config validation passes
+
+test_count: 564 tests passing at 2026-08-04 diagnostic sweep (332 server + 198 agent + 34 dashboard)

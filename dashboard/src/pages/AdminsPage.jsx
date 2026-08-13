@@ -34,7 +34,7 @@ export default function AdminsPage() {
       const { data } = await listAdmins();
       setAdmins(Array.isArray(data) ? data : []);
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to load admins');
+      toast.error(err.response?.data?.error || 'Failed to load admins. Check your network connection and try again. If the issue persists, verify you have super-admin permissions.');
     } finally {
       setLoading(false);
     }
@@ -83,7 +83,7 @@ export default function AdminsPage() {
       load();
     } catch (err) {
       console.error('AdminsPage role change failed:', err);
-      toast.error(err.response?.data?.error || 'Failed to update role');
+      toast.error(err.response?.data?.error || 'Failed to update role. Check your network connection and try again. If the issue persists, verify the role value is valid.');
     }
   }
 

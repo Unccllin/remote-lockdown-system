@@ -2,3 +2,5 @@ commit: a50fcf0
 artifact: PostgreSQL compatibility test (postgres-compat.test.js); DB_SSL env var for docker-compose internal network; pool.js SSL negotiation fix
 date: 2026-08-04
 tests: postgres-compat.test.js passes; SQLite + PostgreSQL dual-path verified
+
+test_count: 564 tests passing at 2026-08-04 diagnostic sweep (332 server + 198 agent + 34 dashboard)

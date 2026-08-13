@@ -46,7 +46,7 @@ export default function DevicesPage() {
       setDevices(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('DevicesPage load failed:', err);
-      toast.error('Failed to load devices');
+      toast.error('Failed to load devices. Check your network connection and try again. If the issue persists, verify the server is running.');
     } finally {
       setLoading(false);
     }

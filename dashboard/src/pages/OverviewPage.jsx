@@ -84,7 +84,7 @@ export default function OverviewPage() {
       setDevices(Array.isArray(devRes.data) ? devRes.data : []);
       setLogs(Array.isArray(logRes.data) ? logRes.data : []);
     } catch {
-      toast.error('Failed to load overview data');
+      toast.error('Failed to load overview data. Check your network connection and try again. If the issue persists, verify the server is running.');
     } finally {
       setLoading(false);
     }

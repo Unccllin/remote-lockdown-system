@@ -57,7 +57,7 @@ function setupEnv(isDev) {
   // SQLite database path — store in Electron's userData directory
   // (set by main.js before requiring this module)
   if (!process.env.SQLITE_PATH) {
-    throw new Error('SQLITE_PATH must be set before starting server');
+    throw new Error('SQLITE_PATH must be set before starting server. Fix: set process.env.SQLITE_PATH to a writable file path for the SQLite database before requiring server-starter.js.');
   }
 
   // User data directory — used by installer.js for caching cross-platform
@@ -163,7 +163,7 @@ async function startServer(options = {}) {
   // 404 JSON for unmatched API routes — prevents API clients from
   // receiving index.html (the SPA fallback) for non-existent endpoints.
   app.all('/api/*', (req, res) => {
-    res.status(404).json({ error: 'Not found' });
+    res.status(404).json({ error: 'Not found. Check the API endpoint path and method.' });
   });
 
   // Serve built dashboard (production mode)
@@ -190,7 +190,7 @@ async function startServer(options = {}) {
   // Error handler
   app.use((err, req, res, _next) => {
     console.error('[server-starter] Express error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error. Check server logs for details and contact support if the issue persists.' });
   });
 
   // Start listening — port 0 means OS picks an available port

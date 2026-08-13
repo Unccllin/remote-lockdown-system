@@ -1,7 +1,7 @@
 # T5: Phase 1 — BitLocker suspension for BIOS changes
 
 > **Label:** `wayfinder:task`
-> **Status:** OPEN
+> **Status:** CLOSED (2026-08-14)
 > **Blocks:** none
 > **Blocked by:** none
 > **Implements:** Q8

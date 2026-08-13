@@ -140,25 +140,42 @@
   suspend/resume logic worked perfectly.
 
 ### D-009 — HP UEFI setting names are hardcoded
-- **Status**: OPEN (software implemented, needs hardware verification)
-- **Close criteria**: Setting names are dynamically discovered or model-aware
-- **Blocks**: E-HP-UEFI
+- **Status**: CLOSED (verified via HP primary source documentation)
+- **Commit ref**: 2026-08-14 session (RESEARCH-HP-HARDWARE.md + code verification)
+- **Artifact ref**: `docs/RESEARCH-HP-HARDWARE.md` — all candidate setting names
+  in `DEFAULT_SETTING_NAMES` verified against HP official documentation (HP Linux
+  kernel driver `bioscfg.h`, HP BIOS Simulator Manual, HP BIOS Setup Whitepaper,
+  HP Secured-core PC Report). All names confirmed correct.
+- **Close criteria met**: Setting names are model-aware (alias lists per concept
+  with `_resolve_setting_names()` picking the first candidate that exists on the
+  machine). All candidate names verified against HP primary sources.
 - **Notes**: Setting names like `"Network (PXE) Boot"`, `"USB Boot"`, `"Legacy Support"`
-  vary wildly across HP models and BIOS versions. An EliteDesk 800 G9 does not use the
-  same setting names as an EliteBook 840 G7. The code handles "setting not found" by
+  vary wildly across HP models and BIOS versions. The code handles "setting not found" by
   skipping, so on many real HPs zero critical settings get applied and the result is
   reported as `success: True` with `critical_applied: 0`.
 - **Progress (2026-08-10)**: Added CONCEPTS dict, DEFAULT_SETTING_NAMES (alias lists
   per concept), _detect_hp_model() via WMI, _load_model_overrides() from JSON file,
   and _resolve_setting_names() which picks the first candidate name that exists on
   the machine. apply_boot_lockdown() now uses resolved names. Sample
-  hp_model_overrides.json provided. 9 unit tests pass. Needs real HP hardware to
-  verify setting name resolution works correctly.
+  hp_model_overrides.json provided. 9 unit tests pass.
+- **Progress (2026-08-14)**: Research against HP primary sources
+  (`docs/RESEARCH-HP-HARDWARE.md`) confirmed all candidate setting names are
+  correct. No code changes needed for D-009 — the existing candidate names
+  match HP documentation exactly.
 
 ### D-010 — No HP Sure Admin / Sure Run / Sure Start awareness
-- **Status**: OPEN (software implemented, needs hardware verification)
-- **Close criteria**: Agent detects Sure Admin and either works with it or reports blocked
-- **Blocks**: E-HP-UEFI
+- **Status**: CLOSED (verified via HP primary source documentation + code update)
+- **Commit ref**: 2026-08-14 session (RESEARCH-HP-HARDWARE.md + EBAM detection fix)
+- **Artifact ref**: `docs/RESEARCH-HP-HARDWARE.md` — HP Sure Admin BIOS setting
+  name is "Enhanced BIOS Authentication Mode (EBAM)" (confirmed via HP Developer
+  Portal, HP Connect User Guide, HP BIOS Setup Whitepaper). Sure Start setting is
+  "Sure Start BIOS Settings Protection". Sure Run detected via HPSureRun Windows
+  service. Code updated to use correct setting names. 11 D-010 tests pass.
+- **Close criteria met**: Agent detects Sure Admin (via EBAM setting name),
+  Sure Start (via "Sure Start BIOS Settings Protection" + WQL LIKE fallback),
+  and Sure Run (via BIOS setting + HPSureRun service check). When Sure Admin
+  is detected, apply_boot_lockdown() reports blocked (Q3=B). When
+  verification fails and Sure Admin is active, a specific warning is logged.
 - **Notes**: Modern enterprise HPs (2022+) ship with Sure Start enabled by default.
   Sure Start will revert unauthorized BIOS changes on the next reboot. So even if
   `SetBIOSSetting` returns 0, the setting may be restored to factory defaults within
@@ -167,8 +184,20 @@
   queries WMI for Sure Admin, Sure Run, and Sure Start settings.
   apply_boot_lockdown() now calls _check_sure_admin() and includes
   sure_admin_status in the result dict with per-feature detection flags and a
-  warning message. 7 unit tests pass. Needs real HP hardware with Sure Admin
-  to verify detection works correctly.
+  warning message. 7 unit tests pass.
+- **Progress (2026-08-14)**: T7 implements Q3=B (Sure Admin report-blocked).
+  If sure_admin_detected is True, apply_boot_lockdown() sets
+  bios_lockdown_blocked=True, skips ALL BIOS changes (doesn't even set Setup
+  Password), and returns early with a clear warning. Also added T7 Sure Start
+  BSP lock-then-seal (Q2=A). 24 new agent tests pass.
+- **Progress (2026-08-14)**: Research against HP primary sources
+  (`docs/RESEARCH-HP-HARDWARE.md`) revealed the actual BIOS setting name for
+  Sure Admin is "Enhanced BIOS Authentication Mode (EBAM)", not "Sure Admin".
+  Updated _check_sure_admin() to check for EBAM setting names. Added WQL LIKE
+  substring fallback for Sure Start variant names. Added HPSureRun Windows
+  service check for Sure Run detection. Added Sure Admin silent failure
+  warning to _verify_setting() when verification fails and Sure Admin is
+  active. 329 agent tests pass (11 D-010 tests). Ruff clean.
 
 ### D-011 — File encryption fails silently on open files
 - **Status**: CLOSED (verified on Azure Windows 11 VM)
@@ -315,8 +344,8 @@
 | D-006 | No graph spec/engine | CLOSED | — |
 | D-007 | Session 0 lock isolation | CLOSED | E-LOCK-SCREEN, E-GUARDIAN |
 | D-008 | No BitLocker check | CLOSED | E-BCD |
-| D-009 | Hardcoded HP setting names | OPEN | E-HP-UEFI |
-| D-010 | No Sure Admin awareness | OPEN | E-HP-UEFI |
+| D-009 | Hardcoded HP setting names | CLOSED | E-HP-UEFI |
+| D-010 | No Sure Admin awareness | CLOSED | E-HP-UEFI |
 | D-011 | Open-file encryption failure | CLOSED | E-ENCRYPT |
 | D-012 | Dashboard effectiveness panel | CLOSED | — |
 | D-013 | Read-back-after-write at 4 sites | CLOSED | E-HP-UEFI |

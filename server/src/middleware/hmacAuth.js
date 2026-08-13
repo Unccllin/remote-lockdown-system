@@ -143,7 +143,7 @@ function hmacVerify(opts = {}) {
 
     if (!hasSig) {
       if (requireHmac) {
-        return res.status(401).json({ error: 'HMAC signature required' });
+        return res.status(401).json({ error: 'HMAC signature required. Include X-Timestamp, X-Nonce, X-Signature, and X-Sig-Version headers. See the HMAC signing documentation for the signature format.' });
       }
       // Transition period: allow unsigned requests with warning
       logger.warn(
@@ -166,14 +166,14 @@ function hmacVerify(opts = {}) {
     const rawBody = req.rawBody || '';
     const result = verifyHmac(deviceKey, req.headers, rawBody);
     if (!result.ok) {
-      return res.status(401).json({ error: `HMAC verification failed: ${result.reason}` });
+      return res.status(401).json({ error: `HMAC verification failed: ${result.reason}. Ensure the agent is using the correct device API key and that the X-Timestamp, X-Nonce, and X-Signature headers are correctly computed.` });
     }
 
     // Replay protection
     const pool = require('../db/pool');
     const fresh = await checkAndRecordNonce(result.nonce, result.ttl, pool);
     if (!fresh) {
-      return res.status(401).json({ error: 'replay detected (nonce already used)' });
+      return res.status(401).json({ error: 'replay detected (nonce already used). Generate a new X-Nonce for each request.' });
     }
 
     req.hmacVerified = true;

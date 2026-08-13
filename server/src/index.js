@@ -192,13 +192,13 @@ if (fs.existsSync(dashboardDistPath)) {
 // 404 JSON for unmatched API routes — prevents API clients from receiving
 // index.html (the SPA fallback) for non-existent endpoints.
 app.all('/api/*', (req, res) => {
-  res.status(404).json({ error: 'Not found' });
+  res.status(404).json({ error: 'Not found. Check the API endpoint path and method. Available routes are under /api/devices, /api/agent, /api/auth, /api/admins, /api/audit, /api/setup, /api/health.' });
 });
 
 app.use((err, _req, res, _next) => {
   // DB unique constraint violation
   if (err.code === '23505') {
-    return res.status(409).json({ error: 'Conflict — resource already exists' });
+    return res.status(409).json({ error: 'Conflict — resource already exists. Use a unique value for the field that caused the conflict.' });
   }
   // Custom status code (e.g., from err.status or err.statusCode)
   if (err.status) {
@@ -206,7 +206,7 @@ app.use((err, _req, res, _next) => {
   }
   // Log and return generic 500 (no stack traces leaked to client)
   logger.error({ err }, 'Unhandled error');
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(500).json({ error: 'Internal server error. Check server logs for details and contact support if the issue persists.' });
 });
 
 const pool = require('./db/pool');

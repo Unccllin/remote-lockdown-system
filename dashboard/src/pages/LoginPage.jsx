@@ -32,7 +32,7 @@ export default function LoginPage() {
       localStorage.setItem('token', data.token);
       navigate('/');
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Login failed');
+      toast.error(err.response?.data?.error || 'Login failed. Check your username and password and try again. If the issue persists, verify the server is running.');
     } finally {
       setLoading(false);
     }

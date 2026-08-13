@@ -1,7 +1,7 @@
 # T6: Phase 1 — Write all tests + verify
 
 > **Label:** `wayfinder:task`
-> **Status:** OPEN
+> **Status:** CLOSED (2026-08-14)
 > **Blocks:** T7 (Phase 2 start)
 > **Blocked by:** T1, T2, T3, T4, T5
 > **Implements:** Q6

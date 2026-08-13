@@ -57,16 +57,16 @@ router.post('/create-admin', async (req, res) => {
 
   // Validate input
   if (!username || !password) {
-    return res.status(400).json({ error: 'username and password are required' });
+    return res.status(400).json({ error: 'username and password are required. Provide both fields in the request body.' });
   }
   if (typeof username !== 'string' || username.length < 3 || username.length > 100) {
-    return res.status(400).json({ error: 'Username must be 3-100 characters' });
+    return res.status(400).json({ error: 'Username must be 3-100 characters. Choose a shorter or longer username.' });
   }
   if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
-    return res.status(400).json({ error: 'Username can only contain letters, numbers, underscores, and hyphens' });
+    return res.status(400).json({ error: 'Username can only contain letters, numbers, underscores, and hyphens. Remove any special characters.' });
   }
   if (typeof password !== 'string' || password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    return res.status(400).json({ error: 'Password must be at least 8 characters. Choose a longer password.' });
   }
 
   try {
@@ -77,7 +77,7 @@ router.post('/create-admin', async (req, res) => {
     if (count > 0) {
       // An admin already exists — this endpoint is permanently disabled
       return res.status(403).json({
-        error: 'Initial setup has already been completed. This endpoint is disabled.',
+        error: 'Initial setup has already been completed. This endpoint is disabled. Log in with an existing admin account and use /api/admins to create new admins.',
       });
     }
 
@@ -113,10 +113,10 @@ router.post('/create-admin', async (req, res) => {
 
     // Handle duplicate username
     if (err.message && err.message.includes('UNIQUE')) {
-      return res.status(409).json({ error: 'Username already exists' });
+      return res.status(409).json({ error: 'Username already exists. Choose a different username.' });
     }
 
-    res.status(500).json({ error: 'Failed to create admin account' });
+    res.status(500).json({ error: 'Failed to create admin account. Check server logs for details and try again.' });
   }
 });
 

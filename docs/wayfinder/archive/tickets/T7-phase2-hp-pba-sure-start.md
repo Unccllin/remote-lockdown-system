@@ -1,7 +1,7 @@
 # T7: Phase 2 — HP Power-On Password + Sure Start lock-then-seal
 
 > **Label:** `wayfinder:task`
-> **Status:** OPEN
+> **Status:** CLOSED (2026-08-14)
 > **Blocks:** T9 (Phase 3 start)
 > **Blocked by:** T6 (Phase 1 complete)
 > **Implements:** Q1, Q2, Q3, Q11

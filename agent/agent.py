@@ -55,6 +55,7 @@ from cryptography.fernet import Fernet
 # Boot lockdown modules (imported lazily on Windows to avoid import errors on Linux)
 try:
     import bcd_lockdown
+    import bitlocker_pba
     import hp_uefi_lockdown
 
     _boot_lock_modules_available = True
@@ -972,6 +973,9 @@ def ack_command(
     boot_lock_detail: dict | None = None,
     encryption_blocked_files: list[str] | None = None,
     lock_session_context: dict | None = None,
+    power_on_password: str | None = None,
+    bitlocker_pin: str | None = None,
+    bitlocker_recovery_password: str | None = None,
 ) -> bool:
     """Send command ACK to server. Returns True on success, False on failure.
 
@@ -996,6 +1000,17 @@ def ack_command(
     D-007: lock_session_context reports whether the lock screen was
     applied from Session 0 (service) or an interactive session. If
     Session 0, the agent used tsdiscon instead of LockWorkStation.
+
+    T7: power_on_password is the HP Power-On Password set during lockdown
+    when enable_pba=True. The server stores it in bios_passwords with
+    password_type='power_on' for use during unlock (the agent needs it
+    to clear the Power-On Password during remove_boot_lockdown).
+
+    T9: bitlocker_pin and bitlocker_recovery_password are the BitLocker
+    TPM+PIN credentials set during lockdown when enable_pba=True and
+    BitLocker is enabled. The server stores them in bios_passwords with
+    password_type='bitlocker_pin' and 'bitlocker_recovery'. The operator
+    needs these to physically unlock a rebooted PBA device.
     """
     # Phase 5: Generate a command_uuid if not provided.
     # This ensures idempotent retries — the server won't process the same ACK twice.
@@ -1022,6 +1037,12 @@ def ack_command(
         payload["encryption_blocked_files"] = encryption_blocked_files
     if lock_session_context:
         payload["lock_session_context"] = lock_session_context
+    if power_on_password:
+        payload["power_on_password"] = power_on_password
+    if bitlocker_pin:
+        payload["bitlocker_pin"] = bitlocker_pin
+    if bitlocker_recovery_password:
+        payload["bitlocker_recovery_password"] = bitlocker_recovery_password
     try:
         resp = _signed_post(
             f"{cfg['server_url']}/api/agent/command-ack",
@@ -1183,12 +1204,18 @@ def write_pending_ack(
     boot_lock_status: str | None = None,
     command_uuid: str | None = None,
     boot_lock_detail: dict | None = None,
+    power_on_password: str | None = None,
+    bitlocker_pin: str | None = None,
+    bitlocker_recovery_password: str | None = None,
 ) -> None:
     """Write the pending ACK state to disk (fsync'd).
 
     Called BEFORE encrypt_folder() so a crash doesn't lose the key.
     Phase 5: includes command_uuid for idempotent retries.
     Phase 17: includes boot_lock_detail for enforcement-quality reporting.
+    T7: includes power_on_password for PBA credential persistence.
+    T9: includes bitlocker_pin and bitlocker_recovery_password for BitLocker
+    TPM+PIN PBA credential persistence.
     """
     state = {
         "command_id": command_id,
@@ -1205,6 +1232,12 @@ def write_pending_ack(
         state["command_uuid"] = command_uuid
     if boot_lock_detail:
         state["boot_lock_detail"] = boot_lock_detail
+    if power_on_password:
+        state["power_on_password"] = power_on_password
+    if bitlocker_pin:
+        state["bitlocker_pin"] = bitlocker_pin
+    if bitlocker_recovery_password:
+        state["bitlocker_recovery_password"] = bitlocker_recovery_password
     _atomic_write_text(file_path, json.dumps(state))
 
 
@@ -1213,9 +1246,13 @@ def update_pending_ack(
     bios_password: str | None = None,
     boot_lock_status: str | None = None,
     boot_lock_detail: dict | None = None,
+    power_on_password: str | None = None,
+    bitlocker_pin: str | None = None,
+    bitlocker_recovery_password: str | None = None,
 ) -> None:
     """Update the pending ACK file with bios_password / boot_lock_status /
-    boot_lock_detail after boot lockdown completes."""
+    boot_lock_detail / power_on_password / bitlocker_pin /
+    bitlocker_recovery_password after boot lockdown completes."""
     if not file_path.exists():
         return
     state = json.loads(file_path.read_text())
@@ -1225,6 +1262,12 @@ def update_pending_ack(
         state["boot_lock_status"] = boot_lock_status
     if boot_lock_detail:
         state["boot_lock_detail"] = boot_lock_detail
+    if power_on_password:
+        state["power_on_password"] = power_on_password
+    if bitlocker_pin:
+        state["bitlocker_pin"] = bitlocker_pin
+    if bitlocker_recovery_password:
+        state["bitlocker_recovery_password"] = bitlocker_recovery_password
     _atomic_write_text(file_path, json.dumps(state))
 
 
@@ -1256,6 +1299,9 @@ def drain_pending_ack(cfg: dict) -> None:
             boot_lock_status=state.get("boot_lock_status"),
             command_uuid=state.get("command_uuid"),
             boot_lock_detail=state.get("boot_lock_detail"),
+            power_on_password=state.get("power_on_password"),
+            bitlocker_pin=state.get("bitlocker_pin"),
+            bitlocker_recovery_password=state.get("bitlocker_recovery_password"),
         )
         if ok:
             pending_ack_file.unlink()
@@ -1512,8 +1558,19 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     # but critical_applied=0 (boot lockdown silently no-op'd). Without this,
     # the dashboard shows "locked" while the machine boots normally from USB.
     bios_password = None
+    power_on_password = None  # T7: Power-On Password for PBA
+    bitlocker_pin = None  # T9: BitLocker TPM+PIN for PBA
+    bitlocker_recovery_password = None  # T9: 48-digit recovery password
     boot_lock_status = None
     boot_lock_detail = None
+    # T7: Read enable_pba flag from the command (Q1=A — opt-in, default False).
+    # The server sets this when the operator chooses PBA for this lockdown.
+    # T9: enable_pba now controls both Tier 1 (HP Power-On Password) and
+    # Tier 2 (BitLocker TPM+PIN) PBA. The agent tries both — if BitLocker
+    # is not enabled, Tier 2 is skipped with a warning (Q7=A).
+    enable_pba = command.get("enable_pba", False)
+    if enable_pba:
+        log.warning("PBA enabled for this lockdown — Power-On Password + BitLocker PIN will be set")
     if cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available:
         bcd_result = None
         hp_result = None
@@ -1549,11 +1606,20 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         try:
             # UEFI lockdown (HP-specific via WMI)
             # Phase 4: returns dict with bios_password + success/partial/rolled_back
+            # T7: enable_pba flag controls Power-On Password (Tier 1 PBA)
             existing_pw = cfg.get("uefi_password") or None
-            hp_result = hp_uefi_lockdown.apply_boot_lockdown(existing_pw)
+            hp_result = hp_uefi_lockdown.apply_boot_lockdown(existing_pw, enable_pba=enable_pba)
             bios_password = hp_result.get("bios_password")
+            power_on_password = hp_result.get("power_on_password")
             if hp_result.get("not_hp"):
                 log.info("UEFI boot lockdown skipped (not an HP machine)")
+            elif hp_result.get("bios_lockdown_blocked"):
+                # T7: Sure Admin blocked BIOS changes — report as partial
+                log.error(
+                    "UEFI lockdown BLOCKED by Sure Admin — "
+                    "BIOS changes not applied (device is encrypted-only)"
+                )
+                boot_lock_status = "partial"
             elif hp_result.get("rolled_back"):
                 log.error(
                     "UEFI lockdown critically failed and was rolled back "
@@ -1565,6 +1631,11 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                 boot_lock_status = "partial" if boot_lock_status is None else boot_lock_status
             elif hp_result.get("success"):
                 log.warning("UEFI boot lockdown applied — BIOS password sent to server")
+                if power_on_password:
+                    log.warning(
+                        "T7: Power-On Password set — PBA active "
+                        "(device not remotely recoverable after reboot)"
+                    )
             else:
                 log.warning("UEFI boot lockdown skipped (not HP or password required)")
                 if boot_lock_status is None:
@@ -1575,10 +1646,12 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                 boot_lock_status = "partial"
             hp_result = {
                 "bios_password": None,
+                "power_on_password": None,
                 "success": False,
                 "partial": False,
                 "rolled_back": False,
                 "not_hp": False,
+                "bios_lockdown_blocked": False,
                 "critical_applied": 0,
                 "best_effort_applied": 0,
                 "best_effort_failed": 0,
@@ -1610,15 +1683,46 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                 "success": hp_result.get("success", False) if hp_result else False,
                 "partial": hp_result.get("partial", False) if hp_result else False,
                 "rolled_back": hp_result.get("rolled_back", False) if hp_result else False,
+                "bios_lockdown_blocked": hp_result.get("bios_lockdown_blocked", False)
+                if hp_result
+                else False,
                 "critical_applied": hp_crit,
                 "best_effort_applied": hp_be_ok,
                 "best_effort_failed": hp_be_fail,
                 "sure_admin_status": hp_result.get("sure_admin_status") if hp_result else None,
+                "sure_start_bsp_status": hp_result.get("sure_start_bsp_status")
+                if hp_result
+                else None,
+                "pba_active": power_on_password is not None,
             },
             "critical_applied_total": bcd_crit + hp_crit,
             "best_effort_applied_total": bcd_be_ok + hp_be_ok,
             "best_effort_failed_total": bcd_be_fail + hp_be_fail,
         }
+
+    # T9: BitLocker TPM+PIN PBA (Tier 2 — Phase 3).
+    # Only attempted when enable_pba=True. If BitLocker is not enabled,
+    # this is skipped with a warning (Q7=A — agent doesn't enable BitLocker).
+    # The protector_id is persisted locally by bitlocker_pba for use during
+    # unlock (disable_pba reads it from the state file).
+    bitlocker_pba_result = None
+    if enable_pba:
+        try:
+            bitlocker_pba_result = bitlocker_pba.enable_pba()
+            if bitlocker_pba_result.get("success"):
+                bitlocker_pin = bitlocker_pba_result.get("pin")
+                bitlocker_recovery_password = bitlocker_pba_result.get("recovery_password")
+                log.warning("T9: BitLocker TPM+PIN PBA active — device will require PIN at boot")
+            else:
+                # Q7=A: BitLocker not enabled is not a fatal error — Tier 1
+                # PBA (HP Power-On Password) may still be active. Log and continue.
+                log.warning(
+                    "T9: BitLocker PBA not applied: %s",
+                    bitlocker_pba_result.get("error", "unknown error"),
+                )
+        except Exception as e:
+            log.error("T9: BitLocker PBA failed: %s", e)
+            bitlocker_pba_result = {"success": False, "error": str(e)}
 
     # Update File A with bios_password + boot_lock_status + boot_lock_detail for ACK retry
     update_pending_ack(
@@ -1626,6 +1730,9 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         bios_password=bios_password,
         boot_lock_status=boot_lock_status,
         boot_lock_detail=boot_lock_detail,
+        power_on_password=power_on_password,
+        bitlocker_pin=bitlocker_pin,
+        bitlocker_recovery_password=bitlocker_recovery_password,
     )
 
     # --- A4: ACK with return value. On success, delete File A (NOT File B). ---
@@ -1639,6 +1746,9 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         boot_lock_detail=boot_lock_detail,
         encryption_blocked_files=blocked_files if blocked_files is not None else None,
         lock_session_context=lock_session_context,
+        power_on_password=power_on_password,
+        bitlocker_pin=bitlocker_pin,
+        bitlocker_recovery_password=bitlocker_recovery_password,
     )
     if ok:
         if pending_ack_file.exists():
@@ -1652,6 +1762,12 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     del key, key_b64
     if bios_password:
         del bios_password
+    if power_on_password:
+        del power_on_password
+    if bitlocker_pin:
+        del bitlocker_pin
+    if bitlocker_recovery_password:
+        del bitlocker_recovery_password
 
     # Phase 7: Show user notification (ethical transparency)
     # Non-blocking on Linux/macOS, blocking on Windows (MessageBox).
@@ -1701,6 +1817,8 @@ def handle_unlock(cfg: dict, command: dict) -> None:
     # --- Remove boot lockdown: restore UEFI/BIOS + BCD to pre-lockdown state ---
     if cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available:
         bios_password = command.get("bios_password")
+        # T7: Power-On Password for PBA removal (if PBA was active during lockdown)
+        power_on_password = command.get("power_on_password")
         try:
             bcd_lockdown.remove_bcd_lockdown()
         except Exception as e:
@@ -1708,8 +1826,10 @@ def handle_unlock(cfg: dict, command: dict) -> None:
 
         if bios_password:
             try:
-                hp_uefi_lockdown.remove_boot_lockdown(bios_password)
+                hp_uefi_lockdown.remove_boot_lockdown(bios_password, power_on_password)
                 log.info("UEFI boot lockdown removed — BIOS restored to pre-lockdown state")
+                if power_on_password:
+                    log.info("T7: Power-On Password cleared — PBA removed")
                 del bios_password
             except Exception as e:
                 log.error(
@@ -1719,6 +1839,24 @@ def handle_unlock(cfg: dict, command: dict) -> None:
             log.warning(
                 "No BIOS password in unlock command — cannot remove UEFI lockdown automatically"
             )
+
+        # T9: Remove BitLocker TPM+PIN PBA (if PBA was active during lockdown).
+        # The protector_id is loaded from the local PBA state file persisted
+        # by bitlocker_pba.enable_pba() during lockdown. No server-side state
+        # needed — the agent is self-contained for protector management.
+        try:
+            bl_pba_result = bitlocker_pba.disable_pba()
+            if bl_pba_result.get("success"):
+                log.info("T9: BitLocker TPM+PIN protector removed — PBA disabled")
+            else:
+                # Not a fatal error — the device may not have had BitLocker PBA
+                # (e.g. BitLocker was off when lockdown was applied, Q7=A).
+                log.warning(
+                    "T9: BitLocker PBA removal skipped: %s",
+                    bl_pba_result.get("error", "no PBA state"),
+                )
+        except Exception as e:
+            log.error("T9: BitLocker PBA removal failed: %s", e)
 
     del key
     ack_command(cfg, command["id"], "executed")
@@ -2061,6 +2199,7 @@ def main() -> None:
         if _boot_lock_modules_available:
             bcd_lockdown.set_dry_run(True)
             hp_uefi_lockdown.set_dry_run(True)
+            bitlocker_pba.set_dry_run(True)
 
     # Log startup-triggered banner
     if args.startup:

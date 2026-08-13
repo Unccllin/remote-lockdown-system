@@ -11,7 +11,11 @@ Usage:
         assert_debt_close_has_evidence,
         assert_enforcement_path_status,
         assert_rule_zero_complete,
+        assert_rule_zero_quality,
         assert_session_closed_with_trace,
+        assert_session_end_quality,
+        assert_current_state_updated,
+        assert_artifact_quality,
         assert_all_invariants,
         GraphViolationError,
     )
@@ -35,6 +39,7 @@ Usage:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -185,6 +190,213 @@ def assert_session_closed_with_trace(trace_path: Path) -> None:
             "I4", "session_close_requires_trace_update",
             f"trace.md missing session-end sections: {', '.join(missing)}",
             "Session-end status block must include all required sections.",
+        )
+
+
+def assert_current_state_updated(current_state_path: Path) -> None:
+    """I4 (extended): No session can close without updating current-state.md.
+
+    Checks that current-state.md has a session-end status block with the
+    same required sections as trace.md. This ensures the compact summary
+    file stays in sync with the full trace.
+
+    Raises GraphViolationError if current-state.md is missing the status block.
+    """
+    if not current_state_path.exists():
+        raise GraphViolationError(
+            "I4", "current_state_requires_update",
+            "current-state.md does not exist at session close",
+            "Session cannot close without updating current-state.md.",
+        )
+    content = current_state_path.read_text()
+    required_sections = [
+        "Fog cleared",
+        "Fog remaining",
+        "Debt items closed",
+        "Debt items still open",
+        "Blockers",
+        "Next session",
+    ]
+    missing = [s for s in required_sections if s not in content]
+    if missing:
+        raise GraphViolationError(
+            "I4", "current_state_requires_update",
+            f"current-state.md missing session-end sections: {', '.join(missing)}",
+            "current-state.md must include the same session-end status block as trace.md.",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Goodhart's Law defense — structural quality minimums (Q1 resolution)
+# These prevent the laziest gaming of I4, I5, I7 without requiring a
+# semantic evaluator. Thresholds are deliberately low.
+# ---------------------------------------------------------------------------
+
+
+def _extract_last_rule_zero_block(content: str) -> str:
+    """Extract the content of the last RULE-ZERO entry in trace.md.
+
+    Finds the last occurrence of a RULE-ZERO header and returns all content
+    until the next '---' separator or '## ' header.
+    Returns empty string if no RULE-ZERO entry found.
+    """
+    # Find all RULE-ZERO header positions (### RULE-ZERO or ### Rule Zero)
+    pattern = r"###\s+(?:RULE-ZERO|Rule Zero)"
+    matches = list(re.finditer(pattern, content))
+    if not matches:
+        return ""
+    last_match = matches[-1]
+    start = last_match.end()
+    # Find the next --- separator or ## header after the RULE-ZERO header
+    rest = content[start:]
+    end_match = re.search(r"^---\s*$|^##\s", rest, re.MULTILINE)
+    if end_match:
+        return rest[: end_match.start()]
+    return rest
+
+
+def assert_rule_zero_quality(trace_path: Path) -> None:
+    """I5 (strengthened): RULE-ZERO entry must have structural quality.
+
+    Checks that the last RULE-ZERO entry in trace.md has:
+    - At least 2 file path references (lines containing '/' or '\\')
+    - At least 1 'Finding' or 'Read' line
+
+    This prevents shallow compliance where an agent writes "RULE-ZERO done"
+    without actually reading source files or synthesizing findings.
+
+    Raises GraphViolationError if the quality minimums are not met.
+    """
+    if not trace_path.exists():
+        raise GraphViolationError(
+            "I5", "rule_zero_quality",
+            "trace.md does not exist — cannot check RULE-ZERO quality",
+            "Read skill files and source code, then log understanding to trace.md.",
+        )
+    content = trace_path.read_text()
+    block = _extract_last_rule_zero_block(content)
+    if not block:
+        raise GraphViolationError(
+            "I5", "rule_zero_quality",
+            "No RULE-ZERO entry found in trace.md",
+            "Add a '### RULE-ZERO — Understanding logged before code changes' section.",
+        )
+    # Count file path references (lines containing / or \ that look like paths)
+    file_path_lines = [
+        line for line in block.splitlines()
+        if ("/" in line or "\\" in line) and line.strip().startswith("-")
+    ]
+    if len(file_path_lines) < 2:
+        raise GraphViolationError(
+            "I5", "rule_zero_quality",
+            f"RULE-ZERO entry has only {len(file_path_lines)} file path reference(s), need >=2",
+            "Cite at least 2 source files you read (lines starting with '- **Read**:').",
+        )
+    # Check for at least 1 Finding or Read line
+    has_finding = bool(re.search(r"\*\*Finding\*\*|\*\*Read\*\*", block))
+    if not has_finding:
+        raise GraphViolationError(
+            "I5", "rule_zero_quality",
+            "RULE-ZERO entry has no 'Finding' or 'Read' line",
+            "Include at least 1 '- **Read**:' or '- **Finding**:' line.",
+        )
+
+
+def assert_session_end_quality(trace_path: Path) -> None:
+    """I4 (strengthened): Session-end block must have content under each section.
+
+    Checks that the last session-end status block in trace.md has at least
+    1 line of non-header content under each of the 6 required sections.
+
+    This prevents shallow compliance where an agent writes the section headers
+    but leaves them empty.
+
+    Raises GraphViolationError if any section has no content.
+    """
+    if not trace_path.exists():
+        raise GraphViolationError(
+            "I4", "session_end_quality",
+            "trace.md does not exist — cannot check session-end quality",
+            "Session cannot close without a trace update.",
+        )
+    content = trace_path.read_text()
+    required_sections = [
+        "Fog cleared",
+        "Fog remaining",
+        "Debt items closed",
+        "Debt items still open",
+        "Blockers",
+        "Next session",
+    ]
+    # Find the last occurrence of each section header and check content after it
+    for section in required_sections:
+        # Find all occurrences of the section header (### Section Name)
+        pattern = rf"###\s+{re.escape(section)}"
+        matches = list(re.finditer(pattern, content))
+        if not matches:
+            raise GraphViolationError(
+                "I4", "session_end_quality",
+                f"Session-end section '{section}' not found in trace.md",
+                "All 6 required sections must be present.",
+            )
+        # Check the last occurrence (most recent session)
+        last = matches[-1]
+        after = content[last.end():]
+        # Find content until the next ### or ## header or --- separator
+        end_match = re.search(r"^###\s|^##\s|^---\s*$", after, re.MULTILINE)
+        section_content = after[: end_match.start()] if end_match else after
+        # Count non-empty, non-header lines
+        content_lines = [
+            line for line in section_content.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        if len(content_lines) < 1:
+            raise GraphViolationError(
+                "I4", "session_end_quality",
+                f"Session-end section '{section}' has no content",
+                f"Add at least 1 line of content under the '{section}' header.",
+            )
+
+
+def assert_artifact_quality(results_dir: Path) -> None:
+    """I7 (strengthened): .complete files must have commit hash + test count.
+
+    Checks that each results/phase-N.complete file contains:
+    - A commit hash pattern (7+ hexadecimal characters)
+    - A test count (digits followed by 'test' or 'pass')
+
+    This prevents shallow compliance where 'tests pass' is written without
+    a commit hash, or a commit hash is written without evidence of tests.
+
+    Raises GraphViolationError if any .complete file lacks quality.
+    """
+    if not results_dir.exists():
+        raise GraphViolationError(
+            "I7", "artifact_quality",
+            f"Results directory not found: {results_dir}",
+            "The results directory must exist with phase completion markers.",
+        )
+    no_commit = []
+    no_tests = []
+    for f in sorted(results_dir.glob("phase-*.complete")):
+        content = f.read_text()
+        # Check for commit hash: 7+ hex chars (git short hash)
+        if not re.search(r"\b[0-9a-f]{7,}\b", content):
+            no_commit.append(f.name)
+        # Check for test count: digits + 'test' or 'pass'
+        if not re.search(r"\d+.*(?:test|pass)", content, re.IGNORECASE):
+            no_tests.append(f.name)
+    if no_commit:
+        raise GraphViolationError(
+            "I7", "artifact_quality",
+            f"Completion markers without commit hash: {', '.join(no_commit)}",
+            "Each .complete file must contain a git commit hash (7+ hex chars).",
+        )
+    if no_tests:
+        raise GraphViolationError(
+            "I7", "artifact_quality",
+            f"Completion markers without test count: {', '.join(no_tests)}",
+            "Each .complete file must contain a test count (digits + 'test' or 'pass').",
         )
 
 
@@ -362,6 +574,28 @@ def assert_all_invariants(graph: dict | None = None) -> list[str]:
         except GraphViolationError as e:
             violations.append(str(e))
 
+    # I4 (extended): Check current-state.md is also updated
+    current_state_path = project_root / ".devin" / "graph" / "current-state.md"
+    if current_state_path.exists():
+        try:
+            assert_current_state_updated(current_state_path)
+        except GraphViolationError as e:
+            violations.append(str(e))
+
+    # I4 (strengthened): Check session-end block has content under each section
+    if trace_path.exists():
+        try:
+            assert_session_end_quality(trace_path)
+        except GraphViolationError as e:
+            violations.append(str(e))
+
+    # I5 (strengthened): Check RULE-ZERO entry has file paths + findings
+    if trace_path.exists():
+        try:
+            assert_rule_zero_quality(trace_path)
+        except GraphViolationError as e:
+            violations.append(str(e))
+
     # I6: Check orchestrator knows all phases
     orchestrator_path = project_root / ".devin" / "orchestration" / "orchestrator.sh"
     try:
@@ -373,6 +607,12 @@ def assert_all_invariants(graph: dict | None = None) -> list[str]:
     results_dir = project_root / ".devin" / "orchestration" / "results"
     try:
         assert_complete_phases_have_artifacts(results_dir)
+    except GraphViolationError as e:
+        violations.append(str(e))
+
+    # I7 (strengthened): Check .complete files have commit hash + test count
+    try:
+        assert_artifact_quality(results_dir)
     except GraphViolationError as e:
         violations.append(str(e))
 

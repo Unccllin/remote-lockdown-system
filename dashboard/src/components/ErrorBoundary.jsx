@@ -23,9 +23,9 @@ export default class ErrorBoundary extends React.Component {
       return (
         <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-300">
           <div className="max-w-md text-center space-y-4">
-            <h1 className="text-xl font-semibold text-slate-200">Something went wrong</h1>
+            <h1 className="text-xl font-semibold text-slate-200">Something went wrong. Refresh the page. If the issue persists, check the browser console for details.</h1>
             <p className="text-sm text-slate-500">
-              An unexpected error occurred. Try refreshing the page.
+              An unexpected error occurred. Refresh the page. If the issue persists, check the browser console for details or contact support.
             </p>
             <pre className="text-xs text-red-400 bg-slate-900 rounded-lg p-3 overflow-auto max-h-40 text-left">
               {this.state.error?.message || 'Unknown error'}

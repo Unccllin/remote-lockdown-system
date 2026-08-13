@@ -1,7 +1,7 @@
 # T3: Phase 1 — VT-d/IOMMU DMA protection via HP WMI
 
 > **Label:** `wayfinder:task`
-> **Status:** OPEN
+> **Status:** CLOSED (2026-08-14)
 > **Blocks:** none
 > **Blocked by:** none
 > **Implements:** Q6

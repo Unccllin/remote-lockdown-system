@@ -23,7 +23,9 @@ order it must be done in, and what evidence is required to call something "done.
 **Mandatory reads at session start, before any work:**
 
 1. `.devin/graph/GRAPH-SPEC.yaml` — all nodes, edges, and invariants
-2. `.devin/graph/trace.md` — last session's context and next session opening
+2. `.devin/graph/current-state.md` — compact session state (latest status,
+   open items, next session opening). Read this FIRST — it's ~70 lines, not
+   2700+. Read `.devin/graph/trace.md` on demand for full session history.
 3. `docs/adr/DEBT-LEDGER.md` — open debt items and close criteria
 4. `docs/adr/GRAPH-SPEC.md` — human-readable ADR for the graph
 
@@ -78,13 +80,18 @@ condition values printed IS an artifact. A timeout with no output is NOT.
 
 **Session-end status block (mandatory at session close):**
 
-Every session must end by appending to `.devin/graph/trace.md`:
+Every session must end by appending to **both** `.devin/graph/trace.md`
+(full history) **and** `.devin/graph/current-state.md` (compact summary):
 - Fog cleared this session (with source citations)
 - Fog remaining (genuinely not in source, with files checked listed)
 - Debt items closed (commit refs + artifacts)
 - Debt items still open
 - Blockers named and status
 - Next session opening — one sentence, specific, no ambiguity
+
+The `current-state.md` file should also be updated with the current open
+wayfinder tickets and open debt items sections. Graph invariant I4 enforces
+that both files have the session-end status block.
 
 ## Environment
 
@@ -165,6 +172,20 @@ make build
 - Agent Python uses inline `# D-XXX:` comments to trace code to debt ledger entries
   (see `docs/adr/DEBT-LEDGER.md`). This is an established convention (26 instances
   across 5 agent files) — matching it is expected, not a violation.
+- **Failure attribution convention**: When a failure occurs during a session
+  (a test fails, a build breaks, an invariant is violated), the session-end
+  trace block must include a "Failure attribution" subsection that names
+  which of the 5 harness layers caused the failure and what harness change
+  would prevent it. The 5 layers (from the WalkingLabs Harness Engineering
+  course, Lecture 01):
+  1. **Task specification** — requirements were vague or ambiguous
+  2. **Context provision** — implicit conventions not written down
+  3. **Execution environment** — incomplete setup, missing dependencies
+  4. **Verification feedback** — no tests, no lint, or verification not communicated
+  5. **State management** — cross-session state loss, no progress tracking
+  This is a convention (guidance), not an enforced invariant — no graph_assert.py
+  check. The convention prepares for future failures without backfilling a
+  failure log with no data.
 
 ## Diagnostic Sweep Results (2026-08-04, updated 2026-08-11)
 

@@ -1,7 +1,7 @@
 # T10: Phase 3 — Dashboard PBA Recovery panel + recovery runbook
 
 > **Label:** `wayfinder:task`
-> **Status:** OPEN
+> **Status:** CLOSED (2026-08-14)
 > **Blocks:** none
 > **Blocked by:** T9
 > **Implements:** Q10

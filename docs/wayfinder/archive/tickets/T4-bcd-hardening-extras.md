@@ -1,7 +1,7 @@
 # T4: Phase 1 — BCD hardening (timeout, bootsequence, integrity checks)
 
 > **Label:** `wayfinder:task`
-> **Status:** OPEN
+> **Status:** CLOSED (2026-08-14)
 > **Blocks:** none
 > **Blocked by:** none
 > **Implements:** Q6

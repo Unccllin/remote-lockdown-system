@@ -58,19 +58,19 @@ router.post('/', async (req, res) => {
 
   // Validate input
   if (!username || !password || !role) {
-    return res.status(400).json({ error: 'username, password, and role are required' });
+    return res.status(400).json({ error: 'username, password, and role are required. Provide all three fields in the request body.' });
   }
   if (typeof username !== 'string' || username.length < 3 || username.length > 100) {
-    return res.status(400).json({ error: 'Username must be 3-100 characters' });
+    return res.status(400).json({ error: 'Username must be 3-100 characters. Choose a shorter or longer username.' });
   }
   if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
-    return res.status(400).json({ error: 'Username can only contain letters, numbers, underscores, and hyphens' });
+    return res.status(400).json({ error: 'Username can only contain letters, numbers, underscores, and hyphens. Remove any special characters.' });
   }
   if (typeof password !== 'string' || password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    return res.status(400).json({ error: 'Password must be at least 8 characters. Choose a longer password.' });
   }
   if (!VALID_ROLES.includes(role)) {
-    return res.status(400).json({ error: `role must be one of: ${VALID_ROLES.join(', ')}` });
+    return res.status(400).json({ error: `role must be one of: ${VALID_ROLES.join(', ')}. Choose a valid role from the list.` });
   }
 
   try {
@@ -98,10 +98,10 @@ router.post('/', async (req, res) => {
   } catch (err) {
     // Duplicate username
     if (err.message && err.message.includes('UNIQUE')) {
-      return res.status(409).json({ error: 'Username already exists' });
+      return res.status(409).json({ error: 'Username already exists. Choose a different username.' });
     }
     if (err.code === '23505') {
-      return res.status(409).json({ error: 'Username already exists' });
+      return res.status(409).json({ error: 'Username already exists. Choose a different username.' });
     }
     throw err;
   }
@@ -115,21 +115,21 @@ router.delete('/:id', async (req, res) => {
 
   // Cannot delete self
   if (req.admin.id === id) {
-    return res.status(403).json({ error: 'Cannot delete your own account' });
+    return res.status(403).json({ error: 'Cannot delete your own account. Ask another super-admin to delete your account.' });
   }
 
   // Fetch the admin to be deleted
   const targetResult = await pool.query('SELECT * FROM admins WHERE id = $1', [id]);
   const target = targetResult.rows[0];
   if (!target) {
-    return res.status(404).json({ error: 'Admin not found' });
+    return res.status(404).json({ error: 'Admin not found. Verify the admin ID is correct.' });
   }
 
   // Cannot delete the last super-admin
   if (target.role === 'super-admin') {
     const superCount = await countSuperAdmins();
     if (superCount <= 1) {
-      return res.status(403).json({ error: 'Cannot delete the last super-admin' });
+      return res.status(403).json({ error: 'Cannot delete the last super-admin. Promote another admin to super-admin first.' });
     }
   }
 
@@ -158,29 +158,29 @@ router.patch('/:id', async (req, res) => {
   const { role } = req.body;
 
   if (!role) {
-    return res.status(400).json({ error: 'role is required' });
+    return res.status(400).json({ error: 'role is required. Provide a role in the request body.' });
   }
   if (!VALID_ROLES.includes(role)) {
-    return res.status(400).json({ error: `role must be one of: ${VALID_ROLES.join(', ')}` });
+    return res.status(400).json({ error: `role must be one of: ${VALID_ROLES.join(', ')}. Choose a valid role from the list.` });
   }
 
   // Cannot change own role (prevents self-demotion lockout)
   if (req.admin.id === id) {
-    return res.status(403).json({ error: 'Cannot change your own role' });
+    return res.status(403).json({ error: 'Cannot change your own role. Ask another super-admin to change your role.' });
   }
 
   // Fetch the target admin
   const targetResult = await pool.query('SELECT * FROM admins WHERE id = $1', [id]);
   const target = targetResult.rows[0];
   if (!target) {
-    return res.status(404).json({ error: 'Admin not found' });
+    return res.status(404).json({ error: 'Admin not found. Verify the admin ID is correct.' });
   }
 
   // Cannot demote the last super-admin
   if (target.role === 'super-admin' && role !== 'super-admin') {
     const superCount = await countSuperAdmins();
     if (superCount <= 1) {
-      return res.status(403).json({ error: 'Cannot demote the last super-admin' });
+      return res.status(403).json({ error: 'Cannot demote the last super-admin. Promote another admin to super-admin first.' });
     }
   }
 

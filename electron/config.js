@@ -123,7 +123,7 @@ function loadConfig(userDataPath) {
     console.log('[config] Loaded from:', configPath);
     return config;
   } catch (err) {
-    console.error('[config] Failed to load config:', err.message);
+    console.error('[config] Failed to load config:', err.message, 'Fix: verify the config file exists at the expected path and contains valid JSON.');
     return null;
   }
 }

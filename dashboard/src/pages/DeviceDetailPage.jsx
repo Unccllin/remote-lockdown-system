@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ShieldAlert, ShieldCheck, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate, UserX, AlertTriangle, FileWarning, Lock } from 'lucide-react';
+import { ArrowLeft, ShieldAlert, ShieldCheck, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate, UserX, AlertTriangle, FileWarning, Lock, Key, Eye, EyeOff, Copy } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
@@ -44,6 +44,38 @@ function getLatestLockdownDetail(audit) {
   return null;
 }
 
+/**
+ * T10: CredentialField — a single PBA credential display row with
+ * reveal/hide toggle and copy-to-clipboard button. Credentials are
+ * masked by default (shown as "••••••••") to prevent shoulder-surfing.
+ */
+function CredentialField({ label, value, revealed, onToggle, onCopy }) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex-1">
+        <p className="text-xs text-slate-400 mb-0.5">{label}</p>
+        <p className="text-sm font-mono text-slate-200 bg-slate-900/50 px-2 py-1 rounded">
+          {revealed ? value : '••••••••••••'}
+        </p>
+      </div>
+      <button
+        onClick={onToggle}
+        className="p-1.5 text-slate-400 hover:text-slate-200 transition-colors"
+        title={revealed ? 'Hide' : 'Reveal'}
+      >
+        {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
+      </button>
+      <button
+        onClick={onCopy}
+        className="p-1.5 text-slate-400 hover:text-slate-200 transition-colors"
+        title="Copy to clipboard"
+      >
+        <Copy size={14} />
+      </button>
+    </div>
+  );
+}
+
 export default function DeviceDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -54,6 +86,11 @@ export default function DeviceDetailPage() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [acting, setActing] = useState(false);
+  // T10: PBA Recovery panel state
+  const [pbaCredentials, setPbaCredentials] = useState(null);
+  const [showPbaCredentials, setShowPbaCredentials] = useState(false);
+  const [pbaLoading, setPbaLoading] = useState(false);
+  const [revealedCredentials, setRevealedCredentials] = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -68,7 +105,7 @@ export default function DeviceDetailPage() {
       setLocations(locRes.data);
     } catch (err) {
       console.error('DeviceDetailPage load failed:', err);
-      toast.error('Failed to load device');
+      toast.error('Failed to load device. Check your network connection and try again. If the issue persists, verify the device ID is correct.');
     } finally {
       setLoading(false);
     }
@@ -160,6 +197,34 @@ export default function DeviceDetailPage() {
     }
   }
 
+  // T10: Fetch PBA credentials for the Recovery panel.
+  // Called on-demand when the operator clicks "Show PBA Credentials" —
+  // credentials are not fetched on page load to minimize exposure.
+  async function fetchPbaCredentials() {
+    setPbaLoading(true);
+    try {
+      const res = await api.get(`/devices/${id}/pba-credentials`);
+      setPbaCredentials(res.data);
+      setShowPbaCredentials(true);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load PBA credentials. Check your network connection and try again. If the issue persists, verify the device has PBA credentials configured.');
+    } finally {
+      setPbaLoading(false);
+    }
+  }
+
+  function copyToClipboard(text, label) {
+    navigator.clipboard.writeText(text).then(() => {
+      toast.success(`${label} copied to clipboard`);
+    }).catch(() => {
+      toast.error('Failed to copy');
+    });
+  }
+
+  function toggleReveal(key) {
+    setRevealedCredentials(prev => ({ ...prev, [key]: !prev[key] }));
+  }
+
   if (loading) return <div className="text-slate-500 text-center py-32">Loading...</div>;
   if (!device) return <div className="text-slate-500 text-center py-32">Device not found.</div>;
 
@@ -184,6 +249,10 @@ export default function DeviceDetailPage() {
   const hasBitlocker = bitlockerStatus?.enabled === true;
   const hasSureAdmin = sureAdminStatus?.any_sure_feature === true;
   const isSessionZero = lockSessionContext?.is_session_zero === true;
+  // T10: PBA Active detection — from boot_lock_detail (T7 pba_active flag)
+  // or from bitlocker PBA (T9 — if bitlocker_pin or recovery password exists
+  // in the credentials, PBA is active)
+  const pbaActive = bootLockDetail?.hp_uefi?.pba_active === true;
 
   return (
     <div>
@@ -260,9 +329,16 @@ export default function DeviceDetailPage() {
           <h1 className="text-2xl font-bold font-mono text-slate-100">{device.hostname}</h1>
           <p className="text-slate-400 text-sm mt-1">Owner: {device.owner_name}</p>
         </div>
-        <span className={STATUS_BADGE[device.status] || 'badge-inactive'}>
-          {device.status}
-        </span>
+        <div className="flex items-center gap-2">
+          {pbaActive && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-950/40 text-red-400 border border-red-800/50">
+              <Key size={10} /> PBA Active
+            </span>
+          )}
+          <span className={STATUS_BADGE[device.status] || 'badge-inactive'}>
+            {device.status}
+          </span>
+        </div>
       </div>
 
       {/* Phase 17: Lockdown-effectiveness panel.
@@ -466,6 +542,112 @@ export default function DeviceDetailPage() {
             effect, the agent may need to run in an interactive session
             instead of as a service.
           </p>
+        </div>
+      )}
+
+      {/* T10: PBA Recovery panel.
+          Shows when PBA is active (Tier 1 HP Power-On Password and/or
+          Tier 2 BitLocker TPM+PIN). The operator needs these credentials
+          to physically unlock a rebooted PBA device. Credentials are
+          fetched on-demand to minimize exposure. */}
+      {isLockedOrStolen && pbaActive && (
+        <div className="card mb-6 border-l-4 border-l-red-500">
+          <div className="flex items-center gap-2 mb-3">
+            <Key size={16} className="text-red-400" />
+            <h2 className="font-semibold text-slate-200 text-sm">
+              PBA Recovery
+            </h2>
+            <span className="text-xs font-medium ml-auto text-red-400">
+              Pre-Boot Authentication Active
+            </span>
+          </div>
+
+          <div className="bg-red-950/30 border border-red-800/50 rounded p-3 mb-4">
+            <p className="text-xs text-red-300 leading-relaxed">
+              <strong>WARNING:</strong> Remote unlock will not work if the
+              device has rebooted. Physical access required to enter these
+              credentials at the pre-boot prompt. If no one can physically
+              access the device, there is no remote recovery path.
+            </p>
+          </div>
+
+          {!showPbaCredentials ? (
+            <button
+              onClick={fetchPbaCredentials}
+              disabled={pbaLoading}
+              className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded border border-slate-700 transition-colors"
+            >
+              {pbaLoading ? (
+                <><Loader size={12} className="animate-spin" /> Loading…</>
+              ) : (
+                <><Eye size={12} /> Show PBA Credentials</>
+              )}
+            </button>
+          ) : pbaCredentials ? (
+            <div className="space-y-3">
+              {/* BitLocker PIN */}
+              {pbaCredentials.bitlocker_pin && (
+                <CredentialField
+                  label="BitLocker PIN"
+                  value={pbaCredentials.bitlocker_pin}
+                  revealed={!!revealedCredentials.bitlocker_pin}
+                  onToggle={() => toggleReveal('bitlocker_pin')}
+                  onCopy={() => copyToClipboard(pbaCredentials.bitlocker_pin, 'BitLocker PIN')}
+                />
+              )}
+
+              {/* BitLocker Recovery Password (48-digit) */}
+              {pbaCredentials.bitlocker_recovery_password && (
+                <CredentialField
+                  label="BitLocker Recovery Password (48-digit)"
+                  value={pbaCredentials.bitlocker_recovery_password}
+                  revealed={!!revealedCredentials.bitlocker_recovery_password}
+                  onToggle={() => toggleReveal('bitlocker_recovery_password')}
+                  onCopy={() => copyToClipboard(pbaCredentials.bitlocker_recovery_password, 'Recovery Password')}
+                />
+              )}
+
+              {/* HP Power-On Password */}
+              {pbaCredentials.power_on_password && (
+                <CredentialField
+                  label="HP Power-On Password"
+                  value={pbaCredentials.power_on_password}
+                  revealed={!!revealedCredentials.power_on_password}
+                  onToggle={() => toggleReveal('power_on_password')}
+                  onCopy={() => copyToClipboard(pbaCredentials.power_on_password, 'Power-On Password')}
+                />
+              )}
+
+              {/* HP Setup Password */}
+              {pbaCredentials.setup_password && (
+                <CredentialField
+                  label="HP Setup Password"
+                  value={pbaCredentials.setup_password}
+                  revealed={!!revealedCredentials.setup_password}
+                  onToggle={() => toggleReveal('setup_password')}
+                  onCopy={() => copyToClipboard(pbaCredentials.setup_password, 'Setup Password')}
+                />
+              )}
+
+              {/* If all credentials are null */}
+              {!pbaCredentials.bitlocker_pin &&
+                !pbaCredentials.bitlocker_recovery_password &&
+                !pbaCredentials.power_on_password &&
+                !pbaCredentials.setup_password && (
+                <p className="text-xs text-slate-500">
+                  No PBA credentials found for this device.
+                </p>
+              )}
+
+              <div className="pt-2 border-t border-slate-800/50">
+                <p className="text-xs text-slate-500">
+                  See <span className="font-mono text-slate-400">docs/PBA_RECOVERY_RUNBOOK.md</span> for step-by-step recovery instructions.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">No PBA credentials found.</p>
+          )}
         </div>
       )}
 

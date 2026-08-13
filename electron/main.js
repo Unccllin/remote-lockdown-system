@@ -178,7 +178,7 @@ app.whenReady().then(async () => {
     const { dialog } = require('electron');
     dialog.showErrorBox(
       'Startup Error',
-      `Failed to start the admin server:\n\n${err.message}\n\nThe application will now quit.`
+      `Failed to start the admin server:\n\n${err.message}\n\nFix: check that the server port is not in use, the database is initialized, and all required environment variables are set. The application will now quit.`
     );
     app.quit();
   }

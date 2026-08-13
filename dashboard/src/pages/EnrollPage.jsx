@@ -20,7 +20,7 @@ export default function EnrollPage() {
       setEnrolled({ device: data, apiKey: data.api_key });
       toast.success(`Device "${data.hostname}" enrolled successfully`);
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Enrollment failed');
+      toast.error(err.response?.data?.error || 'Enrollment failed. Check your input and try again. If the issue persists, verify the hostname is unique and the server is running.');
     } finally {
       setLoading(false);
     }

@@ -43,6 +43,7 @@ help:
 	@echo "  make check-structure      check dist dirs exist (non-fatal)"
 	@echo "  make verify-env           verify all environment items (agent, NSIS, Docker, signing, etc.)"
 	@echo "  make graph-check          run graph invariant sweep (I1-I7)"
+	@echo "  make clean-state          run 5-condition clean state checklist (L12)"
 	@echo "  make clean                remove all dist/ directories"
 
 # ---------------------------------------------------------------------------
@@ -134,6 +135,17 @@ verify-env:
 
 graph-check:
 	@python3 .devin/graph/graph_assert.py
+
+# ---------------------------------------------------------------------------
+# Clean state checklist — 5 conditions from Lecture 12
+# Run at session end to verify the system is in a clean state.
+# See .devin/graph/clean-state-checklist.md for details.
+# ---------------------------------------------------------------------------
+
+.PHONY: clean-state
+
+clean-state:
+	@bash .devin/orchestration/orchestrator.sh clean-state
 
 # ---------------------------------------------------------------------------
 # Clean — remove all build outputs.

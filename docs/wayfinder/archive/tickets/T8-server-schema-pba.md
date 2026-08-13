@@ -1,7 +1,7 @@
 # T8: Phase 2 — Server schema migration + enable_pba flag
 
 > **Label:** `wayfinder:task`
-> **Status:** OPEN
+> **Status:** CLOSED (2026-08-14)
 > **Blocks:** T9
 > **Blocked by:** T6
 > **Implements:** Q1, Q9

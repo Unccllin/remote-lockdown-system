@@ -1,7 +1,7 @@
 # T1: Phase 1 — SafeBoot registry entries at install time
 
 > **Label:** `wayfinder:task`
-> **Status:** OPEN
+> **Status:** CLOSED (2026-08-14)
 > **Blocks:** none
 > **Blocked by:** none
 > **Implements:** Q5

@@ -105,7 +105,7 @@ export default function MapPage() {
       );
       setPoints(located);
     } catch {
-      toast.error('Failed to load map data');
+      toast.error('Failed to load map data. Check your network connection and try again. If the issue persists, verify the server is running.');
     } finally {
       setLoading(false);
     }

@@ -31,7 +31,7 @@ const router = express.Router();
 async function agentAuth(req, res, next) {
   const key = req.headers['x-agent-key'];
   if (!key) {
-    return res.status(401).json({ error: 'Missing x-agent-key header' });
+    return res.status(401).json({ error: 'Missing x-agent-key header. Include the device API key in the x-agent-key header.' });
   }
 
   // Step 1: Try per-device key authentication (hash lookup)
@@ -68,7 +68,7 @@ async function agentAuth(req, res, next) {
     // Device has api_key_hash → shared key no longer works for it (CC5)
   }
 
-  return res.status(401).json({ error: 'Unauthorized' });
+  return res.status(401).json({ error: 'Unauthorized. The provided API key does not match any enrolled device. Verify the key is correct or re-enroll the device.' });
 }
 
 /**
@@ -147,24 +147,42 @@ async function fetchUnlockMaterials(deviceId) {
     );
   }
 
-  // Fetch BIOS password for unlock — the agent needs it to revert UEFI lockdown
+  // Fetch BIOS passwords for unlock — the agent needs the Setup Password to
+  // revert UEFI lockdown, and the Power-On Password (if PBA was active) to
+  // clear it during remove_boot_lockdown.
+  // T8: Fetch all password types and pick the most recent of each.
+  // T9: Also fetch bitlocker_pin and bitlocker_recovery for PBA recovery.
   let biosPassword = null;
+  let powerOnPassword = null;
+  let bitlockerPin = null;
+  let bitlockerRecoveryPassword = null;
   const pwResult = await pool.query(
-    `SELECT * FROM bios_passwords WHERE device_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    `SELECT * FROM bios_passwords WHERE device_id = $1 ORDER BY created_at DESC`,
     [deviceId]
   );
-  if (pwResult.rows[0]) {
+  for (const row of pwResult.rows) {
     // CC16: Dual-mode read for bios_password
-    biosPassword = readDualMode(
-      pwResult.rows[0],
+    const pw = readDualMode(
+      row,
       'password',
       'password_encrypted',
       'pw_enc_nonce',
       'pw_enc_tag'
     );
+    // T8: password_type discriminator (defaults to 'setup' for pre-migration rows)
+    const pwType = row.password_type || 'setup';
+    if (pwType === 'power_on' && !powerOnPassword) {
+      powerOnPassword = pw;
+    } else if (pwType === 'setup' && !biosPassword) {
+      biosPassword = pw;
+    } else if (pwType === 'bitlocker_pin' && !bitlockerPin) {
+      bitlockerPin = pw;
+    } else if (pwType === 'bitlocker_recovery' && !bitlockerRecoveryPassword) {
+      bitlockerRecoveryPassword = pw;
+    }
   }
 
-  return { keyMaterial, biosPassword };
+  return { keyMaterial, biosPassword, powerOnPassword, bitlockerPin, bitlockerRecoveryPassword };
 }
 
 /**
@@ -184,12 +202,12 @@ function calculatePollInterval(deviceStatus) {
 
 router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, mac_address, hardware_uuid } = req.body;
-  if (!hostname) return res.status(400).json({ error: 'hostname required' });
+  if (!hostname) return res.status(400).json({ error: 'hostname required. Include the hostname field in the request body.' });
 
   // FA3: If authenticated via per-device key, req.device is already set.
   // For legacy shared-key auth, find the device from body fields.
   const device = req.device || await findDevice(hostname, mac_address, hardware_uuid);
-  if (!device) return res.status(404).json({ error: 'Device not registered' });
+  if (!device) return res.status(404).json({ error: 'Device not registered. Enroll the device first via POST /api/devices, or verify the hostname and hardware identity fields match an enrolled device.' });
 
   // --- Update phase: record check-in and populate hardware identity if missing ---
   await updateDeviceCheckin(device.id, hostname, mac_address, hardware_uuid);
@@ -202,10 +220,16 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
 
   let keyMaterial = null;
   let biosPassword = null;
+  let powerOnPassword = null;
+  let bitlockerPin = null;
+  let bitlockerRecoveryPassword = null;
   if (command && command.command_type === 'unlock') {
     const materials = await fetchUnlockMaterials(device.id);
     keyMaterial = materials.keyMaterial;
     biosPassword = materials.biosPassword;
+    powerOnPassword = materials.powerOnPassword;
+    bitlockerPin = materials.bitlockerPin;
+    bitlockerRecoveryPassword = materials.bitlockerRecoveryPassword;
   }
 
   // Phase 5: Adaptive polling — tell the agent how often to check in.
@@ -224,6 +248,14 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
           command_uuid: command.command_uuid || null,
           key_material: keyMaterial,
           bios_password: biosPassword,
+          // T7/T8: PBA credentials and flag for the agent
+          power_on_password: powerOnPassword,
+          enable_pba: command.enable_pba || false,
+          // T9: BitLocker PBA credentials for unlock (agent doesn't need these
+          // to disable_pba — it uses the local state file — but the dashboard
+          // needs them for the PBA Recovery panel in T10)
+          bitlocker_pin: bitlockerPin,
+          bitlocker_recovery_password: bitlockerRecoveryPassword,
         }
       : null,
   });
@@ -237,21 +269,22 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
     hostname, command_id, result_status, key_material, bios_password,
     mac_address, hardware_uuid, boot_lock_status, command_uuid,
     boot_lock_detail, encryption_blocked_files, lock_session_context,
+    power_on_password, bitlocker_pin, bitlocker_recovery_password,
   } = req.body;
   if (!hostname || !command_id || !result_status) {
-    return res.status(400).json({ error: 'hostname, command_id, result_status required' });
+    return res.status(400).json({ error: 'hostname, command_id, result_status required. Include all three fields in the request body.' });
   }
 
   // Phase 5: Validate result_status — only allow known values
   const VALID_STATUSES = ['executed', 'failed', 'not_now'];
   if (!VALID_STATUSES.includes(result_status)) {
     return res.status(400).json({
-      error: `Invalid result_status: ${result_status}. Must be one of: ${VALID_STATUSES.join(', ')}`,
+      error: `Invalid result_status: ${result_status}. Must be one of: ${VALID_STATUSES.join(', ')}. Use one of the allowed values.`,
     });
   }
 
   const device = req.device || await findDevice(hostname, mac_address, hardware_uuid);
-  if (!device) return res.status(404).json({ error: 'Device not registered' });
+  if (!device) return res.status(404).json({ error: 'Device not registered. Enroll the device first via POST /api/devices, or verify the hostname and hardware identity fields match an enrolled device.' });
 
   // Phase 5: If command_uuid is provided, check for duplicate ACK.
   // This allows the agent to retry safely — if we've already seen this
@@ -296,13 +329,51 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
         );
       }
 
-      // A3: Insert BIOS password (encrypted at rest)
+      // A3: Insert BIOS Setup password (encrypted at rest)
+      // T8: Specify password_type='setup' explicitly (migration 008 adds the column)
       if (bios_password) {
         const enc = encryptField(bios_password);
         await client.query(
-          `INSERT INTO bios_passwords (device_id, password, password_encrypted, pw_enc_nonce, pw_enc_tag)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [device.id, bios_password, enc.ciphertext, enc.nonce, enc.tag]
+          `INSERT INTO bios_passwords (device_id, password, password_encrypted, pw_enc_nonce, pw_enc_tag, password_type)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [device.id, bios_password, enc.ciphertext, enc.nonce, enc.tag, 'setup']
+        );
+      }
+
+      // T7/T8: Insert Power-On Password (encrypted at rest, password_type='power_on')
+      // This is the HP Power-On Password set when enable_pba=True. The agent
+      // needs it during unlock to clear the Power-On Password (Tier 1 PBA removal).
+      if (power_on_password) {
+        const encPw = encryptField(power_on_password);
+        await client.query(
+          `INSERT INTO bios_passwords (device_id, password, password_encrypted, pw_enc_nonce, pw_enc_tag, password_type)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [device.id, power_on_password, encPw.ciphertext, encPw.nonce, encPw.tag, 'power_on']
+        );
+      }
+
+      // T9: Insert BitLocker TPM+PIN (encrypted at rest, password_type='bitlocker_pin')
+      // This is the PIN the operator needs to enter at the pre-boot prompt on a
+      // rebooted PBA device. The agent doesn't need it for disable_pba (it uses
+      // the local state file), but the dashboard needs it for the PBA Recovery panel.
+      if (bitlocker_pin) {
+        const encPin = encryptField(bitlocker_pin);
+        await client.query(
+          `INSERT INTO bios_passwords (device_id, password, password_encrypted, pw_enc_nonce, pw_enc_tag, password_type)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [device.id, bitlocker_pin, encPin.ciphertext, encPin.nonce, encPin.tag, 'bitlocker_pin']
+        );
+      }
+
+      // T9: Insert BitLocker recovery password (encrypted at rest, password_type='bitlocker_recovery')
+      // This is the 48-digit numerical password that can unlock the drive if the
+      // PIN is lost. The operator needs it for the PBA Recovery runbook.
+      if (bitlocker_recovery_password) {
+        const encRec = encryptField(bitlocker_recovery_password);
+        await client.query(
+          `INSERT INTO bios_passwords (device_id, password, password_encrypted, pw_enc_nonce, pw_enc_tag, password_type)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [device.id, bitlocker_recovery_password, encRec.ciphertext, encRec.nonce, encRec.tag, 'bitlocker_recovery']
         );
       }
 
@@ -411,11 +482,11 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
 router.post('/deadman-report', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, mac_address, hardware_uuid, key_material } = req.body;
   if (!hostname || !key_material) {
-    return res.status(400).json({ error: 'hostname and key_material required' });
+    return res.status(400).json({ error: 'hostname and key_material required. Include both fields in the request body.' });
   }
 
   const device = req.device || await findDevice(hostname, mac_address, hardware_uuid);
-  if (!device) return res.status(404).json({ error: 'Device not registered' });
+  if (!device) return res.status(404).json({ error: 'Device not registered. Enroll the device first via POST /api/devices, or verify the hostname and hardware identity fields match an enrolled device.' });
 
   try {
     await withTransaction(async (client) => {
@@ -470,11 +541,11 @@ router.post('/deadman-report', agentAuth, hmacVerify(), async (req, res) => {
 router.post('/location', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, mac_address, hardware_uuid, location } = req.body;
   if (!hostname || !location) {
-    return res.status(400).json({ error: 'hostname and location required' });
+    return res.status(400).json({ error: 'hostname and location required. Include both fields in the request body.' });
   }
 
   const device = req.device || await findDevice(hostname, mac_address, hardware_uuid);
-  if (!device) return res.status(404).json({ error: 'Device not registered' });
+  if (!device) return res.status(404).json({ error: 'Device not registered. Enroll the device first via POST /api/devices, or verify the hostname and hardware identity fields match an enrolled device.' });
 
   const {
     latitude, longitude, accuracy_meters, source,
@@ -612,7 +683,7 @@ router.get('/download', agentAuth, async (req, res) => {
   }
 
   if (!binPath) {
-    return res.status(404).json({ error: 'Agent binary not available' });
+    return res.status(404).json({ error: 'Agent binary not available. Build the agent and place it in the agent binaries directory. Run make build-agent to create the binary.' });
   }
 
   res.setHeader('Content-Type', 'application/octet-stream');

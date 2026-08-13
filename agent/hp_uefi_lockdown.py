@@ -78,6 +78,12 @@ HP_WMI_NAMESPACE = r"root\hp\InstrumentedBIOS"
 # Set via set_dry_run(True) or the LOCKDOWN_DRY_RUN=1 env var.
 _DRY_RUN = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes")
 
+# D-010: Module-level flag set by _check_sure_admin() during apply_boot_lockdown().
+# Used by _verify_setting() to add a Sure Admin-specific warning when
+# verification fails (Sure Admin silently blocks unsigned BIOS changes —
+# the WMI set appears to succeed but the value doesn't change).
+_sure_admin_active = False
+
 # Simulated BIOS state for dry-run mode (mimics a typical HP EliteBook)
 _DRY_RUN_BIOS_STATE = {
     "Setup Password": {"is_set": False},
@@ -102,6 +108,17 @@ _DRY_RUN_BIOS_STATE = {
     "Virtualization Technology for Directed I/O": "Enable",
     "IOMMU": "Enable",
     "DMA Protection": "Enable",
+    # T7: Power-On Password (dry-run default: not set)
+    "Power-On Password": {"is_set": False},
+    # T7: Sure Start BIOS Settings Protection (dry-run default: disabled)
+    # If enabled, the lock-then-seal pattern would disable it before BIOS
+    # changes and re-enable after. Default disabled so the path is not
+    # triggered unless a test explicitly mocks it.
+    "Sure Start BIOS Settings Protection": "Disable",
+    # D-010: Sure Admin (EBAM) — dry-run default: disabled
+    # The actual BIOS setting name is "Enhanced BIOS Authentication Mode (EBAM)"
+    # per HP documentation (RESEARCH-HP-HARDWARE.md)
+    "Enhanced BIOS Authentication Mode (EBAM)": "Disable",
 }
 
 
@@ -384,7 +401,11 @@ def _run_powershell(script: str, timeout: int = 30) -> str:
         timeout=timeout,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"PowerShell failed (exit {result.returncode}): {result.stderr.strip()}")
+        raise RuntimeError(
+            f"PowerShell failed (exit {result.returncode}): {result.stderr.strip()}. "
+            "Fix: ensure PowerShell is available, the script has no syntax errors, "
+            "and the agent is running with sufficient privileges (Administrator)."
+        )
     return result.stdout.strip()
 
 
@@ -398,8 +419,10 @@ def _dry_run_powershell_response(script: str) -> str:
         # _is_admin check
         return ""  # non-empty = admin
     if "HP_BIOSPassword" in script and "IsSet" in script:
-        # _is_setup_password_set check
-        return "0"  # password not set
+        # _is_setup_password_set or _is_power_on_password_set check
+        if "Power-On Password" in script:
+            return "0"  # Power-On Password not set
+        return "0"  # Setup Password not set
     if "HP_BIOSEnumeration" in script and "CurrentValue" in script:
         # _read_setting from enumeration
         for name, val in _DRY_RUN_BIOS_STATE.items():
@@ -479,6 +502,16 @@ def _check_sure_admin() -> dict:
       - any_sure_feature: bool — True if ANY Sure feature is enabled
       - warning: str | None — warning message if a Sure feature may
         revert BIOS changes
+
+    Research (RESEARCH-HP-HARDWARE.md):
+      - Sure Admin BIOS setting: "Enhanced BIOS Authentication Mode (EBAM)"
+        (not "Sure Admin" — that's the marketing name, not the BIOS setting)
+      - Sure Start BIOS setting: "Sure Start BIOS Settings Protection"
+        (the BSP check in _check_sure_start_bsp() already uses the correct name;
+        this function checks for the general Sure Start self-healing feature)
+      - Sure Run: NOT a standard BIOS setting. Detected via the HPSureRun
+        Windows service or BIOS display-only settings under SPM menu.
+      - WQL LIKE operator supports substring matching: WHERE Name LIKE '%Sure%'
     """
     result = {
         "sure_admin_detected": False,
@@ -488,23 +521,110 @@ def _check_sure_admin() -> dict:
         "warning": None,
     }
 
-    # Check each Sure feature via WMI
-    sure_features = {
-        "sure_admin_detected": ["Sure Admin", "HP Sure Admin"],
-        "sure_run_detected": ["Sure Run", "HP Sure Run"],
-        "sure_start_detected": ["Sure Start", "HP Sure Start"],
-    }
+    # D-010: Sure Admin — the actual BIOS setting name is "Enhanced BIOS
+    # Authentication Mode (EBAM)", not "Sure Admin". Keep old names as
+    # fallbacks for older HP models that may use different naming.
+    sure_admin_names = [
+        "Enhanced BIOS Authentication Mode (EBAM)",
+        "Enhanced BIOS Authentication Mode",
+        "EBAM",
+        "Sure Admin",
+        "HP Sure Admin",
+    ]
 
-    for result_key, setting_names in sure_features.items():
-        for name in setting_names:
-            value = _read_setting(name)
-            if value is not None:
-                # Check if the feature is enabled
-                value_lower = value.lower().strip()
-                if value_lower in ("enable", "enabled", "on", "true", "1", "yes", "active"):
-                    result[result_key] = True
-                    log.warning("D-010: %s is enabled — BIOS changes may be reverted", name)
-                break  # Found the setting, no need to check aliases
+    for name in sure_admin_names:
+        value = _read_setting(name)
+        if value is not None:
+            value_lower = value.lower().strip()
+            if value_lower in ("enable", "enabled", "on", "true", "1", "yes", "active"):
+                result["sure_admin_detected"] = True
+                log.warning("D-010: Sure Admin (EBAM) is enabled — BIOS changes may be reverted")
+            break
+
+    # D-010: Sure Start — check for the general Sure Start self-healing
+    # feature. The BSP-specific check is in _check_sure_start_bsp().
+    # Use exact names first, then WQL LIKE substring match as fallback.
+    sure_start_names = [
+        "Sure Start BIOS Settings Protection",
+        "BIOS Settings Protection",
+        "Sure Start",
+        "HP Sure Start",
+    ]
+
+    sure_start_found = False
+    for name in sure_start_names:
+        value = _read_setting(name)
+        if value is not None:
+            value_lower = value.lower().strip()
+            if value_lower in ("enable", "enabled", "on", "true", "1", "yes", "active"):
+                result["sure_start_detected"] = True
+                log.warning("D-010: Sure Start is enabled — BIOS changes may be reverted")
+            sure_start_found = True
+            break
+
+    # WQL LIKE substring fallback for Sure Start — catches variants like
+    # "Sure Start Hardware Self-Healing" that we don't have as exact candidates
+    if not sure_start_found and not _DRY_RUN:
+        try:
+            output = _run_powershell(
+                f"Get-WmiObject -Namespace '{HP_WMI_NAMESPACE}' "
+                f"-Class HP_BIOSEnumeration -Filter \"Name LIKE '%Sure Start%'\" | "
+                f'ForEach-Object {{ Write-Output "$($_.Name)=$($_.CurrentValue)" }}'
+            )
+            if output:
+                for line in output.split("\n"):
+                    if "=" in line:
+                        sname, sval = line.split("=", 1)
+                        sval_lower = sval.lower().strip()
+                        if sval_lower in ("enable", "enabled", "on", "true", "1", "yes", "active"):
+                            result["sure_start_detected"] = True
+                            log.warning("D-010: Sure Start variant '%s' is enabled", sname)
+                            break
+        except Exception as e:
+            log.debug("D-010: Sure Start WQL LIKE fallback failed: %s", e)
+
+    # D-010: Sure Run — NOT a standard BIOS setting on most models.
+    # Try BIOS display-only settings first, then fall back to Windows service check.
+    sure_run_names = [
+        "HP Sure Run Current State",
+        "HP Sure Run",
+        "Sure Run",
+        "HP Sure Run",
+    ]
+
+    sure_run_found = False
+    for name in sure_run_names:
+        value = _read_setting(name)
+        if value is not None:
+            value_lower = value.lower().strip()
+            if value_lower in (
+                "enable",
+                "enabled",
+                "on",
+                "true",
+                "1",
+                "yes",
+                "active",
+                "provisioned",
+            ):
+                result["sure_run_detected"] = True
+                log.warning("D-010: Sure Run is enabled (BIOS setting '%s')", name)
+            sure_run_found = True
+            break
+
+    # Sure Run service-based detection — check if the HPSureRun Windows
+    # service exists and is running. This is more reliable than BIOS settings
+    # on models where Sure Run is managed via HP Client Security Manager.
+    if not sure_run_found and not _DRY_RUN:
+        try:
+            output = _run_powershell(
+                "(Get-Service -Name HPSureRun -ErrorAction SilentlyContinue).Status"
+            )
+            if output and output.strip().lower() == "running":
+                result["sure_run_detected"] = True
+                log.warning("D-010: Sure Run is enabled (HPSureRun service is running)")
+        except Exception as e:
+            log.debug("D-010: Sure Run service check failed: %s", e)
 
     result["any_sure_feature"] = (
         result["sure_admin_detected"]
@@ -512,10 +632,14 @@ def _check_sure_admin() -> dict:
         or result["sure_start_detected"]
     )
 
+    # D-010: Set module-level flag for _verify_setting() to use
+    global _sure_admin_active
+    _sure_admin_active = result["sure_admin_detected"]
+
     if result["any_sure_feature"]:
         features = []
         if result["sure_admin_detected"]:
-            features.append("Sure Admin")
+            features.append("Sure Admin (EBAM)")
         if result["sure_run_detected"]:
             features.append("Sure Run")
         if result["sure_start_detected"]:
@@ -589,6 +713,121 @@ def _check_secure_boot() -> dict:
         log.debug("T2: Secure Boot setting not found in WMI")
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Sure Start BIOS Settings Protection — lock-then-seal (T7, Q2=A)
+# ---------------------------------------------------------------------------
+# HP Sure Start BIOS Settings Protection (BSP) is a feature that monitors BIOS
+# settings and reverts unauthorized changes on the next boot. If BSP is enabled
+# when we apply lockdown, our BIOS changes will be silently reverted — the
+# agent reports success but the machine isn't actually locked down.
+#
+# The "lock then seal" pattern (Q2=A):
+#   1. Check if BSP is enabled
+#   2. If enabled, disable it (using the Setup Password as authorization)
+#   3. Apply all lockdown BIOS settings
+#   4. Re-enable BSP (so the lockdown settings become tamper-proof)
+#
+# This is distinct from the general Sure Start feature check in _check_sure_admin().
+# That function checks if "Sure Start" (the self-healing BIOS feature) is present.
+# This function checks specifically for "BIOS Settings Protection" (the sub-feature
+# that reverts setting changes).
+#
+# Candidate setting names across HP models:
+#   "Sure Start BIOS Settings Protection"
+#   "BIOS Settings Protection"
+#   "Sure Start Settings Protection"
+
+
+# T7: Candidate setting names for Sure Start BSP
+_SURE_START_BSP_NAMES = [
+    "Sure Start BIOS Settings Protection",
+    "BIOS Settings Protection",
+    "Sure Start Settings Protection",
+]
+
+
+def _check_sure_start_bsp() -> dict:
+    """Check if Sure Start BIOS Settings Protection is enabled.
+
+    T7: Returns a dict with:
+      - enabled: bool — True if BSP is enabled
+      - setting_name: str | None — the setting name that was found
+      - warning: str | None — warning message if BSP is enabled
+    """
+    result = {
+        "enabled": False,
+        "setting_name": None,
+        "warning": None,
+    }
+
+    for name in _SURE_START_BSP_NAMES:
+        value = _read_setting(name)
+        if value is not None:
+            result["setting_name"] = name
+            value_lower = value.lower().strip()
+            if value_lower in ("enable", "enabled", "on", "true", "1", "yes", "active"):
+                result["enabled"] = True
+                result["warning"] = (
+                    f"Sure Start BIOS Settings Protection is enabled (setting '{name}'). "
+                    f"BIOS changes will be reverted on next boot unless BSP is disabled first. "
+                    f"Using lock-then-seal pattern: disable BSP → apply lockdown → re-enable BSP."
+                )
+                log.warning("T7: %s", result["warning"])
+            else:
+                log.info("T7: Sure Start BSP is disabled (setting '%s' = '%s')", name, value)
+            break
+
+    if result["setting_name"] is None:
+        log.debug("T7: Sure Start BSP setting not found in WMI — not supported on this model")
+
+    return result
+
+
+def _disable_sure_start_bsp(setup_password: str) -> bool:
+    """Disable Sure Start BIOS Settings Protection before lockdown changes.
+
+    T7: Uses the Setup Password as authorization. Returns True on success.
+    """
+    for name in _SURE_START_BSP_NAMES:
+        value = _read_setting(name)
+        if value is not None:
+            rc = _set_setting(name, "Disable", setup_password)
+            if rc == 0:
+                log.info("T7: Sure Start BSP disabled (setting '%s')", name)
+                return True
+            log.warning(
+                "T7: Failed to disable Sure Start BSP '%s': %s",
+                name,
+                SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
+            )
+            return False
+    log.debug("T7: Sure Start BSP setting not found — nothing to disable")
+    return True  # Not found = nothing to disable = success
+
+
+def _enable_sure_start_bsp(setup_password: str) -> bool:
+    """Re-enable Sure Start BIOS Settings Protection after lockdown changes.
+
+    T7: Called after all lockdown settings are applied so they become
+    tamper-proof. Returns True on success.
+    """
+    for name in _SURE_START_BSP_NAMES:
+        value = _read_setting(name)
+        if value is not None:
+            rc = _set_setting(name, "Enable", setup_password)
+            if rc == 0:
+                log.info("T7: Sure Start BSP re-enabled (setting '%s') — lockdown sealed", name)
+                return True
+            log.warning(
+                "T7: Failed to re-enable Sure Start BSP '%s': %s",
+                name,
+                SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
+            )
+            return False
+    log.debug("T7: Sure Start BSP setting not found — nothing to re-enable")
+    return True  # Not found = nothing to re-enable = success
 
 
 # ---------------------------------------------------------------------------
@@ -787,7 +1026,8 @@ def _set_setting(name: str, value: str, password: str | None) -> int:
     if _DRY_RUN:
         print(f"  [DRY-RUN] SetBIOSSetting('{name}', '{value}', '***')")
         # Update simulated state
-        if name == "Setup Password":
+        # T7: Power-On Password is stored as a dict with is_set, like Setup Password
+        if name in ("Setup Password", "Power-On Password"):
             _DRY_RUN_BIOS_STATE[name]["is_set"] = bool(value)
         else:
             _DRY_RUN_BIOS_STATE[name] = value
@@ -811,6 +1051,9 @@ def _verify_setting(name: str, expected_value: str) -> bool:
     """Verify a BIOS setting took effect by re-reading it (Phase 4.5 / D-013).
 
     Returns True if the setting matches expected_value, False otherwise.
+    D-010: When verification fails and Sure Admin is active, adds a specific
+    warning — Sure Admin silently blocks unsigned BIOS changes (the WMI set
+    appears to succeed but the value doesn't change).
     """
     current = _read_setting(name)
     if current is None:
@@ -823,6 +1066,14 @@ def _verify_setting(name: str, expected_value: str) -> bool:
             expected_value,
             current,
         )
+        # D-010: Sure Admin silent failure warning
+        if _sure_admin_active:
+            log.warning(
+                "D-010: BIOS setting '%s' was not applied — Sure Admin (EBAM) "
+                "may be blocking unsigned changes. Use HP CMSL signed commands "
+                "or disable Sure Admin in BIOS.",
+                name,
+            )
         return False
     log.info("BIOS setting '%s' → %s (verified)", name, expected_value)
     return True
@@ -857,6 +1108,80 @@ def _is_setup_password_set() -> bool:
         return output.strip().lower() in ("1", "true")
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# HP Power-On Password (T7 — Tier 1 PBA)
+# ---------------------------------------------------------------------------
+# Q1=A: PBA is opt-in via enable_pba flag (default False).
+# The Power-On Password is a BIOS-level pre-boot password that must be entered
+# before the machine will boot. This is Tier 1 PBA — it prevents booting without
+# the password, even from external media.
+#
+# The Power-On Password requires the Setup Password to be set first (HP BIOS
+# requires the Setup Password as authorization to set the Power-On Password).
+# Once set, the machine will prompt for the Power-On Password on every cold
+# boot and warm reboot.
+#
+# CRITICAL TRADE-OFF (Q1): Once PBA is enabled, a rebooted device CANNOT be
+# remotely recovered — the agent can't boot to receive unlock commands. The
+# operator must physically enter the Power-On Password to boot the machine.
+# This is why PBA is opt-in, not default.
+
+
+def _is_power_on_password_supported() -> bool:
+    """Check if this HP machine supports the Power-On Password feature.
+
+    T7: Enumerates HP_BIOSPassword instances and checks for "Power-On Password".
+    Not all HP models support a separate Power-On Password (some only have
+    Setup Password).
+    """
+    if _DRY_RUN:
+        return True  # Simulated support for dry-run
+    if platform.system() != "Windows":
+        return False
+    try:
+        output = _run_powershell(
+            f"Get-WmiObject -Namespace '{HP_WMI_NAMESPACE}' "
+            f"-Class HP_BIOSPassword -Filter \"Name='Power-On Password'\" "
+            f"| Select-Object -ExpandProperty Name"
+        )
+        return bool(output and output.strip())
+    except Exception:
+        return False
+
+
+def _is_power_on_password_set() -> bool:
+    """Check if a Power-On Password is currently set."""
+    if _DRY_RUN:
+        return _DRY_RUN_BIOS_STATE.get("Power-On Password", {}).get("is_set", False)
+    try:
+        output = _run_powershell(
+            f"(Get-WmiObject -Namespace '{HP_WMI_NAMESPACE}' "
+            f"-Class HP_BIOSPassword -Filter \"Name='Power-On Password'\").IsSet"
+        )
+        return output.strip().lower() in ("1", "true")
+    except Exception:
+        return False
+
+
+def set_power_on_password(password: str, setup_password: str) -> int:
+    """Set the HP Power-On Password (Tier 1 PBA).
+
+    T7: Requires the Setup Password to be set first (used as authorization).
+    Returns the WMI return code (0 = success, 1 = Not Supported).
+    """
+    return _set_setting("Power-On Password", password, setup_password)
+
+
+def clear_power_on_password(setup_password: str) -> int:
+    """Clear the HP Power-On Password.
+
+    T7: Called during remove_boot_lockdown when PBA was active.
+    Requires the Setup Password as authorization.
+    Returns the WMI return code (0 = success).
+    """
+    return _set_setting("Power-On Password", "", setup_password)
 
 
 # ---------------------------------------------------------------------------
@@ -969,7 +1294,10 @@ def _rollback_bios_settings(saved_settings: dict, bios_password: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def apply_boot_lockdown(existing_password: str | None = None) -> dict:
+def apply_boot_lockdown(
+    existing_password: str | None = None,
+    enable_pba: bool = False,
+) -> dict:
     """Apply UEFI/BIOS lockdown on an HP machine.
 
     Phase 4 changes:
@@ -979,16 +1307,30 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
       - Rollback on critical failure (CC18) — does NOT clear Setup Password
       - Returns a dict with password + status (password returned even on critical failure)
 
+    T7 changes (Phase 2 PBA):
+      - enable_pba flag (Q1=A, default False): when True, sets HP Power-On
+        Password after Setup Password for Tier 1 pre-boot authentication
+      - Sure Admin report-blocked (Q3=B): if Sure Admin is detected, skips all
+        BIOS changes and reports bios_lockdown_blocked=True
+      - Sure Start BSP lock-then-seal (Q2=A): if BIOS Settings Protection is
+        enabled, disables it before BIOS changes and re-enables after, so
+        lockdown settings become tamper-proof
+
     Args:
         existing_password: The current BIOS Setup password, if one is already
             set. If None and no password is set, a new random password is
             generated. If None and a password IS set, the lockdown cannot
             proceed (we can't authenticate BIOS changes without it).
+        enable_pba: If True, set HP Power-On Password for Tier 1 PBA.
+            Default False — PBA is opt-in (Q1=A) because it prevents remote
+            recovery of rebooted devices.
 
     Returns:
         dict with keys:
           - bios_password: str | None — the BIOS password (for server-side storage).
             Returned even on critical failure (for operator manual BIOS clear).
+          - power_on_password: str | None — T7: the Power-On Password (for
+            server-side storage). Only set when enable_pba=True.
           - success: bool — True if all critical settings applied successfully
           - partial: bool — True if some best-effort settings failed (but critical OK)
           - rolled_back: bool — True if a critical failure triggered rollback
@@ -996,9 +1338,12 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
           - best_effort_applied: int — number of best-effort settings applied
           - best_effort_failed: int — number of best-effort settings that failed
           - not_hp: bool — True if not an HP machine (nothing done)
+          - bios_lockdown_blocked: bool — T7: True if Sure Admin blocked BIOS changes
           - sure_admin_status: dict | None — D-010: Sure Admin/Sure Run/Sure
             Start detection status (sure_admin_detected, sure_run_detected,
             sure_start_detected, any_sure_feature, warning)
+          - sure_start_bsp_status: dict | None — T7: Sure Start BIOS Settings
+            Protection status (enabled, setting_name, warning)
           - secure_boot_status: dict | None — T2: Secure Boot verification
             (enabled, setting_name, warning)
           - bitlocker_status: dict | None — T5: BitLocker status for BIOS
@@ -1006,6 +1351,7 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
     """
     result = {
         "bios_password": None,
+        "power_on_password": None,  # T7: Power-On Password for PBA
         "success": False,
         "partial": False,
         "rolled_back": False,
@@ -1013,7 +1359,9 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
         "best_effort_applied": 0,
         "best_effort_failed": 0,
         "not_hp": False,
+        "bios_lockdown_blocked": False,  # T7: Sure Admin blocked BIOS changes
         "sure_admin_status": None,  # D-010: Sure Admin/Sure Run/Sure Start
+        "sure_start_bsp_status": None,  # T7: Sure Start BSP lock-then-seal
         "secure_boot_status": None,  # T2: Secure Boot verification
         "bitlocker_status": None,  # T5: BitLocker awareness for BIOS changes
     }
@@ -1025,10 +1373,22 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
         return result
 
     # D-010: Check for HP Sure Admin / Sure Run / Sure Start.
-    # If any of these are enabled, BIOS changes may be reverted on next boot.
-    # The agent proceeds but reports the status so the operator is warned.
+    # T7 (Q3=B): If Sure Admin is detected, skip ALL BIOS changes and report
+    # blocked. Sure Admin requires signed payloads which we don't support.
+    # Attempting unsigned SetBIOSSetting calls would be silently rejected by
+    # the hardware on next boot — the same "trust return code 0" problem we
+    # fixed with D-013. Reporting blocked is honest and safe.
     sure_admin_status = _check_sure_admin()
     result["sure_admin_status"] = sure_admin_status
+    if sure_admin_status["sure_admin_detected"]:
+        log.error(
+            "T7: Sure Admin is enabled — BIOS changes blocked. "
+            "Disable Sure Admin or provision SPM keys for signed commands."
+        )
+        result["bios_lockdown_blocked"] = True
+        # Still report Secure Boot status for operator awareness
+        result["secure_boot_status"] = _check_secure_boot()
+        return result
     if sure_admin_status["any_sure_feature"]:
         log.warning("D-010: %s", sure_admin_status["warning"])
 
@@ -1102,6 +1462,55 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
     # Always return the password, even on critical failure (CC18)
     result["bios_password"] = bios_password
 
+    # T7: Set Power-On Password for Tier 1 PBA (Q1=A — opt-in).
+    # The Power-On Password must be set AFTER the Setup Password (HP BIOS
+    # requires the Setup Password as authorization). It's returned in the
+    # result dict for server-side storage and used during unlock to clear it.
+    if enable_pba:
+        if not _is_power_on_password_supported():
+            log.warning(
+                "T7: Power-On Password not supported on this HP model — "
+                "PBA cannot be applied (enable_pba=True was requested)"
+            )
+        elif _is_power_on_password_set():
+            log.warning("T7: Power-On Password is already set — not overwriting")
+        else:
+            power_on_pw = generate_bios_password()
+            log.info("T7: Setting Power-On Password for Tier 1 PBA...")
+            rc = set_power_on_password(power_on_pw, bios_password)
+            if rc != 0:
+                log.error(
+                    "T7: Failed to set Power-On Password: %s — PBA not active",
+                    SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
+                )
+            else:
+                # D-013: Verify the password was actually set
+                if not _is_power_on_password_set():
+                    log.error(
+                        "T7: Power-On Password verification failed — "
+                        "SetBIOSSetting returned success but password is not set"
+                    )
+                else:
+                    result["power_on_password"] = power_on_pw
+                    log.info("T7: Power-On Password set successfully (verified) — PBA active")
+
+    # T7: Sure Start BSP lock-then-seal (Q2=A).
+    # If BIOS Settings Protection is enabled, disable it before applying
+    # lockdown settings, then re-enable after so the settings become
+    # tamper-proof. If BSP is not supported or already disabled, skip.
+    sure_start_bsp = _check_sure_start_bsp()
+    result["sure_start_bsp_status"] = sure_start_bsp
+    bsp_was_disabled = False
+    if sure_start_bsp["enabled"]:
+        log.info("T7: Sure Start BSP is enabled — disabling before lockdown (lock-then-seal)")
+        if _disable_sure_start_bsp(bios_password):
+            bsp_was_disabled = True
+        else:
+            log.error(
+                "T7: Failed to disable Sure Start BSP — BIOS changes may be reverted on next boot"
+            )
+            # Proceed anyway — the operator is warned via sure_start_bsp_status
+
     # D-009: Resolve setting names for this specific HP model.
     # This replaces the hardcoded HP_CRITICAL_SETTINGS / HP_BEST_EFFORT_SETTINGS
     # with model-aware setting names.
@@ -1119,6 +1528,12 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
         result["best_effort_applied"] = 0
         result["best_effort_failed"] = 0
         result["no_critical_settings"] = True
+        # T7: Re-enable BSP if we disabled it (nothing to seal, but restore state)
+        if bsp_was_disabled:
+            _enable_sure_start_bsp(bios_password)
+        # T5: Resume BitLocker if suspended
+        if bitlocker_was_suspended:
+            _resume_bitlocker()
         return result
 
     # Save current state of all settings we're about to change (for rollback)
@@ -1158,6 +1573,9 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
         _rollback_bios_settings(saved_settings, bios_password)
         result["rolled_back"] = True
         result["success"] = False
+        # T7: Re-enable Sure Start BSP (rollback path — restore to pre-lockdown state)
+        if bsp_was_disabled:
+            _enable_sure_start_bsp(bios_password)
         # T5: Resume BitLocker protectors after BIOS changes (rollback path)
         if bitlocker_was_suspended:
             _resume_bitlocker()
@@ -1193,18 +1611,31 @@ def apply_boot_lockdown(existing_password: str | None = None) -> dict:
     result["critical_applied"] = critical_applied
     result["best_effort_applied"] = best_effort_applied
     result["best_effort_failed"] = best_effort_failed
+    # T7: Re-enable Sure Start BSP (lock-then-seal step 2 — seal the lockdown)
+    if bsp_was_disabled:
+        _enable_sure_start_bsp(bios_password)
     # T5: Resume BitLocker protectors after BIOS changes (success path)
     if bitlocker_was_suspended:
         _resume_bitlocker()
     return result
 
 
-def remove_boot_lockdown(bios_password: str) -> bool:
+def remove_boot_lockdown(
+    bios_password: str,
+    power_on_password: str | None = None,
+) -> bool:
     """Remove UEFI/BIOS lockdown and restore original settings.
+
+    T7: If power_on_password is provided, clears the Power-On Password
+    (Tier 1 PBA removal). The presence of power_on_password indicates
+    PBA was active during lockdown.
 
     Args:
         bios_password: The BIOS Setup password that was set during lockdown
             (received from the server in the unlock command).
+        power_on_password: T7: The Power-On Password that was set during
+            lockdown, if PBA was enabled. If provided, it's cleared after
+            BIOS settings are restored. If None, PBA was not active.
 
     Returns:
         True if lockdown was successfully removed, False otherwise.
@@ -1225,6 +1656,14 @@ def remove_boot_lockdown(bios_password: str) -> bool:
         log.info("T5: BitLocker enabled — suspending protectors before BIOS restore")
         if _suspend_bitlocker():
             bitlocker_was_suspended = True
+
+    # T7: Disable Sure Start BSP before BIOS restore (lock-then-seal for removal)
+    bsp_was_disabled = False
+    sure_start_bsp = _check_sure_start_bsp()
+    if sure_start_bsp["enabled"]:
+        log.info("T7: Sure Start BSP enabled — disabling before BIOS restore")
+        if _disable_sure_start_bsp(bios_password):
+            bsp_was_disabled = True
 
     state = load_boot_state()
     # D-009: Resolve model-specific setting names so we restore the right ones
@@ -1279,6 +1718,31 @@ def remove_boot_lockdown(bios_password: str) -> bool:
 
     log.info("Restored %d BIOS settings to pre-lockdown state", restored)
 
+    # T7: Clear Power-On Password if PBA was active (power_on_password provided).
+    # This must be done BEFORE clearing the Setup Password, because clearing
+    # the Power-On Password requires the Setup Password as authorization.
+    if power_on_password:
+        if _is_power_on_password_set():
+            log.info("T7: Clearing Power-On Password (PBA removal)...")
+            rc = clear_power_on_password(bios_password)
+            if rc == 0:
+                if _is_power_on_password_set():
+                    log.warning(
+                        "T7: Power-On Password clear verification failed — "
+                        "SetBIOSSetting returned success but password is still set. "
+                        "Admin may need to clear it manually in BIOS."
+                    )
+                else:
+                    log.info("T7: Power-On Password cleared successfully (verified)")
+            else:
+                log.warning(
+                    "T7: Failed to clear Power-On Password: %s — "
+                    "admin may need to clear it manually in BIOS",
+                    SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
+                )
+        else:
+            log.info("T7: Power-On Password not set — nothing to clear")
+
     # Clear the Setup password if we were the ones who set it
     if state and not state.get("setup_password_was_set", False):
         log.info("Clearing BIOS Setup password (was set by lockdown agent)...")
@@ -1302,6 +1766,10 @@ def remove_boot_lockdown(bios_password: str) -> bool:
         log.info("Setup password was pre-existing — not clearing (admin manages it)")
 
     clear_boot_state()
+
+    # T7: Re-enable Sure Start BSP after BIOS restore (seal the restoration)
+    if bsp_was_disabled:
+        _enable_sure_start_bsp(bios_password)
 
     # T5: Resume BitLocker protectors after BIOS restore
     if bitlocker_was_suspended:

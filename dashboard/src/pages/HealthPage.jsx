@@ -51,8 +51,8 @@ export default function HealthPage() {
       setData(res.data);
       setError(null);
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to load health data');
-      toast.error('Failed to load health data');
+      setError(err.response?.data?.error || 'Failed to load health data. Check your network connection and try again. If the issue persists, verify the server is running.');
+      toast.error('Failed to load health data. Check your network connection and try again. If the issue persists, verify the server is running.');
     } finally {
       setLoading(false);
     }

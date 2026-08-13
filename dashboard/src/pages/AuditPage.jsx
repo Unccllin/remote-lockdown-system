@@ -28,7 +28,7 @@ export default function AuditPage() {
       setLogs(data);
     } catch (err) {
       console.error('AuditPage load failed:', err);
-      toast.error('Failed to load audit log');
+      toast.error('Failed to load audit log. Check your network connection and try again. If the issue persists, verify the server is running.');
     } finally {
       setLoading(false);
     }

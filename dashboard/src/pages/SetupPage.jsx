@@ -57,7 +57,7 @@ export default function SetupPage() {
       toast.success('Admin account created! Please log in.');
       navigate('/login', { replace: true });
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Setup failed');
+      toast.error(err.response?.data?.error || 'Setup failed. Check your input and try again. If the issue persists, verify the server is running and no admin account exists yet.');
     } finally {
       setLoading(false);
     }

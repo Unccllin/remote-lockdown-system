@@ -20,6 +20,7 @@ TASK_QUEUE_DIR="$SCRIPT_DIR/task-queue"
 RESULTS_DIR="$SCRIPT_DIR/results"
 GRAPH_DIR="$PROJECT_ROOT/.devin/graph"
 TRACE_FILE="$GRAPH_DIR/trace.md"
+CURRENT_STATE_FILE="$GRAPH_DIR/current-state.md"
 
 mkdir -p "$TASK_QUEUE_DIR" "$RESULTS_DIR"
 
@@ -133,19 +134,18 @@ rule_zero_check() {
   phase_log "$phase" "RULE-ZERO check passed (I5): understanding logged to trace.md"
 }
 
-# Refactor 5: Write a session-end status block to trace.md
+# Refactor 5: Write a session-end status block to trace.md AND current-state.md
 # This enforces graph invariant I4 (no session close without trace update).
+# Both files must have the session-end status block — trace.md for full
+# history, current-state.md for compact session startup.
 write_session_end() {
   local status=$1  # "SUCCESS" or "FAILURE"
   local phases_run=$2
   local timestamp
   timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-  if [[ ! -f "$TRACE_FILE" ]]; then
-    return 0  # No trace file — don't fail
-  fi
-
-  cat >> "$TRACE_FILE" << EOF
+  local session_block
+  session_block=$(cat << EOF
 
 ## Orchestrator session-end — $timestamp
 
@@ -159,7 +159,98 @@ then check \`docs/adr/DEBT-LEDGER.md\` for open debt items.
 
 ---
 EOF
-  log "Session-end block written to trace.md (I4)"
+)
+
+  # Append to trace.md (full history)
+  if [[ -f "$TRACE_FILE" ]]; then
+    echo "$session_block" >> "$TRACE_FILE"
+    log "Session-end block written to trace.md (I4)"
+  fi
+
+  # Append to current-state.md (compact summary)
+  if [[ -f "$CURRENT_STATE_FILE" ]]; then
+    echo "$session_block" >> "$CURRENT_STATE_FILE"
+    log "Session-end block written to current-state.md (I4)"
+  fi
+}
+
+# Clean state checklist — verifies the 5 conditions from Lecture 12.
+# Run via `make clean-state` or `orchestrator.sh clean-state`.
+clean_state_check() {
+  local pass_count=0
+  local fail_count=0
+  local check_name
+
+  echo "Clean State Checklist:"
+  echo "──────────────────────────────────────────────"
+
+  # 1. Build passes (dashboard build is the most common to break)
+  check_name="1. Build passes"
+  if (cd "$PROJECT_ROOT/dashboard" && npx vite build >/dev/null 2>&1); then
+    ok "$check_name"
+    pass_count=$((pass_count + 1))
+  else
+    fail "$check_name"
+    fail_count=$((fail_count + 1))
+  fi
+
+  # 2. Tests pass (all 3 suites)
+  check_name="2. Tests pass"
+  local test_fail=0
+  (cd "$PROJECT_ROOT/server" && npm test >/dev/null 2>&1) || test_fail=1
+  (cd "$PROJECT_ROOT/agent" && python3 -m pytest tests/ -q >/dev/null 2>&1) || test_fail=1
+  (cd "$PROJECT_ROOT/dashboard" && npx vitest run >/dev/null 2>&1) || test_fail=1
+  if [[ $test_fail -eq 0 ]]; then
+    ok "$check_name"
+    pass_count=$((pass_count + 1))
+  else
+    fail "$check_name"
+    fail_count=$((fail_count + 1))
+  fi
+
+  # 3. Progress recorded (trace.md + current-state.md have session-end blocks)
+  check_name="3. Progress recorded"
+  local progress_fail=0
+  if ! python3 "$GRAPH_DIR/graph_assert.py" >/dev/null 2>&1; then
+    progress_fail=1
+  fi
+  if [[ $progress_fail -eq 0 ]]; then
+    ok "$check_name"
+    pass_count=$((pass_count + 1))
+  else
+    fail "$check_name (graph invariants failed)"
+    fail_count=$((fail_count + 1))
+  fi
+
+  # 4. No temporary artifacts (git status should show only intentional changes)
+  check_name="4. No temp artifacts"
+  local temp_files
+  temp_files=$(cd "$PROJECT_ROOT" && git status --short | grep -E '\.(log|tmp)$|debug_|^?? test_' || true)
+  if [[ -z "$temp_files" ]]; then
+    ok "$check_name"
+    pass_count=$((pass_count + 1))
+  else
+    fail "$check_name (found: $temp_files)"
+    fail_count=$((fail_count + 1))
+  fi
+
+  # 5. Startup path functional (graph-check passes)
+  check_name="5. Startup path functional"
+  if python3 "$GRAPH_DIR/graph_assert.py" >/dev/null 2>&1; then
+    ok "$check_name"
+    pass_count=$((pass_count + 1))
+  else
+    fail "$check_name"
+    fail_count=$((fail_count + 1))
+  fi
+
+  echo ""
+  echo "──────────────────────────────────────────────"
+  echo "  $pass_count passed, $fail_count failed"
+  if [[ $fail_count -gt 0 ]]; then
+    return 1
+  fi
+  return 0
 }
 
 # Run phase-specific tests
@@ -328,6 +419,10 @@ case "${1:-}" in
   graph-check)
     # Run the full graph invariant sweep
     python3 "$GRAPH_DIR/graph_assert.py"
+    ;;
+  clean-state)
+    # Run the 5-condition clean state checklist (Lecture 12)
+    clean_state_check
     ;;
   test)
     [[ -z "${2:-}" ]] && { echo "Usage: $0 test <phase-number>"; exit 1; }

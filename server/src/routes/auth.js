@@ -13,14 +13,14 @@ const router = express.Router();
 
 router.post('/login', async (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) return res.status(400).json({ error: 'username and password required' });
+  if (!username || !password) return res.status(400).json({ error: 'username and password required. Provide both fields in the request body.' });
 
   const result = await pool.query('SELECT * FROM admins WHERE username = $1', [username]);
   const admin = result.rows[0];
-  if (!admin) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!admin) return res.status(401).json({ error: 'Invalid credentials. Check your username and password and try again.' });
 
   const valid = await bcrypt.compare(password, admin.password_hash);
-  if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!valid) return res.status(401).json({ error: 'Invalid credentials. Check your username and password and try again.' });
 
   const token = jwt.sign(
     { id: admin.id, username: admin.username, role: admin.role || 'viewer' },

@@ -256,6 +256,49 @@ describe('POST /api/devices/:id/flag-stolen', () => {
 
     expect(res.status).toBe(409);
   });
+
+  // T7/T8: enable_pba flag in lockdown command creation
+  test('T7/T8: passes enable_pba=true to lockdown command when requested', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', owner_name: 'Alice', status: 'active' };
+    const cmd = { id: 'cmd-1', device_id: 'dev-1', command_type: 'lockdown', status: 'pending', enable_pba: true };
+
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+    mockPool.query.setResult('INSERT INTO commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/flag-stolen')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname_confirm: 'DEV-001', enable_pba: true });
+
+    expect(res.status).toBe(200);
+    // Verify the INSERT INTO commands call included enable_pba=true
+    const insertCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO commands') && c[0].includes('enable_pba')
+    );
+    expect(insertCall).toBeDefined();
+    expect(insertCall[1]).toContain(true);
+  });
+
+  test('T7/T8: defaults enable_pba=false when not provided', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', owner_name: 'Alice', status: 'active' };
+    const cmd = { id: 'cmd-1', device_id: 'dev-1', command_type: 'lockdown', status: 'pending' };
+
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+    mockPool.query.setResult('INSERT INTO commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/flag-stolen')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname_confirm: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    // Verify the INSERT INTO commands call included enable_pba=false
+    const insertCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO commands') && c[0].includes('enable_pba')
+    );
+    expect(insertCall).toBeDefined();
+    expect(insertCall[1]).toContain(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -693,5 +736,127 @@ describe('FA5: Retention scheduler', () => {
     // Stop immediately
     await stopScheduler(500);
     // No error means success
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T10: GET /api/devices/:id/pba-credentials
+// ---------------------------------------------------------------------------
+
+describe('GET /api/devices/:id/pba-credentials', () => {
+  const app = createApp();
+
+  test('rejects without auth token', async () => {
+    const res = await request(app).get('/api/devices/dev-1/pba-credentials');
+    expect(res.status).toBe(401);
+  });
+
+  test('returns 404 when device not found', async () => {
+    mockPool.query.setResult('SELECT * FROM devices WHERE', { rows: [] });
+
+    const res = await request(app)
+      .get('/api/devices/missing/pba-credentials')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Device not found. Verify the device ID is correct and the device is enrolled in the system.');
+  });
+
+  test('returns all PBA credentials grouped by type', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001' };
+    const passwords = [
+      { id: 'pw-1', password: 'SetupPw', password_type: 'setup' },
+      { id: 'pw-2', password: 'PopPw', password_type: 'power_on' },
+      { id: 'pw-3', password: '123456', password_type: 'bitlocker_pin' },
+      { id: 'pw-4', password: '111111-222222-333333-444444-555555-666666-777777-888888', password_type: 'bitlocker_recovery' },
+    ];
+
+    mockPool.query.setResult('SELECT * FROM devices WHERE', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM bios_passwords WHERE', { rows: passwords });
+
+    const res = await request(app)
+      .get('/api/devices/dev-1/pba-credentials')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.setup_password).toBe('SetupPw');
+    expect(res.body.power_on_password).toBe('PopPw');
+    expect(res.body.bitlocker_pin).toBe('123456');
+    expect(res.body.bitlocker_recovery_password).toBe('111111-222222-333333-444444-555555-666666-777777-888888');
+  });
+
+  test('returns nulls when no PBA credentials exist', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001' };
+
+    mockPool.query.setResult('SELECT * FROM devices WHERE', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM bios_passwords WHERE', { rows: [] });
+
+    const res = await request(app)
+      .get('/api/devices/dev-1/pba-credentials')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.setup_password).toBeNull();
+    expect(res.body.power_on_password).toBeNull();
+    expect(res.body.bitlocker_pin).toBeNull();
+    expect(res.body.bitlocker_recovery_password).toBeNull();
+  });
+
+  test('picks most recent of each password_type', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001' };
+    // Two setup passwords — the first (most recent due to ORDER BY created_at DESC) wins
+    const passwords = [
+      { id: 'pw-2', password: 'NewSetupPw', password_type: 'setup' },
+      { id: 'pw-1', password: 'OldSetupPw', password_type: 'setup' },
+    ];
+
+    mockPool.query.setResult('SELECT * FROM devices WHERE', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM bios_passwords WHERE', { rows: passwords });
+
+    const res = await request(app)
+      .get('/api/devices/dev-1/pba-credentials')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.setup_password).toBe('NewSetupPw');
+  });
+
+  test('audit logs the credential access', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001' };
+    const passwords = [
+      { id: 'pw-1', password: '123456', password_type: 'bitlocker_pin' },
+    ];
+
+    mockPool.query.setResult('SELECT * FROM devices WHERE', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM bios_passwords WHERE', { rows: passwords });
+
+    const res = await request(app)
+      .get('/api/devices/dev-1/pba-credentials')
+      .set('Authorization', `Bearer ${makeToken('admin-1')}`);
+
+    expect(res.status).toBe(200);
+
+    // Verify audit log insert — pba_credentials_accessed is in the params, not the SQL
+    const auditInsert = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1].includes('pba_credentials_accessed')
+    );
+    expect(auditInsert).toBeDefined();
+    expect(auditInsert[1]).toContain('dev-1');
+    expect(auditInsert[1]).toContain('admin-1');
+    expect(auditInsert[1]).toContain('pba_credentials_accessed');
+  });
+
+  test('rejects viewer role (requires operator)', async () => {
+    const viewerToken = jwt.sign(
+      { id: 'viewer-1', username: 'viewer', role: 'viewer' },
+      JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    const res = await request(app)
+      .get('/api/devices/dev-1/pba-credentials')
+      .set('Authorization', `Bearer ${viewerToken}`);
+
+    expect(res.status).toBe(403);
   });
 });

@@ -245,10 +245,11 @@ describe('POST /api/agent/command-ack — idempotency (A4)', () => {
       c => c[0].includes('INSERT INTO bios_passwords') && c[0].includes('password_encrypted')
     );
     expect(insertBiosCall).toBeDefined();
-    expect(insertBiosCall[1]).toHaveLength(5);
+    expect(insertBiosCall[1]).toHaveLength(6); // T8: 5 params + password_type
     expect(insertBiosCall[1][1]).toBe('BiosP@ss'); // plaintext
     expect(insertBiosCall[1][2]).toBeDefined(); // ciphertext
     expect(insertBiosCall[1][2]).not.toBe('BiosP@ss');
+    expect(insertBiosCall[1][5]).toBe('setup'); // T8: password_type
   });
 
   test('uses ON CONFLICT DO NOTHING for idempotent key insert (A4)', async () => {

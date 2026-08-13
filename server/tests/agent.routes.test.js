@@ -129,7 +129,7 @@ describe('POST /api/agent/checkin', () => {
       .send({ hostname: 'DEV-001' });
 
     expect(res.status).toBe(200);
-    expect(res.body.command).toEqual({ id: 'cmd-1', type: 'lockdown', key_material: null, bios_password: null, command_uuid: null });
+    expect(res.body.command).toEqual({ id: 'cmd-1', type: 'lockdown', key_material: null, bios_password: null, command_uuid: null, power_on_password: null, enable_pba: false, bitlocker_pin: null, bitlocker_recovery_password: null });
   });
 
   test('attaches key_material for unlock commands', async () => {
@@ -682,5 +682,275 @@ describe('FA3: Key rotation (POST /api/devices/:id/rotate-key)', () => {
       .post('/api/devices/dev-1/rotate-key');
 
     expect(res.status).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T7/T8: PBA — Power-On Password and enable_pba flag
+// ---------------------------------------------------------------------------
+
+describe('T7/T8: PBA — Power-On Password and enable_pba flag', () => {
+  const app = createApp();
+
+  test('checkin returns enable_pba=true for lockdown command with PBA', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const command = { id: 'cmd-1', command_type: 'lockdown', status: 'pending', enable_pba: true };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM commands', { rows: [command] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.command.enable_pba).toBe(true);
+  });
+
+  test('checkin returns enable_pba=false for lockdown command without PBA', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const command = { id: 'cmd-1', command_type: 'lockdown', status: 'pending' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM commands', { rows: [command] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.command.enable_pba).toBe(false);
+  });
+
+  test('checkin returns power_on_password for unlock when PBA was active', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'recovering' };
+    const command = { id: 'cmd-2', command_type: 'unlock', status: 'pending' };
+    const key = { id: 'key-1', key_material: 'fernet-key==' };
+    const setupPw = { id: 'pw-1', password: 'SetupPw123', password_type: 'setup' };
+    const popPw = { id: 'pw-2', password: 'PopPw456', password_type: 'power_on' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM commands', { rows: [command] });
+    mockPool.query.setResult('SELECT * FROM encryption_keys', { rows: [key] });
+    mockPool.query.setResult('SELECT * FROM bios_passwords', { rows: [popPw, setupPw] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.command.type).toBe('unlock');
+    expect(res.body.command.bios_password).toBe('SetupPw123');
+    expect(res.body.command.power_on_password).toBe('PopPw456');
+  });
+
+  test('checkin returns null power_on_password when PBA was not active', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'recovering' };
+    const command = { id: 'cmd-3', command_type: 'unlock', status: 'pending' };
+    const key = { id: 'key-1', key_material: 'fernet-key==' };
+    const setupPw = { id: 'pw-1', password: 'SetupPw123', password_type: 'setup' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM commands', { rows: [command] });
+    mockPool.query.setResult('SELECT * FROM encryption_keys', { rows: [key] });
+    mockPool.query.setResult('SELECT * FROM bios_passwords', { rows: [setupPw] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.command.bios_password).toBe('SetupPw123');
+    expect(res.body.command.power_on_password).toBeNull();
+  });
+
+  test('command-ack stores power_on_password with password_type=power_on', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-1', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-1',
+        result_status: 'executed',
+        key_material: 'fernet-key==',
+        bios_password: 'SetupPw789',
+        power_on_password: 'PopPw000',
+      });
+
+    expect(res.status).toBe(200);
+
+    // Verify both passwords were stored with correct password_type
+    const insertCalls = mockPool.query.mock.calls.filter(
+      c => c[0].includes('INSERT INTO bios_passwords')
+    );
+    expect(insertCalls.length).toBe(2);
+
+    // Find the power_on insert
+    const popInsert = insertCalls.find(c => c[1].includes('power_on'));
+    expect(popInsert).toBeDefined();
+    expect(popInsert[1]).toContain('PopPw000');
+
+    // Find the setup insert
+    const setupInsert = insertCalls.find(c => c[1].includes('setup'));
+    expect(setupInsert).toBeDefined();
+    expect(setupInsert[1]).toContain('SetupPw789');
+  });
+
+  test('command-ack stores bios_password with password_type=setup (no power_on_password)', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-1', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-1',
+        result_status: 'executed',
+        key_material: 'fernet-key==',
+        bios_password: 'SetupPwOnly',
+      });
+
+    expect(res.status).toBe(200);
+
+    // Verify only one bios_password insert (setup only, no power_on)
+    const insertCalls = mockPool.query.mock.calls.filter(
+      c => c[0].includes('INSERT INTO bios_passwords')
+    );
+    expect(insertCalls.length).toBe(1);
+    expect(insertCalls[0][1]).toContain('setup');
+    expect(insertCalls[0][1]).toContain('SetupPwOnly');
+  });
+
+  test('command-ack without power_on_password does not insert power_on row', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-1', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-1',
+        result_status: 'executed',
+        key_material: 'fernet-key==',
+        bios_password: 'JustSetup',
+      });
+
+    expect(res.status).toBe(200);
+
+    // Verify no power_on insert
+    const popInsert = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO bios_passwords') && c[1].includes('power_on')
+    );
+    expect(popInsert).toBeUndefined();
+  });
+
+  // T9: BitLocker TPM+PIN credential storage
+
+  test('T9: command-ack stores bitlocker_pin with password_type=bitlocker_pin', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const cmd = { id: 'cmd-1', command_type: 'lockdown' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT command_type FROM commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/agent/command-ack')
+      .set('x-agent-key', AGENT_KEY)
+      .send({
+        hostname: 'DEV-001',
+        command_id: 'cmd-1',
+        result_status: 'executed',
+        key_material: 'fernet-key==',
+        bios_password: 'SetupPw',
+        power_on_password: 'PopPw',
+        bitlocker_pin: '123456',
+        bitlocker_recovery_password: '111111-222222-333333-444444-555555-666666-777777-888888',
+      });
+
+    expect(res.status).toBe(200);
+
+    // Verify bitlocker_pin insert
+    const pinInsert = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO bios_passwords') && c[1].includes('bitlocker_pin')
+    );
+    expect(pinInsert).toBeDefined();
+    expect(pinInsert[1]).toContain('123456');
+
+    // Verify bitlocker_recovery insert
+    const recInsert = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO bios_passwords') && c[1].includes('bitlocker_recovery')
+    );
+    expect(recInsert).toBeDefined();
+    expect(recInsert[1]).toContain('111111-222222-333333-444444-555555-666666-777777-888888');
+  });
+
+  test('T9: checkin returns bitlocker_pin for unlock when PBA was active', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'recovering' };
+    const command = { id: 'cmd-2', command_type: 'unlock', status: 'pending' };
+    const key = { id: 'key-1', key_material: 'fernet-key==' };
+    const setupPw = { id: 'pw-1', password: 'SetupPw', password_type: 'setup' };
+    const pinPw = { id: 'pw-2', password: '123456', password_type: 'bitlocker_pin' };
+    const recPw = {
+      id: 'pw-3',
+      password: '111111-222222-333333-444444-555555-666666-777777-888888',
+      password_type: 'bitlocker_recovery',
+    };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM commands', { rows: [command] });
+    mockPool.query.setResult('SELECT * FROM encryption_keys', { rows: [key] });
+    mockPool.query.setResult('SELECT * FROM bios_passwords', { rows: [recPw, pinPw, setupPw] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.command.type).toBe('unlock');
+    expect(res.body.command.bios_password).toBe('SetupPw');
+    expect(res.body.command.bitlocker_pin).toBe('123456');
+    expect(res.body.command.bitlocker_recovery_password).toBe(
+      '111111-222222-333333-444444-555555-666666-777777-888888'
+    );
+  });
+
+  test('T9: checkin returns null bitlocker credentials when PBA was not active', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'recovering' };
+    const command = { id: 'cmd-3', command_type: 'unlock', status: 'pending' };
+    const key = { id: 'key-1', key_material: 'fernet-key==' };
+    const setupPw = { id: 'pw-1', password: 'SetupPw', password_type: 'setup' };
+
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM commands', { rows: [command] });
+    mockPool.query.setResult('SELECT * FROM encryption_keys', { rows: [key] });
+    mockPool.query.setResult('SELECT * FROM bios_passwords', { rows: [setupPw] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.command.bitlocker_pin).toBeNull();
+    expect(res.body.command.bitlocker_recovery_password).toBeNull();
   });
 });

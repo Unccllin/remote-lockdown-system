@@ -1,7 +1,7 @@
 # T9: Phase 3 — BitLocker TPM+PIN module
 
 > **Label:** `wayfinder:task`
-> **Status:** OPEN
+> **Status:** CLOSED (2026-08-14)
 > **Blocks:** T10
 > **Blocked by:** T7, T8
 > **Implements:** Q1, Q7, Q11
