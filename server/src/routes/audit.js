@@ -9,8 +9,8 @@ router.get('/', requireAuth, async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 100, 1), 1000);
   const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
-  if (device_id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(device_id)) {
-    return res.status(400).json({ error: 'Invalid device_id format. Use a valid UUID (e.g., 12345678-1234-1234-1234-123456789abc).' });
+  if (device_id && !/^[0-9a-f-]{16,36}$/i.test(device_id)) {
+    return res.status(400).json({ error: 'Invalid device_id format. Use a valid device ID (UUID or 32-char hex string as shown in the device list).' });
   }
 
   let query = `
