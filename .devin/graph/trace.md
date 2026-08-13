@@ -3359,3 +3359,76 @@ Investigation revealed I6 and I7 were already resolved via D-001/D-002
 "currently violated" markers in AGENTS.md and GRAPH-SPEC.yaml comments
 were stale and have been corrected. Optional next steps remain: real HP
 hardware testing, HP CMSL integration, or new feature requests.
+
+---
+
+## Session 2026-08-13 (final) — Code review fixes + CI fix + PBA role gating
+
+**Trigger**: User said "proceed" after I pushed the stale I6/I7 doc fix.
+Ran a code review of the 93ebbef...HEAD diff (PBA Phase 1-3 + harness
+engineering, 94 files, +7279 lines). Also discovered CI had been failing
+since commit 7257390.
+
+**Rule Zero**:
+- Read `.devin/graph/current-state.md` (latest session state)
+- Read the code-review skill (`.devin/skills/code-review/SKILL.md`)
+- Spawned 2 parallel sub-agents (Standards + Spec review)
+- Read `server/src/routes/devices.js`, `dashboard/src/pages/DeviceDetailPage.jsx`,
+  `agent/agent.py`, `agent/bitlocker_pba.py`, `.devin/orchestration/orchestrator.sh`
+- Read the wayfinder tickets (T10-dashboard-pba-recovery.md, T3-error-messages)
+- Read the debt ledger (D-006, D-008, D-019)
+- Verified CI status via GitHub API
+
+**Fog cleared this session**:
+- CI Agent Tests job had been failing since commit 7257390 (4 commits).
+  Root cause: test_graph_assertions.py imports graph_assert.py →
+  graph_loader.py, which requires pyyaml. But pyyaml was not in
+  agent/requirements-dev.txt, so CI's clean Ubuntu environment didn't
+  have it. Worse, graph_loader.py called sys.exit(1) on missing pyyaml,
+  crashing pytest collection with INTERNALERROR. Fixed: added pyyaml to
+  requirements-dev.txt, CI now installs requirements-dev.txt, and
+  graph_loader.py raises ImportError instead of sys.exit(1). CI now
+  fully green (all 7 jobs passed on 95e710a).
+- Code review found 2 hard violations + 3 judgement calls. All hard
+  violations fixed:
+  1. orchestrator.sh line 291 used `python` instead of `python3`
+  2. PBA credentials endpoint used requireRole('operator') but T10 spec
+     says "admin-only" → changed to requireRole('super-admin')
+- PBA role-gating follow-on: dashboard PBA Recovery panel was visible to
+  operators but the endpoint now requires super-admin. Gated the panel
+  behind isSuperAdmin. Updated PBA_RECOVERY_RUNBOOK.md. Added dashboard
+  test verifying operators can't see the panel.
+- Extracted duplicated password_type discriminator logic from
+  routes/agent.js and routes/devices.js to shared utility
+  server/src/db/pbaCredentials.js (groupPbaCredentials). 5 unit tests.
+- Added # D-XXX: debt ledger comments to 3 new agent files per AGENTS.md
+  convention (bitlocker_pba.py → D-008/D-019, test_bitlocker_pba.py →
+  D-008/D-019, test_graph_assertions.py → D-006).
+
+**Fog remaining**:
+- None. All code review findings addressed.
+
+**Debt items closed**:
+None — this is code review remediation and CI fix work, not debt closure.
+
+**Debt items still open**:
+None — all 19 debt items (D-001 through D-019) remain CLOSED.
+
+**Blockers**:
+None — CI is fully green (all 7 jobs passed on 95e710a).
+
+**Failure attribution**:
+The CI failure was a **context provision** layer issue (layer 2 of 5):
+the implicit convention that test_graph_assertions.py needs pyyaml was
+not written down in requirements-dev.txt. The harness change that would
+prevent it: any new test file that imports from outside the agent/
+directory should have its dependencies checked and added to
+requirements-dev.txt. The graph_loader.py sys.exit(1) was a **task
+specification** issue (layer 1): a library module should never call
+sys.exit — it should raise an exception.
+
+**Next session opening**:
+All code review findings resolved. CI green. 753 tests passing
+(368 server + 344 agent + 41 dashboard). Tree clean. Optional next
+steps: real HP hardware testing (E-HP-UEFI still verified-in-unit-test),
+HP CMSL integration, or new feature requests.

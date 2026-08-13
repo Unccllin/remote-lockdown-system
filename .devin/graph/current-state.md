@@ -10,35 +10,53 @@
 
 ---
 
-## Latest session: 2026-08-13 (later) — Commit T3 follow-up + audit device_id fix
+## Latest session: 2026-08-13 (final) — Code review fixes + CI fix + PBA role gating
 
 ### Fog cleared
-- The uncommitted `audit.js` change is a real bug fix, not just cosmetic:
-  the strict UUID regex rejected valid SQLite-generated device IDs (32-char
-  hex, no dashes) in the dev/test backend. Loosened regex now accepts both
-  PostgreSQL UUIDs (36 chars) and SQLite hex IDs (32 chars).
-- Verified via `migrations/001_base.sql` (UUID type) + `sqlitePool.js`
-  line 116 (gen_random_uuid → lower(hex(randomblob(16)))).
-- All 362 server tests pass before commit.
+- CI Agent Tests job had been failing since commit 7257390 (4 commits).
+  Root cause: test_graph_assertions.py imports graph_assert.py →
+  graph_loader.py, which requires pyyaml. But pyyaml was not in
+  agent/requirements-dev.txt, so CI's clean environment didn't have it.
+  Worse, graph_loader.py called sys.exit(1) on missing pyyaml, crashing
+  pytest collection with INTERNALERROR. Fixed: added pyyaml to
+  requirements-dev.txt, CI now installs requirements-dev.txt, and
+  graph_loader.py raises ImportError instead of sys.exit(1).
+- Code review of 93ebbef...HEAD diff found 2 hard violations + 3
+  judgement calls. All hard violations fixed:
+  1. orchestrator.sh used `python` instead of `python3` (AGENTS.md standard)
+  2. PBA credentials endpoint used requireRole('operator') but T10 spec
+     says "admin-only" → changed to requireRole('super-admin')
+- PBA role-gating follow-on: dashboard PBA Recovery panel was visible to
+  operators but the endpoint now requires super-admin. Gated the panel
+  behind isSuperAdmin. Updated PBA_RECOVERY_RUNBOOK.md. Added dashboard
+  test verifying operators can't see the panel.
+- Extracted duplicated password_type discriminator logic from
+  routes/agent.js and routes/devices.js to shared utility
+  server/src/db/pbaCredentials.js (groupPbaCredentials). 5 unit tests.
+- Added # D-XXX: debt ledger comments to 3 new agent files per AGENTS.md
+  convention (bitlocker_pba.py, test_bitlocker_pba.py,
+  test_graph_assertions.py).
+- Skipped BitLocker credential data clumps refactor (judgement call:
+  mild smell, only 2 fields, poor risk/reward with no test coverage of
+  those specific params).
 
 ### Fog remaining
-- None for this change.
+- None. All code review findings addressed (hard violations fixed,
+  judgement calls either addressed or consciously skipped with rationale).
 
 ### Debt items closed
-None — small bug fix surfaced from T3, not a debt item.
+None — this is code review remediation and CI fix work, not debt closure.
 
 ### Debt items still open
 None — all 19 debt items (D-001 through D-019) remain CLOSED.
 
 ### Blockers
-None.
+None — CI is fully green (all 7 jobs passed on 95e710a).
 
 ### Next session opening
-T3 follow-up committed (ca87de0). Tree clean. All harness engineering
-tickets CLOSED, all 19 debt items CLOSED, all graph invariants pass
-(I6 and I7 were already resolved via D-001/D-002 — stale "currently
-violated" markers in AGENTS.md and GRAPH-SPEC.yaml comments corrected
-this session). Optional next steps remain: real HP hardware testing,
+All code review findings resolved. CI green. 753 tests passing
+(368 server + 344 agent + 41 dashboard). Tree clean. Optional next
+steps: real HP hardware testing (E-HP-UEFI still verified-in-unit-test),
 HP CMSL integration, or new feature requests.
 
 ---
@@ -71,4 +89,4 @@ See `docs/adr/DEBT-LEDGER.md` for the full ledger.
 - **Graph ADR**: `docs/adr/GRAPH-SPEC.md`
 - **Verification**: `make graph-check` (runs `graph_assert.py` — all invariants)
 - **Clean state**: `make clean-state` (runs 5-condition checklist from L12)
-- **Test counts**: 344 agent + 362 server + 40 dashboard = 746 total
+- **Test counts**: 344 agent + 368 server + 41 dashboard = 753 total
