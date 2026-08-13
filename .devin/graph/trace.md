@@ -3432,3 +3432,93 @@ All code review findings resolved. CI green. 753 tests passing
 (368 server + 344 agent + 41 dashboard). Tree clean. Optional next
 steps: real HP hardware testing (E-HP-UEFI still verified-in-unit-test),
 HP CMSL integration, or new feature requests.
+
+---
+
+## Session 2026-08-13 (production hardening) — Production readiness gaps addressed
+
+**Trigger**: User asked "what is remaining to complete production". Ran a
+comprehensive audit (subagent + manual investigation) across 8 dimensions:
+graph phases, enforcement paths, debt ledger, Docker/deployment, missing
+infrastructure, test coverage, agent production concerns, and Electron app.
+
+**Rule Zero**:
+- Read `.devin/graph/current-state.md` (latest session state)
+- Read `.devin/graph/GRAPH-SPEC.yaml` (all 17 phases, enforcement paths, debt items)
+- Read `docs/adr/DEBT-LEDGER.md` (debt status)
+- Read `docker-compose.prod.yml`, `Dockerfile.server`, `Caddyfile`
+- Read `.env.prod.example`, `scripts/backup.sh`, `scripts/restore.sh`
+- Read `server/src/routes/metrics.js`, `server/src/notifications/notify.js`
+- Read `.github/workflows/release.yml` (code signing config)
+- Read `.devin/skills/phase-5-signing-autoupdate/SKILL.md`
+- Spawned a background subagent for comprehensive 8-dimension audit
+- Grepped all route files for requireRole/requireAuth to build RBAC matrix
+
+**Fog cleared this session**:
+- Fixed D-009/D-010 status discrepancy: GRAPH-SPEC.yaml had them as OPEN
+  while DEBT-LEDGER.md had them CLOSED (with commit_ref + artifact_ref).
+  Updated GRAPH-SPEC.yaml to CLOSED with matching evidence references.
+- Added automated backup scheduling to docker-compose.prod.yml: a `backup`
+  service using the same Dockerfile.server image, running dcron with
+  configurable schedule (default 2 AM daily) and retention (default 30 days).
+  Runs an initial backup on startup. Uses new --retain-days option in
+  backup.sh.
+- Added backup retention policy to backup.sh: new `--retain-days N` option
+  that prunes old backup files from the output directory after creating
+  a new backup.
+- Added Prometheus + Grafana monitoring stack to docker-compose.prod.yml
+  (optional, enabled via `--profile monitoring`):
+  - monitoring/prometheus.yml — scrapes server /metrics every 15s
+  - monitoring/grafana/provisioning/datasources/prometheus.yml — auto-provisioned
+  - monitoring/grafana/provisioning/dashboards/lockdown.yml — auto-provisioned
+  - monitoring/grafana/dashboards/lockdown-overview.json — 6-panel dashboard
+    (total devices, pending commands, stale devices, uptime, command/checkin
+    rates, DB query p50/p95 latency)
+- Documented notification channel configuration in .env.prod.example:
+  NOTIFICATION_WEBHOOK_URL, SLACK_WEBHOOK_URL, SMTP_HOST/PORT/USER/PASS,
+  EMAIL_FROM/TO — all with usage examples.
+- Added notification env vars to docker-compose.prod.yml server service
+  so they're passed through from .env.prod.
+- Wrote docs/DR_RUNBOOK.md: 5 disaster recovery scenarios (server crash,
+  DB corruption, full server loss, Caddy/TLS failure, encryption key
+  compromise) with exact commands, RTO/RPO targets, post-recovery checklist.
+- Wrote docs/RBAC_ACCESS_MATRIX.md: complete endpoint-by-endpoint matrix
+  of viewer/operator/super-admin access for all API routes + dashboard
+  features, including security notes on PBA credential gating and
+  admin self-deletion protection.
+
+**Fog remaining**:
+- Code signing certificates not configured (requires purchasing
+  Azure Trusted Signing for Windows + Apple Developer ID for macOS).
+  The CI workflow has the env vars commented out and ready to uncomment.
+- E-HP-UEFI not verified on real HP hardware (requires physical HP machine).
+  Unit tests cover the logic with mocked WMI calls.
+- No centralized logging (ELK/Loki/CloudWatch) — left as infrastructure
+  choice for the deployer. Server logs to stdout via pino.
+- No secrets management (Vault/cloud secrets) — .env.prod on disk is the
+  current approach. Left as infrastructure choice for the deployer.
+
+**Debt items closed**:
+None — this is production hardening, not debt closure.
+
+**Debt items still open**:
+None — all 19 debt items (D-001 through D-019) remain CLOSED.
+
+**Blockers**:
+None — CI is fully green. All 753 tests pass. Docker validation passes.
+
+**Failure attribution**:
+The D-009/D-010 discrepancy was a **state management** layer issue
+(layer 5): the debt ledger was updated when the items were closed, but
+the graph spec was not updated to match. The graph_assert.py invariant
+checker doesn't cross-check GRAPH-SPEC.yaml against DEBT-LEDGER.md, so
+the discrepancy went undetected. The harness change that would prevent
+it: graph_assert.py should verify that debt item statuses in
+GRAPH-SPEC.yaml match DEBT-LEDGER.md (a new invariant I8 candidate).
+
+**Next session opening**:
+All addressable production readiness gaps have been resolved. The
+remaining gaps require external resources: code signing certificates
+(must purchase), real HP hardware (must physically access), centralized
+logging/secrets management (deployer infrastructure choice). 753 tests
+passing (368 server + 344 agent + 41 dashboard). Tree clean.

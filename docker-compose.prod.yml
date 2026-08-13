@@ -5,11 +5,16 @@
 #   - PostgreSQL database (with persistent volume)
 #   - Admin server (Express API + built dashboard)
 #   - Caddy reverse proxy (automatic HTTPS with Let's Encrypt)
+#   - Automated daily backups (encrypted, with retention policy)
+#   - Prometheus + Grafana monitoring (optional, enabled by profile)
 #
 # Usage:
 #   1. Copy .env.prod.example to .env.prod and fill in your secrets
-#   2. docker compose -f docker-compose.prod.yml up -d
+#   2. docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 #   3. Visit https://your-domain.com
+#
+# To enable monitoring (Prometheus + Grafana):
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml --profile monitoring up -d
 #
 # The admin server uses the same codebase as the Electron desktop app,
 # but runs as a standalone Node.js process with PostgreSQL instead of SQLite.
@@ -65,6 +70,17 @@ services:
       LOCATION_RETENTION_DAYS: ${LOCATION_RETENTION_DAYS:-90}
       # Phase 5: Command expiry (days)
       COMMAND_EXPIRY_DAYS: ${COMMAND_EXPIRY_DAYS:-30}
+      # Phase 13: Notifications (all optional — if unset, notifications are
+      # logged to console but not sent to any external channel).
+      # See .env.prod.example for full documentation of each channel.
+      NOTIFICATION_WEBHOOK_URL: ${NOTIFICATION_WEBHOOK_URL:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_TO: ${EMAIL_TO:-}
     volumes:
       # Persist agent binaries (for installer generation) across restarts
       - agent_binaries:/app/agent/dist
@@ -90,15 +106,123 @@ services:
     networks:
       - web
 
+  # ---------------------------------------------------------------------------
+  # Automated daily backup service.
+  #
+  # Runs scripts/backup.sh on a cron schedule (default: 2 AM daily). Backups
+  # are encrypted and stored in the backups volume. Old backups are pruned
+  # based on BACKUP_RETENTION_DAYS (default: 30).
+  #
+  # The backup container shares the server's code so it can access backup.sh.
+  # It connects to PostgreSQL over the internal network.
+  #
+  # To disable backups: comment out this service or set BACKUP_ENABLED=false.
+  # To run a backup manually: docker compose exec backup /app/scripts/backup.sh
+  # ---------------------------------------------------------------------------
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-lockdown}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-lockdown}
+      DB_SSL: "false"
+      # Encryption key for backup files (openssl symmetric encryption).
+      # Generate with: openssl rand -hex 32
+      BACKUP_ENCRYPT_KEY: ${BACKUP_ENCRYPT_KEY:-}
+      # GPG recipient for asymmetric encryption (optional, overrides BACKUP_ENCRYPT_KEY).
+      # BACKUP_GPG_RECIPIENT: ${BACKUP_GPG_RECIPIENT:-}
+      # Backup schedule (cron format, default: 2 AM daily).
+      # Use "0 */6 * * *" for every 6 hours, "0 2 * * 0" for weekly, etc.
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}
+      # Retention: delete backups older than N days (default: 30).
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      # Where to store backup files (inside the container).
+      BACKUP_OUTPUT_DIR: /backups
+    volumes:
+      - backups:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        # Install cron and set up the schedule
+        apk add --no-cache dcron
+        echo "$${BACKUP_SCHEDULE} /app/scripts/backup.sh --output /backups/lockdown-backup-$$(date +\%Y\%m\%d-\%H\%M\%S).tar.gz.enc --encrypt-key "$${BACKUP_ENCRYPT_KEY}" --retain-days "$${BACKUP_RETENTION_DAYS}" --cron >> /var/log/backup.log 2>&1" > /etc/crontabs/root
+        # Run an initial backup on startup so you don't wait until 2 AM
+        echo "Running initial backup..."
+        /app/scripts/backup.sh --output /backups/lockdown-backup-init.tar.gz.enc --encrypt-key "$${BACKUP_ENCRYPT_KEY}" --retain-days "$${BACKUP_RETENTION_DAYS}" --cron || true
+        # Start cron in foreground
+        echo "Starting backup scheduler (schedule: $${BACKUP_SCHEDULE}, retention: $${BACKUP_RETENTION_DAYS} days)..."
+        crond -f -l 8
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Prometheus (optional — enable with --profile monitoring)
+  #
+  # Scrapes the server's /metrics endpoint every 15s. Data is stored in a
+  # persistent volume. Accessible at http://your-server:9090 when enabled.
+  #
+  # The Prometheus config is generated from monitoring/prometheus.yml.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.listen-address=:9090"
+    depends_on:
+      - server
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Grafana (optional — enable with --profile monitoring)
+  #
+  # Visualizes Prometheus metrics. Pre-provisioned with a datasource pointing
+  # to Prometheus and a lockdown dashboard. Accessible at
+  # http://your-server:3000 (admin/admin by default — change immediately).
+  #
+  # Dashboards are loaded from monitoring/grafana/dashboards/.
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    depends_on:
+      - prometheus
+    networks:
+      - internal
+
 volumes:
   postgres_data:
   agent_binaries:
   agent_binaries_bin:
   caddy_data:
   caddy_config:
+  backups:
+  prometheus_data:
+  grafana_data:
 
 networks:
   internal:
-    # Internal network for postgres ↔ server communication
+    # Internal network for postgres ↔ server ↔ backup communication
   web:
     # External network for caddy ↔ server communication

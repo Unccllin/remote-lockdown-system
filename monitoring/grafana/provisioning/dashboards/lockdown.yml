@@ -1,0 +1,15 @@
+# Grafana dashboard provisioning — loads all JSON dashboards from
+# /var/lib/grafana/dashboards/ (mounted from monitoring/grafana/dashboards/).
+
+apiVersion: 1
+
+providers:
+  - name: "Lockdown Dashboards"
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

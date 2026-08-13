@@ -10,54 +10,60 @@
 
 ---
 
-## Latest session: 2026-08-13 (final) — Code review fixes + CI fix + PBA role gating
+## Latest session: 2026-08-13 (production hardening) — Production readiness gaps addressed
 
 ### Fog cleared
-- CI Agent Tests job had been failing since commit 7257390 (4 commits).
-  Root cause: test_graph_assertions.py imports graph_assert.py →
-  graph_loader.py, which requires pyyaml. But pyyaml was not in
-  agent/requirements-dev.txt, so CI's clean environment didn't have it.
-  Worse, graph_loader.py called sys.exit(1) on missing pyyaml, crashing
-  pytest collection with INTERNALERROR. Fixed: added pyyaml to
-  requirements-dev.txt, CI now installs requirements-dev.txt, and
-  graph_loader.py raises ImportError instead of sys.exit(1).
-- Code review of 93ebbef...HEAD diff found 2 hard violations + 3
-  judgement calls. All hard violations fixed:
-  1. orchestrator.sh used `python` instead of `python3` (AGENTS.md standard)
-  2. PBA credentials endpoint used requireRole('operator') but T10 spec
-     says "admin-only" → changed to requireRole('super-admin')
-- PBA role-gating follow-on: dashboard PBA Recovery panel was visible to
-  operators but the endpoint now requires super-admin. Gated the panel
-  behind isSuperAdmin. Updated PBA_RECOVERY_RUNBOOK.md. Added dashboard
-  test verifying operators can't see the panel.
-- Extracted duplicated password_type discriminator logic from
-  routes/agent.js and routes/devices.js to shared utility
-  server/src/db/pbaCredentials.js (groupPbaCredentials). 5 unit tests.
-- Added # D-XXX: debt ledger comments to 3 new agent files per AGENTS.md
-  convention (bitlocker_pba.py, test_bitlocker_pba.py,
-  test_graph_assertions.py).
-- Skipped BitLocker credential data clumps refactor (judgement call:
-  mild smell, only 2 fields, poor risk/reward with no test coverage of
-  those specific params).
+- Fixed D-009/D-010 status discrepancy: GRAPH-SPEC.yaml had them as OPEN
+  while DEBT-LEDGER.md had them CLOSED. Updated GRAPH-SPEC.yaml to CLOSED
+  with commit_ref and artifact_ref matching the debt ledger.
+- Added automated backup scheduling to docker-compose.prod.yml: a `backup`
+  service that runs backup.sh on a cron schedule (default 2 AM daily) with
+  configurable retention (default 30 days). Runs an initial backup on
+  startup so you don't wait until 2 AM.
+- Added backup retention policy to backup.sh: new `--retain-days` option
+  that prunes old backup files from the output directory.
+- Added Prometheus + Grafana monitoring stack to docker-compose.prod.yml
+  (optional, enabled via `--profile monitoring`). Includes:
+  - monitoring/prometheus.yml — scrapes server /metrics every 15s
+  - monitoring/grafana/provisioning/ — auto-provisioned datasource + dashboard
+  - monitoring/grafana/dashboards/lockdown-overview.json — 6-panel dashboard
+    (total devices, pending commands, stale devices, uptime, command/checkin
+    rates, DB query p50/p95 latency)
+- Documented notification channel configuration in .env.prod.example:
+  webhook, Slack, and SMTP email with all env vars documented.
+- Added notification env vars to docker-compose.prod.yml server service.
+- Wrote docs/DR_RUNBOOK.md: 5 disaster recovery scenarios with exact
+  commands (server crash, DB corruption, full server loss, Caddy/TLS
+  failure, encryption key compromise), RTO/RPO targets, post-recovery
+  checklist.
+- Wrote docs/RBAC_ACCESS_MATRIX.md: complete endpoint-by-endpoint matrix
+  of viewer/operator/super-admin access for all API routes + dashboard
+  features.
 
 ### Fog remaining
-- None. All code review findings addressed (hard violations fixed,
-  judgement calls either addressed or consciously skipped with rationale).
+- Code signing certificates not configured (requires purchasing
+  Azure Trusted Signing for Windows + Apple Developer ID for macOS).
+- E-HP-UEFI not verified on real HP hardware (requires physical HP machine).
+- No centralized logging (ELK/Loki/CloudWatch) — left as infrastructure
+  choice for the deployer.
+- No secrets management (Vault/cloud secrets) — left as infrastructure
+  choice for the deployer.
 
 ### Debt items closed
-None — this is code review remediation and CI fix work, not debt closure.
+None — this is production hardening, not debt closure.
 
 ### Debt items still open
 None — all 19 debt items (D-001 through D-019) remain CLOSED.
 
 ### Blockers
-None — CI is fully green (all 7 jobs passed on 95e710a).
+None — CI is fully green. All 753 tests pass. Docker validation passes.
 
 ### Next session opening
-All code review findings resolved. CI green. 753 tests passing
-(368 server + 344 agent + 41 dashboard). Tree clean. Optional next
-steps: real HP hardware testing (E-HP-UEFI still verified-in-unit-test),
-HP CMSL integration, or new feature requests.
+All addressable production readiness gaps have been resolved. The
+remaining gaps require external resources: code signing certificates
+(must purchase), real HP hardware (must physically access), centralized
+logging/secrets management (deployer infrastructure choice). 753 tests
+passing (368 server + 344 agent + 41 dashboard). Tree clean.
 
 ---
 

@@ -25,6 +25,7 @@
 #   --db-url <url>       Override the PostgreSQL DATABASE_URL.
 #   --verify             After backup, restore to a temp DB and compare row counts.
 #   --cron               Machine-friendly output (no prompts, no color).
+#   --retain-days <n>    Delete backups older than N days from the output directory.
 #   -h, --help           Show this help message.
 #
 # Exit codes:
@@ -51,6 +52,7 @@ ENCRYPT_KEY="${BACKUP_ENCRYPT_KEY:-}"
 DB_URL_OVERRIDE=""
 VERIFY=0
 CRON=0
+RETAIN_DAYS=0
 
 # --- Internal verify mode ---------------------------------------------------
 # When the script re-invokes itself with --verify-internal, it jumps straight
@@ -161,6 +163,7 @@ while [[ $# -gt 0 ]]; do
     --db-url)       DB_URL_OVERRIDE="$2"; shift 2 ;;
     --verify)       VERIFY=1; shift ;;
     --cron)         CRON=1; shift ;;
+    --retain-days)  RETAIN_DAYS="$2"; shift 2 ;;
     -h|--help)      usage ;;
     *) die "Unknown option: $1 (run with --help for usage)" ;;
   esac
@@ -367,6 +370,15 @@ if [[ "${VERIFY}" -eq 1 ]]; then
 fi
 
 # --- Done -------------------------------------------------------------------
+# Prune old backups if --retain-days was specified
+if [[ "${RETAIN_DAYS}" -gt 0 ]]; then
+  BACKUP_DIR="$(dirname "${OUTPUT}")"
+  PRUNED=$(find "${BACKUP_DIR}" -name 'lockdown-backup-*.tar.gz.enc' -mtime +${RETAIN_DAYS} -delete -print 2>/dev/null | wc -l)
+  if [[ "${PRUNED}" -gt 0 ]]; then
+    log INFO "Pruned ${PRUNED} backup(s) older than ${RETAIN_DAYS} days from ${BACKUP_DIR}"
+  fi
+fi
+
 if [[ "${CRON}" -eq 1 ]]; then
   printf 'BACKUP_OK path=%s size=%s db_type=%s\n' \
     "${OUTPUT}" "$(stat -c%s "${OUTPUT}" 2>/dev/null || stat -f%z "${OUTPUT}")" "${DB_TYPE}"

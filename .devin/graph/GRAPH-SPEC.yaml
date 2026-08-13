@@ -617,13 +617,17 @@ debt_items:
   - id: D-009
     description: "HP UEFI setting names are hardcoded — vary across HP models/BIOS versions"
     close_criteria: "Setting names are dynamically discovered or model-aware"
-    status: OPEN
+    status: CLOSED
+    commit_ref: "2026-08-14 session (RESEARCH-HP-HARDWARE.md + code verification)"
+    artifact_ref: "docs/RESEARCH-HP-HARDWARE.md — all candidate setting names verified against HP primary source documentation"
     blocks: [E-HP-UEFI]
 
   - id: D-010
     description: "No HP Sure Admin / Sure Run / Sure Start awareness in UEFI lockdown"
     close_criteria: "Agent detects Sure Admin and either works with it or reports blocked"
-    status: OPEN
+    status: CLOSED
+    commit_ref: "2026-08-14 session (RESEARCH-HP-HARDWARE.md + EBAM detection fix)"
+    artifact_ref: "docs/RESEARCH-HP-HARDWARE.md — HP Sure Admin BIOS setting name + EBAM detection code"
     blocks: [E-HP-UEFI]
 
   - id: D-011

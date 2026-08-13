@@ -1,0 +1,24 @@
+# Prometheus configuration for the Remote Lockdown System.
+#
+# Scrapes the server's /metrics endpoint (prom-client text format) every 15s.
+# The server must be running with the metrics route enabled (it is by default).
+#
+# In production, Prometheus runs in the Docker stack and reaches the server
+# over the internal network at http://server:3001/metrics.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "lockdown-server"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["server:3001"]
+        labels:
+          service: "lockdown-server"
+
+  # Self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
