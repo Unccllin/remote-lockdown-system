@@ -1,7 +1,22 @@
 require('express-async-errors');
 require('dotenv').config();
 const { validateEnv } = require('./config/env');
-validateEnv(); // CC2/CC11: fail fast on bad config before anything else loads
+const { loadSecretsFromSSM } = require('./config/ssm');
+
+// Bootstrap: load secrets from AWS Parameter Store (if enabled), then
+// validate env. This is async because SSM requires a network call.
+// The rest of the file is wrapped in this async IIFE so that all module
+// loading and server startup happens after secrets are available.
+(async () => {
+  await loadSecretsFromSSM(); // No-op if AWS_SSM_ENABLED != 'true'
+  validateEnv(); // CC2/CC11: fail fast on bad config before anything else loads
+  await main();
+})().catch((err) => {
+  console.error('Fatal error during startup:', err);
+  process.exit(1);
+});
+
+async function main() {
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -319,3 +334,5 @@ async function gracefulShutdown(signal) {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+} // end main()

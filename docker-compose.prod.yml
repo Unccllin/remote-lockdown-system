@@ -81,6 +81,14 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
       EMAIL_TO: ${EMAIL_TO:-}
+      # AWS Parameter Store (optional — if AWS_SSM_ENABLED=true, secrets are
+      # fetched from AWS SSM at startup instead of being read from env vars).
+      # See .env.prod.example and scripts/setup-free-tiers.sh for setup.
+      AWS_SSM_ENABLED: ${AWS_SSM_ENABLED:-false}
+      AWS_SSM_PREFIX: ${AWS_SSM_PREFIX:-/lockdown/prod/}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
     volumes:
       # Persist agent binaries (for installer generation) across restarts
       - agent_binaries:/app/agent/dist
@@ -211,6 +219,37 @@ services:
     networks:
       - internal
 
+  # ---------------------------------------------------------------------------
+  # Promtail (optional — enable with --profile logging)
+  #
+  # Ships Docker container logs to Grafana Cloud Loki (free tier: 50GB/month,
+  # 14-day retention). Reads container JSON log files directly from the Docker
+  # socket and forwards them with structured labels (service, container, level).
+  #
+  # Requires Grafana Cloud Loki credentials in .env.prod:
+  #   LOKI_URL, LOKI_USERNAME, LOKI_API_KEY
+  #
+  # Set up with: scripts/setup-free-tiers.sh
+  # ---------------------------------------------------------------------------
+  promtail:
+    image: grafana/promtail:latest
+    restart: unless-stopped
+    profiles: ["logging"]
+    command:
+      - "-config.file=/etc/promtail/promtail.yml"
+      - "-config.expand-env=true"
+    volumes:
+      - ./monitoring/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - promtail_data:/tmp
+    environment:
+      LOKI_URL: ${LOKI_URL:-}
+      LOKI_USERNAME: ${LOKI_USERNAME:-}
+      LOKI_API_KEY: ${LOKI_API_KEY:-}
+    networks:
+      - internal
+
 volumes:
   postgres_data:
   agent_binaries:
@@ -220,6 +259,7 @@ volumes:
   backups:
   prometheus_data:
   grafana_data:
+  promtail_data:
 
 networks:
   internal:

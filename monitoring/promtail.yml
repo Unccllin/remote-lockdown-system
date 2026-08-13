@@ -1,0 +1,64 @@
+# Promtail configuration for shipping Docker container logs to Grafana Cloud Loki.
+#
+# Reads logs from all Docker containers via the container JSON log files and
+# ships them to Grafana Cloud's hosted Loki instance. Requires the Grafana
+# Cloud Loki URL, username, and API key to be set as environment variables
+# (passed in via docker-compose.prod.yml).
+#
+# The promtail container must mount /var/lib/docker/containers to read the
+# raw JSON log files, and /etc/machine-id for unique instance identification.
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: ${LOKI_URL}
+    basic_auth:
+      username: ${LOKI_USERNAME}
+      password: ${LOKI_API_KEY}
+    # Grafana Cloud Loki uses a tenant ID in the X-Scope-OrgID header
+    # for multi-tenant instances. For single-tenant (free tier), the
+    # basic auth username IS the tenant ID, so no header is needed.
+    batchwait: 1s
+    batchsize: 1048576
+
+scrape_configs:
+  # Scrape Docker container logs
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=remote-lockdown-system"]
+    relabel_configs:
+      # Use the container name as a label
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      # Use the compose service name as a label
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+      # Use the compose project name
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: project
+    pipeline_stages:
+      # Parse JSON logs from pino (server outputs structured JSON)
+      - json:
+          expressions:
+            level: level
+            msg: msg
+            module: module
+            timestamp: time
+      # Set the log level as a label for filtering
+      - labels:
+          level:
+      # Set the timestamp from the pino log entry
+      - timestamp:
+          source: timestamp
+          format: UnixNs
+          fallback_format: RFC3339Nano
