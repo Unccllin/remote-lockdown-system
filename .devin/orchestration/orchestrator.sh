@@ -288,7 +288,7 @@ run_regression_tests() {
   }
 
   # Agent tests
-  (cd "$PROJECT_ROOT/agent" && python -m pytest tests/ -v >/dev/null 2>&1) || {
+  (cd "$PROJECT_ROOT/agent" && python3 -m pytest tests/ -v >/dev/null 2>&1) || {
     fail "Agent regression tests failed"
     rc=1
   }

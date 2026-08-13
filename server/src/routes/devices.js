@@ -543,7 +543,7 @@ router.get('/settings/retention', requireAuth, async (req, res) => {
  * Q10=C: Both dashboard feature AND documentation. This endpoint powers
  * the dashboard; docs/PBA_RECOVERY_RUNBOOK.md is the fallback.
  */
-router.get('/:id/pba-credentials', requireAuth, requireRole('operator'), async (req, res) => {
+router.get('/:id/pba-credentials', requireAuth, requireRole('super-admin'), async (req, res) => {
   const { id } = req.params;
 
   // Verify device exists

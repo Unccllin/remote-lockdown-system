@@ -846,7 +846,7 @@ describe('GET /api/devices/:id/pba-credentials', () => {
     expect(auditInsert[1]).toContain('pba_credentials_accessed');
   });
 
-  test('rejects viewer role (requires operator)', async () => {
+  test('rejects viewer role (requires super-admin)', async () => {
     const viewerToken = jwt.sign(
       { id: 'viewer-1', username: 'viewer', role: 'viewer' },
       JWT_SECRET,
@@ -856,6 +856,20 @@ describe('GET /api/devices/:id/pba-credentials', () => {
     const res = await request(app)
       .get('/api/devices/dev-1/pba-credentials')
       .set('Authorization', `Bearer ${viewerToken}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  test('rejects operator role (requires super-admin)', async () => {
+    const operatorToken = jwt.sign(
+      { id: 'op-1', username: 'operator', role: 'operator' },
+      JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    const res = await request(app)
+      .get('/api/devices/dev-1/pba-credentials')
+      .set('Authorization', `Bearer ${operatorToken}`);
 
     expect(res.status).toBe(403);
   });
