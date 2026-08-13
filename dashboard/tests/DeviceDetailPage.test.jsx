@@ -887,6 +887,7 @@ describe('DeviceDetailPage — userEvent flows', () => {
   });
 
   it('T10: shows PBA Recovery panel with Show Credentials button when PBA active', async () => {
+    setupUser('super-admin');
     api.get.mockImplementation((url) => {
       if (url.startsWith('/devices/1') && !url.includes('location')) {
         return Promise.resolve({ data: { ...baseDevice, status: 'stolen' } });
@@ -954,6 +955,7 @@ describe('DeviceDetailPage — userEvent flows', () => {
   });
 
   it('T10: fetches and displays credentials when Show PBA Credentials clicked', async () => {
+    setupUser('super-admin');
     api.get.mockImplementation((url) => {
       if (url.startsWith('/devices/1') && !url.includes('location') && !url.includes('pba-credentials')) {
         return Promise.resolve({ data: { ...baseDevice, status: 'stolen' } });
@@ -1001,6 +1003,7 @@ describe('DeviceDetailPage — userEvent flows', () => {
   });
 
   it('T10: shows no credentials message when all are null', async () => {
+    setupUser('super-admin');
     api.get.mockImplementation((url) => {
       if (url.startsWith('/devices/1') && !url.includes('location') && !url.includes('pba-credentials')) {
         return Promise.resolve({ data: { ...baseDevice, status: 'stolen' } });
@@ -1074,5 +1077,41 @@ describe('DeviceDetailPage — userEvent flows', () => {
       expect(screen.getByText('DEV-001')).toBeInTheDocument();
     });
     expect(screen.queryByText('PBA Recovery')).not.toBeInTheDocument();
+  });
+
+  it('T10: does not show PBA Recovery panel for operator role (super-admin only)', async () => {
+    // setupUser('operator') is already set in beforeEach
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'stolen' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [{
+            id: 'a1',
+            action: 'agent_lockdown_confirmed',
+            detail: {
+              lockdown_effective: true,
+              boot_lock_detail: {
+                hp_uefi: { pba_active: true, critical_applied: 2 },
+                critical_applied_total: 2,
+              },
+            },
+            timestamp: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    // PBA Active badge is visible to all roles
+    await waitFor(() => {
+      expect(screen.getByText('PBA Active')).toBeInTheDocument();
+    });
+    // PBA Recovery panel is NOT visible to operators
+    expect(screen.queryByText('PBA Recovery')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Show PBA Credentials/i)).not.toBeInTheDocument();
   });
 });

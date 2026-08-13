@@ -18,7 +18,7 @@ to receive unlock commands. Physical access is required.
 
 ## Prerequisites
 
-- Dashboard access (operator or super-admin role).
+- Dashboard access (super-admin role).
 - Physical access to the device (someone must be at the keyboard).
 - The device must have been enrolled in the lockdown system and had PBA
   enabled during lockdown (`enable_pba: true`).
@@ -44,7 +44,7 @@ to receive unlock commands. Physical access is required.
    encrypted message, phone call — do NOT send via email).
 
 > **Security note:** The dashboard logs all PBA credential access in the
-> audit log. Only operators and super-admins can access this endpoint.
+> audit log. Only super-admins can access this endpoint.
 
 ### Step 2: Physical access to the device
 

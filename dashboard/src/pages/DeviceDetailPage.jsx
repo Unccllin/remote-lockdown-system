@@ -229,6 +229,7 @@ export default function DeviceDetailPage() {
   if (!device) return <div className="text-slate-500 text-center py-32">Device not found.</div>;
 
   const isOperator = currentUser?.isOperator;
+  const isSuperAdmin = currentUser?.isSuperAdmin;
   const latestLocation = locations[0];
 
   // Phase 17: Lockdown-effectiveness analysis from the most recent lockdown
@@ -547,10 +548,11 @@ export default function DeviceDetailPage() {
 
       {/* T10: PBA Recovery panel.
           Shows when PBA is active (Tier 1 HP Power-On Password and/or
-          Tier 2 BitLocker TPM+PIN). The operator needs these credentials
+          Tier 2 BitLocker TPM+PIN). The super-admin needs these credentials
           to physically unlock a rebooted PBA device. Credentials are
-          fetched on-demand to minimize exposure. */}
-      {isLockedOrStolen && pbaActive && (
+          fetched on-demand to minimize exposure. Only super-admins can
+          access the PBA credentials endpoint. */}
+      {isLockedOrStolen && pbaActive && isSuperAdmin && (
         <div className="card mb-6 border-l-4 border-l-red-500">
           <div className="flex items-center gap-2 mb-3">
             <Key size={16} className="text-red-400" />
