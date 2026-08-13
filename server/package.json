@@ -10,7 +10,6 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit --detectOpenHandles"
   },
   "dependencies": {
-    "@aws-sdk/client-ssm": "^3.1109.0",
     "@electric-sql/pglite": "^0.5.4",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
