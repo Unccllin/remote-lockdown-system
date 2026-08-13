@@ -4,6 +4,10 @@ Tests for BitLocker TPM+PIN PBA module (T9 — Phase 3).
 All WMI/PowerShell/subprocess calls are mocked — these tests verify
 the logic, not actual BitLocker protector management.
 
+Debt items covered:
+- D-008: BitLocker status check tests (check_bitlocker_status)
+- D-019: BitLocker PBA enable/disable tests (enable_pba, disable_pba)
+
 Covers:
   - check_bitlocker_status (enabled, disabled, not-Windows, dry-run)
   - _generate_pin (length, numeric)

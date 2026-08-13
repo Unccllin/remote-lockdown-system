@@ -11,6 +11,12 @@ Design decisions (see trace.md RULE-ZERO):
   for status checks (consistent with hp_uefi_lockdown._check_bitlocker).
 - The protector_id is persisted locally in a state file so the agent can
   remove the PIN protector during unlock without server-side state.
+
+Debt items addressed:
+- D-008: BitLocker status check (check_bitlocker_status reuses the same
+  manage-bde approach as bcd_lockdown._check_bitlocker)
+- D-019: BitLocker suspension for BIOS changes — this module adds the
+  TPM+PIN protector layer that makes BitLocker a PBA factor
 """
 
 import json
@@ -135,6 +141,9 @@ def _dry_run_powershell_response(script: str) -> str:
 
 def check_bitlocker_status() -> dict:
     """Check if BitLocker is enabled on C: with a TPM protector.
+
+    # D-008: BitLocker status check — reuses the same manage-bde approach
+    # as bcd_lockdown._check_bitlocker for consistency.
 
     Returns a dict with:
       - enabled: bool — True if BitLocker protection is ON
@@ -322,6 +331,10 @@ def _clear_pba_state() -> None:
 def enable_pba(pin: str | None = None) -> dict:
     """Add a TPM+PIN protector to BitLocker and capture recovery password.
 
+    # D-019: Adds the TPM+PIN protector layer that makes BitLocker a PBA
+    # factor. The 48-digit recovery password is captured for operator
+    # recovery via the dashboard PBA Recovery panel.
+
     Q7=A: Requires BitLocker already enabled. If off, returns failure with
     a clear error — the agent does NOT enable BitLocker.
 
@@ -393,6 +406,9 @@ def enable_pba(pin: str | None = None) -> dict:
 
 def disable_pba(protector_id: str | None = None) -> dict:
     """Remove the TPM+PIN protector, restoring TPM-only boot.
+
+    # D-019: Removes the TPM+PIN protector during unlock/recovery so the
+    # device boots normally without the PIN prompt.
 
     Args:
         protector_id: The protector ID to delete. If None, loads from the

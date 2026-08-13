@@ -3,6 +3,11 @@
 Tests the strengthened I4, I5, I7 assertions that check for structural
 quality minimums, not just presence. Each test has a pass case and a fail
 case to verify the assertion catches shallow compliance.
+
+Debt items covered:
+- D-006: Graph spec + assertion engine — these tests verify the
+  strengthened assertions (Q1 Goodhart's Law defense) that were added
+  on top of the original I4/I5/I7 invariant checks.
 """
 
 import sys
