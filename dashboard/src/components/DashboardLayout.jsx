@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   ShieldAlert, Monitor, ClipboardList, LogOut, Plus, Map as MapIcon,
-  LayoutDashboard, Menu, X, Activity, UserCog,
+  LayoutDashboard, Menu, X, Activity, UserCog, Cloud, Bell,
 } from 'lucide-react';
 import { useCurrentUser } from '../hooks/useCurrentUser';
+import { useServerlessMode } from '../hooks/useServerlessMode';
+import TopBar from './TopBar';
 
 const ROLE_LABEL = {
   viewer: 'Viewer',
@@ -23,9 +25,11 @@ export default function DashboardLayout() {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const currentUser = useCurrentUser();
+  const { serverless } = useServerlessMode();
 
   function logout() {
     localStorage.removeItem('token');
+    localStorage.removeItem('user');
     navigate('/login');
   }
 
@@ -49,9 +53,11 @@ export default function DashboardLayout() {
   }
 
   navItems.push({ to: '/audit', icon: ClipboardList, label: 'Audit Log' });
+  navItems.push({ to: '/alerts', icon: Bell, label: 'Alerts' });
 
-  // Admins link is only visible to super-admins
-  if (isSuperAdmin) {
+  // Admins link is only visible to super-admins (and not in serverless mode —
+  // the Worker is single-admin, so there's no admin management UI)
+  if (isSuperAdmin && !serverless) {
     navItems.push({ to: '/admins', icon: UserCog, label: 'Admins' });
   }
 
@@ -112,8 +118,14 @@ export default function DashboardLayout() {
               <div className="w-2 h-2 rounded-full bg-emerald-500" />
               <div className="absolute inset-0 w-2 h-2 rounded-full bg-emerald-500 pulse-ring" />
             </div>
-            <span className="text-xs text-slate-400">System Online</span>
-            <Activity size={12} className="text-emerald-500/50 ml-auto" />
+            <span className="text-xs text-slate-400">
+              {serverless ? 'Serverless' : 'System Online'}
+            </span>
+            {serverless ? (
+              <Cloud size={12} className="text-blue-400/70 ml-auto" />
+            ) : (
+              <Activity size={12} className="text-emerald-500/50 ml-auto" />
+            )}
           </div>
         </div>
 
@@ -146,14 +158,14 @@ export default function DashboardLayout() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Mobile header */}
-        <div className="lg:hidden flex items-center justify-between px-4 py-3 border-b border-slate-800/60 bg-slate-900/80 backdrop-blur-xl">
-          <div className="flex items-center gap-2">
-            <ShieldAlert className="text-blue-500" size={20} />
-            <span className="font-bold text-sm text-slate-100">DeviceLock</span>
-          </div>
-          <button className="text-slate-400" onClick={() => setSidebarOpen(true)}>
-            <Menu size={20} />
+        {/* Top bar — persistent for all screen sizes */}
+        <TopBar />
+
+        {/* Mobile sidebar toggle (below top bar) */}
+        <div className="lg:hidden flex items-center px-4 py-2 border-b border-slate-800/60 bg-slate-900/60">
+          <button className="text-slate-400 hover:text-slate-200" onClick={() => setSidebarOpen(true)}>
+            <Menu size={18} />
+            <span className="text-xs ml-1">Menu</span>
           </button>
         </div>
 

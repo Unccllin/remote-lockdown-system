@@ -11,6 +11,7 @@ import EnrollPage from './pages/EnrollPage';
 import MapPage from './pages/MapPage';
 import HealthPage from './pages/HealthPage';
 import AdminsPage from './pages/AdminsPage';
+import AlertsPage from './pages/AlertsPage';
 import RequireRole from './components/RequireRole';
 
 function PrivateRoute({ children }) {
@@ -37,6 +38,7 @@ export default function App() {
         <Route path="map" element={<MapPage />} />
         <Route path="audit" element={<AuditPage />} />
         <Route path="health" element={<HealthPage />} />
+        <Route path="alerts" element={<AlertsPage />} />
         <Route path="admins" element={<RequireRole role="super-admin"><AdminsPage /></RequireRole>} />
       </Route>
     </Routes>

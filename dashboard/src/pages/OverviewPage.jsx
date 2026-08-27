@@ -17,6 +17,7 @@ import {
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
+import { safeFromNow } from '../utils/time';
 
 const STATUS_BADGE = {
   active: 'badge-active',
@@ -284,7 +285,7 @@ export default function OverviewPage() {
                       <span className="text-slate-500 text-xs flex items-center gap-1 shrink-0">
                         <Clock size={10} />
                         {l.timestamp
-                          ? formatDistanceToNow(new Date(l.timestamp), { addSuffix: true })
+                          ? safeFromNow(l.timestamp)
                           : '—'}
                       </span>
                     </div>
@@ -333,7 +334,7 @@ export default function OverviewPage() {
                   <div className="flex items-center gap-1.5 text-xs text-slate-500">
                     <MapPin size={11} />
                     {d.last_checkin
-                      ? formatDistanceToNow(new Date(d.last_checkin), { addSuffix: true })
+                      ? safeFromNow(d.last_checkin)
                       : 'Never checked in'}
                   </div>
                 </div>

@@ -3,11 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import {
   Monitor, RefreshCw, Plus, WifiOff, Wifi, ShieldOff, Loader,
   Crosshair, Search, ArrowUpDown, ArrowUp, ArrowDown, Users,
+  Lock, Flag, MapPin,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
 import { useCurrentUser } from '../hooks/useCurrentUser';
+import { safeFromNow } from '../utils/time';
 
 const STATUS_BADGE = {
   active: 'badge-active',
@@ -36,6 +38,7 @@ export default function DevicesPage() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [sortField, setSortField] = useState('enrolled_at');
   const [sortDir, setSortDir] = useState('desc');
+  const [deviceLocations, setDeviceLocations] = useState({});
   const navigate = useNavigate();
   const currentUser = useCurrentUser();
 
@@ -43,7 +46,23 @@ export default function DevicesPage() {
     setLoading(true);
     try {
       const { data } = await api.get('/devices');
-      setDevices(Array.isArray(data) ? data : []);
+      const devs = Array.isArray(data) ? data : [];
+      setDevices(devs);
+      // Lazily fetch latest location for each device (city-level)
+      const locMap = {};
+      await Promise.all(
+        devs.map(async (d) => {
+          try {
+            const { data: locs } = await api.get(`/devices/${d.id}/locations?limit=1`);
+            if (Array.isArray(locs) && locs[0]) {
+              locMap[d.id] = locs[0];
+            }
+          } catch {
+            // ignore — no location data
+          }
+        })
+      );
+      setDeviceLocations(locMap);
     } catch (err) {
       console.error('DevicesPage load failed:', err);
       toast.error('Failed to load devices. Check your network connection and try again. If the issue persists, verify the server is running.');
@@ -54,14 +73,22 @@ export default function DevicesPage() {
 
   useEffect(() => { load(); }, []);
 
-  const stats = useMemo(() => ({
-    total: devices.length,
-    active: devices.filter((d) => d.status === 'active').length,
-    stolen: devices.filter((d) => d.status === 'stolen').length,
-    locked: devices.filter((d) => d.status === 'locked').length,
-    recovering: devices.filter((d) => d.status === 'recovering').length,
-    tracking: devices.filter((d) => d.status === 'tracking').length,
-  }), [devices]);
+  const stats = useMemo(() => {
+    const now = Date.now();
+    const HOURS_24 = 24 * 60 * 60 * 1000;
+    return {
+      total: devices.length,
+      active: devices.filter((d) => d.status === 'active').length,
+      stolen: devices.filter((d) => d.status === 'stolen').length,
+      locked: devices.filter((d) => d.status === 'locked').length,
+      recovering: devices.filter((d) => d.status === 'recovering').length,
+      tracking: devices.filter((d) => d.status === 'tracking').length,
+      offline24h: devices.filter((d) => {
+        if (!d.last_checkin) return true;
+        return (now - new Date(d.last_checkin).getTime()) > HOURS_24;
+      }).length,
+    };
+  }, [devices]);
 
   const filtered = useMemo(() => {
     let result = devices;
@@ -129,10 +156,18 @@ export default function DevicesPage() {
       </div>
 
       {/* Stats cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
+        <div className="card glow-blue">
+          <p className="text-xs text-slate-400 mb-1">Total</p>
+          <p className="text-3xl font-bold text-slate-100">{stats.total}</p>
+        </div>
         <div className="card glow-emerald">
           <p className="text-xs text-slate-400 mb-1">Active</p>
           <p className="text-3xl font-bold text-emerald-400">{stats.active}</p>
+        </div>
+        <div className="card glow-amber">
+          <p className="text-xs text-slate-400 mb-1">Offline &gt;24h</p>
+          <p className="text-3xl font-bold text-amber-400">{stats.offline24h}</p>
         </div>
         <div className="card glow-red">
           <p className="text-xs text-slate-400 mb-1">Stolen / Locked</p>
@@ -142,13 +177,9 @@ export default function DevicesPage() {
           <p className="text-xs text-slate-400 mb-1">Tracking</p>
           <p className="text-3xl font-bold text-cyan-400">{stats.tracking}</p>
         </div>
-        <div className="card glow-amber">
+        <div className="card">
           <p className="text-xs text-slate-400 mb-1">Recovering</p>
           <p className="text-3xl font-bold text-amber-400">{stats.recovering}</p>
-        </div>
-        <div className="card glow-blue">
-          <p className="text-xs text-slate-400 mb-1">Total</p>
-          <p className="text-3xl font-bold text-slate-100">{stats.total}</p>
         </div>
       </div>
 
@@ -204,40 +235,76 @@ export default function DevicesPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-800/60 text-slate-400 text-xs uppercase">
+                <th className="text-left px-5 py-3 font-medium">Status</th>
                 <th className="text-left px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-200" onClick={() => toggleSort('hostname')}>
                   <span className="inline-flex items-center gap-1.5">Hostname <SortIcon field="hostname" /></span>
                 </th>
                 <th className="text-left px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-200" onClick={() => toggleSort('owner_name')}>
                   <span className="inline-flex items-center gap-1.5">Owner <SortIcon field="owner_name" /></span>
                 </th>
-                <th className="text-left px-5 py-3 font-medium">Status</th>
+                <th className="text-left px-5 py-3 font-medium">Model</th>
                 <th className="text-left px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-200" onClick={() => toggleSort('last_checkin')}>
                   <span className="inline-flex items-center gap-1.5">Last Check-in <SortIcon field="last_checkin" /></span>
                 </th>
+                <th className="text-left px-5 py-3 font-medium">Location</th>
+                <th className="text-right px-5 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((d) => (
-                <tr
-                  key={d.id}
-                  className="border-b border-slate-800/40 hover:bg-slate-800/30 cursor-pointer transition-colors"
-                  onClick={() => navigate(`/devices/${d.id}`)}
-                >
-                  <td className="px-5 py-3 font-mono text-slate-200">{d.hostname}</td>
-                  <td className="px-5 py-3 text-slate-300">{d.owner_name}</td>
-                  <td className="px-5 py-3">
-                    <span className={STATUS_BADGE[d.status] || 'badge-inactive'}>
-                      {STATUS_ICON[d.status]}
-                      {d.status}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3 text-slate-400">
-                    {d.last_checkin
-                      ? formatDistanceToNow(new Date(d.last_checkin), { addSuffix: true })
-                      : 'Never'}
-                  </td>
-                </tr>
-              ))}
+              {filtered.map((d) => {
+                const loc = deviceLocations[d.id];
+                const locText = loc
+                  ? [loc.city, loc.country].filter(Boolean).join(', ') || `${loc.latitude?.toFixed(2)}, ${loc.longitude?.toFixed(2)}`
+                  : '—';
+                return (
+                  <tr
+                    key={d.id}
+                    className="border-b border-slate-800/40 hover:bg-slate-800/30 cursor-pointer transition-colors group"
+                    onClick={() => navigate(`/devices/${d.id}`)}
+                  >
+                    <td className="px-5 py-3">
+                      <span className={STATUS_BADGE[d.status] || 'badge-inactive'}>
+                        {STATUS_ICON[d.status]}
+                        {d.status}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 font-mono text-slate-200">{d.hostname}</td>
+                    <td className="px-5 py-3 text-slate-300">{d.owner_name}</td>
+                    <td className="px-5 py-3 text-slate-400 text-xs">{d.model || d.hw_model || '—'}</td>
+                    <td className="px-5 py-3 text-slate-400">
+                      {d.last_checkin
+                        ? safeFromNow(d.last_checkin)
+                        : 'Never'}
+                    </td>
+                    <td className="px-5 py-3 text-slate-400 text-xs flex items-center gap-1">
+                      <MapPin size={11} className="text-slate-500" />
+                      {locText}
+                    </td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {currentUser?.isOperator && d.status !== 'stolen' && d.status !== 'locked' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); navigate(`/devices/${d.id}`); }}
+                            className="p-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-colors"
+                            title="Flag as Stolen"
+                          >
+                            <Flag size={14} />
+                          </button>
+                        )}
+                        {currentUser?.isOperator && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); navigate(`/devices/${d.id}`); }}
+                            className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-500/10 transition-colors"
+                            title="Lock / Track"
+                          >
+                            <Lock size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           <div className="px-5 py-3 text-xs text-slate-500 border-t border-slate-800/40">

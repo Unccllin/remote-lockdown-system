@@ -4,6 +4,28 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import DeviceDetailPage from '../src/pages/DeviceDetailPage';
 import { setupUser } from './setup';
 
+// Mock react-leaflet — Leaflet's MapContainer doesn't work in jsdom
+vi.mock('react-leaflet', () => ({
+  MapContainer: ({ children }) => <div data-testid="mock-map">{children}</div>,
+  TileLayer: () => null,
+  Marker: ({ children }) => <div data-testid="mock-marker">{children}</div>,
+  Popup: ({ children }) => <div>{children}</div>,
+  Circle: () => null,
+  Polyline: () => null,
+  useMap: () => ({ setView: vi.fn(), fitBounds: vi.fn() }),
+}));
+
+vi.mock('leaflet', () => ({
+  default: {
+    divIcon: vi.fn(() => ({})),
+    latLngBounds: vi.fn(() => ({})),
+  },
+  divIcon: vi.fn(() => ({})),
+  latLngBounds: vi.fn(() => ({})),
+}));
+
+vi.mock('leaflet/dist/leaflet.css', () => ({}));
+
 // Mock the API client
 vi.mock('../src/api/client', () => ({
   default: {
@@ -183,7 +205,9 @@ describe('DeviceDetailPage', () => {
     renderWithRouter();
 
     await waitFor(() => {
-      expect(screen.getByText('Latest Location')).toBeInTheDocument();
+      // "Latest Location" appears in both the map popup and the details card heading
+      const elements = screen.getAllByText('Latest Location');
+      expect(elements.length).toBeGreaterThan(0);
     }, { timeout: 3000 });
   });
 

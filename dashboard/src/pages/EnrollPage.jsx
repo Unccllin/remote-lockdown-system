@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Download, Copy, Check, Key, AlertTriangle, Package } from 'lucide-react';
+import { ArrowLeft, Download, Copy, Check, Key, AlertTriangle, Package, Cloud } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/client';
+import { useServerlessMode } from '../hooks/useServerlessMode';
 
 export default function EnrollPage() {
   const navigate = useNavigate();
+  const { serverless } = useServerlessMode();
   const [form, setForm] = useState({ hostname: '', owner_name: '' });
   const [loading, setLoading] = useState(false);
   const [enrolled, setEnrolled] = useState(null); // { device, apiKey }
@@ -305,66 +307,86 @@ echo "Done!"
           </div>
         </div>
 
-        {/* One-click installer (primary — for non-IT users) */}
-        <div className="card mb-6 border-emerald-700/30 bg-emerald-950/10">
-          <h3 className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
-            <Package size={14} className="text-emerald-400" />
-            One-Click Installer (Recommended)
-          </h3>
-          <p className="text-xs text-slate-500 mb-4">
-            Download a single .exe file. The user just double-clicks it and follows the
-            wizard — no PowerShell, no ZIP extraction, no command line needed.
-          </p>
-          <button
-            onClick={downloadOneClickInstaller}
-            disabled={downloadingInstaller}
-            className="w-full flex items-center gap-3 px-4 py-4 rounded-lg bg-emerald-900/30 hover:bg-emerald-900/50 border border-emerald-700/50 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Download size={20} className="text-emerald-400" />
-            <div className="text-left">
-              <div className="font-medium">Download Windows Installer (.exe)</div>
-              <div className="text-xs text-slate-500">
-                {downloadingInstaller ? 'Compiling installer... (this takes a few seconds)' : 'GUI wizard — just double-click on the target device'}
+        {/* One-click installer (primary — for non-IT users).
+            Not available in serverless mode — the Worker has no
+            /installer/:id/nsis endpoint. */}
+        {serverless ? (
+          <div className="card mb-6 border-slate-700/40">
+            <div className="flex items-start gap-3">
+              <Cloud size={18} className="text-blue-400/60 shrink-0 mt-0.5" />
+              <div className="text-sm text-slate-400">
+                <p className="font-medium text-slate-300 mb-1">Installer downloads unavailable</p>
+                <p className="text-xs">
+                  The serverless backend doesn't serve installer binaries. Use the
+                  Config JSON or Setup Script above to configure the agent manually,
+                  or connect to the full Express server to download pre-built installers.
+                </p>
               </div>
             </div>
-          </button>
-        </div>
-
-        {/* Advanced installer options (ZIP — for IT admins) */}
-        <div className="card mb-6">
-          <h3 className="text-sm font-medium text-slate-300 mb-2">Advanced: ZIP Installer</h3>
-          <p className="text-xs text-slate-500 mb-4">
-            For IT administrators who prefer manual installation. Contains the raw binary,
-            config, and install script in a ZIP file.
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <button
-              onClick={() => downloadAgentInstaller('win')}
-              disabled={downloadingInstaller}
-              className="flex items-center gap-2 px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Package size={16} className="text-indigo-400" />
-              <div className="text-left">
-                <div className="font-medium">Windows ZIP</div>
-                <div className="text-xs text-slate-500">.exe + install.ps1</div>
-              </div>
-            </button>
-            <button
-              onClick={() => downloadAgentInstaller('linux')}
-              disabled={downloadingInstaller}
-              className="flex items-center gap-2 px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Package size={16} className="text-indigo-400" />
-              <div className="text-left">
-                <div className="font-medium">Linux ZIP</div>
-                <div className="text-xs text-slate-500">binary + install.sh</div>
-              </div>
-            </button>
           </div>
-          <p className="text-xs text-amber-500/60 mt-3">
-            Note: Each installer download generates a new API key for this device. The old key will stop working.
-          </p>
-        </div>
+        ) : (
+          <>
+            <div className="card mb-6 border-emerald-700/30 bg-emerald-950/10">
+              <h3 className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
+                <Package size={14} className="text-emerald-400" />
+                One-Click Installer (Recommended)
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Download a single .exe file. The user just double-clicks it and follows the
+                wizard — no PowerShell, no ZIP extraction, no command line needed.
+              </p>
+              <button
+                onClick={downloadOneClickInstaller}
+                disabled={downloadingInstaller}
+                className="w-full flex items-center gap-3 px-4 py-4 rounded-lg bg-emerald-900/30 hover:bg-emerald-900/50 border border-emerald-700/50 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Download size={20} className="text-emerald-400" />
+                <div className="text-left">
+                  <div className="font-medium">Download Windows Installer (.exe)</div>
+                  <div className="text-xs text-slate-500">
+                    {downloadingInstaller ? 'Compiling installer... (this takes a few seconds)' : 'GUI wizard — just double-click on the target device'}
+                  </div>
+                </div>
+              </button>
+            </div>
+
+            {/* Advanced installer options (ZIP — for IT admins) */}
+            <div className="card mb-6">
+              <h3 className="text-sm font-medium text-slate-300 mb-2">Advanced: ZIP Installer</h3>
+              <p className="text-xs text-slate-500 mb-4">
+                For IT administrators who prefer manual installation. Contains the raw binary,
+                config, and install script in a ZIP file.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  onClick={() => downloadAgentInstaller('win')}
+                  disabled={downloadingInstaller}
+                  className="flex items-center gap-2 px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Package size={16} className="text-indigo-400" />
+                  <div className="text-left">
+                    <div className="font-medium">Windows ZIP</div>
+                    <div className="text-xs text-slate-500">.exe + install.ps1</div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => downloadAgentInstaller('linux')}
+                  disabled={downloadingInstaller}
+                  className="flex items-center gap-2 px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Package size={16} className="text-indigo-400" />
+                  <div className="text-left">
+                    <div className="font-medium">Linux ZIP</div>
+                    <div className="text-xs text-slate-500">binary + install.sh</div>
+                  </div>
+                </button>
+              </div>
+              <p className="text-xs text-amber-500/60 mt-3">
+                Note: Each installer download generates a new API key for this device. The old key will stop working.
+              </p>
+            </div>
+          </>
+        )}
 
         {/* Actions */}
         <div className="flex gap-3">

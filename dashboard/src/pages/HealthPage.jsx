@@ -1,11 +1,13 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   Activity, RefreshCw, Server, HardDrive, Database, ListChecks,
-  AlertTriangle, ShieldCheck, Clock, Cpu, Wifi, WifiOff,
+  AlertTriangle, ShieldCheck, Clock, Cpu, Wifi, WifiOff, Cloud, Monitor,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import { getDetailedHealth } from '../api/health';
+import { useServerlessMode } from '../hooks/useServerlessMode';
+import { safeFromNow } from '../utils/time';
 
 const REFRESH_INTERVAL_MS = 30000;
 
@@ -44,6 +46,7 @@ export default function HealthPage() {
   const [error, setError] = useState(null);
   const [countdown, setCountdown] = useState(REFRESH_INTERVAL_MS / 1000);
   const timerRef = useRef(null);
+  const { serverless } = useServerlessMode();
 
   const load = useCallback(async () => {
     try {
@@ -120,6 +123,78 @@ export default function HealthPage() {
         </div>
       )}
 
+      {/* Serverless mode — the Worker's /health/detailed returns a different
+          shape ({ status, serverless, devices, pending_commands, timestamp })
+          with no server uptime, DB latency, heap memory, fleet breakdown, or
+          alerts. Render a simplified view instead of crashing on
+          data.server.uptimeSeconds. */}
+      {serverless && data && (
+        <>
+          <div className="card mb-6 border-blue-500/30 bg-blue-950/10">
+            <div className="flex items-center gap-2 text-blue-400">
+              <Cloud size={18} />
+              <span className="font-medium text-sm">
+                Connected to Cloudflare Worker (serverless mode)
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-2">
+              The serverless backend doesn't expose server uptime, database
+              latency, or memory metrics. Device and command queue status are
+              shown below.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+            <div className="card">
+              <div className="flex items-center gap-2 mb-4">
+                <Monitor size={16} className="text-slate-400" />
+                <h2 className="text-sm font-semibold text-slate-200">Devices</h2>
+              </div>
+              <div className="flex flex-col items-center justify-center py-4">
+                <p className="text-5xl font-bold text-emerald-400">
+                  {data.devices ?? 0}
+                </p>
+                <p className="text-xs text-slate-500 mt-2">Enrolled devices</p>
+              </div>
+            </div>
+            <div className="card">
+              <div className="flex items-center gap-2 mb-4">
+                <ListChecks size={16} className="text-slate-400" />
+                <h2 className="text-sm font-semibold text-slate-200">Command Queue</h2>
+              </div>
+              <div className="flex flex-col items-center justify-center py-4">
+                <p className={`text-5xl font-bold ${data.pending_commands > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  {data.pending_commands ?? 0}
+                </p>
+                <p className="text-xs text-slate-500 mt-2">Pending commands</p>
+              </div>
+              <div className="mt-2 text-center">
+                {data.pending_commands > 0 ? (
+                  <span className="text-xs text-amber-400 flex items-center justify-center gap-1">
+                    <AlertTriangle size={11} /> Backlog detected
+                  </span>
+                ) : (
+                  <span className="text-xs text-emerald-400 flex items-center justify-center gap-1">
+                    <ShieldCheck size={11} /> Queue clear
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {data.timestamp && (
+            <div className="text-xs text-slate-500 text-center">
+              Last updated {safeFromNow(data.timestamp)}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Express server mode — full health metrics (server uptime, DB,
+          memory, fleet breakdown, alerts). Not rendered in serverless mode
+          because the Worker doesn't return these fields. */}
+      {!serverless && (
+        <>
       {/* Server status card */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
         <div className={`card border ${sc.ring}`}>
@@ -246,7 +321,7 @@ export default function HealthPage() {
                   <span className="text-slate-500 text-xs flex items-center gap-1">
                     <Clock size={10} />
                     {alert.timestamp
-                      ? formatDistanceToNow(new Date(alert.timestamp), { addSuffix: true })
+                      ? safeFromNow(alert.timestamp)
                       : '—'}
                   </span>
                 </div>
@@ -266,6 +341,8 @@ export default function HealthPage() {
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }

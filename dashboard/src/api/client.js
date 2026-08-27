@@ -1,6 +1,11 @@
 import axios from 'axios';
 
-const api = axios.create({ baseURL: '/api' });
+// When VITE_API_URL is set (e.g. pointing at the Cloudflare Worker),
+// use it as the base URL. Otherwise default to same-origin /api (the
+// Express server serves both the dashboard and the API).
+const baseURL = import.meta.env.VITE_API_URL || '/api';
+
+const api = axios.create({ baseURL });
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
@@ -20,10 +25,12 @@ api.interceptors.response.use(
       const isOnLogin = window.location.pathname.startsWith('/login');
       if (hadToken && !isOnLogin) {
         localStorage.removeItem('token');
+        localStorage.removeItem('user');
         window.location.href = '/login';
       } else if (hadToken) {
         // On the login page with a stale token — just clear it, no redirect.
         localStorage.removeItem('token');
+        localStorage.removeItem('user');
       }
     }
     return Promise.reject(err);

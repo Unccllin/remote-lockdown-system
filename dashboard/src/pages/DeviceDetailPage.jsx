@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { ArrowLeft, ShieldAlert, ShieldCheck, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate, UserX, AlertTriangle, FileWarning, Lock, Key, Eye, EyeOff, Copy } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
 import ConfirmModal from '../components/ConfirmModal';
 import { useCurrentUser } from '../hooks/useCurrentUser';
+import { useServerlessMode } from '../hooks/useServerlessMode';
+import { safeFromNow, safeFormat } from '../utils/time';
 
 const STATUS_BADGE = {
   active: 'badge-active',
@@ -55,7 +60,7 @@ function CredentialField({ label, value, revealed, onToggle, onCopy }) {
       <div className="flex-1">
         <p className="text-xs text-slate-400 mb-0.5">{label}</p>
         <p className="text-sm font-mono text-slate-200 bg-slate-900/50 px-2 py-1 rounded">
-          {revealed ? value : '••••••••••••'}
+          {revealed ? value : '----------'}
         </p>
       </div>
       <button
@@ -76,10 +81,47 @@ function CredentialField({ label, value, revealed, onToggle, onCopy }) {
   );
 }
 
+/** Leaflet: auto-fit map bounds to all location points. */
+function FitBounds({ points }) {
+  const map = useMap();
+  useEffect(() => {
+    if (points.length === 0) return;
+    if (points.length === 1) {
+      map.setView([points[0].latitude, points[0].longitude], 13);
+    } else {
+      const bounds = L.latLngBounds(
+        points.map((p) => [p.latitude, p.longitude])
+      );
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+  }, [points, map]);
+  return null;
+}
+
+/** Create a colored Leaflet divIcon marker for the device detail map. */
+function makeDetailIcon(color, isLatest = false) {
+  const pulse = isLatest
+    ? `<div style="position:absolute;inset:0;border-radius:50%;background:${color};opacity:0.4;animation:marker-pulse 2s ease-out infinite;"></div>`
+    : '';
+  const html = `
+    <div style="position:relative;width:14px;height:14px;">
+      ${pulse}
+      <div style="position:absolute;inset:1px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,0.6);"></div>
+    </div>
+  `;
+  return L.divIcon({
+    html,
+    className: 'custom-marker',
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+  });
+}
+
 export default function DeviceDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const currentUser = useCurrentUser();
+  const { serverless } = useServerlessMode();
   const [device, setDevice] = useState(null);
   const [audit, setAudit] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -552,7 +594,7 @@ export default function DeviceDetailPage() {
           to physically unlock a rebooted PBA device. Credentials are
           fetched on-demand to minimize exposure. Only super-admins can
           access the PBA credentials endpoint. */}
-      {isLockedOrStolen && pbaActive && isSuperAdmin && (
+      {isLockedOrStolen && pbaActive && isSuperAdmin && !serverless && (
         <div className="card mb-6 border-l-4 border-l-red-500">
           <div className="flex items-center gap-2 mb-3">
             <Key size={16} className="text-red-400" />
@@ -658,14 +700,14 @@ export default function DeviceDetailPage() {
           <p className="text-xs text-slate-400 mb-1">Last Check-in</p>
           <p className="text-sm font-medium text-slate-200">
             {device.last_checkin
-              ? formatDistanceToNow(new Date(device.last_checkin), { addSuffix: true })
+              ? safeFromNow(device.last_checkin)
               : 'Never'}
           </p>
         </div>
         <div className="card">
           <p className="text-xs text-slate-400 mb-1">Enrolled</p>
           <p className="text-sm font-medium text-slate-200">
-            {format(new Date(device.enrolled_at), 'MMM d, yyyy')}
+            {safeFormat(device.enrolled_at, 'MMM d, yyyy')}
           </p>
         </div>
         <div className="card">
@@ -674,46 +716,159 @@ export default function DeviceDetailPage() {
         </div>
       </div>
 
-      {/* Latest location card */}
-      {latestLocation && (
-        <div className="card mb-6">
-          <div className="flex items-center gap-2 mb-3">
-            <MapPin size={16} className="text-cyan-400" />
-            <h2 className="font-semibold text-slate-200 text-sm">Latest Location</h2>
-          </div>
-          <div className="grid grid-cols-4 gap-4">
-            <div>
-              <p className="text-xs text-slate-400">Latitude</p>
-              <p className="text-sm font-mono text-slate-200">{latestLocation.latitude?.toFixed(4) ?? '—'}</p>
+      {/* Location map + details — dark-themed Leaflet map with GPS pin,
+          accuracy radius, and location history trail. */}
+      {locations.length > 0 ? (
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-6">
+          {/* Map — takes 3/5 width on desktop */}
+          <div className="lg:col-span-3 card p-0 overflow-hidden">
+            <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-800/60">
+              <MapPin size={16} className="text-cyan-400" />
+              <h2 className="font-semibold text-slate-200 text-sm">Location Map</h2>
+              <span className="text-xs text-slate-500 ml-auto">
+                {locations.length} report{locations.length === 1 ? '' : 's'}
+              </span>
             </div>
-            <div>
-              <p className="text-xs text-slate-400">Longitude</p>
-              <p className="text-sm font-mono text-slate-200">{latestLocation.longitude?.toFixed(4) ?? '—'}</p>
-            </div>
-            <div>
-              <p className="text-xs text-slate-400">Source / Accuracy</p>
-              <p className="text-sm text-slate-200">
-                {latestLocation.source}
-                {latestLocation.accuracy_meters ? ` (~${Math.round(latestLocation.accuracy_meters)}m)` : ''}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-slate-400">Reported</p>
-              <p className="text-sm text-slate-200">
-                {formatDistanceToNow(new Date(latestLocation.reported_at), { addSuffix: true })}
-              </p>
-            </div>
-          </div>
-          {latestLocation.city && (
-            <p className="text-xs text-slate-400 mt-3">
-              {latestLocation.city}, {latestLocation.region}, {latestLocation.country}
-            </p>
-          )}
-        </div>
-      )}
+            <MapContainer
+              center={[latestLocation.latitude, latestLocation.longitude]}
+              zoom={13}
+              scrollWheelZoom={true}
+              style={{ height: '400px', width: '100%' }}
+              className="rounded-b-2xl"
+            >
+              <TileLayer
+                url="https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=en"
+                subdomains={['0', '1', '2', '3']}
+                maxZoom={21}
+                attribution='&copy; Google Maps'
+              />
+              <FitBounds points={locations} />
 
-      {/* No location data placeholder */}
-      {!latestLocation && device.status !== 'recovering' && (
+              {/* Location history trail — polyline connecting all points */}
+              {locations.length > 1 && (
+                <Polyline
+                  positions={locations.map((l) => [l.latitude, l.longitude]).reverse()}
+                  pathOptions={{
+                    color: '#06b6d4',
+                    weight: 2,
+                    opacity: 0.5,
+                    dashArray: '5,8',
+                  }}
+                />
+              )}
+
+              {/* Markers for each location point */}
+              {locations.map((loc, idx) => {
+                const isLatest = idx === 0;
+                const color = isLatest ? '#06b6d4' : '#64748b';
+                const pos = [loc.latitude, loc.longitude];
+                return (
+                  <Marker key={loc.id || idx} position={pos} icon={makeDetailIcon(color, isLatest)}>
+                    <Popup>
+                      <div style={{ minWidth: 180 }}>
+                        <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>
+                          {isLatest ? 'Latest Location' : `Report #${locations.length - idx}`}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace', marginBottom: 2 }}>
+                          {loc.latitude?.toFixed(4)}, {loc.longitude?.toFixed(4)}
+                        </div>
+                        {(loc.city || loc.country) && (
+                          <div style={{ fontSize: 11, color: '#475569', marginBottom: 2 }}>
+                            {[loc.city, loc.region, loc.country].filter(Boolean).join(', ')}
+                          </div>
+                        )}
+                        <div style={{ fontSize: 11, color: '#475569' }}>
+                          {loc.reported_at
+                            ? safeFromNow(loc.reported_at)
+                            : '—'}
+                        </div>
+                      </div>
+                    </Popup>
+                    {/* Accuracy radius circle for latest location */}
+                    {isLatest && loc.accuracy_meters && (
+                      <Circle
+                        center={pos}
+                        radius={loc.accuracy_meters}
+                        pathOptions={{
+                          color: '#06b6d4',
+                          fillColor: '#06b6d4',
+                          fillOpacity: 0.1,
+                          weight: 1,
+                        }}
+                      />
+                    )}
+                  </Marker>
+                );
+              })}
+            </MapContainer>
+          </div>
+
+          {/* Location details — takes 2/5 width on desktop */}
+          <div className="lg:col-span-2 space-y-4">
+            <div className="card">
+              <div className="flex items-center gap-2 mb-3">
+                <MapPin size={16} className="text-cyan-400" />
+                <h2 className="font-semibold text-slate-200 text-sm">Latest Location</h2>
+              </div>
+              <div className="space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-xs text-slate-400">Coordinates</span>
+                  <span className="text-sm font-mono text-slate-200">
+                    {latestLocation.latitude?.toFixed(4)}, {latestLocation.longitude?.toFixed(4)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-xs text-slate-400">Source</span>
+                  <span className="text-sm text-slate-200">{latestLocation.source}</span>
+                </div>
+                {latestLocation.accuracy_meters && (
+                  <div className="flex justify-between">
+                    <span className="text-xs text-slate-400">Accuracy</span>
+                    <span className="text-sm font-mono text-slate-200">
+                      ~{Math.round(latestLocation.accuracy_meters)}m
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-xs text-slate-400">Reported</span>
+                  <span className="text-sm text-slate-200">
+                    {safeFromNow(latestLocation.reported_at)}
+                  </span>
+                </div>
+                {latestLocation.city && (
+                  <div className="pt-2 border-t border-slate-800/50">
+                    <p className="text-xs text-slate-400">
+                      {latestLocation.city}, {latestLocation.region}, {latestLocation.country}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Location history mini-list */}
+            {locations.length > 1 && (
+              <div className="card">
+                <h2 className="font-semibold text-slate-200 text-sm mb-3">History Trail</h2>
+                <ul className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {locations.map((loc, idx) => (
+                    <li key={loc.id || idx} className="flex items-center gap-2 text-xs">
+                      <span
+                        className={`w-2 h-2 rounded-full shrink-0 ${idx === 0 ? 'bg-cyan-400' : 'bg-slate-600'}`}
+                      />
+                      <span className="font-mono text-slate-400">
+                        {loc.latitude?.toFixed(2)}, {loc.longitude?.toFixed(2)}
+                      </span>
+                      <span className="text-slate-500 ml-auto">
+                        {safeFromNow(loc.reported_at)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : device.status !== 'recovering' && (
         <div className="card mb-6 text-center">
           <MapPin size={24} className="mx-auto mb-2 text-slate-600" />
           <p className="text-slate-400 text-sm">No location data for this device yet.</p>
@@ -759,8 +914,10 @@ export default function DeviceDetailPage() {
             Recovery in progress — waiting for agent to decrypt
           </span>
         )}
-        {/* Phase 7: Release device (ownership transfer / GDPR erasure) */}
-        {isOperator && device.status === 'active' && (
+        {/* Phase 7: Release device (ownership transfer / GDPR erasure).
+            Not available in serverless mode — the Worker has no
+            DELETE /devices/:id/release endpoint. */}
+        {isOperator && device.status === 'active' && !serverless && (
           <button
             className="btn-ghost text-red-400 border-red-800/50 hover:bg-red-900/20 ml-auto"
             onClick={() => setModal('release')}
@@ -781,7 +938,7 @@ export default function DeviceDetailPage() {
             {locations.map((loc) => (
               <li key={loc.id} className="flex items-start gap-4 py-2 border-b border-slate-800/50 last:border-0">
                 <span className="text-xs text-slate-500 w-36 shrink-0">
-                  {format(new Date(loc.reported_at), 'MMM d, HH:mm:ss')}
+                  {safeFormat(loc.reported_at, 'MMM d, HH:mm:ss')}
                 </span>
                 <span className="text-xs font-mono text-cyan-400 shrink-0">
                   {loc.latitude?.toFixed(4)}, {loc.longitude?.toFixed(4)}
@@ -809,7 +966,7 @@ export default function DeviceDetailPage() {
             {audit.map((a) => (
               <li key={a.id} className="flex items-start gap-4 py-2 border-b border-slate-800/50 last:border-0">
                 <span className="text-xs text-slate-500 w-36 shrink-0">
-                  {format(new Date(a.timestamp), 'MMM d, HH:mm:ss')}
+                  {safeFormat(a.timestamp, 'MMM d, HH:mm:ss')}
                 </span>
                 <span className="text-xs font-mono text-blue-400 shrink-0">{a.action}</span>
                 {a.admin_username && (

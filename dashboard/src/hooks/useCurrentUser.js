@@ -13,21 +13,56 @@ const ROLE_HIERARCHY = { viewer: 0, operator: 1, 'super-admin': 2 };
  *
  * This consolidates the duplicated getCurrentUser() functions that were
  * previously in DashboardLayout.jsx and AdminsPage.jsx.
+ *
+ * When the token is not a JWT (e.g. a raw admin token from the Cloudflare
+ * Worker), falls back to treating the bearer as a super-admin — the Worker
+ * only has one admin role.
  */
 function decodeUser() {
   try {
     const token = localStorage.getItem('token');
     if (!token) return null;
-    const payload = token.split('.')[1];
-    const decoded = JSON.parse(atob(payload));
-    const role = decoded.role || 'viewer';
+
+    // Try JWT decode first (Express server path)
+    const parts = token.split('.');
+    if (parts.length === 3) {
+      const decoded = JSON.parse(atob(parts[1]));
+      const role = decoded.role || 'viewer';
+      return {
+        id: decoded.id,
+        username: decoded.username,
+        role,
+        isViewer: role === 'viewer',
+        isOperator: ROLE_HIERARCHY[role] >= ROLE_HIERARCHY.operator,
+        isSuperAdmin: ROLE_HIERARCHY[role] >= ROLE_HIERARCHY['super-admin'],
+      };
+    }
+
+    // Not a JWT — treat as a raw bearer token (Worker auth).
+    // The Worker's /auth/login returns { user: { username: 'admin', role: 'super-admin' } }
+    // Store that user info alongside the token so we can recover it here.
+    const userJson = localStorage.getItem('user');
+    if (userJson) {
+      const u = JSON.parse(userJson);
+      const role = u.role || 'super-admin';
+      return {
+        id: u.id || 'admin',
+        username: u.username || 'admin',
+        role,
+        isViewer: role === 'viewer',
+        isOperator: ROLE_HIERARCHY[role] >= ROLE_HIERARCHY.operator,
+        isSuperAdmin: ROLE_HIERARCHY[role] >= ROLE_HIERARCHY['super-admin'],
+      };
+    }
+
+    // Token exists but no user info — assume super-admin (Worker single-admin mode)
     return {
-      id: decoded.id,
-      username: decoded.username,
-      role,
-      isViewer: role === 'viewer',
-      isOperator: ROLE_HIERARCHY[role] >= ROLE_HIERARCHY.operator,
-      isSuperAdmin: ROLE_HIERARCHY[role] >= ROLE_HIERARCHY['super-admin'],
+      id: 'admin',
+      username: 'admin',
+      role: 'super-admin',
+      isViewer: false,
+      isOperator: true,
+      isSuperAdmin: true,
     };
   } catch {
     return null;

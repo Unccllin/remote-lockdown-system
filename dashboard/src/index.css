@@ -43,27 +43,41 @@
     @apply w-full bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all;
   }
 
-  /* --- Badges --- */
+  /* --- Badges --- (FleetGuard color spec: green #22C55E, amber #F59E0B, red #EF4444) */
   .badge {
     @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold;
   }
   .badge-active {
-    @apply badge bg-emerald-500/10 text-emerald-400 border border-emerald-500/20;
+    @apply badge text-emerald-400 border;
+    background: rgba(34, 197, 94, 0.1);
+    border-color: rgba(34, 197, 94, 0.2);
   }
   .badge-stolen {
-    @apply badge bg-red-500/10 text-red-400 border border-red-500/20;
+    @apply badge text-red-400 border;
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.2);
   }
   .badge-locked {
-    @apply badge bg-orange-500/10 text-orange-400 border border-orange-500/20;
+    @apply badge text-red-400 border;
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.2);
   }
   .badge-recovering {
-    @apply badge bg-amber-500/10 text-amber-400 border border-amber-500/20;
+    @apply badge text-amber-400 border;
+    background: rgba(245, 158, 11, 0.1);
+    border-color: rgba(245, 158, 11, 0.2);
   }
   .badge-tracking {
     @apply badge bg-cyan-500/10 text-cyan-400 border border-cyan-500/20;
   }
   .badge-inactive {
-    @apply badge bg-slate-700/30 text-slate-400 border border-slate-600/30;
+    @apply badge text-amber-400 border;
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(245, 158, 11, 0.15);
+  }
+  /* Badge pulse — subtle micro-interaction when status changes to offline/stolen/locked */
+  .badge-pulse {
+    animation: badge-pulse 3s ease-in-out infinite;
   }
 
   /* --- Glow effects --- */
@@ -136,4 +150,10 @@
     100% { transform: scale(3); opacity: 0; }
   }
   .custom-marker { background: transparent !important; border: none !important; }
+
+  /* --- Badge pulse (FleetGuard micro-interaction) --- */
+  @keyframes badge-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
 }

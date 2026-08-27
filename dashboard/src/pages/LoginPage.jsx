@@ -30,6 +30,10 @@ export default function LoginPage() {
     try {
       const { data } = await api.post('/auth/login', form);
       localStorage.setItem('token', data.token);
+      // Store user info for non-JWT auth (Worker returns { user: { username, role } })
+      if (data.user) {
+        localStorage.setItem('user', JSON.stringify(data.user));
+      }
       navigate('/');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Login failed. Check your username and password and try again. If the issue persists, verify the server is running.');

@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { format } from 'date-fns';
-import { RefreshCw, ClipboardList, Search } from 'lucide-react';
+import { RefreshCw, ClipboardList, Search, Calendar, User } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/client';
+import { safeFormat } from '../utils/time';
 
 const ACTION_COLOR = {
   flag_stolen: 'text-red-400',
@@ -20,6 +21,9 @@ export default function AuditPage() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [adminFilter, setAdminFilter] = useState('all');
 
   async function load() {
     setLoading(true);
@@ -36,15 +40,40 @@ export default function AuditPage() {
 
   useEffect(() => { load(); }, []);
 
+  // Derive distinct admin usernames from the logs for the filter dropdown
+  const adminOptions = useMemo(() => {
+    const set = new Set();
+    logs.forEach((l) => { if (l.admin_username) set.add(l.admin_username); });
+    return [...set].sort();
+  }, [logs]);
+
   const filtered = useMemo(() => {
-    if (!search) return logs;
-    const q = search.toLowerCase();
-    return logs.filter((l) =>
-      l.action?.toLowerCase().includes(q) ||
-      l.hostname?.toLowerCase().includes(q) ||
-      l.admin_username?.toLowerCase().includes(q)
-    );
-  }, [logs, search]);
+    let result = logs;
+    // Text search
+    if (search) {
+      const q = search.toLowerCase();
+      result = result.filter((l) =>
+        l.action?.toLowerCase().includes(q) ||
+        l.hostname?.toLowerCase().includes(q) ||
+        l.admin_username?.toLowerCase().includes(q)
+      );
+    }
+    // Admin filter
+    if (adminFilter !== 'all') {
+      result = result.filter((l) => l.admin_username === adminFilter);
+    }
+    // Date range filter
+    if (dateFrom) {
+      const fromTime = new Date(dateFrom).getTime();
+      result = result.filter((l) => new Date(l.timestamp).getTime() >= fromTime);
+    }
+    if (dateTo) {
+      // Include the entire end day (add 24h)
+      const toTime = new Date(dateTo).getTime() + 24 * 60 * 60 * 1000;
+      result = result.filter((l) => new Date(l.timestamp).getTime() <= toTime);
+    }
+    return result;
+  }, [logs, search, adminFilter, dateFrom, dateTo]);
 
   return (
     <div>
@@ -58,15 +87,56 @@ export default function AuditPage() {
         </button>
       </div>
 
-      {/* Search */}
-      <div className="relative mb-4 max-w-md">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-        <input
-          className="input pl-10"
-          placeholder="Search by action, device, or admin…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+      {/* Filter bar — search + date range + admin filter */}
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-md">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+          <input
+            className="input pl-10"
+            placeholder="Search by action, device, or admin…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Calendar size={14} className="text-slate-500" />
+          <input
+            type="date"
+            className="input h-9 w-auto text-xs"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            title="From date"
+          />
+          <span className="text-slate-500 text-xs">to</span>
+          <input
+            type="date"
+            className="input h-9 w-auto text-xs"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            title="To date"
+          />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <User size={14} className="text-slate-500" />
+          <select
+            className="input h-9 w-auto text-xs pr-8"
+            value={adminFilter}
+            onChange={(e) => setAdminFilter(e.target.value)}
+          >
+            <option value="all">All admins</option>
+            {adminOptions.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </div>
+        {(dateFrom || dateTo || adminFilter !== 'all') && (
+          <button
+            onClick={() => { setDateFrom(''); setDateTo(''); setAdminFilter('all'); }}
+            className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       {loading && logs.length === 0 ? (
@@ -103,7 +173,7 @@ export default function AuditPage() {
               {filtered.map((l) => (
                 <tr key={l.id} className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
                   <td className="px-5 py-3 text-slate-500 whitespace-nowrap text-xs">
-                    {format(new Date(l.timestamp), 'MMM d, yyyy HH:mm:ss')}
+                    {safeFormat(l.timestamp, 'MMM d, yyyy HH:mm:ss')}
                   </td>
                   <td className="px-5 py-3">
                     <span className={`font-mono text-xs ${ACTION_COLOR[l.action] || 'text-slate-300'}`}>

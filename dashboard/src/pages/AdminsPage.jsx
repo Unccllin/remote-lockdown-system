@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { RefreshCw, Plus, Trash2, ShieldCheck, UserCog } from 'lucide-react';
+import { RefreshCw, Plus, Trash2, ShieldCheck, UserCog, Cloud } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { listAdmins, createAdmin, deleteAdmin, updateAdminRole } from '../api/admins';
 import { useCurrentUser } from '../hooks/useCurrentUser';
+import { useServerlessMode } from '../hooks/useServerlessMode';
 
 const ROLE_BADGE = {
   viewer: 'badge-inactive',
@@ -22,6 +23,7 @@ export default function AdminsPage() {
   const [admins, setAdmins] = useState([]);
   const [loading, setLoading] = useState(true);
   const currentUser = useCurrentUser();
+  const { serverless } = useServerlessMode();
 
   // Create-admin form state
   const [showForm, setShowForm] = useState(false);
@@ -41,8 +43,11 @@ export default function AdminsPage() {
   }
 
   useEffect(() => {
-    load();
-  }, []);
+    // The Worker is single-admin (ADMIN_TOKEN) — no admin management API.
+    if (serverless === false) load();
+    else if (serverless === null) setLoading(true);
+    else setLoading(false); // serverless === true
+  }, [serverless]);
 
   async function handleCreate(e) {
     e.preventDefault();
@@ -88,6 +93,36 @@ export default function AdminsPage() {
   }
 
   const isSelf = (admin) => currentUser && admin.id === currentUser.id;
+
+  if (serverless) {
+    return (
+      <div className="animate-fade-in">
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
+              <UserCog size={22} className="text-red-400" />
+              Admin Management
+            </h1>
+            <p className="text-slate-400 text-sm mt-1">
+              Not available in serverless mode
+            </p>
+          </div>
+        </div>
+        <div className="card text-center py-16">
+          <Cloud size={32} className="mx-auto mb-3 text-blue-400/50" />
+          <p className="text-slate-300 text-sm mb-2">
+            Admin management is not available when connected to the serverless backend.
+          </p>
+          <p className="text-slate-500 text-xs max-w-md mx-auto">
+            The Cloudflare Worker uses a single pre-configured admin token
+            (<span className="font-mono">ADMIN_TOKEN</span>). To manage multiple
+            admins with role-based access, connect the dashboard to the full
+            Express server.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="animate-fade-in">

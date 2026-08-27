@@ -7,6 +7,7 @@ import api from '../api/client';
 import toast from 'react-hot-toast';
 import { MapPin, RefreshCw, Crosshair, ShieldOff, Wifi, Loader, WifiOff, Satellite, Map as MapIcon } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { safeFromNow } from '../utils/time';
 
 // Google Maps tile layer URLs
 const GOOGLE_TILES = {
@@ -220,7 +221,7 @@ export default function MapPage() {
                         )}
                         <div style={{ fontSize: 12, color: '#475569', marginBottom: 6 }}>
                           {location.reported_at
-                            ? formatDistanceToNow(new Date(location.reported_at), { addSuffix: true })
+                            ? safeFromNow(location.reported_at)
                             : 'Unknown time'}
                         </div>
                         <button
