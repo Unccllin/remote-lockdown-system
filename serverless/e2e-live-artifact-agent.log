@@ -1,0 +1,190 @@
+2026-08-27 11:44:28,001 [INFO] Loaded JSON config from: /tmp/e2e-live-1787819953/config.json
+2026-08-27 11:44:28,001 [INFO] Agent starting — hostname=E2E-LIVE-AGENT server=https://lockdown-serverless.mainacollins196.workers.dev poll=5s
+2026-08-27 11:44:28,016 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+2026-08-27 11:44:28,983 [INFO] Adaptive polling: 5s -> 30s (status=stolen)
+2026-08-27 11:44:28,983 [WARNING] LOCKDOWN command received — executing
+2026-08-27 11:44:28,983 [INFO] Sentinel created (atomic): /tmp/e2e-live-1787819953/agent_state/.locked
+2026-08-27 11:44:28,984 [INFO] No recovery public key configured — skipping recovery key file
+2026-08-27 11:44:28,989 [INFO] Encrypted: financials.xlsx
+2026-08-27 11:44:28,989 [INFO] Encrypted: secret.txt
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  !                                                       !
+  !   THIS DEVICE HAS BEEN REPORTED STOLEN               !
+  !   Contact your administrator immediately.             !
+  !                                                       !
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+2026-08-27 11:44:29,344 [INFO] Lock guardian started — re-asserting lock every 10s
+2026-08-27 11:44:29,345 [INFO] Sentinel updated: /tmp/e2e-live-1787819953/agent_state/.locked
+2026-08-27 11:44:29,351 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:44:31,403 [INFO] ACK sent: command=71a9097f1cf4783411f1334efde105f7 status=executed uuid=78bf5a6f
+2026-08-27 11:44:31,406 [WARNING] Key transmitted to server — wiping local pending ACK
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:45:01,964 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:45:33,110 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:46:04,299 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:46:35,323 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:47:06,450 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:47:37,429 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:48:08,869 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:48:39,746 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:49:10,920 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:49:41,783 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:50:12,979 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:50:43,904 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:51:15,077 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:51:45,955 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:52:17,073 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:52:47,951 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:53:19,209 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:53:50,101 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:54:21,285 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:54:52,291 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:55:23,417 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:55:54,377 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:56:25,545 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:56:56,485 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:57:27,598 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:57:58,535 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:58:29,560 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:59:00,715 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 11:59:31,814 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 12:00:02,692 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 12:00:33,799 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 12:01:04,666 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 12:01:35,974 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 12:02:06,866 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 12:02:38,027 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 12:03:08,922 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 12:03:40,177 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 12:03:55,406 [WARNING] Check-in failed: HTTPSConnectionPool(host='lockdown-serverless.mainacollins196.workers.dev', port=443): Read timed out. (read timeout=15)
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 12:04:25,422 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+2026-08-27 12:04:26,861 [INFO] UNLOCK command received
+2026-08-27 12:04:26,863 [INFO] Decrypted: secret.txt
+2026-08-27 12:04:26,863 [INFO] Decrypted: financials.xlsx
+2026-08-27 12:04:26,864 [INFO] Lock screen removed — normal login restored
+2026-08-27 12:04:26,864 [INFO] Sentinel removed
+2026-08-27 12:04:26,867 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+2026-08-27 12:04:28,078 [INFO] ACK sent: command=17ed60b70076df7d9dee55d28400128f status=executed uuid=a38aa272
+2026-08-27 12:04:58,109 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+2026-08-27 12:04:58,965 [INFO] Adaptive polling: 30s -> 300s (status=active)
+2026-08-27 12:09:58,982 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.

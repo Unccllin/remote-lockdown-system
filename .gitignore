@@ -44,8 +44,28 @@ electron/config.json
 # SQLite dev database
 server/.sqlite-data/
 server/lockdown.db
+server/lockdown.db-shm
+server/lockdown.db-wal
 # Python venv
 .venv/
 # k6 binary (downloaded locally)
 k6
 agent/hw_test_artifact.json
+# Research PDFs and .deb packages (large binaries, not part of the codebase)
+*.pdf
+*.deb
+# Firmware/UEFI build artifacts (large binaries)
+firmware/Build/
+firmware/Conf/
+firmware/capsule-output/
+libs-extract/
+# Python cache
+__pycache__/
+# Local admin token for serverless E2E testing (never commit)
+.admin-token-local
+
+# Local E2E device credentials (never commit)
+.e2e-device-local
+
+# Local E2E temp dir pointer (never commit)
+.e2e-dir-local

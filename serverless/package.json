@@ -1,0 +1,14 @@
+{
+  "name": "lockdown-serverless",
+  "version": "1.0.0",
+  "description": "Serverless ping endpoint for the Remote Lockdown agent",
+  "main": "worker.js",
+  "scripts": {
+    "test": "vitest run",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}

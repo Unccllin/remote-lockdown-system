@@ -1,0 +1,100 @@
+{
+  "test": "serverless-e2e-live",
+  "date": "2026-08-27",
+  "worker_url": "https://lockdown-serverless.mainacollins196.workers.dev",
+  "device_id": "92f73f93579fcaab8507d8d7c3bea57e",
+  "hostname": "E2E-LIVE-1787819544",
+  "flow": [
+    {
+      "step": 1,
+      "action": "enroll",
+      "result": "success",
+      "http": 201
+    },
+    {
+      "step": 2,
+      "action": "agent_checkin_active",
+      "result": "status=active, poll=300s, command=null"
+    },
+    {
+      "step": 3,
+      "action": "flag_stolen",
+      "result": "status=stolen, lockdown command pending",
+      "http": 200
+    },
+    {
+      "step": 4,
+      "action": "agent_checkin_stolen",
+      "result": "status=stolen, poll=30s, command=lockdown"
+    },
+    {
+      "step": 5,
+      "action": "lockdown_executed",
+      "result": "2 files encrypted (Fernet), sentinel created, lock guardian started, lock screen attempted (dm-tool failed gracefully on WSL)"
+    },
+    {
+      "step": 6,
+      "action": "lockdown_ack",
+      "result": "command=71a9097f... status=executed, key_material stored in KV"
+    },
+    {
+      "step": 7,
+      "action": "post_lockdown_checkin",
+      "result": "command=null (lockdown command cleared)"
+    },
+    {
+      "step": 8,
+      "action": "recover",
+      "result": "status=recovering, unlock command pending, key_material released",
+      "http": 200
+    },
+    {
+      "step": 9,
+      "action": "unlock_executed",
+      "result": "2 files decrypted, sentinel removed, lock screen removed"
+    },
+    {
+      "step": 10,
+      "action": "unlock_ack",
+      "result": "command=17ed60b7... status=executed"
+    },
+    {
+      "step": 11,
+      "action": "final_status",
+      "result": "status=active, poll=300s"
+    }
+  ],
+  "commands": {
+    "lockdown": {
+      "id": "71a9097f1cf4783411f1334efde105f7",
+      "ack_status": "executed",
+      "ack_uuid": "78bf5a6f"
+    },
+    "unlock": {
+      "id": "17ed60b70076df7d9dee55d28400128f",
+      "ack_status": "executed",
+      "ack_uuid": "a38aa272"
+    }
+  },
+  "files_encrypted": [
+    "secret.txt.enc",
+    "financials.xlsx.enc"
+  ],
+  "files_decrypted_back": [
+    "secret.txt",
+    "financials.xlsx"
+  ],
+  "decryption_verified": true,
+  "bugs_found": [
+    {
+      "id": "KV-RACE-001",
+      "description": "Device status stays stolen after lockdown ACK instead of transitioning to locked",
+      "root_cause": "Checkin handler read-modify-write race with ACK handler on Cloudflare KV. Checkin reads full devices array (with stale status=stolen), updates last_checkin, saves full array (overwriting ACK handler status=locked). Agent checks in every 30s when stolen, so the race repeats before KV propagates.",
+      "impact": "Dashboard shows device as stolen instead of locked after lockdown. Operator confusion.",
+      "fix": "Use per-device KV keys (device:{id}) instead of single devices array, OR separate checkin metadata (last_checkin) from device status into different KV keys, OR have checkin handler preserve status field by re-reading it right before save.",
+      "severity": "medium",
+      "note": "Unlock ACK status update (stolen->active) works because agent polls at 300s when active, giving KV time to propagate before next checkin."
+    }
+  ],
+  "log_file": "serverless/e2e-live-artifact-agent.log"
+}
