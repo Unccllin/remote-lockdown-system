@@ -1,0 +1,21 @@
+[Defines]
+  INF_VERSION                = 0x00010005
+  BASE_NAME                  = SetLockdown
+  FILE_GUID                  = F1E2D3C4-B5A6-7890-ABCD-EF1234567890
+  MODULE_TYPE                = UEFI_APPLICATION
+  VERSION_STRING             = 1.0
+  ENTRY_POINT                = SetLockdownEntryPoint
+
+[Sources]
+  SetLockdown.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]

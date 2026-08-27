@@ -10,6 +10,8 @@ Project-specific guidance for AI agents working in this repo.
 - `electron/` — Electron desktop app bundling server + dashboard + agent
 - `scripts/` — single source of truth for build/verify logic (wrapped by Makefile)
 - `.devin/skills/phase-N-*` — knowledge base for the 17 production-readiness phases
+- `.devin/skills/memory/` — **memory harness skill** (5-stage persistent agent memory)
+- `.devin/memory/` — **memory storage** (raw/, consolidated/, decayed/, index.md)
 - `.devin/graph/` — **the node graph** (center and heart of the project)
 - `docs/adr/` — architecture decision records + debt ledger
 
@@ -24,8 +26,11 @@ order it must be done in, and what evidence is required to call something "done.
 
 1. `.devin/graph/GRAPH-SPEC.yaml` — all nodes, edges, and invariants
 2. `.devin/graph/current-state.md` — compact session state (latest status,
-   open items, next session opening). Read this FIRST — it's ~70 lines, not
-   2700+. Read `.devin/graph/trace.md` on demand for full session history.
+   open items, next session opening). Read this FIRST — it's a GENERATED
+   artifact (~200 lines), produced by `make gen-state` from trace.md + the
+   graph spec. Do NOT edit by hand. Read `.devin/graph/trace.md` on demand
+   for full session history. Old sessions are archived to
+   `.devin/graph/trace-archive-*.md` by `make archive-trace`.
 3. `docs/adr/DEBT-LEDGER.md` — open debt items and close criteria
 4. `docs/adr/GRAPH-SPEC.md` — human-readable ADR for the graph
 
@@ -80,8 +85,11 @@ condition values printed IS an artifact. A timeout with no output is NOT.
 
 **Session-end status block (mandatory at session close):**
 
-Every session must end by appending to **both** `.devin/graph/trace.md`
-(full history) **and** `.devin/graph/current-state.md` (compact summary):
+Every session must end by appending a session-end block to
+`.devin/graph/trace.md` (full history), then running `make gen-state` to
+regenerate `.devin/graph/current-state.md` (compact summary) automatically.
+The block must include:
+- RULE-ZERO — Understanding logged before code changes (with `**Read**:` and `**Finding**:` lines)
 - Fog cleared this session (with source citations)
 - Fog remaining (genuinely not in source, with files checked listed)
 - Debt items closed (commit refs + artifacts)
@@ -89,9 +97,58 @@ Every session must end by appending to **both** `.devin/graph/trace.md`
 - Blockers named and status
 - Next session opening — one sentence, specific, no ambiguity
 
-The `current-state.md` file should also be updated with the current open
-wayfinder tickets and open debt items sections. Graph invariant I4 enforces
-that both files have the session-end status block.
+`current-state.md` is a GENERATED artifact — do NOT edit it by hand. It is
+derived from `trace.md` + `GRAPH-SPEC.yaml` by `scripts/graph_session.py`.
+Graph invariant I4 enforces that both files have the session-end status block,
+and the compactness invariant enforces that `current-state.md` has no
+"Previous session" blocks and stays under 300 lines.
+
+**Session lifecycle tooling:**
+- `make gen-state` — regenerate current-state.md from trace.md + graph spec
+- `make archive-trace` — rotate old sessions from trace.md to archive files
+  (when trace.md exceeds 3000 lines, keeps latest 5 sessions)
+- `python3 scripts/graph_session.py close-session --block-file <file>` —
+  append a session block to trace.md AND regenerate current-state.md in one step
+
+## Memory Harness (mandatory at session start and end)
+
+The memory harness is a 5-stage file-based persistent memory system in
+`.devin/memory/`. It lets the agent remember across sessions.
+
+**Mandatory at session start — RETRIEVE:**
+```bash
+python3 scripts/memory.py retrieve --query "keywords from user request"
+```
+Load relevant memories before taking any action. Acknowledge loaded
+memories in your first response. Working without memory is working blind.
+
+**Mandatory at session end — CAPTURE:**
+```bash
+python3 scripts/memory.py capture \
+  --task "what was asked" \
+  --learnings "- learning 1" \
+  --mistakes "- mistake: correction" \
+  --files "- path/to/file"
+```
+A session without a capture is a lost session. File references are mandatory.
+
+**Every 5 sessions — CONSOLIDATE:**
+```bash
+python3 scripts/memory.py consolidate
+```
+
+**Every 10 sessions — DECAY:**
+```bash
+python3 scripts/memory.py decay
+```
+
+**During session — RECONCILE (opportunistic):**
+```bash
+python3 scripts/memory.py reconcile --id m-001 --status confirmed
+python3 scripts/memory.py reconcile --id m-001 --status wrong --replacement "corrected"
+```
+
+See `.devin/skills/memory/SKILL.md` for full documentation.
 
 ## Environment
 
@@ -109,9 +166,9 @@ export PATH="/home/cllin/.local/node/bin:$PATH"
 npm test
 
 # Per-component
-cd server   && npm test                       # 332 Jest tests
-cd agent    && python3 -m pytest tests/ -q    # 198 pytest tests
-cd dashboard && npx vitest run                # 34 Vitest tests
+cd server   && npm test                       # 368 Jest tests
+cd agent    && python3 -m pytest tests/ -q    # 344 pytest tests
+cd dashboard && npx vitest run                # 41 Vitest tests
 
 # Lint
 cd server    && npx eslint .                  # exit 0 = clean
@@ -132,6 +189,11 @@ bash -n scripts/*.sh
 # Full environment + artifact verification (56 checks)
 make verify-env
 make check-structure      # non-fatal; electron/dist-electron is expected missing locally
+
+# Graph session lifecycle (keeps trace.md and current-state.md compact)
+make gen-state            # regenerate current-state.md from trace.md + graph spec
+make archive-trace        # rotate old sessions to trace-archive-*.md when trace.md > 3000 lines
+python3 scripts/test_graph_session.py  # test the session lifecycle tooling
 
 # Full build (dashboard + agent + electron) — slow, needs PyInstaller + electron-builder
 make build
@@ -189,7 +251,7 @@ make build
 
 ## Diagnostic Sweep Results (2026-08-04, updated 2026-08-11)
 
-All green: 332 server tests, 198 agent tests, 34 dashboard tests, eslint clean on
+All green: 368 server tests, 344 agent tests, 41 dashboard tests, eslint clean on
 server + dashboard, ruff clean + formatted on agent, vite build OK, all shell scripts
 `bash -n` OK, all YAML configs valid, all local imports resolve, git tree clean.
 `verify-environment.sh` final: **61 PASS / 0 FAIL / 1 SKIP** (the 1 skip is the

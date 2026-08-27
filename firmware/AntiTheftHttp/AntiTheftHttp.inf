@@ -1,0 +1,35 @@
+## @file
+# Anti-Theft HTTP Protocol Test UEFI Application
+#
+# Tests whether EFI_HTTP_PROTOCOL is available in OVMF and can make
+# HTTP requests to a local server. This verifies the firmware-level
+# check-in capability.
+#
+##
+
+[Defines]
+  INF_VERSION                = 0x00010006
+  BASE_NAME                  = AntiTheftHttp
+  FILE_GUID                  = C3D4E5F6-A7B8-4901-CDEF-234567890123
+  MODULE_TYPE                = UEFI_APPLICATION
+  VERSION_STRING             = 0.1
+  ENTRY_POINT                = AntiTheftHttpEntryPoint
+
+[Sources]
+  AntiTheftHttp.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  NetworkPkg/NetworkPkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiRuntimeServicesTableLib
+  UefiBootServicesTableLib
+  MemoryAllocationLib
+  BaseMemoryLib
+
+[Protocols]
+  gEfiHttpServiceBindingProtocolGuid
+  gEfiHttpProtocolGuid

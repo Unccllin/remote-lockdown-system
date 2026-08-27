@@ -43,6 +43,9 @@ help:
 	@echo "  make check-structure      check dist dirs exist (non-fatal)"
 	@echo "  make verify-env           verify all environment items (agent, NSIS, Docker, signing, etc.)"
 	@echo "  make graph-check          run graph invariant sweep (I1-I7)"
+	@echo "  make graph-status         print convergence report (phases, debt, enforcement gaps)"
+	@echo "  make gen-state            regenerate current-state.md from trace.md (compact, auto-derived)"
+	@echo "  make archive-trace        rotate old sessions from trace.md to archive files"
 	@echo "  make clean-state          run 5-condition clean state checklist (L12)"
 	@echo "  make clean                remove all dist/ directories"
 
@@ -135,6 +138,30 @@ verify-env:
 
 graph-check:
 	@python3 .devin/graph/graph_assert.py
+
+# Graph convergence report — surfaces the real remaining work (phases, debt,
+# enforcement paths). Unlike graph-check (which asserts invariants), this
+# never raises — it reports what's done vs. what's left.
+.PHONY: graph-status
+
+graph-status:
+	@python3 .devin/graph/graph_assert.py --convergence
+
+# Regenerate current-state.md from trace.md + GRAPH-SPEC.yaml.
+# current-state.md is a GENERATED artifact — do not edit by hand.
+# Run this after appending a session block to trace.md.
+.PHONY: gen-state
+
+gen-state:
+	@python3 scripts/graph_session.py generate-current-state
+
+# Rotate old session blocks from trace.md into trace-archive-YYYY-MM.md files.
+# Keeps trace.md compact (under 3000 lines) by moving old sessions to archives.
+# Default: archive when trace.md exceeds 3000 lines, keep latest 5 sessions.
+.PHONY: archive-trace
+
+archive-trace:
+	@python3 scripts/graph_session.py archive-trace
 
 # ---------------------------------------------------------------------------
 # Clean state checklist — 5 conditions from Lecture 12

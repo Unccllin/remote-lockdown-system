@@ -1,0 +1,55 @@
+## @file
+# Anti-Theft Network Probe UEFI Application
+#
+# Enumerates all available protocols to diagnose where the network
+# stack is breaking.
+#
+##
+
+[Defines]
+  INF_VERSION                = 0x00010006
+  BASE_NAME                  = AntiTheftNetProbe
+  FILE_GUID                  = E5F6A7B8-C9D0-4123-EF01-234567890ABC
+  MODULE_TYPE                = UEFI_APPLICATION
+  VERSION_STRING             = 0.1
+  ENTRY_POINT                = AntiTheftNetProbeEntryPoint
+
+[Sources]
+  AntiTheftNetProbe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  NetworkPkg/NetworkPkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  MemoryAllocationLib
+  BaseMemoryLib
+  DevicePathLib
+
+[Protocols]
+  gEfiHttpServiceBindingProtocolGuid
+  gEfiHttpProtocolGuid
+  gEfiTcp4ServiceBindingProtocolGuid
+  gEfiTcp4ProtocolGuid
+  gEfiIp4ServiceBindingProtocolGuid
+  gEfiIp4ProtocolGuid
+  gEfiDhcp4ServiceBindingProtocolGuid
+  gEfiDhcp4ProtocolGuid
+  gEfiArpServiceBindingProtocolGuid
+  gEfiArpProtocolGuid
+  gEfiManagedNetworkServiceBindingProtocolGuid
+  gEfiManagedNetworkProtocolGuid
+  gEfiSimpleNetworkProtocolGuid
+  gEfiVlanConfigProtocolGuid
+  gEfiPxeBaseCodeProtocolGuid
+  gEfiDns4ServiceBindingProtocolGuid
+  gEfiDns4ProtocolGuid
+  gEfiPciIoProtocolGuid
+  gEfiDevicePathProtocolGuid
+  gEfiPciRootBridgeIoProtocolGuid
+  gEfiLoadedImageProtocolGuid
+  gEfiDriverBindingProtocolGuid
+  gEfiComponentName2ProtocolGuid

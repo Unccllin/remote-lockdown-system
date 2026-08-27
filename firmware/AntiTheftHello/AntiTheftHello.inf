@@ -1,0 +1,35 @@
+## @file
+# Anti-Theft Hello World UEFI Application
+#
+# Proof of concept: verifies the UEFI toolchain, tests UEFI variable
+# read/write (the NVRAM persistence mechanism for the agent state).
+#
+# Build: build -p AntiTheftHello.dsc -a X64 -t GCC5 -b RELEASE
+# Test: QEMU with OVMF firmware
+#
+##
+
+[Defines]
+  INF_VERSION                = 0x00010006
+  BASE_NAME                  = AntiTheftHello
+  FILE_GUID                  = A1B2C3D4-E5F6-4789-ABCD-EF0123456789
+  MODULE_TYPE                = UEFI_APPLICATION
+  VERSION_STRING             = 0.1
+  ENTRY_POINT                = AntiTheftHelloEntryPoint
+
+[Sources]
+  AntiTheftHello.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  ## NONE — this is a simple POC
+
+[Guids]
+  ## NONE — using a hardcoded GUID in the source for now

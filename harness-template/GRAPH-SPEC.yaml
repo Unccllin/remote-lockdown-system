@@ -1,0 +1,396 @@
+# GRAPH-SPEC.yaml — The Node Graph (TEMPLATE — adapt to your project)
+#
+# This is the center and heart of the agent harness. Every agent session,
+# every phase, every verification, and every enforcement path flows through
+# this graph. The graph defines:
+#   - What nodes exist (the work to be done and the gates that guard it)
+#   - What edges are allowed (which nodes can transition to which)
+#   - What conditions must be met to traverse an edge
+#   - What verification gates must pass before a node is "closed"
+#
+# The graph is enforced by graph_assert.py. Violations raise
+# GraphViolationError and halt the pipeline. No node can be skipped.
+#
+# ─── HOW TO ADAPT THIS TEMPLATE ─────────────────────────────────────────────
+# 1. phase_nodes: Replace the placeholder phases with YOUR production-readiness
+#    phases. Start from the 17-phase template (build-foundation, secrets-config,
+#    platform-services, hardening, cicd, signing-autoupdate, monitoring,
+#    e2e-testing, deps-sast, agent-e2e, dashboard-e2e, postgres, docker,
+#    notifications-metrics, backup-restore, load-testing, rbac) and cut/rename
+#    phases that don't apply, add ones that do. Each phase needs: skill, config,
+#    files_owned, deps, status.
+# 2. verification_nodes: Replace with YOUR actual test/lint/build commands.
+#    Each command must be a real shell command that runs in your repo.
+# 3. enforcement_paths: Replace with YOUR critical product features. One node
+#    per feature, with entry_function pointing at the real function. Set status
+#    HONESTLY — do not claim "verified-on-hardware" without a real artifact.
+# 4. component_nodes: Replace with YOUR buildable components.
+# 5. debt_items: Seed with the obvious gaps you find while adapting the graph.
+#    Each item: id, description, status=OPEN, close_criteria, blocks (if any).
+
+# ---------------------------------------------------------------------------
+# NODE TYPES
+# ---------------------------------------------------------------------------
+#
+# SESSION     — lifecycle nodes that frame each agent session
+# GATE        — mandatory checkpoints that must pass before proceeding
+# PHASE       — production-readiness phases, each with a skill file
+# VERIFY      — verification nodes (tests, lint, build, env checks)
+# ENFORCE     — enforcement path nodes (the actual product features)
+# COMPONENT   — buildable components
+# DEBT        — debt items tracked in docs/adr/DEBT-LEDGER.md
+# EVIDENCE    — run artifacts that prove a node actually executed
+
+# ---------------------------------------------------------------------------
+# SESSION LIFECYCLE NODES
+# ---------------------------------------------------------------------------
+# These frame every agent session. No work happens outside this lifecycle.
+
+session_nodes:
+  - id: SESSION-START
+    type: SESSION
+    description: >
+      Session begins. Agent reads current-state.md FIRST (compact ~70-line
+      summary), then DEBT-LEDGER.md, then GRAPH-SPEC.yaml. Identifies the
+      next open debt item or next phase to work on. States the session
+      objective in one sentence.
+    entry_conditions: []
+    exit_conditions:
+      - "current-state.md read and understood"
+      - "DEBT-LEDGER.md read — open items identified"
+      - "GRAPH-SPEC.yaml read — current node located"
+      - "session objective stated in one sentence"
+
+  - id: RULE-ZERO
+    type: GATE
+    description: >
+      Read before you code. For the current work item, read the relevant
+      skill file(s), the source code that will be changed, and any ADRs.
+      Log understanding to trace.md before touching any file. This is NOT
+      optional. Code written before Rule Zero is complete will be wrong in
+      ways that are hard to find later.
+    entry_conditions:
+      - "SESSION-START complete"
+    exit_conditions:
+      - "relevant skill file(s) read"
+      - "source code to be changed read"
+      - "understanding logged to trace.md (with >=2 file path citations + >=1 Finding/Read line)"
+      - "implementation gaps identified (if any)"
+
+  - id: IMPLEMENT
+    type: SESSION
+    description: >
+      Write code changes. Only after RULE-ZERO is complete. Follow existing
+      conventions (AGENTS.md).
+    entry_conditions:
+      - "RULE-ZERO complete"
+    exit_conditions:
+      - "code changes written"
+      - "diff visible (every line accountable)"
+
+  - id: VERIFY
+    type: SESSION
+    description: >
+      Run the verification suite. Not optional. A passing sandbox test is
+      NOT a close. A description of what the code does is NOT a close. A
+      printed log from actual execution is a close.
+    entry_conditions:
+      - "IMPLEMENT complete"
+    exit_conditions:
+      - "relevant VERIFY nodes pass"
+      - "lint clean"
+      - "build succeeds (if applicable)"
+
+  - id: ARTIFACT
+    type: EVIDENCE
+    description: >
+      Capture a run artifact — actual printed output from live execution
+      proving the code works. "No setup detected" with condition values
+      printed IS an artifact. A timeout with no output is NOT.
+    entry_conditions:
+      - "VERIFY complete"
+    exit_conditions:
+      - "run artifact captured and referenced in trace.md"
+
+  - id: CLOSE-DEBT
+    type: SESSION
+    description: >
+      Update DEBT-LEDGER.md (OPEN -> CLOSED with commit hash + artifact ref).
+      Update trace.md AND current-state.md with session-end status block.
+      This is the only node that can mark a debt item as closed.
+    entry_conditions:
+      - "ARTIFACT complete"
+    exit_conditions:
+      - "DEBT-LEDGER.md updated (if a debt item was closed)"
+      - "trace.md updated with session-end status block"
+      - "current-state.md updated with session-end status block"
+      - "next session opening stated in one sentence"
+
+# ---------------------------------------------------------------------------
+# SESSION LIFECYCLE EDGES
+# ---------------------------------------------------------------------------
+# The only allowed path through a session. No shortcuts.
+
+session_edges:
+  - from: SESSION-START
+    to: RULE-ZERO
+    condition: "session objective identified"
+  - from: RULE-ZERO
+    to: IMPLEMENT
+    condition: "understanding logged to trace.md"
+  - from: IMPLEMENT
+    to: VERIFY
+    condition: "code changes written"
+  - from: VERIFY
+    to: ARTIFACT
+    condition: "verification nodes pass"
+  - from: ARTIFACT
+    to: CLOSE-DEBT
+    condition: "run artifact captured"
+  - from: CLOSE-DEBT
+    to: SESSION-START
+    condition: "next session opens (cross-session cycle)"
+    cross_session: true
+
+# ---------------------------------------------------------------------------
+# PHASE NODES
+# ---------------------------------------------------------------------------
+# Replace these with YOUR phases. Each has: skill, config, files_owned, deps,
+# status. Status is COMPLETE | IN_PROGRESS | PENDING.
+#
+# Template phases (adapt names/deps to your project):
+#   P0  build-foundation      deps: []
+#   P1  secrets-config        deps: []
+#   P2  platform-services     deps: []
+#   P3  hardening             deps: [P0, P1, P2]
+#   P4  cicd                  deps: [P0, P1, P2, P3]
+#   P5  signing-autoupdate    deps: [P4]
+#   P6  monitoring            deps: [P3]
+#   P7  e2e-testing           deps: [P0..P6]
+#   P8  deps-sast             deps: [P4]
+#   P9  agent-e2e             deps: [P7]
+#   P10 dashboard-e2e         deps: [P7]
+#   P11 postgres              deps: [P7]
+#   P12 docker                deps: [P11]
+#   P13 notifications-metrics deps: [P6]
+#   P14 backup-restore        deps: [P11]
+#   P15 load-testing          deps: [P13]
+#   P16 rbac                  deps: [P3]
+
+phase_nodes:
+  - id: P0
+    name: build-foundation
+    skill: .devin/skills/phase-0-build-foundation/SKILL.md
+    config: .devin/orchestration/phases/phase-0.conf
+    files_owned: "scripts/build-all.sh,scripts/check-artifacts.sh,Makefile"
+    deps: []
+    status: PENDING
+
+  - id: P1
+    name: secrets-config
+    skill: .devin/skills/phase-1-secrets-config/SKILL.md
+    config: .devin/orchestration/phases/phase-1.conf
+    files_owned: "scripts/generate-secrets.sh,scripts/validate-env.sh"
+    deps: []
+    status: PENDING
+
+  # ... add P2-P16 following the template above ...
+  # Example:
+  # - id: P2
+  #   name: platform-services
+  #   skill: .devin/skills/phase-2-platform-services/SKILL.md
+  #   config: .devin/orchestration/phases/phase-2.conf
+  #   files_owned: "src/platform/*"
+  #   deps: []
+  #   status: PENDING
+
+# ---------------------------------------------------------------------------
+# VERIFICATION NODES
+# ---------------------------------------------------------------------------
+# Replace with YOUR actual test/lint/build commands. Each command must be a
+# real shell command that runs in your repo. expected_output_contains is
+# optional but recommended for test commands.
+
+verification_nodes:
+  - id: V-TEST-UNIT
+    name: unit-tests
+    command: "npm test"  # or: pytest, go test, cargo test, etc.
+    expected_exit: 0
+    expected_output_contains: "pass"
+    component: C-MAIN
+
+  - id: V-LINT
+    name: lint
+    command: "npm run lint"  # or: ruff check, golangci-lint run, etc.
+    expected_exit: 0
+    component: C-MAIN
+
+  - id: V-BUILD
+    name: build
+    command: "npm run build"  # or: cargo build, go build, etc.
+    expected_exit: 0
+    expected_output_contains: "built"  # adapt to your build tool's output
+    component: C-MAIN
+
+  - id: V-ENV
+    name: environment-verification
+    command: "make verify-env"
+    expected_exit: 0
+    expected_output_contains: "PASS"
+    component: C-MAIN
+
+  # Add more verify nodes as needed — one per test suite, one per lint tool,
+  # one per build target. Examples:
+  # - id: V-E2E
+  #   name: e2e-tests
+  #   command: "npm run test:e2e"
+  #   expected_exit: 0
+  #   component: C-MAIN
+  # - id: V-SHELL-SYNTAX
+  #   name: shell-syntax-check
+  #   command: "bash -n scripts/*.sh"
+  #   expected_exit: 0
+  #   component: C-MAIN
+
+# ---------------------------------------------------------------------------
+# ENFORCEMENT PATH NODES
+# ---------------------------------------------------------------------------
+# These are YOUR critical product features — the things that must actually
+# work in production, not just pass tests. One node per critical feature.
+#
+# Status values (use HONESTLY — I3 enforces the highest tier):
+#   verified-on-hardware    — run artifact from real hardware/production (highest)
+#   verified-in-unit-test   — mocked tests pass
+#   verified-in-ci          — CI pipeline tests pass
+#   unverified              — no test coverage at all
+
+enforcement_paths:
+  - id: E-EXAMPLE-1
+    name: example-critical-feature
+    description: "TODO: Replace with your actual critical feature"
+    component: C-MAIN
+    entry_function: "src.module.function_name"
+    verified_by: [V-TEST-UNIT]
+    status: unverified
+    risk_notes: "TODO: What can go wrong in production that tests don't catch?"
+
+  # Add one ENFORCE node per critical feature. Examples:
+  # - id: E-AUTH
+  #   name: authentication
+  #   description: "User login + session management"
+  #   component: C-SERVER
+  #   entry_function: "src.auth.login"
+  #   verified_by: [V-TEST-UNIT, V-E2E]
+  #   status: verified-in-unit-test
+  #   risk_notes: "Token expiry edge cases; concurrent session limits"
+  # - id: E-PAYMENT
+  #   name: payment-processing
+  #   description: "Stripe charge + webhook handling"
+  #   component: C-SERVER
+  #   entry_function: "src.payments.charge"
+  #   verified_by: [V-TEST-UNIT]
+  #   status: unverified
+  #   risk_notes: "Idempotency; webhook replay; refund flow"
+
+# ---------------------------------------------------------------------------
+# COMPONENT NODES
+# ---------------------------------------------------------------------------
+# Replace with YOUR buildable components. If you have a monorepo with one
+# component, just use C-MAIN. If you have multiple (server, client, agent),
+# add one per component.
+
+component_nodes:
+  - id: C-MAIN
+    name: main
+    path: "."
+    build_command: "npm install"
+    verify_nodes: [V-TEST-UNIT, V-LINT, V-BUILD]
+
+  # Example for a multi-component project:
+  # - id: C-SERVER
+  #   name: server
+  #   path: server/
+  #   build_command: "cd server && npm install"
+  #   verify_nodes: [V-TEST-SERVER, V-LINT-SERVER]
+  # - id: C-CLIENT
+  #   name: client
+  #   path: client/
+  #   build_command: "cd client && npm install"
+  #   verify_nodes: [V-TEST-CLIENT, V-LINT-CLIENT, V-BUILD-CLIENT]
+
+# ---------------------------------------------------------------------------
+# DEBT ITEMS
+# ---------------------------------------------------------------------------
+# Tracked in docs/adr/DEBT-LEDGER.md. Each debt item has: id, description,
+# status (OPEN | CLOSED), close_criteria, and (when CLOSED) commit_ref +
+# artifact_ref. The `blocks` field lists enforcement paths this debt blocks.
+#
+# Seed this with the obvious gaps you find while adapting the graph.
+# Start with status: OPEN. Move to CLOSED only at CLOSE-DEBT with evidence.
+
+debt_items:
+  - id: D-001
+    description: "TODO: Replace with your first real debt item"
+    status: OPEN
+    close_criteria: "TODO: What must be true to close this?"
+    blocks: []
+    notes: "TODO: Why does this matter? What breaks if it's not fixed?"
+
+  # Example:
+  # - id: D-002
+  #   description: "No cross-session context persistence"
+  #   status: CLOSED
+  #   commit_ref: "abc1234"
+  #   artifact_ref: "trace.md created with session-end status block"
+  #   close_criteria: "trace.md exists and is updated at session end"
+  #   blocks: []
+
+# ---------------------------------------------------------------------------
+# INVARIANTS
+# ---------------------------------------------------------------------------
+# These mirror the assertions in graph_assert.py. Each is enforced by a
+# function in graph_assert.py that raises GraphViolationError on violation.
+
+invariants:
+  - id: I1
+    rule: phase_deps_must_be_complete
+    description: "No phase runs before its dependencies are COMPLETE"
+
+  - id: I2
+    rule: debt_close_requires_evidence
+    description: "No debt CLOSED without commit_ref + artifact_ref"
+
+  - id: I3
+    rule: hardware_verification_requires_real_artifact
+    description: "No enforcement path marked verified-on-hardware without a real artifact"
+
+  - id: I4
+    rule: session_close_requires_trace_update
+    description: "No session close without trace.md AND current-state.md status block update"
+
+  - id: I5
+    rule: rule_zero_before_code
+    description: "No code changes before RULE-ZERO complete"
+
+  - id: I6
+    rule: orchestrator_knows_all_phases
+    description: "Orchestrator must know about ALL phases in the graph"
+
+  - id: I7
+    rule: complete_phases_have_artifacts
+    description: "Every COMPLETE phase has a non-empty artifact reference"
+
+  # Goodhart's Law defense — structural minimums on gameable invariants.
+  # These prevent shallow compliance that passes the assertion but doesn't
+  # achieve the intent. Thresholds are deliberately low.
+  - id: I5-Q
+    rule: rule_zero_quality
+    description: "RULE-ZERO entry must have >=2 file path citations + >=1 Finding/Read line"
+
+  - id: I4-Q
+    rule: session_end_quality
+    description: "Each session-end section must have >=1 line of non-header content"
+
+  - id: I7-Q
+    rule: artifact_quality
+    description: "Each .complete file must contain a commit hash + test count"

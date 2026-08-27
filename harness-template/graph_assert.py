@@ -1,0 +1,640 @@
+"""
+graph_assert.py — Assertion engine for the node graph.
+
+Enforces the graph invariants defined in GRAPH-SPEC.yaml. Every agent
+session, every phase transition, and every debt closure must pass through
+this engine. Violations raise GraphViolationError and halt the pipeline.
+
+Usage:
+    from graph_assert import (
+        assert_phase_deps_met,
+        assert_debt_close_has_evidence,
+        assert_enforcement_path_status,
+        assert_rule_zero_complete,
+        assert_rule_zero_quality,
+        assert_session_closed_with_trace,
+        assert_session_end_quality,
+        assert_current_state_updated,
+        assert_artifact_quality,
+        assert_orchestrator_knows_all_phases,
+        assert_complete_phases_have_artifacts,
+        assert_all_invariants,
+        GraphViolationError,
+    )
+
+    # Before running a phase:
+    assert_phase_deps_met(graph, "P3")
+
+    # Before closing a debt item:
+    assert_debt_close_has_evidence(debt_item)
+
+    # Before writing code:
+    assert_rule_zero_complete(trace_path)
+
+    # At session end:
+    assert_session_closed_with_trace(trace_path)
+    assert_current_state_updated(current_state_path)
+
+    # Full sweep:
+    violations = assert_all_invariants(graph)
+
+This file is project-agnostic. It works with any GRAPH-SPEC.yaml that
+follows the template structure. No project-specific logic here.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+# Add parent to path for graph_loader import
+sys.path.insert(0, str(Path(__file__).parent))
+from graph_loader import (  # noqa: E402
+    are_phase_deps_met,
+    get_blocked_enforcement_paths,
+    get_debt_items,
+    get_enforcement_paths,
+    get_invariants,
+    get_open_debt_items,
+    get_phase,
+    get_phase_nodes,
+    load_graph,
+)
+
+
+# ---------------------------------------------------------------------------
+# Exception
+# ---------------------------------------------------------------------------
+
+
+class GraphViolationError(Exception):
+    """Raised when a graph invariant is violated.
+
+    The message includes:
+    - The invariant ID (e.g., I1, I2)
+    - The rule name
+    - What was checked
+    - What was found
+    """
+
+    def __init__(self, invariant_id: str, rule: str, description: str, detail: str):
+        self.invariant_id = invariant_id
+        self.rule = rule
+        self.description = description
+        self.detail = detail
+        super().__init__(f"[{invariant_id}] {rule}: {description}\n  → {detail}")
+
+
+# ---------------------------------------------------------------------------
+# Individual invariant assertions
+# ---------------------------------------------------------------------------
+
+
+def assert_phase_deps_met(graph: dict, phase_id: str) -> None:
+    """I1: No phase can run before its dependencies are COMPLETE.
+
+    Raises GraphViolationError if any dependency is not COMPLETE.
+    """
+    phase = get_phase(graph, phase_id)
+    if not phase:
+        raise GraphViolationError(
+            "I1", "phase_deps_must_be_complete",
+            f"Phase {phase_id} not found in graph",
+            "The phase ID does not exist in GRAPH-SPEC.yaml",
+        )
+    deps = phase.get("deps", [])
+    for dep_id in deps:
+        dep = get_phase(graph, dep_id)
+        if not dep:
+            raise GraphViolationError(
+                "I1", "phase_deps_must_be_complete",
+                f"Phase {phase_id} depends on {dep_id}, but {dep_id} not found",
+                f"Dependency {dep_id} does not exist in graph",
+            )
+        if dep.get("status") != "COMPLETE":
+            raise GraphViolationError(
+                "I1", "phase_deps_must_be_complete",
+                f"Phase {phase_id} depends on {dep_id}, but {dep_id} status is {dep.get('status')}",
+                f"Cannot run {phase_id} until {dep_id} is COMPLETE",
+            )
+
+
+def assert_debt_close_has_evidence(debt_item: dict) -> None:
+    """I2: No debt item can be CLOSED without commit_ref and artifact_ref.
+
+    Raises GraphViolationError if a CLOSED debt item lacks evidence.
+    """
+    if debt_item.get("status") == "CLOSED":
+        commit_ref = debt_item.get("commit_ref", "")
+        artifact_ref = debt_item.get("artifact_ref", "")
+        if not commit_ref:
+            raise GraphViolationError(
+                "I2", "debt_close_requires_evidence",
+                f"Debt item {debt_item['id']} is CLOSED but has no commit_ref",
+                f"Description: {debt_item.get('description', '—')}",
+            )
+        if not artifact_ref:
+            raise GraphViolationError(
+                "I2", "debt_close_requires_evidence",
+                f"Debt item {debt_item['id']} is CLOSED but has no artifact_ref",
+                f"Description: {debt_item.get('description', '—')}",
+            )
+
+
+def assert_rule_zero_complete(trace_path: Path) -> None:
+    """I5: No code changes before RULE-ZERO is complete.
+
+    Checks that trace.md has a RULE-ZERO entry for the current session
+    before any IMPLEMENT entry.
+
+    Raises GraphViolationError if RULE-ZERO was not logged before code changes.
+    """
+    if not trace_path.exists():
+        raise GraphViolationError(
+            "I5", "rule_zero_before_code",
+            "trace.md does not exist — RULE-ZERO was not completed",
+            "No session trace found. Read skill files and log understanding before coding.",
+        )
+    content = trace_path.read_text()
+    if "RULE-ZERO" not in content and "Rule Zero" not in content:
+        raise GraphViolationError(
+            "I5", "rule_zero_before_code",
+            "trace.md has no RULE-ZERO entry — understanding was not logged before coding",
+            "Read the relevant skill file(s) and source code, then log understanding to trace.md.",
+        )
+
+
+def assert_session_closed_with_trace(trace_path: Path) -> None:
+    """I4: No session can close without updating trace.md.
+
+    Checks that trace.md has a session-end status block with all 6 required
+    section headers.
+
+    Raises GraphViolationError if the trace is missing the status block.
+    """
+    if not trace_path.exists():
+        raise GraphViolationError(
+            "I4", "session_close_requires_trace_update",
+            "trace.md does not exist at session close",
+            "Session cannot close without a trace update.",
+        )
+    content = trace_path.read_text()
+    required_sections = [
+        "Fog cleared",
+        "Fog remaining",
+        "Debt items closed",
+        "Debt items still open",
+        "Blockers",
+        "Next session",
+    ]
+    missing = [s for s in required_sections if s not in content]
+    if missing:
+        raise GraphViolationError(
+            "I4", "session_close_requires_trace_update",
+            f"trace.md missing session-end sections: {', '.join(missing)}",
+            "Session-end status block must include all required sections.",
+        )
+
+
+def assert_current_state_updated(current_state_path: Path) -> None:
+    """I4 (extended): No session can close without updating current-state.md.
+
+    Checks that current-state.md has a session-end status block with the
+    same required sections as trace.md. This ensures the compact summary
+    file stays in sync with the full trace.
+
+    Raises GraphViolationError if current-state.md is missing the status block.
+    """
+    if not current_state_path.exists():
+        raise GraphViolationError(
+            "I4", "current_state_requires_update",
+            "current-state.md does not exist at session close",
+            "Session cannot close without updating current-state.md.",
+        )
+    content = current_state_path.read_text()
+    required_sections = [
+        "Fog cleared",
+        "Fog remaining",
+        "Debt items closed",
+        "Debt items still open",
+        "Blockers",
+        "Next session",
+    ]
+    missing = [s for s in required_sections if s not in content]
+    if missing:
+        raise GraphViolationError(
+            "I4", "current_state_requires_update",
+            f"current-state.md missing session-end sections: {', '.join(missing)}",
+            "current-state.md must include the same session-end status block as trace.md.",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Goodhart's Law defense — structural quality minimums
+# These prevent the laziest gaming of I4, I5, I7 without requiring a
+# semantic evaluator. Thresholds are deliberately low.
+# ---------------------------------------------------------------------------
+
+
+def _extract_last_rule_zero_block(content: str) -> str:
+    """Extract the content of the last RULE-ZERO entry in trace.md.
+
+    Finds the last occurrence of a RULE-ZERO header and returns all content
+    until the next '---' separator or '## ' header.
+    Returns empty string if no RULE-ZERO entry found.
+    """
+    pattern = r"###\s+(?:RULE-ZERO|Rule Zero)"
+    matches = list(re.finditer(pattern, content))
+    if not matches:
+        return ""
+    last_match = matches[-1]
+    start = last_match.end()
+    rest = content[start:]
+    end_match = re.search(r"^---\s*$|^##\s", rest, re.MULTILINE)
+    if end_match:
+        return rest[: end_match.start()]
+    return rest
+
+
+def assert_rule_zero_quality(trace_path: Path) -> None:
+    """I5 (strengthened): RULE-ZERO entry must have structural quality.
+
+    Checks that the last RULE-ZERO entry in trace.md has:
+    - At least 2 file path references (lines containing '/' or '\\' starting with '-')
+    - At least 1 'Finding' or 'Read' line
+
+    This prevents shallow compliance where an agent writes "RULE-ZERO done"
+    without actually reading source files or synthesizing findings.
+
+    Raises GraphViolationError if the quality minimums are not met.
+    """
+    if not trace_path.exists():
+        raise GraphViolationError(
+            "I5", "rule_zero_quality",
+            "trace.md does not exist — cannot check RULE-ZERO quality",
+            "Read skill files and source code, then log understanding to trace.md.",
+        )
+    content = trace_path.read_text()
+    block = _extract_last_rule_zero_block(content)
+    if not block:
+        raise GraphViolationError(
+            "I5", "rule_zero_quality",
+            "No RULE-ZERO entry found in trace.md",
+            "Add a '### RULE-ZERO — Understanding logged before code changes' section.",
+        )
+    file_path_lines = [
+        line for line in block.splitlines()
+        if ("/" in line or "\\" in line) and line.strip().startswith("-")
+    ]
+    if len(file_path_lines) < 2:
+        raise GraphViolationError(
+            "I5", "rule_zero_quality",
+            f"RULE-ZERO entry has only {len(file_path_lines)} file path reference(s), need >=2",
+            "Cite at least 2 source files you read (lines starting with '- **Read**:').",
+        )
+    has_finding = bool(re.search(r"\*\*Finding\*\*|\*\*Read\*\*", block))
+    if not has_finding:
+        raise GraphViolationError(
+            "I5", "rule_zero_quality",
+            "RULE-ZERO entry has no 'Finding' or 'Read' line",
+            "Include at least 1 '- **Read**:' or '- **Finding**:' line.",
+        )
+
+
+def assert_session_end_quality(trace_path: Path) -> None:
+    """I4 (strengthened): Session-end block must have content under each section.
+
+    Checks that the last session-end status block in trace.md has at least
+    1 line of non-header content under each of the 6 required sections.
+
+    This prevents shallow compliance where an agent writes the section headers
+    but leaves them empty.
+
+    Raises GraphViolationError if any section has no content.
+    """
+    if not trace_path.exists():
+        raise GraphViolationError(
+            "I4", "session_end_quality",
+            "trace.md does not exist — cannot check session-end quality",
+            "Session cannot close without a trace update.",
+        )
+    content = trace_path.read_text()
+    required_sections = [
+        "Fog cleared",
+        "Fog remaining",
+        "Debt items closed",
+        "Debt items still open",
+        "Blockers",
+        "Next session",
+    ]
+    for section in required_sections:
+        pattern = rf"###\s+{re.escape(section)}"
+        matches = list(re.finditer(pattern, content))
+        if not matches:
+            raise GraphViolationError(
+                "I4", "session_end_quality",
+                f"Session-end section '{section}' not found in trace.md",
+                "All 6 required sections must be present.",
+            )
+        last = matches[-1]
+        after = content[last.end():]
+        end_match = re.search(r"^###\s|^##\s|^---\s*$", after, re.MULTILINE)
+        section_content = after[: end_match.start()] if end_match else after
+        content_lines = [
+            line for line in section_content.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        if len(content_lines) < 1:
+            raise GraphViolationError(
+                "I4", "session_end_quality",
+                f"Session-end section '{section}' has no content",
+                f"Add at least 1 line of content under the '{section}' header.",
+            )
+
+
+def assert_artifact_quality(results_dir: Path) -> None:
+    """I7 (strengthened): .complete files must have commit hash + test count.
+
+    Checks that each results/phase-N.complete file contains:
+    - A commit hash pattern (7+ hexadecimal characters)
+    - A test count (digits followed by 'test' or 'pass')
+
+    This prevents shallow compliance where 'tests pass' is written without
+    a commit hash, or a commit hash is written without evidence of tests.
+
+    Raises GraphViolationError if any .complete file lacks quality.
+    """
+    if not results_dir.exists():
+        raise GraphViolationError(
+            "I7", "artifact_quality",
+            f"Results directory not found: {results_dir}",
+            "The results directory must exist with phase completion markers.",
+        )
+    no_commit = []
+    no_tests = []
+    for f in sorted(results_dir.glob("phase-*.complete")):
+        content = f.read_text()
+        if not re.search(r"\b[0-9a-f]{7,}\b", content):
+            no_commit.append(f.name)
+        if not re.search(r"\d+.*(?:test|pass)", content, re.IGNORECASE):
+            no_tests.append(f.name)
+    if no_commit:
+        raise GraphViolationError(
+            "I7", "artifact_quality",
+            f"Completion markers without commit hash: {', '.join(no_commit)}",
+            "Each .complete file must contain a git commit hash (7+ hex chars).",
+        )
+    if no_tests:
+        raise GraphViolationError(
+            "I7", "artifact_quality",
+            f"Completion markers without test count: {', '.join(no_tests)}",
+            "Each .complete file must contain a test count (digits + 'test' or 'pass').",
+        )
+
+
+def assert_orchestrator_knows_all_phases(graph: dict, orchestrator_path: Path) -> None:
+    """I6: Orchestrator must know about ALL phases in the graph.
+
+    Checks that orchestrator.sh includes all phase IDs from the graph.
+
+    Raises GraphViolationError if any phase is missing from the orchestrator.
+    """
+    if not orchestrator_path.exists():
+        raise GraphViolationError(
+            "I6", "orchestrator_knows_all_phases",
+            f"Orchestrator script not found at {orchestrator_path}",
+            "The orchestrator script must exist and know about all phases.",
+        )
+    content = orchestrator_path.read_text()
+    phases = get_phase_nodes(graph)
+    missing = []
+    for phase in phases:
+        phase_num = phase["id"].replace("P", "")
+        if f"[{phase_num}]=" not in content and f'"{phase_num}"' not in content:
+            if f" {phase_num})" not in content and f" {phase_num} " not in content:
+                missing.append(phase["id"])
+    if missing:
+        raise GraphViolationError(
+            "I6", "orchestrator_knows_all_phases",
+            f"Orchestrator is missing phases: {', '.join(missing)}",
+            f"Update orchestrator.sh to include all {len(phases)} phases.",
+        )
+
+
+def assert_complete_phases_have_artifacts(results_dir: Path) -> None:
+    """I7: Every phase marked COMPLETE must have a non-empty artifact reference.
+
+    Checks that each results/phase-N.complete file is non-empty and contains
+    a commit hash reference.
+
+    Raises GraphViolationError if any .complete file is empty or lacks a commit ref.
+    """
+    if not results_dir.exists():
+        raise GraphViolationError(
+            "I7", "complete_phases_have_artifacts",
+            f"Results directory not found: {results_dir}",
+            "The results directory must exist with phase completion markers.",
+        )
+    empty_files = []
+    no_commit = []
+    for f in sorted(results_dir.glob("phase-*.complete")):
+        content = f.read_text().strip()
+        if not content:
+            empty_files.append(f.name)
+        elif "commit" not in content.lower() and "hash" not in content.lower():
+            no_commit.append(f.name)
+    if empty_files:
+        raise GraphViolationError(
+            "I7", "complete_phases_have_artifacts",
+            f"Empty completion markers: {', '.join(empty_files)}",
+            "Each .complete file must contain a commit hash + artifact reference.",
+        )
+    if no_commit:
+        raise GraphViolationError(
+            "I7", "complete_phases_have_artifacts",
+            f"Completion markers without commit ref: {', '.join(no_commit)}",
+            "Each .complete file must reference a commit hash.",
+        )
+
+
+# ---------------------------------------------------------------------------
+# I3: Enforcement path status tracking
+# ---------------------------------------------------------------------------
+
+VALID_ENFORCEMENT_STATUSES = {
+    "verified-on-hardware",
+    "verified-in-unit-test",
+    "verified-in-ci",
+    "unverified",
+}
+
+
+def assert_enforcement_path_status(graph: dict) -> None:
+    """I3: Enforcement path statuses are valid and consistent.
+
+    Checks:
+    1. Every enforcement path has a valid status from the enum
+    2. No path marked 'verified-on-hardware' without a hardware_artifact_ref
+    3. No blocked path (from open debt items) marked as 'verified-on-hardware'
+
+    Raises GraphViolationError on any violation.
+    """
+    paths = get_enforcement_paths(graph)
+    blocked = get_blocked_enforcement_paths(graph)
+    blocked_ids = {p["id"] for p in blocked}
+
+    for path in paths:
+        path_id = path["id"]
+        status = path.get("status", "")
+
+        if status not in VALID_ENFORCEMENT_STATUSES:
+            raise GraphViolationError(
+                "I3", "enforcement_path_status_valid",
+                f"Enforcement path {path_id} has invalid status '{status}'",
+                f"Status must be one of: {', '.join(sorted(VALID_ENFORCEMENT_STATUSES))}",
+            )
+
+        if status == "verified-on-hardware":
+            artifact_ref = path.get("hardware_artifact_ref", "")
+            if not artifact_ref:
+                raise GraphViolationError(
+                    "I3", "hardware_verification_requires_real_artifact",
+                    f"Enforcement path {path_id} marked 'verified-on-hardware' "
+                    f"without hardware_artifact_ref",
+                    "Add a hardware_artifact_ref pointing to a real run artifact.",
+                )
+
+        if path_id in blocked_ids and status == "verified-on-hardware":
+            raise GraphViolationError(
+                "I3", "blocked_path_not_hardware_verified",
+                f"Enforcement path {path_id} is blocked by open debt but marked "
+                f"'verified-on-hardware'",
+                "Resolve the blocking debt items before claiming hardware verification.",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Full sweep
+# ---------------------------------------------------------------------------
+
+
+def assert_all_invariants(
+    graph: dict,
+    trace_path: Path | None = None,
+    current_state_path: Path | None = None,
+    results_dir: Path | None = None,
+    orchestrator_path: Path | None = None,
+) -> list[GraphViolationError]:
+    """Run all invariant checks and return a list of violations.
+
+    Does NOT raise — collects all violations and returns them. This is
+    useful for a full audit. Callers that want to halt on the first
+    violation should call the individual assert_* functions instead.
+
+    Args:
+        graph: The loaded graph dict (from graph_loader.load_graph).
+        trace_path: Path to trace.md. If None, skips trace-based checks.
+        current_state_path: Path to current-state.md. If None, skips that check.
+        results_dir: Path to results/ directory. If None, skips artifact checks.
+        orchestrator_path: Path to orchestrator.sh. If None, skips I6.
+    """
+    violations: list[GraphViolationError] = []
+
+    # I1: Phase deps
+    for phase in get_phase_nodes(graph):
+        try:
+            assert_phase_deps_met(graph, phase["id"])
+        except GraphViolationError as e:
+            violations.append(e)
+
+    # I2: Debt close evidence
+    for debt in get_debt_items(graph):
+        try:
+            assert_debt_close_has_evidence(debt)
+        except GraphViolationError as e:
+            violations.append(e)
+
+    # I3: Enforcement path status
+    try:
+        assert_enforcement_path_status(graph)
+    except GraphViolationError as e:
+        violations.append(e)
+
+    # I4: Session close trace + current-state
+    if trace_path:
+        try:
+            assert_session_closed_with_trace(trace_path)
+        except GraphViolationError as e:
+            violations.append(e)
+        try:
+            assert_session_end_quality(trace_path)
+        except GraphViolationError as e:
+            violations.append(e)
+    if current_state_path:
+        try:
+            assert_current_state_updated(current_state_path)
+        except GraphViolationError as e:
+            violations.append(e)
+
+    # I5: Rule Zero
+    if trace_path:
+        try:
+            assert_rule_zero_complete(trace_path)
+        except GraphViolationError as e:
+            violations.append(e)
+        try:
+            assert_rule_zero_quality(trace_path)
+        except GraphViolationError as e:
+            violations.append(e)
+
+    # I6: Orchestrator knows all phases
+    if orchestrator_path:
+        try:
+            assert_orchestrator_knows_all_phases(graph, orchestrator_path)
+        except GraphViolationError as e:
+            violations.append(e)
+
+    # I7: Complete phases have artifacts
+    if results_dir:
+        try:
+            assert_complete_phases_have_artifacts(results_dir)
+        except GraphViolationError as e:
+            violations.append(e)
+        try:
+            assert_artifact_quality(results_dir)
+        except GraphViolationError as e:
+            violations.append(e)
+
+    return violations
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    graph = load_graph()
+    graph_dir = Path(__file__).parent
+    trace_path = graph_dir / "trace.md"
+    current_state_path = graph_dir / "current-state.md"
+    # results_dir and orchestrator_path are project-relative — adjust as needed
+    results_dir = graph_dir.parent / "orchestration" / "results"
+    orchestrator_path = graph_dir.parent / "orchestration" / "orchestrator.sh"
+
+    violations = assert_all_invariants(
+        graph,
+        trace_path=trace_path,
+        current_state_path=current_state_path,
+        results_dir=results_dir,
+        orchestrator_path=orchestrator_path,
+    )
+
+    if not violations:
+        print("✓ All graph invariants pass.")
+        sys.exit(0)
+    else:
+        print(f"✗ {len(violations)} graph invariant violation(s):")
+        for v in violations:
+            print(f"\n{v}")
+        sys.exit(1)

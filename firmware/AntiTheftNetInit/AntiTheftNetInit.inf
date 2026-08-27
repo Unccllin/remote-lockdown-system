@@ -1,0 +1,44 @@
+## @file
+# Anti-Theft Network Driver Loader
+#
+# Manually loads network drivers from FV and tests HTTP.
+##
+
+[Defines]
+  INF_VERSION                = 0x00010006
+  BASE_NAME                  = AntiTheftNetInit
+  FILE_GUID                  = F7A8B9C0-D1E2-4345-A012-456789ABCDEF
+  MODULE_TYPE                = UEFI_APPLICATION
+  VERSION_STRING             = 0.1
+  ENTRY_POINT                = AntiTheftNetInitEntryPoint
+
+[Sources]
+  AntiTheftNetInit.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  NetworkPkg/NetworkPkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  MemoryAllocationLib
+  BaseMemoryLib
+  DevicePathLib
+
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleNetworkProtocolGuid
+  gEfiHttpServiceBindingProtocolGuid
+  gEfiHttpProtocolGuid
+  gEfiManagedNetworkServiceBindingProtocolGuid
+  gEfiManagedNetworkProtocolGuid
+  gEfiArpServiceBindingProtocolGuid
+  gEfiDhcp4ServiceBindingProtocolGuid
+  gEfiIp4ServiceBindingProtocolGuid
+  gEfiTcp4ServiceBindingProtocolGuid
+  gEfiDns4ServiceBindingProtocolGuid
+  gEfiIp4Config2ProtocolGuid
