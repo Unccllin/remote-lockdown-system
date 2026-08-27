@@ -226,6 +226,53 @@ def assert_current_state_updated(current_state_path: Path) -> None:
         )
 
 
+def assert_current_state_compact(current_state_path: Path) -> None:
+    """I4 (compactness): current-state.md must not accumulate old session blocks.
+
+    current-state.md is a GENERATED artifact (produced by
+    `scripts/graph_session.py generate-current-state`). It should contain
+    only ONE session block ("## Latest session"), not a growing list of
+    "## Previous session" blocks. Old sessions live in trace.md and the
+    trace archives — current-state.md is the compact view.
+
+    This invariant prevents the bloat that occurs when agents manually
+    append "Previous session" blocks without removing old ones (the file
+    grew from ~70 lines to 633, causing session-start lag).
+
+    Raises GraphViolationError if current-state.md contains
+    "## Previous session" headers or exceeds 300 lines.
+    """
+    if not current_state_path.exists():
+        raise GraphViolationError(
+            "I4", "current_state_compact",
+            "current-state.md does not exist",
+            "Run `make gen-state` to generate it from trace.md.",
+        )
+    content = current_state_path.read_text()
+    line_count = content.count("\n")
+
+    # Check for accumulated "Previous session" blocks
+    prev_session_count = len(re.findall(r"^##\s+Previous\s+session", content, re.MULTILINE))
+    if prev_session_count > 0:
+        raise GraphViolationError(
+            "I4", "current_state_compact",
+            f"current-state.md has {prev_session_count} 'Previous session' block(s) — "
+            f"should have 0. Old sessions belong in trace.md, not current-state.md.",
+            "Run `make gen-state` to regenerate current-state.md from trace.md "
+            "(this removes old session blocks automatically).",
+        )
+
+    # Check line count — the file should be compact (~70-200 lines)
+    if line_count > 300:
+        raise GraphViolationError(
+            "I4", "current_state_compact",
+            f"current-state.md is {line_count} lines — exceeds 300 line compactness limit. "
+            f"The file is a generated compact summary, not a full history.",
+            "Run `make gen-state` to regenerate, and `make archive-trace` if "
+            "trace.md itself is too large.",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Goodhart's Law defense — structural quality minimums (Q1 resolution)
 # These prevent the laziest gaming of I4, I5, I7 without requiring a
@@ -582,6 +629,13 @@ def assert_all_invariants(graph: dict | None = None) -> list[str]:
         except GraphViolationError as e:
             violations.append(str(e))
 
+    # I4 (compactness): Check current-state.md hasn't bloated with old sessions
+    if current_state_path.exists():
+        try:
+            assert_current_state_compact(current_state_path)
+        except GraphViolationError as e:
+            violations.append(str(e))
+
     # I4 (strengthened): Check session-end block has content under each section
     if trace_path.exists():
         try:
@@ -620,6 +674,109 @@ def assert_all_invariants(graph: dict | None = None) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Convergence report (Path A: surface the real gaps, don't just assert state)
+# ---------------------------------------------------------------------------
+
+
+def report_convergence(graph: dict | None = None) -> dict:
+    """Compute the project's convergence state — what's done vs. what's left.
+
+    This is NOT an assertion (it never raises). It's a reporting function that
+    surfaces the real remaining work, which the declared status ("all phases
+    COMPLETE, all debt CLOSED") can obscure.
+
+    The three convergence dimensions:
+      1. Phases:       all 17 must be COMPLETE
+      2. Debt:         all debt items must be CLOSED
+      3. Enforcement:  all 13 paths must be verified-on-hardware
+
+    The project is "converged" only when all three reach 100%. Right now
+    enforcement paths are the gap — most are verified-in-unit-test only.
+    """
+    if graph is None:
+        graph = load_graph()
+
+    phases = get_phase_nodes(graph)
+    debts = get_debt_items(graph)
+    enforcement = get_enforcement_paths(graph)
+
+    phases_complete = sum(1 for p in phases if p.get("status") == "COMPLETE")
+    debts_closed = sum(1 for d in debts if d.get("status") == "CLOSED")
+    enforce_on_hw = sum(1 for e in enforcement if e.get("status") == "verified-on-hardware")
+    enforce_in_unit = sum(1 for e in enforcement if e.get("status") == "verified-in-unit-test")
+    enforce_unverified = sum(1 for e in enforcement if e.get("status") == "unverified")
+
+    # The enforcement paths that still need hardware verification
+    enforce_gap = [
+        {
+            "id": e["id"],
+            "name": e.get("name", ""),
+            "status": e.get("status", "?"),
+            "risk_notes": e.get("risk_notes", ""),
+        }
+        for e in enforcement
+        if e.get("status") != "verified-on-hardware"
+    ]
+
+    converged = (
+        phases_complete == len(phases)
+        and debts_closed == len(debts)
+        and enforce_on_hw == len(enforcement)
+    )
+
+    return {
+        "phases": {"complete": phases_complete, "total": len(phases)},
+        "debt": {"closed": debts_closed, "total": len(debts)},
+        "enforcement": {
+            "on_hardware": enforce_on_hw,
+            "in_unit_test": enforce_in_unit,
+            "unverified": enforce_unverified,
+            "total": len(enforcement),
+        },
+        "enforcement_gap": enforce_gap,
+        "converged": converged,
+    }
+
+
+def print_convergence_report() -> None:
+    """Print a human-readable convergence report to stdout."""
+    report = report_convergence()
+
+    print("=== Graph Convergence Report ===")
+    print()
+    print(f"  Phases:       {report['phases']['complete']}/{report['phases']['total']} COMPLETE")
+    print(f"  Debt:         {report['debt']['closed']}/{report['debt']['total']} CLOSED")
+    print(
+        f"  Enforcement:  {report['enforcement']['on_hardware']}/{report['enforcement']['total']} "
+        f"verified-on-hardware"
+    )
+    print(
+        f"                {report['enforcement']['in_unit_test']} verified-in-unit-test, "
+        f"{report['enforcement']['unverified']} unverified"
+    )
+    print()
+
+    if report["converged"]:
+        print("  ✓ Project CONVERGED — all dimensions at 100%.")
+    else:
+        print("  ✗ Project NOT CONVERGED — remaining gaps:")
+        print()
+        if report["phases"]["complete"] < report["phases"]["total"]:
+            print(f"     • {report['phases']['total'] - report['phases']['complete']} phase(s) not COMPLETE")
+        if report["debt"]["closed"] < report["debt"]["total"]:
+            print(f"     • {report['debt']['total'] - report['debt']['closed']} debt item(s) not CLOSED")
+        if report["enforcement"]["on_hardware"] < report["enforcement"]["total"]:
+            gap = report["enforcement"]["total"] - report["enforcement"]["on_hardware"]
+            print(f"     • {gap} enforcement path(s) need hardware verification:")
+            for e in report["enforcement_gap"]:
+                print(f"         - {e['id']:12} {e['name']:30} status={e['status']}")
+                if e["risk_notes"]:
+                    print(f"           notes: {e['risk_notes'][:80]}")
+    print()
+    print(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -637,9 +794,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Run all invariant checks (default if no other flag given).",
     )
+    parser.add_argument(
+        "--convergence",
+        action="store_true",
+        help="Print convergence report (phases, debt, enforcement gaps). Never raises.",
+    )
     args = parser.parse_args()
 
-    if args.assert_phase_deps:
+    if args.convergence:
+        print_convergence_report()
+        sys.exit(0)
+    elif args.assert_phase_deps:
         # Single-phase dependency check
         phase_id = args.assert_phase_deps
         graph = load_graph()
