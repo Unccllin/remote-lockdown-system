@@ -206,6 +206,16 @@ async function query(sql, params) {
   const translated = translateSql(sql);
   let cleanParams = expandParams(sql, params || []);
 
+  // SQLite doesn't auto-serialize JS objects like pg does for JSONB columns.
+  // Without this, objects are stored as "[object Object]" (the bug that
+  // caused audit_log detail to be unreadable). Stringify any object param
+  // so it's stored as valid JSON text in the column.
+  cleanParams = cleanParams.map((p) =>
+    p != null && typeof p === 'object' && !(p instanceof Date) && !Buffer.isBuffer(p)
+      ? JSON.stringify(p)
+      : p
+  );
+
   // Some translations strip placeholders (e.g. pg_try_advisory_lock($1) →
   // SELECT 1). If the translated SQL has fewer ? placeholders than we have
   // params, trim to match — otherwise sqlite3 throws SQLITE_RANGE.

@@ -4,10 +4,11 @@ const { runMigrations } = require('./migrationRunner');
 const logger = require('../logger');
 
 async function migrate() {
+  const dialect = process.env.USE_SQLITE === 'true' ? 'sqlite' : 'pg';
   const client = await pool.connect();
   try {
-    logger.info('Running migrations...');
-    await runMigrations(client);
+    logger.info({ dialect }, 'Running migrations...');
+    await runMigrations(client, { dialect });
     logger.info('Migrations complete.');
   } finally {
     client.release();

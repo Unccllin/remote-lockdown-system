@@ -260,6 +260,11 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
     return res.status(400).json({ error: 'hostname, command_id, result_status required. Include all three fields in the request body.' });
   }
 
+  // Validate key_material is a string (not an object) — encryptField expects a string
+  if (key_material != null && typeof key_material !== 'string') {
+    return res.status(400).json({ error: 'key_material must be a string (base64-encoded key), not an object or array.' });
+  }
+
   // Phase 5: Validate result_status — only allow known values
   const VALID_STATUSES = ['executed', 'failed', 'not_now'];
   if (!VALID_STATUSES.includes(result_status)) {
@@ -270,6 +275,34 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
 
   const device = req.device || await findDevice(hostname, mac_address, hardware_uuid);
   if (!device) return res.status(404).json({ error: 'Device not registered. Enroll the device first via POST /api/devices, or verify the hostname and hardware identity fields match an enrolled device.' });
+
+  // 009: Look up command_type before the transaction so we can compute
+  // lockdown_effective once and reuse it in the UPDATE, audit log, and
+  // notification. Commands are immutable (only status changes), so reading
+  // command_type outside the transaction is safe.
+  const cmdTypeRow = await pool.query('SELECT command_type FROM commands WHERE id = $1 AND device_id = $2', [command_id, device.id]);
+  const cmdType = cmdTypeRow.rows[0]?.command_type;
+
+  // 009: Compute lockdown_effective — used in the UPDATE query, the audit
+  // log, and the notification. This flags the dangerous case where the
+  // agent ACKed "executed" but boot lockdown silently no-op'd
+  // (critical_applied=0 with partial status).
+  //
+  // Semantics:
+  //   - null: not a lockdown command, not executed, or boot lock was not
+  //     attempted (not applicable)
+  //   - true: boot lockdown was attempted AND at least one critical setting
+  //     was applied across BCD + HP UEFI layers
+  //   - false: boot lockdown was attempted BUT zero critical settings were
+  //     applied — the device is encrypted-only, not boot-locked
+  let lockdownEffective = null;
+  if (result_status === 'executed' && cmdType === 'lockdown' && boot_lock_detail) {
+    const attempted = boot_lock_detail.boot_lock_attempted === true;
+    const critTotal = boot_lock_detail.critical_applied_total || 0;
+    if (attempted) {
+      lockdownEffective = critTotal > 0;
+    }
+  }
 
   // Phase 5: If command_uuid is provided, check for duplicate ACK.
   // This allows the agent to retry safely — if we've already seen this
@@ -289,17 +322,26 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
     await withTransaction(async (client) => {
       // A4: Update command status (idempotent — if already executed, no-op)
       // Phase 5: Also store command_uuid if provided
+      // 009: Persist boot_lock_status, boot_lock_detail, lockdown_effective
+      //   so enforcement path results are queryable from the DB, not just
+      //   visible in server notification logs.
+      //   lockdownEffective was computed above (before the transaction).
+
       if (command_uuid) {
         await client.query(
-          `UPDATE commands SET status = $1, executed_at = NOW(), command_uuid = $2
-           WHERE id = $3 AND device_id = $4`,
-          [result_status, command_uuid, command_id, device.id]
+          `UPDATE commands SET status = $1, executed_at = NOW(), command_uuid = $2,
+             boot_lock_status = $3, boot_lock_detail = $4, lockdown_effective = $5
+           WHERE id = $6 AND device_id = $7`,
+          [result_status, command_uuid, boot_lock_status || null,
+           boot_lock_detail || null, lockdownEffective, command_id, device.id]
         );
       } else {
         await client.query(
-          `UPDATE commands SET status = $1, executed_at = NOW()
-           WHERE id = $2 AND device_id = $3`,
-          [result_status, command_id, device.id]
+          `UPDATE commands SET status = $1, executed_at = NOW(),
+             boot_lock_status = $2, boot_lock_detail = $3, lockdown_effective = $4
+           WHERE id = $5 AND device_id = $6`,
+          [result_status, boot_lock_status || null,
+           boot_lock_detail || null, lockdownEffective, command_id, device.id]
         );
       }
 
@@ -363,30 +405,8 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
       }
 
       if (result_status === 'executed') {
-        const cmdResult = await client.query('SELECT command_type FROM commands WHERE id = $1', [command_id]);
-        const cmdType = cmdResult.rows[0]?.command_type;
-
-        // Phase 17: Compute lockdown_effective for lockdown commands.
-        // This flags the dangerous case where the agent ACKed "executed" but
-        // boot lockdown silently no-op'd (critical_applied=0 with partial status).
-        // Without this, the dashboard shows "locked" while the machine boots
-        // normally from USB — the encryption key is the only remaining barrier.
-        //
-        // Semantics:
-        //   - null: not a lockdown command, or boot lock was not attempted
-        //     (boot_lock_enabled=false in agent config) — not applicable
-        //   - true: boot lockdown was attempted AND at least one critical
-        //     setting was applied across BCD + HP UEFI layers
-        //   - false: boot lockdown was attempted BUT zero critical settings
-        //     were applied — the device is encrypted-only, not boot-locked
-        let lockdownEffective = null;
-        if (cmdType === 'lockdown' && boot_lock_detail) {
-          const attempted = boot_lock_detail.boot_lock_attempted === true;
-          const critTotal = boot_lock_detail.critical_applied_total || 0;
-          if (attempted) {
-            lockdownEffective = critTotal > 0;
-          }
-        }
+        // cmdType and lockdownEffective were already computed above
+        // (before the transaction). No need to re-query command_type here.
 
         await client.query(
           'INSERT INTO audit_log (device_id, action, detail) VALUES ($1, $2, $3)',
@@ -425,20 +445,12 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
     //   - lockdown confirmed → device is now encrypted and locked down
     //   - unlock confirmed   → device has been successfully recovered
     if (result_status === 'executed') {
-      const cmdTypeRow = await pool.query('SELECT command_type FROM commands WHERE id = $1', [command_id]);
-      const cmdType = cmdTypeRow.rows[0]?.command_type;
+      // cmdType and lockdownEffective were already computed above
+      // (before the transaction). Reuse them here for the notification.
       if (cmdType === 'lockdown') {
         // Phase 17: Include lockdown_effective + boot_lock_detail in the
         // notification so notification channels (email/Slack) can flag
         // ineffective lockdowns, not just the dashboard.
-        let lockdownEffective = null;
-        if (boot_lock_detail) {
-          const attempted = boot_lock_detail.boot_lock_attempted === true;
-          const critTotal = boot_lock_detail.critical_applied_total || 0;
-          if (attempted) {
-            lockdownEffective = critTotal > 0;
-          }
-        }
         sendNotification('agent_lockdown_confirmed', {
           deviceId: device.id, hostname: device.hostname,
           commandId: command_id, bootLockStatus: boot_lock_status,
@@ -692,5 +704,107 @@ function compareVersions(a, b) {
   }
   return 0;
 }
+
+/**
+ * POST /api/agent/uninstall-auth — Issue a short-lived uninstall token.
+ *
+ * The agent calls this when a local admin wants to uninstall the agent.
+ * The server issues a token valid for 5 minutes. The local uninstall
+ * script must present this token to remove tamper protection (ACLs,
+ * registry DENY ACEs) before deleting the agent.
+ *
+ * Accepts either agent API key (x-agent-key) or admin bearer token.
+ */
+router.post('/uninstall-auth', async (req, res) => {
+  const crypto = require('crypto');
+  const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+
+  // Accept either agent API key or admin bearer token
+  const agentKey = req.headers['x-agent-key'];
+  const bearerToken = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
+
+  let authorized = false;
+  if (agentKey) {
+    try {
+      const providedHash = hashApiKey(agentKey);
+      const device = await getDeviceByApiKeyHash(providedHash);
+      authorized = !!device;
+    } catch { authorized = false; }
+  }
+  if (!authorized && bearerToken && ADMIN_TOKEN) {
+    authorized = bearerToken === ADMIN_TOKEN;
+  }
+
+  if (!authorized) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  // Generate a short-lived token: HMAC-SHA256 of (timestamp_rounded_to_5min + ADMIN_TOKEN)
+  const now = Math.floor(Date.now() / 1000);
+  const window = Math.floor(now / 300) * 300; // 5-minute window
+  const uninstallToken = crypto
+    .createHmac('sha256', ADMIN_TOKEN || 'fallback')
+    .update(String(window))
+    .digest('hex');
+
+  res.json({
+    uninstall_token: uninstallToken,
+    expires_in: 300,
+    issued_at: new Date().toISOString(),
+  });
+});
+
+/**
+ * POST /api/agent/uninstall-auth/verify — Verify an uninstall token.
+ *
+ * Checks if the token is valid (within the current or previous 5-minute window).
+ */
+router.post('/uninstall-auth/verify', async (req, res) => {
+  const crypto = require('crypto');
+  const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+
+  const agentKey = req.headers['x-agent-key'];
+  const bearerToken = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
+
+  let authorized = false;
+  if (agentKey) {
+    try {
+      const providedHash = hashApiKey(agentKey);
+      const device = await getDeviceByApiKeyHash(providedHash);
+      authorized = !!device;
+    } catch { authorized = false; }
+  }
+  if (!authorized && bearerToken && ADMIN_TOKEN) {
+    authorized = bearerToken === ADMIN_TOKEN;
+  }
+
+  if (!authorized) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  const providedToken = req.body?.uninstall_token;
+  if (!providedToken) {
+    return res.status(400).json({ error: 'uninstall_token required' });
+  }
+
+  // Check current and previous 5-minute windows (allows for clock skew)
+  const now = Math.floor(Date.now() / 1000);
+  const validWindows = [
+    Math.floor(now / 300) * 300,
+    Math.floor((now - 300) / 300) * 300,
+  ];
+
+  for (const window of validWindows) {
+    const expectedToken = crypto
+      .createHmac('sha256', ADMIN_TOKEN || 'fallback')
+      .update(String(window))
+      .digest('hex');
+    if (providedToken === expectedToken) {
+      return res.json({ authorized: true, verified: true });
+    }
+  }
+
+  res.json({ authorized: false, verified: false });
+});
 
 module.exports = router;
