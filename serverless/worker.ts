@@ -220,6 +220,13 @@ const KEYS_KEY = 'encryption_keys';
 const LOCATIONS_KEY = 'locations';
 const AUDIT_KEY = 'audit_log';
 
+// KV-RACE-001: Checkin metadata is stored in a separate KV key from device
+// status. This prevents the checkin handler's read-modify-write of the
+// `devices` key from racing with the ACK handler's status update.
+// The checkin handler writes ONLY to `device_checkin:{id}`, never to
+// `devices`. Admin endpoints merge checkin metadata when returning device data.
+const CHECKIN_KEY_PREFIX = 'device_checkin:';
+
 async function listDevices(env: Env): Promise<Device[]> {
   const data = await env.LOCKDOWN_KV.get(DEVICES_KEY);
   return data ? JSON.parse(data) : [];
@@ -227,6 +234,38 @@ async function listDevices(env: Env): Promise<Device[]> {
 
 async function saveDevices(env: Env, devices: Device[]): Promise<void> {
   await env.LOCKDOWN_KV.put(DEVICES_KEY, JSON.stringify(devices));
+}
+
+// Checkin metadata helpers — separate KV key per device.
+// This is the fix for KV-RACE-001: the checkin handler writes to
+// `device_checkin:{id}` instead of modifying the `devices` array,
+// so it can never overwrite the ACK handler's status update.
+interface CheckinMetadata {
+  last_checkin: string | null;
+  mac_address: string | null;
+  hardware_uuid: string | null;
+}
+
+async function getCheckinMetadata(env: Env, deviceId: string): Promise<CheckinMetadata | null> {
+  const data = await env.LOCKDOWN_KV.get(`${CHECKIN_KEY_PREFIX}${deviceId}`);
+  return data ? JSON.parse(data) : null;
+}
+
+async function saveCheckinMetadata(env: Env, deviceId: string, metadata: CheckinMetadata): Promise<void> {
+  await env.LOCKDOWN_KV.put(`${CHECKIN_KEY_PREFIX}${deviceId}`, JSON.stringify(metadata));
+}
+
+// Merge checkin metadata into a device object for admin API responses.
+// Falls back to the device's own fields if no checkin metadata exists
+// (e.g., for devices enrolled before the KV-RACE-001 fix).
+function mergeCheckinMetadata(device: Device, metadata: CheckinMetadata | null): Device {
+  if (!metadata) return device;
+  return {
+    ...device,
+    last_checkin: metadata.last_checkin ?? device.last_checkin,
+    mac_address: metadata.mac_address ?? device.mac_address,
+    hardware_uuid: metadata.hardware_uuid ?? device.hardware_uuid,
+  };
 }
 
 async function listCommands(env: Env): Promise<Command[]> {
@@ -307,14 +346,16 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   const payload = JSON.parse(body);
   const { hostname, mac_address, hardware_uuid } = payload;
 
-  // Update device last check-in
+  // KV-RACE-001: Write checkin metadata to a separate KV key, NOT to
+  // the `devices` key. Same fix as handleAgentCheckin.
   const devices = await listDevices(env);
   const idx = devices.findIndex((d) => d.id === device.id);
   if (idx >= 0) {
-    devices[idx].last_checkin = new Date().toISOString();
-    if (mac_address) devices[idx].mac_address = mac_address;
-    if (hardware_uuid) devices[idx].hardware_uuid = hardware_uuid;
-    await saveDevices(env, devices);
+    await saveCheckinMetadata(env, device.id, {
+      last_checkin: new Date().toISOString(),
+      mac_address: mac_address || devices[idx].mac_address,
+      hardware_uuid: hardware_uuid || devices[idx].hardware_uuid,
+    });
   }
 
   // Check for pending commands
@@ -461,16 +502,23 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
   const payload = JSON.parse(body);
   const { hostname, mac_address, hardware_uuid } = payload;
 
-  // Update device last check-in + hardware identity
+  // KV-RACE-001: Write checkin metadata to a separate KV key, NOT to the
+  // `devices` key. This prevents the checkin handler from overwriting the
+  // ACK handler's device status update when KV reads return stale data.
+  // The device's status is read from `devices` (which is only written by
+  // enroll, ACK, flag-stolen, and recover — never by checkin).
   const devices = await listDevices(env);
   const idx = devices.findIndex((d) => d.id === device.id);
   if (idx < 0) {
     return errorResponse('Device not found', 404);
   }
-  devices[idx].last_checkin = new Date().toISOString();
-  if (mac_address) devices[idx].mac_address = mac_address;
-  if (hardware_uuid) devices[idx].hardware_uuid = hardware_uuid;
-  await saveDevices(env, devices);
+  // Save checkin metadata to a separate KV key (the fix for KV-RACE-001)
+  await saveCheckinMetadata(env, device.id, {
+    last_checkin: new Date().toISOString(),
+    mac_address: mac_address || devices[idx].mac_address,
+    hardware_uuid: hardware_uuid || devices[idx].hardware_uuid,
+  });
+  // Do NOT call saveDevices() here — that would race with the ACK handler.
 
   // Check for pending commands (oldest first)
   const commands = await listCommands(env);
@@ -757,8 +805,15 @@ async function handleListDevices(request: Request, env: Env): Promise<Response> 
     return errorResponse('Admin authentication required', 401);
   }
   const devices = await listDevices(env);
-  // Don't expose api_key_hash
-  const safe = devices.map(({ api_key_hash, ...d }) => d);
+  // Merge checkin metadata from separate KV keys (KV-RACE-001 fix)
+  // and strip api_key_hash before returning.
+  const merged = await Promise.all(
+    devices.map(async (d) => {
+      const meta = await getCheckinMetadata(env, d.id);
+      return mergeCheckinMetadata(d, meta);
+    }),
+  );
+  const safe = merged.map(({ api_key_hash, ...d }) => d);
   return jsonResponse(safe);
 }
 
@@ -775,10 +830,13 @@ async function handleGetDevice(
   if (!device) {
     return errorResponse('Device not found', 404);
   }
+  // Merge checkin metadata from separate KV key (KV-RACE-001 fix)
+  const meta = await getCheckinMetadata(env, device.id);
+  const merged = mergeCheckinMetadata(device, meta);
   // Return just the device object — matches the Express server's
   // `res.json(device)` shape (the dashboard expects devRes.data to be
   // the device, not a wrapper object).
-  const { api_key_hash, ...safeDevice } = device;
+  const { api_key_hash, ...safeDevice } = merged;
   return jsonResponse(safeDevice);
 }
 

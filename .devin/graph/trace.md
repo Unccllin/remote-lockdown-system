@@ -704,3 +704,63 @@ One bug found (KV-RACE-001): device status race condition between checkin and AC
 Fix KV-RACE-001 in the Worker: refactor `handleAgentCheckin` to not overwrite the device status field when saving the full devices array. The fix is to either (a) use per-device KV keys (`device:{id}`) instead of a single `devices` key, so checkin metadata and device status don't race, or (b) separate checkin metadata (last_checkin, mac_address, hardware_uuid) into a different KV key from device status, or (c) have the checkin handler re-read the device's status right before saving and preserve it. Then add a Worker unit test that simulates KV stale reads to verify the fix. After fixing, re-run the live E2E to confirm the device status transitions to `locked` after the lockdown ACK.
 
 ---
+## Session: 2026-08-27 (cont.) — Fix KV-RACE-001
+
+### RULE-ZERO — Understanding logged before code changes
+- **Read**: `serverless/worker.ts` lines 208-307 (KV helpers), 454-546 (checkin handler), 625-706 (ACK handler)
+- **Read**: `serverless/worker.test.ts` lines 1-160 (test setup, MockKV class, helpers)
+- **Finding**: The root cause is a read-modify-write race on the `devices` KV key. Both `handleAgentCheckin` and `handleCommandAck` do `listDevices()` → modify → `saveDevices()`. The checkin handler updates `last_checkin`/`mac_address`/`hardware_uuid` but reads the FULL devices array (which may contain stale `status=stolen` if KV hasn't propagated the ACK's `status=locked` write). When it saves the full array, it overwrites `status=locked` with the stale `status=stolen`.
+- **Fix design**: Separate checkin metadata from device status. Add a `device_checkin:{id}` KV key storing `{ last_checkin, mac_address, hardware_uuid }`. The checkin handler writes ONLY to this key, never to `devices`. The ACK handler continues to write `status` to `devices`. Admin endpoints merge checkin metadata from `device_checkin:{id}` when returning device data. This eliminates the race — checkin and ACK never write to the same key.
+- **Test design**: Create a `StaleKV` class that returns the previous value for one read after a write (simulating KV propagation delay). Write a test that: enroll → flag stolen → checkin (gets lockdown) → ACK (writes status=locked) → checkin (reads stale status=stolen) → verify status is still locked. This test fails with the old code (checkin overwrites devices) and passes with the new code (checkin writes to device_checkin:{id}).
+
+## Session: 2026-08-27 (cont. 2) — Fix KV-RACE-001 + live verification
+
+### Task
+Fix KV-RACE-001: device status stays `stolen` after lockdown ACK instead of transitioning to `locked`. Root cause: checkin handler read-modify-write race with ACK handler on Cloudflare KV `devices` key.
+
+### IMPLEMENT — Code changes written
+1. **`serverless/worker.ts`**: Added `device_checkin:{id}` KV key pattern for checkin metadata (last_checkin, mac_address, hardware_uuid). Modified `handleAgentCheckin` and `handlePing` to write to `device_checkin:{id}` instead of modifying the `devices` array. Modified `handleListDevices` and `handleGetDevice` to merge checkin metadata from `device_checkin:{id}` when returning device data. Added `getCheckinMetadata()`, `saveCheckinMetadata()`, `mergeCheckinMetadata()` helpers.
+2. **`serverless/worker.test.ts`**: Added `StaleKV` class that simulates Cloudflare KV eventual consistency (returns stale data for monitored keys after writes, until `clearStale()` is called). Added KV-RACE-001 test that reproduces the race condition: enroll → flag stolen → checkin → ACK → checkin with stale KV → verify status stays locked.
+
+### VERIFY — Verification nodes pass
+- Worker tests: 29 passed (was 28, +1 new KV-RACE-001 test)
+- Red-green discipline: test failed with old code (`expected 'stolen' to be 'locked'`), passes with fix
+
+### ARTIFACT — Run artifact captured
+- `serverless/e2e-race-fix-artifact-agent.log` — full agent log from live E2E
+- `serverless/e2e-race-fix-artifact.json` — structured summary
+- Live E2E against deployed Worker (version 723ade09):
+  - Enroll → flag stolen → agent checkin (status=stolen, poll=30s) → lockdown executed → ACK sent
+  - Second checkin: status=locked (NOT stolen!), adaptive polling 30s→60s
+  - Third checkin: status=locked, poll=60s
+  - Device status verified via admin API: `locked` (FIX VERIFIED)
+
+### Fog cleared
+1. **KV-RACE-001 fixed and verified**: The checkin handler no longer writes to the `devices` KV key. Checkin metadata (last_checkin, mac_address, hardware_uuid) is stored in a separate `device_checkin:{id}` KV key. The ACK handler continues to write device status to `devices`. No race possible — they write to different keys.
+2. **Live E2E confirms fix**: Device status transitions to `locked` after lockdown ACK and stays `locked` across subsequent checkins. The agent correctly receives `status=locked` and adapts polling from 30s to 60s.
+
+### Fog remaining
+- **Spare HP machine still offline**: E-BCD and E-HP-UEFI still need hardware verification (same blocker as previous sessions).
+- **9 enforcement paths still verified-in-unit-test only**: Not blocked by this session — blocked by hardware availability.
+
+### Debt items closed
+None — KV-RACE-001 was not a debt ledger item (it was a bug found during the previous session's live E2E).
+
+### Debt items still open
+None — all debt items (D-001 through D-019) remain CLOSED.
+
+### Blockers
+- Spare HP machine offline — blocks hardware verification of 9 enforcement paths.
+
+### Test results
+- Worker tests: 29 passed (1 new KV-RACE-001 test)
+- Live E2E: device status transitions to locked after ACK (fix verified)
+- Worker deployment: version 723ade09-36a8-45ca-bcce-6b430e38f822
+
+### Failure attribution
+No failures this session. The red-green discipline worked as intended: the StaleKV test correctly reproduced the race condition (red), and the fix made it pass (green). The StaleKV class is a **Layer 4 (Verification feedback)** improvement — it simulates KV propagation delays that the standard MockKV doesn't, exposing race conditions that only manifest in production.
+
+### Next session opening
+The serverless path is now fully verified: unit tests (29) + live E2E (lockdown→unlock cycle + KV-RACE-001 fix). The remaining convergence blocker is the 9 enforcement paths that need hardware verification (E-DECRYPT, E-HP-UEFI, E-ACK, E-RECOVERY, E-TRACK, E-DEADMAN, E-EFFECTIVENESS, E-OFFLINE-QUEUE, E-AUTO-UPDATE). These are blocked on the spare HP machine being online. If hardware is not available, the next productive work is either (a) adding more Worker integration tests for edge cases (concurrent checkins, KV size limits, key release security) or (b) addressing the dashboard bundle size warning (558KB main chunk, should code-split).
+
+---

@@ -1,0 +1,53 @@
+{
+  "test": "kv-race-001-fix-verification",
+  "date": "2026-08-27",
+  "worker_version": "723ade09-36a8-45ca-bcce-6b430e38f822",
+  "device_id": "be549265fb21f01f6dee91cd19249a20",
+  "hostname": "RACE-FIX-1787828344",
+  "flow": [
+    {
+      "step": 1,
+      "action": "enroll",
+      "result": "success"
+    },
+    {
+      "step": 2,
+      "action": "flag_stolen",
+      "result": "status=stolen, lockdown command pending"
+    },
+    {
+      "step": 3,
+      "action": "agent_checkin",
+      "result": "status=stolen, poll=30s, command=lockdown"
+    },
+    {
+      "step": 4,
+      "action": "lockdown_executed",
+      "result": "1 file encrypted, sentinel created, guardian started"
+    },
+    {
+      "step": 5,
+      "action": "lockdown_ack",
+      "result": "command=0bb2d925... status=executed"
+    },
+    {
+      "step": 6,
+      "action": "second_checkin",
+      "result": "status=locked (NOT stolen!), poll=60s"
+    },
+    {
+      "step": 7,
+      "action": "third_checkin",
+      "result": "status=locked, poll=60s"
+    },
+    {
+      "step": 8,
+      "action": "verify_device_status",
+      "result": "status=locked (FIX VERIFIED)"
+    }
+  ],
+  "bug_fixed": "KV-RACE-001",
+  "fix": "Checkin handler writes to device_checkin:{id} KV key instead of devices key, preventing race with ACK handler",
+  "verification": "Device status transitions to locked after ACK and stays locked across subsequent checkins",
+  "log_file": "serverless/e2e-race-fix-artifact-agent.log"
+}

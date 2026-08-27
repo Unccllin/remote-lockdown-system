@@ -538,3 +538,147 @@ describe('Serverless Worker', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// KV-RACE-001: Stale read race condition between checkin and ACK handlers
+// ---------------------------------------------------------------------------
+// Cloudflare KV is eventually consistent. A read after a write may return
+// stale data. This test simulates that: after a write, the next read of
+// the same key returns the PREVIOUS value, then subsequent reads return
+// the current value. This exposes the race where the checkin handler
+// reads stale device status and overwrites the ACK handler's status update.
+
+class StaleKV {
+  private data: Record<string, string> = {};
+  private previousData: Record<string, string> = {};
+  private staleKeys: Set<string> = new Set();
+  // Only simulate stale reads for these keys (the ones that race)
+  private monitoredKeys: Set<string>;
+  // Monitoring is disabled until startMonitoring() is called, so setup
+  // (enroll, flag-stolen) works normally without stale reads.
+  private monitoring: boolean = false;
+
+  constructor(monitoredKeys: string[] = ['devices']) {
+    this.monitoredKeys = new Set(monitoredKeys);
+  }
+
+  async get(key: string): Promise<string | null> {
+    // If a key is marked stale, return the previous value until clearStale()
+    // is called. This simulates a long KV propagation delay (up to 60s in
+    // real Cloudflare KV), where multiple reads return stale data.
+    if (this.staleKeys.has(key)) {
+      return this.previousData[key] ?? null;
+    }
+    return this.data[key] ?? null;
+  }
+
+  async put(key: string, value: string): Promise<void> {
+    this.previousData[key] = this.data[key] ?? '';
+    this.data[key] = value;
+    // Only mark as stale if monitoring is active AND this is a monitored key
+    if (this.monitoring && this.monitoredKeys.has(key)) {
+      this.staleKeys.add(key);
+    }
+  }
+
+  startMonitoring(): void {
+    this.monitoring = true;
+  }
+
+  clearStale(): void {
+    this.staleKeys.clear();
+  }
+
+  reset(): void {
+    this.data = {};
+    this.previousData = {};
+    this.staleKeys.clear();
+    this.monitoring = false;
+  }
+}
+
+describe('KV-RACE-001: checkin does not overwrite ACK status update', () => {
+  let kv: StaleKV;
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: StaleKV };
+
+  beforeEach(() => {
+    kv = new StaleKV();
+    env = {
+      ADMIN_TOKEN: 'test-admin-token',
+      LOCKDOWN_KV: kv,
+    };
+  });
+
+  it('device status stays locked after ACK even with stale KV reads', async () => {
+    // 1. Enroll device
+    const { device, apiKey } = await enrollDevice(worker, env, 'RACE-001');
+
+    // 2. Flag stolen
+    await worker.fetch(
+      makeRequest('POST', `/api/devices/${device.id}/flag-stolen`, {
+        hostname_confirm: 'RACE-001',
+      }, { Authorization: 'Bearer test-admin-token' }),
+      env,
+    );
+
+    // 3. Agent checkin — gets lockdown command
+    const checkinBody = JSON.stringify({
+      hostname: 'RACE-001',
+      mac_address: 'AA:BB:CC:DD:EE:FF',
+      hardware_uuid: 'test-uuid',
+    });
+    const checkinResp = await worker.fetch(
+      makeRequest('POST', '/api/agent/checkin', checkinBody, signRequest(checkinBody, apiKey)),
+      env,
+    );
+    const checkinData: any = await parseResponse(checkinResp);
+    expect(checkinData.command).not.toBeNull();
+    expect(checkinData.command.type).toBe('lockdown');
+    const commandId = checkinData.command.id;
+
+    // 4. Agent ACKs lockdown — ACK handler writes status=locked to devices key
+    //    Enable stale monitoring NOW so the ACK's write to 'devices' marks it
+    //    as stale. The next read of 'devices' (by the checkin handler) will
+    //    return the OLD value (status=stolen), simulating KV propagation delay.
+    kv.startMonitoring();
+    const ackBody = JSON.stringify({
+      hostname: 'RACE-001',
+      command_id: commandId,
+      result_status: 'executed',
+      key_material: 'test-key-material-base64==',
+    });
+    const ackResp = await worker.fetch(
+      makeRequest('POST', '/api/agent/command-ack', ackBody, signRequest(ackBody, apiKey)),
+      env,
+    );
+    expect(ackResp.status).toBe(200);
+
+    // 5. Agent checks in again — StaleKV returns stale devices (status=stolen)
+    //    With the OLD code: checkin reads stale status=stolen, writes full array
+    //    back → overwrites status=locked with status=stolen (BUG)
+    //    With the FIX: checkin writes to device_checkin:{id}, not devices
+    const checkin2Body = JSON.stringify({
+      hostname: 'RACE-001',
+      mac_address: 'AA:BB:CC:DD:EE:FF',
+      hardware_uuid: 'test-uuid',
+    });
+    const checkin2Resp = await worker.fetch(
+      makeRequest('POST', '/api/agent/checkin', checkin2Body, signRequest(checkin2Body, apiKey)),
+      env,
+    );
+    const checkin2Data: any = await parseResponse(checkin2Resp);
+    expect(checkin2Resp.status).toBe(200);
+
+    // 6. Verify device status is still 'locked' (not overwritten to 'stolen')
+    //    Clear stale reads first so we see the actual current KV state.
+    kv.clearStale();
+    const deviceResp = await worker.fetch(
+      makeRequest('GET', `/api/devices/${device.id}`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      }),
+      env,
+    );
+    const deviceData: any = await parseResponse(deviceResp);
+    expect(deviceData.status).toBe('locked');
+  });
+});

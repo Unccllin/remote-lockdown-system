@@ -1,0 +1,45 @@
+2026-08-27 14:00:20,243 [INFO] Loaded JSON config from: /tmp/race-fix-1787828420/config.json
+2026-08-27 14:00:20,244 [INFO] Agent starting — hostname=RACE-FIX-1787828344 server=https://lockdown-serverless.mainacollins196.workers.dev poll=5s
+2026-08-27 14:00:20,273 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+2026-08-27 14:00:21,687 [INFO] Adaptive polling: 5s -> 30s (status=stolen)
+2026-08-27 14:00:21,687 [WARNING] LOCKDOWN command received — executing
+2026-08-27 14:00:21,687 [INFO] Sentinel created (atomic): /tmp/race-fix-1787828420/agent_state/.locked
+2026-08-27 14:00:21,688 [INFO] No recovery public key configured — skipping recovery key file
+2026-08-27 14:00:21,696 [INFO] Encrypted: secret.txt
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  !                                                       !
+  !   THIS DEVICE HAS BEEN REPORTED STOLEN               !
+  !   Contact your administrator immediately.             !
+  !                                                       !
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+2026-08-27 14:00:21,913 [INFO] Lock guardian started — re-asserting lock every 10s
+2026-08-27 14:00:21,913 [INFO] Sentinel updated: /tmp/race-fix-1787828420/agent_state/.locked
+2026-08-27 14:00:21,916 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 14:00:23,737 [INFO] ACK sent: command=0bb2d925f63f3615b56d93d1406ed5df status=executed uuid=a3f227b2
+2026-08-27 14:00:23,738 [WARNING] Key transmitted to server — wiping local pending ACK
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 14:00:54,203 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+2026-08-27 14:00:55,166 [INFO] Adaptive polling: 30s -> 60s (status=locked)
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 14:01:55,183 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
+2026-08-27 14:02:56,400 [WARNING] Could not get hardware UUID: Command '['cat', '/sys/class/dmi/id/product_uuid']' returned non-zero exit status 1.
+Failed to issue method call: Unknown object '/org/freedesktop/login1/session/auto'.
