@@ -77,6 +77,21 @@ logging.basicConfig(
 )
 log = logging.getLogger("lockdown-agent")
 
+# State crypto: encrypts deadman/sentinel files with DPAPI + HMAC (Layer 3)
+# and optionally seals to TPM (Layer 2). Falls back to plaintext if the
+# state_crypto module is not available (e.g., during early development).
+try:
+    from state_crypto import (
+        is_encrypted_state_file,
+        load_encrypted_state,
+        save_encrypted_state,
+    )
+
+    _STATE_CRYPTO_AVAILABLE = True
+except ImportError:
+    _STATE_CRYPTO_AVAILABLE = False
+    log.warning("state_crypto module not available — state files will be plaintext")
+
 # ---------------------------------------------------------------------------
 # Version
 # ---------------------------------------------------------------------------
@@ -171,6 +186,10 @@ def _load_json_config(config_path):
     if "server_url" in data:
         section["server_url"] = data["server_url"]
 
+    # serverless_url — optional Cloudflare Worker fallback endpoint
+    if "serverless_url" in data and data["serverless_url"]:
+        section["serverless_url"] = data["serverless_url"]
+
     # agent_key — JSON may use any of several key names (api_key, agent_key,
     # device_api_key) depending on when the enrollment page was last updated.
     for json_key in ("api_key", "agent_key", "device_api_key"):
@@ -246,6 +265,11 @@ def load_config(config_path=None) -> dict:
         "server_url": os.environ.get(
             "SERVER_URL", section.get("server_url", "https://localhost:3001")
         ),
+        # Serverless fallback URL (optional). If set, the agent tries the
+        # primary server_url first, then falls back to serverless_url on
+        # connection failure. This is a Cloudflare Worker that mirrors the
+        # /api/agent/* endpoints with KV-backed storage.
+        "serverless_url": os.environ.get("SERVERLESS_URL", section.get("serverless_url", "")),
         # FA3: Per-device API key (preferred) with AGENT_SHARED_KEY legacy fallback.
         # The per-device key is provisioned at enrollment and unique to this device.
         # The legacy shared key is used only for devices that haven't been
@@ -338,6 +362,21 @@ def validate_config(cfg: dict) -> None:
             )
     if not parsed.netloc:
         raise ValueError(f"SERVER_URL is missing a host (got '{server_url}')")
+
+    # Validate serverless_url if present (optional fallback endpoint)
+    serverless_url = cfg.get("serverless_url", "")
+    if serverless_url:
+        parsed_sl = urlparse(serverless_url)
+        if parsed_sl.scheme not in ("https",):
+            if parsed_sl.scheme == "http" and not cfg.get("verify_tls", True):
+                pass  # dev mode
+            else:
+                raise ValueError(
+                    f"SERVERLESS_URL must use https:// (got '{serverless_url}') — "
+                    f"key material must be transported over TLS"
+                )
+        if not parsed_sl.netloc:
+            raise ValueError(f"SERVERLESS_URL is missing a host (got '{serverless_url}')")
 
     lockdown_folder = cfg.get("lockdown_folder")
     if lockdown_folder is not None:
@@ -669,6 +708,29 @@ def get_hardware_uuid() -> str:
     system = platform.system()
     try:
         if system == "Windows":
+            # wmic is deprecated on Windows 11 (removed in 24H2+).
+            # Use PowerShell Get-CimInstance instead, with wmic as fallback
+            # for older Windows versions.
+            try:
+                result = (
+                    subprocess.check_output(
+                        [
+                            "powershell",
+                            "-NoProfile",
+                            "-Command",
+                            "(Get-CimInstance -ClassName Win32_ComputerSystemProduct).UUID",
+                        ],
+                        timeout=10,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    .decode()
+                    .strip()
+                )
+                if result and result != "00000000-0000-0000-0000-000000000000":
+                    return result
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+            # Fallback: wmic (works on older Windows, may not exist on 24H2+)
             result = (
                 subprocess.check_output(
                     ["wmic", "csproduct", "get", "UUID"], timeout=10, stderr=subprocess.DEVNULL
@@ -867,8 +929,8 @@ def report_location(cfg: dict) -> dict | None:
     }
 
     try:
-        resp = _signed_post(
-            f"{cfg['server_url']}/api/agent/location",
+        resp = _post_with_fallback(
+            "/api/agent/location",
             cfg,
             payload,
             timeout=15,
@@ -937,6 +999,32 @@ def _signed_post(url: str, cfg: dict, json_body: dict, **kwargs) -> requests.Res
     return requests.post(url, data=body_bytes, headers=headers, **kwargs)  # noqa: S113 -- timeout is passed by all callers via **kwargs
 
 
+def _post_with_fallback(endpoint: str, cfg: dict, json_body: dict, **kwargs) -> requests.Response:
+    """Signed POST with serverless fallback.
+
+    Tries the primary server_url first. On connection failure (ConnectionError
+    or Timeout), falls back to serverless_url if configured. This lets the
+    agent survive a primary server outage by routing through the Cloudflare
+    Worker — the Worker mirrors the /api/agent/* endpoints with KV storage.
+
+    Non-connection errors (4xx, 5xx HTTP responses) are NOT retried on the
+    fallback — those are application-level errors that the fallback would
+    likely reproduce. Only network-level failures trigger the fallback.
+    """
+    primary_url = f"{cfg['server_url']}{endpoint}"
+    try:
+        return _signed_post(primary_url, cfg, json_body, **kwargs)
+    except (requests.ConnectionError, requests.Timeout) as e:
+        serverless_url = cfg.get("serverless_url", "")
+        if not serverless_url:
+            raise
+        fallback_url = f"{serverless_url}{endpoint}"
+        log.warning(
+            "Primary server unreachable (%s), falling back to serverless: %s", e, fallback_url
+        )
+        return _signed_post(fallback_url, cfg, json_body, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Server communication
 # ---------------------------------------------------------------------------
@@ -944,8 +1032,8 @@ def _signed_post(url: str, cfg: dict, json_body: dict, **kwargs) -> requests.Res
 
 def checkin(cfg: dict) -> dict | None:
     try:
-        resp = _signed_post(
-            f"{cfg['server_url']}/api/agent/checkin",
+        resp = _post_with_fallback(
+            "/api/agent/checkin",
             cfg,
             {
                 "hostname": cfg["hostname"],
@@ -1044,8 +1132,8 @@ def ack_command(
     if bitlocker_recovery_password:
         payload["bitlocker_recovery_password"] = bitlocker_recovery_password
     try:
-        resp = _signed_post(
-            f"{cfg['server_url']}/api/agent/command-ack",
+        resp = _post_with_fallback(
+            "/api/agent/command-ack",
             cfg,
             payload,
             timeout=15,
@@ -1138,8 +1226,8 @@ def drain_offline_queue(cfg: dict) -> None:
         for row_id, endpoint, payload_json, attempts in rows:
             try:
                 payload = json.loads(payload_json)
-                resp = _signed_post(
-                    f"{cfg['server_url']}{endpoint}",
+                resp = _post_with_fallback(
+                    endpoint,
                     cfg,
                     payload,
                     timeout=15,
@@ -1819,6 +1907,20 @@ def handle_unlock(cfg: dict, command: dict) -> None:
         bios_password = command.get("bios_password")
         # T7: Power-On Password for PBA removal (if PBA was active during lockdown)
         power_on_password = command.get("power_on_password")
+
+        # SAFETY FALLBACK: If the server didn't provide the BIOS password
+        # (e.g., ACK failed during lockdown and password was never stored),
+        # try to read it from the local emergency backup file.
+        if not bios_password:
+            try:
+                backup = hp_uefi_lockdown.read_password_backup()
+                if backup and backup.get("bios_password"):
+                    bios_password = backup["bios_password"]
+                    power_on_password = backup.get("power_on_password")
+                    log.info("BIOS password recovered from emergency backup file")
+            except Exception as e:
+                log.warning("Could not read BIOS password backup: %s", e)
+
         try:
             bcd_lockdown.remove_bcd_lockdown()
         except Exception as e:
@@ -1837,7 +1939,12 @@ def handle_unlock(cfg: dict, command: dict) -> None:
                 )
         else:
             log.warning(
-                "No BIOS password in unlock command — cannot remove UEFI lockdown automatically"
+                "No BIOS password in unlock command or backup — "
+                "cannot remove UEFI lockdown automatically"
+            )
+            log.warning(
+                "Manual recovery required: clear BIOS password in BIOS setup, "
+                "then restore USB/network boot settings manually"
             )
 
         # T9: Remove BitLocker TPM+PIN PBA (if PBA was active during lockdown).
@@ -1904,11 +2011,124 @@ COMMAND_HANDLERS = {
 
 
 def startup_check(cfg: dict) -> None:
+    """Re-assert lockdown state on agent startup.
+
+    Fail-secure design (CWE-636): if the device was ever flagged stolen,
+    missing state = locked, not unlocked. This means:
+    - sentinel exists → re-assert lock (normal restart while locked)
+    - sentinel missing + deadman says "stolen" → re-assert lock (tamper detected)
+    - sentinel missing + no deadman file → normal startup (never flagged)
+    - sentinel missing + deadman says "active" → normal startup (was recovered)
+
+    The deadman file is the tamper-evident source of truth. A thief who
+    deletes the sentinel to escape lockdown still gets locked because the
+    deadman file records that the device was flagged stolen. Deleting both
+    files is equivalent to "I was never flagged" — but the deadman file
+    is written on every check-in, so it exists as long as the agent has
+    ever run. A thief would need to find and delete it before the agent
+    restarts, which requires killing the agent first (which triggers the
+    deadman timeout if the server is reachable).
+    """
     sentinel = cfg["lock_sentinel"]
+
+    # Check 1: Sentinel exists → device is locked → re-assert
     if sentinel.exists():
         log.warning("Device was previously locked — re-asserting lock screen")
         apply_lock_screen()
         start_lock_guardian()
+        return
+
+    # Check 2: Sentinel missing — was the device ever flagged stolen?
+    deadman_state = _read_deadman_state()
+    if deadman_state is None:
+        # No deadman file → device was never flagged → normal startup
+        log.debug("No sentinel and no deadman file — normal startup (never flagged)")
+        return
+
+    deadman_status = deadman_state.get("status", "active")
+    if deadman_status == "stolen":
+        # Fail-secure: sentinel was deleted but device was flagged stolen
+        log.error(
+            "FAIL-SECURE: Sentinel missing but device was flagged stolen (last_seen: %s) — "
+            "re-asserting lockdown (sentinel tampering detected)",
+            deadman_state.get("last_seen", "unknown"),
+        )
+        apply_lock_screen()
+        start_lock_guardian()
+        # Re-create the sentinel so subsequent restarts don't re-log the warning
+        try:
+            _atomic_write_text(
+                sentinel,
+                json.dumps(
+                    {
+                        "locked": True,
+                        "deadman": True,
+                        "tamper_detected": True,
+                        "original_last_seen": deadman_state.get("last_seen"),
+                    }
+                ),
+            )
+            log.warning("Sentinel re-created after tamper detection: %s", sentinel)
+        except Exception as e:
+            log.error("Could not re-create sentinel after tamper detection: %s", e)
+    else:
+        # Deadman says active/recovering → device was recovered → normal startup
+        log.debug(
+            "No sentinel but deadman status is '%s' — normal startup (recovered)",
+            deadman_status,
+        )
+
+
+def _read_deadman_state() -> dict | None:
+    """Read the deadman state file, returning None if it doesn't exist or is corrupt.
+
+    Tries encrypted format first (Layer 3), falls back to plaintext for
+    backward compatibility with existing state files. Corrupt or tampered
+    files are treated as fail-secure (return stolen status).
+    """
+    if not DEADMAN_FILE.exists():
+        return None
+    try:
+        # Try encrypted format first
+        if _STATE_CRYPTO_AVAILABLE and is_encrypted_state_file(DEADMAN_FILE):
+            state = load_encrypted_state(DEADMAN_FILE)
+            if state is not None:
+                return state
+            # Encrypted file exists but decryption/HMAC failed = tampering
+            log.error("Deadman file encrypted but verification failed — treating as tamper")
+            return {"status": "stolen", "last_seen": "corrupt", "corrupt": True}
+
+        # Fall back to plaintext (legacy or non-Windows)
+        return json.loads(DEADMAN_FILE.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        log.warning("Deadman file exists but is corrupt (%s) — treating as tamper", e)
+        # Corrupt deadman file = possible tampering = fail-secure
+        return {"status": "stolen", "last_seen": "corrupt", "corrupt": True}
+
+
+def migrate_deadman_to_encrypted() -> None:
+    """Migrate a plaintext deadman file to encrypted format (one-time).
+
+    Called at startup. If the deadman file exists and is plaintext (not
+    encrypted), reads it and re-saves it in encrypted format. This is a
+    no-op if the file is already encrypted or doesn't exist.
+    """
+    if not _STATE_CRYPTO_AVAILABLE:
+        return  # No crypto module — can't encrypt
+    if not DEADMAN_FILE.exists():
+        return  # No file to migrate
+    if is_encrypted_state_file(DEADMAN_FILE):
+        return  # Already encrypted
+
+    # File exists and is plaintext — migrate
+    try:
+        state = json.loads(DEADMAN_FILE.read_text())
+        if save_encrypted_state(DEADMAN_FILE, state):
+            log.info("Deadman file migrated from plaintext to encrypted format")
+        else:
+            log.warning("Failed to migrate deadman file to encrypted format — keeping plaintext")
+    except (json.JSONDecodeError, OSError) as e:
+        log.warning("Could not migrate deadman file (corrupt): %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -1935,15 +2155,21 @@ DEADMAN_TIMEOUT_HOURS = 24  # Lock if flagged-stolen and offline for this long
 
 
 def update_deadman_timer(status: str) -> None:
-    """Write current time + device status to the dead man's file."""
-    DEADMAN_FILE.write_text(
-        json.dumps(
-            {
-                "last_seen": time.time(),
-                "status": status,
-            }
-        )
-    )
+    """Write current time + device status to the dead man's file.
+
+    Uses encrypted format (Layer 3) if state_crypto is available,
+    falls back to plaintext for backward compatibility.
+    """
+    data = {
+        "last_seen": time.time(),
+        "status": status,
+    }
+    if _STATE_CRYPTO_AVAILABLE:
+        if not save_encrypted_state(DEADMAN_FILE, data):
+            log.warning("Failed to save encrypted deadman state — falling back to plaintext")
+            DEADMAN_FILE.write_text(json.dumps(data))
+    else:
+        DEADMAN_FILE.write_text(json.dumps(data))
 
 
 def check_deadman(cfg: dict) -> None:
@@ -1951,10 +2177,18 @@ def check_deadman(cfg: dict) -> None:
     if not DEADMAN_FILE.exists():
         return
     try:
-        state = json.loads(DEADMAN_FILE.read_text())
+        state = _read_deadman_state()
+        if state is None:
+            return
         if state.get("status") != "stolen":
             return
-        elapsed_hours = (time.time() - state["last_seen"]) / 3600
+        # Handle corrupt deadman file (fail-secure: treat as stolen + expired)
+        last_seen = state.get("last_seen", 0)
+        if last_seen == "corrupt" or not isinstance(last_seen, (int, float)):
+            log.warning("DEAD MAN SWITCH: corrupt deadman file — treating as stolen + expired")
+            elapsed_hours = DEADMAN_TIMEOUT_HOURS
+        else:
+            elapsed_hours = (time.time() - last_seen) / 3600
         if elapsed_hours >= DEADMAN_TIMEOUT_HOURS:
             log.warning(
                 "DEAD MAN SWITCH: device was stolen and offline for %.1fh — triggering lockdown",
@@ -1998,8 +2232,8 @@ def report_deadman_key(cfg: dict) -> None:
         return
     try:
         key_material = DEADMAN_KEY_FILE.read_text().strip()
-        resp = _signed_post(
-            f"{cfg['server_url']}/api/agent/deadman-report",
+        resp = _post_with_fallback(
+            "/api/agent/deadman-report",
             cfg,
             {
                 "hostname": cfg["hostname"],
@@ -2076,7 +2310,7 @@ def check_for_update(cfg: dict) -> None:
         download_url = data.get("download_url", "")
         size = data.get("size", 0)
 
-        log.info("Update available: %s → %s (%s bytes)", AGENT_VERSION, latest_version, size)
+        log.info("Update available: %s -> %s (%s bytes)", AGENT_VERSION, latest_version, size)
 
         # Download the new binary
         if not download_url:
@@ -2168,6 +2402,97 @@ def clear_update_signal() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Mutual watchdog — agent monitors the watchdog process and restarts it if dead
+# ---------------------------------------------------------------------------
+
+WATCHDOG_HEARTBEAT_FILE = _STATE_DIR / ".watchdog_heartbeat"
+WATCHDOG_CHECK_INTERVAL = 60  # seconds between watchdog health checks
+WATCHDOG_MAX_AGE_SEC = 180  # 3 minutes — watchdog should heartbeat every 30s
+
+
+def _is_watchdog_running() -> bool:
+    """Check if the watchdog process is running."""
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq lockdown-watchdog.exe"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return "lockdown-watchdog.exe" in result.stdout
+        except Exception:
+            return False
+    else:
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "watchdog.py"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.returncode == 0 and bool(result.stdout.strip())
+        except Exception:
+            return False
+
+
+def _start_watchdog() -> subprocess.Popen | None:
+    """Start the watchdog process if it's not running."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller bundle — look for lockdown-watchdog exe next to agent
+        exe_dir = Path(sys.executable).parent
+        exe_name = "lockdown-watchdog.exe" if sys.platform == "win32" else "lockdown-watchdog"
+        watchdog_bin = exe_dir / exe_name
+        if watchdog_bin.exists():
+            try:
+                creationflags = 0
+                if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    creationflags = subprocess.CREATE_NO_WINDOW
+                proc = subprocess.Popen(
+                    [str(watchdog_bin)],
+                    creationflags=creationflags,
+                    close_fds=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                log.info("Watchdog restarted (PID %d)", proc.pid)
+                return proc
+            except Exception as e:
+                log.warning("Could not start watchdog: %s", e)
+                return None
+    else:
+        # Running from source
+        watchdog_script = Path(__file__).parent / "watchdog.py"
+        if watchdog_script.exists():
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, str(watchdog_script)],
+                    close_fds=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                log.info("Watchdog restarted (PID %d)", proc.pid)
+                return proc
+            except Exception as e:
+                log.warning("Could not start watchdog: %s", e)
+                return None
+    return None
+
+
+def check_watchdog_health() -> None:
+    """Check if the watchdog is alive; restart it if not.
+
+    Called from the main polling loop. The watchdog monitors the agent
+    via heartbeat file, and the agent monitors the watchdog via process
+    check — this is the "mutual watchdog" pattern. Killing one triggers
+    the other to restart it.
+    """
+    if not _is_watchdog_running():
+        log.warning("Watchdog not running — attempting restart")
+        _start_watchdog()
+
+
+# ---------------------------------------------------------------------------
 # Main polling loop
 # ---------------------------------------------------------------------------
 
@@ -2223,6 +2548,9 @@ def main() -> None:
             cfg["server_url"],
             cfg["poll_interval"],
         )
+        # Migrate any plaintext state files to encrypted format (one-time)
+        migrate_deadman_to_encrypted()
+
         startup_check(cfg)
         log.info("DRY RUN: Startup check complete. Exiting (dry-run mode).")
         sys.exit(0)
@@ -2250,6 +2578,11 @@ def main() -> None:
         cfg["server_url"],
         cfg["poll_interval"],
     )
+    if cfg.get("serverless_url"):
+        log.info("Serverless fallback configured: %s", cfg["serverless_url"])
+    # Migrate any plaintext state files to encrypted format (one-time)
+    migrate_deadman_to_encrypted()
+
     startup_check(cfg)
 
     # Clear any stale update signal from a previous run
@@ -2267,6 +2600,14 @@ def main() -> None:
             HEARTBEAT_FILE.touch()
         except Exception as e:
             log.debug("Could not update heartbeat file: %s", e)
+
+        # Mutual watchdog: check if the watchdog process is alive,
+        # restart it if not. The watchdog monitors us via heartbeat,
+        # we monitor the watchdog via process check.
+        try:
+            check_watchdog_health()
+        except Exception as e:
+            log.debug("Watchdog health check failed: %s", e)
 
         # Check dead man's switch before attempting network
         check_deadman(cfg)
@@ -2297,7 +2638,7 @@ def main() -> None:
             if server_poll and isinstance(server_poll, (int, float)) and server_poll > 0:
                 if server_poll != effective_poll_interval:
                     log.info(
-                        "Adaptive polling: %ss → %ss (status=%s)",
+                        "Adaptive polling: %ss -> %ss (status=%s)",
                         effective_poll_interval,
                         int(server_poll),
                         current_status,

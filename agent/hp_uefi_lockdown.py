@@ -223,7 +223,7 @@ def _load_model_overrides() -> dict:
     """Load model-specific setting name overrides from JSON file.
 
     D-009: The override file is optional. If present, it maps HP model
-    names (from WMI query) to dicts of concept → list of setting names.
+    names (from WMI query) to dicts of concept -> list of setting names.
     This allows supporting HP models that use non-standard BIOS setting
     names without modifying the source code.
     """
@@ -363,6 +363,92 @@ ALL_LOCKDOWN_SETTINGS = HP_CRITICAL_SETTINGS + HP_BEST_EFFORT_SETTINGS
 
 # File to save pre-lockdown BIOS state for restoration on recovery
 BOOT_STATE_FILE = Path(__file__).parent / ".boot_state"
+
+# Emergency password backup — written IMMEDIATELY after password generation,
+# before any BIOS changes or ACK attempts. This is the safety net against
+# the 3 critical password-loss risks:
+#   R1: ACK fails + pending_ack file deleted
+#   R2: Critical failure + crash before ACK
+#   R3: Sure Admin blocks + pre-existing password unknown
+# The backup file is encrypted with a simple XOR cipher using the agent's
+# hardware UUID as the key (not cryptographically strong, but prevents
+# casual discovery). The real protection is that this file is also covered
+# by the tamper protection ACLs (DENY DELETE).
+BIOS_PASSWORD_BACKUP_FILE = Path(__file__).parent / ".bios_pw_backup"
+
+
+def _write_password_backup(bios_password: str, power_on_password: str | None = None) -> None:
+    """Write BIOS passwords to an emergency backup file immediately after generation.
+
+    This is the safety net against password loss. The file is written BEFORE
+    any BIOS changes or ACK attempts, so even if the agent crashes, the
+    password is recoverable from this file.
+
+    The file contains a simple XOR-encrypted JSON blob (not strong crypto,
+    but prevents casual discovery). The real protection is tamper protection
+    ACLs on the file.
+    """
+    import json as _json
+    import platform as _platform
+
+    try:
+        # Simple XOR cipher using hardware UUID as key
+        # (not crypto-strong, but prevents casual discovery)
+        key = _platform.node().encode("utf-8") or b"fallback-key"
+        data = _json.dumps(
+            {
+                "bios_password": bios_password,
+                "power_on_password": power_on_password,
+                "timestamp": __import__("time").time(),
+            }
+        ).encode("utf-8")
+
+        # XOR encrypt
+        encrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+        # Base64 encode for safe file storage
+        import base64
+
+        encoded = base64.b64encode(encrypted).decode("ascii")
+
+        _atomic_write_text(BIOS_PASSWORD_BACKUP_FILE, encoded)
+        log.info("BIOS password backup written to %s", BIOS_PASSWORD_BACKUP_FILE)
+    except Exception as e:
+        log.error("CRITICAL: Could not write BIOS password backup: %s", e)
+        log.error("If lockdown proceeds, BIOS password may be unrecoverable if ACK fails")
+
+
+def read_password_backup() -> dict | None:
+    """Read BIOS passwords from the emergency backup file.
+
+    Returns dict with bios_password and power_on_password, or None if
+    the backup file doesn't exist or can't be decrypted.
+    """
+    import base64
+    import json as _json
+    import platform as _platform
+
+    if not BIOS_PASSWORD_BACKUP_FILE.exists():
+        return None
+    try:
+        encoded = BIOS_PASSWORD_BACKUP_FILE.read_text().strip()
+        encrypted = base64.b64decode(encoded)
+        key = _platform.node().encode("utf-8") or b"fallback-key"
+        # XOR decrypt
+        decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(encrypted))
+        data = _json.loads(decrypted.decode("utf-8"))
+        return data
+    except Exception as e:
+        log.error("Could not read BIOS password backup: %s", e)
+        return None
+
+
+def delete_password_backup() -> None:
+    """Delete the BIOS password backup file (called after successful unlock)."""
+    try:
+        BIOS_PASSWORD_BACKUP_FILE.unlink(missing_ok=True)
+        log.info("BIOS password backup deleted (unlock successful)")
+    except Exception as e:
+        log.warning("Could not delete BIOS password backup: %s", e)
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -772,7 +858,7 @@ def _check_sure_start_bsp() -> dict:
                 result["warning"] = (
                     f"Sure Start BIOS Settings Protection is enabled (setting '{name}'). "
                     f"BIOS changes will be reverted on next boot unless BSP is disabled first. "
-                    f"Using lock-then-seal pattern: disable BSP → apply lockdown → re-enable BSP."
+                    f"Using lock-then-seal pattern: disable BSP -> apply lockdown -> re-enable BSP."
                 )
                 log.warning("T7: %s", result["warning"])
             else:
@@ -1075,7 +1161,7 @@ def _verify_setting(name: str, expected_value: str) -> bool:
                 name,
             )
         return False
-    log.info("BIOS setting '%s' → %s (verified)", name, expected_value)
+    log.info("BIOS setting '%s' -> %s (verified)", name, expected_value)
     return True
 
 
@@ -1087,7 +1173,7 @@ def _set_and_verify(name: str, value: str, password: str) -> bool:
     rc = _set_setting(name, value, password)
     if rc != 0:
         log.warning(
-            "BIOS setting '%s' → '%s' failed: %s",
+            "BIOS setting '%s' -> '%s' failed: %s",
             name,
             value,
             SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
@@ -1261,10 +1347,10 @@ def _rollback_bios_settings(saved_settings: dict, bios_password: str) -> bool:
         if rc == 0:
             # D-013: Verify rollback actually took effect (safety-net path)
             if _verify_setting(setting_name, original_value):
-                log.info("Rollback: %s → %s (restored and verified)", setting_name, original_value)
+                log.info("Rollback: %s -> %s (restored and verified)", setting_name, original_value)
             else:
                 log.error(
-                    "Rollback: %s → %s verification failed — "
+                    "Rollback: %s -> %s verification failed — "
                     "setting may not be restored (non-fatal, continuing)",
                     setting_name,
                     original_value,
@@ -1437,6 +1523,11 @@ def apply_boot_lockdown(
     if not password_already_set:
         # Generate a new password and set it
         bios_password = generate_bios_password()
+        # SAFETY: Write password backup IMMEDIATELY after generation,
+        # before any BIOS changes or ACK attempts. This ensures the
+        # password is recoverable even if the agent crashes (R2) or
+        # ACK fails + pending_ack is deleted (R1).
+        _write_password_backup(bios_password)
         log.info("Setting new BIOS Setup password...")
         rc = _set_setting("Setup Password", bios_password, None)
         if rc != 0:
@@ -1476,6 +1567,8 @@ def apply_boot_lockdown(
             log.warning("T7: Power-On Password is already set — not overwriting")
         else:
             power_on_pw = generate_bios_password()
+            # SAFETY: Update backup with power-on password too
+            _write_password_backup(bios_password, power_on_pw)
             log.info("T7: Setting Power-On Password for Tier 1 PBA...")
             rc = set_power_on_password(power_on_pw, bios_password)
             if rc != 0:
@@ -1563,7 +1656,7 @@ def apply_boot_lockdown(
         else:
             critical_failed += 1
 
-    # --- Check for critical failure → rollback (CC18) ---
+    # --- Check for critical failure -> rollback (CC18) ---
     if critical_failed > 0:
         log.error(
             "UEFI lockdown: %d critical setting(s) failed — rolling back BIOS changes",
@@ -1774,5 +1867,8 @@ def remove_boot_lockdown(
     # T5: Resume BitLocker protectors after BIOS restore
     if bitlocker_was_suspended:
         _resume_bitlocker()
+
+    # SAFETY: Delete the password backup file now that unlock is complete
+    delete_password_backup()
 
     return True

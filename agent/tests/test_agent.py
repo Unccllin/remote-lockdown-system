@@ -829,6 +829,172 @@ class TestDeadmanKey:
             if agent.DEADMAN_KEY_FILE.exists():
                 agent.DEADMAN_KEY_FILE.unlink()
 
+    def test_update_deadman_timer_writes_encrypted(self):
+        """update_deadman_timer should write encrypted state when state_crypto is available."""
+        if agent.DEADMAN_FILE.exists():
+            agent.DEADMAN_FILE.unlink()
+        try:
+            if agent._STATE_CRYPTO_AVAILABLE:
+                agent.update_deadman_timer("active")
+                # File should exist and be encrypted (have the LDS1 magic)
+                assert agent.DEADMAN_FILE.exists()
+                with open(agent.DEADMAN_FILE, "rb") as f:
+                    magic = f.read(4)
+                assert magic == b"LDS1"
+            else:
+                # No state_crypto — should write plaintext
+                agent.update_deadman_timer("active")
+                assert agent.DEADMAN_FILE.exists()
+                data = json.loads(agent.DEADMAN_FILE.read_text())
+                assert data["status"] == "active"
+        finally:
+            if agent.DEADMAN_FILE.exists():
+                agent.DEADMAN_FILE.unlink()
+
+    def test_read_deadman_state_reads_encrypted(self):
+        """_read_deadman_state should read encrypted state files."""
+        if agent.DEADMAN_FILE.exists():
+            agent.DEADMAN_FILE.unlink()
+        try:
+            if agent._STATE_CRYPTO_AVAILABLE:
+                from state_crypto import save_encrypted_state
+
+                save_encrypted_state(
+                    agent.DEADMAN_FILE,
+                    {
+                        "last_seen": time.time(),
+                        "status": "stolen",
+                    },
+                )
+                state = agent._read_deadman_state()
+                assert state is not None
+                assert state["status"] == "stolen"
+            else:
+                # No state_crypto — plaintext fallback
+                agent.DEADMAN_FILE.write_text(
+                    json.dumps({"last_seen": time.time(), "status": "stolen"})
+                )
+                state = agent._read_deadman_state()
+                assert state is not None
+                assert state["status"] == "stolen"
+        finally:
+            if agent.DEADMAN_FILE.exists():
+                agent.DEADMAN_FILE.unlink()
+
+    def test_read_deadman_state_falls_back_to_plaintext(self):
+        """_read_deadman_state should read plaintext files (backward compat)."""
+        if agent.DEADMAN_FILE.exists():
+            agent.DEADMAN_FILE.unlink()
+        try:
+            # Write plaintext (legacy format)
+            agent.DEADMAN_FILE.write_text(json.dumps({"last_seen": 1234567890, "status": "active"}))
+            state = agent._read_deadman_state()
+            assert state is not None
+            assert state["status"] == "active"
+            assert state["last_seen"] == 1234567890
+        finally:
+            if agent.DEADMAN_FILE.exists():
+                agent.DEADMAN_FILE.unlink()
+
+    def test_check_deadman_reads_encrypted_state(self, cfg, tmp_sentinel):
+        """check_deadman should work with encrypted deadman files."""
+        if agent.DEADMAN_FILE.exists():
+            agent.DEADMAN_FILE.unlink()
+        try:
+            if agent._STATE_CRYPTO_AVAILABLE:
+                from state_crypto import save_encrypted_state
+
+                save_encrypted_state(
+                    agent.DEADMAN_FILE,
+                    {
+                        "last_seen": time.time() - (25 * 3600),  # 25 hours ago
+                        "status": "stolen",
+                    },
+                )
+            else:
+                agent.DEADMAN_FILE.write_text(
+                    json.dumps(
+                        {
+                            "last_seen": time.time() - (25 * 3600),
+                            "status": "stolen",
+                        }
+                    )
+                )
+
+            with (
+                patch.object(agent, "apply_lock_screen"),
+                patch.object(agent, "start_lock_guardian"),
+                patch.object(agent, "write_pending_ack"),
+                patch.object(agent, "write_recovery_key"),
+            ):
+                agent.check_deadman(cfg)
+                assert tmp_sentinel.exists()
+        finally:
+            for f in [agent.DEADMAN_FILE, agent.DEADMAN_KEY_FILE, tmp_sentinel]:
+                if f.exists():
+                    f.unlink()
+
+    def test_migrate_deadman_to_encrypted(self):
+        """migrate_deadman_to_encrypted should convert plaintext to encrypted."""
+        if agent.DEADMAN_FILE.exists():
+            agent.DEADMAN_FILE.unlink()
+        try:
+            # Write plaintext deadman file
+            agent.DEADMAN_FILE.write_text(json.dumps({"last_seen": 1234567890, "status": "active"}))
+
+            # Run migration
+            agent.migrate_deadman_to_encrypted()
+
+            if agent._STATE_CRYPTO_AVAILABLE:
+                # File should now be encrypted (has LDS1 magic)
+                with open(agent.DEADMAN_FILE, "rb") as f:
+                    magic = f.read(4)
+                assert magic == b"LDS1"
+                # And the content should still be readable
+                state = agent._read_deadman_state()
+                assert state is not None
+                assert state["status"] == "active"
+            else:
+                # No crypto — file should still be plaintext
+                data = json.loads(agent.DEADMAN_FILE.read_text())
+                assert data["status"] == "active"
+        finally:
+            if agent.DEADMAN_FILE.exists():
+                agent.DEADMAN_FILE.unlink()
+
+    def test_migrate_deadman_noop_if_already_encrypted(self):
+        """migrate_deadman_to_encrypted should be a no-op if already encrypted."""
+        if agent.DEADMAN_FILE.exists():
+            agent.DEADMAN_FILE.unlink()
+        try:
+            if agent._STATE_CRYPTO_AVAILABLE:
+                from state_crypto import save_encrypted_state
+
+                save_encrypted_state(
+                    agent.DEADMAN_FILE,
+                    {
+                        "last_seen": 1234567890,
+                        "status": "active",
+                    },
+                )
+                # Get the file content before migration
+                before = agent.DEADMAN_FILE.read_bytes()
+                agent.migrate_deadman_to_encrypted()
+                after = agent.DEADMAN_FILE.read_bytes()
+                # File should be unchanged
+                assert before == after
+        finally:
+            if agent.DEADMAN_FILE.exists():
+                agent.DEADMAN_FILE.unlink()
+
+    def test_migrate_deadman_noop_if_no_file(self):
+        """migrate_deadman_to_encrypted should be a no-op if no deadman file."""
+        if agent.DEADMAN_FILE.exists():
+            agent.DEADMAN_FILE.unlink()
+        # Should not raise
+        agent.migrate_deadman_to_encrypted()
+        assert not agent.DEADMAN_FILE.exists()
+
 
 # ---------------------------------------------------------------------------
 # Config loading
@@ -951,11 +1117,67 @@ class TestStartupCheck:
             if tmp_sentinel.exists():
                 tmp_sentinel.unlink()
 
-    def test_startup_check_noop_if_no_sentinel(self, cfg, tmp_sentinel):
-        """If no sentinel, startup check should do nothing."""
+    def test_startup_check_noop_if_no_sentinel_and_no_deadman(self, cfg, tmp_sentinel):
+        """If no sentinel and no deadman file, startup check should do nothing (never flagged).."""
+        # Ensure deadman file doesn't exist
+        if agent.DEADMAN_FILE.exists():
+            agent.DEADMAN_FILE.unlink()
         with patch.object(agent, "apply_lock_screen") as mock_lock:
             agent.startup_check(cfg)
             mock_lock.assert_not_called()
+
+    def test_startup_check_fail_secure_if_sentinel_missing_but_stolen(self, cfg, tmp_sentinel):
+        """Fail-secure: if sentinel is missing but deadman says 'stolen', re-assert lock."""
+        # Write deadman file with stolen status
+        agent.DEADMAN_FILE.write_text(json.dumps({"last_seen": time.time(), "status": "stolen"}))
+        # Ensure sentinel doesn't exist
+        assert not tmp_sentinel.exists()
+        try:
+            with (
+                patch.object(agent, "apply_lock_screen") as mock_lock,
+                patch.object(agent, "start_lock_guardian") as mock_guardian,
+            ):
+                agent.startup_check(cfg)
+                mock_lock.assert_called_once()
+                mock_guardian.assert_called_once()
+                # Sentinel should be re-created
+                assert tmp_sentinel.exists()
+                sentinel_data = json.loads(tmp_sentinel.read_text())
+                assert sentinel_data["locked"] is True
+                assert sentinel_data["tamper_detected"] is True
+        finally:
+            if tmp_sentinel.exists():
+                tmp_sentinel.unlink()
+            if agent.DEADMAN_FILE.exists():
+                agent.DEADMAN_FILE.unlink()
+
+    def test_startup_check_noop_if_sentinel_missing_and_recovered(self, cfg, tmp_sentinel):
+        """If sentinel missing but deadman says 'active', normal startup (was recovered)."""
+        agent.DEADMAN_FILE.write_text(json.dumps({"last_seen": time.time(), "status": "active"}))
+        try:
+            with patch.object(agent, "apply_lock_screen") as mock_lock:
+                agent.startup_check(cfg)
+                mock_lock.assert_not_called()
+        finally:
+            if agent.DEADMAN_FILE.exists():
+                agent.DEADMAN_FILE.unlink()
+
+    def test_startup_check_fail_secure_if_deadman_corrupt(self, cfg, tmp_sentinel):
+        """Fail-secure: corrupt deadman file = possible tampering = re-assert lock."""
+        agent.DEADMAN_FILE.write_text("CORRUPT-NOT-JSON{{{")
+        try:
+            with (
+                patch.object(agent, "apply_lock_screen") as mock_lock,
+                patch.object(agent, "start_lock_guardian") as mock_guardian,
+            ):
+                agent.startup_check(cfg)
+                mock_lock.assert_called_once()
+                mock_guardian.assert_called_once()
+        finally:
+            if tmp_sentinel.exists():
+                tmp_sentinel.unlink()
+            if agent.DEADMAN_FILE.exists():
+                agent.DEADMAN_FILE.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -1040,9 +1262,153 @@ class TestCheckin:
 
             mock_requests.post.side_effect = real_requests.RequestException("Network error")
             mock_requests.RequestException = real_requests.RequestException
+            mock_requests.ConnectionError = real_requests.ConnectionError
+            mock_requests.Timeout = real_requests.Timeout
 
             result = agent.checkin(cfg)
             assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Serverless fallback
+# ---------------------------------------------------------------------------
+
+
+class TestServerlessFallback:
+    """Tests for _post_with_fallback — primary server failure → serverless fallback."""
+
+    def test_fallback_on_connection_error(self, cfg):
+        """When primary server is unreachable, fall back to serverless_url."""
+        import requests as real_requests
+
+        cfg["serverless_url"] = "https://worker.example.workers.dev"
+        with patch.object(agent, "requests") as mock_requests:
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_requests.post.side_effect = [
+                real_requests.ConnectionError("primary down"),
+                mock_resp,
+            ]
+            mock_requests.ConnectionError = real_requests.ConnectionError
+            mock_requests.Timeout = real_requests.Timeout
+
+            resp = agent._post_with_fallback("/api/agent/checkin", cfg, {"hostname": "TEST"})
+            assert resp is mock_resp
+            # First call to primary, second to fallback
+            assert mock_requests.post.call_count == 2
+            assert "test-server.example.com" in str(mock_requests.post.call_args_list[0])
+            assert "worker.example.workers.dev" in str(mock_requests.post.call_args_list[1])
+
+    def test_no_fallback_when_serverless_not_configured(self, cfg):
+        """Without serverless_url, connection error propagates (no fallback)."""
+        import requests as real_requests
+
+        cfg["serverless_url"] = ""
+        with patch.object(agent, "requests") as mock_requests:
+            mock_requests.post.side_effect = real_requests.ConnectionError("primary down")
+            mock_requests.ConnectionError = real_requests.ConnectionError
+            mock_requests.Timeout = real_requests.Timeout
+
+            with pytest.raises(real_requests.ConnectionError):
+                agent._post_with_fallback("/api/agent/checkin", cfg, {"hostname": "TEST"})
+            assert mock_requests.post.call_count == 1
+
+    def test_no_fallback_on_http_error(self, cfg):
+        """HTTP errors (4xx/5xx) are NOT retried on fallback — only connection errors."""
+        import requests as real_requests
+
+        cfg["serverless_url"] = "https://worker.example.workers.dev"
+        with patch.object(agent, "requests") as mock_requests:
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status.side_effect = real_requests.HTTPError("404 Not Found")
+            mock_requests.post.return_value = mock_resp
+            mock_requests.ConnectionError = real_requests.ConnectionError
+            mock_requests.Timeout = real_requests.Timeout
+
+            resp = agent._post_with_fallback("/api/agent/checkin", cfg, {"hostname": "TEST"})
+            # Should return the response (HTTP errors are not connection errors)
+            assert resp is mock_resp
+            assert mock_requests.post.call_count == 1
+
+    def test_fallback_on_timeout(self, cfg):
+        """Timeout triggers fallback to serverless_url."""
+        import requests as real_requests
+
+        cfg["serverless_url"] = "https://worker.example.workers.dev"
+        with patch.object(agent, "requests") as mock_requests:
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_requests.post.side_effect = [
+                real_requests.Timeout("primary timed out"),
+                mock_resp,
+            ]
+            mock_requests.ConnectionError = real_requests.ConnectionError
+            mock_requests.Timeout = real_requests.Timeout
+
+            resp = agent._post_with_fallback("/api/agent/checkin", cfg, {"hostname": "TEST"})
+            assert resp is mock_resp
+            assert mock_requests.post.call_count == 2
+
+    def test_checkin_uses_fallback(self, cfg):
+        """checkin() should succeed via fallback when primary is down."""
+        import requests as real_requests
+
+        cfg["serverless_url"] = "https://worker.example.workers.dev"
+        with patch.object(agent, "requests") as mock_requests:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"status": "active", "command": None}
+            mock_resp.raise_for_status = MagicMock()
+            mock_requests.post.side_effect = [
+                real_requests.ConnectionError("primary down"),
+                mock_resp,
+            ]
+            mock_requests.RequestException = real_requests.RequestException
+            mock_requests.ConnectionError = real_requests.ConnectionError
+            mock_requests.Timeout = real_requests.Timeout
+
+            result = agent.checkin(cfg)
+            assert result is not None
+            assert result["status"] == "active"
+
+
+class TestServerlessConfig:
+    """Tests for serverless_url config loading and validation."""
+
+    def test_load_config_serverless_url_from_env(self):
+        """SERVERLESS_URL env var should populate serverless_url."""
+        env = {"SERVERLESS_URL": "https://my-worker.workers.dev"}
+        with patch.dict(os.environ, env, clear=True):
+            cfg = agent.load_config()
+            assert cfg["serverless_url"] == "https://my-worker.workers.dev"
+
+    def test_load_config_serverless_url_default_empty(self):
+        """serverless_url should default to empty string when not set."""
+        with patch.dict(os.environ, {}, clear=True):
+            cfg = agent.load_config()
+            assert cfg["serverless_url"] == ""
+
+    def test_validate_config_accepts_valid_serverless_url(self, cfg):
+        """validate_config should accept a valid https serverless_url."""
+        cfg["serverless_url"] = "https://my-worker.workers.dev"
+        agent.validate_config(cfg)  # should not raise
+
+    def test_validate_config_rejects_http_serverless_url(self, cfg):
+        """validate_config should reject http:// serverless_url (TLS required)."""
+        cfg["serverless_url"] = "http://insecure.example.com"
+        with pytest.raises(ValueError, match="SERVERLESS_URL must use https://"):
+            agent.validate_config(cfg)
+
+    def test_validate_config_allows_http_serverless_in_dev_mode(self, cfg):
+        """validate_config should allow http:// serverless_url when verify_tls=False."""
+        cfg["serverless_url"] = "http://localhost:8787"
+        cfg["verify_tls"] = False
+        agent.validate_config(cfg)  # should not raise
+
+    def test_validate_config_rejects_serverless_url_without_host(self, cfg):
+        """validate_config should reject serverless_url with no host."""
+        cfg["serverless_url"] = "https://"
+        with pytest.raises(ValueError, match="SERVERLESS_URL is missing a host"):
+            agent.validate_config(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -1145,6 +1511,8 @@ class TestGeolocation:
 
             mock_requests.post.side_effect = real_requests.RequestException("Network error")
             mock_requests.RequestException = real_requests.RequestException
+            mock_requests.ConnectionError = real_requests.ConnectionError
+            mock_requests.Timeout = real_requests.Timeout
 
             result = agent.report_location(cfg)
             assert result is None
@@ -1201,6 +1569,8 @@ class TestPendingAck:
 
             mock_requests.post.side_effect = real_requests.RequestException("Network error")
             mock_requests.RequestException = real_requests.RequestException
+            mock_requests.ConnectionError = real_requests.ConnectionError
+            mock_requests.Timeout = real_requests.Timeout
 
             result = agent.ack_command(cfg, "cmd-1", "executed")
             assert result is False

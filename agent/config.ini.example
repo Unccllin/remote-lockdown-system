@@ -1,5 +1,11 @@
 [agent]
-server_url = https://your-server.example.com
+# Primary server — Cloudflare Worker (always-on, free tier, global edge).
+# Deploy with: cd serverless && wrangler deploy
+# Enroll devices via: curl -X POST <server_url>/api/enroll
+server_url = https://lockdown-serverless.mainacollins196.workers.dev
+# Optional fallback — if the Worker is unreachable, try this endpoint
+# (e.g. a self-hosted Express server). Leave empty for no fallback.
+serverless_url =
 agent_key = change_this_to_match_server_AGENT_SHARED_KEY
 hostname = DEVICE-HOSTNAME-001
 poll_interval = 30

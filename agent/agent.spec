@@ -42,6 +42,10 @@ hiddenimports = collect_submodules('cryptography') + [
 if sys.platform == 'win32':
     hiddenimports += ['hp_uefi_lockdown', 'bcd_lockdown']
 
+# State crypto modules (Layer 2/3: TPM sealing + DPAPI encryption)
+# These are imported lazily by agent.py, so PyInstaller needs them listed.
+hiddenimports += ['state_crypto', 'tpm_seal']
+
 # Data files to include (config template)
 datas = [
     ('config.ini.example', '.'),

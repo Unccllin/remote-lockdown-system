@@ -1,0 +1,115 @@
+{
+  "timestamp": "2026-08-27T07:55:13.650098+00:00",
+  "platform": "Linux",
+  "platform_release": "6.18.33.2-microsoft-standard-WSL2",
+  "machine": "x86_64",
+  "processor": "",
+  "is_admin_ctypes": false,
+  "is_admin_net_session": {
+    "returncode": -1,
+    "stdout": "",
+    "stderr": "[Errno 2] No such file or directory: 'net'"
+  },
+  "hp_model": {
+    "returncode": -1,
+    "stdout": "",
+    "stderr": "[Errno 2] No such file or directory: 'powershell'"
+  },
+  "hp_wmi": {
+    "returncode": -1,
+    "stdout": "",
+    "stderr": "[Errno 2] No such file or directory: 'powershell'"
+  },
+  "hp_bios_settings": {
+    "raw_output": "",
+    "settings": {},
+    "count": 0
+  },
+  "sure_admin": {
+    "returncode": -1,
+    "stdout": "",
+    "stderr": "[Errno 2] No such file or directory: 'powershell'"
+  },
+  "bios_password": {
+    "returncode": -1,
+    "stdout": "",
+    "stderr": "[Errno 2] No such file or directory: 'powershell'"
+  },
+  "bitlocker": {
+    "raw_output": "",
+    "raw_error": "[Errno 2] No such file or directory: 'manage-bde'",
+    "returncode": -1,
+    "protection_on": false,
+    "encryption_percentage": null
+  },
+  "bcd_settings": {
+    "recoveryenabled": {
+      "returncode": -1,
+      "stdout": "",
+      "stderr": "[Errno 2] No such file or directory: 'bcdedit'"
+    },
+    "displaybootmenu": {
+      "returncode": -1,
+      "stdout": "",
+      "stderr": "[Errno 2] No such file or directory: 'bcdedit'"
+    },
+    "bootsequence": {
+      "returncode": -1,
+      "stdout": "",
+      "stderr": "[Errno 2] No such file or directory: 'bcdedit'"
+    },
+    "timeout": {
+      "returncode": -1,
+      "stdout": "",
+      "stderr": "[Errno 2] No such file or directory: 'bcdedit'"
+    }
+  },
+  "winre": {
+    "raw_output": "",
+    "raw_error": "[Errno 2] No such file or directory: 'reagentc'",
+    "returncode": -1,
+    "enabled": false
+  },
+  "state_files": {
+    ".bcd_state": {
+      "exists": false,
+      "path": "/home/cllin/remote-lockdown-system/agent/.bcd_state"
+    },
+    ".boot_state": {
+      "exists": false,
+      "path": "/home/cllin/remote-lockdown-system/agent/.boot_state"
+    },
+    ".pending_ack": {
+      "exists": false,
+      "path": "/home/cllin/remote-lockdown-system/agent/.pending_ack"
+    },
+    ".deadman": {
+      "exists": false,
+      "path": "/home/cllin/remote-lockdown-system/agent/.deadman"
+    },
+    ".locked": {
+      "exists": false,
+      "path": "/home/cllin/remote-lockdown-system/agent/.locked"
+    },
+    ".heartbeat": {
+      "exists": true,
+      "path": "/home/cllin/remote-lockdown-system/agent/.heartbeat",
+      "content": ""
+    },
+    ".watchdog_heartbeat": {
+      "exists": false,
+      "path": "/home/cllin/remote-lockdown-system/agent/.watchdog_heartbeat"
+    }
+  },
+  "processes": {
+    "agent_running": false,
+    "watchdog_running": false,
+    "agent_tasklist": "",
+    "watchdog_tasklist": ""
+  },
+  "scheduled_task": {
+    "exists": false,
+    "raw_output": "",
+    "raw_error": "[Errno 2] No such file or directory: 'schtasks'"
+  }
+}

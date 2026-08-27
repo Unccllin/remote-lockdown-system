@@ -5,7 +5,7 @@ Hardens the Windows boot process to prevent bypassing the agent via:
   - Safe Mode (F8 / Advanced Startup)
   - Windows Recovery Environment (WinRE)
   - Automatic Repair / Recovery menu
-  - Boot status override (F8 → "Disable automatic restart on failure")
+  - Boot status override (F8 -> "Disable automatic restart on failure")
   - Multi-boot menu (alternate OS without the agent)
 
 What this module does on lockdown:
@@ -22,7 +22,7 @@ CC19: Critical vs. best-effort split.
   - Best-effort settings are defense-in-depth. Failure is logged but does not
     trigger rollback.
   - `bootstatuspolicy IgnoreAllFailures` is best-effort because the bypass it
-    targets (Automatic Repair → advanced options) is already closed by
+    targets (Automatic Repair -> advanced options) is already closed by
     `recoveryenabled No` + `reagentc /disable`. Treating it as critical would
     cause unnecessary rollbacks on machines where the BCD policy field is
     OEM-locked.
@@ -316,7 +316,7 @@ def _clear_bootsequence() -> bool:
 # Each entry: (setting_name, lockdown_value, description)
 BCD_CRITICAL_COMMANDS = [
     # Disable Windows Recovery Environment option
-    # (closes WinRE → command prompt bypass)
+    # (closes WinRE -> command prompt bypass)
     ("recoveryenabled", "No", "Disable recovery menu"),
     # Don't display the boot menu at all
     # (closes multi-boot alternate OS bypass — CC19 promoted to critical)
@@ -623,7 +623,7 @@ def _rollback_bcd(state: dict) -> bool:
     for setting, original_value in saved_settings.items():
         rc, _, stderr = _run(["bcdedit", "/set", "{default}", setting, original_value])
         if rc == 0:
-            log.info("Rollback: %s → %s (restored)", setting, original_value)
+            log.info("Rollback: %s -> %s (restored)", setting, original_value)
         else:
             log.error(
                 "Rollback: failed to restore %s to '%s': %s — non-fatal, continuing",
@@ -732,7 +732,7 @@ def apply_bcd_lockdown() -> dict:
             critical_failed += 1
             log.error("CRITICAL: %s failed", description)
 
-    # --- Check for critical failure → rollback (CC18) ---
+    # --- Check for critical failure -> rollback (CC18) ---
     if critical_failed > 0:
         log.error(
             "BCD lockdown: %d critical setting(s) failed — rolling back all changes",
@@ -829,10 +829,10 @@ def remove_bcd_lockdown() -> bool:
             rc, _, stderr = _run(["bcdedit", "/set", "{default}", setting, original_value])
             if rc == 0:
                 restored += 1
-                log.info("BCD restored: %s → %s", setting, original_value)
+                log.info("BCD restored: %s -> %s", setting, original_value)
             else:
                 failed += 1
-                log.warning("BCD restore failed: %s → %s: %s", setting, original_value, stderr)
+                log.warning("BCD restore failed: %s -> %s: %s", setting, original_value, stderr)
 
         # Re-enable WinRE if it was enabled before lockdown
         if winre_was_enabled:
@@ -849,11 +849,11 @@ def remove_bcd_lockdown() -> bool:
             rc, _, stderr = _run(["bcdedit", "/set", "{bootmgr}", setting, original_value])
             if rc == 0:
                 restored += 1
-                log.info("BCD {bootmgr} restored: %s → %s", setting, original_value)
+                log.info("BCD {bootmgr} restored: %s -> %s", setting, original_value)
             else:
                 failed += 1
                 log.warning(
-                    "BCD {bootmgr} restore failed: %s → %s: %s", setting, original_value, stderr
+                    "BCD {bootmgr} restore failed: %s -> %s: %s", setting, original_value, stderr
                 )
     else:
         # No saved state — use safe defaults
