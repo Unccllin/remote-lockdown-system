@@ -42,13 +42,12 @@ hiddenimports = collect_submodules('cryptography') + [
 # Data files
 datas = []
 
-# Binaries — include the agent exe if it exists in dist/
+# Binaries — the agent exe is NOT bundled in the installer.
+# Instead, the installer downloads it from the Worker at install time
+# (GET /api/download/agent). This keeps the installer small enough to
+# serve from Cloudflare KV (< 25MB) and allows updating the agent
+# without rebuilding the installer.
 binaries = []
-# If lockdown-agent.exe exists in dist/, bundle it
-import os
-agent_exe = os.path.join('dist', 'lockdown-agent.exe')
-if os.path.exists(agent_exe):
-    binaries = [(agent_exe, '.')]
 
 a = Analysis(
     ['installer_gui.py'],

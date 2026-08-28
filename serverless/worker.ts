@@ -1542,6 +1542,41 @@ export default {
       }
     }
 
+    // Binary download endpoints — serve installer + agent from KV.
+    // The binaries are uploaded to KV via:
+    //   wrangler kv:key put --binding LOCKDOWN_KV "binary:installer" --path lockdown-setup.exe
+    //   wrangler kv:key put --binding LOCKDOWN_KV "binary:agent" --path lockdown-agent.exe
+    // No admin auth required — these are public downloads (the enrollment
+    // token controls who can enroll, not who can download the installer).
+    if (path === '/api/download/installer' && method === 'GET') {
+      return handleDownloadBinary(env, 'installer');
+    }
+    if (path === '/api/download/agent' && method === 'GET') {
+      return handleDownloadBinary(env, 'agent');
+    }
+
     return errorResponse('Not found', 404);
   },
 };
+
+/**
+ * GET /api/download/installer or /api/download/agent
+ * Serves a binary file stored in KV (key: binary:installer or binary:agent).
+ * Returns the raw bytes with appropriate Content-Type and Content-Disposition.
+ */
+async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
+  const data = await env.LOCKDOWN_KV.get(`binary:${name}`, { type: 'arrayBuffer' });
+  if (!data) {
+    return errorResponse(`${name} binary not available — upload via wrangler kv:key put`, 404);
+  }
+  const filename = name === 'installer' ? 'lockdown-setup.exe' : 'lockdown-agent.exe';
+  return new Response(data, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/vnd.microsoft.portable-executable',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': String(data.byteLength),
+      'Cache-Control': 'public, max-age=3600',
+    },
+  });
+}

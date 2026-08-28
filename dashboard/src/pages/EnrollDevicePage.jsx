@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, KeyRound, Copy, Check, QrCode, Clock, Loader,
-  CheckCircle2, RefreshCw, Terminal,
+  CheckCircle2, RefreshCw, Terminal, Download, Monitor,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/client';
@@ -308,6 +308,41 @@ export default function EnrollDevicePage() {
             <p className="text-xs text-slate-500 mt-3">
               Run this in an elevated PowerShell on the target Windows machine.
               The installer enrolls the device and installs the agent service automatically.
+            </p>
+          </div>
+
+          {/* Download installer */}
+          <div className="card border-emerald-700/30 bg-emerald-950/10">
+            <h3 className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
+              <Monitor size={14} className="text-emerald-400" />
+              Download Setup Wizard (Recommended)
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Download a single .exe file with a GUI wizard. Just double-click on the
+              target device, paste the enrollment token, and the wizard handles everything —
+              no PowerShell or command line needed.
+            </p>
+            <div className="flex gap-3">
+              <a
+                href={`${serverBaseUrl}/api/download/installer`}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-emerald-900/30 hover:bg-emerald-900/50 border border-emerald-700/50 text-sm text-slate-200 transition-colors"
+                data-testid="download-installer-btn"
+              >
+                <Download size={16} className="text-emerald-400" />
+                Download Setup Wizard (.exe)
+              </a>
+              <a
+                href={`${serverBaseUrl}/api/download/agent`}
+                className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200 transition-colors"
+                data-testid="download-agent-btn"
+              >
+                <Download size={16} className="text-indigo-400" />
+                Agent Only
+              </a>
+            </div>
+            <p className="text-xs text-slate-500 mt-3">
+              The setup wizard downloads the agent automatically during installation.
+              Only download "Agent Only" if you're using the command-line installer.
             </p>
           </div>
 

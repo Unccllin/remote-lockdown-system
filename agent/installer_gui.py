@@ -228,6 +228,7 @@ def write_config(
 
 
 def find_agent_exe() -> Path | None:
+    """Find the agent exe locally (next to installer or in cwd)."""
     if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).parent
     else:
@@ -236,6 +237,29 @@ def find_agent_exe() -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def download_agent_exe(server_url: str, dest_dir: Path) -> Path | None:
+    """Download the agent binary from the Worker (GET /api/download/agent).
+
+    This is used when the agent exe is not bundled with the installer.
+    The binary is stored in Cloudflare KV and served by the Worker.
+    """
+    url = f"{server_url.rstrip('/')}/api/download/agent"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / AGENT_EXE_NAME
+    try:
+        resp = requests.get(url, timeout=120, verify=True, stream=True)
+        if resp.status_code != 200:
+            return None
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=65536):
+                f.write(chunk)
+        return dest if dest.exists() and dest.stat().st_size > 1000000 else None
+    except Exception:
+        if dest.exists():
+            dest.unlink()
+        return None
 
 
 def install_files(agent_exe: Path) -> Path:
@@ -629,11 +653,21 @@ class SetupWizard:
                     self.root.after(0, self._log, f"  Config: {CONFIG_FILE}")
 
                 elif "Installing agent" in msg:
+                    # First try to find the agent exe locally (bundled or
+                    # placed next to the installer). If not found, download
+                    # it from the Worker.
                     agent_exe = find_agent_exe()
                     if not agent_exe:
-                        raise Exception(
-                            f"Cannot find {AGENT_EXE_NAME}. Place it next to this installer."
+                        self.root.after(
+                            0, self._log, "  Agent not found locally, downloading from server..."
                         )
+                        agent_exe = download_agent_exe(self.server_url.get(), INSTALL_DIR)
+                        if not agent_exe:
+                            raise Exception(
+                                f"Cannot find or download {AGENT_EXE_NAME}. "
+                                "Check your network connection and server URL."
+                            )
+                        self.root.after(0, self._log, f"  Downloaded: {agent_exe}")
                     dest = install_files(agent_exe)
                     self.root.after(0, self._log, f"  Agent: {dest}")
 
@@ -650,11 +684,12 @@ class SetupWizard:
                     )
 
                 elif "Launching" in msg:
-                    agent_exe = find_agent_exe()
-                    if agent_exe:
-                        dest = INSTALL_DIR / AGENT_EXE_NAME
+                    dest = INSTALL_DIR / AGENT_EXE_NAME
+                    if dest.exists():
                         launch_agent(dest)
                         self.root.after(0, self._log, "  Agent started in background")
+                    else:
+                        self.root.after(0, self._log, "  Agent not found — skipping launch")
 
                 time.sleep(0.3)  # Visual pacing
 
