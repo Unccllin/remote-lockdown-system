@@ -75,4 +75,6 @@ __pycache__/
 # Local E2E temp dir pointer (never commit)
 .e2e-dir-local
 serverless/.wrangler/
-agent/C:\ProgramData/
+"agent/C:\\ProgramData/"
+agent/C:\\ProgramData/
+agent/C:*
