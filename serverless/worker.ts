@@ -49,6 +49,7 @@ interface Device {
   status: 'active' | 'stolen' | 'locked' | 'recovering' | 'tracking';
   mac_address: string | null;
   hardware_uuid: string | null;
+  serial_number: string | null;
   last_checkin: string | null;
   enrolled_at: string;
   api_key_hash: string;
@@ -250,6 +251,7 @@ interface CheckinMetadata {
   last_checkin: string | null;
   mac_address: string | null;
   hardware_uuid: string | null;
+  serial_number: string | null;
 }
 
 async function getCheckinMetadata(env: Env, deviceId: string): Promise<CheckinMetadata | null> {
@@ -271,6 +273,7 @@ function mergeCheckinMetadata(device: Device, metadata: CheckinMetadata | null):
     last_checkin: metadata.last_checkin ?? device.last_checkin,
     mac_address: metadata.mac_address ?? device.mac_address,
     hardware_uuid: metadata.hardware_uuid ?? device.hardware_uuid,
+    serial_number: metadata.serial_number ?? device.serial_number,
   };
 }
 
@@ -350,7 +353,7 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   }
 
   const payload = JSON.parse(body);
-  const { hostname, mac_address, hardware_uuid } = payload;
+  const { hostname, mac_address, hardware_uuid, serial_number } = payload;
 
   // KV-RACE-001: Write checkin metadata to a separate KV key, NOT to
   // the `devices` key. Same fix as handleAgentCheckin.
@@ -361,6 +364,7 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
       last_checkin: new Date().toISOString(),
       mac_address: mac_address || devices[idx].mac_address,
       hardware_uuid: hardware_uuid || devices[idx].hardware_uuid,
+      serial_number: serial_number || devices[idx].serial_number,
     });
   }
 
@@ -506,7 +510,7 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
   }
 
   const payload = JSON.parse(body);
-  const { hostname, mac_address, hardware_uuid } = payload;
+  const { hostname, mac_address, hardware_uuid, serial_number } = payload;
 
   // KV-RACE-001: Write checkin metadata to a separate KV key, NOT to the
   // `devices` key. This prevents the checkin handler from overwriting the
@@ -523,6 +527,7 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
     last_checkin: new Date().toISOString(),
     mac_address: mac_address || devices[idx].mac_address,
     hardware_uuid: hardware_uuid || devices[idx].hardware_uuid,
+    serial_number: serial_number || devices[idx].serial_number,
   });
   // Do NOT call saveDevices() here — that would race with the ACK handler.
 
@@ -770,6 +775,9 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
   const payload = await request.json() as {
     hostname: string;
     owner_name?: string;
+    hardware_uuid?: string;
+    mac_address?: string;
+    serial_number?: string;
   };
 
   if (!payload.hostname) {
@@ -779,19 +787,56 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
   const apiKey = generateApiKey();
   const apiKeyHash = await sha256(apiKey);
 
+  const devices = await listDevices(env);
+
+  // Re-association by hardware UUID (MDM-style): if a device with the same
+  // hardware_uuid already exists, re-issue credentials and update the record
+  // instead of creating a duplicate. Same hardware = same device record.
+  if (payload.hardware_uuid) {
+    const existingIdx = devices.findIndex(
+      (d) => d.hardware_uuid === payload.hardware_uuid,
+    );
+    if (existingIdx >= 0) {
+      const existing = devices[existingIdx];
+      existing.api_key_hash = apiKeyHash;
+      existing.hostname = payload.hostname;
+      existing.mac_address = payload.mac_address || existing.mac_address;
+      existing.serial_number = payload.serial_number || existing.serial_number;
+      existing.status = 'active';
+      await saveDevices(env, devices);
+
+      return jsonResponse(
+        {
+          device: {
+            id: existing.id,
+            hostname: existing.hostname,
+            status: existing.status,
+            enrolled_at: existing.enrolled_at,
+            hardware_uuid: existing.hardware_uuid,
+            serial_number: existing.serial_number,
+            mac_address: existing.mac_address,
+          },
+          api_key: apiKey, // Only returned once — store it securely
+          reassociated: true,
+        },
+        200,
+      );
+    }
+  }
+
   const device: Device = {
     id: generateId(),
     hostname: payload.hostname,
     owner_name: payload.owner_name || 'Operator',
     status: 'active',
-    mac_address: null,
-    hardware_uuid: null,
+    mac_address: payload.mac_address || null,
+    hardware_uuid: payload.hardware_uuid || null,
+    serial_number: payload.serial_number || null,
     last_checkin: null,
     enrolled_at: new Date().toISOString(),
     api_key_hash: apiKeyHash,
   };
 
-  const devices = await listDevices(env);
   devices.push(device);
   await saveDevices(env, devices);
 
@@ -802,6 +847,9 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
         hostname: device.hostname,
         status: device.status,
         enrolled_at: device.enrolled_at,
+        hardware_uuid: device.hardware_uuid,
+        serial_number: device.serial_number,
+        mac_address: device.mac_address,
       },
       api_key: apiKey, // Only returned once — store it securely
     },
@@ -855,9 +903,23 @@ async function handleEnrollToken(request: Request, env: Env): Promise<Response> 
  * response shape as /api/enroll.
  */
 async function handleEnrollClaim(request: Request, env: Env): Promise<Response> {
-  let payload: { token?: string; hostname: string; owner_name?: string };
+  let payload: {
+    token?: string;
+    hostname: string;
+    owner_name?: string;
+    hardware_uuid?: string;
+    mac_address?: string;
+    serial_number?: string;
+  };
   try {
-    payload = await request.json() as { token?: string; hostname: string; owner_name?: string };
+    payload = await request.json() as {
+      token?: string;
+      hostname: string;
+      owner_name?: string;
+      hardware_uuid?: string;
+      mac_address?: string;
+      serial_number?: string;
+    };
   } catch {
     return errorResponse('Invalid JSON body', 400);
   }
@@ -904,19 +966,56 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
   const apiKey = generateApiKey();
   const apiKeyHash = await sha256(apiKey);
 
+  const devices = await listDevices(env);
+
+  // Re-association by hardware UUID (MDM-style): if a device with the same
+  // hardware_uuid already exists, re-issue credentials and update the record
+  // instead of creating a duplicate. Same hardware = same device record.
+  if (payload.hardware_uuid) {
+    const existingIdx = devices.findIndex(
+      (d) => d.hardware_uuid === payload.hardware_uuid,
+    );
+    if (existingIdx >= 0) {
+      const existing = devices[existingIdx];
+      existing.api_key_hash = apiKeyHash;
+      existing.hostname = payload.hostname;
+      existing.mac_address = payload.mac_address || existing.mac_address;
+      existing.serial_number = payload.serial_number || existing.serial_number;
+      existing.status = 'active';
+      await saveDevices(env, devices);
+
+      return jsonResponse(
+        {
+          device: {
+            id: existing.id,
+            hostname: existing.hostname,
+            status: existing.status,
+            enrolled_at: existing.enrolled_at,
+            hardware_uuid: existing.hardware_uuid,
+            serial_number: existing.serial_number,
+            mac_address: existing.mac_address,
+          },
+          api_key: apiKey, // Only returned once — store it securely
+          reassociated: true,
+        },
+        200,
+      );
+    }
+  }
+
   const device: Device = {
     id: generateId(),
     hostname: payload.hostname,
     owner_name: payload.owner_name || 'Operator',
     status: 'active',
-    mac_address: null,
-    hardware_uuid: null,
+    mac_address: payload.mac_address || null,
+    hardware_uuid: payload.hardware_uuid || null,
+    serial_number: payload.serial_number || null,
     last_checkin: null,
     enrolled_at: new Date().toISOString(),
     api_key_hash: apiKeyHash,
   };
 
-  const devices = await listDevices(env);
   devices.push(device);
   await saveDevices(env, devices);
 
@@ -927,6 +1026,9 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
         hostname: device.hostname,
         status: device.status,
         enrolled_at: device.enrolled_at,
+        hardware_uuid: device.hardware_uuid,
+        serial_number: device.serial_number,
+        mac_address: device.mac_address,
       },
       api_key: apiKey, // Only returned once — store it securely
     },
@@ -972,6 +1074,36 @@ async function handleGetDevice(
   // the device, not a wrapper object).
   const { api_key_hash, ...safeDevice } = merged;
   return jsonResponse(safeDevice);
+}
+
+/**
+ * GET /api/devices/by-hardware/:uuid — look up a device by its hardware UUID.
+ *
+ * This lets the dashboard find a device by its hardware identifier (the same
+ * identifier used for MDM-style re-association at enrollment time). Merges
+ * checkin metadata so the returned device reflects the latest agent-reported
+ * hardware IDs.
+ */
+async function handleDeviceByHardware(
+  request: Request,
+  env: Env,
+  hardwareUuid: string,
+): Promise<Response> {
+  if (!verifyAdminAuth(request, env)) {
+    return errorResponse('Admin authentication required', 401);
+  }
+  const devices = await listDevices(env);
+  // Search both the device record and merged checkin metadata, since the
+  // hardware_uuid may have been reported via checkin after enrollment.
+  for (const d of devices) {
+    const meta = await getCheckinMetadata(env, d.id);
+    const merged = mergeCheckinMetadata(d, meta);
+    if (merged.hardware_uuid === hardwareUuid) {
+      const { api_key_hash, ...safeDevice } = merged;
+      return jsonResponse(safeDevice);
+    }
+  }
+  return errorResponse('Device not found', 404);
 }
 
 async function handleFlagStolen(
@@ -1370,6 +1502,14 @@ export default {
     }
     if (path === '/api/devices' && method === 'GET') {
       return handleListDevices(request, env);
+    }
+
+    // Device lookup by hardware UUID — must be checked BEFORE the generic
+    // /api/devices/:id route, otherwise "by-hardware" would be treated as
+    // a device ID.
+    if (path.startsWith('/api/devices/by-hardware/') && method === 'GET') {
+      const hardwareUuid = decodeURIComponent(path.slice('/api/devices/by-hardware/'.length));
+      return handleDeviceByHardware(request, env, hardwareUuid);
     }
 
     // Device-specific routes: /api/devices/:id[/action]

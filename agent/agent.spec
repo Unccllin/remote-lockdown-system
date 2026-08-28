@@ -46,6 +46,12 @@ if sys.platform == 'win32':
 # These are imported lazily by agent.py, so PyInstaller needs them listed.
 hiddenimports += ['state_crypto', 'tpm_seal']
 
+# New feature modules (imported lazily by agent.py with import guards)
+# duress: duress code + hidden file trigger
+# tamper_protection: 5-layer tamper detection (Windows-only, lazy import)
+# watchdog: process monitor (Windows-only, lazy import)
+hiddenimports += ['duress', 'tamper_protection', 'watchdog']
+
 # Data files to include (config template)
 datas = [
     ('config.ini.example', '.'),

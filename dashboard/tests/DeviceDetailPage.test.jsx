@@ -53,6 +53,9 @@ const baseDevice = {
   status: 'active',
   last_checkin: '2025-01-01T00:00:00Z',
   enrolled_at: '2025-01-01T00:00:00Z',
+  serial_number: 'SN12345678',
+  hardware_uuid: '550e8400-e29b-41d4-a716-446655440000',
+  mac_address: 'AA:BB:CC:DD:EE:FF',
 };
 
 beforeEach(() => {
@@ -78,6 +81,51 @@ describe('DeviceDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Flag as Stolen')).toBeInTheDocument();
     });
+  });
+
+  it('displays hardware identifiers in the Hardware Identity section', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: baseDevice });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('Hardware Identity')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.getByText('Serial Number')).toBeInTheDocument();
+    expect(screen.getByText('SN12345678')).toBeInTheDocument();
+    expect(screen.getByText('Hardware UUID')).toBeInTheDocument();
+    expect(screen.getByText('550e8400-e29b-41d4-a716-446655440000')).toBeInTheDocument();
+    expect(screen.getByText('MAC Address')).toBeInTheDocument();
+    expect(screen.getByText('AA:BB:CC:DD:EE:FF')).toBeInTheDocument();
+  });
+
+  it('shows N/A for missing hardware identifiers', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({
+          data: {
+            ...baseDevice,
+            serial_number: null,
+            hardware_uuid: null,
+            mac_address: null,
+          },
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('Hardware Identity')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    // Three "N/A" values for the three missing identifiers
+    expect(screen.getAllByText('N/A').length).toBe(3);
   });
 
   it('shows Recover button when status is stolen', async () => {

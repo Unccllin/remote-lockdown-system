@@ -155,6 +155,66 @@ def get_hardware_uuid() -> str:
     return None
 
 
+def get_serial_number() -> str:
+    """Get the machine serial number (service tag).
+
+    Uses the platform-appropriate source:
+      - Windows: WMI/CIM Win32_BIOS SerialNumber
+      - Linux:   /sys/class/dmi/id/product_serial
+      - macOS:   IOPlatformSerialNumber via ioreg
+
+    Returns None if the serial number is not available.
+    """
+    system = platform.system()
+    try:
+        if system == "Windows":
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_BIOS | Select-Object -ExpandProperty SerialNumber",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            serial = result.stdout.strip()
+            invalid = {"none", "default string", "to be filled by o.e.m."}
+            if serial and serial.lower() not in invalid:
+                return serial
+        elif system == "Linux":
+            try:
+                serial = Path("/sys/class/dmi/id/product_serial").read_text().strip()
+            except (FileNotFoundError, PermissionError):
+                return None
+            if serial and serial.lower() not in ("none", "0", "default string"):
+                return serial
+        elif system == "Darwin":
+            result = subprocess.run(
+                [
+                    "ioreg",
+                    "-rd1",
+                    "-c",
+                    "IOPlatformExpertDevice",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            for line in result.stdout.splitlines():
+                if "IOPlatformSerialNumber" in line:
+                    # "IOPlatformSerialNumber" = "C02XXXXXXXX"
+                    parts = line.split('"')
+                    if len(parts) >= 4:
+                        serial = parts[-2].strip()
+                        if serial:
+                            return serial
+    except Exception:  # noqa: S110 — serial not available on this platform / build
+        pass
+    return None
+
+
 def find_agent_exe() -> Path | None:
     """Find the agent exe to install. Look next to the installer, then in cwd."""
     if getattr(sys, "frozen", False):
@@ -182,9 +242,15 @@ def enroll_device(server_url: str, admin_token: str, hostname: str, owner_name: 
     Returns: {"device": {...}, "api_key": "..."} or raises Exception.
     """
     url = f"{server_url.rstrip('/')}/api/enroll"
+    hardware_uuid = get_hardware_uuid()
+    mac_address = get_mac_address()
+    serial_number = get_serial_number()
     payload = {
         "hostname": hostname,
         "owner_name": owner_name,
+        "hardware_uuid": hardware_uuid,
+        "mac_address": mac_address,
+        "serial_number": serial_number,
     }
     headers = {
         "Content-Type": "application/json",
@@ -210,6 +276,9 @@ def enroll_device(server_url: str, admin_token: str, hostname: str, owner_name: 
 
     data = resp.json()
     print_ok(f"Device enrolled: id={data['device']['id']}")
+    print(f"      Hardware UUID: {hardware_uuid or 'N/A'}")
+    print(f"      Serial Number: {serial_number or 'N/A'}")
+    print(f"      MAC Address: {mac_address or 'N/A'}")
     return data
 
 
@@ -223,10 +292,16 @@ def enroll_device_with_token(server_url: str, token: str, hostname: str, owner_n
     Returns: {"device": {...}, "api_key": "..."} or raises Exception.
     """
     url = f"{server_url.rstrip('/')}/api/enroll/claim"
+    hardware_uuid = get_hardware_uuid()
+    mac_address = get_mac_address()
+    serial_number = get_serial_number()
     payload = {
         "token": token,
         "hostname": hostname,
         "owner_name": owner_name,
+        "hardware_uuid": hardware_uuid,
+        "mac_address": mac_address,
+        "serial_number": serial_number,
     }
     headers = {
         "Content-Type": "application/json",
@@ -258,6 +333,9 @@ def enroll_device_with_token(server_url: str, token: str, hostname: str, owner_n
 
     data = resp.json()
     print_ok(f"Device enrolled: id={data['device']['id']}")
+    print(f"      Hardware UUID: {hardware_uuid or 'N/A'}")
+    print(f"      Serial Number: {serial_number or 'N/A'}")
+    print(f"      MAC Address: {mac_address or 'N/A'}")
     return data
 
 

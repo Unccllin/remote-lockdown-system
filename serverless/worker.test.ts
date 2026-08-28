@@ -713,6 +713,411 @@ describe('Serverless Worker', () => {
     });
   });
 
+  describe('Hardware ID capture at enrollment', () => {
+    it('POST /api/enroll captures hardware_uuid, mac_address, serial_number', async () => {
+      const req = makeRequest(
+        'POST',
+        '/api/enroll',
+        {
+          hostname: 'HW-001',
+          owner_name: 'Test',
+          hardware_uuid: 'uuid-hw-001',
+          mac_address: 'AA:BB:CC:DD:EE:01',
+          serial_number: 'SN-001',
+        },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp = await worker.fetch(req, env);
+      const data: any = await parseResponse(resp);
+
+      expect(resp.status).toBe(201);
+      expect(data.device.hardware_uuid).toBe('uuid-hw-001');
+      expect(data.device.mac_address).toBe('AA:BB:CC:DD:EE:01');
+      expect(data.device.serial_number).toBe('SN-001');
+    });
+
+    it('stored hardware IDs appear in device detail', async () => {
+      const enrollReq = makeRequest(
+        'POST',
+        '/api/enroll',
+        {
+          hostname: 'HW-002',
+          hardware_uuid: 'uuid-hw-002',
+          mac_address: 'AA:BB:CC:DD:EE:02',
+          serial_number: 'SN-002',
+        },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const enrollResp = await worker.fetch(enrollReq, env);
+      const enrollData: any = await parseResponse(enrollResp);
+      const deviceId = enrollData.device.id;
+
+      const getReq = makeRequest('GET', `/api/devices/${deviceId}`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const getResp = await worker.fetch(getReq, env);
+      const getData: any = await parseResponse(getResp);
+
+      expect(getData.hardware_uuid).toBe('uuid-hw-002');
+      expect(getData.mac_address).toBe('AA:BB:CC:DD:EE:02');
+      expect(getData.serial_number).toBe('SN-002');
+    });
+
+    it('POST /api/enroll/claim captures hardware IDs', async () => {
+      // Generate token
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const { token } = await parseResponse(await worker.fetch(tokenReq, env)) as any;
+
+      const claimReq = makeRequest('POST', '/api/enroll/claim', {
+        token,
+        hostname: 'HW-CLAIM-001',
+        hardware_uuid: 'uuid-claim-001',
+        mac_address: 'AA:BB:CC:DD:EE:03',
+        serial_number: 'SN-003',
+      });
+      const claimResp = await worker.fetch(claimReq, env);
+      const claimData: any = await parseResponse(claimResp);
+
+      expect(claimResp.status).toBe(201);
+      expect(claimData.device.hardware_uuid).toBe('uuid-claim-001');
+      expect(claimData.device.mac_address).toBe('AA:BB:CC:DD:EE:03');
+      expect(claimData.device.serial_number).toBe('SN-003');
+    });
+  });
+
+  describe('Re-association by hardware UUID', () => {
+    it('re-enrolling with same hardware_uuid returns same device ID with new API key', async () => {
+      // First enrollment
+      const enroll1 = makeRequest(
+        'POST',
+        '/api/enroll',
+        {
+          hostname: 'REASSOC-001',
+          hardware_uuid: 'uuid-reassoc-001',
+          mac_address: 'AA:BB:CC:DD:EE:10',
+          serial_number: 'SN-REASSOC-001',
+        },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp1 = await worker.fetch(enroll1, env);
+      const data1: any = await parseResponse(resp1);
+      const firstDeviceId = data1.device.id;
+      const firstApiKey = data1.api_key;
+
+      expect(resp1.status).toBe(201);
+
+      // Second enrollment with same hardware_uuid but different hostname
+      const enroll2 = makeRequest(
+        'POST',
+        '/api/enroll',
+        {
+          hostname: 'REASSOC-001-RENamed',
+          hardware_uuid: 'uuid-reassoc-001',
+          mac_address: 'AA:BB:CC:DD:EE:11',
+          serial_number: 'SN-REASSOC-001-NEW',
+        },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp2 = await worker.fetch(enroll2, env);
+      const data2: any = await parseResponse(resp2);
+
+      // Should return same device ID, new API key, reassociated flag
+      expect(resp2.status).toBe(200);
+      expect(data2.device.id).toBe(firstDeviceId);
+      expect(data2.api_key).toBeDefined();
+      expect(data2.api_key).not.toBe(firstApiKey);
+      expect(data2.reassociated).toBe(true);
+      // Hostname should be updated
+      expect(data2.device.hostname).toBe('REASSOC-001-RENamed');
+      expect(data2.device.hardware_uuid).toBe('uuid-reassoc-001');
+    });
+
+    it('re-associated device has updated hostname, mac_address, serial_number', async () => {
+      // First enrollment
+      const enroll1 = makeRequest(
+        'POST',
+        '/api/enroll',
+        {
+          hostname: 'REASSOC-DETAIL-001',
+          hardware_uuid: 'uuid-reassoc-detail',
+          mac_address: 'AA:BB:CC:DD:EE:20',
+          serial_number: 'SN-OLD',
+        },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp1 = await worker.fetch(enroll1, env);
+      const data1: any = await parseResponse(resp1);
+      const deviceId = data1.device.id;
+
+      // Re-enroll with new details
+      const enroll2 = makeRequest(
+        'POST',
+        '/api/enroll',
+        {
+          hostname: 'REASSOC-DETAIL-NEW',
+          hardware_uuid: 'uuid-reassoc-detail',
+          mac_address: 'AA:BB:CC:DD:EE:21',
+          serial_number: 'SN-NEW',
+        },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      await worker.fetch(enroll2, env);
+
+      // Verify via device detail
+      const getReq = makeRequest('GET', `/api/devices/${deviceId}`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const getResp = await worker.fetch(getReq, env);
+      const getData: any = await parseResponse(getResp);
+
+      expect(getData.hostname).toBe('REASSOC-DETAIL-NEW');
+      expect(getData.mac_address).toBe('AA:BB:CC:DD:EE:21');
+      expect(getData.serial_number).toBe('SN-NEW');
+      expect(getData.status).toBe('active');
+    });
+
+    it('re-association resets status to active', async () => {
+      // Enroll
+      const enroll1 = makeRequest(
+        'POST',
+        '/api/enroll',
+        {
+          hostname: 'REASSOC-STATUS-001',
+          hardware_uuid: 'uuid-reassoc-status',
+        },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp1 = await worker.fetch(enroll1, env);
+      const data1: any = await parseResponse(resp1);
+      const deviceId = data1.device.id;
+
+      // Flag stolen
+      await worker.fetch(
+        makeRequest('POST', `/api/devices/${deviceId}/flag-stolen`, {
+          hostname_confirm: 'REASSOC-STATUS-001',
+        }, { Authorization: 'Bearer test-admin-token' }),
+        env,
+      );
+
+      // Verify it's stolen
+      const stolenResp = await worker.fetch(
+        makeRequest('GET', `/api/devices/${deviceId}`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const stolenData: any = await parseResponse(stolenResp);
+      expect(stolenData.status).toBe('stolen');
+
+      // Re-enroll with same hardware_uuid
+      const enroll2 = makeRequest(
+        'POST',
+        '/api/enroll',
+        {
+          hostname: 'REASSOC-STATUS-001',
+          hardware_uuid: 'uuid-reassoc-status',
+        },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp2 = await worker.fetch(enroll2, env);
+      const data2: any = await parseResponse(resp2);
+
+      expect(resp2.status).toBe(200);
+      expect(data2.device.status).toBe('active');
+    });
+
+    it('re-association via enroll/claim with same hardware_uuid', async () => {
+      // First enrollment via admin
+      const enroll1 = makeRequest(
+        'POST',
+        '/api/enroll',
+        {
+          hostname: 'REASSOC-CLAIM-001',
+          hardware_uuid: 'uuid-reassoc-claim',
+        },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp1 = await worker.fetch(enroll1, env);
+      const data1: any = await parseResponse(resp1);
+      const firstDeviceId = data1.device.id;
+
+      // Generate token and claim with same hardware_uuid
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const { token } = await parseResponse(await worker.fetch(tokenReq, env)) as any;
+
+      const claimReq = makeRequest('POST', '/api/enroll/claim', {
+        token,
+        hostname: 'REASSOC-CLAIM-NEW',
+        hardware_uuid: 'uuid-reassoc-claim',
+      });
+      const claimResp = await worker.fetch(claimReq, env);
+      const claimData: any = await parseResponse(claimResp);
+
+      expect(claimResp.status).toBe(200);
+      expect(claimData.device.id).toBe(firstDeviceId);
+      expect(claimData.reassociated).toBe(true);
+      expect(claimData.device.hostname).toBe('REASSOC-CLAIM-NEW');
+    });
+
+    it('different hardware_uuid creates a new device (no re-association)', async () => {
+      const enroll1 = makeRequest(
+        'POST',
+        '/api/enroll',
+        {
+          hostname: 'NEW-DEV-001',
+          hardware_uuid: 'uuid-new-001',
+        },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp1 = await worker.fetch(enroll1, env);
+      const data1: any = await parseResponse(resp1);
+
+      const enroll2 = makeRequest(
+        'POST',
+        '/api/enroll',
+        {
+          hostname: 'NEW-DEV-002',
+          hardware_uuid: 'uuid-new-002',
+        },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp2 = await worker.fetch(enroll2, env);
+      const data2: any = await parseResponse(resp2);
+
+      expect(resp2.status).toBe(201);
+      expect(data2.device.id).not.toBe(data1.device.id);
+      expect(data2.reassociated).toBeUndefined();
+    });
+  });
+
+  describe('GET /api/devices/by-hardware/:uuid', () => {
+    it('finds a device by hardware_uuid', async () => {
+      // Enroll with hardware_uuid
+      await worker.fetch(
+        makeRequest('POST', '/api/enroll', {
+          hostname: 'BYHW-001',
+          hardware_uuid: 'uuid-byhw-001',
+          mac_address: 'AA:BB:CC:DD:EE:30',
+          serial_number: 'SN-BYHW-001',
+        }, { Authorization: 'Bearer test-admin-token' }),
+        env,
+      );
+
+      const req = makeRequest('GET', '/api/devices/by-hardware/uuid-byhw-001', undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const resp = await worker.fetch(req, env);
+      const data: any = await parseResponse(resp);
+
+      expect(resp.status).toBe(200);
+      expect(data.hostname).toBe('BYHW-001');
+      expect(data.hardware_uuid).toBe('uuid-byhw-001');
+      expect(data.serial_number).toBe('SN-BYHW-001');
+    });
+
+    it('returns 404 for unknown hardware_uuid', async () => {
+      const req = makeRequest('GET', '/api/devices/by-hardware/nonexistent-uuid', undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(404);
+    });
+
+    it('rejects without admin auth', async () => {
+      const req = makeRequest('GET', '/api/devices/by-hardware/some-uuid');
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('finds device by hardware_uuid reported via checkin (not enrollment)', async () => {
+      // Enroll WITHOUT hardware_uuid
+      const enrollResp = await worker.fetch(
+        makeRequest('POST', '/api/enroll', {
+          hostname: 'BYHW-CHECKIN-001',
+        }, { Authorization: 'Bearer test-admin-token' }),
+        env,
+      );
+      const enrollData: any = await parseResponse(enrollResp);
+      const apiKey = enrollData.api_key;
+
+      // Agent checks in with hardware_uuid
+      const checkinBody = JSON.stringify({
+        hostname: 'BYHW-CHECKIN-001',
+        hardware_uuid: 'uuid-from-checkin',
+        mac_address: 'AA:BB:CC:DD:EE:40',
+        serial_number: 'SN-CHECKIN',
+      });
+      await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', checkinBody, signRequest(checkinBody, apiKey)),
+        env,
+      );
+
+      // Now look up by the checkin-reported hardware_uuid
+      const req = makeRequest('GET', '/api/devices/by-hardware/uuid-from-checkin', undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const resp = await worker.fetch(req, env);
+      const data: any = await parseResponse(resp);
+
+      expect(resp.status).toBe(200);
+      expect(data.hostname).toBe('BYHW-CHECKIN-001');
+      expect(data.hardware_uuid).toBe('uuid-from-checkin');
+    });
+  });
+
+  describe('Serial number in checkin metadata', () => {
+    it('serial_number from checkin appears in device detail', async () => {
+      const { apiKey, device } = await enrollDevice(worker, env, 'SERIAL-001');
+
+      const checkinBody = JSON.stringify({
+        hostname: 'SERIAL-001',
+        hardware_uuid: 'uuid-serial-001',
+        mac_address: 'AA:BB:CC:DD:EE:50',
+        serial_number: 'SN-CHECKIN-001',
+      });
+      const checkinReq = makeRequest('POST', '/api/agent/checkin', checkinBody, signRequest(checkinBody, apiKey));
+      const checkinResp = await worker.fetch(checkinReq, env);
+      expect(checkinResp.status).toBe(200);
+
+      const getReq = makeRequest('GET', `/api/devices/${device.id}`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const getResp = await worker.fetch(getReq, env);
+      const getData: any = await parseResponse(getResp);
+
+      expect(getData.serial_number).toBe('SN-CHECKIN-001');
+      expect(getData.hardware_uuid).toBe('uuid-serial-001');
+      expect(getData.mac_address).toBe('AA:BB:CC:DD:EE:50');
+    });
+
+    it('serial_number from checkin appears in device list', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'SERIAL-LIST-001');
+
+      const checkinBody = JSON.stringify({
+        hostname: 'SERIAL-LIST-001',
+        serial_number: 'SN-LIST-001',
+      });
+      await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', checkinBody, signRequest(checkinBody, apiKey)),
+        env,
+      );
+
+      const listReq = makeRequest('GET', '/api/devices', undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const listResp = await worker.fetch(listReq, env);
+      const listData: any = await parseResponse(listResp);
+
+      const found = listData.find((d: any) => d.hostname === 'SERIAL-LIST-001');
+      expect(found).toBeDefined();
+      expect(found.serial_number).toBe('SN-LIST-001');
+    });
+  });
+
   describe('CORS', () => {
     it('handles OPTIONS preflight', async () => {
       const req = makeRequest('OPTIONS', '/api/health');

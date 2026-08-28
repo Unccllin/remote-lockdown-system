@@ -732,6 +732,33 @@ export default function DeviceDetailPage() {
         </div>
       </div>
 
+      {/* Hardware Identity — physical-machine identifiers that persist even
+          if the hostname changes (e.g. after theft). Lets the admin confirm
+          they are looking at the right physical box. */}
+      <div className="card mb-6">
+        <h2 className="font-semibold text-slate-200 text-sm mb-3">Hardware Identity</h2>
+        <div className="space-y-2">
+          <div className="flex justify-between">
+            <span className="text-xs text-slate-500">Serial Number</span>
+            <span className={`text-sm font-mono ${device.serial_number ? 'text-slate-200' : 'text-slate-400'}`}>
+              {device.serial_number || 'N/A'}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-xs text-slate-500">Hardware UUID</span>
+            <span className={`text-sm font-mono ${device.hardware_uuid ? 'text-slate-200' : 'text-slate-400'}`}>
+              {device.hardware_uuid || 'N/A'}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-xs text-slate-500">MAC Address</span>
+            <span className={`text-sm font-mono ${device.mac_address ? 'text-slate-200' : 'text-slate-400'}`}>
+              {device.mac_address || 'N/A'}
+            </span>
+          </div>
+        </div>
+      </div>
+
       {/* Location map + details — dark-themed Leaflet map with GPS pin,
           accuracy radius, and location history trail. */}
       {locations.length > 0 ? (
