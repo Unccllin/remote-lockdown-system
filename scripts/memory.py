@@ -56,6 +56,18 @@ RECONCILE_WRONG_THRESHOLD = 3  # force-decay after this many wrongs
 
 # ─── Utilities ───────────────────────────────────────────────────────────────
 
+def atomic_write(path: Path, content: str) -> None:
+    """Write content to a file atomically using temp-file + rename.
+
+    This prevents half-written files if the process is interrupted
+    mid-write. The temp file is created in the same directory as the
+    target (so the rename is atomic on POSIX filesystems).
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content)
+    tmp.rename(path)
+
+
 def now_iso():
     return datetime.now().strftime("%Y-%m-%d")
 
@@ -271,7 +283,7 @@ def stage_capture(args):
     # Write the capture file
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     capture_file = RAW_DIR / f"{session_id}.md"
-    capture_file.write_text(capture)
+    atomic_write(capture_file, capture)
 
     print(f"[OK] Capture written: {capture_file}")
     print(f"     Session ID: {session_id}")
@@ -384,7 +396,7 @@ def stage_consolidate(args):
         # Still mark as processed
         for f in pending_files:
             processed.add(f.stem)
-        consolidated_log.write_text("\n".join(sorted(processed)))
+        atomic_write(consolidated_log, "\n".join(sorted(processed)))
         return
 
     # Deduplication: group by first 5 significant words
@@ -463,7 +475,7 @@ def stage_consolidate(args):
     # Mark processed sessions
     for f in pending_files:
         processed.add(f.stem)
-    consolidated_log.write_text("\n".join(sorted(processed)))
+    atomic_write(consolidated_log, "\n".join(sorted(processed)))
 
     print(f"[OK] Consolidation complete:")
     print(f"     Processed {len(pending_files)} new raw captures ({len(raw_files)} total)")
@@ -536,7 +548,7 @@ def write_consolidated_memory(mid, content, meta, filepath):
 ## Evidence
 - {meta.get("last_seen", now_iso())}: Observed in {meta.get("seen_count", 1)} session(s)
 """
-    filepath.write_text(file_content)
+    atomic_write(filepath, file_content)
 
 
 # ─── Stage 3: RETRIEVE ──────────────────────────────────────────────────────
@@ -873,7 +885,7 @@ def stage_decay(args):
 - date: {now_iso()}
 - can_be_restored: true (move back to consolidated/ if needed)
 """
-            decayed_file.write_text(decayed_content)
+            atomic_write(decayed_file, decayed_content)
             f.unlink()
             archived += 1
             print(f"  [DECAYED] {mid}: {reason}")
@@ -1138,7 +1150,7 @@ def stage_index(args):
     if line_count > MAX_INDEX_LINES:
         print(f"[WARN] Index has {line_count} lines (max {MAX_INDEX_LINES}). Consider running decay.")
 
-    INDEX_FILE.write_text(content)
+    atomic_write(INDEX_FILE, content)
     print(f"[OK] Index rebuilt: {len(entries)} active, {len(superseded)} superseded, {len(decayed)} decayed")
 
 
@@ -1151,7 +1163,7 @@ def stage_init(args):
         print(f"  [OK] {d}")
 
     if not INDEX_FILE.exists():
-        INDEX_FILE.write_text("# Memory Index\n\nNo memories yet.\n")
+        atomic_write(INDEX_FILE, "# Memory Index\n\nNo memories yet.\n")
         print(f"  [OK] {INDEX_FILE} (initialized)")
 
     print("\n[OK] Memory harness initialized.")
