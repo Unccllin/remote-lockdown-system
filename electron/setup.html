@@ -16,10 +16,7 @@
       min-height: 100vh;
       padding: 2rem;
     }
-    .container {
-      max-width: 560px;
-      width: 100%;
-    }
+    .container { max-width: 560px; width: 100%; }
     h1 {
       font-size: 1.5rem;
       margin-bottom: 0.5rem;
@@ -31,51 +28,21 @@
       color: #94a3b8;
       margin-bottom: 2rem;
       font-size: 0.95rem;
-    }
-    .mode-card {
-      border: 2px solid #334155;
-      border-radius: 12px;
-      padding: 1.5rem;
-      margin-bottom: 1rem;
-      cursor: pointer;
-      transition: border-color 0.2s, background 0.2s;
-    }
-    .mode-card:hover {
-      border-color: #475569;
-      background: #1e293b;
-    }
-    .mode-card.selected {
-      border-color: #3b82f6;
-      background: #1e293b;
-    }
-    .mode-card h2 {
-      font-size: 1.1rem;
-      margin-bottom: 0.5rem;
-    }
-    .mode-card p {
-      color: #94a3b8;
-      font-size: 0.875rem;
       line-height: 1.5;
     }
-    .mode-card .icon {
-      font-size: 1.5rem;
-      margin-bottom: 0.5rem;
-    }
-    .serverless-config {
-      display: none;
-      margin-top: 1rem;
-      padding: 1rem;
+    .config-box {
+      padding: 1.5rem;
       background: #1e293b;
-      border-radius: 8px;
+      border-radius: 12px;
+      border: 2px solid #334155;
     }
-    .serverless-config.visible { display: block; }
-    .serverless-config label {
+    .config-box label {
       display: block;
       font-size: 0.875rem;
       margin-bottom: 0.5rem;
       color: #cbd5e1;
     }
-    .serverless-config input {
+    .config-box input {
       width: 100%;
       padding: 0.625rem;
       border-radius: 6px;
@@ -85,7 +52,7 @@
       font-size: 0.875rem;
       font-family: monospace;
     }
-    .serverless-config input:focus {
+    .config-box input:focus {
       outline: none;
       border-color: #3b82f6;
     }
@@ -117,53 +84,30 @@
       background: #3b82f6;
       color: white;
     }
-    .btn:not(:disabled):hover {
-      background: #2563eb;
-    }
+    .btn:not(:disabled):hover { background: #2563eb; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Remote Lockdown Admin</h1>
-    <p class="subtitle">Choose how you want to run the admin app. You can change this later by deleting the config file.</p>
+    <h1>☁️ Remote Lockdown Admin</h1>
+    <p class="subtitle">Enter the URL of your deployed Cloudflare Worker backend. This is where all API calls will be sent.</p>
 
-    <div class="mode-card" id="card-local" onclick="selectMode('local')">
-      <div class="icon">🖥️</div>
-      <h2>Local Server</h2>
-      <p>Runs a self-contained server on this machine with a local SQLite database. No internet connection required. Best for single-machine setups or air-gapped environments.</p>
-    </div>
-
-    <div class="mode-card" id="card-serverless" onclick="selectMode('serverless')">
-      <div class="icon">☁️</div>
-      <h2>Cloud (Serverless)</h2>
-      <p>Connects to a deployed Cloudflare Worker backend. No local server or database — all data lives in the cloud. Best for managing devices across multiple locations.</p>
-    </div>
-
-    <div class="serverless-config" id="serverless-config">
+    <div class="config-box">
       <label for="worker-url">Cloudflare Worker URL</label>
-      <input type="text" id="worker-url" placeholder="https://your-worker.workers.dev" oninput="onUrlInput()">
+      <input type="text" id="worker-url" value="https://lockdown-serverless.mainacollins196.workers.dev" oninput="onUrlInput()">
       <div class="test-result" id="test-result"></div>
     </div>
 
-    <button class="btn" id="confirm-btn" disabled onclick="confirm()">Continue</button>
+    <button class="btn" id="confirm-btn" disabled onclick="confirm()">Connect</button>
   </div>
 
   <script>
-    let selectedMode = null;
     let workerUrlValid = false;
-
-    function selectMode(mode) {
-      selectedMode = mode;
-      document.getElementById('card-local').classList.toggle('selected', mode === 'local');
-      document.getElementById('card-serverless').classList.toggle('selected', mode === 'serverless');
-      document.getElementById('serverless-config').classList.toggle('visible', mode === 'serverless');
-      updateConfirmButton();
-    }
 
     function onUrlInput() {
       workerUrlValid = false;
       document.getElementById('test-result').textContent = '';
-      updateConfirmButton();
+      document.getElementById('confirm-btn').disabled = true;
     }
 
     async function testWorkerUrl() {
@@ -194,40 +138,28 @@
         resultEl.className = 'test-result err';
         workerUrlValid = false;
       }
-      updateConfirmButton();
-    }
-
-    function updateConfirmButton() {
-      const btn = document.getElementById('confirm-btn');
-      if (selectedMode === 'local') {
-        btn.disabled = false;
-      } else if (selectedMode === 'serverless') {
-        btn.disabled = !workerUrlValid;
-      } else {
-        btn.disabled = true;
-      }
+      document.getElementById('confirm-btn').disabled = !workerUrlValid;
     }
 
     function confirm() {
-      if (selectedMode === 'local') {
-        window.wizardAPI.selectMode('local', null);
-      } else if (selectedMode === 'serverless') {
-        const url = document.getElementById('worker-url').value.trim();
-        // Normalize: ensure it ends with /api
-        let normalized = url;
-        if (!normalized.endsWith('/api')) {
-          normalized = normalized.replace(/\/$/, '') + '/api';
-        }
-        window.wizardAPI.selectMode('serverless', normalized);
+      if (!workerUrlValid) return;
+      const url = document.getElementById('worker-url').value.trim();
+      // Normalize: ensure it ends with /api
+      let normalized = url;
+      if (!normalized.endsWith('/api')) {
+        normalized = normalized.replace(/\/$/, '') + '/api';
       }
+      window.wizardAPI.confirmUrl(normalized);
     }
 
-    // Auto-test URL when user stops typing (debounced)
+    // Auto-test URL on load and when user stops typing (debounced)
     let urlTimer = null;
     document.getElementById('worker-url').addEventListener('input', () => {
       clearTimeout(urlTimer);
       urlTimer = setTimeout(testWorkerUrl, 600);
     });
+    // Test the pre-filled URL on load
+    setTimeout(testWorkerUrl, 300);
   </script>
 </body>
 </html>

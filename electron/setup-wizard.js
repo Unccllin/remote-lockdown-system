@@ -1,29 +1,27 @@
 /**
- * setup-wizard.js — First-run setup wizard for mode selection.
+ * setup-wizard.js — First-run setup wizard for Worker URL configuration.
  *
- * Shows a BrowserWindow with setup.html that lets the user choose between
- * "Local Server" (bundled Express + SQLite) and "Cloud (Serverless)"
- * (Cloudflare Worker). For serverless mode, validates the Worker URL by
- * fetching /health and checking for `serverless: true`.
+ * Shows a BrowserWindow with setup.html that asks the user for their
+ * Cloudflare Worker URL. Validates the URL by fetching /health and
+ * checking for `serverless: true`.
  *
- * Exports a single function `showSetupWizard` that returns a Promise
- * resolving to `{ mode, workerUrl }` when the user confirms their choice.
+ * Exports `showSetupWizard` which returns a Promise resolving to
+ * `{ workerUrl }` when the user confirms.
  */
 
 const { BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 
 /**
- * Show the setup wizard and wait for the user's selection.
+ * Show the setup wizard and wait for the user's Worker URL.
  *
- * @param {string} userDataPath — Electron's app.getPath('userData')
- * @returns {Promise<{ mode: 'local'|'serverless', workerUrl: string|null }>}
+ * @returns {Promise<{ workerUrl: string }>}
  */
 function showSetupWizard() {
   return new Promise((resolve) => {
     const win = new BrowserWindow({
       width: 640,
-      height: 720,
+      height: 480,
       resizable: false,
       minimizable: false,
       maximizable: false,
@@ -38,40 +36,32 @@ function showSetupWizard() {
       },
     });
 
-    // Load the setup wizard HTML
     win.loadFile(path.join(__dirname, 'setup.html'));
 
-    // Prevent the user from closing the wizard without making a choice
+    // Prevent closing without making a choice
     win.on('close', (e) => {
-      // If the promise hasn't resolved yet, prevent close and let the
-      // user make a selection. The window is only closed programmatically
-      // after resolve.
       e.preventDefault();
     });
 
-    // Handle mode selection from the wizard
-    const selectHandler = (_event, { mode, workerUrl }) => {
+    // Handle URL confirmation from the wizard
+    const confirmHandler = (_event, workerUrl) => {
       win.removeAllListeners('close');
       win.close();
-      ipcMain.removeListener('setup:select-mode', selectHandler);
-      resolve({ mode, workerUrl });
+      ipcMain.removeListener('setup:confirm-url', confirmHandler);
+      resolve({ workerUrl });
     };
-    ipcMain.on('setup:select-mode', selectHandler);
+    ipcMain.on('setup:confirm-url', confirmHandler);
 
-    // Handle Worker URL validation requests from the wizard
-    const testHandler = async (event, url) => {
+    // Handle Worker URL validation requests
+    const testHandler = async (_event, url) => {
       try {
-        const result = await validateWorkerUrl(url);
-        event.sender.send('setup:test-worker-url-result', result);
-        // ipcRenderer.invoke expects a return value, not a send
-        return result;
+        return await validateWorkerUrl(url);
       } catch (err) {
         return { ok: false, error: err.message };
       }
     };
     ipcMain.handle('setup:test-worker-url', testHandler);
 
-    // Clean up handlers when window is closed
     win.on('closed', () => {
       ipcMain.removeHandler('setup:test-worker-url');
     });
@@ -101,7 +91,6 @@ async function validateWorkerUrl(url) {
   }
 
   // Fetch /health from the Worker. The URL may or may not include /api.
-  // Try /health first (Worker root), then /api/health.
   const base = url.trim().replace(/\/$/, '');
   const candidates = [
     base.replace(/\/api$/, '') + '/health',
@@ -122,10 +111,8 @@ async function validateWorkerUrl(url) {
       if (data.serverless === true) {
         return { ok: true };
       }
-      // Response was OK but not serverless — might be an Express server
       return { ok: false, error: 'This URL does not appear to be a serverless Worker (no serverless: true in /health response)' };
     } catch {
-      // Try next candidate URL
       continue;
     }
   }

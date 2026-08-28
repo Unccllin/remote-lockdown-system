@@ -43,7 +43,8 @@ describe('startStaticServer (serverless mode)', () => {
     expect(serverInfo).toBeDefined();
     expect(serverInfo.port).toBeGreaterThan(0);
     expect(serverInfo.server).toBeDefined();
-    expect(serverInfo.pool).toBeNull(); // no database in serverless mode
+    // No pool property — serverless mode has no database
+    expect(serverInfo.pool).toBeUndefined();
   });
 
   it('serves index.html at root', async () => {

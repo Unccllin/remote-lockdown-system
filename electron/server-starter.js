@@ -1,226 +1,37 @@
 /**
- * server-starter.js — starts the Express server in-process within Electron.
+ * server-starter.js — static file server for the Electron admin app.
  *
- * This module is loaded by the Electron main process. It:
- *   1. Sets environment variables (dev defaults if not set)
- *   2. Overrides the DB pool to use SQLite (sqlitePool.js)
- *   3. Runs database migrations
- *   4. Starts the Express server on the configured port
- *   5. Serves the built dashboard from dashboard/dist/
+ * The Electron app is a serverless desktop shell. All API calls go to a
+ * Cloudflare Worker. This module starts a minimal Express server that
+ * serves ONLY the built dashboard UI (static files + SPA fallback).
  *
- * The server uses the same route modules as the standalone server,
- * so behavior is identical between dev, production, and Electron modes.
+ * Why a local server at all? BrowserRouter (used by the dashboard) requires
+ * an HTTP origin — file:// doesn't support the History API. So we start a
+ * tiny static server on a random port, and the dashboard's API calls go
+ * cross-origin to the Worker (which has CORS Access-Control-Allow-Origin: *).
  */
 
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
+const express = require('express');
 
-// --- Module resolution ---
-// The Electron app lives in electron/ but needs to require modules from
-// server/node_modules (express, helmet, cors, etc.). We use Module.createRequire
-// to create a require function rooted at the server directory, so all module
-// resolution happens as if we were running from inside the server directory.
-//
-// In dev: server files are at ../server relative to this file (repo layout).
-// In production (packaged): server files are in extraResources at
-//   process.resourcesPath/server/ — the ../server relative path does NOT
-//   work because electron-builder 25 silently drops ../ globs from the
-//   files config, so server code is placed in extraResources instead.
-const serverDir = process.resourcesPath && fs.existsSync(path.join(process.resourcesPath, 'server'))
-  ? path.join(process.resourcesPath, 'server')
-  : path.join(__dirname, '..', 'server');
-const Module = require('module');
-const requireFromServer = Module.createRequire
-  ? Module.createRequire(path.join(serverDir, 'package.json'))
-  : require; // fallback for older Node.js
-
-// --- Environment setup ---
-// In production, these are set by the first-run setup. In dev, use defaults.
-function setupEnv(isDev) {
-  process.env.NODE_ENV = isDev ? 'development' : 'production';
-
-  // Security keys — in production these are generated on first run and
-  // stored in the user data directory. In dev, use fixed defaults.
-  if (isDev) {
-    process.env.AGENT_SHARED_KEY = process.env.AGENT_SHARED_KEY || 'dev-agent-shared-key-not-a-placeholder-24';
-    process.env.AGENT_KEY_PEPPER = process.env.AGENT_KEY_PEPPER || 'dev-pepper-key-not-a-placeholder-32';
-    process.env.JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret-not-a-placeholder-32';
-    process.env.FIELD_ENCRYPTION_KEY = process.env.FIELD_ENCRYPTION_KEY || 'a'.repeat(64);
-    process.env.LOCATION_FIELD_KEY = process.env.LOCATION_FIELD_KEY || 'b'.repeat(64);
-    process.env.ALLOW_NON_PROD = '1';
-  }
-
-  process.env.CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
-  process.env.USE_SQLITE = 'true';
-
-  // SQLite database path — store in Electron's userData directory
-  // (set by main.js before requiring this module)
-  if (!process.env.SQLITE_PATH) {
-    throw new Error('SQLITE_PATH must be set before starting server. Fix: set process.env.SQLITE_PATH to a writable file path for the SQLite database before requiring server-starter.js.');
-  }
-
-  // User data directory — used by installer.js for caching cross-platform
-  // agent binaries downloaded from GitHub Releases
-  // Derive from SQLITE_PATH (both are in userData directory)
-  if (!process.env.USER_DATA_DIR) {
-    process.env.USER_DATA_DIR = path.dirname(path.dirname(process.env.SQLITE_PATH));
-  }
-
-  // Server port — use 0 to let the OS pick an available port
-  process.env.PORT = process.env.PORT || '0';
-}
-
-// --- Database setup ---
-async function setupDatabase() {
-  const sqlitePool = require(path.join(serverDir, 'src/db/sqlitePool'));
-  const { runMigrations } = require(path.join(serverDir, 'src/db/migrationRunner'));
-
-  // Override the pool module so all route modules use SQLite
-  const poolPath = require.resolve(path.join(serverDir, 'src/db/pool'));
-  require.cache[poolPath] = {
-    exports: sqlitePool,
-    id: poolPath,
-    filename: poolPath,
-    loaded: true,
-  };
-
-  console.log('[server-starter] Running SQLite migrations...');
-  await runMigrations(sqlitePool, { dialect: 'sqlite' });
-  console.log('[server-starter] Migrations complete.');
-
-  return sqlitePool;
-}
-
-// --- Seed initial admin (first run only) ---
-async function seedInitialAdmin(pool, username, password) {
-  const bcrypt = requireFromServer('bcryptjs');
-  const adminCheck = await pool.query('SELECT COUNT(*) as count FROM admins');
-  if (parseInt(adminCheck.rows[0].count) > 0) {
-    return false; // already seeded
-  }
-
-  const hash = bcrypt.hashSync(password, 10);
-  await pool.query(
-    'INSERT INTO admins (id, username, password_hash, role) VALUES ($1, $2, $3, $4)',
-    [crypto.randomUUID(), username, hash, 'super-admin']
-  );
-  console.log(`[server-starter] Created initial admin: ${username}`);
-  return true;
-}
-
-// --- Express server (full: API + static dashboard) ---
-async function startServer(options = {}) {
-  const { isDev = false, dashboardDistPath = null } = options;
-
-  setupEnv(isDev);
-  const pool = await setupDatabase();
-
-  // Seed initial admin if requested
-  if (options.initialAdmin) {
-    await seedInitialAdmin(pool, options.initialAdmin.username, options.initialAdmin.password);
-  }
-
-  const express = requireFromServer('express');
-  const helmet = requireFromServer('helmet');
-  const cors = requireFromServer('cors');
-  const rateLimit = requireFromServer('express-rate-limit');
-  const app = express();
-
-  // Security middleware
-  // Note: helmet is relaxed for Electron (same-origin, no external requests)
-  app.use(helmet({
-    contentSecurityPolicy: false, // Electron manages CSP separately
-    crossOriginEmbedderPolicy: false,
-  }));
-  app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
-
-  // Raw body capture for HMAC signature verification (same as index.js)
-  app.use(express.json({
-    verify: (req, _res, buf) => {
-      req.rawBody = buf.toString('utf8');
-    },
-  }));
-
-  // Rate limiter on agent endpoint (same as index.js)
-  const agentLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 30,
-    standardHeaders: true,
-    legacyHeaders: false,
-  });
-
-  // API routes — kept in sync with server/src/index.js
-  app.use('/api/auth', require(path.join(serverDir, 'src/routes/auth')));
-  app.use('/api/setup', require(path.join(serverDir, 'src/routes/setup')));
-  app.use('/api/devices', require(path.join(serverDir, 'src/routes/devices')));
-  app.use('/api/agent', agentLimiter, require(path.join(serverDir, 'src/routes/agent')));
-  app.use('/api/audit', require(path.join(serverDir, 'src/routes/audit')));
-  app.use('/api/installer', require(path.join(serverDir, 'src/routes/installer')));
-  app.use('/api/health', require(path.join(serverDir, 'src/routes/health')));
-  app.use('/api/admins', require(path.join(serverDir, 'src/routes/admins')));
-
-  // 404 JSON for unmatched API routes — prevents API clients from
-  // receiving index.html (the SPA fallback) for non-existent endpoints.
-  app.all('/api/*', (req, res) => {
-    res.status(404).json({ error: 'Not found. Check the API endpoint path and method.' });
-  });
-
-  // Serve built dashboard (production mode)
-  if (dashboardDistPath && fs.existsSync(dashboardDistPath)) {
-    const indexPath = path.resolve(dashboardDistPath, 'index.html');
-    app.use(express.static(dashboardDistPath, {
-      index: false,
-      setHeaders: (res, filePath) => {
-        if (filePath.endsWith('index.html')) {
-          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        } else {
-          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        }
-      },
-    }));
-    // SPA fallback: serve index.html for any non-API route
-    app.get('*', (req, res, next) => {
-      if (req.path.startsWith('/api/')) return next();
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.sendFile(indexPath);
-    });
-  }
-
-  // Error handler
-  app.use((err, req, res, _next) => {
-    console.error('[server-starter] Express error:', err);
-    res.status(500).json({ error: 'Internal server error. Check server logs for details and contact support if the issue persists.' });
-  });
-
-  // Start listening — port 0 means OS picks an available port
-  const port = parseInt(process.env.PORT || '0');
-  return new Promise((resolve, reject) => {
-    const server = app.listen(port, () => {
-      const actualPort = server.address().port;
-      console.log(`[server-starter] Server running on http://localhost:${actualPort}`);
-      resolve({ server, port: actualPort, pool });
-    });
-    server.on('error', reject);
-  });
-}
-
-// --- Static-only server (serverless mode: serves dashboard UI, no API) ---
-// In serverless mode, the backend is a Cloudflare Worker. We still need a
-// local HTTP server to serve the dashboard UI because BrowserRouter requires
-// an HTTP origin (file:// doesn't support the History API). This server
-// serves ONLY static files + SPA fallback — no API routes, no database.
+/**
+ * Start a static-only server that serves the dashboard UI.
+ *
+ * @param {object} options
+ * @param {string} options.dashboardDistPath — path to dashboard/dist (built dashboard)
+ * @returns {Promise<{ server: object, port: number }>}
+ */
 async function startStaticServer(options = {}) {
   const { dashboardDistPath = null } = options;
 
   if (!dashboardDistPath || !fs.existsSync(dashboardDistPath)) {
-    throw new Error('Dashboard dist path is required for static server. Fix: build the dashboard first with `cd dashboard && npx vite build`, then ensure the path is passed to startStaticServer.');
+    throw new Error('Dashboard dist path is required. Fix: build the dashboard first with `cd dashboard && npx vite build`, then ensure the path is passed to startStaticServer.');
   }
 
-  const express = requireFromServer('express');
   const app = express();
-
   const indexPath = path.resolve(dashboardDistPath, 'index.html');
+
   app.use(express.static(dashboardDistPath, {
     index: false,
     setHeaders: (res, filePath) => {
@@ -242,11 +53,11 @@ async function startStaticServer(options = {}) {
   return new Promise((resolve, reject) => {
     const server = app.listen(port, () => {
       const actualPort = server.address().port;
-      console.log(`[server-starter] Static server running on http://localhost:${actualPort} (serverless mode — API calls go to Worker)`);
-      resolve({ server, port: actualPort, pool: null });
+      console.log(`[server-starter] Static server running on http://localhost:${actualPort} (API calls go to Worker)`);
+      resolve({ server, port: actualPort });
     });
     server.on('error', reject);
   });
 }
 
-module.exports = { startServer, startStaticServer, setupEnv, setupDatabase };
+module.exports = { startStaticServer };
