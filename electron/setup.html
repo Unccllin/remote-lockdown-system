@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Remote Lockdown Admin — Setup</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 560px;
+      width: 100%;
+    }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .subtitle {
+      color: #94a3b8;
+      margin-bottom: 2rem;
+      font-size: 0.95rem;
+    }
+    .mode-card {
+      border: 2px solid #334155;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .mode-card:hover {
+      border-color: #475569;
+      background: #1e293b;
+    }
+    .mode-card.selected {
+      border-color: #3b82f6;
+      background: #1e293b;
+    }
+    .mode-card h2 {
+      font-size: 1.1rem;
+      margin-bottom: 0.5rem;
+    }
+    .mode-card p {
+      color: #94a3b8;
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+    .mode-card .icon {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .serverless-config {
+      display: none;
+      margin-top: 1rem;
+      padding: 1rem;
+      background: #1e293b;
+      border-radius: 8px;
+    }
+    .serverless-config.visible { display: block; }
+    .serverless-config label {
+      display: block;
+      font-size: 0.875rem;
+      margin-bottom: 0.5rem;
+      color: #cbd5e1;
+    }
+    .serverless-config input {
+      width: 100%;
+      padding: 0.625rem;
+      border-radius: 6px;
+      border: 1px solid #475569;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-size: 0.875rem;
+      font-family: monospace;
+    }
+    .serverless-config input:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    .test-result {
+      margin-top: 0.5rem;
+      font-size: 0.8rem;
+      min-height: 1.2em;
+    }
+    .test-result.ok { color: #22c55e; }
+    .test-result.err { color: #ef4444; }
+    .test-result.testing { color: #f59e0b; }
+    .btn {
+      width: 100%;
+      padding: 0.75rem;
+      border-radius: 8px;
+      border: none;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 1.5rem;
+      transition: background 0.2s;
+    }
+    .btn:disabled {
+      background: #334155;
+      color: #64748b;
+      cursor: not-allowed;
+    }
+    .btn:not(:disabled) {
+      background: #3b82f6;
+      color: white;
+    }
+    .btn:not(:disabled):hover {
+      background: #2563eb;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Remote Lockdown Admin</h1>
+    <p class="subtitle">Choose how you want to run the admin app. You can change this later by deleting the config file.</p>
+
+    <div class="mode-card" id="card-local" onclick="selectMode('local')">
+      <div class="icon">🖥️</div>
+      <h2>Local Server</h2>
+      <p>Runs a self-contained server on this machine with a local SQLite database. No internet connection required. Best for single-machine setups or air-gapped environments.</p>
+    </div>
+
+    <div class="mode-card" id="card-serverless" onclick="selectMode('serverless')">
+      <div class="icon">☁️</div>
+      <h2>Cloud (Serverless)</h2>
+      <p>Connects to a deployed Cloudflare Worker backend. No local server or database — all data lives in the cloud. Best for managing devices across multiple locations.</p>
+    </div>
+
+    <div class="serverless-config" id="serverless-config">
+      <label for="worker-url">Cloudflare Worker URL</label>
+      <input type="text" id="worker-url" placeholder="https://your-worker.workers.dev" oninput="onUrlInput()">
+      <div class="test-result" id="test-result"></div>
+    </div>
+
+    <button class="btn" id="confirm-btn" disabled onclick="confirm()">Continue</button>
+  </div>
+
+  <script>
+    let selectedMode = null;
+    let workerUrlValid = false;
+
+    function selectMode(mode) {
+      selectedMode = mode;
+      document.getElementById('card-local').classList.toggle('selected', mode === 'local');
+      document.getElementById('card-serverless').classList.toggle('selected', mode === 'serverless');
+      document.getElementById('serverless-config').classList.toggle('visible', mode === 'serverless');
+      updateConfirmButton();
+    }
+
+    function onUrlInput() {
+      workerUrlValid = false;
+      document.getElementById('test-result').textContent = '';
+      updateConfirmButton();
+    }
+
+    async function testWorkerUrl() {
+      const url = document.getElementById('worker-url').value.trim();
+      const resultEl = document.getElementById('test-result');
+
+      if (!url) {
+        resultEl.textContent = '';
+        return;
+      }
+
+      resultEl.textContent = 'Testing connection...';
+      resultEl.className = 'test-result testing';
+
+      try {
+        const result = await window.wizardAPI.testWorkerUrl(url);
+        if (result.ok) {
+          resultEl.textContent = '✓ Connected — serverless backend verified';
+          resultEl.className = 'test-result ok';
+          workerUrlValid = true;
+        } else {
+          resultEl.textContent = '✗ ' + result.error;
+          resultEl.className = 'test-result err';
+          workerUrlValid = false;
+        }
+      } catch (err) {
+        resultEl.textContent = '✗ ' + err.message;
+        resultEl.className = 'test-result err';
+        workerUrlValid = false;
+      }
+      updateConfirmButton();
+    }
+
+    function updateConfirmButton() {
+      const btn = document.getElementById('confirm-btn');
+      if (selectedMode === 'local') {
+        btn.disabled = false;
+      } else if (selectedMode === 'serverless') {
+        btn.disabled = !workerUrlValid;
+      } else {
+        btn.disabled = true;
+      }
+    }
+
+    function confirm() {
+      if (selectedMode === 'local') {
+        window.wizardAPI.selectMode('local', null);
+      } else if (selectedMode === 'serverless') {
+        const url = document.getElementById('worker-url').value.trim();
+        // Normalize: ensure it ends with /api
+        let normalized = url;
+        if (!normalized.endsWith('/api')) {
+          normalized = normalized.replace(/\/$/, '') + '/api';
+        }
+        window.wizardAPI.selectMode('serverless', normalized);
+      }
+    }
+
+    // Auto-test URL when user stops typing (debounced)
+    let urlTimer = null;
+    document.getElementById('worker-url').addEventListener('input', () => {
+      clearTimeout(urlTimer);
+      urlTimer = setTimeout(testWorkerUrl, 600);
+    });
+  </script>
+</body>
+</html>

@@ -6,6 +6,8 @@
  * loads the config and sets environment variables before the server starts.
  *
  * The config file contains:
+ *   - mode: 'local' | 'serverless' | null (null = first run, not yet chosen)
+ *   - serverless_worker_url: Worker URL when mode is 'serverless' (null otherwise)
  *   - AGENT_KEY_PEPPER: pepper for per-device API key hashing
  *   - JWT_SECRET: secret for JWT signing
  *   - FIELD_ENCRYPTION_KEY: AES-256 key for encrypting sensitive DB fields
@@ -72,6 +74,8 @@ function configExists(userDataPath) {
  */
 function createConfig() {
   return {
+    mode: null, // null = first run, not yet chosen; 'local' | 'serverless'
+    serverless_worker_url: null, // Worker URL when mode is 'serverless'
     AGENT_KEY_PEPPER: generateKey(32),
     JWT_SECRET: generateKey(32),
     FIELD_ENCRYPTION_KEY: generateKey(32),
@@ -129,6 +133,35 @@ function loadConfig(userDataPath) {
 }
 
 /**
+ * Update specific fields in the existing config and save.
+ * Merges the provided partial config into the existing config on disk.
+ * @param {string} userDataPath — Electron's app.getPath('userData')
+ * @param {object} partial — partial config fields to update
+ * @returns {object} the updated full config
+ */
+function updateConfig(userDataPath, partial) {
+  const existing = loadConfig(userDataPath) || createConfig();
+  const updated = { ...existing, ...partial };
+  saveConfig(userDataPath, updated);
+  return updated;
+}
+
+/**
+ * Save the selected mode and (if serverless) the Worker URL.
+ * Called by the setup wizard after the user picks a mode.
+ * @param {string} userDataPath — Electron's app.getPath('userData')
+ * @param {'local'|'serverless'} mode
+ * @param {string|null} workerUrl — Worker URL (required for serverless mode)
+ * @returns {object} the updated config
+ */
+function saveMode(userDataPath, mode, workerUrl = null) {
+  return updateConfig(userDataPath, {
+    mode,
+    serverless_worker_url: mode === 'serverless' ? workerUrl : null,
+  });
+}
+
+/**
  * Initialize config: load existing or create new.
  * Sets environment variables from the config.
  *
@@ -144,6 +177,14 @@ function initConfig(userDataPath) {
     config = createConfig();
     saveConfig(userDataPath, config);
     isFirstRun = true;
+  }
+
+  // Backfill mode field for configs created before dual-mode support
+  if (config.mode === undefined) {
+    config.mode = null;
+  }
+  if (config.serverless_worker_url === undefined) {
+    config.serverless_worker_url = null;
   }
 
   // Set environment variables from config
@@ -163,6 +204,8 @@ module.exports = {
   createConfig,
   saveConfig,
   loadConfig,
+  updateConfig,
+  saveMode,
   initConfig,
   generateKey,
   generateSharedKey,

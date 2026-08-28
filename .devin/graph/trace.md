@@ -764,3 +764,143 @@ No failures this session. The red-green discipline worked as intended: the Stale
 The serverless path is now fully verified: unit tests (29) + live E2E (lockdown→unlock cycle + KV-RACE-001 fix). The remaining convergence blocker is the 9 enforcement paths that need hardware verification (E-DECRYPT, E-HP-UEFI, E-ACK, E-RECOVERY, E-TRACK, E-DEADMAN, E-EFFECTIVENESS, E-OFFLINE-QUEUE, E-AUTO-UPDATE). These are blocked on the spare HP machine being online. If hardware is not available, the next productive work is either (a) adding more Worker integration tests for edge cases (concurrent checkins, KV size limits, key release security) or (b) addressing the dashboard bundle size warning (558KB main chunk, should code-split).
 
 ---
+
+---
+
+## Session: 2026-08-27 — Electron dual-mode (local + serverless) rebuild — planning session
+
+### Task
+User asked to resume "rebuilding the electron app to act as a single installer and to be configured to work serverless." This was a planning/architecture session — no code was written. The goal was to (a) locate any in-progress work from prior sessions, (b) decide the architecture, and (c) set up the next session to begin implementation.
+
+### RULE-ZERO — Understanding logged before code changes
+- **Read**: `.devin/graph/current-state.md` (latest session: KV-RACE-001 fix + live verification), `GRAPH-SPEC.yaml` (all nodes/edges/invariants), `docs/adr/DEBT-LEDGER.md` (all 19 debt items CLOSED), memory retrieve (no relevant memories for electron+serverless).
+- **Read**: `electron/main.js`, `electron/config.js`, `electron/server-starter.js` — current Electron app bundles Express + SQLite + built dashboard in-process; first-run generates security keys to userData dir; serves API + dashboard from one Express process on OS-picked port.
+- **Read**: `serverless/worker.ts` (via trace history) — Cloudflare Worker deployed and live-verified (full lockdown→unlock E2E + KV-RACE-001 fix). Dashboard already has `useServerlessMode.js` hook + serverless-aware UI gating (hides Admins, PBA, installer downloads, Release button; shows "Serverless" badge).
+- **Finding**: No Electron serverless work exists in git. Searched: 4 stashes (none touch electron serverless), reflog (no relevant commits), `task/installer-security` worktree (older branch, fully merged into master — last commit Jul 29), untracked files (only `agent/installer.py` + `scripts/hp-hardware-test-guide.sh`). The in-progress work the user referenced is NOT recoverable from git — it was either lost when a prior session ended without committing, or was discussed but never written to disk. We are effectively greenfield from the current committed Electron app.
+
+### Architecture decision (confirmed with user)
+**Dual-mode Electron app:**
+- First-run setup wizard lets user choose: "Local server" (current behavior — bundled Express + SQLite, self-contained/offline) OR "Cloud (serverless)" (thin desktop shell pointing at a deployed Cloudflare Worker URL).
+- One installer supports both modes (no separate builds).
+- Key technical change: dashboard's API base URL (`VITE_API_URL`) is currently baked at build time — must become **runtime-configurable** (read from Electron preload / a config file at startup) so one binary can target either localhost:PORT (local mode) or https://worker.dev/api (serverless mode).
+- In serverless mode, the Electron app does NOT start the bundled Express server — it's just a BrowserWindow loading the dashboard with the Worker URL injected. In local mode, current behavior is preserved.
+
+### Fog cleared
+1. **In-progress work location**: Searched all git surfaces (stash x4, reflog, worktree `task/installer-security`, untracked files). The Electron serverless rebuild work is NOT in git — confirmed lost or never written. Greenfield from current committed Electron app.
+2. **Architecture decided**: Dual-mode (local + serverless toggle) over Worker-only (which would make Electron pointless) and Worker+local-cache (redundant with Worker KV + agent offline queue). User confirmed.
+3. **Key implementation insight**: The blocker for one-installer-both-modes is that `VITE_API_URL` is build-time. Runtime API URL configuration is the core technical change needed.
+
+### Fog remaining
+- **Exact first-run setup wizard UX**: Not yet designed. Current Electron app has no setup wizard (config.js auto-generates keys silently). Need to design the mode-selection + Worker URL input + (local mode) admin account creation flow.
+- **How dashboard gets the runtime API URL**: Preload script IPC? Query string on loadURL? A `/api/config` endpoint the local server exposes? Need to pick one — preload IPC is cleanest (no extra HTTP round-trip, no query string in URL bar).
+- **Worker URL validation**: In serverless mode, need to validate the Worker URL is reachable + actually returns `serverless: true` from `/health` before accepting it.
+- **Config storage for mode + Worker URL**: Extend `electron/config.js` to store `mode: 'local'|'serverless'` and `serverless_worker_url`. Currently stores only security keys + port.
+
+### Debt items closed
+None — planning session, no code changes.
+
+### Debt items still open
+None — all debt items (D-001 through D-019) remain CLOSED.
+
+### Blockers
+- Spare HP machine offline — blocks hardware verification of 9 enforcement paths (unchanged from previous sessions, not related to this session's work).
+
+### Test results
+No tests run — planning session, no code changes. Existing tests unchanged.
+
+### Failure attribution
+No failures this session. Note for future: the lost in-progress work is a **Layer 5 (State management)** failure from a prior session — code was written but never committed, so cross-session state was lost. This session's mandatory session-end capture (this block + memory capture) is the mitigation: the architecture decision and implementation plan are now persisted to trace.md + memory, so the next session can resume even if no code is committed.
+
+### Next session opening
+Begin implementing the dual-mode Electron app, in this order: (1) extend `electron/config.js` to store `mode` ('local'|'serverless') + `serverless_worker_url` fields; (2) add a first-run setup wizard (Electron BrowserWindow with a simple HTML/React form) that asks the user to pick mode and, if serverless, input + validate the Worker URL; (3) modify `electron/main.js` to branch on mode — local mode starts the bundled server (current behavior), serverless mode skips server-starter and loads the dashboard with the Worker URL; (4) make the dashboard API base URL runtime-configurable via Electron preload IPC (inject `window.__ELECTRON_API_URL__` before the dashboard loads) instead of build-time `VITE_API_URL`; (5) rebuild the dashboard bundle and verify both modes work end-to-end.
+
+---
+
+## Session: 2026-08-28 — Electron dual-mode implementation (in progress)
+
+### RULE-ZERO — Understanding logged before code changes
+- **Read**: `electron/main.js`, `config.js`, `server-starter.js`, `preload.js`, `package.json` — current app bundles Express+SQLite+dashboard, first-run auto-generates keys, no setup wizard.
+- **Read**: `dashboard/src/api/client.js` — `baseURL = import.meta.env.VITE_API_URL || '/api'` (build-time only).
+- **Read**: `dashboard/src/hooks/useServerlessMode.js`, `dashboard/tests/client.test.js`, `dashboard/tests/useServerlessMode.test.js` — serverless detection via /health, tests mock axios.
+- **Read**: `dashboard/src/main.jsx` — uses BrowserRouter (requires HTTP server, can't use file://).
+- **Read**: `dashboard/vite.config.js` — dev proxy to localhost:3001.
+- **Read**: `serverless/worker.ts` lines 331-337 — /health returns `{status:'ok', serverless:true}`. Worker has CORS `*` (line 138).
+- **Finding**: In serverless mode, must start a minimal static-only Express server (no API routes) to serve the dashboard UI, because BrowserRouter requires HTTP. The dashboard's API calls go to the Worker URL injected via preload IPC. This is the cleanest approach — "serverless" means the backend is serverless (Worker), not the frontend serving.
+
+---
+
+## Session: 2026-08-28 — Electron dual-mode implementation
+
+### Task
+Implement the dual-mode Electron app planned in the 2026-08-27 planning session. First-run setup wizard lets user choose "Local Server" (bundled Express+SQLite) or "Cloud Serverless" (Cloudflare Worker). One installer supports both modes. Dashboard API URL becomes runtime-configurable via Electron preload IPC instead of build-time only.
+
+### RULE-ZERO — Understanding logged before code changes
+- **Read**: `.devin/graph/current-state.md` (planning session with architecture decision), memory retrieve.
+- **Read**: `electron/main.js`, `config.js`, `server-starter.js`, `preload.js`, `package.json` — current app bundles Express+SQLite+dashboard, first-run auto-generates keys, no setup wizard, preload is minimal (version/platform/isElectron only).
+- **Read**: `dashboard/src/api/client.js` — `baseURL = import.meta.env.VITE_API_URL || '/api'` (build-time only, no runtime override).
+- **Read**: `dashboard/src/hooks/useServerlessMode.js`, `dashboard/tests/client.test.js`, `dashboard/tests/useServerlessMode.test.js` — serverless detection via /health, tests mock axios.
+- **Read**: `dashboard/src/main.jsx` — uses BrowserRouter (requires HTTP server, can't use file:// for SPA).
+- **Read**: `dashboard/vite.config.js` — dev proxy to localhost:3001.
+- **Read**: `serverless/worker.ts` lines 331-337 — /health returns `{status:'ok', serverless:true}`. Worker has CORS `Access-Control-Allow-Origin: *` (line 138).
+- **Finding**: In serverless mode, must start a minimal static-only Express server (no API routes) to serve the dashboard UI, because BrowserRouter requires HTTP. The dashboard's API calls go to the Worker URL injected via preload IPC. "Serverless" means the backend is serverless (Worker), not the frontend serving.
+
+### IMPLEMENT — Code changes written
+1. **`electron/config.js`**: Added `mode` ('local'|'serverless'|null) and `serverless_worker_url` fields to config. Added `updateConfig()` and `saveMode()` functions. `initConfig()` backfills `mode: null` for existing configs created before dual-mode support (triggers setup wizard on next launch).
+2. **`electron/setup-preload.js`** (NEW): Preload script for the setup wizard window. Exposes `wizardAPI.selectMode(mode, url)` via IPC and `wizardAPI.testWorkerUrl(url)` for Worker URL validation.
+3. **`electron/setup.html`** (NEW): Setup wizard UI — dark-themed HTML page with two mode cards (Local Server / Cloud Serverless). Serverless mode shows Worker URL input with debounced auto-validation (fetches /health, checks for `serverless: true`). Confirm button disabled until valid selection made.
+4. **`electron/setup-wizard.js`** (NEW): Creates the setup wizard BrowserWindow, handles IPC for mode selection and Worker URL validation. `validateWorkerUrl()` tries multiple /health URL candidates (root /health, /api/health) with 5s timeout. Returns Promise resolving to `{mode, workerUrl}`.
+5. **`electron/main.js`**: Rewrote app lifecycle to branch on mode. After `initConfig()`, if `config.mode` is null → show setup wizard → save mode. Serverless mode: sets `ELECTRON_API_BASE_URL` env var, starts `startStaticServer()`. Local mode: sets SQLite path, starts `startServer()` (current behavior). Both modes create the same BrowserWindow loading from localhost:PORT.
+6. **`electron/preload.js`**: Extended to expose `apiBaseUrl` on `window.electronApp`. Reads from `process.env.ELECTRON_API_BASE_URL` (set by main.js in serverless mode, null in local mode).
+7. **`electron/server-starter.js`**: Added `startStaticServer()` — serves only static files + SPA fallback (no API routes, no database, no helmet/cors/rateLimit). Used in serverless mode. Updated exports.
+8. **`electron/package.json`**: Added `setup-preload.js`, `setup-wizard.js`, `setup.html` to electron-builder `files` list.
+9. **`dashboard/src/api/client.js`**: Updated baseURL resolution to priority order: (1) `window.electronApp?.apiBaseUrl` (runtime, Electron serverless), (2) `import.meta.env.VITE_API_URL` (build-time), (3) `/api` (same-origin fallback).
+10. **`dashboard/tests/client.test.js`**: Added 3 new tests for runtime URL resolution: electronApp.apiBaseUrl overrides VITE_API_URL (serverless mode), null apiBaseUrl falls back to VITE_API_URL (local mode), null apiBaseUrl + empty VITE_API_URL falls back to /api. Added `delete window.electronApp` to beforeEach cleanup.
+11. **`.devin/graph/GRAPH-SPEC.yaml`**: Updated V-ELECTRON-SYNTAX command to include `setup-preload.js` and `setup-wizard.js`.
+12. **`AGENTS.md`**: Updated the electron syntax check command to match.
+
+### VERIFY — Verification nodes pass
+- V-ELECTRON-SYNTAX: `node --check main.js preload.js setup-preload.js setup-wizard.js server-starter.js config.js updater.js` — exit 0
+- V-SYNTAX-SWEEP: `find server/src electron -name '*.js' | xargs node --check` — exit 0
+- V-DASHBOARD: 72 vitest tests pass (was 69, +3 new client.test.js tests for runtime URL resolution)
+- V-LINT-DASHBOARD: `npx eslint .` — exit 0
+- V-BUILD-DASHBOARD: `npx vite build` — built successfully (558KB main chunk, pre-existing warning)
+
+### ARTIFACT — Run artifact captured
+- Dashboard test output: `8 test files passed, 72 tests passed` (7 in client.test.js, up from 5)
+- Dashboard build output: `1937 modules transformed, built in 10.04s`
+- Electron syntax check: all 7 .js files pass `node --check`
+
+### Fog cleared
+1. **Dual-mode architecture implemented**: One Electron installer supports both local (bundled Express+SQLite) and serverless (Cloudflare Worker) modes. First-run setup wizard lets user choose. Mode stored in config.json alongside security keys.
+2. **Runtime API URL resolution**: Dashboard's axios client now checks `window.electronApp.apiBaseUrl` (injected by Electron preload) before falling back to build-time `VITE_API_URL` and then `/api`. One dashboard build works for both modes.
+3. **Serverless mode serving**: In serverless mode, a minimal static-only Express server serves the dashboard UI (BrowserRouter requires HTTP). No API routes, no database. API calls go cross-origin to the Worker (which has CORS `*`).
+4. **Worker URL validation**: Setup wizard validates the Worker URL by fetching /health and checking for `serverless: true`. Tries multiple URL patterns (root /health, /api/health) with 5s timeout.
+
+### Fog remaining
+- **Not tested on real Electron runtime**: All verification is syntax checks + unit tests. The Electron app has not been launched in either mode (requires a display/GUI environment). The setup wizard IPC flow, the preload injection, and the static server in serverless mode are verified by code review + syntax checks only.
+- **Setup wizard UX not user-tested**: The wizard HTML is functional but hasn't been interacted with in a real Electron window.
+- **No dev-mode serverless path**: In dev mode (`ELECTRON_IS_DEV=1`), the app loads from the Vite dev server and skips the setup wizard (mode is read from config but the wizard only shows when mode is null). Dev-mode serverless testing would require manually setting `ELECTRON_API_BASE_URL` env var.
+
+### Debt items closed
+None — this is a new feature, not a debt item closure. No debt item was opened for this work (the dual-mode Electron app is an enhancement, not a tracked debt item).
+
+### Debt items still open
+None — all debt items (D-001 through D-019) remain CLOSED.
+
+### Blockers
+- Spare HP machine offline — blocks hardware verification of 9 enforcement paths (unchanged, not related to this session's work).
+
+### Test results
+- Dashboard: 72 tests pass (8 test files, +3 new runtime URL tests)
+- Dashboard build: succeeds (558KB main chunk, pre-existing warning)
+- Electron syntax: all 7 .js files pass `node --check`
+- Full JS syntax sweep: all server/src + electron .js files pass
+- Dashboard lint: clean
+
+### Failure attribution
+No failures this session. All code changes passed syntax checks, lint, tests, and build on the first attempt. The red-green discipline was applied to the client.test.js tests (3 new tests written before/alongside the client.js change, all pass).
+
+### Next session opening
+The dual-mode Electron app is implemented and verified via syntax checks + unit tests + build. The next step is to test it in a real Electron runtime: (a) launch the app in local mode and verify the setup wizard appears, the Express server starts, and the dashboard loads with same-origin /api; (b) launch in serverless mode and verify the static server starts, the dashboard loads, and API calls go to the Worker URL. If a GUI environment is not available, the next productive work is to write integration tests for the setup wizard IPC flow (mocking BrowserWindow + ipcMain) and the static server (supertest against startStaticServer). After that, commit the changes and update the electron README to document the dual-mode setup.
+
+---

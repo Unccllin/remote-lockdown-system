@@ -178,7 +178,7 @@ cd agent     && python3 -m ruff format --check .
 
 # Build
 cd dashboard && npx vite build                # outputs dashboard/dist
-cd electron  && node --check main.js preload.js server-starter.js config.js updater.js
+cd electron  && node --check main.js preload.js setup-preload.js setup-wizard.js server-starter.js config.js updater.js
 
 # Syntax sweep of all .js (not .jsx — JSX needs vite/vitest to validate)
 find server/src electron -name '*.js' | grep -v node_modules | xargs -I{} node --check {}

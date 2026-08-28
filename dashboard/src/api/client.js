@@ -1,9 +1,14 @@
 import axios from 'axios';
 
-// When VITE_API_URL is set (e.g. pointing at the Cloudflare Worker),
-// use it as the base URL. Otherwise default to same-origin /api (the
-// Express server serves both the dashboard and the API).
-const baseURL = import.meta.env.VITE_API_URL || '/api';
+// Runtime API URL resolution (priority order):
+// 1. window.electronApp.apiBaseUrl — injected by Electron preload in
+//    serverless mode (points at the Cloudflare Worker). Null in local mode.
+// 2. import.meta.env.VITE_API_URL — build-time URL (e.g. Worker URL baked
+//    into a standalone dashboard build).
+// 3. '/api' — same-origin fallback (the Express server serves both the
+//    dashboard and the API in local mode).
+const electronApiUrl = typeof window !== 'undefined' && window.electronApp?.apiBaseUrl;
+const baseURL = electronApiUrl || import.meta.env.VITE_API_URL || '/api';
 
 const api = axios.create({ baseURL });
 

@@ -20,6 +20,7 @@ import axios from 'axios';
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  delete window.electronApp;
 });
 
 describe('api client', () => {
@@ -41,6 +42,41 @@ describe('api client', () => {
 
     expect(axios.create).toHaveBeenCalledWith({ baseURL: '/api' });
     vi.unstubAllEnvs();
+  });
+
+  it('uses window.electronApp.apiBaseUrl when set (Electron serverless mode)', async () => {
+    // Simulate Electron preload injecting the API URL
+    const workerUrl = 'https://lockdown-serverless.example.workers.dev/api';
+    window.electronApp = { apiBaseUrl: workerUrl };
+    vi.stubEnv('VITE_API_URL', 'https://should-be-overridden.example.com/api');
+    vi.resetModules();
+    await import('../src/api/client');
+
+    expect(axios.create).toHaveBeenCalledWith({ baseURL: workerUrl });
+    vi.unstubAllEnvs();
+    delete window.electronApp;
+  });
+
+  it('falls back to VITE_API_URL when electronApp.apiBaseUrl is null (Electron local mode)', async () => {
+    window.electronApp = { apiBaseUrl: null };
+    vi.stubEnv('VITE_API_URL', 'https://worker.example.com/api');
+    vi.resetModules();
+    await import('../src/api/client');
+
+    expect(axios.create).toHaveBeenCalledWith({ baseURL: 'https://worker.example.com/api' });
+    vi.unstubAllEnvs();
+    delete window.electronApp;
+  });
+
+  it('falls back to /api when neither electronApp nor VITE_API_URL is set', async () => {
+    window.electronApp = { apiBaseUrl: null };
+    vi.stubEnv('VITE_API_URL', '');
+    vi.resetModules();
+    await import('../src/api/client');
+
+    expect(axios.create).toHaveBeenCalledWith({ baseURL: '/api' });
+    vi.unstubAllEnvs();
+    delete window.electronApp;
   });
 
   it('registers request and response interceptors', async () => {

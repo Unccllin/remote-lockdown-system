@@ -11,6 +11,7 @@
   "scripts": {
     "start": "electron .",
     "start:dev": "ELECTRON_IS_DEV=1 electron .",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit",
     "install:server": "cd ../server && npm ci --omit=dev",
     "rebuild:native": "electron-rebuild -f -w sqlite3 -m ../server/node_modules",
     "build:agent": "cd ../agent && python3 -m PyInstaller agent.spec --noconfirm && python3 -m PyInstaller watchdog.spec --noconfirm && python3 -m PyInstaller offline_recovery.spec --noconfirm",
@@ -28,7 +29,9 @@
   "devDependencies": {
     "@electron/rebuild": "3.7.2",
     "electron": "^41.7.1",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "jest": "^30.4.2",
+    "supertest": "^7.2.2"
   },
   "overrides": {
     "tar": "^7.5.21"
@@ -44,6 +47,9 @@
     "files": [
       "main.js",
       "preload.js",
+      "setup-preload.js",
+      "setup-wizard.js",
+      "setup.html",
       "server-starter.js",
       "config.js",
       "updater.js",
@@ -57,7 +63,9 @@
       {
         "from": "../server/src",
         "to": "server/src",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "../server/package.json",
@@ -66,12 +74,16 @@
       {
         "from": "../server/node_modules",
         "to": "server/node_modules",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "../dashboard/dist",
         "to": "dashboard/dist",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "../agent/dist",
@@ -98,11 +110,15 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "msi",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.ico",
@@ -115,7 +131,10 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "icon": "build/icon.icns",
@@ -130,7 +149,9 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.png",

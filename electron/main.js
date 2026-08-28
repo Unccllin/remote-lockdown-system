@@ -2,9 +2,12 @@
  * main.js — Electron main process.
  *
  * This is the entry point for the Admin desktop app. It:
- *   1. Determines the SQLite database path (in userData directory)
- *   2. Determines the dashboard dist path (dev: Vite dev server, prod: built files)
- *   3. Starts the Express server in-process (server-starter.js)
+ *   1. Initializes config (load existing or generate new on first run)
+ *   2. If mode is not yet chosen (first run), shows the setup wizard
+ *   3. Based on the selected mode:
+ *      - Local: starts the full Express server (API + SQLite + dashboard)
+ *      - Serverless: starts a static-only server (dashboard UI only, API
+ *        calls go to the Cloudflare Worker)
  *   4. Creates a BrowserWindow and loads the dashboard
  *   5. Handles app lifecycle (single instance, window management)
  */
@@ -12,12 +15,13 @@
 const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { initConfig } = require('./config');
+const { initConfig, saveMode } = require('./config');
 
 // Keep a global reference to prevent garbage collection
 let mainWindow = null;
 let serverInfo = null;
 let isFirstRun = false;
+let appMode = null; // 'local' | 'serverless'
 
 // --- Paths ---
 function getSqlitePath() {
@@ -99,7 +103,7 @@ function createWindow(serverPort) {
     // Open DevTools in dev
     mainWindow.webContents.openDevTools();
   } else {
-    // Production: load from the Express server (which serves the built dashboard)
+    // Production: load from the local server (full or static-only)
     mainWindow.loadURL(`http://localhost:${serverPort}`);
   }
 
@@ -140,27 +144,49 @@ app.whenReady().then(async () => {
   try {
     // Initialize config (load existing or generate new on first run)
     const userDataPath = app.getPath('userData');
-    const { config, isFirstRun: firstRun } = initConfig(userDataPath);
+    let { config, isFirstRun: firstRun } = initConfig(userDataPath);
     isFirstRun = firstRun;
     console.log('[main] First run:', isFirstRun);
 
-    // Set SQLite path
-    process.env.SQLITE_PATH = getSqlitePath();
-    console.log('[main] SQLite path:', process.env.SQLITE_PATH);
+    // If mode is not yet chosen, show the setup wizard
+    if (!config.mode) {
+      console.log('[main] Mode not selected — showing setup wizard...');
+      const { showSetupWizard } = require('./setup-wizard');
+      const { mode, workerUrl } = await showSetupWizard();
+      config = saveMode(userDataPath, mode, workerUrl);
+      console.log(`[main] Mode selected: ${mode}${workerUrl ? ` (${workerUrl})` : ''}`);
+    }
 
-    // Determine dashboard path
-    const dashboardDistPath = getDashboardDistPath();
+    appMode = config.mode;
     const isDev = process.env.ELECTRON_IS_DEV === '1' || !app.isPackaged;
+    const dashboardDistPath = getDashboardDistPath();
 
-    // Start the Express server
-    const { startServer } = require('./server-starter');
-    serverInfo = await startServer({
-      isDev,
-      dashboardDistPath,
-      // Don't seed admin via server-starter — the setup wizard handles it
-    });
+    if (appMode === 'serverless') {
+      // --- Serverless mode ---
+      // Set the API base URL for the preload script to inject into the dashboard.
+      // The dashboard's axios client will use this instead of same-origin /api.
+      process.env.ELECTRON_API_BASE_URL = config.serverless_worker_url;
+      console.log('[main] Serverless mode — API base URL:', config.serverless_worker_url);
 
-    console.log(`[main] Server started on port ${serverInfo.port}`);
+      // Start a static-only server (serves dashboard UI, no API routes)
+      const { startStaticServer } = require('./server-starter');
+      serverInfo = await startStaticServer({ dashboardDistPath });
+      console.log(`[main] Static server started on port ${serverInfo.port}`);
+    } else {
+      // --- Local mode (default) ---
+      // Set SQLite path for the bundled Express server
+      process.env.SQLITE_PATH = getSqlitePath();
+      console.log('[main] SQLite path:', process.env.SQLITE_PATH);
+
+      // Start the full Express server (API + SQLite + dashboard)
+      const { startServer } = require('./server-starter');
+      serverInfo = await startServer({
+        isDev,
+        dashboardDistPath,
+        // Don't seed admin via server-starter — the setup wizard handles it
+      });
+      console.log(`[main] Server started on port ${serverInfo.port}`);
+    }
 
     // Create the browser window
     createWindow(serverInfo.port);
@@ -178,7 +204,7 @@ app.whenReady().then(async () => {
     const { dialog } = require('electron');
     dialog.showErrorBox(
       'Startup Error',
-      `Failed to start the admin server:\n\n${err.message}\n\nFix: check that the server port is not in use, the database is initialized, and all required environment variables are set. The application will now quit.`
+      `Failed to start the admin app:\n\n${err.message}\n\nFix: check that the dashboard is built, the server port is not in use, and all required environment variables are set. The application will now quit.`
     );
     app.quit();
   }

@@ -109,7 +109,7 @@ async function seedInitialAdmin(pool, username, password) {
   return true;
 }
 
-// --- Express server ---
+// --- Express server (full: API + static dashboard) ---
 async function startServer(options = {}) {
   const { isDev = false, dashboardDistPath = null } = options;
 
@@ -205,4 +205,48 @@ async function startServer(options = {}) {
   });
 }
 
-module.exports = { startServer, setupEnv, setupDatabase };
+// --- Static-only server (serverless mode: serves dashboard UI, no API) ---
+// In serverless mode, the backend is a Cloudflare Worker. We still need a
+// local HTTP server to serve the dashboard UI because BrowserRouter requires
+// an HTTP origin (file:// doesn't support the History API). This server
+// serves ONLY static files + SPA fallback — no API routes, no database.
+async function startStaticServer(options = {}) {
+  const { dashboardDistPath = null } = options;
+
+  if (!dashboardDistPath || !fs.existsSync(dashboardDistPath)) {
+    throw new Error('Dashboard dist path is required for static server. Fix: build the dashboard first with `cd dashboard && npx vite build`, then ensure the path is passed to startStaticServer.');
+  }
+
+  const express = requireFromServer('express');
+  const app = express();
+
+  const indexPath = path.resolve(dashboardDistPath, 'index.html');
+  app.use(express.static(dashboardDistPath, {
+    index: false,
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }));
+
+  // SPA fallback: serve index.html for any route (client-side routing)
+  app.get('*', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.sendFile(indexPath);
+  });
+
+  const port = parseInt(process.env.PORT || '0');
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port, () => {
+      const actualPort = server.address().port;
+      console.log(`[server-starter] Static server running on http://localhost:${actualPort} (serverless mode — API calls go to Worker)`);
+      resolve({ server, port: actualPort, pool: null });
+    });
+    server.on('error', reject);
+  });
+}
+
+module.exports = { startServer, startStaticServer, setupEnv, setupDatabase };

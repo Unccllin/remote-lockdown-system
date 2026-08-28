@@ -365,7 +365,7 @@ verification_nodes:
 
   - id: V-ELECTRON-SYNTAX
     name: electron-syntax-check
-    command: "cd electron && node --check main.js preload.js server-starter.js config.js updater.js"
+    command: "cd electron && node --check main.js preload.js setup-preload.js setup-wizard.js server-starter.js config.js updater.js"
     expected_exit: 0
     component: C-ELECTRON
 
