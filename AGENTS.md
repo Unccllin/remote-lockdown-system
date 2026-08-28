@@ -287,3 +287,80 @@ Hardware test harness (D-003): `make hw-test-dry` runs the harness in dry-run mo
    (immutable for hashed assets, no-cache for index.html). Also made CORS
    conditional (only when `CORS_ORIGIN` is set) and added a 404 JSON handler
    for unmatched `/api/*` routes.
+
+## Hardware Test Harness Redesign (planned, not yet implemented)
+
+Research completed 2026-08-28. Decision: borrow patterns from existing frameworks rather than adopt a heavy dependency. Will redesign `agent/hw_test_harness.py` to v2.0.
+
+### Frameworks evaluated (30+)
+- OpenHTF (Google) — best HIL framework, phase/measurement/plug model, Apache-2.0
+- bench-vv — binds test reports to firmware SHA-256, MIT
+- f0_library — EDR testing with VHD isolation for destructive tests, Apache-2.0
+- FleetDM osquery-perf — MDM command lifecycle simulator (Pending→Fetched→Acked→Error), MIT
+- Windows-Red-Teaming — tri-mode (dry-run/check/simulate) with cleanup, MIT
+- pytest-timeout, pytest-rerunfailures — timeout + retry for flaky network tests
+- Allure + JUnit XML + CTRF — reporting standards
+- Prey, Computrace, Jamf, Intune — no public HIL test harnesses found
+- Robot Framework, pytest-embedded, LabGrid — good but overkill for our use case
+
+### Patterns to borrow (12)
+1. Phase lifecycle (OpenHTF): precondition → action → verify → cleanup
+2. Service gating (pytest-embedded): --services hp,tpm,server,defender
+3. Tri-mode (Windows-Red-Teaming): dry-run → check → simulate
+4. Hash binding (bench-vv): record agent binary SHA-256 in every artifact
+5. VHD isolation (f0_library): destructive tests target VHD, not real disk
+6. Command lifecycle (FleetDM): test Pending → Fetched → Acked → Error → Canceled
+7. Timeout protection (pytest-timeout): per-test timeout, default 60s
+8. Retry logic (pytest-rerunfailures): retry network tests up to N times
+9. CTRF JSON format: standardized test report with summary, tests[], extra
+10. Tag-based filtering: --tag E-ENCRYPT,E-DURESS
+11. Evidence capture (macOSLab): before/after state snapshots
+12. Rollback (GhostWall): capture prior state, restore after destructive test
+
+### Proposed v2.0 structure
+- Environment detection (existing + TPM, Defender, agent binary hash)
+- TestResult v2 (CTRF-compatible + evidence + rollback state)
+- Test base class with phase lifecycle
+- Timeout wrapper (per-test, default 60s)
+- Retry wrapper (configurable, default 2 retries for network tests)
+- Tri-mode execution (dry-run → check → simulate)
+- Service gating (--services hp,tpm,server,defender)
+- Tag-based filtering (--tag E-ENCRYPT,E-DURESS)
+- 12 enforcement path tests:
+  - E-ENCRYPT (enhanced with VHD isolation)
+  - E-LOCK-SCREEN (enhanced with sentinel verification)
+  - E-GUARDIAN (enhanced with re-lock verification)
+  - E-BCD (enhanced with VHD isolation + rollback)
+  - E-HP-UEFI (enhanced with rollback)
+  - E-DURESS (new — fake unlock + re-lock after 5 min)
+  - E-HIDDEN-FILE (new — file trigger → lockdown)
+  - E-TAMPER (new — agent binary modification detection)
+  - E-TPM (new — TPM sealing of state files)
+  - E-ENROLL (new — token enrollment flow)
+  - E-HWID (new — hardware ID collection)
+  - E-INTEGRATION (new — full cycle: enroll → flag → lockdown → recover)
+- Artifact generation (CTRF JSON + JUnit XML + agent binary hash)
+- Artifact upload (POST to server for dashboard display)
+
+### Current harness gaps (v1.0)
+- Only 5 of 12+ enforcement paths tested
+- No tests for duress, hidden trigger, tamper, TPM, enrollment, hardware IDs
+- No agent↔server integration test
+- No recovery/unlock test
+- No ACK verification
+- Lock-screen test is fire-and-forget (no sentinel verification)
+- Guardian test doesn't verify re-lock
+- No artifact upload to server
+- Single --only flag (can't run multiple tests)
+- No timeout protection
+- No test for covert tracking (E-TRACK)
+
+### Hardware testing status (as of 2026-08-28)
+- HP machine (DESKTOP-RUDJGI6) successfully enrolled via one-click installer
+- Hardware UUID: B1198844-32B1-419B-B6BB-07371BE2DDD0, MAC: 74:70:FD:17:B7:67
+- Lockdown command received and executed on real hardware (status: locked)
+- Recovery command received and executed (screen unlocked, files decrypted)
+- Agent now runs windowless (console=False) with file logging
+- Windows Defender exclusion auto-added by installer
+- TODO: re-test on HP with windowless agent + Defender exclusion
+- TODO: test duress code, hidden file trigger, tamper protection on hardware
