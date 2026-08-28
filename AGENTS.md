@@ -364,3 +364,207 @@ Research completed 2026-08-28. Decision: borrow patterns from existing framework
 - Windows Defender exclusion auto-added by installer
 - TODO: re-test on HP with windowless agent + Defender exclusion
 - TODO: test duress code, hidden file trigger, tamper protection on hardware
+
+## Complete Harness Audit (2026-08-28)
+
+Audited all 21 harnesses/subsystems in the project. Findings and improvement
+opportunities recorded below. This is the baseline for the harness evolution
+work — pick up here tomorrow.
+
+### Harness inventory (21 total)
+
+| # | Harness | Tests/Items | Framework | Coverage |
+|---|---------|------------|-----------|----------|
+| 1 | Server unit/API | 368 | Jest 30 | None |
+| 2 | Agent unit/integration | ~463 | pytest 8 | None |
+| 3 | Dashboard unit | 84 | Vitest 3.2 | None |
+| 4 | Serverless Worker | 54 | Vitest 2 | None |
+| 5 | Electron | 30 | Jest 30 | None |
+| 6 | E2E (API + Playwright) | 14 | Jest + Playwright | N/A |
+| 7 | Memory | 129 memories | Custom Python | None |
+| 8 | Hardware (HIL) | 5 paths | Custom Python | N/A |
+| 9 | CI/CD | 4 workflows | GitHub Actions | N/A |
+| 10 | Load testing | 3 scenarios | k6 | N/A |
+| 11 | Docker test compose | 1 stack | Docker Compose | N/A |
+| 12 | Graph assertion | 7 invariants | Custom Python | None |
+| 13 | PostgreSQL smoke | 1 flow | Custom Node | N/A |
+| 14 | Code review skill | N/A | Agent skill | N/A |
+| 15 | Firmware/UEFI | 6 test scripts | QEMU/OVMF + swtpm | N/A |
+| 16 | Phase orchestrator | 17 phases | Bash + configs | N/A |
+| 17 | Harness template | Template | Python | N/A |
+| 18 | Wayfinder hardening | 4 tickets | Markdown | N/A |
+| 19 | Manual boot lockdown | 8 commands | Python CLI | N/A |
+| 20 | Electron simulation | 1 script | Node + Express | N/A |
+| 21 | Clean-state checklist | 5 conditions | Markdown | N/A |
+
+### Improvements by harness
+
+#### 1. Server (368 tests) — 7 improvements
+- No coverage reporting (add test:coverage script + thresholds)
+- No shared fixtures/factories (DEVICE, adminToken duplicated inline)
+- Fragile SQL substring matching in mockPool.setResult()
+- No __mocks__ directory (manual require in every file)
+- No global setup/teardown (migrations + env cleanup duplicated)
+- maxWorkers=1 forced due to PGlite singleton (slow CI)
+- No serverless/worker integration tests
+
+#### 2. Agent (~463 tests) — 9 improvements
+- No conftest.py (cfg, tmp_folder, tmp_sentinel duplicated across 3+ files)
+- No pytest.ini or pyproject.toml (no markers, addopts, timeouts)
+- No pytest.mark.parametrize anywhere (0 occurrences)
+- No coverage reporting (no pytest-cov, .coveragerc)
+- test_boot_lockdown.py is 3,056 lines (split into BCD + HP UEFI)
+- test_tamper_protection.py skips on Windows (backwards skip logic)
+- No tests for watchdog.py, offline_recovery.py, diagnose_boot_lockdown.py
+- Hardware harness only has unit tests (real paths not in CI)
+- No timeout protection (hanging test hangs forever)
+
+#### 3. Dashboard (84 tests) — 7 improvements
+- No coverage reporting (@vitest/coverage-v8 not installed)
+- No renderWithRouter helper (each test redefines MemoryRouter)
+- @testing-library/user-event installed but unused (all use fireEvent)
+- Download buttons not tested (download-installer-btn, download-agent-btn)
+- EnrollPage.jsx has no test file (download logic untested)
+- No MSW (API mocked via vi.mock, no contract testing)
+- No negative-state tests (loading, 404, network error, malformed JWT)
+
+#### 4. Worker (54 tests) — 5 improvements
+- Not tested against real Workers runtime (plain Vitest, not Miniflare)
+- All 54 tests in one 1,273-line file
+- Import path mismatch risk (imports ./worker.js, source is worker.ts)
+- Several endpoints not tested (uninstall-auth, command-ack edge cases)
+- No deployed/Wrangler integration test
+
+#### 5. Electron (30 tests) — 6 improvements
+- Main process (main.js) not tested (BrowserWindow, single-instance, lifecycle)
+- IPC completely untested (preload.js, setup-preload.js contextBridge)
+- Setup wizard not tested end-to-end (only validateWorkerUrl helper)
+- Updater logic not tested (updater.js has no test file)
+- No Electron-runtime tests (runs Jest in Node, not electron.launch)
+- No E2E smoke test for built app
+
+#### 6. E2E (14 tests) — 8 improvements
+- No make test-e2e target (E2E orphaned from main workflow)
+- Playwright is Chromium-only (no Firefox/WebKit)
+- No E2E for enrollment, map, admins, duress flow
+- Agent E2E doesn't test HMAC, offline queue, deadman, tracking, auto-update, tamper
+- run-e2e.sh doesn't run Playwright (two separate harnesses)
+- No screenshot/video artifacts on API/agent E2E failure
+- No CI wiring for Playwright
+- Agent E2E kills+relaunches agent before each command (hack, not realistic)
+
+#### 7. Memory (129 memories) — 9 improvements
+- "Every 5/10 sessions" not enforced (consolidate/decay are manual)
+- No file locking or atomic writes (race conditions in ID generation)
+- Floating-point confidence artifacts (0.6000000000000001 in files)
+- Deduplication brittle (first 5 words only — false positives/negatives)
+- Retrieve is keyword-only (no stemming, stopwords, semantic, typo tolerance)
+- reconcile creates fake session IDs (provenance chain broken)
+- No corruption handling (malformed files crash stage_index)
+- No size cap on raw/ (captures never deleted, grow indefinitely)
+- No CLI-level tests (tests use fake argparse, never run memory.py as subprocess)
+
+#### 8. Hardware HIL (5 paths) — 12 improvements (covered in harness redesign plan above)
+
+#### 9. CI/CD (4 workflows) — 6 improvements
+- No graph-check in release.yml (tag can release with violations)
+- Duplicated lint paths (lint.yml vs release.yml inline different commands)
+- No ruff format --check in lint.yml (only ruff check)
+- No shellcheck for scripts/*.sh (only bash -n)
+- No SLSA/SBOM/provenance in release pipeline
+- No concurrency block in release.yml (multiple tags can race)
+
+#### 10. Load testing (3 scenarios) — 5 improvements
+- Not wired to CI or scheduled (manual only)
+- No HMAC signing in k6 scripts (will break when REQUIRE_HMAC=true)
+- No result persistence (stdout only, no regression tracking)
+- No make load-test target
+- No server-side metrics (CPU, memory, DB pool)
+
+#### 11. Docker test compose — 3 improvements
+- Never actually run in CI (only structural validation)
+- Weak test secrets committed in file
+- No integration with E2E or load testing
+
+#### 12. Graph assertion — 4 improvements
+- Doesn't verify cited files exist (RULE-ZERO refs, hardware_artifact_ref)
+- No self-tests (no test_graph_assert.py with known good/bad fixtures)
+- Structural checks can be gamed (any / counts as file reference)
+- Failure attribution convention not enforced
+
+#### 13. PostgreSQL smoke — 3 improvements
+- Not in CI (manual only, requires real Postgres)
+- 480 lines in one file with no test framework structure
+- No scheduled run (should be nightly with Postgres service container)
+
+#### 14. Code review skill — 2 improvements
+- Not integrated with GitHub PR checks (manual only)
+- Wrong directory (.agents/skills/ not .devin/skills/)
+
+#### 15. Firmware/UEFI — 5 improvements
+- No CI integration (QEMU/swtpm tests are manual)
+- No test result artifacts (stdout only)
+- No regression tracking
+- DNS tunnel tests have no assertions (manual verification only)
+- UEFI variable round-trip test requires real hardware (no QEMU-only path)
+
+#### 16. Phase orchestrator — 2 improvements
+- No test coverage for orchestrator.sh itself
+- Task queue files not cleaned up after completion
+
+#### 17-21. Template, Wayfinder, Manual boot lockdown, Electron sim, Clean-state
+- These are documentation/convention artifacts, not test harnesses
+- Wayfinder tickets T1-T3 are CLOSED but Q1 (Goodhart) should be verified
+- Clean-state checklist exists but is not enforced by any tooling
+
+### Cross-cutting themes (apply to ALL harnesses)
+1. No coverage reporting anywhere (none of 21 harnesses have coverage configured)
+2. No shared fixtures (every harness duplicates setup code)
+3. New features untested (download, duress, enrollment, tamper have gaps)
+4. No timeout protection (agent, server, memory tests can hang)
+5. No parametrize (agent has 0 parametrized tests)
+6. E2E is orphaned (not in Makefile, not in CI, not in verify-env)
+7. Large files not split (test_boot_lockdown.py 3056 lines, worker.test.ts 1273, test_agent.py 2027, memory.py 1360)
+8. No concurrency protection (memory harness has race conditions)
+9. Manual processes that should be automated (consolidate/decay, E2E, convergence)
+10. Firmware/UEFI tests entirely outside CI
+
+### Priority ranking for improvements
+
+P0 (low effort, benefit all):
+- Add coverage reporting to all 7 test harnesses
+- Add conftest.py / shared fixtures (agent, server, dashboard)
+- Add make full-verify + make test-e2e
+- Automate memory consolidate/decay (hook into session close)
+
+P1 (medium effort, high impact):
+- Test new features (download, duress, enrollment, tamper)
+- Add timeout protection (agent, server, memory)
+- Fix memory race conditions (atomic writes, file locking)
+- Split mega test files (agent, worker, memory)
+- Fix backwards skip logic in test_tamper_protection.py
+- Round confidence values in memory harness
+- Add graph-check to release.yml
+- Add ruff format --check to lint.yml
+
+P2 (medium-high effort):
+- Add pytest.mark.parametrize to agent
+- Switch dashboard from fireEvent to user-event
+- Add Electron runtime tests (IPC, main process)
+- Add Miniflare for Worker
+- Add MSW for dashboard contract testing
+- Improve memory retrieve (stemming, stopwords)
+- Fix memory reconcile provenance (fake session IDs)
+- Add corruption handling to memory harness
+- Wire firmware/UEFI tests into CI (QEMU + swtpm service)
+- Add HMAC signing to k6 load tests
+
+P3 (low effort, nice to have):
+- Enable Firefox/WebKit in Playwright
+- Convert test_graph_session.py to pytest
+- Add convergence gate to verify-env
+- Add size cap/rotation for raw/ captures
+- Add shellcheck to lint.yml
+- Add PostgreSQL smoke to nightly CI
+- Add make load-test target
+- Add graph_assert.py self-tests
