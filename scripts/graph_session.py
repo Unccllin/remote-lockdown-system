@@ -410,6 +410,11 @@ def close_session(
 
     The block_content should be a full session block starting with
     "## Session: ..." header.
+
+    After appending, automatically runs memory consolidate/decay if the
+    raw session count triggers the thresholds (every 5 sessions consolidate,
+    every 10 sessions decay). This enforces the cadence that was previously
+    only a manual recommendation.
     """
     if not trace_path.exists():
         print(f"ERROR: trace.md not found at {trace_path}", file=sys.stderr)
@@ -434,10 +439,59 @@ def close_session(
     lines = generate_current_state(trace_path, graph_spec_path, current_state_path)
     if lines and lines > 0:
         print(f"Appended session to trace.md and regenerated current-state.md ({lines} lines)")
-        return True
     else:
         print("ERROR: failed to regenerate current-state.md", file=sys.stderr)
         return False
+
+    # Auto-run memory consolidate/decay based on raw session count.
+    # This enforces the "every 5 sessions consolidate, every 10 sessions
+    # decay" cadence that was previously only a manual recommendation.
+    _maybe_auto_consolidate_decay()
+
+    return True
+
+
+def _maybe_auto_consolidate_decay() -> None:
+    """Check raw session count and run consolidate/decay if thresholds are met.
+
+    Consolidate every 5 new raw captures, decay every 10.
+    Runs memory.py as a subprocess to avoid import coupling.
+    """
+    memory_script = Path(__file__).parent / "memory.py"
+    raw_dir = Path(__file__).parent.parent / ".devin" / "memory" / "raw"
+    if not memory_script.exists() or not raw_dir.exists():
+        return
+
+    raw_count = len(list(raw_dir.glob("sess-*.md")))
+    if raw_count == 0:
+        return
+
+    consolidate_interval = 5
+    decay_interval = 10
+
+    if raw_count % consolidate_interval == 0:
+        print(f"[memory] {raw_count} raw sessions — running consolidate...")
+        import subprocess
+        result = subprocess.run(
+            ["python3", str(memory_script), "consolidate"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0:
+            print(f"[memory] consolidate completed")
+        else:
+            print(f"[memory] consolidate failed: {result.stderr.strip()}", file=sys.stderr)
+
+    if raw_count % decay_interval == 0:
+        print(f"[memory] {raw_count} raw sessions — running decay...")
+        import subprocess
+        result = subprocess.run(
+            ["python3", str(memory_script), "decay"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0:
+            print(f"[memory] decay completed")
+        else:
+            print(f"[memory] decay failed: {result.stderr.strip()}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------

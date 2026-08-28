@@ -132,12 +132,16 @@ python3 scripts/memory.py capture \
 ```
 A session without a capture is a lost session. File references are mandatory.
 
-**Every 5 sessions — CONSOLIDATE:**
+**Every 5 sessions — CONSOLIDATE (automated):**
+Consolidate runs automatically when `close-session` detects the raw session
+count is a multiple of 5. You can also run it manually:
 ```bash
 python3 scripts/memory.py consolidate
 ```
 
-**Every 10 sessions — DECAY:**
+**Every 10 sessions — DECAY (automated):**
+Decay runs automatically when `close-session` detects the raw session count
+is a multiple of 10. You can also run it manually:
 ```bash
 python3 scripts/memory.py decay
 ```
