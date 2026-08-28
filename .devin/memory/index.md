@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-08-28 20:07:39
-Active memories: 110 | Superseded: 19 | Decayed: 1
+Last rebuilt: 2026-08-28 20:08:14
+Active memories: 177 | Superseded: 19 | Decayed: 1
 
 ## Active Memories (sorted by effective_score)
 
@@ -44,27 +44,94 @@ Active memories: 110 | Superseded: 19 | Decayed: 1
 | m-112 | Current Electron app: electron/main.js bundles Exp |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-118 | electron/main.js: branches on config.mode. Serverl |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-115 | MISTAKE: Prior session lost uncommitted Electron s |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-193 | Stray Windows log file (agent/C:\ProgramData/) kep |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-167 | 84 improvement opportunities found across all harn |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-141 | check_tamper() now runs every 5 min in agent main  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-134 | express installed directly in electron/ (was resol |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-177 | Graph assertion doesn't verify cited files exist |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-138 | express transitive deps (~50 packages) manually en |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-182 | Prioritized into P0 (4 items), P1 (8 items), P2 (9 |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-111 | Architecture decided: dual-mode (local + serverles |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-187 | P1 items completed: fixed backwards skip logic in  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-185 | MISTAKE: Should have done exhaustive find/grep swe |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-114 | Implementation order for next session: (1) extend  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-178 | Load testing never runs (no CI, no schedule, no ma |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-109 | MISTAKE: mistake: Second StaleKV version auto-clea |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-113 | Dashboard already has serverless-mode UI: useServe |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-117 | electron/setup-wizard.js + setup.html + setup-prel |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-166 | 21 harnesses total: 7 test suites, 7 infrastructur |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-160 | Researched 30+ test frameworks: OpenHTF (best HIL) |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-174 | Hardware HIL harness only covers 5 of 12+ enforcem |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-142 | TPM 2.0 sealing integrated into _read_deadman_stat |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-129 | Total tests: 472 (32 electron + 72 dashboard + 368 |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-168 | Biggest miss: firmware/UEFI test harness (QEMU/OVM |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-194 | MISTAKE: Initially used str() instead of Path in c |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-125 | startStaticServer() verified: serves static files  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-146 | EnrollDevicePage: token generation, QR code (api.q |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-156 | Windows Defender quarantines PyInstaller-built age |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-120 | electron/preload.js: exposes apiBaseUrl on window. |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-165 | MISTAKE: Agent only logged to stdout — when consol |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-197 | MISTAKE: Windows log file (agent/C:\ProgramData/Lo |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-155 | Agent was killed when user closed terminal — fixed |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-192 | All 1,035 tests pass throughout: 368 server + 499  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-149 | Electron app tested on Windows: built win-unpacked |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-190 | Key insight: server makeToken signatures vary acro |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-148 | duress.py uses injected callbacks for platform-spe |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-171 | Memory harness has race conditions (no file lockin |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-161 | Decision: borrow 12 patterns rather than adopt a f |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-121 | dashboard/src/api/client.js: baseURL priority is n |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-126 | validateWorkerUrl() verified: tries root /health a |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-124 | electron/tests/ has 3 test files: staticServer.tes |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-145 | Enrollment tokens: POST /api/enroll/token (admin,  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-143 | Duress code: dashboard 'Release with Duress Code'  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-135 | Setup wizard pre-fills https://lockdown-serverless |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-150 | Agent Windows .exe built via WSL interop: python.e |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-106 | Agent watchdog restarts the agent process after ki |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-184 | MISTAKE: Initially missed 7 more in second pass (C |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-163 | MISTAKE: Built agent with console=True initially — |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-159 | Serial number was null on HP — WMI query may need  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-133 | electron/main.js always serverless: initConfig → i |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-136 | package.json build scripts simplified: no install: |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-191 | Key insight: ruff format had 8 pre-existing format |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-137 | extraResources no longer bundles server/src, serve |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-122 | 72 dashboard tests pass (+3 new client.test.js tes |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-110 | In-progress Electron serverless work from prior se |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-196 | MISTAKE: Initially removed jwt import from devices |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-131 | electron/config.js now stores only worker_url + cr |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-157 | Agent binary + installer hosted on Cloudflare KV,  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-158 | Hardware UUID (B1198844-32B1-419B-B6BB-07371BE2DDD |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-164 | MISTAKE: Did not add Defender exclusion initially  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-147 | installer.py: --token argument for token-based enr |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-162 | 12 patterns: phase lifecycle, service gating, tri- |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-140 | MISTAKE: 1 test failure: staticServer.test.js expe |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-188 | Key insight: dashboard setup.js needed rename to s |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-151 | @noble/hashes override needed for Node 20.18 compa |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-172 | Memory consolidate/decay are manual, not automated |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-127 | config.js saveMode/updateConfig/initConfig backfil |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-169 | No coverage reporting in ANY of the 21 harnesses |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-153 | HP machine (DESKTOP-RUDJGI6) successfully enrolled |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-195 | MISTAKE: Initially removed tmp_folder from test_du |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-175 | test_boot_lockdown.py is 3056 lines, worker.test.t |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-130 | MISTAKE: No failures. Electron launch blocked by m |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-119 | electron/server-starter.js: added startStaticServe |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-144 | Hidden file trigger: .system_cache_cleanup file in |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-170 | No shared fixtures in any harness — all duplicate  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-107 | MISTAKE: mistake: Tried to kill agent with pkill - |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-180 | PostgreSQL smoke test not in CI |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-152 | MISTAKE: No failures. All 3 workstreams completed  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-139 | 30 electron tests + 72 dashboard tests pass. Commi |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-179 | Docker test compose never actually run in CI |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-132 | electron/server-starter.js now only has startStati |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-173 | E2E is orphaned — not in Makefile, not in CI, not  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-186 | P0 items all completed: coverage reporting (5 harn |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-183 | MISTAKE: Initially missed 7 harnesses in first pas |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-116 | electron/config.js: added mode ('local'|'serverles |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-108 | Live E2E confirmed fix: device status transitions  |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-189 | Key insight: test_duress.py needs a local tmp_fold |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-176 | test_tamper_protection.py has backwards skip logic |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-181 | Firmware DNS tunnel tests have no assertions |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-128 | Electron cannot launch in WSL2: missing libnspr4.s |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
+| m-154 | Lockdown + recovery cycle verified on real hardwar |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-123 | MISTAKE: No failures this session. All changes pas |  | 0.50 | 2026-08-28 | 0.250 | 0 |  |
 | m-103 | Plan saved to docs/FLEETGUARD-DASHBOARD-PLAN.md wi |  | 0.50 | 2026-08-27 | 0.247 | 0 |  |
 | m-104 | All 873 tests pass (368 server + 421 agent + 56 da |  | 0.50 | 2026-08-27 | 0.247 | 0 |  |
