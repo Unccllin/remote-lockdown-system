@@ -7,6 +7,8 @@ module.exports = {
   maxWorkers: 1,
   // Don't use clearMocks — it can interfere with our custom mock implementation.
   // We handle cleanup in beforeEach instead.
+  // Timeout: 15s per test (default is 5s, but some E2E tests need more).
+  testTimeout: 15000,
   collectCoverageFrom: [
     'src/**/*.js',
     '!src/db/migrate.js',

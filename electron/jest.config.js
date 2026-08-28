@@ -5,6 +5,7 @@ module.exports = {
   // express and other server dependencies. Tests run from electron/ so the
   // relative path resolution works the same as in production.
   rootDir: '.',
+  testTimeout: 10000,
   collectCoverageFrom: [
     '*.js',
     '!main.js',

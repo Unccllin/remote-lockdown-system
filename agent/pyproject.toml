@@ -1,6 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --timeout=30"
 markers = [
     "hardware: tests that require real Windows/HP hardware",
     "slow: tests that take more than 5 seconds",

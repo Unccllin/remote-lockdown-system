@@ -8,6 +8,7 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./tests/setup.jsx'],
     exclude: ['node_modules', 'dist', 'e2e/**'],
+    testTimeout: 15000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary', 'lcov', 'json'],

@@ -3,6 +3,7 @@
 ruff==0.5.0
 pytest==8.2.0
 pytest-cov==5.0.0
+pytest-timeout==2.3.1
 # pyyaml is needed by test_graph_assertions.py, which imports
 # graph_assert.py → graph_loader.py (the node graph loader).
 pyyaml==6.0.3
