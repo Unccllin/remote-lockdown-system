@@ -110,7 +110,9 @@ exe = EXE(
         'VCRUNTIME140_1.dll',
     ],
     runtime_tmpdir=None,
-    console=True,  # Keep console for logging (use --silent for covert mode)
+    console=False,  # Run as background process — no visible window.
+    # The agent logs to a file (agent.log in the install directory).
+    # Use --debug flag to enable console output for troubleshooting.
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

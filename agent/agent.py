@@ -70,10 +70,23 @@ _DRY_RUN = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes"
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
+# The agent runs as a background process (console=False in PyInstaller).
+# Log to a file so logs are preserved even without a console window.
+# Also log to stdout when running in a terminal (e.g., during development
+# or when launched with --debug).
+_log_handlers = [logging.StreamHandler(sys.stdout)]
+try:
+    # Log to agent.log in the install directory (or cwd if not installed)
+    _log_dir = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _log_handlers.append(logging.FileHandler(_log_dir / "agent.log", encoding="utf-8"))
+except Exception:  # noqa: S110 — logging setup failure is non-fatal
+    pass  # If we can't create the log dir, just use stdout
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=_log_handlers,
 )
 log = logging.getLogger("lockdown-agent")
 
@@ -2839,10 +2852,13 @@ def main() -> None:
         log.error("Invalid configuration: %s", e)
         sys.exit(1)
 
-    # --silent flag: suppress stdout logging for covert operation
+    # --silent flag: suppress stdout logging for covert operation.
+    # File logging (agent.log) continues regardless.
     if args.silent:
-        logging.disable(logging.INFO)
-        log.info("Running in silent mode — stdout logging suppressed")
+        for h in log.handlers:
+            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+                log.removeHandler(h)
+        log.info("Running in silent mode — stdout logging suppressed (file logging continues)")
 
     log.info(
         "Agent starting — hostname=%s server=%s poll=%ss",
