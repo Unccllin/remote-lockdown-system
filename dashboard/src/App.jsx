@@ -8,6 +8,7 @@ import DevicesPage from './pages/DevicesPage';
 import DeviceDetailPage from './pages/DeviceDetailPage';
 import AuditPage from './pages/AuditPage';
 import EnrollPage from './pages/EnrollPage';
+import EnrollDevicePage from './pages/EnrollDevicePage';
 import MapPage from './pages/MapPage';
 import HealthPage from './pages/HealthPage';
 import AdminsPage from './pages/AdminsPage';
@@ -34,7 +35,8 @@ export default function App() {
         <Route index element={<OverviewPage />} />
         <Route path="devices" element={<DevicesPage />} />
         <Route path="devices/:id" element={<DeviceDetailPage />} />
-        <Route path="devices/enroll" element={<RequireRole role="operator"><EnrollPage /></RequireRole>} />
+        <Route path="devices/enroll" element={<RequireRole role="operator"><EnrollDevicePage /></RequireRole>} />
+        <Route path="devices/enroll/manual" element={<RequireRole role="operator"><EnrollPage /></RequireRole>} />
         <Route path="map" element={<MapPage />} />
         <Route path="audit" element={<AuditPage />} />
         <Route path="health" element={<HealthPage />} />

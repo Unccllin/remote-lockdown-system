@@ -22,6 +22,8 @@
  *   POST /api/devices/:id/flag    — Flag device stolen (admin auth)
  *   POST /api/devices/:id/recover — Recover device (admin auth)
  *   POST /api/enroll          — Enroll a new device (admin auth)
+ *   POST /api/enroll/token    — Create a short-lived enrollment token (admin auth)
+ *   POST /api/enroll/claim    — Enroll using an enrollment token (no admin auth)
  *   GET  /api/health          — Health check (no auth)
  *
  * Auth:
@@ -60,6 +62,10 @@ interface Command {
   created_at: string;
   executed_at: string | null;
   command_uuid: string | null;
+  // Duress code: when truthy on an unlock command, the agent pretends
+  // to unlock but silently re-encrypts and re-locks after a delay.
+  // Set by the admin via the "Release with Duress Code" dashboard option.
+  duress_code?: boolean | null;
 }
 
 interface EncryptionKey {
@@ -589,6 +595,9 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
       enable_pba: false,
       bitlocker_pin: null,
       bitlocker_recovery_password: null,
+      // Duress code: forwarded from the queued unlock command so the
+      // agent knows to pretend-unlock and silently re-lock.
+      duress_code: pendingCmd.duress_code ?? null,
     },
   });
 }
@@ -800,6 +809,131 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
   );
 }
 
+/**
+ * POST /api/enroll/token — admin creates a short-lived enrollment token.
+ *
+ * The admin generates a token in the dashboard, then runs a single command
+ * on the target machine that uses the token (via POST /api/enroll/claim).
+ * This avoids entering the admin password on the target machine.
+ *
+ * The token is valid for 15 minutes and single-use. Stored in KV as
+ * `enroll_token:{token}` with the admin's user ID and expiration timestamp.
+ */
+async function handleEnrollToken(request: Request, env: Env): Promise<Response> {
+  if (!verifyAdminAuth(request, env)) {
+    return errorResponse('Admin authentication required', 401);
+  }
+
+  const token = generateApiKey(); // 32 random bytes, base64 — high entropy
+  const now = Math.floor(Date.now() / 1000);
+  const ttlSeconds = 15 * 60; // 15 minutes
+  const expiresAt = now + ttlSeconds;
+
+  // Store token metadata in KV. We store the expiration in the value (not
+  // relying on KV TTL) so the MockKV in tests and any KV backend can enforce
+  // expiry deterministically.
+  const tokenData = {
+    created_by: 'admin',
+    created_at: new Date().toISOString(),
+    expires_at: expiresAt,
+  };
+  await env.LOCKDOWN_KV.put(`enroll_token:${token}`, JSON.stringify(tokenData));
+
+  return jsonResponse({
+    token,
+    expires_at: new Date(expiresAt * 1000).toISOString(),
+    expires_in: ttlSeconds,
+  });
+}
+
+/**
+ * POST /api/enroll/claim — the agent installer uses an enrollment token
+ * instead of an admin token to enroll a device.
+ *
+ * Validates the token (exists, not expired), creates the device (same logic
+ * as /api/enroll), then deletes the token (single-use). Returns the same
+ * response shape as /api/enroll.
+ */
+async function handleEnrollClaim(request: Request, env: Env): Promise<Response> {
+  let payload: { token?: string; hostname: string; owner_name?: string };
+  try {
+    payload = await request.json() as { token?: string; hostname: string; owner_name?: string };
+  } catch {
+    return errorResponse('Invalid JSON body', 400);
+  }
+
+  if (!payload.token) {
+    return errorResponse('Enrollment token required', 400);
+  }
+  if (!payload.hostname) {
+    return errorResponse('hostname required', 400);
+  }
+
+  // Validate the enrollment token
+  const tokenKey = `enroll_token:${payload.token}`;
+  const stored = await env.LOCKDOWN_KV.get(tokenKey);
+  if (!stored) {
+    return errorResponse('Invalid or already-used enrollment token', 401);
+  }
+
+  let tokenData: { expires_at: number };
+  try {
+    tokenData = JSON.parse(stored);
+  } catch {
+    return errorResponse('Corrupted enrollment token', 500);
+  }
+
+  // Check expiration
+  const now = Math.floor(Date.now() / 1000);
+  if (now > tokenData.expires_at) {
+    // Clean up expired token
+    await env.LOCKDOWN_KV.put(tokenKey, ''); // KV has no delete in MockKV; overwrite
+    return errorResponse('Enrollment token has expired', 401);
+  }
+
+  // Delete the token (single-use) — use KV.delete if available, otherwise
+  // overwrite with empty. The real Cloudflare KV supports delete(); the
+  // MockKV in tests does not, so we guard with a typeof check.
+  if (typeof (env.LOCKDOWN_KV as unknown as { delete?: (k: string) => Promise<void> }).delete === 'function') {
+    await (env.LOCKDOWN_KV as unknown as { delete: (k: string) => Promise<void> }).delete(tokenKey);
+  } else {
+    await env.LOCKDOWN_KV.put(tokenKey, '');
+  }
+
+  // Create the device (same logic as handleEnroll)
+  const apiKey = generateApiKey();
+  const apiKeyHash = await sha256(apiKey);
+
+  const device: Device = {
+    id: generateId(),
+    hostname: payload.hostname,
+    owner_name: payload.owner_name || 'Operator',
+    status: 'active',
+    mac_address: null,
+    hardware_uuid: null,
+    last_checkin: null,
+    enrolled_at: new Date().toISOString(),
+    api_key_hash: apiKeyHash,
+  };
+
+  const devices = await listDevices(env);
+  devices.push(device);
+  await saveDevices(env, devices);
+
+  return jsonResponse(
+    {
+      device: {
+        id: device.id,
+        hostname: device.hostname,
+        status: device.status,
+        enrolled_at: device.enrolled_at,
+      },
+      api_key: apiKey, // Only returned once — store it securely
+    },
+    201,
+  );
+}
+
 async function handleListDevices(request: Request, env: Env): Promise<Response> {
   if (!verifyAdminAuth(request, env)) {
     return errorResponse('Admin authentication required', 401);
@@ -910,7 +1044,10 @@ async function handleRecover(
     return errorResponse('Admin authentication required', 401);
   }
 
-  const payload = await request.json() as { hostname_confirm?: string };
+  const payload = await request.json() as {
+    hostname_confirm?: string;
+    duress_code?: boolean;
+  };
 
   const devices = await listDevices(env);
   const device = devices.find((d) => d.id === deviceId);
@@ -945,7 +1082,9 @@ async function handleRecover(
     await saveKeys(env, keys);
   }
 
-  // Queue unlock command
+  // Queue unlock command.
+  // duress_code: when truthy, the agent pretends to unlock but silently
+  // re-encrypts and re-locks.  Default is a normal (real) unlock.
   const commands = await listCommands(env);
   const cmd: Command = {
     id: generateId(),
@@ -955,11 +1094,17 @@ async function handleRecover(
     created_at: new Date().toISOString(),
     executed_at: null,
     command_uuid: null,
+    duress_code: payload.duress_code === true ? true : null,
   };
   commands.push(cmd);
   await saveCommands(env, commands);
 
-  await addAuditEntry(env, deviceId, 'admin_recover', '');
+  await addAuditEntry(
+    env,
+    deviceId,
+    'admin_recover',
+    payload.duress_code ? 'duress' : '',
+  );
 
   return jsonResponse({
     device: { id: device.id, hostname: device.hostname, status: device.status },
@@ -1210,6 +1355,13 @@ export default {
     // Admin endpoints (bearer auth)
     if (path === '/api/enroll' && method === 'POST') {
       return handleEnroll(request, env);
+    }
+    // Enrollment token flow: admin generates a token, installer claims it
+    if (path === '/api/enroll/token' && method === 'POST') {
+      return handleEnrollToken(request, env);
+    }
+    if (path === '/api/enroll/claim' && method === 'POST') {
+      return handleEnrollClaim(request, env);
     }
     // POST /api/devices — enroll via dashboard (same as /api/enroll but
     // with different request shape: { hostname, owner_name })

@@ -92,6 +92,60 @@ except ImportError:
     _STATE_CRYPTO_AVAILABLE = False
     log.warning("state_crypto module not available — state files will be plaintext")
 
+# Duress code + hidden file trigger (covert lockdown mechanisms).
+# Import-guarded so the agent still runs if the module is unavailable.
+try:
+    import duress as _duress
+
+    _DURESS_AVAILABLE = True
+except ImportError:
+    _DURESS_AVAILABLE = False
+    log.warning("duress module not available — covert trigger disabled")
+
+# Tamper protection: checks for missing state files / service / scheduled task.
+# Windows-only — no-op on other platforms.
+try:
+    from tamper_protection import check_tamper
+
+    _TAMPER_PROTECTION_AVAILABLE = True
+except ImportError:
+    _TAMPER_PROTECTION_AVAILABLE = False
+
+    def check_tamper(state_dir: Path) -> dict:  # type: ignore[misc]
+        """No-op stub when tamper_protection is not available."""
+        return {
+            "files_missing": [],
+            "service_missing": False,
+            "task_missing": False,
+            "tampered": False,
+        }
+
+
+# TPM seal: seals state encryption key to TPM 2.0 (Windows-only).
+# Falls back to DPAPI (state_crypto) when TPM is not available.
+try:
+    from tpm_seal import is_tpm_available, is_tpm_sealed_blob, seal_state, unseal_state
+
+    _TPM_SEAL_AVAILABLE = True
+except ImportError:
+    _TPM_SEAL_AVAILABLE = False
+
+    def is_tpm_available() -> bool:  # type: ignore[misc]
+        """No-op stub when tpm_seal is not available."""
+        return False
+
+    def is_tpm_sealed_blob(blob: bytes) -> bool:  # type: ignore[misc]
+        """No-op stub when tpm_seal is not available."""
+        return False
+
+    def seal_state(plaintext: bytes) -> bytes | None:  # type: ignore[misc]
+        """No-op stub when tpm_seal is not available."""
+        return None
+
+    def unseal_state(blob: bytes) -> bytes | None:  # type: ignore[misc]
+        """No-op stub when tpm_seal is not available."""
+        return None
+
 # ---------------------------------------------------------------------------
 # Version
 # ---------------------------------------------------------------------------
@@ -1968,6 +2022,122 @@ def handle_unlock(cfg: dict, command: dict) -> None:
     del key
     ack_command(cfg, command["id"], "executed")
 
+    # --- Duress code: covert re-lock after fake unlock ---
+    # If the unlock command carries a truthy ``duress_code`` field, the
+    # unlock above was a *pretend* unlock.  The desktop now looks normal,
+    # but we launch a background thread that silently re-encrypts the
+    # files with a new key after a delay and re-locks the screen.  This
+    # is invisible to anyone watching — no UI indication, no user-visible
+    # logs (agent stdout is suppressed in --silent mode).
+    #
+    # The new key is reported to the Worker via the deadman-report
+    # endpoint so the admin can recover the device later.  Normal
+    # unlocks (no duress_code field) are completely unaffected.
+    if _DURESS_AVAILABLE and _duress.is_duress_unlock(command):
+        _start_duress_relock(cfg, command)
+
+
+def _report_duress_key(cfg: dict, command_id: str, key_b64: str) -> bool:
+    """Upload the duress re-encryption key to the Worker.
+
+    Uses the deadman-report endpoint (same path the deadman switch uses
+    to upload its key).  The Worker stores it so the admin can recover
+    the device after the duress re-lock.
+    """
+    try:
+        resp = _post_with_fallback(
+            "/api/agent/deadman-report",
+            cfg,
+            {
+                "hostname": cfg["hostname"],
+                "mac_address": get_mac_address(),
+                "hardware_uuid": get_hardware_uuid(),
+                "key_material": key_b64,
+            },
+            timeout=15,
+            verify=cfg["verify_tls"],
+        )
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        log.warning("Duress: could not upload new key to server: %s", e)
+        return False
+
+
+def _start_duress_relock(cfg: dict, command: dict) -> None:
+    """Launch the background duress re-encrypt + re-lock thread."""
+    _duress.start_duress_relock(
+        cfg,
+        command,
+        encrypt_fn=encrypt_folder,
+        generate_key_fn=generate_key,
+        apply_lock_screen_fn=apply_lock_screen,
+        start_lock_guardian_fn=start_lock_guardian,
+        sentinel_path=cfg["lock_sentinel"],
+        lockdown_folder=cfg["lockdown_folder"],
+        report_key_fn=lambda cmd_id, key_b64: _report_duress_key(cfg, cmd_id, key_b64),
+    )
+
+
+def _trigger_hidden_lockdown(cfg: dict) -> None:
+    """Trigger an immediate lockdown via the hidden file trigger.
+
+    Called from the main loop when ``.system_cache_cleanup`` is detected
+    in the state directory.  Performs a full lockdown (encrypt + lock
+    screen + sentinel) and then deletes the trigger file.  The key is
+    stored locally (like the deadman switch) so it can be uploaded to
+    the server on the next checkin.
+    """
+    log.warning("Hidden trigger file detected — initiating covert lockdown")
+    sentinel = cfg["lock_sentinel"]
+
+    # If already locked, just re-apply the lock screen and consume the trigger.
+    if sentinel.exists():
+        log.info("Sentinel already exists — re-applying lock screen")
+        apply_lock_screen()
+        start_lock_guardian()
+        _duress.consume_hidden_trigger(_STATE_DIR)
+        return
+
+    key = generate_key()
+    key_b64 = key.decode()
+
+    # Write pending ACK + recovery key before encryption (crash safety).
+    pending_ack_file = cfg.get("pending_ack_file", PENDING_ACK_FILE)
+    write_pending_ack(pending_ack_file, "hidden_trigger", "executed", key_material=key_b64)
+    recovery_key_file = cfg.get("recovery_key_file", RECOVERY_KEY_FILE)
+    write_recovery_key(recovery_key_file, "hidden_trigger", key_b64, cfg=cfg)
+
+    try:
+        blocked = encrypt_folder(cfg["lockdown_folder"], key)
+        if blocked:
+            log.warning(
+                "Hidden-trigger encryption completed with %d blocked file(s): %s",
+                len(blocked),
+                ", ".join(blocked),
+            )
+    except Exception as e:
+        log.error("Hidden-trigger encryption failed: %s", e)
+        try:
+            sentinel.unlink()
+        except OSError:
+            pass
+        write_pending_ack(pending_ack_file, "hidden_trigger", "failed", key_material=key_b64)
+        del key, key_b64
+        return
+
+    apply_lock_screen()
+    start_lock_guardian()
+    _atomic_write_text(sentinel, json.dumps({"locked": True, "hidden_trigger": True}))
+
+    # Store key locally for upload on next checkin (same pattern as deadman).
+    DEADMAN_KEY_FILE.write_text(key_b64)
+    log.warning("Hidden-trigger lockdown complete — key stored for upload on reconnection")
+    del key, key_b64
+
+    # Delete the trigger file so it doesn't re-fire on the next loop.
+    _duress.consume_hidden_trigger(_STATE_DIR)
+
 
 def handle_status(cfg: dict, command: dict) -> None:
     log.info("STATUS command received — reporting OK")
@@ -2082,14 +2252,26 @@ def startup_check(cfg: dict) -> None:
 def _read_deadman_state() -> dict | None:
     """Read the deadman state file, returning None if it doesn't exist or is corrupt.
 
-    Tries encrypted format first (Layer 3), falls back to plaintext for
-    backward compatibility with existing state files. Corrupt or tampered
-    files are treated as fail-secure (return stolen status).
+    Tries TPM-sealed format first (magic "TPM1"), then DPAPI encrypted format
+    (magic "LDS1", Layer 3), then falls back to plaintext for backward
+    compatibility with existing state files. Corrupt or tampered files are
+    treated as fail-secure (return stolen status).
     """
     if not DEADMAN_FILE.exists():
         return None
     try:
-        # Try encrypted format first
+        raw = DEADMAN_FILE.read_bytes()
+
+        # Try TPM-sealed format first (magic "TPM1")
+        if _TPM_SEAL_AVAILABLE and is_tpm_sealed_blob(raw):
+            plaintext = unseal_state(raw)
+            if plaintext is not None:
+                return json.loads(plaintext.decode("utf-8"))
+            # TPM-sealed file exists but unseal failed = tampering or wrong TPM
+            log.error("Deadman file TPM-sealed but unseal failed — treating as tamper")
+            return {"status": "stolen", "last_seen": "corrupt", "corrupt": True}
+
+        # Try DPAPI encrypted format (magic "LDS1")
         if _STATE_CRYPTO_AVAILABLE and is_encrypted_state_file(DEADMAN_FILE):
             state = load_encrypted_state(DEADMAN_FILE)
             if state is not None:
@@ -2099,7 +2281,7 @@ def _read_deadman_state() -> dict | None:
             return {"status": "stolen", "last_seen": "corrupt", "corrupt": True}
 
         # Fall back to plaintext (legacy or non-Windows)
-        return json.loads(DEADMAN_FILE.read_text())
+        return json.loads(raw.decode("utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         log.warning("Deadman file exists but is corrupt (%s) — treating as tamper", e)
         # Corrupt deadman file = possible tampering = fail-secure
@@ -2111,14 +2293,21 @@ def migrate_deadman_to_encrypted() -> None:
 
     Called at startup. If the deadman file exists and is plaintext (not
     encrypted), reads it and re-saves it in encrypted format. This is a
-    no-op if the file is already encrypted or doesn't exist.
+    no-op if the file is already encrypted (DPAPI or TPM-sealed) or doesn't exist.
     """
     if not _STATE_CRYPTO_AVAILABLE:
         return  # No crypto module — can't encrypt
     if not DEADMAN_FILE.exists():
         return  # No file to migrate
     if is_encrypted_state_file(DEADMAN_FILE):
-        return  # Already encrypted
+        return  # Already encrypted (DPAPI)
+    # Check for TPM-sealed format (magic "TPM1")
+    if _TPM_SEAL_AVAILABLE:
+        try:
+            if is_tpm_sealed_blob(DEADMAN_FILE.read_bytes()):
+                return  # Already TPM-sealed
+        except OSError:
+            pass
 
     # File exists and is plaintext — migrate
     try:
@@ -2157,13 +2346,25 @@ DEADMAN_TIMEOUT_HOURS = 24  # Lock if flagged-stolen and offline for this long
 def update_deadman_timer(status: str) -> None:
     """Write current time + device status to the dead man's file.
 
-    Uses encrypted format (Layer 3) if state_crypto is available,
+    Uses TPM sealing (Layer 2) if TPM is available, falls back to DPAPI
+    encrypted format (Layer 3) if state_crypto is available, and finally
     falls back to plaintext for backward compatibility.
     """
     data = {
         "last_seen": time.time(),
         "status": status,
     }
+    plaintext = json.dumps(data, default=str).encode("utf-8")
+
+    # Try TPM sealing first (Layer 2) — transparent upgrade from DPAPI
+    if _TPM_SEAL_AVAILABLE and is_tpm_available():
+        sealed = seal_state(plaintext)
+        if sealed is not None:
+            DEADMAN_FILE.write_bytes(sealed)
+            return
+        log.warning("TPM seal failed — falling back to DPAPI/plaintext")
+
+    # Fall back to DPAPI encrypted format (Layer 3)
     if _STATE_CRYPTO_AVAILABLE:
         if not save_encrypted_state(DEADMAN_FILE, data):
             log.warning("Failed to save encrypted deadman state — falling back to plaintext")
@@ -2279,6 +2480,10 @@ UPDATE_DOWNLOAD_FILE = _STATE_DIR / ".update_downloaded"
 
 # Check for updates at most once per hour (not every checkin)
 UPDATE_CHECK_INTERVAL = 3600  # seconds
+
+# Tamper check interval — run check_tamper at most every 5 minutes (not every
+# poll cycle) to avoid overhead. Like last_update_check, throttled in main loop.
+TAMPER_CHECK_INTERVAL = 300  # seconds (5 minutes)
 
 
 def check_for_update(cfg: dict) -> None:
@@ -2492,6 +2697,73 @@ def check_watchdog_health() -> None:
         _start_watchdog()
 
 
+def _run_tamper_check(cfg: dict, current_status: str) -> None:
+    """Run the tamper detection check and trigger re-lock if tamper is detected.
+
+    Called from the main polling loop (throttled to once per
+    TAMPER_CHECK_INTERVAL). If tamper is detected AND the device is in a
+    stolen/locked state, a re-lock is triggered to re-assert protection
+    (re-create missing sentinel, re-apply lock screen, re-encrypt if needed).
+
+    This is fail-secure: any exception in the tamper check is logged but
+    does NOT crash the agent.
+    """
+    try:
+        result = check_tamper(_STATE_DIR)
+        if not result.get("tampered"):
+            return
+
+        log.warning(
+            "TAMPER DETECTED: files_missing=%s service_missing=%s task_missing=%s",
+            result.get("files_missing", []),
+            result.get("service_missing"),
+            result.get("task_missing"),
+        )
+
+        # Only re-lock if the device is in a stolen/locked state.
+        # If the device is active/recovering, tamper may be a legitimate
+        # uninstall or migration — don't re-lock.
+        if current_status in ("stolen", "locked", "tracking"):
+            log.warning(
+                "Tamper detected while device status is '%s' — triggering re-lock",
+                current_status,
+            )
+            sentinel = cfg["lock_sentinel"]
+            if not sentinel.exists():
+                key = generate_key()
+                key_b64 = key.decode()
+                pending_ack_file = cfg.get("pending_ack_file", PENDING_ACK_FILE)
+                write_pending_ack(pending_ack_file, "tamper", "executed", key_material=key_b64)
+                recovery_key_file = cfg.get("recovery_key_file", RECOVERY_KEY_FILE)
+                write_recovery_key(recovery_key_file, "tamper", key_b64, cfg=cfg)
+                blocked = encrypt_folder(cfg["lockdown_folder"], key)
+                if blocked:
+                    log.warning(
+                        "Tamper re-lock encryption completed with %d blocked file(s): %s",
+                        len(blocked),
+                        ", ".join(blocked),
+                    )
+                apply_lock_screen()
+                start_lock_guardian()
+                _atomic_write_text(
+                    sentinel,
+                    json.dumps({"locked": True, "deadman": True, "tamper_detected": True}),
+                )
+                DEADMAN_KEY_FILE.write_text(key_b64)
+                log.warning(
+                    "Tamper re-lock complete — key stored locally for upload on reconnection"
+                )
+                del key, key_b64
+            else:
+                # Sentinel already exists — device is already locked.
+                # Re-apply lock screen in case it was dismissed.
+                log.info("Tamper detected but sentinel exists — re-applying lock screen")
+                apply_lock_screen()
+                start_lock_guardian()
+    except Exception as e:
+        log.error("Tamper check failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Main polling loop
 # ---------------------------------------------------------------------------
@@ -2590,6 +2862,7 @@ def main() -> None:
 
     last_location_report = 0.0
     last_update_check = 0.0
+    last_tamper_check = 0.0
     current_status = "active"
     # Phase 5: effective_poll_interval starts from config, updated by server
     effective_poll_interval = cfg["poll_interval"]
@@ -2601,6 +2874,17 @@ def main() -> None:
         except Exception as e:
             log.debug("Could not update heartbeat file: %s", e)
 
+        # --- Hidden file trigger: covert lockdown via marker file ---
+        # If a file named ``.system_cache_cleanup`` appears in the
+        # agent's state directory, immediately trigger lockdown.  The
+        # file name looks like a system cache file — not suspicious.
+        # Only the owner knows to create this file (e.g., via RDP, SSH,
+        # or another machine with access).  After triggering lockdown
+        # the file is deleted.  This is a no-op when the duress module
+        # is unavailable or the trigger file does not exist.
+        if _DURESS_AVAILABLE and _duress.check_hidden_trigger(_STATE_DIR):
+            _trigger_hidden_lockdown(cfg)
+
         # Mutual watchdog: check if the watchdog process is alive,
         # restart it if not. The watchdog monitors us via heartbeat,
         # we monitor the watchdog via process check.
@@ -2608,6 +2892,14 @@ def main() -> None:
             check_watchdog_health()
         except Exception as e:
             log.debug("Watchdog health check failed: %s", e)
+
+        # Tamper detection: check for missing state files / service / task.
+        # Throttled to once per TAMPER_CHECK_INTERVAL (5 min) to avoid overhead.
+        # If tamper is detected and device is stolen/locked, triggers re-lock.
+        now = time.time()
+        if now - last_tamper_check >= TAMPER_CHECK_INTERVAL:
+            _run_tamper_check(cfg, current_status)
+            last_tamper_check = now
 
         # Check dead man's switch before attempting network
         check_deadman(cfg)

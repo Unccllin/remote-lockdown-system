@@ -169,11 +169,16 @@ export default function DeviceDetailPage() {
     }
   }
 
-  async function recover() {
+  async function recover(duress = false) {
     setActing(true);
     try {
-      await api.post(`/devices/${id}/recover`, { hostname_confirm: device.hostname });
-      toast.success('Recovery command queued — unlock key released to agent');
+      await api.post(`/devices/${id}/recover`, {
+        hostname_confirm: device.hostname,
+        duress_code: duress,
+      });
+      toast.success(duress
+        ? 'Recovery command queued — unlock key released to agent'
+        : 'Recovery command queued — unlock key released to agent');
       setModal(null);
       load();
     } catch (err) {
@@ -316,9 +321,20 @@ export default function DeviceDetailPage() {
           description={`This will queue an unlock command and release the decryption key for "${device.hostname}". Type the device hostname to confirm.`}
           confirmLabel={acting ? 'Processing…' : 'Recover Device'}
           confirmValue={device.hostname}
-          onConfirm={recover}
+          onConfirm={() => recover(false)}
           onCancel={() => setModal(null)}
           danger={false}
+        />
+      )}
+      {modal === 'recover_duress' && (
+        <ConfirmModal
+          title="Release with Duress Code"
+          description={`This will queue an unlock command for "${device.hostname}" that PRETENDS to unlock. The agent will show a normal desktop, then silently re-encrypt files and re-lock after a short delay. Use this if someone is forcing you to unlock the device. Type the device hostname to confirm.`}
+          confirmLabel={acting ? 'Processing…' : 'Release with Duress Code'}
+          confirmValue={device.hostname}
+          onConfirm={() => recover(true)}
+          onCancel={() => setModal(null)}
+          danger
         />
       )}
       {modal === 'track' && (
@@ -906,6 +922,15 @@ export default function DeviceDetailPage() {
         {isOperator && (device.status === 'stolen' || device.status === 'locked') && (
           <button className="btn-success" onClick={() => setModal('recover')}>
             <Unlock size={14} /> Recover Device
+          </button>
+        )}
+        {isOperator && (device.status === 'stolen' || device.status === 'locked') && (
+          <button
+            className="btn-ghost text-amber-400 border-amber-700/50 hover:bg-amber-900/20"
+            onClick={() => setModal('recover_duress')}
+            title="Pretend to unlock — silently re-locks after a delay"
+          >
+            <ShieldAlert size={14} /> Release with Duress Code
           </button>
         )}
         {device.status === 'recovering' && (

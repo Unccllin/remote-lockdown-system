@@ -165,6 +165,190 @@ describe('Serverless Worker', () => {
     });
   });
 
+  describe('POST /api/enroll/token', () => {
+    it('creates a short-lived enrollment token (admin auth)', async () => {
+      const req = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const resp = await worker.fetch(req, env);
+      const data: any = await parseResponse(resp);
+
+      expect(resp.status).toBe(200);
+      expect(data.token).toBeDefined();
+      expect(typeof data.token).toBe('string');
+      expect(data.expires_at).toBeDefined();
+      expect(data.expires_in).toBe(900); // 15 minutes
+    });
+
+    it('rejects without admin auth', async () => {
+      const req = makeRequest('POST', '/api/enroll/token', {});
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('stores the token in KV', async () => {
+      const req = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const resp = await worker.fetch(req, env);
+      const data: any = await parseResponse(resp);
+
+      // Verify the token is stored in KV
+      const stored = await kv.get(`enroll_token:${data.token}`);
+      expect(stored).not.toBeNull();
+      const tokenData = JSON.parse(stored!);
+      expect(tokenData.expires_at).toBeDefined();
+    });
+  });
+
+  describe('POST /api/enroll/claim', () => {
+    it('enrolls a device using a valid enrollment token', async () => {
+      // 1. Generate token
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const tokenResp = await worker.fetch(tokenReq, env);
+      const tokenData: any = await parseResponse(tokenResp);
+      const token = tokenData.token;
+
+      // 2. Claim the token (no admin auth needed)
+      const claimReq = makeRequest('POST', '/api/enroll/claim', {
+        token,
+        hostname: 'TOKEN-DEV-001',
+        owner_name: 'Token Test',
+      });
+      const claimResp = await worker.fetch(claimReq, env);
+      const claimData: any = await parseResponse(claimResp);
+
+      expect(claimResp.status).toBe(201);
+      expect(claimData.device.hostname).toBe('TOKEN-DEV-001');
+      expect(claimData.api_key).toBeDefined();
+    });
+
+    it('rejects claim without a token', async () => {
+      const req = makeRequest('POST', '/api/enroll/claim', {
+        hostname: 'NO-TOKEN-001',
+      });
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(400);
+    });
+
+    it('rejects claim without hostname', async () => {
+      // Generate a token first
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const tokenResp = await worker.fetch(tokenReq, env);
+      const tokenData: any = await parseResponse(tokenResp);
+
+      const req = makeRequest('POST', '/api/enroll/claim', {
+        token: tokenData.token,
+      });
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(400);
+    });
+
+    it('rejects claim with an invalid token', async () => {
+      const req = makeRequest('POST', '/api/enroll/claim', {
+        token: 'nonexistent-token',
+        hostname: 'INVALID-001',
+      });
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('token is single-use — second claim fails', async () => {
+      // Generate token
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const tokenResp = await worker.fetch(tokenReq, env);
+      const tokenData: any = await parseResponse(tokenResp);
+      const token = tokenData.token;
+
+      // First claim succeeds
+      const claim1 = makeRequest('POST', '/api/enroll/claim', {
+        token,
+        hostname: 'SINGLE-USE-001',
+      });
+      const resp1 = await worker.fetch(claim1, env);
+      expect(resp1.status).toBe(201);
+
+      // Second claim with same token fails
+      const claim2 = makeRequest('POST', '/api/enroll/claim', {
+        token,
+        hostname: 'SINGLE-USE-002',
+      });
+      const resp2 = await worker.fetch(claim2, env);
+      expect(resp2.status).toBe(401);
+    });
+
+    it('rejects claim with an expired token', async () => {
+      // Generate token
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const tokenResp = await worker.fetch(tokenReq, env);
+      const tokenData: any = await parseResponse(tokenResp);
+      const token = tokenData.token;
+
+      // Manually expire the token by overwriting its KV entry
+      const expiredData = JSON.stringify({
+        created_by: 'admin',
+        created_at: new Date().toISOString(),
+        expires_at: Math.floor(Date.now() / 1000) - 60, // expired 60s ago
+      });
+      await kv.put(`enroll_token:${token}`, expiredData);
+
+      const claimReq = makeRequest('POST', '/api/enroll/claim', {
+        token,
+        hostname: 'EXPIRED-001',
+      });
+      const claimResp = await worker.fetch(claimReq, env);
+      expect(claimResp.status).toBe(401);
+    });
+
+    it('does not require admin auth (token replaces admin password)', async () => {
+      // Generate token with admin auth
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const tokenResp = await worker.fetch(tokenReq, env);
+      const tokenData: any = await parseResponse(tokenResp);
+
+      // Claim with NO Authorization header — should still succeed
+      const claimReq = makeRequest('POST', '/api/enroll/claim', {
+        token: tokenData.token,
+        hostname: 'NO-AUTH-001',
+      });
+      const claimResp = await worker.fetch(claimReq, env);
+      expect(claimResp.status).toBe(201);
+    });
+
+    it('enrolled device appears in device list', async () => {
+      // Generate + claim
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const { token } = await parseResponse(await worker.fetch(tokenReq, env)) as any;
+
+      const claimReq = makeRequest('POST', '/api/enroll/claim', {
+        token,
+        hostname: 'LIST-CHECK-001',
+        owner_name: 'List Check',
+      });
+      await worker.fetch(claimReq, env);
+
+      // List devices
+      const listReq = makeRequest('GET', '/api/devices', undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const listResp = await worker.fetch(listReq, env);
+      const listData: any = await parseResponse(listResp);
+      expect(listData.some((d: any) => d.hostname === 'LIST-CHECK-001')).toBe(true);
+    });
+  });
+
   describe('GET /api/devices', () => {
     it('returns empty list when no devices', async () => {
       const req = makeRequest('GET', '/api/devices', undefined, {
