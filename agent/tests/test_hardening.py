@@ -15,11 +15,9 @@ Tests import functions directly from agent.py — no running server required.
 
 import json
 import os
-import shutil
 
 # agent.py lives in the parent directory
 import sys
-import tempfile
 import threading
 from pathlib import Path
 from unittest.mock import patch

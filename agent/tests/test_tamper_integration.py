@@ -10,9 +10,7 @@ All platform-specific calls are mocked — no real TPM or Windows API access.
 """
 
 import json
-import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch

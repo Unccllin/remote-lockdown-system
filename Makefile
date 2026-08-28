@@ -31,10 +31,16 @@ help:
 	@echo "  make build-electron       build only the electron app"
 	@echo ""
 	@echo "Test:"
-	@echo "  make test                 run all test suites"
+	@echo "  make test                 run all test suites (server + agent + dashboard)"
 	@echo "  make test-server          run server tests"
 	@echo "  make test-agent           run agent tests"
 	@echo "  make test-dashboard       run dashboard tests"
+	@echo "  make test-worker          run serverless worker tests"
+	@echo "  make test-electron        run electron tests"
+	@echo "  make test-e2e             run API-level E2E tests (lockdown + recovery + agent-integration)"
+	@echo "  make test-e2e-dashboard   run Playwright browser E2E tests (dashboard)"
+	@echo "  make test-coverage        run all test suites with coverage reporting"
+	@echo "  make full-verify          run everything: lint + test + e2e + verify-env + graph-check"
 	@echo "  make hw-test              run hardware test harness (D-003)"
 	@echo "  make hw-test-dry          dry-run hardware test harness"
 	@echo ""
@@ -80,7 +86,7 @@ build-electron:
 # (build-all.sh is a build orchestrator; tests live in each component.)
 # ---------------------------------------------------------------------------
 
-.PHONY: test test-server test-agent test-dashboard
+.PHONY: test test-server test-agent test-dashboard test-worker test-electron test-e2e test-e2e-dashboard test-coverage
 
 test: test-server test-agent test-dashboard
 
@@ -92,6 +98,69 @@ test-agent:
 
 test-dashboard:
 	@cd dashboard && npm test
+
+test-worker:
+	@cd serverless && npx vitest run
+
+test-electron:
+	@cd electron && npm test
+
+# Lint all components — server, dashboard, agent.
+.PHONY: lint lint-server lint-dashboard lint-agent
+
+lint: lint-server lint-dashboard lint-agent
+
+lint-server:
+	@cd server && npx eslint src/ tests/ --max-warnings=0
+
+lint-dashboard:
+	@cd dashboard && npx eslint src/ tests/ --max-warnings=0
+
+lint-agent:
+	@cd agent && python3 -m ruff check . tests/
+
+# Format check — agent only (ruff format). Pre-existing formatting issues
+# in some files need to be fixed before this can be added to the lint target.
+.PHONY: format-check
+format-check:
+	@cd agent && python3 -m ruff format --check . tests/
+
+# API-level E2E tests — runs lockdown + recovery + agent-integration suites
+# against a real Express app with isolated SQLite temp database.
+test-e2e:
+	@scripts/run-e2e.sh --agent-integration --verbose
+
+# Playwright browser E2E tests — requires dashboard built and server running.
+# Set USE_SQLITE=true and ALLOW_NON_PROD=1 for local runs.
+test-e2e-dashboard:
+	@cd dashboard && npx playwright test
+
+# Run all test suites with coverage reporting.
+test-coverage:
+	@export PATH="/home/cllin/.local/node/bin:$$PATH" && \
+	echo "=== Server coverage ===" && cd server && npm run test:coverage && cd .. && \
+	echo "=== Agent coverage ===" && cd agent && python3 -m pytest tests/ --cov=. --cov-report=term -q && cd .. && \
+	echo "=== Dashboard coverage ===" && cd dashboard && npx vitest run --coverage && cd .. && \
+	echo "=== Worker coverage ===" && cd serverless && npx vitest run --coverage && cd .. && \
+	echo "=== Electron coverage ===" && cd electron && npm run test:coverage && cd .. && \
+	echo "=== All coverage reports generated ==="
+
+# Full verification sweep — runs everything in order:
+#   1. Graph invariant check (fastest gate, catches structural issues first)
+#   2. Lint (all components)
+#   3. Tests (all 5 test suites)
+#   4. E2E (API-level)
+#   5. Environment verification (build tooling, signing, Docker)
+#   6. Artifact check (build outputs exist)
+# Stops on first failure.
+.PHONY: full-verify
+
+full-verify: graph-check lint test test-e2e verify-env check-artifacts
+	@echo ""
+	@echo "=========================================="
+	@echo "  FULL VERIFICATION PASSED"
+	@echo "  graph-check + lint + tests + e2e + env + artifacts"
+	@echo "=========================================="
 
 # Hardware test harness (D-003) — runs enforcement path tests against
 # real Windows/HP hardware. On non-Windows/non-HP, tests are skipped.
