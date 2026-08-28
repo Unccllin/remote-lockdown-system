@@ -68,8 +68,7 @@ def is_tpm_available() -> bool:
 
     try:
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "(Get-Tpm).TpmReady"],
+            ["powershell", "-NoProfile", "-Command", "(Get-Tpm).TpmReady"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -173,6 +172,7 @@ def _cng_encrypt_with_tpm(plaintext: bytes) -> bytes | None:
     try:
         # Use PowerShell to encrypt with the TPM key
         import base64
+
         b64_plaintext = base64.b64encode(plaintext).decode("ascii")
 
         ps_script = f"""
@@ -219,6 +219,7 @@ def _cng_decrypt_with_tpm(ciphertext: bytes) -> bytes | None:
 
     try:
         import base64
+
         b64_ciphertext = base64.b64encode(ciphertext).decode("ascii")
 
         ps_script = f"""
@@ -258,9 +259,11 @@ try {{
 # AES-256-GCM encryption for the state data
 # ---------------------------------------------------------------------------
 
+
 def _aes_gcm_encrypt(key: bytes, plaintext: bytes) -> bytes:
     """Encrypt with AES-256-GCM. Returns nonce + ciphertext + tag."""
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
     nonce = os.urandom(12)
     aesgcm = AESGCM(key)
     ciphertext = aesgcm.encrypt(nonce, plaintext, None)
@@ -270,6 +273,7 @@ def _aes_gcm_encrypt(key: bytes, plaintext: bytes) -> bytes:
 def _aes_gcm_decrypt(key: bytes, blob: bytes) -> bytes | None:
     """Decrypt AES-256-GCM. Expects nonce + ciphertext + tag."""
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
     if len(blob) < 12:
         return None
     nonce = blob[:12]
@@ -284,6 +288,7 @@ def _aes_gcm_decrypt(key: bytes, blob: bytes) -> bytes | None:
 # ---------------------------------------------------------------------------
 # Public API: seal / unseal
 # ---------------------------------------------------------------------------
+
 
 def seal_state(plaintext: bytes) -> bytes | None:
     """Seal state data to the TPM.
@@ -315,7 +320,7 @@ def seal_state(plaintext: bytes) -> bytes | None:
     sealed_key = _cng_encrypt_with_tpm(data_key)
 
     # Zero out the data key from memory
-    data_key = b'\x00' * 32
+    data_key = b"\x00" * 32
 
     if sealed_key is None:
         log.error("Failed to seal data key to TPM")
@@ -355,14 +360,14 @@ def unseal_state(blob: bytes) -> bytes | None:
             log.warning("TPM blob has wrong magic")
             return None
 
-        sealed_key_len = struct.unpack("<I", blob[_MAGIC_LEN:_MAGIC_LEN + _LEN_BYTES])[0]
+        sealed_key_len = struct.unpack("<I", blob[_MAGIC_LEN : _MAGIC_LEN + _LEN_BYTES])[0]
         offset = _MAGIC_LEN + _LEN_BYTES
 
         if len(blob) < offset + sealed_key_len:
             log.warning("TPM blob truncated (sealed key)")
             return None
 
-        sealed_key = blob[offset:offset + sealed_key_len]
+        sealed_key = blob[offset : offset + sealed_key_len]
         offset += sealed_key_len
 
         encrypted_state = blob[offset:]
@@ -377,7 +382,7 @@ def unseal_state(blob: bytes) -> bytes | None:
         plaintext = _aes_gcm_decrypt(data_key, encrypted_state)
 
         # Zero out the data key
-        data_key = b'\x00' * 32
+        data_key = b"\x00" * 32
 
         if plaintext is None:
             log.error("AES decryption failed — state may be tampered")

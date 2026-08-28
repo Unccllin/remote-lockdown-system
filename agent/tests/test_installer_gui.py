@@ -136,7 +136,9 @@ def test_enroll_device_with_token_expired():
                 "old-token",
                 "TEST-PC",
                 "Owner",
-                None, None, None,
+                None,
+                None,
+                None,
             )
 
 
@@ -155,7 +157,9 @@ def test_enroll_device_with_token_already_used():
                 "used-token",
                 "TEST-PC",
                 "Owner",
-                None, None, None,
+                None,
+                None,
+                None,
             )
 
 
@@ -174,7 +178,9 @@ def test_enroll_device_with_token_server_error():
                 "token",
                 "TEST-PC",
                 "Owner",
-                None, None, None,
+                None,
+                None,
+                None,
             )
 
 

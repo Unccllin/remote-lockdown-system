@@ -31,13 +31,13 @@ class TestEncryptDecryptRoundTrip:
         assert encrypted != plaintext
 
     def test_encrypt_empty_data(self):
-        plaintext = b''
+        plaintext = b""
         encrypted = state_crypto.encrypt_data(plaintext)
         decrypted = state_crypto.decrypt_data(encrypted)
         assert decrypted == plaintext
 
     def test_encrypt_large_data(self):
-        plaintext = b'{"data": "' + b'A' * 10000 + b'"}'
+        plaintext = b'{"data": "' + b"A" * 10000 + b'"}'
         encrypted = state_crypto.encrypt_data(plaintext)
         decrypted = state_crypto.decrypt_data(encrypted)
         assert decrypted == plaintext
@@ -78,7 +78,7 @@ class TestSaveLoadEncryptedState:
 
     def test_load_returns_none_for_wrong_magic(self, tmp_path):
         path = tmp_path / ".wrong_magic"
-        path.write_bytes(b"XXXX" + b'\x00' * 32 + b'data')
+        path.write_bytes(b"XXXX" + b"\x00" * 32 + b"data")
         assert state_crypto.load_encrypted_state(path) is None
 
 

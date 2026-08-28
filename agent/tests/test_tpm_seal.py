@@ -63,23 +63,23 @@ class TestAESGCM:
 
     def test_aes_gcm_decrypt_too_short_returns_none(self):
         key = os.urandom(32)
-        assert tpm_seal._aes_gcm_decrypt(key, b'short') is None
+        assert tpm_seal._aes_gcm_decrypt(key, b"short") is None
 
 
 class TestBlobFormat:
     def test_sealed_blob_has_magic(self):
         # Create a fake blob with the correct magic
-        sealed_key = b'\x00' * 256  # RSA 2048 = 256 bytes
-        encrypted_state = b'\x00' * 100
+        sealed_key = b"\x00" * 256  # RSA 2048 = 256 bytes
+        encrypted_state = b"\x00" * 100
         blob = tpm_seal._MAGIC + struct.pack("<I", len(sealed_key)) + sealed_key + encrypted_state
 
         assert tpm_seal.is_tpm_sealed_blob(blob) is True
 
     def test_non_tpm_blob_rejected(self):
-        assert tpm_seal.is_tpm_sealed_blob(b'XXXX' + b'\x00' * 100) is False
+        assert tpm_seal.is_tpm_sealed_blob(b"XXXX" + b"\x00" * 100) is False
 
     def test_empty_blob_rejected(self):
-        assert tpm_seal.is_tpm_sealed_blob(b'') is False
+        assert tpm_seal.is_tpm_sealed_blob(b"") is False
 
 
 class TestSealUnseal:
@@ -93,8 +93,8 @@ class TestSealUnseal:
     @patch.object(tpm_seal, "_is_windows", return_value=False)
     def test_unseal_returns_none_on_non_windows(self, mock_win):
         # Create a valid-looking blob
-        sealed_key = b'\x00' * 256
-        encrypted_state = b'\x00' * 100
+        sealed_key = b"\x00" * 256
+        encrypted_state = b"\x00" * 100
         blob = tpm_seal._MAGIC + struct.pack("<I", len(sealed_key)) + sealed_key + encrypted_state
 
         result = tpm_seal.unseal_state(blob)
@@ -136,37 +136,37 @@ class TestUnsealFailSecure:
 
     def test_unseal_too_short_blob(self):
         with patch.object(tpm_seal, "_is_windows", return_value=True):
-            result = tpm_seal.unseal_state(b'TPM1')
+            result = tpm_seal.unseal_state(b"TPM1")
             assert result is None
 
     def test_unseal_wrong_magic(self):
         with patch.object(tpm_seal, "_is_windows", return_value=True):
-            blob = b'XXXX' + struct.pack("<I", 4) + b'\x00' * 100
+            blob = b"XXXX" + struct.pack("<I", 4) + b"\x00" * 100
             result = tpm_seal.unseal_state(blob)
             assert result is None
 
     def test_unseal_truncated_sealed_key(self):
         with patch.object(tpm_seal, "_is_windows", return_value=True):
             # Claim 256 bytes of sealed key but only provide 10
-            blob = tpm_seal._MAGIC + struct.pack("<I", 256) + b'\x00' * 10
+            blob = tpm_seal._MAGIC + struct.pack("<I", 256) + b"\x00" * 10
             result = tpm_seal.unseal_state(blob)
             assert result is None
 
     @patch.object(tpm_seal, "_is_windows", return_value=True)
     @patch.object(tpm_seal, "_cng_decrypt_with_tpm", return_value=None)
     def test_unseal_tpm_decrypt_fails(self, mock_decrypt, mock_win):
-        sealed_key = b'\x00' * 256
-        encrypted_state = b'\x00' * 100
+        sealed_key = b"\x00" * 256
+        encrypted_state = b"\x00" * 100
         blob = tpm_seal._MAGIC + struct.pack("<I", len(sealed_key)) + sealed_key + encrypted_state
 
         result = tpm_seal.unseal_state(blob)
         assert result is None
 
     @patch.object(tpm_seal, "_is_windows", return_value=True)
-    @patch.object(tpm_seal, "_cng_decrypt_with_tpm", return_value=b'wrong_key')
+    @patch.object(tpm_seal, "_cng_decrypt_with_tpm", return_value=b"wrong_key")
     def test_unseal_aes_decrypt_fails(self, mock_decrypt, mock_win):
-        sealed_key = b'\x00' * 256
-        encrypted_state = b'\x00' * 100  # Not valid AES-GCM
+        sealed_key = b"\x00" * 256
+        encrypted_state = b"\x00" * 100  # Not valid AES-GCM
         blob = tpm_seal._MAGIC + struct.pack("<I", len(sealed_key)) + sealed_key + encrypted_state
 
         result = tpm_seal.unseal_state(blob)

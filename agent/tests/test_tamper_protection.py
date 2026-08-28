@@ -10,7 +10,7 @@ Two test classes:
 
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -83,6 +83,7 @@ class TestWindowsProtectionMocked:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         # Create a temp file to protect so the function actually invokes icacls
         import tempfile
+
         tmp = Path(tempfile.mktemp())
         tmp.write_text("fake agent")
         try:

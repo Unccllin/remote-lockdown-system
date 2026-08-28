@@ -57,9 +57,7 @@ def _get_machine_guid() -> bytes:
     if _is_windows():
         try:
             result = subprocess.run(
-                ["reg", "query",
-                 r"HKLM\\SOFTWARE\\Microsoft\\Cryptography",
-                 "/v", "MachineGuid"],
+                ["reg", "query", r"HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -98,6 +96,7 @@ def _get_machine_guid() -> bytes:
 
     # Fallback: hostname (weak but better than nothing)
     import socket
+
     return socket.gethostname().encode("utf-8")
 
 
@@ -113,6 +112,7 @@ def _get_hmac_key() -> bytes:
 # ---------------------------------------------------------------------------
 # DPAPI (Windows only)
 # ---------------------------------------------------------------------------
+
 
 def _dpapi_protect(plaintext: bytes) -> bytes | None:
     """Encrypt data using Windows DPAPI (CryptProtectData).
@@ -161,8 +161,7 @@ def _dpapi_protect(plaintext: bytes) -> bytes | None:
         )
 
         if not result:
-            log.error("CryptProtectData failed (GetLastError: %d)",
-                      kernel32.GetLastError())
+            log.error("CryptProtectData failed (GetLastError: %d)", kernel32.GetLastError())
             return None
 
         # Extract encrypted data
@@ -222,8 +221,7 @@ def _dpapi_unprotect(ciphertext: bytes) -> bytes | None:
         )
 
         if not result:
-            log.debug("CryptUnprotectData failed (GetLastError: %d)",
-                      kernel32.GetLastError())
+            log.debug("CryptUnprotectData failed (GetLastError: %d)", kernel32.GetLastError())
             return None
 
         # Extract decrypted data
@@ -241,6 +239,7 @@ def _dpapi_unprotect(ciphertext: bytes) -> bytes | None:
 # ---------------------------------------------------------------------------
 # Fallback encryption (non-Windows, for testing)
 # ---------------------------------------------------------------------------
+
 
 def _fallback_encrypt(plaintext: bytes) -> bytes:
     """Simple XOR-based encryption for non-Windows testing.
@@ -261,6 +260,7 @@ def _fallback_decrypt(ciphertext: bytes) -> bytes:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def encrypt_data(plaintext: bytes) -> bytes:
     """Encrypt data using DPAPI (Windows) or fallback (non-Windows)."""
@@ -333,8 +333,8 @@ def load_encrypted_state(path: Path) -> dict | None:
             return None
 
         # Extract HMAC and ciphertext
-        stored_hmac = blob[_MAGIC_LEN:_MAGIC_LEN + _HMAC_LEN]
-        ciphertext = blob[_MAGIC_LEN + _HMAC_LEN:]
+        stored_hmac = blob[_MAGIC_LEN : _MAGIC_LEN + _HMAC_LEN]
+        ciphertext = blob[_MAGIC_LEN + _HMAC_LEN :]
 
         # Verify HMAC (encrypt-then-MAC)
         key = _get_hmac_key()

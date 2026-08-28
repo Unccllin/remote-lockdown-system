@@ -27,6 +27,7 @@ import agent
 # This file keeps a more thorough cleanup_state_files fixture below
 # that also cleans DEADMAN_FILE and DEADMAN_KEY_FILE.
 
+
 @pytest.fixture(autouse=True)
 def cleanup_state_files():
     """Clean up any state files created during tests (including deadman files)."""

@@ -526,7 +526,7 @@ def write_consolidated_memory(mid, content, meta, filepath):
 
 ## Metadata
 - tags: [{tags_str}]
-- confidence: {meta.get("confidence", 0.5)}
+- confidence: {round(float(meta.get("confidence", 0.5)), 2)}
 - first_seen: {meta.get("first_seen", now_iso())}
 - last_seen: {meta.get("last_seen", now_iso())}
 - seen_count: {meta.get("seen_count", 1)}

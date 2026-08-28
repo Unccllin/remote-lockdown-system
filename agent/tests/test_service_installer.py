@@ -74,7 +74,8 @@ class TestCommandBuilding:
 
     def test_build_agent_command_includes_config_if_exists(self):
         with patch.object(
-            service_installer, "_get_config_path",
+            service_installer,
+            "_get_config_path",
             return_value=Path("/fake/config.json"),
         ):
             cmd = service_installer._build_agent_command()

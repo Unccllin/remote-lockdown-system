@@ -117,10 +117,10 @@ lint-dashboard:
 	@cd dashboard && npx eslint src/ tests/ --max-warnings=0
 
 lint-agent:
-	@cd agent && python3 -m ruff check . tests/
+	@cd agent && python3 -m ruff check . tests/ && python3 -m ruff format --check . tests/
 
-# Format check — agent only (ruff format). Pre-existing formatting issues
-# in some files need to be fixed before this can be added to the lint target.
+# Format check is now part of lint-agent. This target is kept for backwards
+# compatibility but simply delegates to lint-agent's format check.
 .PHONY: format-check
 format-check:
 	@cd agent && python3 -m ruff format --check . tests/
