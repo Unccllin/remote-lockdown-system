@@ -1,23 +1,13 @@
 const request = require('supertest');
-const express = require('express');
 const jwt = require('jsonwebtoken');
 
-const { mockPool } = require('./mockPool');
+const { mockPool, makeToken, JWT_SECRET, createApp: _createApp } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
 const devicesRoutes = require('../src/routes/devices');
 
-const JWT_SECRET = 'test-secret-key-that-is-long-enough-for-validation-32';
-
-function makeToken(adminId = 'admin-1', username = 'admin', role = 'super-admin') {
-  return jwt.sign({ id: adminId, username, role }, JWT_SECRET, { expiresIn: '1h' });
-}
-
 function createApp() {
-  const app = express();
-  app.use(express.json());
-  app.use('/api/devices', devicesRoutes);
-  return app;
+  return _createApp({ devices: devicesRoutes });
 }
 
 beforeEach(() => {

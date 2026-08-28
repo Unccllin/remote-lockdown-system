@@ -12,7 +12,7 @@
  *     - sends notifications for new alerts
  */
 
-const { mockPool } = require('./mockPool');
+const { mockPool } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
 // --- notify.js tests ------------------------------------------------------

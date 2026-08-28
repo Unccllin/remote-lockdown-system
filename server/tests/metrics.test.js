@@ -12,7 +12,7 @@
 const request = require('supertest');
 const express = require('express');
 
-const { mockPool } = require('./mockPool');
+const { mockPool } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
 const metricsRoutes = require('../src/routes/metrics');

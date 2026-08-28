@@ -1,4 +1,6 @@
 import '@testing-library/jest-dom';
+import { render } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 // Mock localStorage
 const localStorageMock = (() => {
@@ -28,4 +30,24 @@ Object.defineProperty(window, 'localStorage', { value: localStorageMock });
 export function setupUser(role = 'operator') {
   const payload = btoa(JSON.stringify({ id: 'test-user-id', username: 'testuser', role }));
   localStorage.setItem('token', `header.${payload}.signature`);
+}
+
+/**
+ * Test helper: render a component inside a MemoryRouter.
+ *
+ * Most page components use react-router hooks (useParams, useNavigate, etc.)
+ * and need to be rendered inside a Router. This helper wraps the component
+ * in a MemoryRouter with optional initial routes.
+ *
+ * Usage:
+ *   renderWithRouter(<DevicesPage />)
+ *   renderWithRouter(<DeviceDetailPage />, { initialEntries: ['/devices/dev-1'] })
+ */
+export function renderWithRouter(ui, options = {}) {
+  const { initialEntries = ['/'] } = options;
+  return render(
+    <MemoryRouter initialEntries={initialEntries}>
+      {ui}
+    </MemoryRouter>
+  );
 }

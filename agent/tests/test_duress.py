@@ -25,6 +25,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import duress  # noqa: E402, I001
 
 
+# Shared fixtures (tmp_sentinel, cfg, cleanup_guardian) are provided by
+# tests/conftest.py. This file keeps its own tmp_folder (2 files only,
+# no subdir) because several duress tests assert exact file counts.
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -40,7 +44,12 @@ def tmp_state_dir():
 
 @pytest.fixture
 def tmp_folder():
-    """Create a temporary folder with some test files."""
+    """Create a temporary folder with exactly 2 test files (no subdir).
+
+    Duress tests assert exact .enc file counts, so the folder must have
+    a known number of files. The conftest tmp_folder creates 3 files
+    (including subdir/nested.txt) which would break these assertions.
+    """
     d = Path(tempfile.mkdtemp())
     (d / "file1.txt").write_text("hello world")
     (d / "file2.txt").write_text("secret data")

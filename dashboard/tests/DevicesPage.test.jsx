@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { screen, waitFor } from '@testing-library/react';
 import DevicesPage from '../src/pages/DevicesPage';
-import { setupUser } from './setup';
+import { setupUser, renderWithRouter } from './setup';
 
 // Mock the API client
 vi.mock('../src/api/client', () => ({
@@ -13,14 +12,6 @@ vi.mock('../src/api/client', () => ({
 }));
 
 import api from '../src/api/client';
-
-function renderWithRouter() {
-  return render(
-    <MemoryRouter>
-      <DevicesPage />
-    </MemoryRouter>
-  );
-}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -39,7 +30,7 @@ describe('DevicesPage', () => {
       ],
     });
 
-    renderWithRouter();
+    renderWithRouter(<DevicesPage />);
 
     await waitFor(() => {
       expect(screen.getByText('DEV-001')).toBeInTheDocument();
@@ -58,7 +49,7 @@ describe('DevicesPage', () => {
       ],
     });
 
-    renderWithRouter();
+    renderWithRouter(<DevicesPage />);
 
     await waitFor(() => {
       expect(screen.getByText('DEV-001')).toBeInTheDocument();
@@ -72,7 +63,7 @@ describe('DevicesPage', () => {
   it('shows empty state when no devices', async () => {
     api.get.mockResolvedValue({ data: [] });
 
-    renderWithRouter();
+    renderWithRouter(<DevicesPage />);
 
     await waitFor(() => {
       expect(screen.getByText(/No devices enrolled/i)).toBeInTheDocument();
@@ -86,7 +77,7 @@ describe('DevicesPage', () => {
       ],
     });
 
-    renderWithRouter();
+    renderWithRouter(<DevicesPage />);
 
     await waitFor(() => {
       expect(screen.getByText('DEV-001')).toBeInTheDocument();

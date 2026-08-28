@@ -6,13 +6,13 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
-    setupFiles: ['./tests/setup.js'],
+    setupFiles: ['./tests/setup.jsx'],
     exclude: ['node_modules', 'dist', 'e2e/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary', 'lcov', 'json'],
       reportsDirectory: './coverage',
-      exclude: ['node_modules/', 'e2e/', 'tests/setup.js', 'src/main.jsx'],
+      exclude: ['node_modules/', 'e2e/', 'tests/setup.jsx', 'src/main.jsx'],
     },
   },
 });

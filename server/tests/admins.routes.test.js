@@ -3,14 +3,12 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
-const { mockPool } = require('./mockPool');
+const { mockPool, JWT_SECRET } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
 const adminsRoutes = require('../src/routes/admins');
 const devicesRoutes = require('../src/routes/devices');
 const setupRoutes = require('../src/routes/setup');
-
-const JWT_SECRET = 'test-secret-key-that-is-long-enough-for-validation-32';
 
 function makeToken(role = 'super-admin', adminId = 'admin-1', username = 'admin') {
   return jwt.sign({ id: adminId, username, role }, JWT_SECRET, { expiresIn: '1h' });

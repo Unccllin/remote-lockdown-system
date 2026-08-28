@@ -9,7 +9,7 @@
  * params (parameterized), not in the SQL string itself.
  */
 
-const { mockPool } = require('./mockPool');
+const { mockPool } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
 const request = require('supertest');

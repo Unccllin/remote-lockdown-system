@@ -16,7 +16,7 @@
  */
 
 // Mock the pool BEFORE requiring the scheduler
-const { mockPool } = require('./mockPool');
+const { mockPool } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
 const { runRetentionPurge } = require('../src/jobs/retentionScheduler');

@@ -2,7 +2,7 @@ const request = require('supertest');
 const express = require('express');
 const jwt = require('jsonwebtoken');
 
-const { mockPool } = require('./mockPool');
+const { mockPool } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
 // We need to require the router AFTER the mock is set up
@@ -625,7 +625,7 @@ describe('FA3: Per-device API key authentication', () => {
 // ---------------------------------------------------------------------------
 
 describe('FA3: Key rotation (POST /api/devices/:id/rotate-key)', () => {
-  const { mockPool } = require('./mockPool');
+  const { mockPool } = require('./helpers');
   const deviceRoutes = require('../src/routes/devices');
 
   function createAdminApp() {

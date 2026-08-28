@@ -2,7 +2,7 @@ const request = require('supertest');
 const express = require('express');
 const bcrypt = require('bcryptjs');
 
-const { mockPool } = require('./mockPool');
+const { mockPool } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
 const setupRoutes = require('../src/routes/setup');

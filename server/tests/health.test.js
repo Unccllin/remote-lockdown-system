@@ -2,12 +2,11 @@ const request = require('supertest');
 const express = require('express');
 const jwt = require('jsonwebtoken');
 
-const { mockPool } = require('./mockPool');
+const { mockPool, JWT_SECRET } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
 const healthRoutes = require('../src/routes/health');
 
-const JWT_SECRET = 'test-secret-key-that-is-long-enough-for-validation-32';
 
 function createApp() {
   const app = express();

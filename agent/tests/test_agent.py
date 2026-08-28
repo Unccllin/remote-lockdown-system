@@ -24,63 +24,8 @@ from cryptography.fernet import Fernet, InvalidToken
 
 import agent
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def tmp_folder():
-    """Create a temporary folder with some test files."""
-    d = Path(tempfile.mkdtemp())
-    (d / "file1.txt").write_text("hello world")
-    (d / "file2.txt").write_text("secret data")
-    (d / "subdir").mkdir()
-    (d / "subdir" / "nested.txt").write_text("nested content")
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
-
-
-@pytest.fixture
-def tmp_sentinel():
-    """Create a temporary sentinel file path that doesn't exist."""
-    f = Path(tempfile.mktemp())
-    if f.exists():
-        f.unlink()
-    yield f
-    if f.exists():
-        f.unlink()
-
-
-@pytest.fixture
-def cfg(tmp_folder, tmp_sentinel):
-    """A test config dict."""
-    return {
-        "server_url": "https://test-server.example.com",
-        "agent_key": "test-key",
-        "hostname": "TEST-DEV-001",
-        "poll_interval": 1,
-        "lockdown_folder": tmp_folder,
-        "lock_sentinel": tmp_sentinel,
-        "verify_tls": True,
-        # A1/A4/A8: new config options
-        "pending_ack_file": Path(tempfile.mktemp()),
-        "recovery_key_file": Path(tempfile.mktemp()),
-        "recovery_public_key": "",  # Empty = recovery feature disabled in tests
-        "server_supports_ack_dedup": False,
-    }
-
-
-@pytest.fixture(autouse=True)
-def cleanup_guardian():
-    """Ensure lock guardian is stopped and temp files cleaned up after each test."""
-    yield
-    agent.stop_lock_guardian()
-    # Clean up any pending ACK / recovery key files created during tests
-    for f in [agent.PENDING_ACK_FILE, agent.RECOVERY_KEY_FILE]:
-        if f.exists():
-            f.unlink()
-
+# Shared fixtures (tmp_folder, tmp_sentinel, cfg, cleanup_guardian)
+# are now provided by tests/conftest.py — no need to redefine here.
 
 # ---------------------------------------------------------------------------
 # Encryption / Decryption

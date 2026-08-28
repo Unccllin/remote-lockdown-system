@@ -17,7 +17,7 @@ const path = require('path');
 // Mock the DB pool so requiring installer.js has no real DB side effects.
 // The pure helpers under test do not touch the pool, but the module loads it
 // at require time.
-const { mockPool } = require('./mockPool');
+const { mockPool } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
 const installer = require('../src/routes/installer');

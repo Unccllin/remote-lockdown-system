@@ -24,52 +24,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import agent
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def tmp_folder():
-    """Create a temporary folder with some test files."""
-    d = Path(tempfile.mkdtemp())
-    (d / "file1.txt").write_text("hello world")
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
-
-
-@pytest.fixture
-def tmp_sentinel():
-    """Create a temporary sentinel file path that doesn't exist."""
-    f = Path(tempfile.mktemp())
-    if f.exists():
-        f.unlink()
-    yield f
-    if f.exists():
-        f.unlink()
-
-
-@pytest.fixture
-def cfg(tmp_folder, tmp_sentinel):
-    """A test config dict."""
-    return {
-        "server_url": "https://test-server.example.com",
-        "agent_key": "test-key",
-        "hostname": "TEST-DEV-001",
-        "poll_interval": 1,
-        "lockdown_folder": tmp_folder,
-        "lock_sentinel": tmp_sentinel,
-        "verify_tls": True,
-        "pending_ack_file": Path(tempfile.mktemp()),
-        "recovery_key_file": Path(tempfile.mktemp()),
-        "recovery_public_key": "",
-        "server_supports_ack_dedup": False,
-    }
-
+# Shared fixtures (tmp_folder, tmp_sentinel, cfg, cleanup_guardian)
+# are now provided by tests/conftest.py — no need to redefine here.
+# This file keeps a more thorough cleanup_state_files fixture below
+# that also cleans DEADMAN_FILE and DEADMAN_KEY_FILE.
 
 @pytest.fixture(autouse=True)
 def cleanup_state_files():
-    """Clean up any state files created during tests."""
+    """Clean up any state files created during tests (including deadman files)."""
     yield
     agent.stop_lock_guardian()
     for f in [
