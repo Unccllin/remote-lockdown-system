@@ -292,6 +292,37 @@ def install_service() -> bool:
         return False
 
 
+def add_defender_exclusions() -> bool:
+    """Add Windows Defender exclusions for the agent install directory.
+
+    PyInstaller-built executables often trigger false positives in
+    antivirus software because they pack Python + dependencies into a
+    single .exe (similar to how malware packs payloads). Adding an
+    exclusion for the install directory prevents Defender from
+    quarantining the agent binary.
+    """
+    if platform.system() != "Windows":
+        return False
+    try:
+        install_path = str(INSTALL_DIR)
+        agent_path = str(INSTALL_DIR / AGENT_EXE_NAME)
+        for path in [install_path, agent_path]:
+            subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    f"Add-MpPreference -ExclusionPath '{path}'",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        return True
+    except Exception:  # noqa: S110
+        return False
+
+
 def launch_agent(agent_path: Path):
     subprocess.Popen(
         [str(agent_path), "--config", str(CONFIG_FILE)],
@@ -653,6 +684,13 @@ class SetupWizard:
                     self.root.after(0, self._log, f"  Config: {CONFIG_FILE}")
 
                 elif "Installing agent" in msg:
+                    # Add Defender exclusions first — PyInstaller exes
+                    # often trigger false positives. This must happen
+                    # BEFORE the agent binary is placed in the install dir.
+                    self.root.after(0, self._log, "  Adding Defender exclusions...")
+                    add_defender_exclusions()
+                    self.root.after(0, self._log, "  Exclusions added")
+
                     # First try to find the agent exe locally (bundled or
                     # placed next to the installer). If not found, download
                     # it from the Worker.
