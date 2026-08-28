@@ -25,6 +25,11 @@ agent/dist/
 server/coverage/
 server/.pglite-data/
 dashboard/coverage/
+serverless/coverage/
+electron/coverage/
+agent/.coverage
+agent/coverage/
+agent/htmlcov/
 # Playwright test output
 dashboard/test-results/
 dashboard/playwright-report/
@@ -69,3 +74,5 @@ __pycache__/
 
 # Local E2E temp dir pointer (never commit)
 .e2e-dir-local
+serverless/.wrangler/
+agent/C:\ProgramData/

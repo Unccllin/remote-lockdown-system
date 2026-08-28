@@ -5,10 +5,12 @@
   "main": "worker.js",
   "scripts": {
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.9",
     "vitest": "^2.0.0"
   }
 }

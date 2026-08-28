@@ -8,5 +8,11 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./tests/setup.js'],
     exclude: ['node_modules', 'dist', 'e2e/**'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'text-summary', 'lcov', 'json'],
+      reportsDirectory: './coverage',
+      exclude: ['node_modules/', 'e2e/', 'tests/setup.js', 'src/main.jsx'],
+    },
   },
 });

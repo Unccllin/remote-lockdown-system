@@ -12,6 +12,7 @@
     "start": "electron .",
     "start:dev": "ELECTRON_IS_DEV=1 electron .",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit --coverage",
     "build:agent": "cd ../agent && python3 -m PyInstaller agent.spec --noconfirm && python3 -m PyInstaller watchdog.spec --noconfirm && python3 -m PyInstaller offline_recovery.spec --noconfirm",
     "build:dashboard": "cd ../dashboard && npx vite build",
     "build": "npm run build:dashboard && npm run build:agent && electron-builder",

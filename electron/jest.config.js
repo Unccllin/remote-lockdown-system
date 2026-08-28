@@ -5,4 +5,13 @@ module.exports = {
   // express and other server dependencies. Tests run from electron/ so the
   // relative path resolution works the same as in production.
   rootDir: '.',
+  collectCoverageFrom: [
+    '*.js',
+    '!main.js',
+    '!preload.js',
+    '!**/node_modules/**',
+    '!**/tests/**',
+  ],
+  coverageDirectory: 'coverage',
+  coverageReporters: ['text', 'text-summary', 'lcov', 'json'],
 };

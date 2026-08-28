@@ -7,4 +7,11 @@ module.exports = {
   maxWorkers: 1,
   // Don't use clearMocks — it can interfere with our custom mock implementation.
   // We handle cleanup in beforeEach instead.
+  collectCoverageFrom: [
+    'src/**/*.js',
+    '!src/db/migrate.js',
+    '!src/**/*.test.js',
+  ],
+  coverageDirectory: 'coverage',
+  coverageReporters: ['text', 'text-summary', 'lcov', 'json'],
 };

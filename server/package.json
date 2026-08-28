@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "migrate": "node src/db/migrate.js",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit --detectOpenHandles"
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit --detectOpenHandles",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit --detectOpenHandles --coverage"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",

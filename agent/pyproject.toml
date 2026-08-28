@@ -1,0 +1,28 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "hardware: tests that require real Windows/HP hardware",
+    "slow: tests that take more than 5 seconds",
+    "integration: tests that wire multiple modules together",
+]
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "tests/*",
+    "test_boot_lockdown.py",
+    "hw_test_harness.py",
+    "installer_gui.py",
+    "*/__pycache__/*",
+    "*/.venv/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if .*TYPE_CHECKING:",
+]
