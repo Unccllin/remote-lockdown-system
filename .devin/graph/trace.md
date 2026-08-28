@@ -975,3 +975,77 @@ No failures this session. Electron could not be launched due to missing system l
 The dual-mode Electron app is implemented, integration-tested (32 new tests), and committed (9297f8c). The remaining work is: (a) test on a real Windows/macOS/Linux desktop with a GUI to verify the setup wizard IPC flow, preload injection, and mode branching end-to-end; (b) update the electron README.md to document the dual-mode setup and how to switch modes; (c) consider adding the electron tests to the unified `npm test` runner at the repo root (currently only server Jest + agent pytest are unified); (d) address the dashboard bundle size warning (558KB main chunk, should code-split). If no GUI environment is available, (b) and (c) are the productive next steps.
 
 ---
+
+---
+
+## Session: 2026-08-28 — Serverless-only Electron app refactor
+
+### Task
+User clarified the Electron app should be serverless-only — no local server mode, no mode toggle. Refactored the dual-mode app to remove all local server infrastructure (Express API routes, SQLite, security keys, mode selection) and keep only the serverless path.
+
+### RULE-ZERO — Understanding logged before code changes
+- **Read**: `electron/config.js` (212 lines) — had mode field, 5 security keys, server_port, backfill logic, env var setting.
+- **Read**: `electron/main.js` (239 lines) — had mode branching (serverless: startStaticServer, local: startServer + SQLite path), getSqlitePath(), appMode variable.
+- **Read**: `electron/server-starter.js` (252 lines) — had startServer() (full Express with API routes, helmet, cors, rateLimit, migrations, pool override), setupDatabase(), seedInitialAdmin(), setupEnv(), requireFromServer pattern.
+- **Read**: `electron/setup-wizard.js` (136 lines) — returned {mode, workerUrl}, had selectMode IPC handler.
+- **Read**: `electron/setup-preload.js` (13 lines) — exposed selectMode(mode, url).
+- **Read**: `electron/setup.html` (233 lines) — had two mode cards (Local Server / Cloud Serverless), mode selection JS, conditional serverless config visibility.
+- **Read**: `electron/package.json` (185 lines) — had install:server, rebuild:native scripts, server/src + server/node_modules + server/package.json in extraResources, @electron/rebuild devDep.
+- **Finding**: Express was resolved from server/node_modules via Module.createRequire. For serverless-only, should install express directly in electron/ to remove the server dependency entirely.
+
+### IMPLEMENT — Code changes written
+1. **`electron/config.js`**: Stripped from 212 to 134 lines. Removed: mode field, all 5 security keys (AGENT_KEY_PEPPER, JWT_SECRET, FIELD_ENCRYPTION_KEY, LOCATION_FIELD_KEY, AGENT_SHARED_KEY), server_port, generateKey(), generateSharedKey(), saveMode(), updateConfig(), backfill logic, env var setting. Now stores only `worker_url` + `created_at`. New `saveWorkerUrl()` replaces `saveMode()`. `initConfig()` returns `{config, isFirstRun}` where isFirstRun = no config or no worker_url.
+2. **`electron/main.js`**: Stripped from 239 to 185 lines. Removed: getSqlitePath(), appMode variable, mode branching (if appMode === 'serverless' / else local), startServer() import, SQLite path env var. Now always: initConfig → if no worker_url show wizard → saveWorkerUrl → set ELECTRON_API_BASE_URL → startStaticServer → createWindow. Removed pool cleanup from before-quit (no pool).
+3. **`electron/server-starter.js`**: Stripped from 252 to 63 lines. Removed: startServer(), setupDatabase(), seedInitialAdmin(), setupEnv(), requireFromServer pattern, helmet/cors/rateLimit, all API route imports, 404 handler, error handler. Now just `startStaticServer()` using `require('express')` directly (express installed in electron/node_modules). No pool property in return value.
+4. **`electron/setup-wizard.js`**: `showSetupWizard()` now returns `{workerUrl}` not `{mode, workerUrl}`. IPC channel renamed from `setup:select-mode` to `setup:confirm-url`. Window height reduced from 720 to 480 (no mode cards). validateWorkerUrl() unchanged.
+5. **`electron/setup-preload.js`**: `selectMode(mode, url)` → `confirmUrl(url)`. IPC channel `setup:select-mode` → `setup:confirm-url`.
+6. **`electron/setup.html`**: Stripped from 233 to 165 lines. Removed: mode cards (Local Server / Cloud Serverless), mode selection JS, conditional serverless config visibility. Now just: title, subtitle, Worker URL input (pre-filled with `https://lockdown-serverless.mainacollins196.workers.dev`), test result, Connect button. Auto-tests URL on load (300ms delay).
+7. **`electron/package.json`**: Removed `install:server` and `rebuild:native` scripts. Simplified all build scripts (build, build:win, build:mac, build:linux, publish) to `build:dashboard && build:agent && electron-builder`. Removed `@electron/rebuild` devDep. Added express as direct dependency. Added all express transitive deps to files list (~50 packages). Removed server/src, server/node_modules, server/package.json from extraResources.
+8. **`electron/tests/config.test.js`**: Rewritten for simplified config — 8 tests (down from 11). Tests createConfig, saveWorkerUrl (save + overwrite), initConfig (first run, missing worker_url, existing worker_url), getConfigPath, configExists.
+9. **`electron/tests/staticServer.test.js`**: Fixed 1 test — `serverInfo.pool` is now `undefined` (not `null`) since startStaticServer no longer returns a pool property.
+
+### VERIFY — Verification nodes pass
+- V-ELECTRON-SYNTAX: all 7 .js files pass `node --check`
+- V-SYNTAX-SWEEP: all server/src + electron .js files pass
+- Electron tests: 30 passed (3 suites) — 8 config + 11 validateWorkerUrl + 10 staticServer (was 32, -2 from config simplification)
+- Dashboard tests: 72 passed (8 suites, unchanged)
+
+### ARTIFACT — Run artifact captured
+- Electron test output: `3 test suites passed, 30 tests passed, 0.951s`
+- Dashboard test output: `8 test files passed, 72 tests passed, 5.83s`
+- Git commit: `ff9fe49` — `refactor: serverless-only Electron app — remove local server mode` (10 files, +772/-691)
+
+### Fog cleared
+1. **Serverless-only architecture**: The Electron app is now a thin desktop shell. No bundled Express server, no SQLite, no security keys. All API calls go to the Cloudflare Worker. The only local server is a minimal static file server (express) for the dashboard UI (BrowserRouter needs HTTP).
+2. **No server directory dependency**: Express is now installed directly in electron/node_modules instead of being resolved from server/node_modules via Module.createRequire. The electron app no longer depends on the server directory at all — neither at dev time nor in the packaged app.
+3. **Smaller installer**: Removed server/src, server/node_modules, server/package.json from extraResources. The installer no longer bundles the entire server node_modules tree (which included sqlite3, bcryptjs, helmet, cors, etc.). Only express + its transitive deps are bundled.
+4. **Simplified build**: No more `install:server` (npm ci in server/) or `rebuild:native` (electron-rebuild for sqlite3 native module). Build is now just: build:dashboard + build:agent + electron-builder.
+5. **Pre-filled Worker URL**: Setup wizard pre-fills `https://lockdown-serverless.mainacollins196.workers.dev` and auto-tests it on load. User just clicks Connect.
+
+### Fog remaining
+- **Not tested on real Electron runtime**: Still can't launch Electron in WSL2 (missing libnspr4.so). The setup wizard IPC flow, preload injection, and static server are verified by integration tests but not by an end-to-end launch.
+- **express transitive deps list is manual**: The files list in package.json manually enumerates ~50 express transitive dependency packages. If express is updated and gains new deps, this list would need updating. An alternative would be to use a bundler (webpack/esbuild) to bundle server-starter.js + express into a single file, but that's a bigger change.
+
+### Debt items closed
+None.
+
+### Debt items still open
+None — all debt items (D-001 through D-019) remain CLOSED.
+
+### Blockers
+- WSL2 missing GUI libraries — blocks Electron runtime testing (environment limitation).
+- Spare HP machine offline — blocks hardware verification of 9 enforcement paths (unchanged).
+
+### Test results
+- Electron: 30 tests pass (3 suites)
+- Dashboard: 72 tests pass (8 suites)
+- Total: 102 tests pass
+- Git: commit ff9fe49 on master
+
+### Failure attribution
+1 test failure during verification: `staticServer.test.js` expected `serverInfo.pool` to be `null` but the simplified `startStaticServer()` no longer returns a `pool` property (it's `undefined`). Fixed by changing the assertion to `toBeUndefined()`. This was a test-only fix — the production code was correct.
+
+### Next session opening
+The Electron app is now serverless-only and committed (ff9fe49). The app is a thin desktop shell that talks to the Cloudflare Worker. Remaining work: (a) test on a real desktop with GUI to verify the setup wizard and dashboard load end-to-end; (b) update the electron README to document the serverless-only setup; (c) consider bundling express via webpack/esbuild instead of manually enumerating transitive deps in package.json files list; (d) consider adding a "Change Worker URL" option in the app's settings (currently requires deleting the config file).
+
+---
