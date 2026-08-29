@@ -103,7 +103,7 @@ def _run_cmd(cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
         return -1, "", f"Command not found: {cmd[0]}"
     except subprocess.TimeoutExpired:
         return -2, "", f"Command timed out: {' '.join(cmd)}"
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         return -3, "", str(e)
 
 
@@ -203,7 +203,7 @@ def check_bitlocker_status() -> dict:
             "has_pin_protector": has_pin,
             "error": None,
         }
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, RuntimeError) as e:
         return {
             "enabled": False,
             "has_tpm_protector": False,
@@ -311,7 +311,7 @@ def _load_pba_state() -> dict | None:
         return None
     try:
         return json.loads(_BITLOCKER_PBA_STATE_FILE.read_text())
-    except Exception as e:
+    except (json.JSONDecodeError, ValueError, TypeError, OSError) as e:
         log.warning("T9: Failed to load PBA state: %s", e)
         return None
 
@@ -393,7 +393,7 @@ def enable_pba(pin: str | None = None) -> dict:
             "protector_id": protector_id,
             "error": None,
         }
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         log.error("T9: Failed to enable BitLocker PBA: %s", e)
         return {
             "success": False,
@@ -438,6 +438,6 @@ def disable_pba(protector_id: str | None = None) -> dict:
         _clear_pba_state()
         log.info("T9: BitLocker TPM+PIN PBA removed — device boots without PIN")
         return {"success": True, "error": None}
-    except Exception as e:
+    except (RuntimeError, OSError, FileNotFoundError) as e:
         log.error("T9: Failed to disable BitLocker PBA: %s", e)
         return {"success": False, "error": str(e)}

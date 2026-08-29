@@ -137,7 +137,7 @@ def check_and_apply_update() -> bool:
 
     try:
         signal = json.loads(UPDATE_PENDING_FILE.read_text())
-    except Exception as e:
+    except (json.JSONDecodeError, ValueError, TypeError, OSError) as e:
         log.error("Failed to read update signal: %s — removing", e)
         UPDATE_PENDING_FILE.unlink(missing_ok=True)
         return False
@@ -180,7 +180,7 @@ def check_and_apply_update() -> bool:
 
         log.info("Agent binary updated to version %s", version)
 
-    except Exception as e:
+    except (OSError, FileNotFoundError, PermissionError) as e:
         log.error("Failed to apply update: %s — restoring backup", e)
         # Try to restore the backup
         backup = AGENT_SCRIPT.with_suffix(".bak")

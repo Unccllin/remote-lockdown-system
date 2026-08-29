@@ -79,7 +79,7 @@ class TestHardwareIdentity:
 
     def test_get_hardware_uuid_fallback(self):
         with patch("platform.system", return_value="Linux"):
-            with patch("subprocess.check_output", side_effect=Exception("No DMI")):
+            with patch("subprocess.check_output", side_effect=OSError("No DMI")):
                 uuid_val = agent.get_hardware_uuid()
                 # Should fall back to uuid.getnode()
                 assert len(uuid_val) > 0

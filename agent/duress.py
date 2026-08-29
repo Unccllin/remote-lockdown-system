@@ -202,7 +202,7 @@ def start_duress_relock(
 
             try:
                 encrypt_fn(lockdown_folder, new_key)
-            except Exception as e:
+            except (ValueError, TypeError, OSError) as e:
                 log.error("Duress: re-encryption failed: %s", e)
                 return
             finally:
@@ -218,14 +218,14 @@ def start_duress_relock(
             # Write sentinel so lock persists across reboots.
             try:
                 _atomic_write_json(sentinel_path, {"locked": True, "duress": True})
-            except Exception as e:
+            except (OSError, ValueError, TypeError) as e:
                 log.warning("Duress: could not write sentinel: %s", e)
 
             # Report the new key to the Worker so the admin can recover.
             if report_key_fn is not None:
                 try:
                     report_key_fn(command_id, key_b64)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — report_key_fn is an opaque callback that may raise network or platform-specific errors
                     log.warning("Duress: could not report new key to server: %s", e)
             del key_b64
 
@@ -236,7 +236,7 @@ def start_duress_relock(
             log.info("Duress: re-applying lock screen")
             apply_lock_screen_fn()
             start_lock_guardian_fn()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — duress worker orchestrates multiple lock operations and must not crash
             log.error("Duress thread crashed: %s", e)
 
     _duress_thread = threading.Thread(target=_duress_worker, daemon=True)

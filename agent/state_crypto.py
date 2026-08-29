@@ -67,7 +67,12 @@ def _get_machine_guid() -> bytes:
                     if "MachineGuid" in line:
                         guid = line.strip().split()[-1]
                         return guid.encode("utf-8")
-        except Exception as e:
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            FileNotFoundError,
+            OSError,
+        ) as e:
             log.debug("Could not read MachineGuid: %s", e)
 
     # Linux: /etc/machine-id
@@ -75,7 +80,7 @@ def _get_machine_guid() -> bytes:
         mid = Path("/etc/machine-id").read_text().strip()
         if mid:
             return mid.encode("utf-8")
-    except Exception as e:
+    except (OSError, FileNotFoundError, PermissionError) as e:
         log.debug("Could not read /etc/machine-id: %s", e)
 
     # macOS: IOPlatformUUID
@@ -91,7 +96,12 @@ def _get_machine_guid() -> bytes:
                 if "IOPlatformUUID" in line:
                     uuid = line.split('"')[-2]
                     return uuid.encode("utf-8")
-    except Exception as e:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ) as e:
         log.debug("Could not read IOPlatformUUID: %s", e)
 
     # Fallback: hostname (weak but better than nothing)
@@ -171,7 +181,7 @@ def _dpapi_protect(plaintext: bytes) -> bytes | None:
         kernel32.LocalFree(out_blob.pbData)
 
         return encrypted
-    except Exception as e:
+    except (OSError, AttributeError, TypeError, ValueError) as e:
         log.error("DPAPI encrypt failed: %s", e)
         return None
 
@@ -231,7 +241,7 @@ def _dpapi_unprotect(ciphertext: bytes) -> bytes | None:
         kernel32.LocalFree(out_blob.pbData)
 
         return decrypted
-    except Exception as e:
+    except (OSError, AttributeError, TypeError, ValueError) as e:
         log.debug("DPAPI decrypt failed: %s", e)
         return None
 
@@ -301,7 +311,7 @@ def save_encrypted_state(path: Path, data: dict) -> bool:
         blob = _MAGIC + signature + encrypted
         path.write_bytes(blob)
         return True
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         log.error("Failed to save encrypted state to %s: %s", path, e)
         return False
 
@@ -354,7 +364,7 @@ def load_encrypted_state(path: Path) -> dict | None:
     except json.JSONDecodeError as e:
         log.warning("State file %s JSON parse failed: %s", path, e)
         return None
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         log.error("Failed to load encrypted state from %s: %s", path, e)
         return None
 
@@ -367,5 +377,5 @@ def is_encrypted_state_file(path: Path) -> bool:
         with open(path, "rb") as f:
             header = f.read(_MAGIC_LEN)
         return header == _MAGIC
-    except Exception:
+    except (OSError, FileNotFoundError, PermissionError):
         return False

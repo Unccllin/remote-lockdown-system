@@ -58,7 +58,7 @@ def _is_admin() -> bool:
     try:
         result = subprocess.run(["net", "session"], capture_output=True, text=True, timeout=5)
         return result.returncode == 0
-    except Exception:
+    except (subprocess.SubprocessError, OSError, FileNotFoundError):
         return False
 
 
@@ -168,7 +168,7 @@ def apply_file_acls(
             else:
                 log.info("ACL hardened: %s (DELETE denied for Everyone)", fpath_str)
                 results[label] = {"grant": True, "deny": True}
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError, FileNotFoundError) as e:
             log.error("ACL hardening failed for %s: %s", fpath_str, e)
             results[label] = {"grant": False, "deny": False, "error": str(e)}
 
@@ -230,7 +230,7 @@ def remove_file_acls(
             else:
                 log.warning("ACL reset failed for %s: %s", fpath_str, result.stderr)
                 results[label] = False
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError, FileNotFoundError) as e:
             log.error("ACL reset failed for %s: %s", fpath_str, e)
             results[label] = False
 
@@ -305,7 +305,7 @@ if (Test-Path -Path "Registry::$path" -ErrorAction SilentlyContinue) {{
             else:
                 log.warning("Registry protection failed for %s: %s", key, result.stderr)
                 results[key] = False
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError, FileNotFoundError) as e:
             log.error("Registry protection failed for %s: %s", key, e)
             results[key] = False
 
@@ -351,7 +351,7 @@ if (Test-Path -Path "Registry::$path" -ErrorAction SilentlyContinue) {{
                 results[key] = True
             else:
                 results[key] = "not_found" if "NOT_FOUND" in result.stdout else False
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError, FileNotFoundError) as e:
             log.error("Registry ACL reset failed for %s: %s", key, e)
             results[key] = False
 
@@ -401,7 +401,7 @@ def request_uninstall_token(
             e.read().decode("utf-8", errors="replace"),
         )
         return None
-    except Exception as e:
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as e:
         log.error("Uninstall token request failed: %s", e)
         return None
 
@@ -435,7 +435,7 @@ def verify_uninstall_token(
             return data.get("authorized", False)
     except HTTPError:
         return False
-    except Exception:
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
         return False
 
 
@@ -536,7 +536,7 @@ def check_tamper(state_dir: Path) -> dict:
             timeout=5,
         )
         result["task_missing"] = task_result.returncode != 0
-    except Exception:
+    except (subprocess.SubprocessError, OSError, FileNotFoundError):
         result["task_missing"] = True
 
     # Check if the service still exists
@@ -548,7 +548,7 @@ def check_tamper(state_dir: Path) -> dict:
             timeout=5,
         )
         result["service_missing"] = svc_result.returncode != 0
-    except Exception:
+    except (subprocess.SubprocessError, OSError, FileNotFoundError):
         result["service_missing"] = True
 
     result["tampered"] = (

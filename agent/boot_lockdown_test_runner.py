@@ -50,7 +50,7 @@ def check_admin():
             print("ERROR: This script must be run as Administrator!")
             print("Right-click → Run as administrator, or run from an elevated cmd.")
             sys.exit(1)
-    except Exception as e:
+    except (OSError, AttributeError, ImportError) as e:
         print(f"WARNING: Could not check admin status: {e}")
 
 

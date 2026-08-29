@@ -617,7 +617,7 @@ def _detect_session_context() -> dict:
         result["is_session_zero"] = (
             our_session_id.value == 0 or our_session_id.value != console_session_id
         )
-    except Exception as e:
+    except (OSError, AttributeError, ImportError) as e:
         log.debug("D-007: Session detection failed: %s", e)
     return result
 
@@ -668,21 +668,26 @@ def _lock_workstation() -> None:
                     e.returncode,
                     e.stderr.decode(errors="replace").strip() if e.stderr else "",
                 )
-            except Exception as e:
+            except (subprocess.TimeoutExpired, OSError) as e:
                 log.warning("D-007: tsdiscon error — falling back to LockWorkStation: %s", e)
         # Either not Session 0, or tsdiscon failed — try LockWorkStation
         try:
             import ctypes
 
             ctypes.windll.user32.LockWorkStation()
-        except Exception as e:
+        except (OSError, AttributeError) as e:
             log.warning("Windows lock failed: %s", e)
     elif system == "Linux":
         for cmd in [["dm-tool", "lock"], ["loginctl", "lock-session"], ["xdg-screensaver", "lock"]]:
             try:
                 subprocess.run(cmd, check=True, timeout=5)
                 break
-            except Exception as e:
+            except (
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+                FileNotFoundError,
+                OSError,
+            ) as e:
                 log.debug("Lock command %s failed: %s", cmd[0], e)
                 continue
     elif system == "Darwin":
@@ -695,7 +700,7 @@ def _lock_workstation() -> None:
                 ],
                 timeout=5,
             )
-        except Exception as e:
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
             log.warning("macOS lock failed: %s", e)
 
 
@@ -825,7 +830,13 @@ def get_hardware_uuid() -> str:
             for line in result.splitlines():
                 if "IOPlatformUUID" in line:
                     return line.split('"')[-2]
-    except Exception as e:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+        IndexError,
+    ) as e:
         log.warning("Could not get hardware UUID: %s", e)
     return str(uuid.getnode())
 
@@ -902,7 +913,14 @@ def scan_wifi_networks() -> list[dict]:
                             "signal": int(parts[2]) if parts[2].isdigit() else 0,
                         }
                     )
-    except Exception as e:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+        ValueError,
+        IndexError,
+    ) as e:
         log.warning("WiFi scan failed: %s", e)
     return networks
 
@@ -924,7 +942,7 @@ def get_ip_geolocation() -> dict | None:
                 "source": "ip",
                 "accuracy": "city",
             }
-    except Exception as e:
+    except (requests.RequestException, ValueError) as e:
         log.warning("IP geolocation failed: %s", e)
     return None
 
@@ -970,7 +988,7 @@ def get_geolocation(cfg: dict) -> dict | None:
                     "source": "wifi",
                     "wifi_count": len(wifi_points),
                 }
-            except Exception as e:
+            except (requests.RequestException, ValueError, TypeError, KeyError) as e:
                 log.warning("WiFi geolocation failed: %s", e)
 
     # Fallback to IP-based geolocation
@@ -1257,7 +1275,7 @@ def queue_offline(endpoint: str, payload: dict) -> None:
         conn.commit()
         conn.close()
         log.debug("Queued offline: %s (%d items in queue)", endpoint, _queue_size())
-    except Exception as e:
+    except (sqlite3.Error, TypeError, OSError) as e:
         log.warning("Failed to queue offline request: %s", e)
 
 
@@ -1268,7 +1286,7 @@ def _queue_size() -> int:
         row = conn.execute("SELECT COUNT(*) FROM offline_queue").fetchone()
         conn.close()
         return row[0] if row else 0
-    except Exception as e:
+    except (sqlite3.Error, OSError) as e:
         log.warning("Could not query offline queue size: %s", e)
         return 0
 
@@ -1303,7 +1321,7 @@ def drain_offline_queue(cfg: dict) -> None:
                 resp.raise_for_status()
                 conn.execute("DELETE FROM offline_queue WHERE id = ?", (row_id,))
                 sent += 1
-            except Exception:
+            except (json.JSONDecodeError, requests.RequestException, KeyError, TypeError):
                 # Increment attempt count; give up after 10 attempts
                 conn.execute(
                     "UPDATE offline_queue SET attempts = attempts + 1 WHERE id = ?", (row_id,)
@@ -1319,7 +1337,7 @@ def drain_offline_queue(cfg: dict) -> None:
         conn.close()
         if sent > 0:
             log.info("Drained %d offline queue items (%d remaining)", sent, _queue_size())
-    except Exception as e:
+    except (sqlite3.Error, OSError) as e:
         log.warning("Failed to drain offline queue: %s", e)
 
 
@@ -1463,7 +1481,7 @@ def drain_pending_ack(cfg: dict) -> None:
             log.info("Pending ACK drained & deleted for command=%s", state["command_id"])
         else:
             log.warning("Pending ACK retry failed; will retry next loop")
-    except Exception as e:
+    except (json.JSONDecodeError, OSError, KeyError) as e:
         log.error("Failed to drain pending ACK: %s", e)
 
 
@@ -1490,7 +1508,7 @@ def _get_recovery_public_key(cfg: dict):
         pem_data = pem_path.read_bytes()
         public_key = serialization.load_pem_public_key(pem_data)
         return public_key
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         log.warning("Could not load recovery public key: %s", e)
         return None
 
@@ -1548,7 +1566,7 @@ def write_recovery_key(
 
         _atomic_write_text(file_path, json.dumps(state))
         log.info("Recovery key file written (RSA-wrapped, command=%s)", command_id)
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         log.error("Failed to write recovery key file: %s", e)
 
 
@@ -1612,7 +1630,7 @@ def show_lockdown_notification() -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-    except Exception as e:
+    except (OSError, AttributeError, FileNotFoundError, subprocess.SubprocessError) as e:
         log.info("Could not show lockdown notification: %s", e)
 
 
@@ -1662,7 +1680,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
 
     try:
         blocked_files = encrypt_folder(folder, key)
-    except Exception as e:
+    except (ValueError, TypeError, OSError) as e:
         log.error("Encryption failed: %s", e)
         # Remove the sentinel so a retry can re-attempt encryption.
         try:
@@ -1745,7 +1763,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
             else:
                 log.error("BCD lockdown failed")
                 boot_lock_status = "partial"
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError, ValueError, TypeError) as e:
             log.error("BCD lockdown failed: %s", e)
             boot_lock_status = "partial"
             bcd_result = {
@@ -1795,7 +1813,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                 log.warning("UEFI boot lockdown skipped (not HP or password required)")
                 if boot_lock_status is None:
                     boot_lock_status = "partial"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — HP UEFI lockdown uses WMI which may raise platform-specific errors
             log.error("UEFI lockdown failed: %s", e)
             if boot_lock_status is None:
                 boot_lock_status = "partial"
@@ -1875,7 +1893,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                     "T9: BitLocker PBA not applied: %s",
                     bitlocker_pba_result.get("error", "unknown error"),
                 )
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError, ValueError, TypeError) as e:
             log.error("T9: BitLocker PBA failed: %s", e)
             bitlocker_pba_result = {"success": False, "error": str(e)}
 
@@ -1929,7 +1947,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     # The lockdown is already complete, so blocking is acceptable.
     try:
         show_lockdown_notification()
-    except Exception as e:
+    except (OSError, AttributeError, FileNotFoundError, subprocess.SubprocessError) as e:
         log.info("Lockdown notification failed: %s", e)
 
 
@@ -1947,7 +1965,7 @@ def handle_unlock(cfg: dict, command: dict) -> None:
 
     try:
         decrypt_folder(folder, key)
-    except Exception as e:
+    except (ValueError, TypeError, OSError) as e:
         log.error("Decryption failed: %s", e)
         ack_command(cfg, command["id"], "failed")
         return
@@ -1985,12 +2003,12 @@ def handle_unlock(cfg: dict, command: dict) -> None:
                     bios_password = backup["bios_password"]
                     power_on_password = backup.get("power_on_password")
                     log.info("BIOS password recovered from emergency backup file")
-            except Exception as e:
+            except (OSError, json.JSONDecodeError, KeyError) as e:
                 log.warning("Could not read BIOS password backup: %s", e)
 
         try:
             bcd_lockdown.remove_bcd_lockdown()
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError, ValueError, TypeError) as e:
             log.error("BCD lockdown removal failed: %s", e)
 
         if bios_password:
@@ -2000,7 +2018,7 @@ def handle_unlock(cfg: dict, command: dict) -> None:
                 if power_on_password:
                     log.info("T7: Power-On Password cleared — PBA removed")
                 del bios_password
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — HP UEFI lockdown removal uses WMI which may raise platform-specific errors
                 log.error(
                     "UEFI lockdown removal failed: %s — admin may need to clear BIOS manually", e
                 )
@@ -2029,7 +2047,7 @@ def handle_unlock(cfg: dict, command: dict) -> None:
                     "T9: BitLocker PBA removal skipped: %s",
                     bl_pba_result.get("error", "no PBA state"),
                 )
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError, ValueError, TypeError) as e:
             log.error("T9: BitLocker PBA removal failed: %s", e)
 
     del key
@@ -2072,7 +2090,7 @@ def _report_duress_key(cfg: dict, command_id: str, key_b64: str) -> bool:
         )
         resp.raise_for_status()
         return True
-    except Exception as e:
+    except (requests.RequestException, KeyError, TypeError) as e:
         log.warning("Duress: could not upload new key to server: %s", e)
         return False
 
@@ -2129,7 +2147,7 @@ def _trigger_hidden_lockdown(cfg: dict) -> None:
                 len(blocked),
                 ", ".join(blocked),
             )
-    except Exception as e:
+    except (ValueError, TypeError, OSError) as e:
         log.error("Hidden-trigger encryption failed: %s", e)
         try:
             sentinel.unlink()
@@ -2252,7 +2270,7 @@ def startup_check(cfg: dict) -> None:
                 ),
             )
             log.warning("Sentinel re-created after tamper detection: %s", sentinel)
-        except Exception as e:
+        except (OSError, TypeError) as e:
             log.error("Could not re-create sentinel after tamper detection: %s", e)
     else:
         # Deadman says active/recovering → device was recovered → normal startup
@@ -2436,7 +2454,7 @@ def check_deadman(cfg: dict) -> None:
                     "Deadman lockdown complete — key stored locally for upload on reconnection"
                 )
                 del key, key_b64
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — deadman check orchestrates multiple lock operations
         log.error("Dead man check failed: %s", e)
 
 
@@ -2464,7 +2482,7 @@ def report_deadman_key(cfg: dict) -> None:
         del key_material
     except requests.RequestException as e:
         log.warning("Could not upload deadman key (will retry): %s", e)
-    except Exception as e:
+    except (OSError, KeyError, TypeError) as e:
         log.error("Deadman key upload failed: %s", e)
 
 
@@ -2540,7 +2558,7 @@ def check_for_update(cfg: dict) -> None:
 
     except requests.RequestException as e:
         log.debug("Update check failed: %s", e)
-    except Exception as e:
+    except (ValueError, KeyError, TypeError, OSError) as e:
         log.warning("Update check error: %s", e)
 
 
@@ -2596,12 +2614,12 @@ def download_update(cfg: dict, url: str, expected_sha256: str, version: str) -> 
         UPDATE_PENDING_FILE.write_text(_json.dumps(signal, indent=2))
         log.info("Update signal written — watchdog will apply on next check")
 
-    except Exception as e:
+    except (requests.RequestException, OSError, ValueError, TypeError) as e:
         log.error("Update download failed: %s", e)
         # Clean up partial download
         try:
             tmp_file.unlink(missing_ok=True)
-        except Exception as e:
+        except OSError as e:
             log.warning("Could not clean up partial update download: %s", e)
 
 
@@ -2639,7 +2657,7 @@ def _is_watchdog_running() -> bool:
                 timeout=5,
             )
             return "lockdown-watchdog.exe" in result.stdout
-        except Exception:
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             return False
     else:
         try:
@@ -2650,7 +2668,7 @@ def _is_watchdog_running() -> bool:
                 timeout=5,
             )
             return result.returncode == 0 and bool(result.stdout.strip())
-        except Exception:
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             return False
 
 
@@ -2675,7 +2693,7 @@ def _start_watchdog() -> subprocess.Popen | None:
                 )
                 log.info("Watchdog restarted (PID %d)", proc.pid)
                 return proc
-            except Exception as e:
+            except (OSError, FileNotFoundError) as e:
                 log.warning("Could not start watchdog: %s", e)
                 return None
     else:
@@ -2691,7 +2709,7 @@ def _start_watchdog() -> subprocess.Popen | None:
                 )
                 log.info("Watchdog restarted (PID %d)", proc.pid)
                 return proc
-            except Exception as e:
+            except (OSError, FileNotFoundError) as e:
                 log.warning("Could not start watchdog: %s", e)
                 return None
     return None
@@ -2773,7 +2791,7 @@ def _run_tamper_check(cfg: dict, current_status: str) -> None:
                 log.info("Tamper detected but sentinel exists — re-applying lock screen")
                 apply_lock_screen()
                 start_lock_guardian()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — tamper check orchestrates multiple lock operations
         log.error("Tamper check failed: %s", e)
 
 
@@ -2887,7 +2905,7 @@ def main() -> None:
         # Update heartbeat so watchdog knows agent is alive
         try:
             HEARTBEAT_FILE.touch()
-        except Exception as e:
+        except OSError as e:
             log.debug("Could not update heartbeat file: %s", e)
 
         # --- Hidden file trigger: covert lockdown via marker file ---
@@ -2906,7 +2924,7 @@ def main() -> None:
         # we monitor the watchdog via process check.
         try:
             check_watchdog_health()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — watchdog health check must not crash main loop
             log.debug("Watchdog health check failed: %s", e)
 
         # Tamper detection: check for missing state files / service / task.
@@ -2962,7 +2980,7 @@ def main() -> None:
                 if handler:
                     try:
                         handler(cfg, command)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 — main loop must not crash
                         log.exception("Handler %s crashed: %s", cmd_type, e)
                         ack_command(cfg, command["id"], "failed", command_uuid=cmd_uuid)
                 else:

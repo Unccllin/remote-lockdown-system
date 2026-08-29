@@ -157,7 +157,7 @@ def _is_admin() -> bool:
             timeout=5,
         )
         return result.returncode == 0
-    except Exception:
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
 
 
@@ -236,7 +236,7 @@ def _load_model_overrides() -> dict:
     try:
         _MODEL_OVERRIDES = json.loads(MODEL_OVERRIDES_FILE.read_text())
         log.info("Loaded HP model overrides from %s", MODEL_OVERRIDES_FILE)
-    except Exception as e:
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as e:
         log.warning("Failed to load HP model overrides: %s", e)
         _MODEL_OVERRIDES = {}
     return _MODEL_OVERRIDES
@@ -256,7 +256,7 @@ def _detect_hp_model() -> str | None:
         output = _run_powershell("(Get-WmiObject -Class Win32_ComputerSystem).Model")
         model = output.strip() if output else ""
         return model if model else None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — WMI/PowerShell may raise platform-specific errors
         log.debug("Failed to detect HP model: %s", e)
         return None
 
@@ -412,7 +412,7 @@ def _write_password_backup(bios_password: str, power_on_password: str | None = N
 
         _atomic_write_text(BIOS_PASSWORD_BACKUP_FILE, encoded)
         log.info("BIOS password backup written to %s", BIOS_PASSWORD_BACKUP_FILE)
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         log.error("CRITICAL: Could not write BIOS password backup: %s", e)
         log.error("If lockdown proceeds, BIOS password may be unrecoverable if ACK fails")
 
@@ -437,7 +437,7 @@ def read_password_backup() -> dict | None:
         decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(encrypted))
         data = _json.loads(decrypted.decode("utf-8"))
         return data
-    except Exception as e:
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as e:
         log.error("Could not read BIOS password backup: %s", e)
         return None
 
@@ -447,7 +447,7 @@ def delete_password_backup() -> None:
     try:
         BIOS_PASSWORD_BACKUP_FILE.unlink(missing_ok=True)
         log.info("BIOS password backup deleted (unlock successful)")
-    except Exception as e:
+    except (OSError, PermissionError) as e:
         log.warning("Could not delete BIOS password backup: %s", e)
 
 
@@ -547,7 +547,7 @@ def is_hp_machine() -> bool:
             f"| Select-Object -First 1 -ExpandProperty Name"
         )
         return bool(output)
-    except Exception:
+    except Exception:  # noqa: BLE001 — WMI/PowerShell may raise platform-specific errors
         return False
 
 
@@ -666,7 +666,7 @@ def _check_sure_admin() -> dict:
                             result["sure_start_detected"] = True
                             log.warning("D-010: Sure Start variant '%s' is enabled", sname)
                             break
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — WMI/PowerShell may raise platform-specific errors
             log.debug("D-010: Sure Start WQL LIKE fallback failed: %s", e)
 
     # D-010: Sure Run — NOT a standard BIOS setting on most models.
@@ -709,7 +709,7 @@ def _check_sure_admin() -> dict:
             if output and output.strip().lower() == "running":
                 result["sure_run_detected"] = True
                 log.warning("D-010: Sure Run is enabled (HPSureRun service is running)")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — WMI/PowerShell may raise platform-specific errors
             log.debug("D-010: Sure Run service check failed: %s", e)
 
     result["any_sure_feature"] = (
@@ -967,7 +967,7 @@ def _run_cmd(cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
         return -1, "", f"Command not found: {cmd[0]}"
     except subprocess.TimeoutExpired:
         return -2, "", f"Command timed out: {' '.join(cmd)}"
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         return -3, "", str(e)
 
 
@@ -1019,7 +1019,7 @@ def _check_bitlocker() -> dict:
             "percentage": percentage,
             "error": None,
         }
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         return {"enabled": False, "suspended": False, "percentage": "0%", "error": str(e)}
 
 
@@ -1045,7 +1045,7 @@ def _suspend_bitlocker() -> bool:
             return True
         log.warning("T5: Failed to suspend BitLocker protectors: %s", stderr)
         return False
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         log.warning("T5: Failed to suspend BitLocker protectors: %s", e)
         return False
 
@@ -1070,7 +1070,7 @@ def _resume_bitlocker() -> bool:
             return True
         log.warning("T5: Failed to resume BitLocker protectors: %s", stderr)
         return False
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         log.warning("T5: Failed to resume BitLocker protectors: %s", e)
         return False
 
@@ -1092,7 +1092,7 @@ def _read_setting(name: str) -> str | None:
         )
         if output:
             return output
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — WMI/PowerShell may raise platform-specific errors
         log.debug("HP_BIOSEnumeration query failed for '%s': %s", name, e)
     # Fall back to HP_BIOSSetting
     try:
@@ -1102,7 +1102,7 @@ def _read_setting(name: str) -> str | None:
         )
         if output:
             return output
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — WMI/PowerShell may raise platform-specific errors
         log.debug("HP_BIOSSetting query failed for '%s': %s", name, e)
     return None
 
@@ -1192,7 +1192,7 @@ def _is_setup_password_set() -> bool:
             f"-Class HP_BIOSPassword -Filter \"Name='Setup Password'\").IsSet"
         )
         return output.strip().lower() in ("1", "true")
-    except Exception:
+    except Exception:  # noqa: BLE001 — WMI/PowerShell may raise platform-specific errors
         return False
 
 
@@ -1233,7 +1233,7 @@ def _is_power_on_password_supported() -> bool:
             f"| Select-Object -ExpandProperty Name"
         )
         return bool(output and output.strip())
-    except Exception:
+    except Exception:  # noqa: BLE001 — WMI/PowerShell may raise platform-specific errors
         return False
 
 
@@ -1247,7 +1247,7 @@ def _is_power_on_password_set() -> bool:
             f"-Class HP_BIOSPassword -Filter \"Name='Power-On Password'\").IsSet"
         )
         return output.strip().lower() in ("1", "true")
-    except Exception:
+    except Exception:  # noqa: BLE001 — WMI/PowerShell may raise platform-specific errors
         return False
 
 
@@ -1307,7 +1307,7 @@ def load_boot_state() -> dict | None:
         return None
     try:
         return json.loads(BOOT_STATE_FILE.read_text())
-    except Exception as e:
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as e:
         log.error("Could not read boot state: %s", e)
         return None
 

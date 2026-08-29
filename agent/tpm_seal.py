@@ -75,7 +75,12 @@ def is_tpm_available() -> bool:
         )
         if result.returncode == 0:
             return result.stdout.strip().lower() == "true"
-    except Exception as e:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ) as e:
         log.debug("TPM check failed: %s", e)
 
     return False
@@ -149,7 +154,12 @@ try {{
                 log.warning("TPM key creation unexpected output: %s", output)
         else:
             log.warning("TPM key creation failed: %s", result.stderr.strip())
-    except Exception as e:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ) as e:
         log.warning("TPM key creation error: %s", e)
 
     return False
@@ -202,7 +212,12 @@ try {{
             return base64.b64decode(encrypted_b64)
         else:
             log.warning("TPM encrypt failed: %s", result.stderr.strip())
-    except Exception as e:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ) as e:
         log.warning("TPM encrypt error: %s", e)
 
     return None
@@ -249,7 +264,12 @@ try {{
             return base64.b64decode(decrypted_b64)
         else:
             log.debug("TPM decrypt failed: %s", result.stderr.strip())
-    except Exception as e:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ) as e:
         log.debug("TPM decrypt error: %s", e)
 
     return None
@@ -272,6 +292,7 @@ def _aes_gcm_encrypt(key: bytes, plaintext: bytes) -> bytes:
 
 def _aes_gcm_decrypt(key: bytes, blob: bytes) -> bytes | None:
     """Decrypt AES-256-GCM. Expects nonce + ciphertext + tag."""
+    from cryptography.exceptions import InvalidTag
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     if len(blob) < 12:
@@ -281,7 +302,7 @@ def _aes_gcm_decrypt(key: bytes, blob: bytes) -> bytes | None:
     aesgcm = AESGCM(key)
     try:
         return aesgcm.decrypt(nonce, ciphertext, None)
-    except Exception:
+    except (ValueError, TypeError, OSError, InvalidTag):
         return None
 
 
@@ -389,7 +410,7 @@ def unseal_state(blob: bytes) -> bytes | None:
             return None
 
         return plaintext
-    except Exception as e:
+    except (struct.error, ValueError, TypeError, OSError) as e:
         log.error("TPM unseal error: %s", e)
         return None
 
@@ -431,6 +452,11 @@ try {{
             timeout=10,
         )
         return result.returncode == 0
-    except Exception as e:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ) as e:
         log.warning("TPM key deletion failed: %s", e)
         return False

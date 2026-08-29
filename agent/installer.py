@@ -109,14 +109,14 @@ def is_admin() -> bool:
         return False
     try:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
+    except (OSError, AttributeError, PermissionError):
         return False
 
 
 def get_hostname() -> str:
     try:
         return socket.gethostname()
-    except Exception:
+    except OSError:
         return "UNKNOWN"
 
 
@@ -127,7 +127,7 @@ def get_mac_address() -> str:
 
         mac = uuid.getnode()
         return ":".join(f"{(mac >> ele) & 0xFF:02X}" for ele in range(40, -1, -8))
-    except Exception:
+    except (OSError, AttributeError, ValueError):
         return None
 
 
@@ -429,7 +429,7 @@ def install_service():
     except ImportError:
         print_warn("service_installer module not found — skipping service install")
         return False
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, RuntimeError) as e:
         print_fail(f"Service installation error: {e}")
         return False
 
@@ -457,7 +457,7 @@ def verify_checkin(server_url: str, api_key: str) -> bool:
         else:
             print_fail(f"Server health check failed: HTTP {resp.status_code}")
             return False
-    except Exception as e:
+    except (requests.RequestException, json.JSONDecodeError, ValueError, OSError) as e:
         print_fail(f"Cannot reach server: {e}")
         return False
 
@@ -616,7 +616,7 @@ def main():
             enroll_data = enroll_device_with_token(server_url, enroll_token, hostname, owner_name)
         else:
             enroll_data = enroll_device(server_url, admin_token, hostname, owner_name)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — enroll functions raise generic Exception for user-facing errors
         print_fail(str(e))
         sys.exit(1)
 

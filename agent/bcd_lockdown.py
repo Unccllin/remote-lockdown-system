@@ -133,7 +133,7 @@ def _is_admin() -> bool:
             timeout=5,
         )
         return result.returncode == 0
-    except Exception:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
 
 
@@ -186,7 +186,7 @@ def _run(cmd: list[str], timeout: int = 15) -> tuple[int, str, str]:
         return -1, "", f"Command not found: {cmd[0]}"
     except subprocess.TimeoutExpired:
         return -2, "", f"Command timed out: {' '.join(cmd)}"
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         return -3, "", str(e)
 
 
@@ -466,7 +466,7 @@ def _check_bitlocker() -> dict:
             "percentage": percentage,
             "error": None,
         }
-    except Exception as e:
+    except (ValueError, TypeError, IndexError, OSError) as e:
         return {"enabled": False, "suspended": False, "percentage": "0%", "error": str(e)}
 
 
@@ -497,7 +497,7 @@ def _suspend_bitlocker() -> bool:
             return True
         log.warning("Failed to suspend BitLocker protectors: %s", stderr)
         return False
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, TypeError) as e:
         log.warning("Failed to suspend BitLocker protectors: %s", e)
         return False
 
@@ -525,7 +525,7 @@ def _resume_bitlocker() -> bool:
             return True
         log.warning("Failed to resume BitLocker protectors: %s", stderr)
         return False
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, TypeError) as e:
         log.warning("Failed to resume BitLocker protectors: %s", e)
         return False
 
@@ -581,7 +581,7 @@ def load_bcd_state() -> dict | None:
         return None
     try:
         return json.loads(BCD_STATE_FILE.read_text())
-    except Exception as e:
+    except (json.JSONDecodeError, ValueError, TypeError, OSError) as e:
         log.error("Could not read BCD state: %s", e)
         return None
 

@@ -62,7 +62,7 @@ def _is_admin() -> bool:
     try:
         result = subprocess.run(["net", "session"], capture_output=True, text=True, timeout=5)
         return result.returncode == 0
-    except Exception:
+    except (subprocess.SubprocessError, OSError, FileNotFoundError):
         return False
 
 
@@ -292,7 +292,7 @@ Set-ScheduledTask -TaskName '{TASK_NAME}' -Trigger $task.Triggers
         try:
             apply_all_protection(agent_path, config_path, state_dir, watchdog_path)
             log.info("Tamper protection applied — agent binary and config protected from deletion")
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError, RuntimeError, FileNotFoundError) as e:
             log.warning("Tamper protection partially failed: %s", e)
     else:
         log.warning("tamper_protection module not available — skipping ACL hardening")
@@ -364,7 +364,7 @@ def uninstall(
             log.warning("No uninstall token provided — attempting removal without server auth")
             try:
                 remove_all_protection(agent_path, config_path, state_dir, watchdog_path)
-            except Exception as e:
+            except (subprocess.SubprocessError, OSError, RuntimeError, FileNotFoundError) as e:
                 log.warning("Could not remove tamper protection: %s", e)
                 log.warning(
                     "The agent may be protected by DENY ACLs. Use --token for authorized uninstall."

@@ -30,7 +30,12 @@ def run_cmd(cmd: list[str], timeout: int = 10) -> dict:
             "stdout": result.stdout.strip(),
             "stderr": result.stderr.strip(),
         }
-    except Exception as e:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ) as e:
         return {"returncode": -1, "stdout": "", "stderr": str(e)}
 
 
@@ -48,7 +53,12 @@ def run_powershell(script: str, timeout: int = 15) -> dict:
             "stdout": result.stdout.strip(),
             "stderr": result.stderr.strip(),
         }
-    except Exception as e:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ) as e:
         return {"returncode": -1, "stdout": "", "stderr": str(e)}
 
 
@@ -58,7 +68,7 @@ def check_admin() -> bool:
         return False
     try:
         return ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except Exception:
+    except (OSError, AttributeError):
         return False
 
 
@@ -243,7 +253,7 @@ def check_existing_state_files() -> dict:
             try:
                 content = fpath.read_text()
                 files[fname]["content"] = content[:500]  # First 500 chars
-            except Exception as e:
+            except (OSError, FileNotFoundError, PermissionError, UnicodeDecodeError) as e:
                 files[fname]["content"] = f"(error reading: {e})"
     return files
 

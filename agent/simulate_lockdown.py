@@ -563,7 +563,7 @@ def run_simulation():
     except AssertionError as e:
         print(f"\n  ✗ ASSERTION FAILED: {e}")
         sys.exit(1)
-    except Exception as e:
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as e:
         print(f"\n  ✗ ERROR: {e}")
         import traceback
 

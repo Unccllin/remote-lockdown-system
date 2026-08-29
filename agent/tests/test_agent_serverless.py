@@ -194,8 +194,11 @@ class TestGeolocation:
             assert result["city"] == "San Francisco"
 
     def test_get_ip_geolocation_returns_none_on_failure(self):
+        import requests as real_requests
+
         with patch.object(agent, "requests") as mock_requests:
-            mock_requests.get.side_effect = Exception("Network error")
+            mock_requests.RequestException = real_requests.RequestException
+            mock_requests.get.side_effect = real_requests.RequestException("Network error")
             result = agent.get_ip_geolocation()
             assert result is None
 

@@ -97,7 +97,7 @@ def with_timeout(seconds: int):
             def target():
                 try:
                     result_holder["value"] = fn(*args, **kwargs)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001 — captures arbitrary test function exceptions for re-raise
                     result_holder["error"] = e
 
             thread = threading.Thread(target=target, daemon=True)
@@ -134,7 +134,7 @@ def with_retry(max_retries: int, retry_delay: float = 1.0):
             for attempt in range(max_retries + 1):
                 try:
                     return fn(*args, **kwargs)
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001 — retries arbitrary test function on any exception
                     pass  # will retry
                     if attempt < max_retries:
                         time.sleep(retry_delay * (attempt + 1))
@@ -561,7 +561,7 @@ class HardwareTest:
                     def target():  # noqa: B023
                         try:
                             result_holder["value"] = _run_action()  # noqa: B023
-                        except Exception as e:  # noqa: BLE001, B023
+                        except Exception as e:  # noqa: BLE001, B023 — captures arbitrary test action exceptions for re-raise
                             result_holder["error"] = e  # noqa: B023
 
                     thread = threading.Thread(target=target, daemon=True)
@@ -594,7 +594,7 @@ class HardwareTest:
                 self.result.timed_out = True
                 self.result.finish("ERROR", str(e), error=str(e))
                 break
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 — catches arbitrary test action exceptions for retry/error reporting
                 if attempt < effective_retries:
                     time.sleep(1.0 * (attempt + 1))
                     continue
@@ -1036,7 +1036,7 @@ class TestTpm(HardwareTest):
             # Seal data with TPM
             try:
                 tpm_seal.seal_data(test_data, sealed_file)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 — TPM platform-specific errors
                 return f"TPM seal failed: {e}"
 
             if not sealed_file.exists():
@@ -1045,7 +1045,7 @@ class TestTpm(HardwareTest):
             # Unseal data
             try:
                 unsealed = tpm_seal.unseal_data(sealed_file)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 — TPM platform-specific errors
                 return f"TPM unseal failed: {e}"
 
             if unsealed != test_data:
@@ -1097,7 +1097,7 @@ class TestEnroll(HardwareTest):
             if not token:
                 return "No token in enrollment response"
             return f"Enrollment token generated: {token[:8]}..."
-        except Exception as e:  # noqa: BLE001
+        except (urllib.error.URLError, OSError, ValueError) as e:
             return f"Enrollment request failed: {e}"
 
     def verify(self, env: dict, mode: str, action_detail: str = "") -> tuple[bool, str]:
@@ -1456,9 +1456,9 @@ def run_harness(
 
     # Pattern: Artifact upload to server
     if upload_url:
-        try:
-            import urllib.request
+        import urllib.request
 
+        try:
             upload_req = urllib.request.Request(  # noqa: S310
                 f"{upload_url}/api/hw-test-artifact",
                 method="POST",
@@ -1467,7 +1467,7 @@ def run_harness(
             )
             urllib.request.urlopen(upload_req, timeout=10)  # noqa: S310
             print(f"Artifact uploaded to: {upload_url}")
-        except Exception as e:  # noqa: BLE001
+        except (urllib.error.URLError, OSError, ValueError) as e:
             print(f"WARNING: Artifact upload failed: {e}")
 
     return artifact if isinstance(artifact, dict) else {"xml": artifact}

@@ -75,7 +75,7 @@ LOCKDOWN_FOLDER = INSTALL_DIR / "lockdown_folder"
 def get_hostname() -> str:
     try:
         return socket.gethostname()
-    except Exception:
+    except OSError:
         return "UNKNOWN"
 
 
@@ -85,7 +85,7 @@ def get_mac_address() -> str | None:
 
         mac = uuid.getnode()
         return ":".join(f"{(mac >> ele) & 0xFF:02X}" for ele in range(40, -1, -8))
-    except Exception:
+    except (OSError, AttributeError, ValueError):
         return None
 
 
@@ -156,7 +156,7 @@ def get_serial_number() -> str | None:
 def is_admin() -> bool:
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
-    except Exception:
+    except (OSError, AttributeError, PermissionError):
         return False
 
 
@@ -256,7 +256,7 @@ def download_agent_exe(server_url: str, dest_dir: Path) -> Path | None:
             for chunk in resp.iter_content(chunk_size=65536):
                 f.write(chunk)
         return dest if dest.exists() and dest.stat().st_size > 1000000 else None
-    except Exception:
+    except (requests.RequestException, OSError):
         if dest.exists():
             dest.unlink()
         return None
@@ -288,7 +288,7 @@ def install_service() -> bool:
         return service_installer.install()
     except ImportError:
         return False
-    except Exception:
+    except (subprocess.SubprocessError, OSError, RuntimeError):
         return False
 
 
@@ -357,10 +357,10 @@ def run_hardware_tests() -> dict:
                 }
             except subprocess.TimeoutExpired:
                 results[test_name] = {"status": "TIMEOUT", "stdout": "", "stderr": ""}
-            except Exception as e:
+            except (OSError, subprocess.SubprocessError) as e:
                 results[test_name] = {"status": "ERROR", "stdout": "", "stderr": str(e)}
         return results
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         return {"error": str(e)}
 
 
@@ -740,7 +740,7 @@ class SetupWizard:
             else:
                 self.root.after(500, self.show_page, self.PAGE_COMPLETE)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — GUI install thread catch-all for user-facing error display
             self.root.after(0, self._set_status, f"Error: {e}", None)
             self.root.after(0, self._log, f"\n✗ ERROR: {e}")
             self.install_error = str(e)
