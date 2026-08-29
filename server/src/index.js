@@ -143,7 +143,7 @@ app.get('/api/health', async (req, res) => {
     res.status(503).json({
       status: 'degraded',
       db: 'disconnected',
-      error: err.message,
+      error: 'Database unreachable',
       timestamp: new Date().toISOString(),
     });
   }
@@ -204,7 +204,7 @@ app.use((err, _req, res, _next) => {
   }
   // Custom status code (e.g., from err.status or err.statusCode)
   if (err.status) {
-    return res.status(err.status).json({ error: err.message });
+    return res.status(err.status).json({ error: 'Request failed' });
   }
   // Log and return generic 500 (no stack traces leaked to client)
   logger.error({ err }, 'Unhandled error');

@@ -170,9 +170,11 @@ export PATH="/home/cllin/.local/node/bin:$PATH"
 npm test
 
 # Per-component
-cd server   && npm test                       # 368 Jest tests
-cd agent    && python3 -m pytest tests/ -q    # 344 pytest tests
-cd dashboard && npx vitest run                # 41 Vitest tests
+cd server   && npm test                       # 388 Jest tests
+cd agent    && python3 -m pytest tests/ -q    # 603 pytest tests
+cd dashboard && npx vitest run                # 191 Vitest tests
+cd electron  && npm test                      # 30 Jest tests
+cd serverless && npm test                     # 54 Vitest tests
 
 # Lint
 cd server    && npx eslint .                  # exit 0 = clean
@@ -184,13 +186,13 @@ cd agent     && python3 -m ruff format --check .
 cd dashboard && npx vite build                # outputs dashboard/dist
 cd electron  && node --check main.js preload.js setup-preload.js setup-wizard.js server-starter.js config.js updater.js
 
-# Syntax sweep of all .js (not .jsx — JSX needs vite/vitest to validate)
-find server/src electron -name '*.js' | grep -v node_modules | xargs -I{} node --check {}
+# Syntax sweep of all .js and .cjs (not .jsx — JSX needs vite/vitest to validate)
+find server/src electron -name '*.js' -o -name '*.cjs' | grep -v node_modules | xargs -I{} node --check {}
 
 # Shell scripts
-bash -n scripts/*.sh
+bash -n scripts/*.sh && bash -n .devin/orchestration/orchestrator.sh
 
-# Full environment + artifact verification (56 checks)
+# Full environment + artifact verification (61 checks)
 make verify-env
 make check-structure      # non-fatal; electron/dist-electron is expected missing locally
 
@@ -253,11 +255,12 @@ make build
   check. The convention prepares for future failures without backfilling a
   failure log with no data.
 
-## Diagnostic Sweep Results (2026-08-04, updated 2026-08-11)
+## Diagnostic Sweep Results (2026-08-04, updated 2026-08-29)
 
-All green: 368 server tests, 344 agent tests, 41 dashboard tests, eslint clean on
-server + dashboard, ruff clean + formatted on agent, vite build OK, all shell scripts
-`bash -n` OK, all YAML configs valid, all local imports resolve, git tree clean.
+All green: 388 server tests, 603 agent tests, 191 dashboard tests, 30 electron tests,
+54 serverless tests, eslint clean on server + dashboard, ruff clean + formatted on
+agent, vite build OK, all shell scripts `bash -n` OK, all YAML configs valid, all
+local imports resolve, git tree clean.
 `verify-environment.sh` final: **61 PASS / 0 FAIL / 1 SKIP** (the 1 skip is the
 intentional `installer-windows-execpolicy` by-design skip).
 

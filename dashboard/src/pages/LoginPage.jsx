@@ -64,12 +64,13 @@ export default function LoginPage() {
         </div>
 
         {/* Login form */}
-        <form onSubmit={handleSubmit} className="card space-y-5">
+        <form onSubmit={handleSubmit} className="card space-y-5" aria-label="Login form">
           <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">Username</label>
+            <label htmlFor="login-username" className="block text-xs font-medium text-slate-400 mb-1.5">Username</label>
             <div className="relative">
               <User size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
               <input
+                id="login-username"
                 className="input pl-10"
                 value={form.username}
                 onChange={(e) => setForm({ ...form, username: e.target.value })}
@@ -80,10 +81,11 @@ export default function LoginPage() {
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">Password</label>
+            <label htmlFor="login-password" className="block text-xs font-medium text-slate-400 mb-1.5">Password</label>
             <div className="relative">
               <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
               <input
+                id="login-password"
                 className="input pl-10"
                 type="password"
                 value={form.password}

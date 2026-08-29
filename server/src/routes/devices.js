@@ -177,11 +177,11 @@ router.delete('/:id', requireAuth, requireRole('operator'), async (req, res) => 
     // A6: Guard trigger raises a P0001 exception with a helpful message
     if (err.code === 'P0001' || (err.message && err.message.includes('unreleased encryption keys'))) {
       return res.status(409).json({
-        error: err.message || 'Cannot delete device with unreleased encryption keys',
+        error: 'Cannot delete device with unreleased encryption keys',
         hint: 'Recover the device first, or use ?force=true to release keys and delete',
       });
     }
-    if (err.status === 404) return res.status(404).json({ error: err.message });
+    if (err.status === 404) return res.status(404).json({ error: 'Device not found' });
     throw err;
   }
 });

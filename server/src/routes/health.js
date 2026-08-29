@@ -26,7 +26,7 @@ async function probeDb(timeoutMs = 3000) {
     ]);
     return { ok: true, latencyMs: Date.now() - start };
   } catch (err) {
-    return { ok: false, latencyMs: Date.now() - start, error: err.message };
+    return { ok: false, latencyMs: Date.now() - start, error: 'unreachable' };
   }
 }
 
