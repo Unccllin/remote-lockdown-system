@@ -51,104 +51,41 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-08-28 — Tamper protection, covert duress trigger, streamlined enrollment
+## Latest session: 2026-08-29 — P1 items + hw_test_harness v2.0 redesign
 
-### Task
-Three workstreams in parallel: (1) complete the 5-layer tamper protection architecture, (2) design and implement a hidden/covert lockdown trigger, (3) streamline device enrollment with token-based flow.
-
-### RULE-ZERO — Understanding logged before code changes
-- **Read**: agent/agent.py main loop (lines 2500-2679) — has check_watchdog_health() but NOT check_tamper(). Has _read_deadman_state() and update_deadman_timer() for state encryption.
-- **Read**: agent/tamper_protection.py (558 lines) — check_tamper() exists at line 504 but is not wired into agent loop. File ACLs, registry protection, uninstall authorization all implemented.
-- **Read**: agent/tpm_seal.py (431 lines) — seal_state(), unseal_state(), is_tpm_available() all implemented. File format: [magic "TPM1"] [sealed_key_len] [sealed_key] [encrypted_state]. NOT integrated into agent.py.
-- **Read**: agent/watchdog.py (261 lines) — process monitor, restarts agent if heartbeat goes stale. Mutual watchdog partially implemented (check_watchdog_health exists in agent.py).
-- **Read**: agent/installer.py (442 lines) — one-click installer, calls POST /api/enroll with admin token, writes config.json, installs service.
-- **Read**: serverless/worker.ts — handleEnroll at line 756, handleAgentCheckin at line 495, handleRecover for unlock commands.
-- **Read**: dashboard/src/pages/DeviceDetailPage.jsx — has recover() for unlock, flag-stolen, track, locate actions.
-- **Read**: dashboard/src/pages/DevicesPage.jsx — has "Enroll Device" button navigating to /devices/enroll.
-- **Finding**: No previous record of "hidden format feature" in trace.md or memory. The closest concept is the LDS1 magic header in state_crypto.py. Designed a duress code + hidden file trigger as the covert mechanism.
-- **Finding**: Enrollment requires admin token on target machine — security risk. Token-based enrollment (admin generates short-lived token in dashboard, installer uses token) is safer and more user-friendly.
-
-### IMPLEMENT — Code changes written (3 parallel workstreams)
-
-#### WS1: Complete tamper protection
-1. **agent/agent.py**: Added import guards for tamper_protection.check_tamper and tpm_seal (is_tpm_available, is_tpm_sealed_blob, seal_state, unseal_state). Added _run_tamper_check() helper that calls check_tamper() every 5 min and triggers re-lock if device is stolen/locked. Wired into main loop after check_watchdog_health(). Updated _read_deadman_state() to try TPM format first (TPM1), then DPAPI (LDS1), then plaintext. Updated update_deadman_timer() to use seal_state() when TPM available.
-2. **agent/tests/test_tamper_integration.py** (NEW, 21 tests): Tamper check wiring, re-lock on tamper, TPM preference, DPAPI fallback, import guards.
-
-#### WS2: Hidden/covert lockdown trigger
-3. **agent/duress.py** (NEW): check_hidden_trigger() checks for .system_cache_cleanup file. is_duress_unlock() detects duress_code field. start_duress_relock() launches daemon thread that re-encrypts after 60s and re-locks after 5 min. Platform-agnostic via injected callbacks.
-4. **agent/agent.py**: Added import-guarded duress import. handle_unlock() checks for duress code and starts re-lock thread. Main loop checks for hidden trigger file every iteration. Added _trigger_hidden_lockdown(), _start_duress_relock(), _report_duress_key().
-5. **serverless/worker.ts**: Added duress_code field to Command interface. handleAgentCheckin forwards it. handleRecover accepts and stores it.
-6. **dashboard/src/pages/DeviceDetailPage.jsx**: Added "Release with Duress Code" button (amber) + confirmation modal with hostname verification.
-7. **agent/tests/test_duress.py** (NEW, 20 tests): Hidden trigger, duress detection, re-encryption engine, agent integration.
-
-#### WS3: Streamlined device enrollment
-8. **serverless/worker.ts**: Added POST /api/enroll/token (admin creates 15-min single-use token) + POST /api/enroll/claim (installer uses token, no admin auth). Token stored in KV, deleted after claim.
-9. **dashboard/src/pages/EnrollDevicePage.jsx** (NEW): Token generation, QR code (api.qrserver.com), one-line install command, countdown timer, device polling, success view.
-10. **dashboard/src/App.jsx**: Route /devices/enroll → EnrollDevicePage, old manual enroll moved to /devices/enroll/manual.
-11. **agent/installer.py**: Added --token argument, enroll_device_with_token() calls /api/enroll/claim. Backward compat with --admin-token preserved.
-12. **dashboard/tests/EnrollDevicePage.test.jsx** (NEW, 10 tests): Token generation, QR code, command display, copy button, waiting status, countdown, error handling, device detection.
-13. **serverless/worker.test.ts**: +11 tests for enroll/token and enroll/claim endpoints.
-14. **agent/tests/test_installer.py** (NEW, 8 tests): Token-based enrollment, error handling, backward compat, CLI args.
-
-#### Also
-15. **electron/test-simulation.js** (NEW): Browser simulation of the Electron app (starts static server, injects Worker URL, serves setup wizard).
-16. **electron/package.json**: @noble/hashes override for Node 20.18 compat.
-
-### VERIFY — Verification nodes pass
-- Agent tests: 482 passed (344 existing + 21 WS1 + 20 WS2 + 8 WS3 + others)
-- Dashboard tests: 82 passed (9 test files, +10 EnrollDevicePage)
-- Worker tests: 40 passed (+11 enrollment token tests)
-- Server tests: 368 passed (unchanged)
-- Electron tests: 30 passed (unchanged)
-- Total: 1002 tests pass
-- Ruff lint: clean (all changed files formatted)
-- Dashboard eslint: clean
-
-### ARTIFACT — Run artifact captured
-- Agent: 482 passed in 9.76s
-- Dashboard: 82 passed in 9.21s
-- Worker: 40 passed in 652ms
-- Server: 368 passed in 22.07s
-- Electron: 30 passed in 1.177s
-- Git commit: e082bee (15 files, +3267/-1030)
+### RULE-ZERO
+**Read**: AGENTS.md (harness audit + redesign plan), hw_test_harness.py (v1.0), GRAPH-SPEC.yaml (enforcement paths)
+**Finding**: All P0 items done in prior session. P1 items remained. The hw_test_harness v1.0 had 5 tests, no patterns from research, and 10 documented gaps.
 
 ### Fog cleared
-1. **Tamper protection complete**: check_tamper() now runs every 5 min in the agent loop. If protected files/scheduled task/service are missing AND device is stolen/locked, the agent re-asserts lockdown (re-encrypt, re-lock screen, restart guardian). TPM 2.0 sealing is now integrated — deadman state is sealed to TPM hardware first, falls back to DPAPI, then plaintext. The 5-layer architecture is complete.
-2. **Covert duress trigger implemented**: Two invisible mechanisms — (a) duress code: dashboard "Release with Duress Code" makes the agent pretend to unlock, then re-encrypt with new key after 60s and re-lock after 5 min; (b) hidden file trigger: .system_cache_cleanup file in state dir triggers immediate lockdown. Both are invisible to anyone who doesn't know they exist.
-3. **Streamlined enrollment**: Admin generates a 15-min single-use token in the dashboard, gets a QR code + one-line command. The installer uses the token (no admin password needed on target machine). Device appears in dashboard automatically. Backward compatible with old admin-token flow.
-4. **Electron app tested on Windows**: The serverless-only Electron app was built, launched on Windows via WSL interop, setup wizard appeared, Worker URL validated, config saved, dashboard loaded with API calls going to the Cloudflare Worker. End-to-end verified.
-5. **Agent Windows binaries built**: lockdown-agent.exe (15MB), lockdown-watchdog.exe (7MB), lockdown-recovery.exe (13MB) built via WSL interop using Windows Python 3.12 + PyInstaller.
+- How to implement all 12 patterns in a single Python file (no heavy deps needed)
+- How to structure HardwareTest base class with phase lifecycle (precondition→action→verify→cleanup)
+- How to do threading-based timeout that works cross-platform (SIGALRM is Unix-only)
+- How to make verify() methods work (need action_detail param, not self.result.detail)
+- How to do tag-based filtering replacing --only flag
+- How to generate CTRF + JUnit XML + legacy JSON artifacts from same results
 
 ### Fog remaining
-- **Not tested on real hardware**: The tamper protection, duress code, and hidden trigger are verified by unit tests but not on a real Windows machine with TPM. The TPM sealing path requires a real TPM to test.
-- **Enrollment flow not end-to-end tested**: The token-based enrollment is verified by unit tests but not tested with a real installer.exe on a real target machine.
-- **Dashboard bundle size warning persists**: 558KB main chunk (pre-existing).
-- **5 pre-existing ruff format issues**: state_crypto.py, tpm_seal.py, and 3 other files have formatting issues that predate this session. Not touched to avoid unrelated changes.
+- Whether v2.0 tests actually pass on real HP hardware (requires physical machine)
+- Whether TPM sealing works on the HP's specific TPM module
+- Whether the E-INTEGRATION test's full cycle works against the production server
+- Whether artifact upload to server works (no /api/hw-test-artifact endpoint yet)
 
 ### Debt items closed
-None — these are new features, not debt item closures.
+- D-003 (partial): hw_test_harness v2.0 implemented with 12 tests + 12 patterns. Still needs hardware run to fully close.
 
 ### Debt items still open
-None — all debt items (D-001 through D-019) remain CLOSED.
+- D-003: Needs real hardware run on HP machine (DESKTOP-RUDJGI6) with v2.0 harness
+- Server endpoint for artifact upload (/api/hw-test-artifact) not yet implemented
 
 ### Blockers
-- WSL2 missing GUI libraries — blocks Electron runtime testing (worked around by launching Windows exe via WSL interop).
-- Spare HP machine offline — blocks hardware verification of 9 enforcement paths (unchanged).
-
-### Test results
-- Agent: 482 tests pass
-- Dashboard: 82 tests pass
-- Worker: 40 tests pass
-- Server: 368 tests pass
-- Electron: 30 tests pass
-- Total: 1002 tests pass
-- Git: commit e082bee on master
-
-### Failure attribution
-No failures this session. All three workstreams completed in parallel without conflicts. The subagents worked on disjoint file sets (agent/Python, dashboard/React, worker/TypeScript) so there were no merge conflicts.
+- Physical HP hardware access required for remaining 2 items
 
 ### Next session opening
-All three workstreams are implemented, tested, and committed (e082bee). The next steps are: (a) test the enrollment flow end-to-end on a real Windows machine (generate token in dashboard, run installer with --token, verify device appears); (b) test the duress code on real hardware (unlock with duress, verify re-lock after 5 min); (c) test tamper protection on a machine with TPM (verify TPM sealing works); (d) build a new Windows installer with the updated agent binaries (now includes duress.py + tamper integration); (e) consider adding a "Change Worker URL" option in the Electron app settings.
+Run `python3 hw_test_harness.py --mode simulate` on HP machine (DESKTOP-RUDJGI6) to generate real hardware artifacts, then update GRAPH-SPEC enforcement path statuses from "verified-on-hardware (Azure)" to "verified-on-hardware (HP)".
+
+### Failure attribution
+No failures this session. All 1,050+ tests pass, lint clean, format clean.
 
 ---
 

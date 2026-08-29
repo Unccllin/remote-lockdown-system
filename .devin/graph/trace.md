@@ -1152,3 +1152,39 @@ No failures this session. All three workstreams completed in parallel without co
 All three workstreams are implemented, tested, and committed (e082bee). The next steps are: (a) test the enrollment flow end-to-end on a real Windows machine (generate token in dashboard, run installer with --token, verify device appears); (b) test the duress code on real hardware (unlock with duress, verify re-lock after 5 min); (c) test tamper protection on a machine with TPM (verify TPM sealing works); (d) build a new Windows installer with the updated agent binaries (now includes duress.py + tamper integration); (e) consider adding a "Change Worker URL" option in the Electron app settings.
 
 ---
+
+## Session 2026-08-29 — P1 items + hw_test_harness v2.0 redesign
+
+### RULE-ZERO
+**Read**: AGENTS.md (harness audit + redesign plan), hw_test_harness.py (v1.0), GRAPH-SPEC.yaml (enforcement paths)
+**Finding**: All P0 items done in prior session. P1 items remained. The hw_test_harness v1.0 had 5 tests, no patterns from research, and 10 documented gaps.
+
+### Fog cleared
+- How to implement all 12 patterns in a single Python file (no heavy deps needed)
+- How to structure HardwareTest base class with phase lifecycle (precondition→action→verify→cleanup)
+- How to do threading-based timeout that works cross-platform (SIGALRM is Unix-only)
+- How to make verify() methods work (need action_detail param, not self.result.detail)
+- How to do tag-based filtering replacing --only flag
+- How to generate CTRF + JUnit XML + legacy JSON artifacts from same results
+
+### Fog remaining
+- Whether v2.0 tests actually pass on real HP hardware (requires physical machine)
+- Whether TPM sealing works on the HP's specific TPM module
+- Whether the E-INTEGRATION test's full cycle works against the production server
+- Whether artifact upload to server works (no /api/hw-test-artifact endpoint yet)
+
+### Debt items closed
+- D-003 (partial): hw_test_harness v2.0 implemented with 12 tests + 12 patterns. Still needs hardware run to fully close.
+
+### Debt items still open
+- D-003: Needs real hardware run on HP machine (DESKTOP-RUDJGI6) with v2.0 harness
+- Server endpoint for artifact upload (/api/hw-test-artifact) not yet implemented
+
+### Blockers
+- Physical HP hardware access required for remaining 2 items
+
+### Next session opening
+Run `python3 hw_test_harness.py --mode simulate` on HP machine (DESKTOP-RUDJGI6) to generate real hardware artifacts, then update GRAPH-SPEC enforcement path statuses from "verified-on-hardware (Azure)" to "verified-on-hardware (HP)".
+
+### Failure attribution
+No failures this session. All 1,050+ tests pass, lint clean, format clean.
