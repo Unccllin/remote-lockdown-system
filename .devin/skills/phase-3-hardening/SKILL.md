@@ -1,4 +1,9 @@
-# Skill Domain: Phase 3 — Code Hardening & Security Review
+---
+name: phase-3-hardening
+description: Code hardening, security review, and edge-case test coverage for crypto, auth, and lock screen
+---
+
+# Phase 3 — Code Hardening & Security Review
 
 ## Context
 
@@ -9,131 +14,102 @@ functionality.
 
 ## Current State
 
-### Server
-- `server/src/routes/agent.js` (556 lines) — agent checkin, command ACK, key release
-- `server/src/routes/devices.js` (498 lines) — device CRUD, flag stolen, recover
-- `server/src/middleware/auth.js` — JWT auth with algorithm allowlist
-- `server/src/middleware/hmacAuth.js` (181 lines) — HMAC signing with replay protection
+### Server (hardened)
+- `server/src/routes/agent.js` — agent checkin, command ACK, key release
+- `server/src/routes/devices.js` — device CRUD, flag stolen, recover
+- `server/src/middleware/auth.js` — JWT auth with algorithm allowlist (rejects `none`)
+- `server/src/middleware/hmacAuth.js` — HMAC signing with replay protection (nonce cache with expiry)
 - `server/src/db/fieldCrypto.js` — AES-256-GCM field encryption
-- `server/src/db/apiKey.js` — per-device API key management
+- `server/src/db/apiKey.js` — per-device API key management with pepper
+- Rate limiting applied to auth and agent endpoints via `express-rate-limit`
+- `server/tests/security.test.js` — security test suite covering:
+  - JWT with `alg: none` rejected, expired tokens rejected
+  - HMAC replayed nonce rejected, stale timestamp rejected
+  - Rate limiting kicks in after threshold
+  - SQL injection attempts on all input params
+  - CORS headers correct (not `*` in production)
+  - Field encryption roundtrip, wrong key produces error
+  - API key pepper applied before hashing
+- `server/tests/sqli.regression.test.js` — SQL injection regression tests
 
-### Agent
-- `agent/agent.py` (1669 lines) — polling, encryption, lock screen, key management
-- `agent/hp_uefi_lockdown.py` (681 lines) — HP UEFI BIOS password
-- `agent/bcd_lockdown.py` — Windows BCD lockdown
-- `agent/offline_recovery.py` (167 lines) — offline recovery tool
+### Agent (hardened)
+- `agent/agent.py` — polling, encryption, lock screen, key management
+- `agent/hp_uefi_lockdown.py` — HP UEFI BIOS password (model-aware setting names)
+- `agent/bcd_lockdown.py` — Windows BCD lockdown (with BitLocker awareness)
+- `agent/offline_recovery.py` — offline recovery tool
+- `agent/tests/test_hardening.py` — agent hardening tests covering:
+  - Fernet key generation produces valid key
+  - Key wipe zeroes the bytearray
+  - Concurrent lockdown commands are idempotent
+  - Decryption with wrong key raises InvalidToken (not crash)
+  - Config validation: invalid SERVER_URL raises error, relative LOCKDOWN_FOLDER raises error
+  - Lock screen: agent process restart triggers watchdog
+  - File encryption: partial failure is tracked (blocked files reported)
+- Bare `pass` exception handlers replaced with logging
 
-## Research Findings
+### Crypto Edge Cases (all handled)
+1. Fernet key generation uses `Fernet.generate_key()` (not `os.urandom`)
+2. Key wipe uses `ctypes.memset` on `bytearray` (mutable) for secure zeroing
+3. Key sent over HTTPS via POST (not GET) — doesn't appear in logs
+4. Concurrent lockdown commands are idempotent (no double-encrypt)
+5. Decryption with wrong key raises `InvalidToken` — handled gracefully
 
-### Error Handling Patterns
-- Server routes use try/catch with Express error middleware
-- Agent uses try/except with logging but some exception handlers are bare `pass`
-- Key concern: **what happens when encryption fails mid-operation?**
-  - If Fernet encryption fails partway through LOCKDOWN_FOLDER, some files may be encrypted and others not
-  - The agent should track which files were encrypted and support resumption
-  - Current code: need to verify if partial-failure recovery exists
+## Verification
 
-### Crypto Edge Cases
-1. **Fernet key generation**: Must use `cryptography.fernet.Fernet.generate_key()` — NOT `os.urandom` base64
-2. **Key wipe**: After sending key to server, agent must securely wipe the local key copy. `del key` is insufficient — need `ctypes.memset` or similar to zero the memory
-3. **Key in transit**: Key is sent over HTTPS to server. Verify the agent endpoint uses POST (not GET) so key doesn't appear in logs
-4. **Concurrent lockdown commands**: If two lockdown commands arrive, agent must not double-encrypt. Check for idempotency
-5. **Decryption with wrong key**: If server releases wrong key, Fernet will raise `InvalidToken`. Agent must handle this gracefully
+```bash
+# Run server security tests
+cd server && npx jest tests/security.test.js --verbose
 
-### Auth Security
-1. **JWT algorithm**: `auth.js` has an algorithm allowlist — verify it rejects `none` algorithm
-2. **HMAC replay protection**: `hmacAuth.js` uses nonce cache — verify nonces expire properly
-3. **Rate limiting**: `express-rate-limit` is a dependency — verify it's applied to auth and agent endpoints
-4. **SQL injection**: `sqli.regression.test.js` exists — verify it covers all routes
-5. **CORS**: Verify `CORS_ORIGIN` is not `*` in production
+# Run agent hardening tests
+cd agent && python3 -m pytest tests/test_hardening.py -v
 
-### Input Validation
-- Device hostname is used in confirmation (must type hostname to confirm). Verify hostname is sanitized before display (XSS prevention in dashboard)
-- Agent config values: verify `SERVER_URL` is a valid URL, `LOCKDOWN_FOLDER` is an absolute path
-- File paths: verify no path traversal in agent's file operations
+# Run SQL injection regression tests
+cd server && npx jest tests/sqli.regression.test.js --verbose
 
-### Lock Screen Security
-- Agent applies a lock screen on lockdown. Verify:
-  1. The lock screen can't be bypassed by killing the agent process (watchdog should restart it)
-  2. The lock screen doesn't expose a way to open a terminal or file manager
-  3. On Linux, the lock screen mechanism (is it X11 lock? VT switch? Both?) is robust
+# Lint all components
+make lint
 
-## Reasoning Questions
+# Full verification sweep
+make full-verify
+```
 
-1. **Should we change the crypto implementation or just add tests?**
-   - Answer: Primarily add tests that verify edge cases. Only change code if tests reveal actual bugs. Changing crypto code without a clear bug introduces risk.
+## Regression checks
 
-2. **Should the key wipe use ctypes.memset or a simpler approach?**
-   - Answer: Use `cryptography.fernet.Fernet`'s built-in key object. When the Fernet object is garbage collected, the key bytes are freed. For explicit wipe, use `ctypes.memset` on the key string's buffer. But Python strings are immutable, so the key should be stored as a `bytearray` for mutable wiping.
+1. **Verify JWT rejects `none` algorithm**: `cd server && npx jest tests/security.test.js -t "none"`
+2. **Verify HMAC replay protection works**: `cd server && npx jest tests/security.test.js -t "replay"`
+3. **Verify rate limiting on agent endpoints**: `cd server && npx jest tests/security.test.js -t "rate"`
+4. **Verify Fernet key generation is correct**: `cd agent && python3 -m pytest tests/test_hardening.py -k "fernet" -v`
+5. **Verify key wipe zeroes bytearray**: `cd agent && python3 -m pytest tests/test_hardening.py -k "wipe" -v`
+6. **Verify no bare `pass` in exception handlers**: `grep -rn "except.*:" agent/*.py | grep -A1 "pass"` should show no bare pass
+7. **Verify CORS is not `*` in production**: `grep -r "CORS_ORIGIN" server/src/`
 
-3. **Should we add rate limiting to agent endpoints?**
-   - Answer: Yes, but with higher limits than auth endpoints. Agents poll every 30s, so limit to ~10 requests/minute per device. Use the device's API key as the rate limit key.
+## Gotchas
 
-4. **Should the security test file be separate or integrated into existing tests?**
-   - Answer: Separate file (`security.test.js`). Security tests have different concerns and should be runnable independently. They also serve as documentation of security requirements.
-
-5. **Should we fix the bare `pass` exception handlers in the agent?**
-   - Answer: Yes — replace with logging. Silent exception swallowing hides bugs. Each `pass` should become `logger.warning(...)` or `logger.error(...)` with the exception details.
-
-## Implementation Guidelines
-
-### server/tests/security.test.js
-Test cases:
-- JWT with `alg: none` is rejected
-- JWT with expired token is rejected
-- HMAC with replayed nonce is rejected
-- HMAC with stale timestamp is rejected
-- Rate limiting kicks in after threshold
-- SQL injection attempts on all input params
-- CORS headers correct (not `*` in production mode)
-- Field encryption: encrypt → decrypt roundtrip
-- Field encryption: wrong key produces error, not garbage
-- API key: pepper is applied before hashing
-
-### agent/tests/test_hardening.py
-Test cases:
-- Fernet key generation produces valid key
-- Key wipe zeroes the bytearray
-- Concurrent lockdown commands are idempotent
-- Decryption with wrong key raises InvalidToken (not crash)
-- Config validation: invalid SERVER_URL raises error
-- Config validation: relative LOCKDOWN_FOLDER raises error
-- Lock screen: agent process restart triggers watchdog
-- File encryption: partial failure is tracked
-
-### Code Fixes (only if tests reveal bugs)
-- Replace bare `pass` in exception handlers with logging
-- Add rate limiting to agent routes if missing
-- Sanitize hostname before dashboard display
-- Validate agent config on startup
-
-## File Boundaries
-- CREATE: `server/tests/security.test.js`, `agent/tests/test_hardening.py`
-- EDIT (targeted fixes only): `server/src/routes/agent.js`, `server/src/routes/devices.js`, `server/src/middleware/hmacAuth.js`, `agent/agent.py`
-- DO NOT REWRITE: any existing route logic, crypto implementation, or auth flow
-- DO NOT EDIT: `server/src/db/fieldCrypto.js`, `server/src/db/migrations/`, `agent/hp_uefi_lockdown.py`, `agent/bcd_lockdown.py`
+- Changing crypto code without a clear bug introduces risk — only change if tests reveal actual bugs
+- Python strings are immutable — key must be stored as `bytearray` for mutable wiping via `ctypes.memset`
+- Agent rate limits are higher than auth (agents poll every 30s, ~10 req/min per device)
+- Lock screen can't be bypassed by killing agent process — watchdog restarts it
 
 ## Graph Integration
 
-**Phase node**: `P3` in `.devin/graph/GRAPH-SPEC.yaml`
+**Phase node**: `P3` in `.devin/graph/GRAPH-SPEC.yaml` — status: COMPLETE
 
 This phase is part of the node graph — the center and heart of the project.
 Before working on this phase, an agent MUST:
 
 1. Read `.devin/graph/GRAPH-SPEC.yaml` — locate the `P3` node
-2. Read `.devin/graph/trace.md` — check last session's context
+2. Read `.devin/graph/current-state.md` — compact session state (read FIRST)
 3. Read `docs/adr/DEBT-LEDGER.md` — check for open debt items blocking this phase
 4. Complete RULE-ZERO (read this skill file + source code before coding)
-5. At session end, append a status block to `trace.md`
+5. At session end, append a status block to `trace.md` and run `make gen-state`
 
-**Verification nodes gating this phase**: V-SERVER,V-AGENT,V-LINT-SERVER,V-LINT-AGENT
+**Verification nodes gating this phase**: V-SERVER, V-AGENT, V-LINT-SERVER, V-LINT-AGENT
 
-**Enforcement paths touched by this phase**: E-ENCRYPT,E-DECRYPT,E-LOCK-SCREEN,E-GUARDIAN,E-BCD,E-HP-UEFI,E-ACK,E-RECOVERY,E-TRACK,E-DEADMAN
+**Enforcement paths touched by this phase**: E-ENCRYPT, E-DECRYPT, E-LOCK-SCREEN, E-GUARDIAN, E-BCD, E-HP-UEFI, E-ACK, E-RECOVERY, E-TRACK, E-DEADMAN
 
-**Debt items related to this phase**: D-007,D-008,D-009,D-010,D-011
+**Debt items related to this phase**: D-007 (CLOSED), D-008 (CLOSED), D-009 (CLOSED), D-010 (CLOSED), D-011 (CLOSED)
 
 **Graph invariants that apply**:
 - I1: Phase dependencies must be COMPLETE before this phase runs
 - I5: RULE-ZERO must be complete before any code changes
-- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref
-
+- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref (D-002 CLOSED)

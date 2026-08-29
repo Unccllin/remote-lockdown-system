@@ -1,3 +1,8 @@
+---
+name: memory
+description: 5-stage persistent agent memory. Use at session start (retrieve) and session end (capture) to remember across sessions.
+---
+
 # Memory Harness Skill
 
 ## When to Invoke
@@ -61,6 +66,18 @@ python3 scripts/memory.py capture \
 - `--impact`: why this matters — which decision, enforcement path, debt item,
   or phase this affects.
 - `--response`: what the relevant team/agent should consider next.
+
+Additional capture flags:
+- `--from-stdin`: read the session transcript from stdin instead of using CLI args. Useful for piping.
+- `--session-id <id>`: override the auto-generated session ID (e.g., `sess-028`).
+- `--environment`: repo, branch, key files (optional context).
+- `--duration`: approximate session duration (optional).
+- `--decisions`: decisions made and why (one per line).
+- `--actions`: actions taken and results (one per line).
+- `--worked`/`--failed`/`--unexpected`: free-text fields for what worked/failed/surprised.
+- `--questions`: open questions remaining (one per line).
+
+All writes are **atomic** — `scripts/memory.py` uses an `atomic_write()` helper that writes to a temp file then renames, preventing corruption from partial writes or concurrent access.
 
 ### Stage 2: CONSOLIDATE (every 5 sessions)
 
@@ -138,6 +155,14 @@ statuses auto-create the appropriate edges.
 ```bash
 python3 scripts/memory.py decay
 ```
+
+### INIT (first-time setup)
+
+```bash
+python3 scripts/memory.py init
+```
+
+Creates the `.devin/memory/` directory structure (raw/, consolidated/, decayed/, index.md). Run once when setting up the project. No-op if already initialized.
 
 ### CLEANUP (after consolidation, or when duplicates are detected)
 

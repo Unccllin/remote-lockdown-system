@@ -1,94 +1,115 @@
-# Skill Domain: Phase 12 — Docker Compose Validation
+---
+name: phase-12-docker
+description: Docker Compose validation, test compose file, and production deployment documentation
+---
+
+# Phase 12 — Docker Compose Validation
 
 ## Context
-docker-compose.prod.yml exists for production deployment but has never been tested end-to-end. Secrets files don't exist, Caddy config is untested, and the full stack (Postgres + server + Caddy) hasn't been validated.
+
+docker-compose.prod.yml exists for production deployment. This phase validates
+the full stack (Postgres + server + Caddy) and provides deployment documentation.
 
 ## Current State
-- docker-compose.prod.yml — Postgres + server + Caddy
-- docker-compose.yml — dev/test with Docker secrets
-- .env.prod.example — production env template
-- Caddyfile — Caddy reverse proxy config
-- Dockerfile.server — server image
-- scripts/generate-secrets.sh — generates secrets (Phase 1)
 
-## Research Findings
+### Docker Files
+- `docker-compose.prod.yml` — Postgres + server + Caddy production stack
+- `docker-compose.yml` — dev/test with Docker secrets
+- `docker-compose.test.yml` — test-specific compose file (SQLite mode, no Postgres, no Caddy, port 3001)
+- `.env.prod.example` — production env template
+- `Caddyfile` — Caddy reverse proxy config (auto-HTTPS)
+- `Dockerfile.server` — server image (builds and copies dashboard/dist, serves static + SPA fallback)
+
+### Validation Script
+- `scripts/validate-docker.sh` — comprehensive Docker validation
+  - `--config` — validate compose file syntax (`docker compose config` if available)
+  - `--env` — validate all required env vars are present in .env.prod
+  - `--caddy` — validate Caddyfile syntax
+  - `--dockerfile` — validate Dockerfile syntax (hadolint if available)
+  - `--live` — actually start stack, health check, clean up (requires Docker)
+  - `--all` — run all checks
+  - Exit 0 if all pass, 1 if any fail
+  - Uses `--env-file .env.prod` for Docker Compose (required — Docker Compose only auto-loads `.env`, not `.env.prod`)
+
+### Deployment Documentation
+- `docs/DEPLOYMENT.md` — step-by-step production deployment guide
+  - Prerequisites (Docker, domain, DNS)
+  - Secret generation
+  - Docker compose commands (with `--env-file .env.prod`)
+  - Health verification
+  - Troubleshooting
+
 ### Docker Compose Prod Stack
 - PostgreSQL 14+ with volume
 - Node.js server (Dockerfile.server)
 - Caddy for auto-HTTPS + reverse proxy
 - Secrets via Docker secrets or env vars
+- `DB_SSL: "false"` for internal network (no SSL on docker-compose internal network)
 
-### Validation Steps
-1. Generate secrets using scripts/generate-secrets.sh
-2. Create .env.prod from .env.prod.example
-3. `docker compose -f docker-compose.prod.yml config` — validate compose syntax
-4. `docker compose -f docker-compose.prod.yml up -d` — start stack
-5. Verify health: `curl http://localhost/health`
-6. Create admin: `POST /api/setup/create-admin`
-7. Login, enroll device, verify API works
-8. `docker compose -f docker-compose.prod.yml down` — clean shutdown
+## Verification
 
-### Test Script Design
-- Can't run actual Docker in this environment
-- But CAN validate: compose file syntax, env var completeness, Caddyfile syntax, Dockerfile syntax
-- Create a validation script that checks everything except actual Docker execution
+```bash
+# Validate Docker config (all checks)
+scripts/validate-docker.sh --all
 
-## Reasoning Questions
-1. **Should the test script actually run Docker?**
-   - Answer: No — Docker may not be available. The script should validate config files and optionally run Docker if available (`--live` flag).
+# Validate individual aspects
+scripts/validate-docker.sh --config
+scripts/validate-docker.sh --env
+scripts/validate-docker.sh --caddy
+scripts/validate-docker.sh --dockerfile
 
-2. **Should we add a docker-compose.test.yml?**
-   - Answer: Yes — a test-specific compose file that uses SQLite instead of Postgres, no Caddy, just the server. For quick local validation.
+# Live validation (requires Docker running)
+scripts/validate-docker.sh --live
 
-## Implementation Guidelines
-### scripts/validate-docker.sh
-- `--config` — validate compose file syntax (`docker compose config` if available)
-- `--env` — validate all required env vars are present in .env.prod
-- `--caddy` — validate Caddyfile syntax
-- `--dockerfile` — validate Dockerfile syntax (hadolint if available)
-- `--live` — actually start stack, health check, clean up (requires Docker)
-- `--all` — run all checks
-- Exit 0 if all pass, 1 if any fail
+# Verify test compose file exists
+ls docker-compose.test.yml
 
-### docker-compose.test.yml
-- Just the server with SQLite mode
-- No Postgres, no Caddy
-- For quick local testing
-- Maps port 3001
+# Verify deployment docs exist
+ls docs/DEPLOYMENT.md
 
-### docs/DEPLOYMENT.md
-- Step-by-step production deployment guide
-- Prerequisites (Docker, domain, DNS)
-- Secret generation
-- Docker compose commands
-- Health verification
-- Troubleshooting
+# Full environment verification (includes Docker validation)
+make verify-env
 
-## File Boundaries
-- CREATE: `scripts/validate-docker.sh`, `docker-compose.test.yml`, `docs/DEPLOYMENT.md`
-- DO NOT EDIT: `docker-compose.prod.yml`, `docker-compose.yml`, `Caddyfile`, `Dockerfile.server`
+# Full verification sweep
+make full-verify
+```
+
+## Regression checks
+
+1. **Verify validate-docker.sh supports --live flag**: `grep -c "\-\-live" scripts/validate-docker.sh`
+2. **Verify docker-compose.test.yml uses SQLite (no Postgres)**: `grep -i "sqlite\|postgres" docker-compose.test.yml`
+3. **Validate compose file syntax**: `docker compose -f docker-compose.prod.yml config --quiet 2>/dev/null || echo "Docker not available"`
+4. **Verify --env-file .env.prod is documented**: `grep -r "env-file.*env.prod" scripts/validate-docker.sh docs/DEPLOYMENT.md`
+5. **Verify DB_SSL=false is set in prod compose**: `grep "DB_SSL" docker-compose.prod.yml`
+
+## Gotchas
+
+- Docker Compose only auto-loads `.env`, NOT `.env.prod` — must use `--env-file .env.prod` explicitly
+- `DB_SSL_VERIFY=false` still negotiated SSL — `DB_SSL=false` disables SSL entirely (needed for docker-compose internal network with no SSL)
+- `Dockerfile.server` builds and copies `dashboard/dist` into the image — server serves both API (`/api/*`) and built dashboard (static files + SPA fallback)
+- Caddyfile and `Dockerfile.server` are NOT YAML — do not YAML-validate them
+- `validate-docker.sh` validates config files and optionally runs Docker if available (`--live` flag)
 
 ## Graph Integration
 
-**Phase node**: `P12` in `.devin/graph/GRAPH-SPEC.yaml`
+**Phase node**: `P12` in `.devin/graph/GRAPH-SPEC.yaml` — status: COMPLETE
 
 This phase is part of the node graph — the center and heart of the project.
 Before working on this phase, an agent MUST:
 
 1. Read `.devin/graph/GRAPH-SPEC.yaml` — locate the `P12` node
-2. Read `.devin/graph/trace.md` — check last session's context
+2. Read `.devin/graph/current-state.md` — compact session state (read FIRST)
 3. Read `docs/adr/DEBT-LEDGER.md` — check for open debt items blocking this phase
 4. Complete RULE-ZERO (read this skill file + source code before coding)
-5. At session end, append a status block to `trace.md`
+5. At session end, append a status block to `trace.md` and run `make gen-state`
 
 **Verification nodes gating this phase**: V-DOCKER
 
 **Enforcement paths touched by this phase**: —
 
-**Debt items related to this phase**: —
+**Debt items related to this phase**: — (none)
 
 **Graph invariants that apply**:
 - I1: Phase dependencies must be COMPLETE before this phase runs
 - I5: RULE-ZERO must be complete before any code changes
-- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref
-
+- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref (D-002 CLOSED)

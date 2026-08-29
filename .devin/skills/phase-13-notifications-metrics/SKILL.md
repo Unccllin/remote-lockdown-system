@@ -1,128 +1,130 @@
-# Skill Domain: Phase 13 — Notifications, Metrics & Alerting
+---
+name: phase-13-notifications-metrics
+description: Webhook/email notifications, Prometheus metrics endpoint, and alert scheduler
+---
+
+# Phase 13 — Notifications, Metrics & Alerting
 
 ## Context
+
 Phase 6 added basic health endpoints and dashboard alerts. This phase adds:
 1. Webhook/email notifications for critical events (stale agents, lockdown, health degradation)
 2. Prometheus-compatible metrics endpoint for external monitoring
 
 ## Current State
-- server/src/routes/health.js — health endpoints (liveness, readiness, detailed)
-- dashboard/src/pages/HealthPage.jsx — health dashboard
-- server/src/jobs/retentionScheduler.js — scheduled cleanup job
-- No notification system (alerts only visible in dashboard)
-- No Prometheus metrics endpoint
 
-## Research Findings
 ### Notification System
-- Events that should trigger notifications:
-  1. Device goes stale (no checkin > 2x poll interval)
-  2. Device flagged as stolen
-  3. Lockdown confirmed by agent
-  4. Recovery completed
-  5. Server health degraded (DB down)
-  6. Dead man's switch triggered
-
-- Notification channels:
-  1. Webhook (generic HTTP POST with JSON payload)
-  2. Email (via SMTP or transactional email service)
-  3. Slack incoming webhook (specialized webhook format)
-
+- `server/src/notifications/notify.js` — async notification module
+  - `sendNotification(eventType, payload)` — async, fire-and-forget
+  - Checks configured channels (webhook, email, Slack)
+  - Webhook: HTTP POST with JSON `{eventType, timestamp, payload}`
+  - Email: nodemailer with template
+  - Slack: formatted message to Slack webhook
+  - Logs errors but never throws
 - Config via env vars:
   - `NOTIFICATION_WEBHOOK_URL` — generic webhook
   - `NOTIFICATION_EMAIL_*` — SMTP config (host, port, user, pass, from, to)
   - `SLACK_WEBHOOK_URL` — Slack-specific
+- Notifications degrade gracefully if not configured
+
+### Events That Trigger Notifications
+1. Device goes stale (no checkin > 2x poll interval)
+2. Device flagged as stolen
+3. Lockdown confirmed by agent
+4. Recovery completed
+5. Server health degraded (DB down)
+6. Dead man's switch triggered
 
 ### Prometheus Metrics
-- Endpoint: `GET /metrics` (no auth, standard Prometheus scrape target)
-- Format: OpenMetrics/Prometheus text format
-- Metrics to expose:
-  - `lockdown_devices_total{status="active|stolen|locked|recovering"}` — gauge
-  - `lockdown_commands_pending_total` — gauge
-  - `lockdown_commands_completed_total` — counter
-  - `lockdown_agent_checkins_total` — counter
-  - `lockdown_db_query_duration_seconds` — histogram
-  - `lockdown_uptime_seconds` — gauge
-  - `lockdown_stale_devices_total` — gauge
-  - `lockdown_health_status{component="db|server"}` — gauge (0/1)
-
-- Use `prom-client` npm package (standard Prometheus client for Node.js)
+- `server/src/routes/metrics.js` — Prometheus metrics endpoint
+  - `GET /metrics` (no auth, standard Prometheus scrape target, outside API auth layer)
+  - Uses `prom-client` Registry
+  - Custom metrics:
+    - `lockdown_devices_total{status="active|stolen|locked|recovering"}` — gauge
+    - `lockdown_commands_pending_total` — gauge
+    - `lockdown_commands_completed_total` — counter
+    - `lockdown_agent_checkins_total` — counter
+    - `lockdown_db_query_duration_seconds` — histogram
+    - `lockdown_uptime_seconds` — gauge
+    - `lockdown_stale_devices_total` — gauge
+    - `lockdown_health_status{component="db|server"}` — gauge (0/1)
+  - Collects metrics on each request (gauge queries)
 
 ### Alert Scheduler
-- Reuse the retentionScheduler pattern
-- New `alertScheduler.js` that runs every 60s
-- Checks for stale devices, writes to audit_log with `event_type='health_alert'`
-- Fires notifications via notification module
+- `server/src/jobs/alertScheduler.js` — runs every 60s
+  - Queries for stale devices (>2x poll interval)
+  - Creates audit_log entries for new stale devices (`event_type='health_alert'`)
+  - Fires notifications for new alerts
+  - Reuses the retentionScheduler pattern
 
-## Reasoning Questions
-1. **Should notifications be sync or async?**
-   - Answer: Async. Notifications should not block the request. Use `setImmediate` or a simple queue. Don't add a heavy queue dependency — a simple async fire-and-forget with error logging is sufficient.
+### Server Integration
+- `server/src/index.js` — registers metrics route (`app.use('/metrics', metricsRoutes)`, outside auth) + starts alertScheduler
 
-2. **Should we use prom-client or hand-roll the metrics?**
-   - Answer: `prom-client`. It handles proper formatting, registry, and standard metrics (process, GC). It's the standard for Node.js Prometheus integration.
+### Tests
+- `server/tests/notifications.test.js` — tests notification module with mock webhook, alert scheduler detects stale devices
+- `server/tests/metrics.test.js` — tests metrics endpoint returns valid Prometheus format
 
-3. **Should email notifications require extra dependencies?**
-   - Answer: Use `nodemailer` for SMTP. It's the standard Node.js email library. Add as optional dependency — notifications degrade gracefully if not configured.
+## Verification
 
-4. **Should metrics endpoint require auth?**
-   - Answer: No. Prometheus scrapes endpoints without auth. Standard practice. Put it on a separate path `/metrics` (not `/api/metrics`) to keep it outside the API auth layer.
+```bash
+# Run notification tests
+cd server && npx jest tests/notifications.test.js --verbose
 
-## Implementation Guidelines
-### server/src/routes/metrics.js
-- `GET /metrics` — Prometheus text format
-- Use prom-client Registry
-- Register custom metrics (device counts, command counts, etc.)
-- Collect metrics on each request (gauge queries)
+# Run metrics tests
+cd server && npx jest tests/metrics.test.js --verbose
 
-### server/src/notifications/notify.js
-- `sendNotification(eventType, payload)` — async, fire-and-forget
-- Checks configured channels (webhook, email, Slack)
-- Webhook: HTTP POST with JSON `{eventType, timestamp, payload}`
-- Email: nodemailer with template
-- Slack: formatted message to Slack webhook
-- Logs errors but never throws
+# Verify metrics route is registered (outside auth)
+grep -n "metrics" server/src/index.js
 
-### server/src/jobs/alertScheduler.js
-- Runs every 60s
-- Queries for stale devices (>2x poll interval)
-- Creates audit_log entries for new stale devices
-- Fires notifications for new alerts
+# Verify notification module exists
+ls server/src/notifications/notify.js
 
-### server/src/index.js (minimal edit)
-- Register metrics route: `app.use('/metrics', metricsRoutes)` (outside auth)
-- Start alertScheduler
+# Verify alert scheduler exists
+ls server/src/jobs/alertScheduler.js
 
-### server/tests/notifications.test.js
-- Test notification module with mock webhook
-- Test alert scheduler detects stale devices
-- Test metrics endpoint returns valid Prometheus format
+# Verify prom-client is a dependency
+grep "prom-client" server/package.json
 
-## File Boundaries
-- CREATE: `server/src/routes/metrics.js`, `server/src/notifications/notify.js`, `server/src/jobs/alertScheduler.js`, `server/tests/notifications.test.js`, `server/tests/metrics.test.js`
-- EDIT: `server/src/index.js` (register metrics route + start scheduler — 3 lines)
-- EDIT: `server/package.json` (add `prom-client` and `nodemailer` deps)
-- DO NOT EDIT: existing routes, health.js, dashboard pages
+# Full verification sweep
+make full-verify
+```
+
+## Regression checks
+
+1. **Verify notifications are async (fire-and-forget)**: `grep -i "setImmediate\|async\|fire" server/src/notifications/notify.js`
+2. **Verify metrics endpoint requires NO auth**: `grep -i "metrics" server/src/index.js` (should be outside auth middleware)
+3. **Verify alert scheduler runs every 60s**: `grep -i "60000\|60.*sec\|interval" server/src/jobs/alertScheduler.js`
+4. **Verify notifications degrade gracefully if not configured**: `grep -i "not configured\|graceful\|skip" server/src/notifications/notify.js`
+5. **Verify metrics are in Prometheus text format**: `cd server && npx jest tests/metrics.test.js -t "prometheus"`
+
+## Gotchas
+
+- Notifications are async (fire-and-forget) — use `setImmediate` or simple queue, not a heavy queue dependency
+- `/metrics` endpoint is on a separate path (not `/api/metrics`) to keep it outside the API auth layer — Prometheus scrapes without auth
+- `prom-client` handles proper formatting, registry, and standard metrics (process, GC) — don't hand-roll
+- `nodemailer` is an optional dependency — notifications degrade gracefully if not configured
+- Alert scheduler reuses the `retentionScheduler.js` pattern (setInterval within server process)
 
 ## Graph Integration
 
-**Phase node**: `P13` in `.devin/graph/GRAPH-SPEC.yaml`
+**Phase node**: `P13` in `.devin/graph/GRAPH-SPEC.yaml` — status: COMPLETE
 
 This phase is part of the node graph — the center and heart of the project.
 Before working on this phase, an agent MUST:
 
 1. Read `.devin/graph/GRAPH-SPEC.yaml` — locate the `P13` node
-2. Read `.devin/graph/trace.md` — check last session's context
+2. Read `.devin/graph/current-state.md` — compact session state (read FIRST)
 3. Read `docs/adr/DEBT-LEDGER.md` — check for open debt items blocking this phase
 4. Complete RULE-ZERO (read this skill file + source code before coding)
-5. At session end, append a status block to `trace.md`
+5. At session end, append a status block to `trace.md` and run `make gen-state`
 
-**Verification nodes gating this phase**: V-SERVER,V-DASHBOARD
+**Verification nodes gating this phase**: V-SERVER, V-DASHBOARD
 
 **Enforcement paths touched by this phase**: —
 
-**Debt items related to this phase**: —
+**Debt items related to this phase**: — (none)
 
 **Graph invariants that apply**:
 - I1: Phase dependencies must be COMPLETE before this phase runs
 - I5: RULE-ZERO must be complete before any code changes
-- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref
-
+- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref (D-002 CLOSED)

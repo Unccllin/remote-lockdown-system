@@ -1,17 +1,46 @@
-# Skill Domain: Phase 9 — Agent Integration E2E
+---
+name: phase-9-agent-e2e
+description: Agent integration E2E tests that spawn the real Python agent process against a test server
+---
+
+# Phase 9 — Agent Integration E2E
 
 ## Context
-Phase 7 created API-level E2E tests (supertest against Express, no real agent). This phase adds integration tests that spawn the real Python agent process against a test server, verifying actual encryption, lock screen, and key management.
+
+Phase 7 created API-level E2E tests (supertest against Express, no real agent).
+This phase adds integration tests that spawn the real Python agent process
+against a test server, verifying actual encryption, lock screen, and key
+management.
 
 ## Current State
-- tests/e2e/setup.js — starts Express with SQLite, provides API helpers
-- tests/e2e/lockdown-flow.test.js — API-level lockdown test (no real agent)
-- tests/e2e/recovery-flow.test.js — API-level recovery test (no real agent)
-- agent/agent.py — full agent implementation (1669 lines)
-- agent/config.ini.example — config template
 
-## Research Findings
-### Agent Process Testing Strategy
+### Agent Integration Test Infrastructure
+- `tests/e2e/agent-helpers.js` — helper functions for agent process management
+  - `startTestServer()` — starts Express on random port, returns `{url, cleanup}`
+  - `createAgentConfig(serverUrl, apiKey, hostname, lockdownFolder)` — writes temp config.ini
+  - `startAgent(configPath)` — spawns `python3 agent/agent.py`, returns `{process, cleanup}`
+  - `waitForCondition(checkFn, timeoutMs, intervalMs)` — polling helper
+  - `createTestLockdownFolder()` — creates temp dir with test files, returns `{path, files, cleanup}`
+- `tests/e2e/agent-integration.test.js` — Jest test that spawns Python agent
+  - Test: agent checks in to server
+  - Test: lockdown encrypts LOCKDOWN_FOLDER files (verifies actual encryption)
+  - Test: recovery decrypts LOCKDOWN_FOLDER files (verifies actual decryption)
+  - Test: agent reconnects after server restart
+  - Skips all tests if Python/cryptography not available
+- `scripts/run-e2e.sh` — updated with `--agent-integration` flag
+
+### Agent Config for Testing
+```ini
+[agent]
+server_url = http://localhost:TEST_PORT
+agent_key = TEST_DEVICE_API_KEY
+hostname = test-device-001
+lockdown_folder = /tmp/test-lockdown-XXXX
+poll_interval = 2
+verify_tls = false
+```
+
+### Test Flow (12 steps)
 1. Start test Express server on a real port (not supertest in-process)
 2. Create a temp LOCKDOWN_FOLDER with test files
 3. Generate agent config.ini pointing to test server
@@ -25,84 +54,61 @@ Phase 7 created API-level E2E tests (supertest against Express, no real agent). 
 11. Verify LOCKDOWN_FOLDER files are decrypted (can read original content)
 12. Kill agent subprocess, clean up
 
-### Challenges
-- Agent needs Python + dependencies (cryptography, requests) installed
-- Agent polling interval is 30s by default — tests would be slow
-- Solution: set POLL_INTERVAL=2 in test config for fast tests
-- Agent needs to run as non-root for testing (lock screen may need root)
-- Solution: use `--dry-run` mode if agent supports it, or test without lock screen
-- Read agent/agent.py to find if there's a dry-run/test mode
+## Verification
 
-### Agent Config for Testing
-```ini
-[agent]
-server_url = http://localhost:TEST_PORT
-agent_key = TEST_DEVICE_API_KEY
-hostname = test-device-001
-lockdown_folder = /tmp/test-lockdown-XXXX
-poll_interval = 2
-verify_tls = false
+```bash
+# Run agent integration E2E tests
+make test-e2e
+
+# Run with verbose output
+scripts/run-e2e.sh --agent-integration --verbose
+
+# Verify agent helpers exist
+ls tests/e2e/agent-helpers.js tests/e2e/agent-integration.test.js
+
+# Verify run-e2e.sh supports --agent-integration flag
+grep "agent-integration" scripts/run-e2e.sh
+
+# Full verification sweep (includes E2E)
+make full-verify
 ```
 
-### Test File Structure
-- tests/e2e/agent-integration.test.js — Jest test that spawns Python agent
-- tests/e2e/agent-helpers.js — helper functions for agent process management
-- May need to skip tests if Python/cryptography not available
+## Regression checks
 
-## Reasoning Questions
-1. **Should tests skip if Python not available?**
-   - Answer: Yes. Use `beforeAll` to check `python3 --version` and `python3 -c "import cryptography, requests"`. If missing, `test.skip` with message.
+1. **Verify tests skip if Python not available**: `grep -c "skip\|python3.*version\|import cryptography" tests/e2e/agent-integration.test.js`
+2. **Verify tests use polling with timeout (not fixed sleep)**: `grep -c "waitForCondition\|poll\|timeout" tests/e2e/agent-helpers.js`
+3. **Verify lock screen is NOT tested (requires root/display)**: `grep -i "lock.screen\|lock_screen" tests/e2e/agent-integration.test.js` (should show skip or exclusion)
+4. **Verify tests use Python script (not binary)**: `grep "python3.*agent.py" tests/e2e/agent-helpers.js`
+5. **Verify POLL_INTERVAL=2 for fast tests**: `grep "poll_interval" tests/e2e/agent-helpers.js`
 
-2. **How long should tests wait for agent actions?**
-   - Answer: Use polling with timeout. Max 30s timeout per action (poll every 500ms). With POLL_INTERVAL=2, agent should process commands within 4-6s.
+## Gotchas
 
-3. **Should lock screen be tested?**
-   - Answer: No — lock screen requires root/display access. Test encryption and key management only. Lock screen is verified manually per docs/E2E_TEST.md.
-
-4. **Should tests use the agent binary or Python script?**
-   - Answer: Python script (`python3 agent/agent.py`). Binary may not be built. Script tests the same code.
-
-## Implementation Guidelines
-### tests/e2e/agent-helpers.js
-- `startTestServer()` — start Express on random port, return {url, cleanup}
-- `createAgentConfig(serverUrl, apiKey, hostname, lockdownFolder)` — write temp config.ini
-- `startAgent(configPath)` — spawn python3 agent/agent.py, return {process, cleanup}
-- `waitForCondition(checkFn, timeoutMs, intervalMs)` — polling helper
-- `createTestLockdownFolder()` — create temp dir with test files, return {path, files, cleanup}
-
-### tests/e2e/agent-integration.test.js
-- Test: agent checks in to server
-- Test: lockdown encrypts LOCKDOWN_FOLDER files
-- Test: recovery decrypts LOCKDOWN_FOLDER files
-- Test: agent reconnects after server restart (if feasible)
-- Skip all if Python/cryptography not available
-
-## File Boundaries
-- CREATE: `tests/e2e/agent-helpers.js`, `tests/e2e/agent-integration.test.js`
-- EDIT: `scripts/run-e2e.sh` (add `--agent-integration` flag)
-- DO NOT EDIT: agent/agent.py, existing E2E test files, server source
+- Agent needs Python + dependencies (cryptography, requests) installed — tests skip gracefully if missing
+- Agent polling interval is set to 2s in test config (default 30s would make tests too slow)
+- Lock screen is NOT tested (requires root/display access) — verified manually per docs/E2E_TEST.md
+- Tests use the Python script (`python3 agent/agent.py`), not the PyInstaller binary — binary testing happens in CI (release.yml)
+- Max 30s timeout per action (poll every 500ms) — with POLL_INTERVAL=2, agent should process commands within 4-6s
 
 ## Graph Integration
 
-**Phase node**: `P9` in `.devin/graph/GRAPH-SPEC.yaml`
+**Phase node**: `P9` in `.devin/graph/GRAPH-SPEC.yaml` — status: COMPLETE
 
 This phase is part of the node graph — the center and heart of the project.
 Before working on this phase, an agent MUST:
 
 1. Read `.devin/graph/GRAPH-SPEC.yaml` — locate the `P9` node
-2. Read `.devin/graph/trace.md` — check last session's context
+2. Read `.devin/graph/current-state.md` — compact session state (read FIRST)
 3. Read `docs/adr/DEBT-LEDGER.md` — check for open debt items blocking this phase
 4. Complete RULE-ZERO (read this skill file + source code before coding)
-5. At session end, append a status block to `trace.md`
+5. At session end, append a status block to `trace.md` and run `make gen-state`
 
-**Verification nodes gating this phase**: V-SERVER,V-AGENT
+**Verification nodes gating this phase**: V-SERVER, V-AGENT
 
-**Enforcement paths touched by this phase**: E-ENCRYPT,E-ACK,E-RECOVERY,E-OFFLINE-QUEUE
+**Enforcement paths touched by this phase**: E-ENCRYPT, E-ACK, E-RECOVERY, E-OFFLINE-QUEUE
 
-**Debt items related to this phase**: D-003
+**Debt items related to this phase**: D-003 (CLOSED — hardware test harness built and verified on Azure Windows VM)
 
 **Graph invariants that apply**:
 - I1: Phase dependencies must be COMPLETE before this phase runs
 - I5: RULE-ZERO must be complete before any code changes
-- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref
-
+- I7: If this phase is COMPLETE, its `.complete` file must have a commit hash + artifact ref (D-002 CLOSED)

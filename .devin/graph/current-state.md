@@ -54,8 +54,10 @@
 ## Latest session: 2026-08-29 — Fresh improvement audit + all doable items
 
 ### RULE-ZERO
-**Read**: GRAPH-SPEC.yaml (enforcement path statuses), DEBT-LEDGER.md (open items), server/src/routes/ (missing endpoints), dashboard/src/pages/ (untested pages), agent/*.py (untested modules), .github/workflows/ci.yml (missing CI gates)
-**Finding**: 10 improvement areas identified. 8 doable without hardware, 2 require HP machine.
+- **Read**: GRAPH-SPEC.yaml (enforcement path statuses), DEBT-LEDGER.md (open items)
+- **Read**: server/src/routes/ (missing endpoints), dashboard/src/pages/ (untested pages), agent/*.py (untested modules)
+- **Read**: .github/workflows/ci.yml (missing CI gates)
+- **Finding**: 10 improvement areas identified. 8 doable without hardware, 2 require HP machine.
 
 ### Fog cleared
 - How to implement hw-test-artifact endpoint (CTRF + legacy format support, device association by hostname)

@@ -340,13 +340,13 @@ verification_nodes:
 
   - id: V-SYNTAX-SWEEP
     name: js-syntax-sweep
-    command: "find server/src electron -name '*.js' | grep -v node_modules | xargs -I{} node --check {}"
+    command: "find server/src electron -name '*.js' -o -name '*.cjs' | grep -v node_modules | xargs -I{} node --check {}"
     expected_exit: 0
     component: C-SERVER
 
   - id: V-SHELL-SYNTAX
     name: shell-syntax-check
-    command: "bash -n scripts/*.sh"
+    command: "bash -n scripts/*.sh && bash -n .devin/orchestration/orchestrator.sh"
     expected_exit: 0
     component: C-SERVER
 
@@ -371,15 +371,17 @@ verification_nodes:
 
   - id: V-HW-HARNESS
     name: hardware-test-harness
-    command: "cd agent && python3 hw_test_harness.py --dry-run"
+    command: "cd agent && python3 hw_test_harness.py --mode dry-run"
     expected_exit: 0
     expected_output_contains: "Summary"
     component: C-AGENT
     notes: >
-      D-003: Hardware-in-the-loop test harness. Dry-run mode verifies the
-      harness runs and generates an artifact. Full mode (without --dry-run)
-      executes real enforcement paths on Windows/HP hardware. On non-Windows,
-      all tests are gracefully skipped.
+      D-003 (CLOSED): Hardware-in-the-loop test harness v2.0. Dry-run mode
+      (--mode dry-run) verifies the harness runs and generates an artifact.
+      Check mode (--mode check) verifies environment without executing tests.
+      Simulate mode (--mode simulate) executes real enforcement paths on
+      Windows/HP hardware. On non-Windows, all tests are gracefully skipped.
+      Use --upload <server-url> to POST artifacts to /api/hw-test-artifact.
 
 # ---------------------------------------------------------------------------
 # ENFORCEMENT PATH NODES
