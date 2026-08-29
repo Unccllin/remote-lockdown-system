@@ -20,6 +20,7 @@ const setupRoutes = require('./routes/setup');
 const healthRoutes = require('./routes/health');
 const metricsRoutes = require('./routes/metrics');
 const adminsRoutes = require('./routes/admins');
+const hwTestArtifactRoutes = require('./routes/hwTestArtifact');
 const { startAlertScheduler } = require('./jobs/alertScheduler');
 
 const app = express();
@@ -120,6 +121,7 @@ app.use('/api/installer', dashboardLimiter, installerRoutes);
 app.use('/api/health', healthRoutes); // No rate limit — health checks
 app.use('/metrics', metricsRoutes);    // No rate limit — Prometheus scraping
 app.use('/api/admins', dashboardLimiter, adminsRoutes);
+app.use('/api/hw-test-artifact', dashboardLimiter, hwTestArtifactRoutes);
 
 app.get('/api/health', async (req, res) => {
   // FA6: Extended health check — DB probe + scheduler status

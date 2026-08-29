@@ -9,18 +9,18 @@ the full server/agent flow. Useful for verifying that:
 
 Usage:
   # Real mode (run as Administrator on the HP machine):
-  python test_boot_lockdown.py status       — check current state
-  python test_boot_lockdown.py bcd-lock     — apply BCD lockdown only
-  python test_boot_lockdown.py bcd-unlock   — remove BCD lockdown
-  python test_boot_lockdown.py uefi-lock    — apply UEFI lockdown (HP only)
-  python test_boot_lockdown.py uefi-unlock  — remove UEFI lockdown
-  python test_boot_lockdown.py full-lock    — apply both (like real lockdown)
-  python test_boot_lockdown.py full-unlock  — remove both
+  python boot_lockdown_test_runner.py status       — check current state
+  python boot_lockdown_test_runner.py bcd-lock     — apply BCD lockdown only
+  python boot_lockdown_test_runner.py bcd-unlock   — remove BCD lockdown
+  python boot_lockdown_test_runner.py uefi-lock    — apply UEFI lockdown (HP only)
+  python boot_lockdown_test_runner.py uefi-unlock  — remove UEFI lockdown
+  python boot_lockdown_test_runner.py full-lock    — apply both (like real lockdown)
+  python boot_lockdown_test_runner.py full-unlock  — remove both
 
   # Dry-run mode (safe — no actual BIOS/BCD changes, works on any OS):
-  python test_boot_lockdown.py --dry-run status
-  python test_boot_lockdown.py --dry-run full-lock
-  python test_boot_lockdown.py --dry-run full-unlock
+  python boot_lockdown_test_runner.py --dry-run status
+  python boot_lockdown_test_runner.py --dry-run full-lock
+  python boot_lockdown_test_runner.py --dry-run full-unlock
 
 IMPORTANT: In real mode, run as Administrator. BCD and BIOS changes require elevation.
 """

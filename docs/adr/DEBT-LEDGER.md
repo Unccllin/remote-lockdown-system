@@ -332,6 +332,30 @@
 
 ---
 
+### D-020 — No server endpoint for hardware test artifact upload
+- **Status**: CLOSED
+- **Commit ref**: 2026-08-29 session
+- **Artifact ref**: `server/src/routes/hwTestArtifact.js` — POST/GET endpoint;
+  `server/tests/hwTestArtifact.routes.test.js` — 15 tests pass;
+  `server/src/db/migrations/010_hw_test_artifacts.sql` — table migration
+- **Close criteria met**: The hw_test_harness v2.0 `--upload` flag now has a
+  receiving endpoint at `POST /api/hw-test-artifact`. Accepts both CTRF and
+  legacy artifact formats, stores in `hw_test_artifacts` table, associates
+  with device by hostname, logs to audit trail.
+
+### D-021 — Missing CI gates for electron, serverless, scripts, hw harness
+- **Status**: CLOSED
+- **Commit ref**: 2026-08-29 session
+- **Artifact ref**: `.github/workflows/ci.yml` — 4 new jobs added
+  (electron-tests, serverless-tests, script-tests, hw-harness-dry-run);
+  `.github/workflows/release.yml` — same gates added to release test job
+- **Close criteria met**: CI now runs electron unit tests, serverless worker
+  tests, script tests (graph_session + memory), and hardware harness dry-run
+  on every push/PR. Release workflow includes the same gates plus ruff format
+  check.
+
+---
+
 ## Close criteria summary
 
 | ID | Description | Status | Blocks |
@@ -355,3 +379,5 @@
 | D-017 | No VT-d/IOMMU DMA protection | CLOSED | E-HP-UEFI |
 | D-018 | BCD missing timeout/bootsequence/integrity | CLOSED | E-BCD |
 | D-019 | No BitLocker suspension for BIOS changes | CLOSED | E-HP-UEFI |
+| D-020 | No server endpoint for hw test artifact upload | CLOSED | — |
+| D-021 | Missing CI gates (electron, serverless, scripts, hw) | CLOSED | — |

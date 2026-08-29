@@ -87,10 +87,39 @@ jobs:
         run: cd agent && pip-audit -r requirements.txt
 
       - name: Agent — ruff
-        run: cd agent && ruff check ./*.py tests/
+        run: cd agent && ruff check . tests/
+
+      - name: Agent — ruff format check
+        run: cd agent && ruff format --check . tests/
 
       - name: Agent — tests
         run: cd agent && pytest tests/ -v
+
+      # --- Electron tests ---
+      - name: Electron — install deps
+        run: |
+          cd server && npm ci
+          cd ../electron && npm ci
+
+      - name: Electron — tests
+        run: cd electron && npm test
+
+      # --- Serverless worker tests ---
+      - name: Serverless — install deps
+        run: cd serverless && npm ci
+
+      - name: Serverless — tests
+        run: cd serverless && npm test
+
+      # --- Script tests (graph_session + memory) ---
+      - name: Script tests
+        run: |
+          python3 scripts/test_graph_session.py
+          python3 scripts/test_memory.py
+
+      # --- HW harness dry-run ---
+      - name: HW harness dry-run
+        run: cd agent && python3 hw_test_harness.py --mode dry-run
 
       # --- API E2E (lockdown + recovery + agent integration) ---
       # Needs server deps (jest, supertest, sqlite3) + agent deps (cryptography,

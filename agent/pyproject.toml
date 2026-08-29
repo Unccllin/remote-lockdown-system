@@ -11,7 +11,7 @@ markers = [
 source = ["."]
 omit = [
     "tests/*",
-    "test_boot_lockdown.py",
+    "boot_lockdown_test_runner.py",
     "hw_test_harness.py",
     "installer_gui.py",
     "*/__pycache__/*",
