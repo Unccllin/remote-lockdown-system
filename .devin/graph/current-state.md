@@ -51,41 +51,39 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-08-29 — P1 items + hw_test_harness v2.0 redesign
+## Latest session: 2026-08-29 — Fresh improvement audit + all doable items
 
 ### RULE-ZERO
-**Read**: AGENTS.md (harness audit + redesign plan), hw_test_harness.py (v1.0), GRAPH-SPEC.yaml (enforcement paths)
-**Finding**: All P0 items done in prior session. P1 items remained. The hw_test_harness v1.0 had 5 tests, no patterns from research, and 10 documented gaps.
+**Read**: GRAPH-SPEC.yaml (enforcement path statuses), DEBT-LEDGER.md (open items), server/src/routes/ (missing endpoints), dashboard/src/pages/ (untested pages), agent/*.py (untested modules), .github/workflows/ci.yml (missing CI gates)
+**Finding**: 10 improvement areas identified. 8 doable without hardware, 2 require HP machine.
 
 ### Fog cleared
-- How to implement all 12 patterns in a single Python file (no heavy deps needed)
-- How to structure HardwareTest base class with phase lifecycle (precondition→action→verify→cleanup)
-- How to do threading-based timeout that works cross-platform (SIGALRM is Unix-only)
-- How to make verify() methods work (need action_detail param, not self.result.detail)
-- How to do tag-based filtering replacing --only flag
-- How to generate CTRF + JUnit XML + legacy JSON artifacts from same results
+- How to implement hw-test-artifact endpoint (CTRF + legacy format support, device association by hostname)
+- How to fix BitLocker "Protection Status: On" parsing (was checking for "protection on" substring, fixed to parse value after colon)
+- How to fix bios_password dict handling in simulate_lockdown (apply_boot_lockdown returns dict, not string)
+- How to fix dry-run state leakage between test modules (hardcoded defaults instead of import-time capture)
+- How to fix shutil.move recursion in test (use Path.write_text instead of calling real shutil.move)
 
 ### Fog remaining
-- Whether v2.0 tests actually pass on real HP hardware (requires physical machine)
-- Whether TPM sealing works on the HP's specific TPM module
-- Whether the E-INTEGRATION test's full cycle works against the production server
-- Whether artifact upload to server works (no /api/hw-test-artifact endpoint yet)
+- Whether v2.0 harness passes on real HP hardware (requires physical machine)
+- Whether the 9 unit-test-only enforcement paths pass on hardware
+- Whether the hw-test-artifact endpoint works with real PostgreSQL (tested with mock only)
 
 ### Debt items closed
-- D-003 (partial): hw_test_harness v2.0 implemented with 12 tests + 12 patterns. Still needs hardware run to fully close.
+- D-020: hw-test-artifact endpoint (CLOSED — server/src/routes/hwTestArtifact.js + 15 tests + migration)
+- D-021: CI gates (CLOSED — 4 new CI jobs + release.yml gates)
 
 ### Debt items still open
-- D-003: Needs real hardware run on HP machine (DESKTOP-RUDJGI6) with v2.0 harness
-- Server endpoint for artifact upload (/api/hw-test-artifact) not yet implemented
+- None in the ledger (all 21 items CLOSED). Remaining work is hardware verification only.
 
 ### Blockers
-- Physical HP hardware access required for remaining 2 items
+- Physical HP hardware access required for enforcement path verification
 
 ### Next session opening
-Run `python3 hw_test_harness.py --mode simulate` on HP machine (DESKTOP-RUDJGI6) to generate real hardware artifacts, then update GRAPH-SPEC enforcement path statuses from "verified-on-hardware (Azure)" to "verified-on-hardware (HP)".
+Run v2.0 harness on HP machine (DESKTOP-RUDJGI6) with `python3 hw_test_harness.py --mode simulate --upload <server-url>`, then update GRAPH-SPEC enforcement path statuses from "verified-in-unit-test" to "verified-on-hardware" for all passing paths.
 
 ### Failure attribution
-No failures this session. All 1,050+ tests pass, lint clean, format clean.
+No failures this session. 3 production bugs found and fixed during test writing (BitLocker parsing, bios_password dict, UnboundLocalError). 1 test bug fixed (shutil.move recursion). All 1182+ tests pass.
 
 ---
 

@@ -27,9 +27,10 @@ No fix is merged until every gate that was previously failing is green.
 
 ### Finding 1 — Makefile `test-agent` is broken and lies  [LOCAL]
 - **Root cause**: `make test-agent` runs `python3 -m pytest -q` with no path.
-  `agent/test_boot_lockdown.py` (a manual CLI script) and
-  `agent/tests/test_boot_lockdown.py` (the real pytest suite) share the same
-  module basename → pytest aborts with "import file mismatch".
+  `agent/boot_lockdown_test_runner.py` (formerly `test_boot_lockdown.py`, a
+  manual CLI script) and `agent/tests/test_boot_lockdown.py` (the real pytest
+  suite) shared the same module basename → pytest aborted with "import file
+  mismatch". (Fixed: the CLI script was renamed to `boot_lockdown_test_runner.py`.)
   The `|| echo "agent: no pytest tests or pytest not installed"` then
   **swallows the error**, so `make test-agent` exits 0 while running 0 tests.
 - **CI is unaffected** — CI runs `pytest tests/ -v` (scoped to `tests/`).

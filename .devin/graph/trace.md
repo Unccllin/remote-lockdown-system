@@ -1188,3 +1188,37 @@ Run `python3 hw_test_harness.py --mode simulate` on HP machine (DESKTOP-RUDJGI6)
 
 ### Failure attribution
 No failures this session. All 1,050+ tests pass, lint clean, format clean.
+
+## Session 2026-08-29 — Fresh improvement audit + all doable items
+
+### RULE-ZERO
+**Read**: GRAPH-SPEC.yaml (enforcement path statuses), DEBT-LEDGER.md (open items), server/src/routes/ (missing endpoints), dashboard/src/pages/ (untested pages), agent/*.py (untested modules), .github/workflows/ci.yml (missing CI gates)
+**Finding**: 10 improvement areas identified. 8 doable without hardware, 2 require HP machine.
+
+### Fog cleared
+- How to implement hw-test-artifact endpoint (CTRF + legacy format support, device association by hostname)
+- How to fix BitLocker "Protection Status: On" parsing (was checking for "protection on" substring, fixed to parse value after colon)
+- How to fix bios_password dict handling in simulate_lockdown (apply_boot_lockdown returns dict, not string)
+- How to fix dry-run state leakage between test modules (hardcoded defaults instead of import-time capture)
+- How to fix shutil.move recursion in test (use Path.write_text instead of calling real shutil.move)
+
+### Fog remaining
+- Whether v2.0 harness passes on real HP hardware (requires physical machine)
+- Whether the 9 unit-test-only enforcement paths pass on hardware
+- Whether the hw-test-artifact endpoint works with real PostgreSQL (tested with mock only)
+
+### Debt items closed
+- D-020: hw-test-artifact endpoint (CLOSED — server/src/routes/hwTestArtifact.js + 15 tests + migration)
+- D-021: CI gates (CLOSED — 4 new CI jobs + release.yml gates)
+
+### Debt items still open
+- None in the ledger (all 21 items CLOSED). Remaining work is hardware verification only.
+
+### Blockers
+- Physical HP hardware access required for enforcement path verification
+
+### Next session opening
+Run v2.0 harness on HP machine (DESKTOP-RUDJGI6) with `python3 hw_test_harness.py --mode simulate --upload <server-url>`, then update GRAPH-SPEC enforcement path statuses from "verified-in-unit-test" to "verified-on-hardware" for all passing paths.
+
+### Failure attribution
+No failures this session. 3 production bugs found and fixed during test writing (BitLocker parsing, bios_password dict, UnboundLocalError). 1 test bug fixed (shutil.move recursion). All 1182+ tests pass.
