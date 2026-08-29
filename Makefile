@@ -41,8 +41,9 @@ help:
 	@echo "  make test-e2e-dashboard   run Playwright browser E2E tests (dashboard)"
 	@echo "  make test-coverage        run all test suites with coverage reporting"
 	@echo "  make full-verify          run everything: lint + test + e2e + verify-env + graph-check"
-	@echo "  make hw-test              run hardware test harness (D-003)"
+	@echo "  make hw-test              run hardware test harness v2.0 (D-003, simulate mode)"
 	@echo "  make hw-test-dry          dry-run hardware test harness"
+	@echo "  make hw-test-check        check test eligibility (no execution)"
 	@echo ""
 	@echo "Other:"
 	@echo "  make check-artifacts      verify build outputs (strict)"
@@ -162,16 +163,20 @@ full-verify: graph-check lint test test-e2e verify-env check-artifacts
 	@echo "  graph-check + lint + tests + e2e + env + artifacts"
 	@echo "=========================================="
 
-# Hardware test harness (D-003) — runs enforcement path tests against
+# Hardware test harness v2.0 (D-003) — runs 12 enforcement path tests against
 # real Windows/HP hardware. On non-Windows/non-HP, tests are skipped.
+# Modes: simulate (real actions), dry-run (skip), check (eligibility only).
 # Use hw-test-dry to see what would run without executing real actions.
-.PHONY: hw-test hw-test-dry
+.PHONY: hw-test hw-test-dry hw-test-check
 
 hw-test:
-	@cd agent && python3 hw_test_harness.py
+	@cd agent && python3 hw_test_harness.py --mode simulate
 
 hw-test-dry:
-	@cd agent && python3 hw_test_harness.py --dry-run
+	@cd agent && python3 hw_test_harness.py --mode dry-run
+
+hw-test-check:
+	@cd agent && python3 hw_test_harness.py --mode check
 
 # ---------------------------------------------------------------------------
 # Artifact verification — wraps scripts/check-artifacts.sh

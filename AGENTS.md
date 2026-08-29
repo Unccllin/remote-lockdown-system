@@ -292,9 +292,10 @@ Hardware test harness (D-003): `make hw-test-dry` runs the harness in dry-run mo
    conditional (only when `CORS_ORIGIN` is set) and added a 404 JSON handler
    for unmatched `/api/*` routes.
 
-## Hardware Test Harness Redesign (planned, not yet implemented)
+## Hardware Test Harness v2.0 (implemented 2026-08-28)
 
-Research completed 2026-08-28. Decision: borrow patterns from existing frameworks rather than adopt a heavy dependency. Will redesign `agent/hw_test_harness.py` to v2.0.
+Redesigned from v1.0 with 12 patterns borrowed from established HIL frameworks.
+The harness is at `agent/hw_test_harness.py` (v2.0).
 
 ### Frameworks evaluated (30+)
 - OpenHTF (Google) — best HIL framework, phase/measurement/plug model, Apache-2.0
@@ -346,18 +347,18 @@ Research completed 2026-08-28. Decision: borrow patterns from existing framework
 - Artifact generation (CTRF JSON + JUnit XML + agent binary hash)
 - Artifact upload (POST to server for dashboard display)
 
-### Current harness gaps (v1.0)
-- Only 5 of 12+ enforcement paths tested
-- No tests for duress, hidden trigger, tamper, TPM, enrollment, hardware IDs
-- No agent↔server integration test
-- No recovery/unlock test
-- No ACK verification
-- Lock-screen test is fire-and-forget (no sentinel verification)
-- Guardian test doesn't verify re-lock
-- No artifact upload to server
-- Single --only flag (can't run multiple tests)
-- No timeout protection
-- No test for covert tracking (E-TRACK)
+### Current harness gaps (v1.0 — ALL FIXED in v2.0)
+- ~~Only 5 of 12+ enforcement paths tested~~ → 12 tests now
+- ~~No tests for duress, hidden trigger, tamper, TPM, enrollment, hardware IDs~~ → all added
+- ~~No agent↔server integration test~~ → E-INTEGRATION test added
+- ~~No recovery/unlock test~~ → E-INTEGRATION covers recover
+- ~~No ACK verification~~ → E-INTEGRATION covers command lifecycle
+- ~~Lock-screen test is fire-and-forget~~ → sentinel verification added
+- ~~Guardian test doesn't verify re-lock~~ → verify phase added
+- ~~No artifact upload to server~~ → --upload flag added
+- ~~Single --only flag~~ → --tag flag for multiple tests
+- ~~No timeout protection~~ → per-test timeout with threading
+- ~~No test for covert tracking (E-TRACK)~~ → tracked via E-INTEGRATION
 
 ### Hardware testing status (as of 2026-08-28)
 - HP machine (DESKTOP-RUDJGI6) successfully enrolled via one-click installer
