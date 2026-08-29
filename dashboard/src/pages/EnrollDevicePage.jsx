@@ -167,7 +167,7 @@ export default function EnrollDevicePage() {
           <ArrowLeft size={14} /> Back to Devices
         </button>
 
-        <div className="card text-center py-10">
+        <div className="card text-center py-10" role="status" aria-live="polite">
           <CheckCircle2 size={48} className="mx-auto text-emerald-400 mb-4" />
           <h1 className="text-2xl font-bold text-slate-100 mb-2">Device Enrolled!</h1>
           <p className="text-slate-400 text-sm mb-4">
@@ -348,7 +348,7 @@ export default function EnrollDevicePage() {
 
           {/* Waiting status */}
           {!expired && polling && (
-            <div className="card flex items-center gap-3">
+            <div className="card flex items-center gap-3" role="status" aria-live="polite">
               <Loader size={18} className="text-blue-400 animate-spin" />
               <div>
                 <p className="text-sm text-slate-200 font-medium">Waiting for device…</p>
@@ -361,7 +361,7 @@ export default function EnrollDevicePage() {
 
           {/* Expired notice */}
           {expired && (
-            <div className="card border-red-500/20 bg-red-950/10">
+            <div className="card border-red-500/20 bg-red-950/10" role="status" aria-live="polite">
               <p className="text-sm text-red-300">
                 The enrollment token has expired. Generate a new token to continue.
               </p>

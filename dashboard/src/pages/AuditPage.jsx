@@ -96,6 +96,7 @@ export default function AuditPage() {
             placeholder="Search by action, device, or admin…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search audit logs"
           />
         </div>
         <div className="flex items-center gap-1.5">
@@ -140,7 +141,7 @@ export default function AuditPage() {
       </div>
 
       {loading && logs.length === 0 ? (
-        <div className="card p-0 overflow-hidden">
+        <div className="card p-0 overflow-hidden" role="status" aria-live="polite">
           <div className="space-y-3 p-5">
             {[...Array(6)].map((_, i) => (
               <div key={i} className="flex gap-4">
@@ -153,12 +154,12 @@ export default function AuditPage() {
           </div>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="card text-center text-slate-500 py-16">
+        <div className="card text-center text-slate-500 py-16" role="status" aria-live="polite">
           <ClipboardList size={32} className="mx-auto mb-3 opacity-30" />
           {logs.length === 0 ? 'No audit events yet.' : 'No events match your search.'}
         </div>
       ) : (
-        <div className="card p-0 overflow-hidden">
+        <div className="card p-0 overflow-hidden" aria-live="polite">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-800/60 text-slate-400 text-xs uppercase">

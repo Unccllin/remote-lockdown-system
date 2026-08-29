@@ -132,14 +132,14 @@ export default function OverviewPage() {
             Monitoring {stats.total} device{stats.total === 1 ? '' : 's'} across your organization
           </p>
         </div>
-        <button className="btn-ghost" onClick={load}>
+        <button className="btn-ghost" onClick={load} aria-label="Refresh overview data">
           <Loader size={14} className={loading ? 'animate-spin' : ''} />
           Refresh
         </button>
       </div>
 
       {/* Stats cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6" aria-live="polite">
         <div className="card card-hover glow-blue">
           <div className="flex items-start justify-between">
             <div>
@@ -321,6 +321,8 @@ export default function OverviewPage() {
                   key={d.id}
                   className="card card-hover cursor-pointer"
                   onClick={() => navigate(`/devices/${d.id}`)}
+                  tabIndex={0}
+                  role="button"
                 >
                   <div className="flex items-center justify-between mb-2">
                     <span className="font-mono text-sm text-slate-200 truncate">

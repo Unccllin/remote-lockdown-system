@@ -1,0 +1,1727 @@
+openapi: 3.0.3
+info:
+  title: Remote Lockdown System API
+  version: 1.0.0
+  description: |
+    REST API for the Remote Lockdown System — a firmware-persistent anti-theft
+    system for managing device enrollment, lockdown/recovery commands, agent
+    check-ins, audit logging, and admin management.
+
+    ## Authentication
+    - **Admin endpoints**: Bearer JWT (`Authorization: Bearer <token>`) obtained
+      via `POST /api/auth/login`. Roles: `viewer` < `operator` < `super-admin`.
+    - **Agent endpoints**: Per-device API key (`x-agent-key` header) with
+      HMAC-SHA256 request signing (`X-Signature` header).
+
+    ## Rate Limiting
+    - Auth/setup: 200 req/15min per IP.
+    - Dashboard/API: 2000 req/15min per IP.
+    - Agent: 600 req/15min per device.
+    - Health/metrics: no limit.
+
+servers:
+  - url: http://localhost:3001
+    description: Local development server
+  - url: https://lockdown.example.com
+    description: Production server
+
+security: []
+
+tags:
+  - name: Auth
+    description: Admin authentication
+  - name: Setup
+    description: First-run system setup
+  - name: Devices
+    description: Device enrollment and management
+  - name: Agent
+    description: Agent check-in, command ack, and auto-update
+  - name: Audit
+    description: Audit log queries
+  - name: Installer
+    description: Agent installer package generation
+  - name: Health
+    description: Health and readiness probes
+  - name: Admins
+    description: Admin account management (super-admin only)
+  - name: Hardware Test Artifacts
+    description: Hardware test harness artifact storage
+  - name: Metrics
+    description: Prometheus metrics endpoint
+
+paths:
+  # ---------------------------------------------------------------------------
+  # /api/auth
+  # ---------------------------------------------------------------------------
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Admin login
+      description: Authenticate an admin and receive a JWT.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  example: admin
+                password:
+                  type: string
+                  format: password
+                  example: secret123
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiIs...
+                  admin:
+                    $ref: '#/components/schemas/Admin'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---------------------------------------------------------------------------
+  # /api/setup
+  # ---------------------------------------------------------------------------
+  /api/setup/status:
+    get:
+      tags: [Setup]
+      summary: Check setup status
+      description: Returns whether the system needs initial setup (no admin exists).
+      security: []
+      responses:
+        '200':
+          description: Setup status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  needsSetup:
+                    type: boolean
+                  adminCount:
+                    type: integer
+                  error:
+                    type: string
+                    nullable: true
+
+  /api/setup/create-admin:
+    post:
+      tags: [Setup]
+      summary: Create initial admin
+      description: Creates the first admin account. Permanently disabled once any admin exists.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                  maxLength: 100
+                  pattern: '^[a-zA-Z0-9_-]+$'
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+      responses:
+        '201':
+          description: Admin created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  username:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Setup already completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  # ---------------------------------------------------------------------------
+  # /api/devices
+  # ---------------------------------------------------------------------------
+  /api/devices:
+    get:
+      tags: [Devices]
+      summary: List all devices
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Device'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Devices]
+      summary: Enroll a new device
+      security:
+        - bearerAuth: [operator]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hostname, owner_name]
+              properties:
+                hostname:
+                  type: string
+                  maxLength: 63
+                  pattern: '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$'
+                owner_name:
+                  type: string
+      responses:
+        '201':
+          description: Device enrolled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Device'
+                  - type: object
+                    properties:
+                      api_key:
+                        type: string
+                        description: Plaintext API key — shown once, never stored.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/devices/{id}:
+    get:
+      tags: [Devices]
+      summary: Get a device by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Device details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Devices]
+      summary: Update device owner_name
+      security:
+        - bearerAuth: [operator]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                owner_name:
+                  type: string
+                  maxLength: 200
+      responses:
+        '200':
+          description: Updated device
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Devices]
+      summary: Delete a device
+      security:
+        - bearerAuth: [operator]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - name: force
+          in: query
+          schema:
+            type: string
+            enum: ['true']
+          description: Release all encryption keys before deleting.
+      responses:
+        '200':
+          description: Device deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: string
+                  forced:
+                    type: boolean
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/devices/{id}/flag-stolen:
+    post:
+      tags: [Devices]
+      summary: Flag device as stolen
+      description: Issues a lockdown command and sets device status to stolen.
+      security:
+        - bearerAuth: [operator]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hostname_confirm]
+              properties:
+                hostname_confirm:
+                  type: string
+                enable_pba:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Device flagged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device:
+                    $ref: '#/components/schemas/Device'
+                  command:
+                    $ref: '#/components/schemas/Command'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/devices/{id}/recover:
+    post:
+      tags: [Devices]
+      summary: Recover a stolen/locked device
+      description: Issues an unlock command and releases the encryption key.
+      security:
+        - bearerAuth: [operator]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hostname_confirm]
+              properties:
+                hostname_confirm:
+                  type: string
+      responses:
+        '200':
+          description: Recovery initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device:
+                    $ref: '#/components/schemas/Device'
+                  command:
+                    $ref: '#/components/schemas/Command'
+                  key_released:
+                    type: boolean
+                  key_material:
+                    type: string
+                    nullable: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/devices/{id}/rotate-key:
+    post:
+      tags: [Devices]
+      summary: Rotate device API key
+      security:
+        - bearerAuth: [super-admin]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: New API key generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device_id:
+                    type: string
+                  hostname:
+                    type: string
+                  api_key:
+                    type: string
+                    description: Plaintext key — shown once.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/devices/{id}/track:
+    post:
+      tags: [Devices]
+      summary: Start covert tracking
+      security:
+        - bearerAuth: [operator]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Tracking command issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device:
+                    $ref: '#/components/schemas/Device'
+                  command:
+                    $ref: '#/components/schemas/Command'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/devices/{id}/locate:
+    post:
+      tags: [Devices]
+      summary: One-time location request
+      security:
+        - bearerAuth: [operator]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Locate command issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device:
+                    $ref: '#/components/schemas/Device'
+                  command:
+                    $ref: '#/components/schemas/Command'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/devices/{id}/stop-track:
+    post:
+      tags: [Devices]
+      summary: Stop covert tracking
+      security:
+        - bearerAuth: [operator]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Stop-track command issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device:
+                    $ref: '#/components/schemas/Device'
+                  command:
+                    $ref: '#/components/schemas/Command'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/devices/{id}/locations:
+    get:
+      tags: [Devices]
+      summary: Get location history
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 500
+      responses:
+        '200':
+          description: Location reports
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LocationReport'
+
+  /api/devices/{id}/location/latest:
+    get:
+      tags: [Devices]
+      summary: Get latest location
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Latest location
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocationReport'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/devices/{id}/release:
+    delete:
+      tags: [Devices]
+      summary: Release device (GDPR erasure)
+      security:
+        - bearerAuth: [operator]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hostname_confirm]
+              properties:
+                hostname_confirm:
+                  type: string
+      responses:
+        '200':
+          description: Device released
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/devices/settings/retention:
+    get:
+      tags: [Devices]
+      summary: Get retention settings
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Retention configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  location_retention_days:
+                    type: integer
+                  command_expiry_days:
+                    type: integer
+                  audit_log_retention_days:
+                    type: integer
+                  min_location_retention:
+                    type: integer
+                  max_location_retention:
+                    type: integer
+
+  /api/devices/{id}/pba-credentials:
+    get:
+      tags: [Devices]
+      summary: Get PBA credentials
+      description: Returns decrypted Pre-Boot Authentication credentials for recovery.
+      security:
+        - bearerAuth: [super-admin]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: PBA credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  setup_password:
+                    type: string
+                    nullable: true
+                  power_on_password:
+                    type: string
+                    nullable: true
+                  bitlocker_pin:
+                    type: string
+                    nullable: true
+                  bitlocker_recovery_password:
+                    type: string
+                    nullable: true
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------------------
+  # /api/agent
+  # ---------------------------------------------------------------------------
+  /api/agent/checkin:
+    post:
+      tags: [Agent]
+      summary: Agent check-in
+      description: Periodic check-in returning next pending command and adaptive poll interval.
+      security:
+        - agentKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hostname]
+              properties:
+                hostname:
+                  type: string
+                mac_address:
+                  type: string
+                hardware_uuid:
+                  type: string
+      responses:
+        '200':
+          description: Check-in result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device_id:
+                    type: string
+                  status:
+                    type: string
+                  poll_interval:
+                    type: integer
+                  command:
+                    nullable: true
+                    allOf:
+                      - $ref: '#/components/schemas/Command'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/agent/command-ack:
+    post:
+      tags: [Agent]
+      summary: Acknowledge command execution
+      security:
+        - agentKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hostname, command_id, result_status]
+              properties:
+                hostname:
+                  type: string
+                command_id:
+                  type: integer
+                result_status:
+                  type: string
+                  enum: [executed, failed, not_now]
+                command_uuid:
+                  type: string
+                key_material:
+                  type: string
+                bios_password:
+                  type: string
+                power_on_password:
+                  type: string
+                bitlocker_pin:
+                  type: string
+                bitlocker_recovery_password:
+                  type: string
+                mac_address:
+                  type: string
+                hardware_uuid:
+                  type: string
+                boot_lock_status:
+                  type: string
+                boot_lock_detail:
+                  type: object
+                encryption_blocked_files:
+                  type: array
+                  items:
+                    type: string
+                lock_session_context:
+                  type: object
+      responses:
+        '200':
+          description: Acknowledgment received
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  deduplicated:
+                    type: boolean
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/agent/deadman-report:
+    post:
+      tags: [Agent]
+      summary: Deadman switch report
+      security:
+        - agentKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hostname, key_material]
+              properties:
+                hostname:
+                  type: string
+                key_material:
+                  type: string
+                mac_address:
+                  type: string
+                hardware_uuid:
+                  type: string
+      responses:
+        '200':
+          description: Deadman report received
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  deduplicated:
+                    type: boolean
+
+  /api/agent/location:
+    post:
+      tags: [Agent]
+      summary: Submit location report
+      security:
+        - agentKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hostname, location]
+              properties:
+                hostname:
+                  type: string
+                mac_address:
+                  type: string
+                hardware_uuid:
+                  type: string
+                location:
+                  type: object
+                  properties:
+                    latitude:
+                      type: number
+                    longitude:
+                      type: number
+                    accuracy_meters:
+                      type: number
+                    source:
+                      type: string
+                    city:
+                      type: string
+                    region:
+                      type: string
+                    country:
+                      type: string
+                    ip:
+                      type: string
+                    wifi_count:
+                      type: integer
+      responses:
+        '200':
+          description: Location stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/agent/update:
+    get:
+      tags: [Agent]
+      summary: Check for agent update
+      security:
+        - agentKey: []
+      parameters:
+        - name: version
+          in: query
+          schema:
+            type: string
+        - name: platform
+          in: query
+          schema:
+            type: string
+            enum: [win, linux]
+      responses:
+        '200':
+          description: Update check result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  update_available:
+                    type: boolean
+                  latest_version:
+                    type: string
+                  current_version:
+                    type: string
+                  sha256:
+                    type: string
+                  size:
+                    type: integer
+                  download_url:
+                    type: string
+                  built_at:
+                    type: string
+                    format: date-time
+
+  /api/agent/download:
+    get:
+      tags: [Agent]
+      summary: Download agent binary
+      security:
+        - agentKey: []
+      parameters:
+        - name: platform
+          in: query
+          schema:
+            type: string
+            enum: [win, linux]
+            default: linux
+      responses:
+        '200':
+          description: Agent binary
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/agent/uninstall-auth:
+    post:
+      tags: [Agent]
+      summary: Issue uninstall token
+      description: Issues a short-lived (5-minute) token for tamper protection removal.
+      security:
+        - agentKey: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Uninstall token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uninstall_token:
+                    type: string
+                  expires_in:
+                    type: integer
+                  issued_at:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/agent/uninstall-auth/verify:
+    post:
+      tags: [Agent]
+      summary: Verify uninstall token
+      security:
+        - agentKey: []
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uninstall_token]
+              properties:
+                uninstall_token:
+                  type: string
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authorized:
+                    type: boolean
+                  verified:
+                    type: boolean
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---------------------------------------------------------------------------
+  # /api/audit
+  # ---------------------------------------------------------------------------
+  /api/audit:
+    get:
+      tags: [Audit]
+      summary: Query audit log
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: device_id
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        '200':
+          description: Audit log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditLog'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  # ---------------------------------------------------------------------------
+  # /api/installer
+  # ---------------------------------------------------------------------------
+  /api/installer/{deviceId}:
+    get:
+      tags: [Installer]
+      summary: Download ZIP installer
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - name: platform
+          in: query
+          schema:
+            type: string
+            enum: [win, linux]
+            default: win
+      responses:
+        '200':
+          description: ZIP installer package
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/installer/{deviceId}/nsis:
+    get:
+      tags: [Installer]
+      summary: Download NSIS installer
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: NSIS EXE installer
+          content:
+            application/vnd.microsoft.portable-executable:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/installer/agent-version:
+    get:
+      tags: [Installer]
+      summary: Get agent binary version
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: platform
+          in: query
+          schema:
+            type: string
+            enum: [win, linux]
+      responses:
+        '200':
+          description: Agent version info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                    nullable: true
+                  available:
+                    type: boolean
+                  sha256:
+                    type: string
+                  size:
+                    type: integer
+                  built_at:
+                    type: string
+                    format: date-time
+                  platform:
+                    type: string
+                  source:
+                    type: string
+
+  # ---------------------------------------------------------------------------
+  # /api/health
+  # ---------------------------------------------------------------------------
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Extended health check
+      description: DB probe + scheduler status. Rejects agent-key probing.
+      security: []
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  db:
+                    type: string
+                  scheduler:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: date-time
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          description: Degraded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness probe
+      security: []
+      responses:
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  db:
+                    type: string
+                  dbLatencyMs:
+                    type: integer
+                  timestamp:
+                    type: string
+                    format: date-time
+        '503':
+          description: Degraded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/health/detailed:
+    get:
+      tags: [Health]
+      summary: Detailed system status
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Full system status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: date-time
+                  server:
+                    type: object
+                    properties:
+                      uptimeSeconds:
+                        type: integer
+                      memory:
+                        type: object
+                        properties:
+                          rssMb:
+                            type: integer
+                          heapUsedMb:
+                            type: integer
+                          heapTotalMb:
+                            type: integer
+                  db:
+                    type: object
+                    properties:
+                      connected:
+                        type: boolean
+                      latencyMs:
+                        type: integer
+                      error:
+                        type: string
+                        nullable: true
+                  fleet:
+                    type: object
+                    properties:
+                      active:
+                        type: integer
+                      stale:
+                        type: integer
+                      missing:
+                        type: integer
+                      dead:
+                        type: integer
+                      never:
+                        type: integer
+                      total:
+                        type: integer
+                  queueDepth:
+                    type: integer
+                  recentAlerts:
+                    type: array
+                    items:
+                      type: object
+
+  # ---------------------------------------------------------------------------
+  # /api/admins
+  # ---------------------------------------------------------------------------
+  /api/admins:
+    get:
+      tags: [Admins]
+      summary: List all admins
+      security:
+        - bearerAuth: [super-admin]
+      responses:
+        '200':
+          description: List of admins
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Admin'
+    post:
+      tags: [Admins]
+      summary: Create a new admin
+      security:
+        - bearerAuth: [super-admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, role]
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                  maxLength: 100
+                  pattern: '^[a-zA-Z0-9_-]+$'
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+                role:
+                  type: string
+                  enum: [viewer, operator, super-admin]
+      responses:
+        '201':
+          description: Admin created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Admin'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admins/{id}:
+    delete:
+      tags: [Admins]
+      summary: Delete an admin
+      security:
+        - bearerAuth: [super-admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Admin deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: string
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Admins]
+      summary: Update admin role
+      security:
+        - bearerAuth: [super-admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [viewer, operator, super-admin]
+      responses:
+        '200':
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Admin'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------------------
+  # /api/hw-test-artifact
+  # ---------------------------------------------------------------------------
+  /api/hw-test-artifact:
+    post:
+      tags: [Hardware Test Artifacts]
+      summary: Upload a hardware test artifact
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: CTRF or legacy harness artifact JSON.
+      responses:
+        '201':
+          description: Artifact stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  device_id:
+                    type: string
+                    nullable: true
+                  hostname:
+                    type: string
+                    nullable: true
+                  summary:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                      passed:
+                        type: integer
+                      failed:
+                        type: integer
+                      skipped:
+                        type: integer
+                      errors:
+                        type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    get:
+      tags: [Hardware Test Artifacts]
+      summary: List recent artifacts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: device_id
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: List of artifacts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HwTestArtifact'
+
+  /api/hw-test-artifact/{id}:
+    get:
+      tags: [Hardware Test Artifacts]
+      summary: Get a specific artifact
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Full artifact including JSON payload
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/HwTestArtifact'
+                  - type: object
+                    properties:
+                      artifact_json:
+                        type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------------------
+  # /metrics
+  # ---------------------------------------------------------------------------
+  /metrics:
+    get:
+      tags: [Metrics]
+      summary: Prometheus metrics
+      description: Prometheus text-format metrics for external scraping.
+      security: []
+      responses:
+        '200':
+          description: Prometheus exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+        '500':
+          description: Metrics collection failed
+          content:
+            text/plain:
+              schema:
+                type: string
+
+# =============================================================================
+# Components
+# =============================================================================
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Admin JWT obtained via POST /api/auth/login. Optional array
+        values specify the minimum role required (viewer, operator, super-admin).
+    agentKey:
+      type: apiKey
+      in: header
+      name: x-agent-key
+      description: Per-device API key or legacy AGENT_SHARED_KEY.
+
+  parameters:
+    DeviceId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Device UUID.
+
+  responses:
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Authentication required or invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Resource conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ServiceUnavailable:
+      description: Service unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+
+    Admin:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        role:
+          type: string
+          enum: [viewer, operator, super-admin]
+        created_at:
+          type: string
+          format: date-time
+
+    Device:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        hostname:
+          type: string
+        owner_name:
+          type: string
+        status:
+          type: string
+          enum: [active, stolen, locked, recovering, tracking]
+        last_checkin:
+          type: string
+          format: date-time
+          nullable: true
+        enrolled_at:
+          type: string
+          format: date-time
+        mac_address:
+          type: string
+          nullable: true
+        hardware_uuid:
+          type: string
+          nullable: true
+
+    Command:
+      type: object
+      properties:
+        id:
+          type: integer
+        device_id:
+          type: string
+          format: uuid
+        command_type:
+          type: string
+          enum: [lockdown, unlock, track, stop_track, locate]
+        status:
+          type: string
+          enum: [pending, executed, failed, not_now, expired]
+        command_uuid:
+          type: string
+          nullable: true
+        enable_pba:
+          type: boolean
+        key_material:
+          type: string
+          nullable: true
+        bios_password:
+          type: string
+          nullable: true
+        power_on_password:
+          type: string
+          nullable: true
+        bitlocker_pin:
+          type: string
+          nullable: true
+        bitlocker_recovery_password:
+          type: string
+          nullable: true
+        boot_lock_status:
+          type: string
+          nullable: true
+        boot_lock_detail:
+          type: object
+          nullable: true
+        lockdown_effective:
+          type: boolean
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        executed_at:
+          type: string
+          format: date-time
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+          format: uuid
+          nullable: true
+        admin_id:
+          type: string
+          format: uuid
+          nullable: true
+        action:
+          type: string
+        detail:
+          type: object
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+        hostname:
+          type: string
+          nullable: true
+        admin_username:
+          type: string
+          nullable: true
+
+    LocationReport:
+      type: object
+      properties:
+        id:
+          type: integer
+        device_id:
+          type: string
+          format: uuid
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        accuracy_meters:
+          type: number
+          nullable: true
+        source:
+          type: string
+        city:
+          type: string
+          nullable: true
+        region:
+          type: string
+          nullable: true
+        country:
+          type: string
+          nullable: true
+        ip_address:
+          type: string
+          nullable: true
+        wifi_count:
+          type: integer
+          nullable: true
+        reported_at:
+          type: string
+          format: date-time
+
+    HwTestArtifact:
+      type: object
+      properties:
+        id:
+          type: integer
+        device_id:
+          type: string
+          format: uuid
+          nullable: true
+        admin_id:
+          type: string
+          format: uuid
+          nullable: true
+        hostname:
+          type: string
+          nullable: true
+        harness_version:
+          type: string
+          nullable: true
+        agent_hash:
+          type: string
+          nullable: true
+        total_tests:
+          type: integer
+        passed:
+          type: integer
+        failed:
+          type: integer
+        skipped:
+          type: integer
+        errors:
+          type: integer
+        created_at:
+          type: string
+          format: date-time

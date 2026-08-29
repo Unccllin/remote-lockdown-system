@@ -155,8 +155,9 @@ export default function AdminsPage() {
           <h2 className="text-sm font-semibold text-slate-200 mb-4">Create New Admin</h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Username</label>
+              <label htmlFor="admin-username" className="block text-xs text-slate-400 mb-1">Username</label>
               <input
+                id="admin-username"
                 className="input"
                 placeholder="e.g. jdoe"
                 value={form.username}
@@ -167,8 +168,9 @@ export default function AdminsPage() {
               />
             </div>
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Password</label>
+              <label htmlFor="admin-password" className="block text-xs text-slate-400 mb-1">Password</label>
               <input
+                id="admin-password"
                 className="input"
                 type="password"
                 placeholder="min 8 characters"
@@ -179,8 +181,9 @@ export default function AdminsPage() {
               />
             </div>
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Role</label>
+              <label htmlFor="admin-role" className="block text-xs text-slate-400 mb-1">Role</label>
               <select
+                id="admin-role"
                 className="input"
                 value={form.role}
                 onChange={(e) => setForm({ ...form, role: e.target.value })}
@@ -204,7 +207,7 @@ export default function AdminsPage() {
 
       {/* Admins table */}
       {loading && admins.length === 0 ? (
-        <div className="card p-0 overflow-hidden">
+        <div className="card p-0 overflow-hidden" role="status" aria-live="polite">
           <div className="space-y-3 p-5">
             {[...Array(3)].map((_, i) => (
               <div key={i} className="flex gap-4">
@@ -216,7 +219,7 @@ export default function AdminsPage() {
           </div>
         </div>
       ) : admins.length === 0 ? (
-        <div className="card text-center text-slate-500 py-16">
+        <div className="card text-center text-slate-500 py-16" role="status" aria-live="polite">
           <ShieldCheck size={32} className="mx-auto mb-3 opacity-30" />
           No admins found.
         </div>
@@ -266,6 +269,7 @@ export default function AdminsPage() {
                         disabled={isSelf(a)}
                         onClick={() => handleDelete(a)}
                         title={isSelf(a) ? 'Cannot delete your own account' : 'Delete admin'}
+                        aria-label={isSelf(a) ? 'Cannot delete your own account' : 'Delete admin'}
                       >
                         <Trash2 size={14} />
                       </button>

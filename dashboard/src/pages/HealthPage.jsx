@@ -115,7 +115,7 @@ export default function HealthPage() {
       </div>
 
       {error && !data && (
-        <div className="card border-red-500/30 mb-6">
+        <div className="card border-red-500/30 mb-6" role="alert" aria-live="polite">
           <div className="flex items-center gap-2 text-red-400">
             <AlertTriangle size={18} />
             <span className="font-medium">{error}</span>
@@ -145,7 +145,7 @@ export default function HealthPage() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-            <div className="card">
+            <div className="card" aria-live="polite">
               <div className="flex items-center gap-2 mb-4">
                 <Monitor size={16} className="text-slate-400" />
                 <h2 className="text-sm font-semibold text-slate-200">Devices</h2>
@@ -157,7 +157,7 @@ export default function HealthPage() {
                 <p className="text-xs text-slate-500 mt-2">Enrolled devices</p>
               </div>
             </div>
-            <div className="card">
+            <div className="card" aria-live="polite">
               <div className="flex items-center gap-2 mb-4">
                 <ListChecks size={16} className="text-slate-400" />
                 <h2 className="text-sm font-semibold text-slate-200">Command Queue</h2>
@@ -197,7 +197,7 @@ export default function HealthPage() {
         <>
       {/* Server status card */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-        <div className={`card border ${sc.ring}`}>
+        <div className={`card border ${sc.ring}`} aria-live="polite">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Server size={16} className="text-slate-400" />
@@ -244,7 +244,7 @@ export default function HealthPage() {
         </div>
 
         {/* Fleet status card */}
-        <div className="card">
+        <div className="card" aria-live="polite">
           <div className="flex items-center gap-2 mb-4">
             <ShieldCheck size={16} className="text-slate-400" />
             <h2 className="text-sm font-semibold text-slate-200">Fleet Status</h2>
@@ -270,7 +270,7 @@ export default function HealthPage() {
         </div>
 
         {/* Command queue card */}
-        <div className="card">
+        <div className="card" aria-live="polite">
           <div className="flex items-center gap-2 mb-4">
             <ListChecks size={16} className="text-slate-400" />
             <h2 className="text-sm font-semibold text-slate-200">Command Queue</h2>

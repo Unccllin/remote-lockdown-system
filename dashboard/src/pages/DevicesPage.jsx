@@ -213,7 +213,7 @@ export default function DevicesPage() {
 
       {/* Device table */}
       {loading && devices.length === 0 ? (
-        <div className="card p-0 overflow-hidden">
+        <div className="card p-0 overflow-hidden" role="status" aria-live="polite">
           <div className="space-y-3 p-5">
             {[...Array(5)].map((_, i) => (
               <div key={i} className="flex gap-4">
@@ -236,14 +236,14 @@ export default function DevicesPage() {
             <thead>
               <tr className="border-b border-slate-800/60 text-slate-400 text-xs uppercase">
                 <th className="text-left px-5 py-3 font-medium">Status</th>
-                <th className="text-left px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-200" onClick={() => toggleSort('hostname')}>
+                <th className="text-left px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-200" onClick={() => toggleSort('hostname')} aria-sort={sortField === 'hostname' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
                   <span className="inline-flex items-center gap-1.5">Hostname <SortIcon field="hostname" /></span>
                 </th>
-                <th className="text-left px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-200" onClick={() => toggleSort('owner_name')}>
+                <th className="text-left px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-200" onClick={() => toggleSort('owner_name')} aria-sort={sortField === 'owner_name' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
                   <span className="inline-flex items-center gap-1.5">Owner <SortIcon field="owner_name" /></span>
                 </th>
                 <th className="text-left px-5 py-3 font-medium">Model</th>
-                <th className="text-left px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-200" onClick={() => toggleSort('last_checkin')}>
+                <th className="text-left px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-200" onClick={() => toggleSort('last_checkin')} aria-sort={sortField === 'last_checkin' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
                   <span className="inline-flex items-center gap-1.5">Last Check-in <SortIcon field="last_checkin" /></span>
                 </th>
                 <th className="text-left px-5 py-3 font-medium">Location</th>
@@ -261,6 +261,8 @@ export default function DevicesPage() {
                     key={d.id}
                     className="border-b border-slate-800/40 hover:bg-slate-800/30 cursor-pointer transition-colors group"
                     onClick={() => navigate(`/devices/${d.id}`)}
+                    tabIndex={0}
+                    role="button"
                   >
                     <td className="px-5 py-3">
                       <span className={STATUS_BADGE[d.status] || 'badge-inactive'}>
@@ -287,6 +289,7 @@ export default function DevicesPage() {
                             onClick={(e) => { e.stopPropagation(); navigate(`/devices/${d.id}`); }}
                             className="p-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-colors"
                             title="Flag as Stolen"
+                            aria-label="Flag as Stolen"
                           >
                             <Flag size={14} />
                           </button>
@@ -296,6 +299,7 @@ export default function DevicesPage() {
                             onClick={(e) => { e.stopPropagation(); navigate(`/devices/${d.id}`); }}
                             className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-500/10 transition-colors"
                             title="Lock / Track"
+                            aria-label="Lock / Track"
                           >
                             <Lock size={14} />
                           </button>
