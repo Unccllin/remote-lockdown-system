@@ -4,8 +4,8 @@
 
 CREATE TABLE IF NOT EXISTS hw_test_artifacts (
     id              SERIAL PRIMARY KEY,
-    device_id       VARCHAR(36) REFERENCES devices(id) ON DELETE SET NULL,
-    admin_id        INTEGER REFERENCES admins(id) ON DELETE SET NULL,
+    device_id       UUID REFERENCES devices(id) ON DELETE SET NULL,
+    admin_id        UUID REFERENCES admins(id) ON DELETE SET NULL,
     hostname        TEXT,
     harness_version TEXT,
     agent_hash      TEXT,
