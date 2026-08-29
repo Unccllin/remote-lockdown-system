@@ -79,8 +79,10 @@ def check_bitlocker() -> dict:
     }
     for line in result["stdout"].split("\n"):
         line_lower = line.lower().strip()
-        if "protection status" in line_lower and "on" in line_lower:
-            info["protection_on"] = True
+        if "protection status" in line_lower:
+            value = line_lower.split(":", 1)[-1].strip()
+            if value == "on":
+                info["protection_on"] = True
         if "percentage encrypted" in line_lower:
             try:
                 pct = line_lower.split(":")[-1].strip().replace("%", "")

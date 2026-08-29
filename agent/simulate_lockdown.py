@@ -161,6 +161,7 @@ class SimulatedServer:
             return {"error": "Device not registered"}
 
         # Update command status
+        cmd_type = None
         for cmd in self.commands:
             if cmd["id"] == command_id:
                 cmd["status"] = result_status
@@ -270,8 +271,11 @@ class SimulatedAgent:
 
         # UEFI lockdown
         print("  Applying UEFI lockdown (HP WMI)...")
-        bios_password = hp_uefi_lockdown.apply_boot_lockdown(
+        uefi_result = hp_uefi_lockdown.apply_boot_lockdown(
             existing_password=self.cfg.get("uefi_password") or None
+        )
+        bios_password = (
+            uefi_result.get("bios_password") if isinstance(uefi_result, dict) else uefi_result
         )
         if bios_password:
             print(f"  UEFI lockdown: SUCCESS (password: {bios_password})")

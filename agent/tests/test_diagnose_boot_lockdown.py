@@ -122,7 +122,7 @@ class TestCheckAdmin:
 
         with (
             patch("platform.system", return_value="Windows"),
-            patch.object(diagnose_boot_lockdown.ctypes, "windll", mock_windll),
+            patch.object(diagnose_boot_lockdown.ctypes, "windll", mock_windll, create=True),
         ):
             assert diagnose_boot_lockdown.check_admin() is True
 
@@ -133,7 +133,7 @@ class TestCheckAdmin:
 
         with (
             patch("platform.system", return_value="Windows"),
-            patch.object(diagnose_boot_lockdown.ctypes, "windll", mock_windll),
+            patch.object(diagnose_boot_lockdown.ctypes, "windll", mock_windll, create=True),
         ):
             assert diagnose_boot_lockdown.check_admin() is False
 
@@ -144,7 +144,7 @@ class TestCheckAdmin:
 
         with (
             patch("platform.system", return_value="Windows"),
-            patch.object(diagnose_boot_lockdown.ctypes, "windll", mock_windll),
+            patch.object(diagnose_boot_lockdown.ctypes, "windll", mock_windll, create=True),
         ):
             assert diagnose_boot_lockdown.check_admin() is False
 

@@ -263,12 +263,22 @@ class TestCheckAndApplyUpdate:
 
         mock_start.return_value = MagicMock()
 
-        # Make shutil.move fail when replacing the binary
+        # Make shutil.move fail on the first call (replacing binary) but
+        # succeed on the second call (restoring backup in the error handler).
+        move_calls = [0]
+
+        def move_side_effect(src, dst):
+            move_calls[0] += 1
+            if move_calls[0] == 1:
+                raise OSError("disk full")
+            # Second call: restore backup — simulate success
+            Path(dst).write_text(Path(src).read_text())
+
         with (
             patch.object(watchdog, "UPDATE_PENDING_FILE", update_pending),
             patch.object(watchdog, "AGENT_SCRIPT", agent_script),
             patch.object(watchdog, "_agent_proc", MagicMock()),
-            patch("shutil.move", side_effect=OSError("disk full")),
+            patch("shutil.move", side_effect=move_side_effect),
         ):
             result = watchdog.check_and_apply_update()
 

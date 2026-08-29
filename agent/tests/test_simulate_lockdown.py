@@ -25,14 +25,59 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import bcd_lockdown  # noqa: E402
 import hp_uefi_lockdown  # noqa: E402
 
+# Capture the ORIGINAL defaults from the module source (not the current
+# state, which may have been modified by other test modules that ran first).
+_DEFAULT_BCD_STATE = {
+    "bootmenupolicy": "Legacy",
+    "displaybootmenu": "Yes",
+    "bootstatuspolicy": "DisplayAllFailures",
+    "recoveryenabled": "Yes",
+    "nointegritychecks": "No",
+    "allowprereleasesignatures": "No",
+    "timeout": "30",
+}
+_DEFAULT_BIOS_STATE = {
+    "Setup Password": {"is_set": False},
+    "Network (PXE) Boot": "Enable",
+    "Network Boot": "Enable",
+    "USB Boot": "Enable",
+    "USB Storage Boot": "Enable",
+    "USB Floppy/CD Boot": "Enable",
+    "Legacy Boot Options": "Enable",
+    "Legacy Support": "Enable",
+    "Fast Boot": "Disable",
+    "Prompt for Admin password on F12 (Network Boot)": "Disable",
+    "F12 Boot Menu": "Enable",
+    "One-Time Boot Menu": "Enable",
+    "Secure Boot": "Enable",
+    "SecureBoot": "Enable",
+    "Configure Legacy Support and Secure Boot": "Secure Boot",
+    "VT-d": "Enable",
+    "Intel VT-d": "Enable",
+    "Virtualization Technology for Directed I/O": "Enable",
+    "DMA Protection": "Enable",
+    "Sure Start BIOS Settings Protection": "Disable",
+}
+_DEFAULT_WINRE_ENABLED = True
+
 _saved_bcd_dry_run = bcd_lockdown._DRY_RUN
 _saved_hp_dry_run = hp_uefi_lockdown._DRY_RUN
-_saved_bcd_state = copy.deepcopy(bcd_lockdown._DRY_RUN_BCD_STATE)
-_saved_hp_bios_state = copy.deepcopy(hp_uefi_lockdown._DRY_RUN_BIOS_STATE)
-_saved_winre_enabled = bcd_lockdown._DRY_RUN_WINRE_ENABLED
 
-# Importing simulate_lockdown sets dry_run=True on both modules
+# Importing simulate_lockdown sets dry_run=True on both modules as a side
+# effect. We immediately restore the original state so other test modules
+# (test_boot_lockdown_bcd, test_boot_lockdown_uefi, etc.) are not affected.
 import simulate_lockdown  # noqa: E402
+
+bcd_lockdown.set_dry_run(_saved_bcd_dry_run)
+hp_uefi_lockdown.set_dry_run(_saved_hp_dry_run)
+
+
+def _reset_dry_run_state():
+    """Reset dry-run in-memory state to known defaults."""
+    bcd_lockdown._DRY_RUN_BCD_STATE = copy.deepcopy(_DEFAULT_BCD_STATE)
+    hp_uefi_lockdown._DRY_RUN_BIOS_STATE = copy.deepcopy(_DEFAULT_BIOS_STATE)
+    bcd_lockdown._DRY_RUN_WINRE_ENABLED = _DEFAULT_WINRE_ENABLED
+
 
 # ---------------------------------------------------------------------------
 # Module-scoped fixture: restore dry_run state after all tests
@@ -45,9 +90,24 @@ def _restore_dry_run_state():
     yield
     bcd_lockdown.set_dry_run(_saved_bcd_dry_run)
     hp_uefi_lockdown.set_dry_run(_saved_hp_dry_run)
-    bcd_lockdown._DRY_RUN_BCD_STATE = _saved_bcd_state
-    hp_uefi_lockdown._DRY_RUN_BIOS_STATE = _saved_hp_bios_state
-    bcd_lockdown._DRY_RUN_WINRE_ENABLED = _saved_winre_enabled
+    _reset_dry_run_state()
+
+
+@pytest.fixture(autouse=True)
+def _enable_dry_run_for_test():
+    """Enable dry_run for each test and restore in-memory state after.
+
+    simulate_lockdown.py requires dry_run=True to function. We enable it
+    per-test and restore the original state after, so other test modules
+    are not affected.
+    """
+    bcd_lockdown.set_dry_run(True)
+    hp_uefi_lockdown.set_dry_run(True)
+    _reset_dry_run_state()
+    yield
+    bcd_lockdown.set_dry_run(_saved_bcd_dry_run)
+    hp_uefi_lockdown.set_dry_run(_saved_hp_dry_run)
+    _reset_dry_run_state()
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +117,10 @@ def _restore_dry_run_state():
 
 @pytest.fixture
 def redirect_state_files(tmp_path):
-    """Redirect BCD sentinel, boot state, and password backup to temp paths."""
+    """Redirect BCD sentinel, boot state, and password backup to temp paths.
+
+    Also resets the in-memory dry-run state so tests don't leak state.
+    """
     orig_bcd_sentinel = bcd_lockdown.BCD_LOCK_SENTINEL
     orig_boot_state = hp_uefi_lockdown.BOOT_STATE_FILE
     orig_pw_backup = hp_uefi_lockdown.BIOS_PASSWORD_BACKUP_FILE
@@ -66,11 +129,15 @@ def redirect_state_files(tmp_path):
     hp_uefi_lockdown.BOOT_STATE_FILE = tmp_path / ".boot_state"
     hp_uefi_lockdown.BIOS_PASSWORD_BACKUP_FILE = tmp_path / ".bios_pw_backup"
 
+    # Reset dry-run in-memory state to defaults
+    _reset_dry_run_state()
+
     yield tmp_path
 
     bcd_lockdown.BCD_LOCK_SENTINEL = orig_bcd_sentinel
     hp_uefi_lockdown.BOOT_STATE_FILE = orig_boot_state
     hp_uefi_lockdown.BIOS_PASSWORD_BACKUP_FILE = orig_pw_backup
+    _reset_dry_run_state()
 
 
 # ---------------------------------------------------------------------------
@@ -282,11 +349,11 @@ class TestSimulatedAgent:
         """run_lockdown encrypts files, writes sentinel, and ACKs."""
         server = simulate_lockdown.SimulatedServer()
         device = server.register_device("HP-TEST-001", "Test User")
+        lock_cmd = server.flag_stolen(device["id"])
         cfg = self._make_cfg(tmp_folder, tmp_sentinel)
         agent = simulate_lockdown.SimulatedAgent(server, cfg)
 
-        cmd = {"id": "lock-cmd-1", "type": "lockdown"}
-        agent.run_lockdown(cmd)
+        agent.run_lockdown({"id": lock_cmd["id"], "type": "lockdown"})
 
         # Folder is encrypted
         assert len(list(tmp_folder.rglob("*.enc"))) > 0
@@ -296,18 +363,20 @@ class TestSimulatedAgent:
         # Server received ACK with key
         assert server.get_stored_key(device["id"]) is not None
 
-    def test_run_lockdown_skips_if_sentinel_exists(self, tmp_folder, tmp_sentinel):
+    def test_run_lockdown_skips_if_sentinel_exists(
+        self, tmp_folder, tmp_sentinel, redirect_state_files
+    ):
         """run_lockdown skips if the sentinel already exists."""
         server = simulate_lockdown.SimulatedServer()
-        server.register_device("HP-TEST-001", "Test User")
+        device = server.register_device("HP-TEST-001", "Test User")
+        lock_cmd = server.flag_stolen(device["id"])
         cfg = self._make_cfg(tmp_folder, tmp_sentinel)
         agent = simulate_lockdown.SimulatedAgent(server, cfg)
 
         # Pre-create sentinel
         tmp_sentinel.write_text(json.dumps({"locked": True}))
 
-        cmd = {"id": "lock-cmd-1", "type": "lockdown"}
-        agent.run_lockdown(cmd)
+        agent.run_lockdown({"id": lock_cmd["id"], "type": "lockdown"})
 
         # Files should NOT be encrypted (skipped)
         assert (tmp_folder / "file1.txt").exists()
@@ -319,23 +388,27 @@ class TestSimulatedAgent:
         """run_unlock decrypts files, removes sentinel, and ACKs."""
         server = simulate_lockdown.SimulatedServer()
         device = server.register_device("HP-TEST-001", "Test User")
+        lock_cmd = server.flag_stolen(device["id"])
         cfg = self._make_cfg(tmp_folder, tmp_sentinel)
         agent = simulate_lockdown.SimulatedAgent(server, cfg)
 
         # First, lock down
-        lock_cmd = {"id": "lock-1", "type": "lockdown"}
-        agent.run_lockdown(lock_cmd)
+        agent.run_lockdown({"id": lock_cmd["id"], "type": "lockdown"})
         stored_key = server.get_stored_key(device["id"])
         assert stored_key is not None
 
+        # Queue unlock command on the server
+        unlock_cmd = server.recover_device(device["id"])
+
         # Now unlock
-        unlock_cmd = {
-            "id": "unlock-1",
-            "type": "unlock",
-            "key_material": stored_key,
-            "bios_password": "fake_pw",
-        }
-        agent.run_unlock(unlock_cmd)
+        agent.run_unlock(
+            {
+                "id": unlock_cmd["id"],
+                "type": "unlock",
+                "key_material": stored_key,
+                "bios_password": "fake_pw",
+            }
+        )
 
         # Folder is decrypted
         assert (tmp_folder / "file1.txt").read_text() == "hello world"
@@ -343,19 +416,21 @@ class TestSimulatedAgent:
         # Sentinel removed
         assert not tmp_sentinel.exists()
 
-    def test_run_unlock_fails_without_key_material(self, tmp_folder, tmp_sentinel):
+    def test_run_unlock_fails_without_key_material(
+        self, tmp_folder, tmp_sentinel, redirect_state_files
+    ):
         """run_unlock ACKs as 'failed' when no key_material is provided."""
         server = simulate_lockdown.SimulatedServer()
-        server.register_device("HP-TEST-001", "Test User")
+        device = server.register_device("HP-TEST-001", "Test User")
+        unlock_cmd = server.recover_device(device["id"])
         cfg = self._make_cfg(tmp_folder, tmp_sentinel)
         agent = simulate_lockdown.SimulatedAgent(server, cfg)
 
-        cmd = {"id": "unlock-1", "type": "unlock"}
-        agent.run_unlock(cmd)
+        agent.run_unlock({"id": unlock_cmd["id"], "type": "unlock"})
 
         # Command should be ACKed as failed
         for c in server.commands:
-            if c["id"] == "unlock-1":
+            if c["id"] == unlock_cmd["id"]:
                 assert c["status"] == "failed"
 
     def test_poll_and_execute_lockdown(self, tmp_folder, tmp_sentinel, redirect_state_files):
@@ -367,9 +442,10 @@ class TestSimulatedAgent:
         cfg = self._make_cfg(tmp_folder, tmp_sentinel)
         agent = simulate_lockdown.SimulatedAgent(server, cfg)
 
-        result = agent.poll_and_execute()
+        agent.poll_and_execute()
 
-        assert result["status"] == "locked"
+        # Device status on the server is updated to "locked" after ACK
+        assert server.devices[device["id"]]["status"] == "locked"
         assert tmp_sentinel.exists()
 
     def test_poll_and_execute_unlock(self, tmp_folder, tmp_sentinel, redirect_state_files):
@@ -388,9 +464,10 @@ class TestSimulatedAgent:
         server.recover_device(device["id"])
 
         # Second poll: unlock
-        result = agent.poll_and_execute()
+        agent.poll_and_execute()
 
-        assert result["status"] == "active"
+        # Device status on the server is updated to "active" after ACK
+        assert server.devices[device["id"]]["status"] == "active"
         assert not tmp_sentinel.exists()
         assert (tmp_folder / "file1.txt").read_text() == "hello world"
 
@@ -442,12 +519,16 @@ class TestRunSimulation:
         orig_pw_backup = hp_uefi_lockdown.BIOS_PASSWORD_BACKUP_FILE
         hp_uefi_lockdown.BIOS_PASSWORD_BACKUP_FILE = tmp_path / ".bios_pw_backup"
 
+        # Reset dry-run state to defaults before running the full simulation
+        _reset_dry_run_state()
+
         try:
             simulate_lockdown.run_simulation()
         except SystemExit as e:
             pytest.fail(f"run_simulation exited with code {e.code}")
         finally:
             hp_uefi_lockdown.BIOS_PASSWORD_BACKUP_FILE = orig_pw_backup
+            _reset_dry_run_state()
 
         captured = capsys.readouterr()
         assert "SIMULATION COMPLETE" in captured.out
