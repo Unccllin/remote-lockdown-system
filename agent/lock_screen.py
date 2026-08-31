@@ -35,6 +35,23 @@ import threading
 import time
 from pathlib import Path
 
+
+# WNDCLASS structure — not in ctypes.wintypes, must define it
+class WNDCLASS(ctypes.Structure):
+    _fields_ = [
+        ("style", ctypes.wintypes.UINT),
+        ("lpfnWndProc", ctypes.WNDPROC),
+        ("cbClsExtra", ctypes.c_int),
+        ("cbWndExtra", ctypes.c_int),
+        ("hInstance", ctypes.wintypes.HINSTANCE),
+        ("hIcon", ctypes.wintypes.HICON),
+        ("hCursor", ctypes.wintypes.HANDLE),
+        ("hbrBackground", ctypes.wintypes.HBRUSH),
+        ("lpszMenuName", ctypes.wintypes.LPCWSTR),
+        ("lpszClassName", ctypes.wintypes.LPCWSTR),
+    ]
+
+
 # Win32 constants
 HWND_TOPMOST = -1
 SWP_NOMOVE = 0x0002
@@ -216,7 +233,7 @@ class LockScreenWindow:
             return False
 
         # Register window class
-        wc = ctypes.wintypes.WNDCLASS()
+        wc = WNDCLASS()
         wc.lpfnWndProc = ctypes.WNDPROC(self._wnd_proc)
         wc.hInstance = self.hinstance
         wc.lpszClassName = "LockdownLockScreen"

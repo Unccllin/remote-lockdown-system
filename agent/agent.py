@@ -67,7 +67,7 @@ try:
     import lock_screen as lock_screen_module
 
     _lock_screen_available = True
-except ImportError:
+except (ImportError, AttributeError, OSError):
     _lock_screen_available = False
 
 # Master dry-run switch: when True, ALL lock modules log what they would do
