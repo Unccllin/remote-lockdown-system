@@ -1686,6 +1686,10 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     folder = cfg["lockdown_folder"]
     sentinel = cfg["lock_sentinel"]
 
+    # Report location immediately so the operator knows where the device is
+    log.info("Reporting location before lockdown...")
+    report_location(cfg)
+
     # Atomically create the sentinel to prevent a TOCTOU race when multiple
     # threads (or the deadman switch) call handle_lockdown concurrently.
     # O_CREAT | O_EXCL fails atomically if the file already exists — only one
@@ -3047,8 +3051,11 @@ def main() -> None:
                 else:
                     log.warning("Unknown command type: %s", cmd_type)
 
-            # If device is in tracking mode, report location periodically
-            if current_status == "tracking":
+            # Report location periodically when in tracking or stolen mode.
+            # Tracking: covert mode — agent reports location silently.
+            # Stolen: device is locked down — still report location so the
+            # operator can track where the device is.
+            if current_status in ("tracking", "stolen"):
                 now = time.time()
                 if now - last_location_report >= cfg["location_interval"]:
                     report_location(cfg)
