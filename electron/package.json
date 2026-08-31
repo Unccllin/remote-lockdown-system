@@ -116,26 +116,6 @@
         "filter": [
           "**/*"
         ]
-      },
-      {
-        "from": "../agent/dist",
-        "to": "agent",
-        "filter": [
-          "lockdown-agent",
-          "lockdown-agent.exe",
-          "lockdown-watchdog",
-          "lockdown-watchdog.exe",
-          "lockdown-recovery",
-          "lockdown-recovery.exe"
-        ]
-      },
-      {
-        "from": "../agent/bin",
-        "to": "agent/bin",
-        "filter": [
-          "nssm.exe",
-          "nssm"
-        ]
       }
     ],
     "win": {
