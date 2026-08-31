@@ -208,6 +208,11 @@ def enroll_device_with_token(
 def write_config(
     server_url: str, api_key: str, hostname: str, device_id: str, boot_lock_enabled: bool = True
 ) -> Path:
+    """Write the agent config file atomically.
+
+    Writes to a temp file first, then renames to the final path so a
+    crash during the write doesn't leave a corrupt config.
+    """
     config = {
         "server_url": server_url.rstrip("/"),
         "api_key": api_key,
@@ -223,7 +228,21 @@ def write_config(
         "server_supports_ack_dedup": True,
     }
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+
+    # Atomic write: write to temp file, then rename
+    tmp_file = CONFIG_FILE.with_suffix(".json.tmp")
+    try:
+        tmp_file.write_text(json.dumps(config, indent=2))
+        # On Windows, os.replace() atomically replaces the target
+        os.replace(str(tmp_file), str(CONFIG_FILE))
+    except OSError as e:
+        if tmp_file.exists():
+            tmp_file.unlink()
+        raise RuntimeError(f"Failed to write config file: {e}") from e
+
+    # Verify the file was actually written
+    if not CONFIG_FILE.exists():
+        raise RuntimeError(f"Config file was not created at {CONFIG_FILE}")
     return CONFIG_FILE
 
 
@@ -313,15 +332,27 @@ def create_lockdown_folder():
         )
 
 
-def install_service() -> bool:
+def install_service() -> tuple[bool, str]:
+    """Install the scheduled task + registry run key.
+
+    Returns (success, message) so the GUI can show the actual error
+    instead of a generic "module not found".
+    """
     try:
         import service_installer
 
-        return service_installer.install()
+        result = service_installer.install()
+        if result:
+            return True, "installed"
+        return False, "service_installer.install() returned False — check agent.log"
     except ImportError:
-        return False
-    except (subprocess.SubprocessError, OSError, RuntimeError):
-        return False
+        return False, "service_installer module not found"
+    except FileNotFoundError as e:
+        return False, f"missing system binary: {e}"
+    except subprocess.SubprocessError as e:
+        return False, f"subprocess error: {e}"
+    except (OSError, RuntimeError) as e:
+        return False, f"{type(e).__name__}: {e}"
 
 
 def add_defender_exclusions() -> bool:
@@ -699,6 +730,15 @@ class SetupWizard:
                         self.mac_address if self.mac_address != "N/A" else None,
                         self.serial_number if self.serial_number != "N/A" else None,
                     )
+                    # Validate enrollment response before using it
+                    if not isinstance(data, dict):
+                        raise Exception(
+                            f"Invalid enrollment response: expected dict, got {type(data).__name__}"
+                        )
+                    if not data.get("api_key"):
+                        raise Exception("Enrollment response missing api_key")
+                    if not data.get("device") or not data["device"].get("id"):
+                        raise Exception("Enrollment response missing device.id")
                     self.install_result = data
                     self.root.after(0, self._log, f"  Device ID: {data['device']['id']}")
                     self.root.after(
@@ -758,11 +798,11 @@ class SetupWizard:
                     self.root.after(0, self._log, f"  Folder: {LOCKDOWN_FOLDER}")
 
                 elif "Installing service" in msg:
-                    success = install_service()
+                    success, svc_msg = install_service()
                     self.root.after(
                         0,
                         self._log,
-                        f"  Service: {'installed' if success else 'skipped (module not found)'}",
+                        f"  Service: {svc_msg}",
                     )
 
                 elif "Launching" in msg:

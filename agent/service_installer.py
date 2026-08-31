@@ -179,11 +179,20 @@ def install() -> bool:
         log.error("Service installation requires admin privileges")
         return False
 
+    # Check that required Windows binaries exist
+    required_binaries = ["schtasks", "reg", "cmd"]
+    for binary in required_binaries:
+        try:
+            subprocess.run(["where", binary], capture_output=True, text=True, timeout=5, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            log.error("Required binary '%s' not found on PATH", binary)
+            return False
+
     watchdog_cmd = _build_watchdog_command()
     agent_cmd = _build_agent_command()
 
     # --- 1. Create the scheduled task ---
-    # Delete existing task if it exists
+    # Delete existing task if it exists (ignore errors — may not exist yet)
     subprocess.run(
         ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
         capture_output=True,
@@ -271,11 +280,18 @@ Set-ScheduledTask -TaskName '{TASK_NAME}' -Trigger $task.Triggers
 
     # --- 3. Launch the agent immediately ---
     log.info("Launching agent immediately...")
-    subprocess.Popen(
-        ["cmd", "/c", agent_cmd],
-        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-        close_fds=True,
-    )
+    try:
+        subprocess.Popen(
+            ["cmd", "/c", agent_cmd],
+            creationflags=subprocess.CREATE_NO_WINDOW
+            if hasattr(subprocess, "CREATE_NO_WINDOW")
+            else 0,
+            close_fds=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log.error("Failed to launch agent: %s", e)
+        # Don't return False — the scheduled task is installed and will
+        # start the agent on next reboot or 5-min trigger
 
     # --- 4. Apply tamper protection (file ACLs + registry DENY ACEs) ---
     if _HAS_TAMPER_PROTECTION:

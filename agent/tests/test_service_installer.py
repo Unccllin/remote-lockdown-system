@@ -114,8 +114,14 @@ class TestInstallFlow:
     @patch.object(service_installer, "_is_admin", return_value=True)
     @patch.object(service_installer, "subprocess")
     def test_install_fails_if_schtasks_create_fails(self, mock_subprocess, mock_admin, mock_win):
-        # First subprocess.run (schtasks /Delete) succeeds, second (schtasks /Create) fails
+        # subprocess.run calls in order:
+        # 1-3. where schtasks/reg/cmd (binary checks) — all succeed
+        # 4. schtasks /Delete — succeeds
+        # 5. schtasks /Create — fails
         mock_subprocess.run.side_effect = [
+            MagicMock(returncode=0, stderr="", stdout=""),  # where schtasks
+            MagicMock(returncode=0, stderr="", stdout=""),  # where reg
+            MagicMock(returncode=0, stderr="", stdout=""),  # where cmd
             MagicMock(returncode=0, stderr="", stdout=""),  # Delete existing
             MagicMock(returncode=1, stderr="Access denied", stdout=""),  # Create fails
         ]

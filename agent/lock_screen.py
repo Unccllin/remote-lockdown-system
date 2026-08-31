@@ -24,23 +24,46 @@ Build:
     pyinstaller lock_screen.spec --noconfirm
 """
 
+# --- stdout/stderr guard ---
+# When built with PyInstaller console=False, sys.stdout/stderr are None.
+import os
+import sys
+
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+
 import argparse
 import ctypes
 import ctypes.wintypes
-import os
+import logging
 import platform
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
+
+log = logging.getLogger("lock_screen")
+
+
+# WNDPROC — function pointer type for window procedures.
+# ctypes.WNDPROC doesn't exist; we must define it with WINFUNCTYPE.
+# Signature: LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM)
+WNDPROC = ctypes.WINFUNCTYPE(
+    ctypes.wintypes.LRESULT,  # return type
+    ctypes.wintypes.HWND,  # hwnd
+    ctypes.wintypes.UINT,  # msg
+    ctypes.wintypes.WPARAM,  # wParam
+    ctypes.wintypes.LPARAM,  # lParam
+)
 
 
 # WNDCLASS structure — not in ctypes.wintypes, must define it
 class WNDCLASS(ctypes.Structure):
     _fields_ = [
         ("style", ctypes.wintypes.UINT),
-        ("lpfnWndProc", ctypes.WNDPROC),
+        ("lpfnWndProc", WNDPROC),
         ("cbClsExtra", ctypes.c_int),
         ("cbWndExtra", ctypes.c_int),
         ("hInstance", ctypes.wintypes.HINSTANCE),
@@ -108,7 +131,7 @@ def _disable_task_manager(disable: bool) -> None:
         winreg.SetValueEx(key, TASKMGR_VALUE, 0, winreg.REG_DWORD, 1 if disable else 0)
         winreg.CloseKey(key)
     except (OSError, PermissionError) as e:
-        print(f"Warning: Could not modify Task Manager registry: {e}", file=sys.stderr)
+        log.warning("Could not modify Task Manager registry: %s", e)
 
 
 def _block_keys() -> None:
@@ -229,7 +252,7 @@ class LockScreenWindow:
     def create(self) -> bool:
         """Create the fullscreen topmost window."""
         if not _is_windows():
-            print("Lock screen is Windows-only", file=sys.stderr)
+            log.error("Lock screen is Windows-only")
             return False
 
         # Register window class
@@ -244,7 +267,7 @@ class LockScreenWindow:
         if not ctypes.windll.user32.RegisterClassW(ctypes.byref(wc)):
             err = ctypes.windll.kernel32.GetLastError()
             if err != 1410:  # ERROR_CLASS_ALREADY_EXISTS
-                print(f"RegisterClass failed: {err}", file=sys.stderr)
+                log.error("RegisterClass failed: %s", err)
                 return False
 
         # Get virtual screen bounds (all monitors)
@@ -271,7 +294,7 @@ class LockScreenWindow:
 
         if not self.hwnd:
             err = ctypes.windll.kernel32.GetLastError()
-            print(f"CreateWindowEx failed: {err}", file=sys.stderr)
+            log.error("CreateWindowEx failed: %s", err)
             return False
 
         # Force topmost
@@ -375,7 +398,7 @@ def launch(test_mode: bool = False) -> None:
     not found (e.g. running from source), it relaunches itself.
     """
     if not _is_windows():
-        print("Lock screen is Windows-only", file=sys.stderr)
+        log.error("Lock screen is Windows-only")
         return
 
     if getattr(sys, "frozen", False):
@@ -457,16 +480,16 @@ def main() -> None:
 
     if args.unlock:
         remove()
-        print("Lock screen removed.")
+        log.info("Lock screen removed.")
         return
 
     if not _is_windows():
-        print("Lock screen is Windows-only", file=sys.stderr)
+        log.error("Lock screen is Windows-only")
         sys.exit(1)
 
     # If already running, don't launch another
     if is_running() and not args.test:
-        print("Lock screen is already running.", file=sys.stderr)
+        log.warning("Lock screen is already running.")
         return
 
     win = LockScreenWindow(test_mode=args.test)
@@ -474,4 +497,26 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:  # noqa: BLE001 — catch-all so crash is logged
+        import traceback
+
+        crash_file = (
+            Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData"))
+            / "LockdownAgent"
+            / "lockscreen_crash.log"
+        )
+        try:
+            crash_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(crash_file, "a", encoding="utf-8") as f:
+                f.write(f"\n{'=' * 60}\n")
+                f.write(f"LOCKSCREEN CRASH at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Error: {type(e).__name__}: {e}\n")
+                f.write(traceback.format_exc())
+                f.write(f"{'=' * 60}\n")
+        except OSError:
+            pass
+        raise

@@ -111,9 +111,14 @@ exe = EXE(
         'VCRUNTIME140_1.dll',
     ],
     runtime_tmpdir=None,
-    console=False,  # Run as background process — no visible window.
-    # The agent logs to a file (agent.log in the install directory).
-    # Use --debug flag to enable console output for troubleshooting.
+    # console=True + hide_console='hide-late' keeps stdout/stderr working
+    # when launched from cmd/PowerShell (--version, --debug work) but hides
+    # the console window when double-clicked or launched by the scheduler.
+    # This fixes the "no output" bug where console=False made sys.stdout
+    # None, causing --version to silently fail and crash tracebacks to be
+    # invisible.
+    console=True,
+    hide_console='hide-late',
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

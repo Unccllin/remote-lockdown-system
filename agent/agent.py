@@ -31,9 +31,22 @@ USAGE:
     pythonw agent.py --silent
 """
 
+# --- stdout/stderr guard ---
+# When built with PyInstaller console=False (windowed mode), sys.stdout
+# and sys.stderr are None. This causes print() and argparse to crash with
+# AttributeError. Redirect to os.devnull so the agent doesn't crash.
+import os
+import sys
+
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+
 import argparse
 import base64
 import configparser
+import ctypes
 import hashlib
 import hmac
 import json
@@ -733,7 +746,7 @@ def apply_lock_screen() -> None:
             _lock_workstation()
     else:
         _lock_workstation()
-    print(_BANNER)
+    log.warning(_BANNER)
 
 
 # ---------------------------------------------------------------------------
@@ -2862,6 +2875,11 @@ def main() -> None:
     )
     parser.add_argument("--version", "-v", action="store_true", help="Show version and exit")
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode: attach to console, show all output, write detailed log",
+    )
+    parser.add_argument(
         "--lockscreen",
         action="store_true",
         help="Run as fullscreen lock screen overlay (internal use — launched by agent)",
@@ -2873,8 +2891,28 @@ def main() -> None:
     )
     args, _ = parser.parse_known_args()
 
+    # --- Debug mode: reattach to parent console so output is visible ---
+    # When built with console=False (PyInstaller GUI mode), stdout/stderr
+    # are None. --debug reattaches to the parent process's console so
+    # the user can see output when running from cmd/PowerShell.
+    if args.debug:
+        try:
+            ctypes.windll.kernel32.AttachConsole(-1)  # ATTACH_PARENT_PROCESS
+            # Reopen stdout/stderr to the console
+            sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+            sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+        except (OSError, AttributeError, FileNotFoundError):
+            pass  # Not Windows or no parent console
+
     if args.version:
-        print(f"lockdown-agent {AGENT_VERSION} (frozen={_is_frozen()})")
+        # Use sys.stdout if available (console=True build), otherwise
+        # write to stderr or a file so --version always works.
+        version_msg = f"lockdown-agent {AGENT_VERSION} (frozen={_is_frozen()})"
+        try:
+            print(version_msg)
+        except (AttributeError, OSError):
+            # console=False build — sys.stdout is None
+            sys.stderr.write(version_msg + "\n") if sys.stderr else None
         sys.exit(0)
 
     # If --lockscreen flag is set, run the lock screen overlay instead of the agent
@@ -2883,7 +2921,7 @@ def main() -> None:
             win = lock_screen_module.LockScreenWindow(test_mode=args.lockscreen_test)
             win.run()
         else:
-            print("Lock screen not available", file=sys.stderr)
+            log.error("Lock screen not available")
         sys.exit(0)
 
     # Propagate master dry-run switch to all lock modules
@@ -3071,4 +3109,29 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:  # noqa: BLE001 — catch-all so crash is logged
+        # When console=False, there's no stderr. Write to a crash log file
+        # so we can diagnose why the agent died.
+        import traceback
+
+        crash_file = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
+        crash_file = crash_file / "crash.log"
+        try:
+            crash_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(crash_file, "a", encoding="utf-8") as f:
+                f.write(f"\n{'=' * 60}\n")
+                f.write(f"CRASH at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Version: {AGENT_VERSION}\n")
+                f.write(f"Python: {sys.version}\n")
+                f.write(f"Platform: {platform.platform()}\n")
+                f.write(f"Frozen: {_is_frozen()}\n")
+                f.write(f"Error: {type(e).__name__}: {e}\n")
+                f.write(traceback.format_exc())
+                f.write(f"{'=' * 60}\n")
+        except OSError:
+            pass  # Can't even write crash log — nothing more we can do
+        raise
