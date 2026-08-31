@@ -76,7 +76,7 @@ function createWindow(serverPort) {
       nodeIntegration: false,
       sandbox: true,
     },
-    show: false,
+    show: true,
   });
 
   if (isDev) {
@@ -135,14 +135,22 @@ app.whenReady().then(async () => {
     process.env.ELECTRON_API_BASE_URL = config.worker_url;
     console.log('[main] API base URL:', config.worker_url);
 
-    // Start a static-only server to serve the dashboard UI
-    // (BrowserRouter requires an HTTP origin — file:// doesn't work)
-    const dashboardDistPath = getDashboardDistPath();
-    const { startStaticServer } = require('./server-starter');
-    serverInfo = await startStaticServer({ dashboardDistPath });
-    console.log(`[main] Static server started on port ${serverInfo.port}`);
+    // In dev mode, load directly from the Vite dev server — no static server needed.
+    // In production mode, start a static server to serve the built dashboard.
+    const isDev = process.env.ELECTRON_IS_DEV === '1' || !app.isPackaged;
+    let serverPort = null;
 
-    createWindow(serverInfo.port);
+    if (!isDev) {
+      const dashboardDistPath = getDashboardDistPath();
+      const { startStaticServer } = require('./server-starter');
+      serverInfo = await startStaticServer({ dashboardDistPath });
+      serverPort = serverInfo.port;
+      console.log(`[main] Static server started on port ${serverInfo.port}`);
+    } else {
+      console.log('[main] Dev mode — loading from Vite dev server');
+    }
+
+    createWindow(serverPort);
 
     // Auto-updater (only works in production)
     try {
