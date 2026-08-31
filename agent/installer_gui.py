@@ -262,6 +262,30 @@ def download_agent_exe(server_url: str, dest_dir: Path) -> Path | None:
         return None
 
 
+def download_lockscreen_exe(server_url: str, dest_dir: Path) -> Path | None:
+    """Download the lock screen overlay from the Worker (GET /api/download/lockscreen).
+
+    The lock screen is a fullscreen topmost window that blocks all desktop
+    interaction during lockdown. Without it, the agent falls back to
+    LockWorkStation() which a thief can bypass by logging back in.
+    """
+    url = f"{server_url.rstrip('/')}/api/download/lockscreen"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / "lockdown-lockscreen.exe"
+    try:
+        resp = requests.get(url, timeout=120, verify=True, stream=True)
+        if resp.status_code != 200:
+            return None
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=65536):
+                f.write(chunk)
+        return dest if dest.exists() and dest.stat().st_size > 1000000 else None
+    except (requests.RequestException, OSError):
+        if dest.exists():
+            dest.unlink()
+        return None
+
+
 def install_files(agent_exe: Path) -> Path:
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
     dest = INSTALL_DIR / AGENT_EXE_NAME
@@ -716,6 +740,18 @@ class SetupWizard:
                         self.root.after(0, self._log, f"  Downloaded: {agent_exe}")
                     dest = install_files(agent_exe)
                     self.root.after(0, self._log, f"  Agent: {dest}")
+
+                    # Download and install the lock screen overlay
+                    self.root.after(0, self._log, "  Downloading lock screen overlay...")
+                    lockscreen = download_lockscreen_exe(self.server_url.get(), INSTALL_DIR)
+                    if lockscreen:
+                        self.root.after(0, self._log, f"  Lock screen: {lockscreen}")
+                    else:
+                        self.root.after(
+                            0,
+                            self._log,
+                            "  Lock screen not available — will fall back to LockWorkStation",
+                        )
 
                 elif "Creating lockdown" in msg:
                     create_lockdown_folder()
