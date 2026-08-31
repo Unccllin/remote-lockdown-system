@@ -62,6 +62,14 @@ try:
 except ImportError:
     _boot_lock_modules_available = False
 
+# Lock screen overlay (fullscreen topmost window that blocks interaction)
+try:
+    import lock_screen as lock_screen_module
+
+    _lock_screen_available = True
+except ImportError:
+    _lock_screen_available = False
+
 # Master dry-run switch: when True, ALL lock modules log what they would do
 # instead of executing. Set via LOCKDOWN_DRY_RUN=1 env var.
 # This propagates to bcd_lockdown and hp_uefi_lockdown at startup.
@@ -705,11 +713,26 @@ def _lock_workstation() -> None:
 
 
 def apply_lock_screen() -> None:
-    """Lock the workstation and display the stolen banner."""
+    """Lock the workstation and display the stolen banner.
+
+    On Windows, launches a fullscreen topmost overlay window that blocks
+    all desktop interaction (separate process, can't be killed from the
+    agent's main process). Falls back to LockWorkStation() if the overlay
+    module is not available.
+    """
     if _DRY_RUN:
         log.info("[DRY-RUN] Would lock workstation and display stolen banner — skipping")
         return
-    _lock_workstation()
+    # Launch fullscreen lock screen overlay (Windows only)
+    if _lock_screen_available and platform.system() == "Windows":
+        try:
+            lock_screen_module.launch()
+            log.info("Fullscreen lock screen overlay launched")
+        except (OSError, RuntimeError) as e:
+            log.warning("Lock screen overlay failed: %s — falling back to LockWorkStation", e)
+            _lock_workstation()
+    else:
+        _lock_workstation()
     print(_BANNER)
 
 
@@ -753,14 +776,33 @@ def stop_lock_guardian() -> None:
 
 
 def _lock_guardian_loop(stop_event: threading.Event) -> None:
-    """Background loop — re-lock the screen at regular intervals."""
+    """Background loop — re-lock the screen at regular intervals.
+
+    On Windows, also re-launches the fullscreen overlay if it was killed
+    (e.g. via Task Manager before we disabled it).
+    """
     while not stop_event.is_set():
         _lock_workstation()
+        # Re-assert the fullscreen overlay if it's not running
+        if _lock_screen_available and platform.system() == "Windows":
+            try:
+                if not lock_screen_module.is_running():
+                    lock_screen_module.launch()
+                    log.info("Lock guardian re-launched lock screen overlay")
+            except (OSError, RuntimeError) as e:
+                log.debug("Lock guardian overlay re-launch failed: %s", e)
         stop_event.wait(LOCK_GUARDIAN_INTERVAL)
 
 
 def remove_lock_screen() -> None:
     stop_lock_guardian()
+    # Kill the fullscreen lock screen overlay process
+    if _lock_screen_available and platform.system() == "Windows":
+        try:
+            lock_screen_module.remove()
+            log.info("Lock screen overlay removed")
+        except (OSError, RuntimeError) as e:
+            log.warning("Failed to remove lock screen overlay: %s", e)
     log.info("Lock screen removed — normal login restored")
 
 
@@ -2815,10 +2857,29 @@ def main() -> None:
         help="Mark this run as startup-triggered (logs a banner, does not change behavior)",
     )
     parser.add_argument("--version", "-v", action="store_true", help="Show version and exit")
+    parser.add_argument(
+        "--lockscreen",
+        action="store_true",
+        help="Run as fullscreen lock screen overlay (internal use — launched by agent)",
+    )
+    parser.add_argument(
+        "--lockscreen-test",
+        action="store_true",
+        help="Run lock screen in test mode (ESC to close)",
+    )
     args, _ = parser.parse_known_args()
 
     if args.version:
         print(f"lockdown-agent {AGENT_VERSION} (frozen={_is_frozen()})")
+        sys.exit(0)
+
+    # If --lockscreen flag is set, run the lock screen overlay instead of the agent
+    if args.lockscreen or args.lockscreen_test:
+        if _lock_screen_available and platform.system() == "Windows":
+            win = lock_screen_module.LockScreenWindow(test_mode=args.lockscreen_test)
+            win.run()
+        else:
+            print("Lock screen not available", file=sys.stderr)
         sys.exit(0)
 
     # Propagate master dry-run switch to all lock modules

@@ -267,6 +267,14 @@ def install_files(agent_exe: Path) -> Path:
     dest = INSTALL_DIR / AGENT_EXE_NAME
     if agent_exe.resolve() != dest.resolve():
         shutil.copy2(agent_exe, dest)
+
+    # Also install the lock screen overlay if it's next to the agent exe
+    lockscreen_src = agent_exe.parent / "lockdown-lockscreen.exe"
+    if lockscreen_src.exists():
+        lockscreen_dest = INSTALL_DIR / "lockdown-lockscreen.exe"
+        if lockscreen_src.resolve() != lockscreen_dest.resolve():
+            shutil.copy2(lockscreen_src, lockscreen_dest)
+
     return dest
 
 

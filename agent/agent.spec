@@ -50,7 +50,8 @@ hiddenimports += ['state_crypto', 'tpm_seal']
 # duress: duress code + hidden file trigger
 # tamper_protection: 5-layer tamper detection (Windows-only, lazy import)
 # watchdog: process monitor (Windows-only, lazy import)
-hiddenimports += ['duress', 'tamper_protection', 'watchdog']
+# lock_screen: fullscreen topmost overlay that blocks desktop interaction
+hiddenimports += ['duress', 'tamper_protection', 'watchdog', 'lock_screen']
 
 # Data files to include (config template)
 datas = [

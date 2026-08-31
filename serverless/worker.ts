@@ -1555,6 +1555,10 @@ export default {
       return handleDownloadBinary(env, 'agent');
     }
 
+    if (path === '/api/download/lockscreen' && method === 'GET') {
+      return handleDownloadBinary(env, 'lockscreen');
+    }
+
     return errorResponse('Not found', 404);
   },
 };
@@ -1569,7 +1573,10 @@ async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
   if (!data) {
     return errorResponse(`${name} binary not available — upload via wrangler kv:key put`, 404);
   }
-  const filename = name === 'installer' ? 'lockdown-setup.exe' : 'lockdown-agent.exe';
+  const filename =
+    name === 'installer' ? 'lockdown-setup.exe' :
+    name === 'lockscreen' ? 'lockdown-lockscreen.exe' :
+    'lockdown-agent.exe';
   return new Response(data, {
     status: 200,
     headers: {
