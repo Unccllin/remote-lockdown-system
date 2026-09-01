@@ -1559,9 +1559,31 @@ export default {
       return handleDownloadBinary(env, 'lockscreen');
     }
 
+    if (path === '/api/download/deploy.ps1' && method === 'GET') {
+      return handleDownloadScript(env, 'deploy');
+    }
+
     return errorResponse('Not found', 404);
   },
 };
+
+/**
+ * GET /api/download/deploy.ps1
+ * Serves a PowerShell script stored in KV (key: script:deploy).
+ */
+async function handleDownloadScript(env: Env, name: string): Promise<Response> {
+  const data = await env.LOCKDOWN_KV.get(`script:${name}`, { type: 'arrayBuffer' });
+  if (!data) {
+    return errorResponse(`${name} script not available`, 404);
+  }
+  return new Response(data, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': `attachment; filename="deploy.ps1"`,
+      'Cache-Control': 'no-cache',
+    },
+  });
+}
 
 /**
  * GET /api/download/installer or /api/download/agent
