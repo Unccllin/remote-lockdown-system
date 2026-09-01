@@ -50,8 +50,24 @@ log = logging.getLogger("lock_screen")
 # WNDPROC — function pointer type for window procedures.
 # ctypes.WNDPROC doesn't exist; we must define it with WINFUNCTYPE.
 # Signature: LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM)
+# LRESULT is not in ctypes.wintypes on all Python versions — use c_long.
+LRESULT = ctypes.c_long
+
+
+# PAINTSTRUCT — not in ctypes.wintypes on all Python versions.
+class PAINTSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("hdc", ctypes.wintypes.HDC),
+        ("fErase", ctypes.wintypes.BOOL),
+        ("rcPaint", ctypes.wintypes.RECT),
+        ("fRestore", ctypes.wintypes.BOOL),
+        ("fIncUpdate", ctypes.wintypes.BOOL),
+        ("rgbReserved", ctypes.c_byte * 32),
+    ]
+
+
 WNDPROC = ctypes.WINFUNCTYPE(
-    ctypes.wintypes.LRESULT,  # return type
+    LRESULT,  # return type
     ctypes.wintypes.HWND,  # hwnd
     ctypes.wintypes.UINT,  # msg
     ctypes.wintypes.WPARAM,  # wParam
@@ -189,7 +205,7 @@ class LockScreenWindow:
 
     def _paint(self, hwnd: int) -> None:
         """Paint the stolen banner on the window."""
-        ps = ctypes.wintypes.PAINTSTRUCT()
+        ps = PAINTSTRUCT()
         hdc = ctypes.windll.user32.BeginPaint(hwnd, ctypes.byref(ps))
 
         # Get client rect
