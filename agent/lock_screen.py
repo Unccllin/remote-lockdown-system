@@ -257,7 +257,7 @@ class LockScreenWindow:
 
         # Register window class
         wc = WNDCLASS()
-        wc.lpfnWndProc = ctypes.WNDPROC(self._wnd_proc)
+        wc.lpfnWndProc = WNDPROC(self._wnd_proc)
         wc.hInstance = self.hinstance
         wc.lpszClassName = "LockdownLockScreen"
         wc.style = CS_HREDRAW | CS_VREDRAW

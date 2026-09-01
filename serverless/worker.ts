@@ -1563,6 +1563,10 @@ export default {
       return handleDownloadScript(env, 'deploy');
     }
 
+    if (path === '/api/download/reenroll.ps1' && method === 'GET') {
+      return handleDownloadScript(env, 'reenroll');
+    }
+
     return errorResponse('Not found', 404);
   },
 };

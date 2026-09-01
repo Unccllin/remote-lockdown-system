@@ -38,7 +38,7 @@ param(
 
 $ErrorActionPreference = "Continue"
 $INSTALL_DIR = "C:\ProgramData\LockdownAgent"
-$WORKER_API = "$ServerUrl/api"
+$WORKER_API = $ServerUrl
 
 function Write-Step($msg) {
     Write-Host "`n[STEP] $msg" -ForegroundColor Cyan
@@ -115,7 +115,7 @@ Write-OK "Install dir: $INSTALL_DIR"
 Write-Step "Downloading agent binary..."
 $agentPath = Join-Path $INSTALL_DIR "lockdown-agent.exe"
 try {
-    Invoke-WebRequest -Uri "$WORKER_API/download/agent" -OutFile $agentPath -TimeoutSec 120
+    Invoke-WebRequest -Uri "$WORKER_API/api/download/agent" -OutFile $agentPath -TimeoutSec 120
     $agentSize = (Get-Item $agentPath).Length
     if ($agentSize -lt 1000000) {
         Write-Err "Agent binary too small: $agentSize bytes"
@@ -130,7 +130,7 @@ try {
 Write-Step "Downloading lock screen binary..."
 $lockscreenPath = Join-Path $INSTALL_DIR "lockdown-lockscreen.exe"
 try {
-    Invoke-WebRequest -Uri "$WORKER_API/download/lockscreen" -OutFile $lockscreenPath -TimeoutSec 120
+    Invoke-WebRequest -Uri "$WORKER_API/api/download/lockscreen" -OutFile $lockscreenPath -TimeoutSec 120
     $lockSize = (Get-Item $lockscreenPath).Length
     if ($lockSize -lt 1000000) {
         Write-Err "Lockscreen binary too small: $lockSize bytes"
@@ -193,7 +193,7 @@ if ($Token -eq "") {
     } | ConvertTo-Json
 
     try {
-        $enrollResponse = Invoke-RestMethod -Uri "$WORKER_API/enroll/claim" -Method POST -Body $enrollBody -ContentType "application/json" -TimeoutSec 30
+        $enrollResponse = Invoke-RestMethod -Uri "$WORKER_API/api/enroll/claim" -Method POST -Body $enrollBody -ContentType "application/json" -TimeoutSec 30
         $deviceId = $enrollResponse.device.id
         $apiKey = $enrollResponse.api_key
         Write-OK "Enrolled! Device ID: $deviceId"
@@ -325,7 +325,7 @@ Start-Sleep -Seconds 15
 
 # Check if the device has checked in by querying the Worker
 try {
-    $healthResponse = Invoke-RestMethod -Uri "$WORKER_API/health/detailed" -TimeoutSec 10
+    $healthResponse = Invoke-RestMethod -Uri "$WORKER_API/api/health/detailed" -TimeoutSec 10
     Write-OK "Worker is reachable (devices: $($healthResponse.devices), pending: $($healthResponse.pending_commands))"
 } catch {
     Write-Err "Worker unreachable: $_"
