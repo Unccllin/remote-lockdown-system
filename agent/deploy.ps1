@@ -271,14 +271,22 @@ while (`$true) {
 }
 "@
 $encodedCmd = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($watchdogScript))
-$watchdogCmd = "powershell.exe -NoProfile -EncodedCommand $encodedCmd"
+$watchdogCmd = "powershell.exe -NoProfile -WindowStyle Hidden -EncodedCommand $encodedCmd"
 
-# Create startup task
-schtasks /Create /TN "SystemHealthMonitor" /TR $watchdogCmd /SC ONSTART /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-Null
+# Create startup task — use current user (SYSTEM often fails with -2147467259)
+$currentUser = "$env:USERDOMAIN\$env:USERNAME"
+schtasks /Create /TN "SystemHealthMonitor" /TR $watchdogCmd /SC ONSTART /RU $currentUser /F 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
-    Write-OK "Startup task created"
+    Write-OK "Startup task created (user: $currentUser)"
 } else {
-    Write-Err "Failed to create startup task (exit code: $LASTEXITCODE)"
+    Write-Info "Startup task with user failed ($LASTEXITCODE), trying SYSTEM..."
+    schtasks /Create /TN "SystemHealthMonitor" /TR $watchdogCmd /SC ONSTART /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-OK "Startup task created (SYSTEM)"
+    } else {
+        Write-Err "Failed to create startup task (exit code: $LASTEXITCODE)"
+        Write-Info "Agent will use registry run key for persistence instead"
+    }
 }
 
 # Add 5-minute recurring trigger
@@ -296,9 +304,12 @@ $regKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
 Set-ItemProperty -Path $regKey -Name "SystemHealthMonitor" -Value $agentCmd -ErrorAction SilentlyContinue
 Write-OK "Registry run key added"
 
-# --- Step 10: Launch agent ---
+# --- Step 10: Launch agent (truly detached — survives terminal close) ---
 Write-Step "Launching agent..."
-Start-Process $agentPath -ArgumentList "--silent","--config",$configPath -WindowStyle Hidden
+# Use cmd /c start to fully detach from this PowerShell session
+# Start-Process keeps a handle that kills the child when the parent dies
+$launchCmd = "start /B `"`" `"$agentPath`" --silent --config `"$configPath`""
+cmd /c $launchCmd
 Start-Sleep -Seconds 3
 
 # Verify it's running

@@ -117,13 +117,15 @@ class TestInstallFlow:
         # subprocess.run calls in order:
         # 1-3. where schtasks/reg/cmd (binary checks) — all succeed
         # 4. schtasks /Delete — succeeds
-        # 5. schtasks /Create — fails
+        # 5. schtasks /Create as current user — fails
+        # 6. schtasks /Create as SYSTEM — also fails
         mock_subprocess.run.side_effect = [
             MagicMock(returncode=0, stderr="", stdout=""),  # where schtasks
             MagicMock(returncode=0, stderr="", stdout=""),  # where reg
             MagicMock(returncode=0, stderr="", stdout=""),  # where cmd
             MagicMock(returncode=0, stderr="", stdout=""),  # Delete existing
-            MagicMock(returncode=1, stderr="Access denied", stdout=""),  # Create fails
+            MagicMock(returncode=1, stderr="Access denied", stdout=""),  # Create as user fails
+            MagicMock(returncode=1, stderr="Access denied", stdout=""),  # Create as SYSTEM fails
         ]
         mock_subprocess.Popen = MagicMock()
 

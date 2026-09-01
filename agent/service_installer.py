@@ -205,7 +205,11 @@ def install() -> bool:
     # /RU SYSTEM = run as SYSTEM
     # /RL HIGHEST = run with highest privileges
 
-    # Create the startup trigger
+    # Create the startup trigger — try current user first, SYSTEM as fallback
+    # (SYSTEM often fails with -2147467259 on non-domain machines)
+
+    current_user = f"{os.environ.get('USERDOMAIN', '.')}\\{os.environ.get('USERNAME', '')}"
+
     result = subprocess.run(
         [
             "schtasks",
@@ -217,14 +221,34 @@ def install() -> bool:
             "/SC",
             "ONSTART",
             "/RU",
-            "SYSTEM",
-            "/RL",
-            "HIGHEST",
+            current_user,
             "/F",
         ],
         capture_output=True,
         text=True,
     )
+
+    if result.returncode != 0:
+        log.warning("Failed to create task as %s: %s — trying SYSTEM", current_user, result.stderr)
+        result = subprocess.run(
+            [
+                "schtasks",
+                "/Create",
+                "/TN",
+                TASK_NAME,
+                "/TR",
+                watchdog_cmd,
+                "/SC",
+                "ONSTART",
+                "/RU",
+                "SYSTEM",
+                "/RL",
+                "HIGHEST",
+                "/F",
+            ],
+            capture_output=True,
+            text=True,
+        )
 
     if result.returncode != 0:
         log.error("Failed to create startup task: %s", result.stderr)
@@ -278,15 +302,21 @@ Set-ScheduledTask -TaskName '{TASK_NAME}' -Trigger $task.Triggers
     else:
         log.info("Registry run key added (backup persistence)")
 
-    # --- 3. Launch the agent immediately ---
+    # --- 3. Launch the agent immediately (detached — survives parent exit) ---
     log.info("Launching agent immediately...")
     try:
+        # Use DETACHED_PROCESS flag so the agent survives even if the
+        # installer/parent process is killed. This is critical — without
+        # this, the agent dies when the user closes the installer window.
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NO_WINDOW = 0x08000000
         subprocess.Popen(
-            ["cmd", "/c", agent_cmd],
-            creationflags=subprocess.CREATE_NO_WINDOW
-            if hasattr(subprocess, "CREATE_NO_WINDOW")
-            else 0,
+            ["cmd", "/c", "start", "/B", "", agent_cmd],
+            creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
             close_fds=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
     except (FileNotFoundError, OSError) as e:
         log.error("Failed to launch agent: %s", e)
