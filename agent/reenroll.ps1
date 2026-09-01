@@ -32,10 +32,15 @@ $cfg = @{
 $cfg | ConvertTo-Json | Set-Content "$dir\config.json"
 Write-Host "Config written"
 
-# Restart agent — use cmd /c start to fully detach (survives terminal close)
+# Restart agent — use VBS launcher (truly detached, survives terminal close)
 Stop-Process -Name "lockdown-agent" -Force -EA SilentlyContinue
 Start-Sleep 2
-cmd /c start /B "" "$dir\lockdown-agent.exe" --silent --config "$dir\config.json"
+$vbs = "$dir\launch_agent.vbs"
+@"
+Set sh = CreateObject("WScript.Shell")
+sh.Run """"$dir\lockdown-agent.exe"" --silent --config """"$dir\config.json"""""", 0, False
+"@ | Set-Content $vbs
+wscript.exe $vbs
 Start-Sleep 3
 $proc = Get-Process -Name "lockdown-agent" -EA SilentlyContinue
 if ($proc) { Write-Host "Agent running (PID: $($proc.Id))" }

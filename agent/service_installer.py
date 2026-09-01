@@ -302,21 +302,26 @@ Set-ScheduledTask -TaskName '{TASK_NAME}' -Trigger $task.Triggers
     else:
         log.info("Registry run key added (backup persistence)")
 
-    # --- 3. Launch the agent immediately (detached — survives parent exit) ---
+    # --- 3. Launch the agent immediately (VBS launcher — truly detached) ---
     log.info("Launching agent immediately...")
     try:
-        # Use DETACHED_PROCESS flag so the agent survives even if the
-        # installer/parent process is killed. This is critical — without
-        # this, the agent dies when the user closes the installer window.
-        DETACHED_PROCESS = 0x00000008
-        CREATE_NO_WINDOW = 0x08000000
+        # Write a VBS launcher and execute it via wscript.exe.
+        # wscript.exe runs in its own session, so the agent survives
+        # even if the installer/parent process is killed or the terminal
+        # is closed. This is the most reliable detachment method on Windows.
+        install_dir = Path(agent_cmd.split('"')[1]).parent
+        vbs_path = install_dir / "launch_agent.vbs"
+        vbs_content = (
+            'Set sh = CreateObject("WScript.Shell")\n'
+            f'sh.Run "{agent_cmd}", 0, False\n'
+        )
+        vbs_path.write_text(vbs_content, encoding="utf-8")
         subprocess.Popen(
-            ["cmd", "/c", "start", "/B", "", agent_cmd],
-            creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+            ["wscript.exe", str(vbs_path)],
+            creationflags=subprocess.CREATE_NO_WINDOW
+            if hasattr(subprocess, "CREATE_NO_WINDOW")
+            else 0,
             close_fds=True,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
         )
     except (FileNotFoundError, OSError) as e:
         log.error("Failed to launch agent: %s", e)
