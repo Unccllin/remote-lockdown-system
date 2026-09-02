@@ -74,7 +74,7 @@ exe = EXE(
         'VCRUNTIME140_1.dll',
     ],
     runtime_tmpdir=None,
-    console=False,  # No console — it's a fullscreen overlay
+    console=True,  # Temporarily True to debug — change back to False after fix
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
