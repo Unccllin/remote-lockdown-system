@@ -46,31 +46,34 @@
   (see D-101). swtpm is optional in the harness (`USE_SWTPM=1`).
 
 ### D-101 — swtpm not installed locally for TPM simulation
-- **Status**: PARTIAL (swtpm installed in Docker; QEMU+swtpm boot hangs)
+- **Status**: PARTIAL (QEMU+swtpm hang FIXED; firmware hangs at "Collecting platform state")
 - **Category**: ENV
-- **Blocker**: `swtpm` 0.7.3 is installed in the `pbl-qemu:latest` Docker
-  image, but QEMU 8.2.2 hangs during TPM device initialization when swtpm
-  is attached. Tested 13 configurations — ALL hang with 0 bytes serial
-  output:
-  1. Ubuntu OVMF + tpm-tis, 2. Ubuntu OVMF + tpm-crb, 3. secboot OVMF,
-  4. Custom OVMF (TPM2_ENABLE=TRUE) + tpm-tis, 5. Custom OVMF + tpm-crb,
-  6. Combined OVMF.fd, 7. SeaBIOS (no OVMF), 8. q35 machine, 9. Unix
-  sockets, 10. --privileged Docker, 11. swtpm_setup, 12. Manual init,
-  13. TCP sockets.
-  Key finding: swtpm log shows QEMU NEVER sends TPM commands to swtpm.
-  SeaBIOS also hangs, proving the issue is QEMU's TPM device emulation,
-  not OVMF. Custom OVMF built with TPM2_ENABLE=TRUE also hangs.
-  Root cause: QEMU 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18) TPM device
-  emulation bug in Docker.
-- **Close criteria**: `swtpm` installed and a QEMU+swtpm boot produces a
-  run artifact showing PBL TPM initialization (lock-state read, PCR read).
-  **NOT MET**: QEMU+swtpm boot hangs. Requires different QEMU version,
-  different Docker image, or bare metal execution.
+- **Blocker**: QEMU+swtpm hang was the root cause — now FIXED (commit 47a2ca4).
+  The fix: start swtpm with ONLY the `--ctrl` (control) socket, NOT the
+  `--server` (data) socket. QEMU's TPM emulator backend sends CMD_SET_DATAFD
+  (0x10) to establish the data channel by passing a file descriptor via
+  SCM_RIGHTS. When swtpm already has a `--server` socket, the data fd is
+  already set and CMD_SET_DATAFD fails with TPM_RC_BAD_PARAMETER (0x1F),
+  causing QEMU to hang waiting for a response that never comes.
+  Evidence: swtpm log now shows TPM2_GetCapability commands and responses
+  exchanged. PBL firmware boots, displays banner, reaches step [1/8]
+  "Collecting platform state" (TPM operations begin). Previously: 0 bytes
+  serial output, QEMU hung indefinitely.
+  Remaining issue: firmware hangs at "Collecting platform state" — this is
+  a firmware-level issue (the firmware may be waiting for a specific TPM
+  response or making an unsupported TPM command), NOT a QEMU/swtpm
+  configuration issue. The QEMU/swtpm infrastructure is now working.
+- **Close criteria**: QEMU+swtpm boot produces a run artifact showing PBL
+  TPM initialization (lock-state read, PCR read). **PARTIALLY MET**:
+  QEMU+swtpm now communicates (TPM commands exchanged), but firmware hangs
+  at "Collecting platform state" before reaching TPM NV read or PCR read.
 - **Workaround**: TPM command construction is verified by compilation only.
   Runtime behavior without swtpm is verified (TPM NV reads return "Not
-  Found" as expected). Runtime behavior WITH swtpm is untested.
-- **Next step**: Try a different QEMU version (e.g. QEMU 9.x), a different
-  Docker image (e.g. Fedora with edk2-ovmf), or run on bare metal.
+  Found" as expected). Runtime behavior WITH swtpm now partially tested
+  (TPM2_GetCapability works, firmware hangs at later TPM operations).
+- **Next step**: Debug why firmware hangs at "Collecting platform state"
+  after TPM2_GetCapability. Check if firmware is making a TPM command that
+  swtpm doesn't support, or waiting for a response that never comes.
 
 ### D-102 — TPM commands use no-session (TPM_ST_NO_SESSIONS)
 - **Status**: OPEN (partial — HMAC session + AES-256-CFB implemented, builds, QEMU 10/10)
@@ -1254,7 +1257,7 @@
 | ID | Description | Status | Category |
 |----|-------------|--------|----------|
 | D-100 | QEMU not installed locally | PARTIAL | ENV |
-| D-101 | swtpm not installed locally | PARTIAL | ENV |
+| D-101 | swtpm not installed locally | PARTIAL (QEMU+swtpm hang FIXED; firmware hangs at platform state) | ENV |
 | D-102 | TPM_ST_NO_SESSIONS (no auth) | OPEN | SECURITY |
 | D-103 | SMBIOS string extraction stubbed | CLOSED | STUB |
 | D-104 | PK fingerprint computation stubbed | CLOSED | STUB |
