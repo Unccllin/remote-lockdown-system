@@ -1310,4 +1310,5 @@ module.exports = {
   METHOD_RULES,
   createEnv,
   syncPblStatusToAgent,
+  getPolicySigningKeys,
 };
