@@ -173,9 +173,11 @@ PblKDFa (
   UINTN   OutputOffset = 0;
   UINTN   LabelLen;
 
-  if (Key == NULL || Label == NULL || Output == NULL) {
+  if (Label == NULL || Output == NULL) {
     return FALSE;
   }
+  // Key may be NULL when KeySize is 0 (unbound session with TPM_RH_NULL).
+  // HMAC-SHA256 with an empty key is valid.
   if (OutputSize < (Bits + 7) / 8) {
     return FALSE;
   }
@@ -186,11 +188,16 @@ PblKDFa (
     Counter++;
 
     // Initialize HMAC-SHA256 with the key
+    // For unbound sessions (TPM_RH_NULL), Key is NULL and KeySize is 0.
+    // OpenSSL's HMAC_Init_ex may reject NULL key, so use a dummy non-NULL
+    // pointer when KeySize is 0.
     VOID *HmacCtx = HmacSha256New ();
     if (HmacCtx == NULL) {
       return FALSE;
     }
-    if (!HmacSha256SetKey (HmacCtx, Key, KeySize)) {
+    CONST UINT8 EmptyKey[1] = { 0 };
+    CONST UINT8 *HmacKey = (Key != NULL) ? Key : EmptyKey;
+    if (!HmacSha256SetKey (HmacCtx, HmacKey, KeySize)) {
       HmacSha256Free (HmacCtx);
       return FALSE;
     }
@@ -329,6 +336,12 @@ PblTpmStartHmacSession (
   CopyMem (Ptr, mSession.NonceCaller, 32);
   Ptr += 32;
 
+  // salt = TPM2B(0 bytes) — empty since tpmKey is TPM_RH_NULL (no encrypted salt)
+  // Per TPM 2.0 Part 3 §11.1, the salt TPM2B_ENCRYPTED_SECRET is always present
+  // in the command, even when tpmKey is TPM_RH_NULL (size=0, no data).
+  *(UINT16 *)Ptr = SwapBytes16 (0);
+  Ptr += 2;
+
   // sessionType = TPM_SE_HMAC
   *Ptr = (UINT8)TPM_SE_HMAC;
   Ptr += 1;
@@ -354,8 +367,10 @@ PblTpmStartHmacSession (
   }
 
   // Parse response: tag(2) + size(4) + responseCode(4) + sessionHandle(4)
-  //   + nonceTPM(TPM2B) + sessionAttributes(1)
-  if (RespSize < 2 + 4 + 4 + 4 + 2 + 32 + 1) {
+  //   + nonceTPM(TPM2B) + optional sessionAttributes(1)
+  // Note: swtpm 0.7.3 omits sessionAttributes; require only enough for
+  // header + sessionHandle + nonceTPM.size field.
+  if (RespSize < 2 + 4 + 4 + 4 + 2) {
     return EFI_DEVICE_ERROR;
   }
 
@@ -376,7 +391,7 @@ PblTpmStartHmacSession (
   // nonceTPM (TPM2B)
   UINT16 NonceTpmSize = SwapBytes16 (*(UINT16 *)RespPtr);
   RespPtr += 2;
-  if (NonceTpmSize > 32) {
+  if (NonceTpmSize > 32 || (RespPtr + NonceTpmSize) > (RespBuf + RespSize)) {
     return EFI_DEVICE_ERROR;
   }
   CopyMem (mSession.NonceTpm, RespPtr, NonceTpmSize);
@@ -1041,6 +1056,10 @@ PblTpmStartPcrSession (
   CopyMem (Ptr, mPcrSession.NonceCaller, 32);
   Ptr += 32;
 
+  // salt = TPM2B(0 bytes) — empty since tpmKey is TPM_RH_NULL
+  *(UINT16 *)Ptr = SwapBytes16 (0);
+  Ptr += 2;
+
   // sessionType = TPM_SE_HMAC
   *Ptr = (UINT8)TPM_SE_HMAC;
   Ptr += 1;
@@ -1065,8 +1084,8 @@ PblTpmStartPcrSession (
     return Status;
   }
 
-  // Parse response
-  if (RespSize < 2 + 4 + 4 + 4 + 2 + 32 + 1) {
+  // Parse response (swtpm 0.7.3 omits sessionAttributes)
+  if (RespSize < 2 + 4 + 4 + 4 + 2) {
     return EFI_DEVICE_ERROR;
   }
 
@@ -1084,7 +1103,7 @@ PblTpmStartPcrSession (
 
   UINT16 NonceTpmSize = SwapBytes16 (*(UINT16 *)RespPtr);
   RespPtr += 2;
-  if (NonceTpmSize > 32) {
+  if (NonceTpmSize > 32 || (RespPtr + NonceTpmSize) > (RespBuf + RespSize)) {
     return EFI_DEVICE_ERROR;
   }
   CopyMem (mPcrSession.NonceTpm, RespPtr, NonceTpmSize);

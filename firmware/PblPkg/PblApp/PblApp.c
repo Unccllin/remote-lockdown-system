@@ -85,11 +85,14 @@ PblAppEntryPoint (
   //
   Print (L"[3/8] Reading TPM NV state...\n");
 
-  // D-102: Start HMAC session bound to PBL_NV_LOCK_STATE (C2 §3.1, §3.3).
+  // D-102: Start HMAC session bound to TPM_RH_NULL (C2 §3.1, §3.3).
   // The session provides AES-256-CFB parameter encryption for all NV reads/writes.
+  // Binding to TPM_RH_NULL creates an unbound session that still provides
+  // parameter encryption. Binding to the NV index would require it to be
+  // defined first (NV_DefineSpace), which hasn't been called yet.
   // In development mode (no auth value provisioned), bindAuth is empty.
   // If session start fails, commands fall back to TPM_RS_PW (C2 §3.2 minimum).
-  Status = PblTpmStartHmacSession (PBL_NV_LOCK_STATE, NULL, 0);
+  Status = PblTpmStartHmacSession ((UINT32)TPM_RH_NULL, NULL, 0);
   if (EFI_ERROR (Status)) {
     Print (L"  [INFO] HMAC session start failed: %r — using password auth\n", Status);
     // Continue — PblTpmBeginCommandWithSessionAuth falls back to TPM_RS_PW

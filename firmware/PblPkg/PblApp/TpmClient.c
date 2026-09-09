@@ -42,6 +42,12 @@ typedef struct {
 } PBL_TPM2_RESPONSE_HEADER;
 #pragma pack()
 
+// D-102: Track handle count for the current TPM_ST_SESSIONS command being built.
+// Handles go between the header and the auth area per TPM 2.0 wire format.
+// PblTpmFillCommandHmac and PblTpmFillPcrCommandHmac use this to compute
+// correct offsets for nonceCaller, HMAC, and pHash (which includes handles).
+STATIC UINT32 mCurrentCmdHandleCount = 0;
+
 /** Locate the EFI_TCG2_PROTOCOL. Returns NULL if no TPM present. **/
 EFI_TCG2_PROTOCOL *
 PblTcg2Locate (
@@ -151,29 +157,51 @@ PblTpmBeginCommand (
   handle with continueSession + decrypt + encrypt attributes. Otherwise,
   falls back to TPM_RS_PW password auth (C2 §3.2 minimum).
 
+  TPM 2.0 wire format for TPM_ST_SESSIONS commands:
+    header(10) + handles(4*HandleCount) + authAreaSize(4) + authArea + params
+
+  Handles go BEFORE the auth area per TPM 2.0 Part 2 §17.5.
+
   Authorization area format (TPMS_AUTH_COMMAND) with HMAC session:
     sessionHandle (4 bytes): session handle from StartAuthSession
     nonceCaller (TPM2B): 2 bytes size=0 (refreshed per command in full impl)
     sessionAttributes (1 byte): continueSession | decrypt | encrypt
     hmac (TPM2B): 2 bytes size=0 (computed in full impl)
 
+  @param  Buffer        Output command buffer.
+  @param  BufferSize    Size of Buffer.
+  @param  CommandCode   TPM command code.
+  @param  HandleCount   Number of handles to write before the auth area.
+  @param  Handles       Array of handle values (HandleCount entries).
+
   @return Pointer past the authorization area (where command parameters go).
 **/
 STATIC
 UINT8 *
 PblTpmBeginCommandWithSessionAuth (
-  OUT UINT8  *Buffer,
-  IN  UINT32  BufferSize,
-  IN  TPM_CC  CommandCode
+  OUT UINT8        *Buffer,
+  IN  UINT32       BufferSize,
+  IN  TPM_CC       CommandCode,
+  IN  UINT32       HandleCount,
+  IN  CONST UINT32 *Handles
   )
 {
   PBL_TPM2_COMMAND_HEADER *Hdr = (PBL_TPM2_COMMAND_HEADER *)Buffer;
   UINT8 *Ptr;
+  UINT32 i;
+
+  mCurrentCmdHandleCount = HandleCount;
 
   Hdr->Tag         = SwapBytes16 (TPM_ST_SESSIONS);
   Hdr->CommandSize = SwapBytes32 (sizeof (PBL_TPM2_COMMAND_HEADER));
   Hdr->CommandCode = SwapBytes32 ((UINT32)CommandCode);
   Ptr = Buffer + sizeof (PBL_TPM2_COMMAND_HEADER);
+
+  // Write handles before the auth area (TPM 2.0 Part 2 §17.5)
+  for (i = 0; i < HandleCount; i++) {
+    *(UINT32 *)Ptr = SwapBytes32 (Handles[i]);
+    Ptr += 4;
+  }
 
   if (PblTpmIsSessionActive ()) {
     // HMAC session auth — 73 bytes:
@@ -284,27 +312,43 @@ PblTpmFillCommandHmac (
   Hdr = (PBL_TPM2_COMMAND_HEADER *)CommandBuffer;
   CommandCode = SwapBytes32 (Hdr->CommandCode);
 
-  // Write the refreshed nonceCaller into the auth area at offset 20
-  // Auth area layout: sessionHandle(4) | nonceCaller(2+32) | attrs(1) | hmac(2+32)
-  // nonceCaller TPM2B: size(2) at offset 18, data(32) at offset 20
+  // Compute auth area offset: header(10) + handles(4*N)
+  UINT32 HandleBytes = 4 * mCurrentCmdHandleCount;
+  UINT32 AuthOffset = 10 + HandleBytes;
+
+  // Write the refreshed nonceCaller into the auth area
+  // Auth area layout: authAreaSize(4) + sessionHandle(4) + nonceCaller(2+32) + attrs(1) + hmac(2+32)
+  // nonceCaller TPM2B: size(2) at AuthOffset+8, data(32) at AuthOffset+10
   Nonce = PblTpmGetNonceCaller ();
   if (Nonce != NULL) {
-    *(UINT16 *)(CommandBuffer + 18) = SwapBytes16 (32);
-    CopyMem (CommandBuffer + 20, Nonce, 32);
+    *(UINT16 *)(CommandBuffer + AuthOffset + 8) = SwapBytes16 (32);
+    CopyMem (CommandBuffer + AuthOffset + 10, Nonce, 32);
   }
 
-  // Parameters start at offset 87 (header(10) + authAreaSize(4) + authArea(73))
-  ParamsStart = CommandBuffer + 87;
-  ParamsSize = TotalSize - 87;
+  // Parameters start after: header(10) + handles(4*N) + authAreaSize(4) + authArea(73)
+  UINT32 ParamsOffset = AuthOffset + 4 + 73;
+  ParamsStart = CommandBuffer + ParamsOffset;
+  ParamsSize = TotalSize - ParamsOffset;
+
+  // Build pHash input: handles + parameters (per TPM 2.0 Part 1 §18.1,
+  // cpHash = H(TPM_CC || handles || params), auth area excluded)
+  UINTN HashInputSize = HandleBytes + ParamsSize;
+  UINT8 *HashInput = AllocatePool (HashInputSize);
+  if (HashInput == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+  CopyMem (HashInput, CommandBuffer + 10, HandleBytes);  // handles
+  CopyMem (HashInput + HandleBytes, ParamsStart, ParamsSize);  // params
 
   // Compute pHash-based HMAC
-  Status = PblTpmComputeCommandHmacEx (CommandCode, ParamsStart, ParamsSize, Hmac);
+  Status = PblTpmComputeCommandHmacEx (CommandCode, HashInput, HashInputSize, Hmac);
+  FreePool (HashInput);
   if (EFI_ERROR (Status)) {
     return Status;
   }
 
-  // Fill HMAC into auth area at offset 55 (after hmac TPM2B size field at offset 53)
-  CopyMem (CommandBuffer + 55, Hmac, 32);
+  // Fill HMAC into auth area at: AuthOffset + 4 + 4 + 2 + 32 + 1 + 2 = AuthOffset + 45
+  CopyMem (CommandBuffer + AuthOffset + 45, Hmac, 32);
 
   return EFI_SUCCESS;
 }
@@ -430,30 +474,46 @@ PblTpmFillPcrCommandHmac (
   Hdr = (PBL_TPM2_COMMAND_HEADER *)CommandBuffer;
   CommandCode = SwapBytes32 (Hdr->CommandCode);
 
-  // Write refreshed nonceCaller into auth area at offset 20
+  // Compute auth area offset: header(10) + handles(4*N)
+  UINT32 PcrHandleBytes = 4 * mCurrentCmdHandleCount;
+  UINT32 PcrAuthOffset = 10 + PcrHandleBytes;
+
+  // Write refreshed nonceCaller into auth area
   Nonce = PblTpmGetPcrNonceCaller ();
   if (Nonce != NULL) {
-    *(UINT16 *)(CommandBuffer + 18) = SwapBytes16 (32);
-    CopyMem (CommandBuffer + 20, Nonce, 32);
+    *(UINT16 *)(CommandBuffer + PcrAuthOffset + 8) = SwapBytes16 (32);
+    CopyMem (CommandBuffer + PcrAuthOffset + 10, Nonce, 32);
   }
 
-  // Parameters start at offset 87 (header(10) + authAreaSize(4) + authArea(73))
-  ParamsStart = CommandBuffer + 87;
-  ParamsSize = TotalSize - 87;
+  // Parameters start after: header(10) + handles(4*N) + authAreaSize(4) + authArea(73)
+  UINT32 PcrParamsOffset = PcrAuthOffset + 4 + 73;
+  ParamsStart = CommandBuffer + PcrParamsOffset;
+  ParamsSize = TotalSize - PcrParamsOffset;
+
+  // Build pHash input: handles + parameters
+  UINTN PcrHashInputSize = PcrHandleBytes + ParamsSize;
+  UINT8 *PcrHashInput = AllocatePool (PcrHashInputSize);
+  if (PcrHashInput == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+  CopyMem (PcrHashInput, CommandBuffer + 10, PcrHandleBytes);
+  CopyMem (PcrHashInput + PcrHandleBytes, ParamsStart, ParamsSize);
 
   // Compute pHash-based HMAC using the PCR session
   PBL_TPM_SESSION *PcrSession = PblTpmGetPcrSession ();
   if (PcrSession == NULL) {
+    FreePool (PcrHashInput);
     return EFI_NOT_STARTED;
   }
   Status = PblTpmComputeCommandHmacSession (
-             PcrSession, CommandCode, ParamsStart, ParamsSize, Hmac);
+             PcrSession, CommandCode, PcrHashInput, PcrHashInputSize, Hmac);
+  FreePool (PcrHashInput);
   if (EFI_ERROR (Status)) {
     return Status;
   }
 
-  // Fill HMAC into auth area at offset 55
-  CopyMem (CommandBuffer + 55, Hmac, 32);
+  // Fill HMAC into auth area at: PcrAuthOffset + 45
+  CopyMem (CommandBuffer + PcrAuthOffset + 45, Hmac, 32);
 
   return EFI_SUCCESS;
 }
@@ -633,10 +693,10 @@ PblTpmReadLockState (
   // TPM2_NV_Read(0x01C00001, offset=0, size=64) with HMAC session auth.
   // D-102: When HMAC session is active, command parameters are encrypted
   // with AES-256-CFB before sending, and response parameters are decrypted.
-  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read);
+  // NV_Read has two handles: authHandle + nvIndex (both = NV index).
+  UINT32 NvHandles[] = { PBL_NV_LOCK_STATE, PBL_NV_LOCK_STATE };
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read, 2, NvHandles);
   UINT8 *ParamsStart = Ptr;  // Save start of parameters for encryption
-  *(UINT32 *)Ptr = SwapBytes32 (PBL_NV_LOCK_STATE);  // NV index
-  Ptr += 4;
   *(UINT16 *)Ptr = SwapBytes16 (0);   // offset
   Ptr += 2;
   *(UINT16 *)Ptr = SwapBytes16 (PBL_LOCK_STATE_SIZE);  // size
@@ -718,10 +778,9 @@ PblTpmReadPolicyVersion (
 
   // TPM2_NV_Read(0x01C00002, offset=0, size=8) with HMAC session auth.
   // D-102: Encrypt command parameters if session is active.
-  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read);
+  UINT32 PvHandles[] = { PBL_NV_POLICY_VERSION, PBL_NV_POLICY_VERSION };
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read, 2, PvHandles);
   UINT8 *ParamsStart = Ptr;
-  *(UINT32 *)Ptr = SwapBytes32 (PBL_NV_POLICY_VERSION);
-  Ptr += 4;
   *(UINT16 *)Ptr = SwapBytes16 (0);   // offset
   Ptr += 2;
   *(UINT16 *)Ptr = SwapBytes16 (8);   // size (uint64)
@@ -790,10 +849,9 @@ PblTpmIncrementPolicyVersion (
     return EFI_NOT_FOUND;
   }
 
-  // TPM2_NV_Increment(0x01C00002) with password auth
-  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Increment);
-  *(UINT32 *)Ptr = SwapBytes32 (PBL_NV_POLICY_VERSION);
-  Ptr += 4;
+  // TPM2_NV_Increment(0x01C00002) with session auth
+  UINT32 IncHandles[] = { PBL_NV_POLICY_VERSION, PBL_NV_POLICY_VERSION };
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Increment, 2, IncHandles);
 
   PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
@@ -829,10 +887,9 @@ PblTpmWriteLockState (
   // TPM2_NV_Write(0x01C00001, offset=0, data=64 bytes) with HMAC session auth.
   // D-102: When HMAC session is active, command parameters (including the
   // data being written) are encrypted with AES-256-CFB before sending.
-  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Write);
+  UINT32 WriteHandles[] = { PBL_NV_LOCK_STATE, PBL_NV_LOCK_STATE };
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Write, 2, WriteHandles);
   UINT8 *ParamsStart = Ptr;  // Save start of parameters for encryption
-  *(UINT32 *)Ptr = SwapBytes32 (PBL_NV_LOCK_STATE);  // NV index
-  Ptr += 4;
   // TPM2B_NV_BUFFER: 2-byte size + data
   *(UINT16 *)Ptr = SwapBytes16 (PBL_LOCK_STATE_SIZE);
   Ptr += 2;
@@ -967,13 +1024,18 @@ PblTpmExtendPcr (
   // active, use it; otherwise fall back to no-session (scaffold).
   UINT8 *Ptr;
   if (PblTpmIsPcrSessionActive ()) {
-    // Use PCR HMAC session — same layout as PblTpmBeginCommandWithSessionAuth
-    // but with the PCR session handle.
+    // Use PCR HMAC session with pcrHandle BEFORE the auth area.
+    // TPM 2.0 wire format: header(10) + pcrHandle(4) + authAreaSize(4) + auth(73) + params
+    mCurrentCmdHandleCount = 1;
     PBL_TPM2_COMMAND_HEADER *Hdr = (PBL_TPM2_COMMAND_HEADER *)CmdBuf;
     Hdr->Tag         = SwapBytes16 (TPM_ST_SESSIONS);
     Hdr->CommandSize = SwapBytes32 (sizeof (PBL_TPM2_COMMAND_HEADER));
     Hdr->CommandCode = SwapBytes32 ((UINT32)TPM_CC_PCR_Extend);
     Ptr = CmdBuf + sizeof (PBL_TPM2_COMMAND_HEADER);
+
+    // pcrHandle goes before the auth area
+    *(UINT32 *)Ptr = SwapBytes32 (PcrIndex);
+    Ptr += 4;
 
     // Auth area: 73 bytes (handle(4) + nonce(2+32) + attrs(1) + hmac(2+32))
     *(UINT32 *)Ptr = SwapBytes32 (73);
@@ -995,8 +1057,10 @@ PblTpmExtendPcr (
     Ptr = PblTpmBeginCommand (CmdBuf, sizeof (CmdBuf), TPM_CC_PCR_Extend);
   }
 
-  *(UINT32 *)Ptr = SwapBytes32 (PcrIndex);  // PCR handle
-  Ptr += 4;
+  if (!PblTpmIsPcrSessionActive ()) {
+    *(UINT32 *)Ptr = SwapBytes32 (PcrIndex);  // PCR handle (in no-session mode)
+    Ptr += 4;
+  }
   *(UINT32 *)Ptr = SwapBytes32 (1);  // digest count
   Ptr += 4;
   *(UINT16 *)Ptr = SwapBytes16 (TPM_ALG_SHA256);  // hash algorithm
@@ -1061,15 +1125,16 @@ PblTpmReadPcr (
 
   // TPM2_PCR_Read(pcrSelection)
   // Command: tag(2) + size(4) + cc(4) + pcrSelectionCount(4) +
-  //          alg(2) + pcrSelectSize(3) + pcrSelect(3) = 22 bytes
+  //          alg(2) + sizeofSelect(1) + pcrSelect(3) = 21 bytes
+  // TPMS_PCR_SELECTION: hash(2) + sizeofSelect(1) + pcrSelect(sizeofSelect)
   // For a single PCR: set the bit in the 3-byte bitmap
   UINT8 *Ptr = PblTpmBeginCommand (CmdBuf, sizeof (CmdBuf), TPM_CC_PCR_Read);
   *(UINT32 *)Ptr = SwapBytes32 (1);  // pcr selection count
   Ptr += 4;
   *(UINT16 *)Ptr = SwapBytes16 (TPM_ALG_SHA256);  // hash algorithm
   Ptr += 2;
-  *(UINT16 *)Ptr = SwapBytes16 (3);  // sizeof(select) = 3
-  Ptr += 2;
+  *Ptr = 3;  // sizeofSelect = 3 (UINT8, not UINT16 per TPM 2.0 spec)
+  Ptr += 1;
   // 3-byte PCR bitmask: set bit for the requested PCR
   ZeroMem (Ptr, 3);
   Ptr[PcrIndex / 8] |= (1 << (PcrIndex % 8));
@@ -1087,7 +1152,7 @@ PblTpmReadPcr (
   //   header(10) + pcrUpdateCounter(4) + pcrSelection +
   //   pcrValues
   //
-  // pcrSelection = count(4) + [ hashAlg(2) + sizeofSelect(2) +
+  // pcrSelection = count(4) + [ hashAlg(2) + sizeofSelect(1) +
   //   pcrSelect(sizeofSelect) ] * count
   //
   // pcrValues = [ TPM2B_DIGEST ] * (number of selected PCRs)
@@ -1095,7 +1160,7 @@ PblTpmReadPcr (
   //
   // We requested 1 PCR with SHA-256, so there should be exactly
   // one 32-byte digest in the response.
-  if (RespSize < 10 + 4 + 4 + 2 + 2 + 3 + 2) {
+  if (RespSize < 10 + 4 + 4 + 2 + 1 + 3 + 2) {
     return EFI_DEVICE_ERROR;
   }
 
@@ -1110,8 +1175,8 @@ PblTpmReadPcr (
     return EFI_DEVICE_ERROR;
   }
 
-  // Skip hashAlg(2) + sizeofSelect(2)
-  RespPtr += 4;
+  // Skip hashAlg(2) + sizeofSelect(1)
+  RespPtr += 3;
   // Skip pcrSelect (3 bytes for SHA-256 bank)
   RespPtr += 3;
 
