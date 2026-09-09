@@ -1012,7 +1012,7 @@
   but not required for closure.
 
 ### D-209 — PBL policy blob generation not implemented
-- **Status**: CLOSED (commit pending, artifact: 579 server tests pass)
+- **Status**: CLOSED (commit d111ada, artifact: 579 server tests pass)
 - **Category**: SERVER
 - **Progress**: `serverless/pbl/routes/policy.ts` (248 lines, was 102)
   implements `buildFullPolicyPayload(version, options?)` with all ~40
@@ -1273,7 +1273,7 @@
 | D-206 | PBL device identity mapping not implemented | CLOSED (commit 60c0a78) | SERVER |
 | D-207 | CBOR parsing in serverless Worker not implemented | CLOSED (commit 4ed2f48) | SERVER |
 | D-208 | COSE_Sign1 encoding in serverless Worker not implemented | CLOSED (commit ee311de) | SERVER |
-| D-209 | PBL policy blob generation not implemented | CLOSED (commit pending) | SERVER |
+| D-209 | PBL policy blob generation not implemented | CLOSED (commit d111ada) | SERVER |
 | D-210 | Serverless Worker PBL route integration not implemented | OPEN (partial — full Express integration test implemented; QEMU/swtpm runtime test pending) | SERVER |
 | D-211 | Covert tracking mode (C5) not fully implemented | OPEN (partial) | TODO |
 
