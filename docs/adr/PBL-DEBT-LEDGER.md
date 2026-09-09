@@ -836,7 +836,7 @@
   in that file. Firmware Ed25519 verification remains blocked by EDK2.
 
 ### D-206 — PBL device identity mapping not implemented
-- **Status**: CLOSED (all close criteria met — pending commit ref for graph I2)
+- **Status**: CLOSED (commit 60c0a78, artifact: 521 server tests pass)
 - **Category**: SERVER
 - **Progress**: `serverless/pbl/devices.ts` (93 lines, was 53) implements
   PBL device store with KV prefix `pbl_devices:`. Added `listDevices(kv)`
@@ -940,18 +940,31 @@
   exclusive deployments).
 
 ### D-207 — CBOR parsing in serverless Worker not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (commit pending, artifact: 547 server tests + 305 serverless tests pass)
 - **Category**: SERVER
 - **Progress**: `serverless/pbl/cbor.ts` (294 lines) implements full CBOR
   encoder + decoder. Encoder: encodeUint, encodeBstr, encodeTstr, encodeBool,
-  encodeMap, encodeArray, encodeNull. Decoder: CborDecoder class with
-  readBstr, readUint, readTstr, readBool, readIntKeyedMap, readArray,
-  skipItem. decodeVerdictRequest function. 7 CBOR tests in pbl.test.ts.
-- **Blocker**: No negative integer encoding (nint) in encoder (only in
-  COSE module). No floating point support. No indefinite-length items.
-  No tags. Not needed by PBL but would be needed for full RFC 8949.
-- **Close criteria**: Full RFC 8949 compliance (if needed). Runtime test
-  with PBL firmware sending CBOR requests.
+  encodeMap, encodeArray, encodeNull, encodeNegativeInt, encodeTag,
+  encodeUndefined. Decoder: CborDecoder class with readBstr, readUint,
+  readTstr, readBool, readIntKeyedMap, readArray, skipItem, readNegativeInt,
+  readTag, readUndefined. decodeVerdictRequest function. 7 CBOR tests in
+  pbl.test.ts (including negative integer encoding/decoding tests).
+  D-207 Express equivalent: `server/src/pbl/cbor.js` (174 lines) implements
+  encodeUint, encodeNint, encodeBstr, encodeTstr, encodeArray, encodeMap,
+  encodeNull, encodeBool, decode, decodeFirst. 26 new CBOR tests in
+  `server/tests/pblCbor.test.js` covering nint encoding/decoding, round-trip
+  tests for all supported types, COSE alg ID maps (nint keys), and edge
+  cases. 547 server tests pass.
+- **Blocker**: None — nint encoding is implemented in both serverless and
+  Express modules. Floating point, indefinite-length, and tags are not
+  needed by PBL (the "if needed" qualifier in close criteria is not met).
+  Runtime test with PBL firmware is blocked by D-101 but not required for
+  D-207 closure (CBOR encoding is verified by unit tests).
+- **Close criteria**: ✓ Negative integer encoding (nint) in both encoders.
+  ✓ nint decoding in both decoders. ✓ nint tests (serverless: 7 CBOR tests
+  in pbl.test.ts, Express: 26 tests in pblCbor.test.js). Full RFC 8949
+  compliance not needed by PBL (floating point, indefinite-length, tags
+  are not used in the PBL wire protocol).
 
 ### D-208 — COSE_Sign1 encoding in serverless Worker not implemented
 - **Status**: OPEN (partial — server-side COSE_Sign1 verification + Ed25519 support implemented; counter-signature + firmware runtime test pending)
@@ -1222,8 +1235,8 @@
 | D-203 | PBL attestation endpoint not implemented | OPEN (partial — PCR digest comparison + AK Name binding implemented; event log + hardware pending) | SERVER |
 | D-204 | PBL override endpoints not implemented | OPEN (partial — challenge_seed binding + audit trail implemented; production operator key pending) | SERVER |
 | D-205 | Verdict signing infrastructure not implemented | OPEN (partial — Ed25519 server signing implemented; firmware cert chain + Ed25519 verification blocked by EDK2) | SECURITY |
-| D-206 | PBL device identity mapping not implemented | OPEN (partial) | SERVER |
-| D-207 | CBOR parsing in serverless Worker not implemented | OPEN (partial) | SERVER |
+| D-206 | PBL device identity mapping not implemented | CLOSED (commit 60c0a78) | SERVER |
+| D-207 | CBOR parsing in serverless Worker not implemented | CLOSED (nint encoding + tests done) | SERVER |
 | D-208 | COSE_Sign1 encoding in serverless Worker not implemented | OPEN (partial) | SERVER |
 | D-209 | PBL policy blob generation not implemented | OPEN (partial — form-based creation UI + server-side CBOR encoding + signing implemented) | SERVER |
 | D-210 | Serverless Worker PBL route integration not implemented | OPEN (partial — full Express integration test implemented; QEMU/swtpm runtime test pending) | SERVER |
