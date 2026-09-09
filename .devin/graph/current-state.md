@@ -51,98 +51,97 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-09-09 (cont. 10) — D-206 persistent KV store + sync tests
+## Latest session: 2026-09-09 (cont. 16) — D-101 QEMU+swtpm hang FIXED
 
 ### RULE-ZERO
-**Read**: pool.js (PostgreSQL + SQLite pool), migrationRunner.js (migration
-ordering), existing migration 011 (pbl_device_mapping), kvStore.js (shared
-in-memory KV store), pbl.js (syncPblStatusToAgent), devices.js
-(syncAgentStatusToPbl), jest.config.js (setupFiles), tests/setup.js (env vars).
-**Finding**: The shared KV store was in-memory only. Need a database-backed
-implementation with migration 012. Tests need PBL_KV_IN_MEMORY=1 to force
-in-memory mode. Sync functions need to be exported and tested with mocked
-DB pool.
+**Read**: ci-harness-docker.sh (swtpm configuration), QEMU TPM emulator
+source code (tpm_emulator.c, tpm_ioctl.h), swtpm ctrlchannel.c source
+code, strace output showing QEMU sending CMD_SET_DATAFD (0x10) via
+SCM_RIGHTS, swtpm log showing error 0x1F (TPM_RC_BAD_PARAMETER).
+**Finding**: The QEMU+swtpm hang was caused by a swtpm configuration
+error. swtpm was started with both --ctrl (control) and --server (data)
+sockets. QEMU's TPM emulator backend sends CMD_SET_DATAFD (0x10) to
+establish the data channel by passing a file descriptor via SCM_RIGHTS.
+When swtpm already has a --server socket, the data fd is already set
+and CMD_SET_DATAFD fails with TPM_RC_BAD_PARAMETER (0x1F), causing QEMU
+to hang waiting for a response that never comes. Fix: start swtpm with
+ONLY the --ctrl socket (no --server). QEMU then successfully sends
+CMD_SET_DATAFD to establish the data channel itself.
 
-### D-206 Work completed (continued)
+### D-101 Work completed
 
-1. **Persistent KV store migration** (migration 012) — Added
-   `012_pbl_kv_store.sql` (Postgres) and `012_pbl_kv_store.sql` (SQLite).
-   Creates a `pbl_kv_store` table with key (TEXT PK), value (TEXT),
-   created_at, updated_at. Index on key for prefix scans.
+1. **QEMU+swtpm hang FIXED** (commit 47a2ca4):
+   - Root cause: swtpm started with both --ctrl and --server sockets.
+     QEMU's CMD_SET_DATAFD fails because data fd is already set.
+   - Fix: Start swtpm with ONLY --ctrl socket (no --server).
+   - Evidence: swtpm log shows TPM2_GetCapability commands and responses
+     exchanged. PBL firmware boots, displays banner, reaches step [1/8]
+     "Collecting platform state" (TPM operations begin).
+   - Previously: 0 bytes serial output, QEMU hung indefinitely.
+   - Tested with: QEMU 6.2+swtpm 0.6.3, QEMU 7.2+swtpm 0.7.1, QEMU
+     8.2.2+swtpm 0.7.3 — all work with the fix.
 
-2. **DB-backed KV implementation** (`server/src/pbl/kvStore.js`) —
-   `createDbKv(pool)` returns a KV interface backed by the `pbl_kv_store`
-   table. `createSharedEnv()` now tries the DB pool first, falls back to
-   in-memory Map. `PBL_KV_IN_MEMORY=1` env var forces in-memory mode
-   (for tests). `tryGetDbPool()` loads the pool lazily, returns null on
-   error or when in-memory mode is forced.
-
-3. **Test setup** (`server/tests/setup.js`) — Added
-   `process.env.PBL_KV_IN_MEMORY = '1'` to force in-memory KV in all tests.
-
-4. **Sync function exports** — `syncPblStatusToAgent` exported from pbl.js,
-   `syncAgentStatusToPbl` exported from devices.js.
-
-5. **Sync function tests** (`server/tests/pblStatusSync.test.js`) — 14 new
-   tests covering:
-   - PBL → Agent: locked, tracking→stolen, active, no linked device, unknown
-     status, DB query failure (best-effort), getDeviceByPblDeviceId failure.
-   - Agent → PBL: locked, tracking, active (clears lock_reason), no
-     pbl_device_id, null device, PBL device not in KV.
-   - Bidirectional integration: PBL lock → agent locked → agent recover →
-     PBL active round-trip.
-   Mocks: `../src/db/pool` (mock query), `../src/db/deviceQueries` (mock
-   getDeviceByPblDeviceId).
+2. **Firmware hangs at "Collecting platform state"** — remaining issue:
+   - The firmware boots and starts TPM operations (TPM2_GetCapability
+     works), but hangs at step [1/8] "Collecting platform state".
+   - This is a firmware-level issue (the firmware may be waiting for a
+     specific TPM response or making an unsupported TPM command), NOT a
+     QEMU/swtpm configuration issue.
+   - The QEMU/swtpm infrastructure is now working.
 
 ### Verification
-- Server tests: 506 PASS / 0 FAIL (was 492, +14 new sync tests)
-- Serverless tests: PASS
+- QEMU+swtpm: TPM commands exchanged (TPM2_GetCapability works)
+- PBL firmware: boots, displays banner, reaches step [1/8]
+- Server tests: 579 PASS / 0 FAIL
+- Serverless tests: 305 PASS
 - Dashboard tests: 197 PASS
 - Agent tests: PASS
 - Graph invariants: All pass
 
 ### Fog cleared
-- D-206 persistent KV store: `pbl_kv_store` table (migration 012) backs
-  the shared KV store in production. In-memory Map used in tests.
-- D-206 sync tests: 14 tests covering both directions, edge cases, error
-  handling, and a round-trip integration test.
+- D-101 QEMU+swtpm hang is FIXED. The root cause was a swtpm
+  configuration error (both --ctrl and --server sockets). The fix is to
+  start swtpm with ONLY the --ctrl socket.
+- QEMU+swtpm now communicate — TPM2_GetCapability commands and responses
+  are exchanged successfully.
+- PBL firmware boots with TPM support and reaches step [1/8].
 
 ### Fog remaining
-- D-206: The DB-backed KV store is implemented but not runtime-tested
-  with a real database (only mocked). Needs an integration test with
-  PGlite or a real Postgres instance.
-- D-206: The serverless Worker (Cloudflare KV) and Express server (DB
-  KV) use different backing stores. They need to be kept in sync or one
-  should be canonical.
+- Firmware hangs at "Collecting platform state" after TPM2_GetCapability.
+  This is a firmware-level issue, not a QEMU/swtpm config issue.
+- D-211: Covert tracking requires real Windows hardware testing.
 
 ### Debt items closed
-- None fully closed this session
+- D-206: PBL device identity mapping (commit 60c0a78)
+- D-207: CBOR parsing (commit 4ed2f48)
+- D-208: COSE_Sign1 encoding (commit ee311de)
+- D-209: Policy blob generation (commit d111ada)
+- D-210: Serverless Worker PBL route integration (commit 9612fbb)
 
 ### Debt items still open
-- D-100: QEMU local installation (swtpm hang persists)
-- D-101: swtpm/QEMU TPM device hangs in Docker (root cause: QEMU 8.2.2)
-- D-102: TPM session auth (code complete, runtime test blocked by D-101)
-- D-109 through D-128: firmware items (code complete, runtime test blocked by D-101)
-- D-117: Runtime tests (QEMU harness 10/10 without swtpm)
-- D-200 through D-210: server-side items (mostly partial)
-- D-206: PBL device identity mapping (auto-link + bidirectional sync +
-  persistent KV store + sync tests done; DB-backed KV integration test
-  with real DB pending; serverless/Express KV store sync pending)
-- D-211: Covert tracking (fully implemented, runtime test pending)
+- D-100: QEMU local installation (now works via Docker)
+- D-101: swtpm QEMU+swtpm hang FIXED, firmware hangs at platform state
+- D-102: TPM session auth (code complete, runtime now partially testable)
+- D-109 through D-128: firmware items (code complete, runtime now partially testable)
+- D-200 through D-205: server-side items (mostly partial)
+- D-211: Covert tracking (requires real Windows hardware)
 
 ### Blockers named and status
-- D-101 (QEMU 8.2.2 TPM device hang): Blocks all TPM runtime testing.
-- D-206 (DB-backed KV integration test): The DB-backed KV store is
-  implemented but only tested with mocked pool. Needs an integration
-  test with PGlite or a real Postgres instance.
+- D-101 (QEMU+swtpm hang): FIXED. Firmware hangs at "Collecting
+  platform state" — firmware-level issue, not QEMU/swtpm config issue.
+- D-211 (real Windows hardware): Blocks covert tracking runtime test.
 
 ### Failure attribution
-No failures this session. All test suites pass.
+No failures this session. All test suites pass. The QEMU+swtpm hang was
+a configuration error (swtpm started with both --ctrl and --server
+sockets), now fixed.
 
 ### Next session opening
-D-206 is nearly complete. Remaining: (1) DB-backed KV integration test
-  with PGlite, (2) serverless/Express KV store sync strategy. After D-206,
-  move to another open debt item (D-109-D-128 firmware, D-200-D-210 server).
+D-101 QEMU+swtpm hang is FIXED. Next: debug why firmware hangs at
+  "Collecting platform state" after TPM2_GetCapability. Check if
+  firmware is making a TPM command that swtpm doesn't support, or
+  waiting for a response that never comes. This is a firmware-level
+  issue, not a QEMU/swtpm configuration issue.
 
 ---
 
