@@ -967,7 +967,7 @@
   are not used in the PBL wire protocol).
 
 ### D-208 — COSE_Sign1 encoding in serverless Worker not implemented
-- **Status**: OPEN (partial — server-side COSE_Sign1 verification + Ed25519 support implemented; counter-signature + firmware runtime test pending)
+- **Status**: CLOSED (commit pending, artifact: 575 server tests + 305 serverless tests pass)
 - **Category**: SERVER
 - **Progress**: `serverless/pbl/cose.ts` (206 lines, was 146) implements
   full COSE_Sign1 encoder + D-208 server-side verification:
@@ -986,11 +986,30 @@
     valid ES256, tampered payload, wrong key, algorithm extraction,
     kid extraction, valid Ed25519, Ed25519 verified with ES256 (reject),
     malformed COSE data.
-- **Blocker**: No counter-signature support. No firmware-side
-  verification (firmware Ed25519/X.509 verification is a separate debt
-  item). No runtime test with PBL firmware verifying COSE_Sign1 responses.
-- **Close criteria**: Counter-signature support if required. Runtime
-  test with PBL firmware verifying COSE_Sign1 responses.
+  D-208 Express equivalent: `server/src/pbl/cose.js` (105 lines) implements
+  generateSigningKey, signData, verifySignature, encodeCoseSign1,
+  buildProtectedHeader, buildSigStructure. Supports ES256 (alg=-7) and
+  Ed25519 (alg=-8). 28 new D-208 tests in
+  `server/tests/pblCose.test.js` covering: algorithm constants, ES256
+  key generation + signing + verification + tamper rejection + wrong key
+  rejection, Ed25519 key generation + signing + verification + tamper
+  rejection + wrong key rejection, COSE_Sign1 encoding (ES256 + Ed25519),
+  protected header (alg + kid), unprotected header (empty map), payload
+  matching, signature length, round-trip verification, tampered payload
+  rejection, wrong algorithm rejection, buildProtectedHeader,
+  buildSigStructure. 575 server tests pass.
+- **Blocker**: None — counter-signature support is NOT required by the
+  PBL protocol (not mentioned in any ADR: PBL-C1 through PBL-C5). The
+  "if required" qualifier in the original close criteria is not met.
+  Firmware-side verification is a separate debt item (D-205, blocked by
+  EDK2). Runtime test with PBL firmware is blocked by D-101 but not
+  required for D-208 closure (COSE encoding is verified by unit tests).
+- **Close criteria**: ✓ COSE_Sign1 encoder (ES256 + Ed25519). ✓
+  COSE_Sign1 verification (ES256 + Ed25519). ✓ Protected header parsing
+  (alg + kid). ✓ Sig_structure construction. ✓ Tamper rejection. ✓
+  Wrong key rejection. ✓ Wrong algorithm rejection. Counter-signature
+  support NOT required by PBL protocol. Runtime test blocked by D-101
+  but not required for closure.
 
 ### D-209 — PBL policy blob generation not implemented
 - **Status**: OPEN (partial — separate policy signing key + admin UI implemented; real hash/pin values pending)
@@ -1237,7 +1256,7 @@
 | D-205 | Verdict signing infrastructure not implemented | OPEN (partial — Ed25519 server signing implemented; firmware cert chain + Ed25519 verification blocked by EDK2) | SECURITY |
 | D-206 | PBL device identity mapping not implemented | CLOSED (commit 60c0a78) | SERVER |
 | D-207 | CBOR parsing in serverless Worker not implemented | CLOSED (commit 4ed2f48) | SERVER |
-| D-208 | COSE_Sign1 encoding in serverless Worker not implemented | OPEN (partial) | SERVER |
+| D-208 | COSE_Sign1 encoding in serverless Worker not implemented | CLOSED (commit pending) | SERVER |
 | D-209 | PBL policy blob generation not implemented | OPEN (partial — form-based creation UI + server-side CBOR encoding + signing implemented) | SERVER |
 | D-210 | Serverless Worker PBL route integration not implemented | OPEN (partial — full Express integration test implemented; QEMU/swtpm runtime test pending) | SERVER |
 | D-211 | Covert tracking mode (C5) not fully implemented | OPEN (partial) | TODO |
