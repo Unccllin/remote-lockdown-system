@@ -1084,7 +1084,7 @@
   tests pass, dashboard build succeeds.
 
 ### D-210 — Serverless Worker PBL route integration not implemented
-- **Status**: CLOSED (commit pending, artifact: 579 server tests + 305 serverless tests pass)
+- **Status**: CLOSED (commit 9612fbb, artifact: 579 server tests + 305 serverless tests pass)
 - **Category**: SERVER
 - **Progress**: `handlePblRoute` in worker.ts dispatches all `/v1/*`
   routes with CORS headers and rate limiting.
@@ -1294,7 +1294,7 @@
 | D-207 | CBOR parsing in serverless Worker not implemented | CLOSED (commit 4ed2f48) | SERVER |
 | D-208 | COSE_Sign1 encoding in serverless Worker not implemented | CLOSED (commit ee311de) | SERVER |
 | D-209 | PBL policy blob generation not implemented | CLOSED (commit d111ada) | SERVER |
-| D-210 | Serverless Worker PBL route integration not implemented | CLOSED (commit pending) | SERVER |
+| D-210 | Serverless Worker PBL route integration not implemented | CLOSED (commit 9612fbb) | SERVER |
 | D-211 | Covert tracking mode (C5) not fully implemented | OPEN (partial) | TODO |
 
 **Totals**: 43 open items — 3 ENV, 6 STUB, 15 TODO, 5 SECURITY, 1 TEST, 11 SERVER, 2 remaining
