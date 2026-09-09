@@ -940,7 +940,7 @@
   exclusive deployments).
 
 ### D-207 — CBOR parsing in serverless Worker not implemented
-- **Status**: CLOSED (commit pending, artifact: 547 server tests + 305 serverless tests pass)
+- **Status**: CLOSED (commit 4ed2f48, artifact: 547 server tests + 305 serverless tests pass)
 - **Category**: SERVER
 - **Progress**: `serverless/pbl/cbor.ts` (294 lines) implements full CBOR
   encoder + decoder. Encoder: encodeUint, encodeBstr, encodeTstr, encodeBool,
@@ -1236,7 +1236,7 @@
 | D-204 | PBL override endpoints not implemented | OPEN (partial — challenge_seed binding + audit trail implemented; production operator key pending) | SERVER |
 | D-205 | Verdict signing infrastructure not implemented | OPEN (partial — Ed25519 server signing implemented; firmware cert chain + Ed25519 verification blocked by EDK2) | SECURITY |
 | D-206 | PBL device identity mapping not implemented | CLOSED (commit 60c0a78) | SERVER |
-| D-207 | CBOR parsing in serverless Worker not implemented | CLOSED (nint encoding + tests done) | SERVER |
+| D-207 | CBOR parsing in serverless Worker not implemented | CLOSED (commit 4ed2f48) | SERVER |
 | D-208 | COSE_Sign1 encoding in serverless Worker not implemented | OPEN (partial) | SERVER |
 | D-209 | PBL policy blob generation not implemented | OPEN (partial — form-based creation UI + server-side CBOR encoding + signing implemented) | SERVER |
 | D-210 | Serverless Worker PBL route integration not implemented | OPEN (partial — full Express integration test implemented; QEMU/swtpm runtime test pending) | SERVER |
