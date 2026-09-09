@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   ShieldAlert, Monitor, ClipboardList, LogOut, Plus, Map as MapIcon,
-  LayoutDashboard, Menu, X, Activity, UserCog, Cloud, Bell,
+  LayoutDashboard, Menu, X, Activity, UserCog, Cloud, Bell, Cpu, FileText,
 } from 'lucide-react';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useServerlessMode } from '../hooks/useServerlessMode';
@@ -50,6 +50,7 @@ export default function DashboardLayout() {
   // Enroll Device link is only visible to operators and above
   if (isOperator) {
     navItems.push({ to: '/devices/enroll', icon: Plus, label: 'Enroll Device' });
+    navItems.push({ to: '/pbl-devices', icon: Cpu, label: 'PBL Devices' });
   }
 
   navItems.push({ to: '/audit', icon: ClipboardList, label: 'Audit Log' });
@@ -59,6 +60,7 @@ export default function DashboardLayout() {
   // the Worker is single-admin, so there's no admin management UI)
   if (isSuperAdmin && !serverless) {
     navItems.push({ to: '/admins', icon: UserCog, label: 'Admins' });
+    navItems.push({ to: '/pbl-policy', icon: FileText, label: 'PBL Policy' });
   }
 
   const navItemClass = ({ isActive }) =>

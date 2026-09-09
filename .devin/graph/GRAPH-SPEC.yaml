@@ -38,13 +38,13 @@ session_nodes:
   - id: SESSION-START
     type: SESSION
     description: >
-      Session begins. Agent reads trace.md, DEBT-LEDGER.md, and GRAPH-SPEC.yaml.
-      Identifies the next open debt item or next phase to work on.
-      Sets the session objective.
+      Session begins. Agent reads trace.md, DEBT-LEDGER.md, PBL-DEBT-LEDGER.md,
+      and GRAPH-SPEC.yaml. Identifies the next open debt item or next phase
+      to work on. Sets the session objective.
     entry_conditions: []
     exit_conditions:
       - "trace.md read and understood"
-      - "DEBT-LEDGER.md read — open items identified"
+      - "DEBT-LEDGER.md + PBL-DEBT-LEDGER.md read — open items identified"
       - "GRAPH-SPEC.yaml read — current node located"
       - "session objective stated in one sentence"
 
@@ -105,13 +105,13 @@ session_nodes:
   - id: CLOSE-DEBT
     type: SESSION
     description: >
-      Update DEBT-LEDGER.md (OPEN -> CLOSED with commit hash + artifact ref).
-      Update trace.md with session-end status block. This is the only node
-      that can mark a debt item as closed.
+      Update DEBT-LEDGER.md or PBL-DEBT-LEDGER.md (OPEN -> CLOSED with commit
+      hash + artifact ref). Update trace.md with session-end status block.
+      This is the only node that can mark a debt item as closed.
     entry_conditions:
       - "ARTIFACT complete"
     exit_conditions:
-      - "DEBT-LEDGER.md updated (if a debt item was closed)"
+      - "DEBT-LEDGER.md or PBL-DEBT-LEDGER.md updated (if a debt item was closed)"
       - "trace.md updated with session-end status block"
       - "next session opening stated in one sentence"
 
@@ -549,12 +549,15 @@ component_nodes:
 # ---------------------------------------------------------------------------
 # DEBT ITEMS
 # ---------------------------------------------------------------------------
-# Tracked in docs/adr/DEBT-LEDGER.md. Each debt item has:
+# Tracked in two ledgers:
+#   - docs/adr/DEBT-LEDGER.md       — D-001..D-021 (legacy, all CLOSED)
+#   - docs/adr/PBL-DEBT-LEDGER.md   — D-100..D-130 (PBL, 31 OPEN)
+# Each debt item has:
 #   - id, description, close_criteria, status, commit_ref, artifact_ref
 # The graph asserts that a debt item cannot be CLOSED without:
 #   1. A run artifact (EVIDENCE node output)
 #   2. A commit hash
-#   3. DEBT-LEDGER.md updated
+#   3. The relevant ledger (DEBT-LEDGER.md or PBL-DEBT-LEDGER.md) updated
 
 debt_items:
   - id: D-001
@@ -646,6 +649,291 @@ debt_items:
     status: CLOSED
     commit_ref: "Phase 17 (this session)"
     artifact_ref: "5 new dashboard tests pass; panel renders for locked/stolen devices"
+
+  # -------------------------------------------------------------------------
+  # PBL debt items (D-100 through D-130)
+  # Tracked in docs/adr/PBL-DEBT-LEDGER.md
+  # These are open items for the Pre-Boot Lock UEFI application.
+  # Categories: ENV (environment), STUB (scaffold), TODO (not started),
+  #            SECURITY (security-critical), TEST (test gap)
+  # -------------------------------------------------------------------------
+
+  - id: D-100
+    description: "QEMU not installed locally for PBL smoke testing"
+    close_criteria: "QEMU boot of PblApp.efi produces a run artifact (screenshot or serial log)"
+    status: OPEN
+    category: ENV
+
+  - id: D-101
+    description: "swtpm not installed locally for TPM 2.0 simulation"
+    close_criteria: "QEMU+swtpm boot shows PBL TPM initialization (lock-state read, PCR read)"
+    status: OPEN
+    category: ENV
+
+  - id: D-102
+    description: "TpmClient.c uses TPM_ST_NO_SESSIONS (no auth) — C2 requires HMAC sessions"
+    close_criteria: "TPM2_StartAuthSession (HMAC + AES-256-CFB) implemented for all NV operations"
+    status: OPEN
+    category: SECURITY
+
+  - id: D-103
+    description: "PlatformState.c SMBIOS string extraction is stubbed"
+    close_criteria: "Extract vendor/version/product strings from SMBIOS Type 0/1/2/4"
+    status: CLOSED
+    category: STUB
+    commit_ref: "session 10 — PblSmbiosGetString helper + Type 0/1 extraction"
+    artifact_ref: "PblApp.efi SHA-256 702a3a10db5c14ec247c70ad2207c7727e5113c22f48e72619a4dfc36d8712ea"
+
+  - id: D-104
+    description: "PlatformState.c PK fingerprint computation is stubbed"
+    close_criteria: "SHA-256 of PK/db/dbx variable data computed and stored"
+    status: CLOSED
+    category: STUB
+    commit_ref: "session 9 — Sha256HashAll on PK variable data"
+    artifact_ref: "PblApp.efi SHA-256 4331ba23ba745ac10ba78c4743b9b9684fdd0e02ded3d6cdc2e56797cad2f5d6"
+
+  - id: D-105
+    description: "PlatformState.c db/dbx signature list parsing is stubbed"
+    close_criteria: "Parse EFI_SIGNATURE_LIST entries, identify known certificate GUIDs"
+    status: CLOSED
+    category: STUB
+    commit_ref: "session 9 — walk EFI_SIGNATURE_LIST in db and dbx"
+    artifact_ref: "PblApp.efi SHA-256 4331ba23ba745ac10ba78c4743b9b9684fdd0e02ded3d6cdc2e56797cad2f5d6"
+
+  - id: D-106
+    description: "PlatformState.c BootOrder network boot detection is incomplete"
+    close_criteria: "Parse EFI_DEVICE_PATH_PROTOCOL for MAC/IPv4/IPv6/HTTP boot nodes"
+    status: CLOSED
+    category: STUB
+    commit_ref: "session 11 — walk EFI_DEVICE_PATH_PROTOCOL in Boot#### entries"
+    artifact_ref: "PblApp.efi SHA-256 2ceabe2e4c5aaa0c78ec2a0f964315030538e56175ad936cebc02d2a54fd0525"
+
+  - id: D-107
+    description: "PlatformState.c PCR reading is not wired to TpmClient.c"
+    close_criteria: "Call PblTpmReadPcr for PCR 4/5/7/11, store digests in PBL_PLATFORM_STATE"
+    status: CLOSED
+    category: TODO
+    commit_ref: "session 8 — PblCollectPcrReadings calls PblTpmReadPcr"
+    artifact_ref: "PblApp.efi SHA-256 7e51e58a831b1000f2bfab4ad648f47c357e505489c9d382b898c591bd8921c5"
+
+  - id: D-108
+    description: "TpmClient.c PblTpmReadPcr response parsing is stubbed"
+    close_criteria: "Parse TPMS_PCR_READ response, extract TPM2B_DIGEST values"
+    status: CLOSED
+    category: STUB
+    commit_ref: "session 8 — PblTpmReadPcr parses TPM2_PCR_Read response"
+    artifact_ref: "PblApp.efi SHA-256 7e51e58a831b1000f2bfab4ad648f47c357e505489c9d382b898c591bd8921c5"
+
+  - id: D-109
+    description: "Verdict fetch and verification flow not implemented (C1 §7)"
+    close_criteria: "C1 §7 9-step verification + C3 HTTPS POST implemented and tested"
+    status: OPEN
+    category: TODO
+
+  - id: D-110
+    description: "Policy blob parsing not implemented (C4)"
+    close_criteria: "COSE_Sign1 parsing + CBOR decoding of ~40 policy fields + signature verification"
+    status: OPEN
+    category: TODO
+
+  - id: D-111
+    description: "Decision engine not implemented (C4 §5 18-step evaluation)"
+    close_criteria: "C4 §5 18-step evaluation with locked/unlocked/degraded/override scenarios"
+    status: OPEN
+    category: TODO
+
+  - id: D-112
+    description: "Lock screen UI not implemented (REQ-14)"
+    close_criteria: "Text-mode + graphical lock screen with device ID, contact info, countdown"
+    status: OPEN
+    category: TODO
+
+  - id: D-113
+    description: "Override challenge/response not implemented (C1 §6)"
+    close_criteria: "Challenge display + response input + verification logic"
+    status: OPEN
+    category: TODO
+
+  - id: D-114
+    description: "Chain-load Windows Boot Manager not implemented"
+    close_criteria: "ESP file discovery + gBS->LoadImage + gBS->StartImage for bootmgfw.efi"
+    status: OPEN
+    category: TODO
+
+  - id: D-115
+    description: "CBOR encoding/decoding not implemented"
+    close_criteria: "CBOR major type 0-7 encoding/decoding + map/array handling"
+    status: OPEN
+    category: TODO
+
+  - id: D-116
+    description: "TLS certificate pin verification not implemented (C3 §4)"
+    close_criteria: "Certificate pin extraction from C4 policy + TLS handshake verification"
+    status: OPEN
+    category: SECURITY
+
+  - id: D-117
+    description: "No runtime tests for PBL modules"
+    close_criteria: "Host-side unit tests for TPM commands + QEMU+swtpm integration tests"
+    status: OPEN
+    category: TEST
+
+  - id: D-118
+    description: "EFI_RNG_PROTOCOL nonce generation not implemented (C3 §5)"
+    close_criteria: "Locate EFI_RNG_PROTOCOL, call GetRNG, verify 32-byte nonce"
+    status: OPEN
+    category: SECURITY
+
+  - id: D-119
+    description: "ACPI FADT S3 parsing is stubbed"
+    close_criteria: "Parse RSDP→XSDT→FADT chain, read S3 support bit"
+    status: OPEN
+    category: STUB
+
+  - id: D-120
+    description: "BitLocker detection not implemented"
+    close_criteria: "Detect BitLocker from ESP/BCD, read PCR binding metadata"
+    status: OPEN
+    category: TODO
+
+  - id: D-121
+    description: "SPI protections check not implemented (C4 §2.3)"
+    close_criteria: "Read SPI config registers via SMM protocol, check BIOSWE/BLE/SMM_BWP"
+    status: OPEN
+    category: TODO
+
+  - id: D-122
+    description: "DCI/DCP check not implemented (C4 §2.4)"
+    close_criteria: "Read DCI/DCP status via documented platform protocol"
+    status: OPEN
+    category: TODO
+
+  - id: D-123
+    description: "DMA protection check not implemented (C4 §2.5)"
+    close_criteria: "Read VT-d status via ACPI DMAR table and PCI config"
+    status: OPEN
+    category: TODO
+
+  - id: D-124
+    description: "MOR (Memory Overwrite Request) not implemented (C4 §2.6)"
+    close_criteria: "Set MOR bit via EFI_TCG2_PROTOCOL or ACPI Memory Clear interface"
+    status: OPEN
+    category: TODO
+
+  - id: D-125
+    description: "TCG event log not implemented (C4 §2.7)"
+    close_criteria: "Log PBL events via EFI_TCG2_PROTOCOL->HashLogExtendEvent"
+    status: OPEN
+    category: TODO
+
+  - id: D-126
+    description: "SVN (Security Version Number) check not implemented (C4 §2.8)"
+    close_criteria: "Read firmware version from SMBIOS Type 0, compare against C4 policy floor"
+    status: OPEN
+    category: TODO
+
+  - id: D-127
+    description: "AMT check not implemented (C4 §2.9)"
+    close_criteria: "Read AMT status via documented MEI protocol"
+    status: OPEN
+    category: TODO
+
+  - id: D-128
+    description: "SBAT variable check not implemented"
+    close_criteria: "Determine SBAT relevance for PBL; if relevant, read SBAT variable from ESP"
+    status: OPEN
+    category: TODO
+
+  - id: D-129
+    description: "No real hardware validation for PBL"
+    close_criteria: "Boot PblApp.efi on real UEFI hardware, capture serial/log output"
+    status: OPEN
+    category: ENV
+
+  - id: D-130
+    description: "Code signing not configured for PblApp.efi"
+    close_criteria: "Sign PblApp.efi with sbsign, verify loads under Secure Boot in QEMU"
+    status: OPEN
+    category: SECURITY
+
+  # -------------------------------------------------------------------------
+  # Server-side PBL debt items (D-200 through D-210)
+  # The serverless Worker has NO PBL endpoints. These items cover building
+  # the server-side verdict service that PBL calls statelessly.
+  # -------------------------------------------------------------------------
+
+  - id: D-200
+    description: "PBL verdict endpoint (POST /v1/verdict) not implemented in serverless Worker"
+    close_criteria: "CBOR request parsed, device status looked up, COSE_Sign1 verdict signed and returned"
+    status: OPEN
+    category: SERVER
+
+  - id: D-201
+    description: "PBL policy endpoint (GET /v1/policy/{version}) not implemented"
+    close_criteria: "COSE_Sign1 policy blob served from KV with correct Content-Type"
+    status: OPEN
+    category: SERVER
+
+  - id: D-202
+    description: "PBL enrollment endpoint (POST /v1/enroll) not implemented"
+    close_criteria: "Accepts device_id/ek_cert/ak_public, stores in KV, returns pinned cert + policy version"
+    status: OPEN
+    category: SERVER
+
+  - id: D-203
+    description: "PBL attestation endpoint (POST /v1/attest) not implemented"
+    close_criteria: "Accepts TPM2_Quote, verifies AK signature, returns attestation result"
+    status: OPEN
+    category: SERVER
+
+  - id: D-204
+    description: "PBL override endpoints (POST /v1/override/challenge and /response) not implemented"
+    close_criteria: "Challenge issued and response verified for offline override flow"
+    status: OPEN
+    category: SERVER
+
+  - id: D-205
+    description: "Verdict signing infrastructure (Ed25519/ES256 + COSE_Sign1) not implemented"
+    close_criteria: "Ed25519 signing key generated, cert pinned in C4 policy, COSE_Sign1 signing works"
+    status: OPEN
+    category: SECURITY
+
+  - id: D-206
+    description: "PBL device identity mapping (TPM-based device_id) not implemented"
+    close_criteria: "KV schema for pbl_devices:{device_id} works, lookup by TPM device_id returns correct status"
+    status: OPEN
+    category: SERVER
+
+  - id: D-207
+    description: "CBOR parsing in serverless Worker not implemented"
+    close_criteria: "Worker parses CBOR request bodies for all /v1/* endpoints"
+    status: OPEN
+    category: SERVER
+
+  - id: D-208
+    description: "COSE_Sign1 encoding in serverless Worker not implemented"
+    close_criteria: "Worker produces valid COSE_Sign1 responses verifiable by PBL"
+    status: OPEN
+    category: SERVER
+
+  - id: D-209
+    description: "PBL policy blob generation (~40 fields, signed) not implemented"
+    close_criteria: "All ~40 C4 policy fields populated, signed with policy key, stored in KV"
+    status: OPEN
+    category: SERVER
+
+  - id: D-210
+    description: "Serverless Worker /v1/* route integration not implemented"
+    close_criteria: "/v1/* routes dispatched correctly, PBL endpoints accessible at Worker URL"
+    status: OPEN
+    category: SERVER
+
+  # Covert tracking debt items (D-211+)
+  - id: D-211
+    description: "Covert tracking mode (C5) not fully implemented"
+    close_criteria: "Agent stealth, dashboard Track button, admin API, PCR sealing, end-to-end test"
+    status: OPEN
+    category: TODO
 
 # ---------------------------------------------------------------------------
 # GRAPH INVARIANTS (asserted by graph_assert.py)

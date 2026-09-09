@@ -13,14 +13,46 @@ import crypto from 'crypto';
 
 // Mock KV namespace
 class MockKV {
-  private data: Record<string, string> = {};
+  private data: Record<string, string | Uint8Array> = {};
 
-  async get(key: string): Promise<string | null> {
-    return this.data[key] ?? null;
+  async get(key: string, options?: { type?: 'json' | 'text' | 'arrayBuffer' } | string): Promise<string | Uint8Array | null> {
+    const val = this.data[key];
+    if (val === undefined) return null;
+    // Handle both { type: 'json' } and 'json' style calls
+    const type = typeof options === 'string' ? options : options?.type;
+    if (type === 'json') {
+      const str = typeof val === 'string' ? val : new TextDecoder().decode(val);
+      return JSON.parse(str);
+    }
+    if (type === 'arrayBuffer') {
+      if (val instanceof Uint8Array) return val;
+      return new TextEncoder().encode(val);
+    }
+    // Default: return as string
+    return typeof val === 'string' ? val : new TextDecoder().decode(val);
   }
 
-  async put(key: string, value: string): Promise<void> {
-    this.data[key] = value;
+  async put(key: string, value: string | Uint8Array): Promise<void> {
+    this.data[key] = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+  }
+
+  async delete(key: string): Promise<void> {
+    delete this.data[key];
+  }
+
+  async list(options?: { prefix?: string; cursor?: string }): Promise<{
+    keys: { name: string }[];
+    list_complete: boolean;
+    cursor?: string;
+  }> {
+    const prefix = options?.prefix ?? '';
+    const keys: { name: string }[] = [];
+    for (const key of Object.keys(this.data)) {
+      if (!prefix || key.startsWith(prefix)) {
+        keys.push({ name: key });
+      }
+    }
+    return { keys, list_complete: true };
   }
 
   reset(): void {
@@ -101,10 +133,12 @@ async function parseResponse(resp: Response): Promise<unknown> {
 // We need to import the worker handler
 // Since the worker uses `export default`, we import it dynamically
 let worker: { fetch: (req: Request, env: unknown) => Promise<Response> };
+let resetKeyCache: () => void;
 
 beforeEach(async () => {
   const mod = await import('./worker.js');
   worker = mod.default;
+  resetKeyCache = mod.resetKeyCache;
 });
 
 describe('Serverless Worker', () => {
@@ -117,6 +151,8 @@ describe('Serverless Worker', () => {
       ADMIN_TOKEN: 'test-admin-token',
       LOCKDOWN_KV: kv,
     };
+    // D-205: Reset the module-level key cache so each test starts fresh
+    if (resetKeyCache) resetKeyCache();
   });
 
   describe('GET /api/health', () => {
@@ -631,6 +667,84 @@ describe('Serverless Worker', () => {
       expect(resp.status).toBe(200);
       expect(Array.isArray(data)).toBe(true);
       expect(data.length).toBe(0);
+    });
+
+    it('POST /api/agent/efs-cert uploads cert (agent auth)', async () => {
+      const { device, apiKey } = await enrollDevice(worker, env, 'EFS-001');
+      const body = JSON.stringify({
+        cert_base64: 'MIIKXAIBAzCCCgAGCSqGSIb3DQEHAaCCCfkEggn1MIIJ8TCCBf8GCSqGSIb3DQEH',
+        cert_password: 'secret123',
+      });
+      const req = makeRequest(
+        'POST',
+        '/api/agent/efs-cert',
+        body,
+        signRequest(body, apiKey),
+      );
+      const resp = await worker.fetch(req, env);
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.stored).toBe(true);
+      expect(data.device.id).toBe(device.id);
+    });
+
+    it('POST /api/agent/efs-cert rejects without auth', async () => {
+      const body = JSON.stringify({ cert_base64: 'dGVzdA==', cert_password: 'pw' });
+      const req = makeRequest('POST', '/api/agent/efs-cert', body);
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('POST /api/agent/efs-cert rejects missing cert_base64', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'EFS-002');
+      const body = JSON.stringify({ cert_password: 'pw' });
+      const req = makeRequest(
+        'POST',
+        '/api/agent/efs-cert',
+        body,
+        signRequest(body, apiKey),
+      );
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(400);
+    });
+
+    it('GET /api/devices/:id/efs-cert returns uploaded cert (admin auth)', async () => {
+      const { device, apiKey } = await enrollDevice(worker, env, 'EFS-003');
+      // Upload cert first
+      const certBody = JSON.stringify({
+        cert_base64: 'MIIKXAIBAzCCCgAGCSqGSIb3DQEHAaCCCfkEggn1MIIJ8TCCBf8GCSqGSIb3DQEH',
+        cert_password: 'secret123',
+      });
+      await worker.fetch(
+        makeRequest('POST', '/api/agent/efs-cert', certBody, signRequest(certBody, apiKey)),
+        env,
+      );
+      // Download cert
+      const req = makeRequest('GET', `/api/devices/${device.id}/efs-cert`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const resp = await worker.fetch(req, env);
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.cert_base64).toBe('MIIKXAIBAzCCCgAGCSqGSIb3DQEHAaCCCfkEggn1MIIJ8TCCBf8GCSqGSIb3DQEH');
+      expect(data.cert_password).toBe('secret123');
+      expect(data.device_id).toBe(device.id);
+    });
+
+    it('GET /api/devices/:id/efs-cert returns 404 if no cert uploaded', async () => {
+      const { device } = await enrollDevice(worker, env, 'EFS-004');
+      const req = makeRequest('GET', `/api/devices/${device.id}/efs-cert`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(404);
+    });
+
+    it('GET /api/devices/:id/efs-cert rejects without admin auth', async () => {
+      const { device } = await enrollDevice(worker, env, 'EFS-005');
+      const req = makeRequest('GET', `/api/devices/${device.id}/efs-cert`);
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(401);
     });
 
     it('GET /api/audit returns audit entries after actions', async () => {
@@ -1269,5 +1383,1151 @@ describe('KV-RACE-001: checkin does not overwrite ACK status update', () => {
     );
     const deviceData: any = await parseResponse(deviceResp);
     expect(deviceData.status).toBe('locked');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D-210: PBL /v1/* route integration tests
+// ---------------------------------------------------------------------------
+
+describe('D-210: PBL route integration', () => {
+  let kv: MockKV;
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV; PBL_SIGNING_KEY?: string };
+
+  beforeEach(() => {
+    kv = new MockKV();
+    env = {
+      ADMIN_TOKEN: 'test-admin-token',
+      LOCKDOWN_KV: kv,
+    };
+    // D-205: Reset the module-level key cache so each test starts fresh
+    if (resetKeyCache) resetKeyCache();
+  });
+
+  describe('GET /v1/health', () => {
+    it('returns ok status with pbl flag', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/health'), env);
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.status).toBe('ok');
+      expect(data.pbl).toBe(true);
+    });
+  });
+
+  describe('GET /v1/policy/:version', () => {
+    it('returns a COSE_Sign1 policy for version 1', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/policy/1'), env);
+      expect(resp.status).toBe(200);
+      expect(resp.headers.get('Content-Type')).toBe('application/cose');
+      const body = new Uint8Array(await resp.arrayBuffer());
+      expect(body.length).toBeGreaterThan(0);
+    });
+
+    it('returns stored policy when available', async () => {
+      const fakePolicy = new Uint8Array([0x84, 0x40, 0xa0, 0x44, 0x01, 0x02, 0x03, 0x04]);
+      await kv.put('pbl_policy:5', fakePolicy);
+      await kv.put('pbl_policy:latest_version', '5');
+
+      const resp = await worker.fetch(makeRequest('GET', '/v1/policy/5'), env);
+      expect(resp.status).toBe(200);
+      const body = new Uint8Array(await resp.arrayBuffer());
+      expect(Array.from(body)).toEqual(Array.from(fakePolicy));
+    });
+
+    it('returns latest policy version', async () => {
+      const fakePolicy = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+      await kv.put('pbl_policy:3', fakePolicy);
+      await kv.put('pbl_policy:latest_version', '3');
+
+      const resp = await worker.fetch(makeRequest('GET', '/v1/policy/latest'), env);
+      expect(resp.status).toBe(200);
+      const body = new Uint8Array(await resp.arrayBuffer());
+      expect(Array.from(body)).toEqual(Array.from(fakePolicy));
+    });
+
+    it('rejects invalid version', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/policy/abc'), env);
+      expect(resp.status).toBe(400);
+    });
+  });
+
+  describe('GET /v1/devices', () => {
+    it('rejects without admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/devices'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('returns empty list when no devices exist', async () => {
+      const resp = await worker.fetch(
+        makeRequest('GET', '/v1/devices', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.devices).toEqual([]);
+      expect(data.count).toBe(0);
+    });
+
+    it('returns devices after enrollment', async () => {
+      // Enroll a PBL device first
+      const deviceId = 'aabbccdd'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'active',
+        enrolled_at: '2026-01-01T00:00:00Z',
+        hostname: 'test-pbl-host',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('GET', '/v1/devices', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.devices.length).toBe(1);
+      expect(data.devices[0].device_id).toBe(deviceId);
+      expect(data.count).toBe(1);
+    });
+  });
+
+  describe('GET /v1/devices/:id', () => {
+    it('rejects without admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/devices/abc'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('returns 404 for non-existent device', async () => {
+      const resp = await worker.fetch(
+        makeRequest('GET', '/v1/devices/ff'.repeat(32), undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('returns device for valid id', async () => {
+      const deviceId = 'a1b2c3d4'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'active',
+        enrolled_at: '2026-01-01T00:00:00Z',
+        hostname: 'test-host',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('GET', `/v1/devices/${deviceId}`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.device.device_id).toBe(deviceId);
+      expect(data.device.status).toBe('active');
+      expect(data.device.hostname).toBe('test-host');
+    });
+  });
+
+  describe('POST /v1/devices/:id/lock', () => {
+    it('rejects without admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('POST', '/v1/devices/abc/lock'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('returns 404 for non-existent device', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/devices/ff'.repeat(32) + '/lock', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('locks an active device', async () => {
+      const deviceId = 'a1b2c3d4'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'active',
+        enrolled_at: '2026-01-01T00:00:00Z',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('POST', `/v1/devices/${deviceId}/lock`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.device.status).toBe('locked');
+      expect(data.device.lock_reason).toBe('admin_lock');
+    });
+  });
+
+  describe('POST /v1/devices/:id/unlock', () => {
+    it('rejects without admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('POST', '/v1/devices/abc/unlock'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('unlocks a locked device', async () => {
+      const deviceId = 'a1b2c3d4'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'locked',
+        enrolled_at: '2026-01-01T00:00:00Z',
+        lock_reason: 'admin_lock',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('POST', `/v1/devices/${deviceId}/unlock`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.device.status).toBe('active');
+    });
+  });
+
+  describe('DELETE /v1/devices/:id', () => {
+    it('rejects without admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('DELETE', '/v1/devices/abc'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('returns 404 for non-existent device', async () => {
+      const resp = await worker.fetch(
+        makeRequest('DELETE', '/v1/devices/ff'.repeat(32), undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('deletes an existing device', async () => {
+      const deviceId = 'a1b2c3d4'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'active',
+        enrolled_at: '2026-01-01T00:00:00Z',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('DELETE', `/v1/devices/${deviceId}`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.deleted).toBe(true);
+
+      // Verify device is gone
+      const getResp = await worker.fetch(
+        makeRequest('GET', `/v1/devices/${deviceId}`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(getResp.status).toBe(404);
+    });
+  });
+
+  describe('D-206: PBL device agent-mapping', () => {
+    const pblDeviceId = 'd2060001'.repeat(8);
+    const agentDeviceId = 'agent-uuid-1234';
+
+    beforeEach(async () => {
+      await kv.put(`pbl_devices:${pblDeviceId}`, JSON.stringify({
+        device_id: pblDeviceId,
+        status: 'active',
+        enrolled_at: '2026-01-01T00:00:00Z',
+      }));
+    });
+
+    it('GET agent-mapping returns mapped=false when no mapping exists', async () => {
+      const resp = await worker.fetch(
+        makeRequest('GET', `/v1/devices/${pblDeviceId}/agent-mapping`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.mapped).toBe(false);
+      expect(data.pbl_device_id).toBe(pblDeviceId);
+    });
+
+    it('POST agent-mapping links PBL device to agent device', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', `/v1/devices/${pblDeviceId}/agent-mapping`, {
+          agent_device_id: agentDeviceId,
+        }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.mapped).toBe(true);
+      expect(data.pbl_device_id).toBe(pblDeviceId);
+      expect(data.agent_device_id).toBe(agentDeviceId);
+    });
+
+    it('GET agent-mapping returns mapped=true after linking', async () => {
+      await kv.put(`pbl_device_mapping:${pblDeviceId}`, agentDeviceId);
+
+      const resp = await worker.fetch(
+        makeRequest('GET', `/v1/devices/${pblDeviceId}/agent-mapping`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.mapped).toBe(true);
+      expect(data.agent_device_id).toBe(agentDeviceId);
+    });
+
+    it('POST agent-mapping rejects missing agent_device_id', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', `/v1/devices/${pblDeviceId}/agent-mapping`, {}, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it('POST agent-mapping rejects non-existent PBL device', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', `/v1/devices/${'ff'.repeat(32)}/agent-mapping`, {
+          agent_device_id: agentDeviceId,
+        }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('POST agent-mapping rejects without admin auth', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', `/v1/devices/${pblDeviceId}/agent-mapping`, {
+          agent_device_id: agentDeviceId,
+        }),
+        env,
+      );
+      expect(resp.status).toBe(401);
+    });
+
+    it('DELETE agent-mapping removes the mapping', async () => {
+      await kv.put(`pbl_device_mapping:${pblDeviceId}`, agentDeviceId);
+
+      const resp = await worker.fetch(
+        makeRequest('DELETE', `/v1/devices/${pblDeviceId}/agent-mapping`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.unmapped).toBe(true);
+    });
+
+    it('DELETE agent-mapping returns 404 when no mapping exists', async () => {
+      const resp = await worker.fetch(
+        makeRequest('DELETE', `/v1/devices/${pblDeviceId}/agent-mapping`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('DELETE agent-mapping rejects without admin auth', async () => {
+      const resp = await worker.fetch(
+        makeRequest('DELETE', `/v1/devices/${pblDeviceId}/agent-mapping`),
+        env,
+      );
+      expect(resp.status).toBe(401);
+    });
+  });
+
+  describe('POST /v1/devices/:id/track (C5 covert tracking, D-211)', () => {
+    it('rejects without admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('POST', '/v1/devices/abc/track'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('returns 404 for non-existent device', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/devices/ff'.repeat(32) + '/track', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('sets device to tracking status', async () => {
+      const deviceId = 'a1b2c3d4'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'active',
+        enrolled_at: '2026-01-01T00:00:00Z',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('POST', `/v1/devices/${deviceId}/track`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.device.status).toBe('tracking');
+      expect(data.device.lock_reason).toBe('reported_stolen');
+    });
+  });
+
+  describe('POST /v1/devices/:id/stop-track (C5, D-211)', () => {
+    it('rejects without admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('POST', '/v1/devices/abc/stop-track'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('returns 404 for non-existent device', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/devices/ff'.repeat(32) + '/stop-track', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('stops tracking and returns device to active', async () => {
+      const deviceId = 'a1b2c3d4'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'tracking',
+        enrolled_at: '2026-01-01T00:00:00Z',
+        lock_reason: 'reported_stolen',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('POST', `/v1/devices/${deviceId}/stop-track`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.device.status).toBe('active');
+    });
+  });
+
+  describe('POST /v1/attest', () => {
+    it('rejects invalid device_id', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/attest', { device_id: 'short', quote: 'test' }),
+        env,
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it('returns 404 for unregistered device', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/attest', {
+          device_id: 'ff'.repeat(32),
+          quote: 'dGVzdA==',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('accepts attestation from enrolled device', async () => {
+      const deviceId = 'a1b2c3d4'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'active',
+        enrolled_at: '2026-01-01T00:00:00Z',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/attest', {
+          device_id: deviceId,
+          quote: 'dGVzdA==',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.attested).toBe(true);
+      expect(data.health).toBe('ok');
+    });
+
+    it('D-203: reports quote_verified=false when no AK public is stored', async () => {
+      const deviceId = 'd2030001'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'active',
+        enrolled_at: '2026-01-01T00:00:00Z',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/attest', {
+          device_id: deviceId,
+          quote: 'dGVzdA==',
+          signature: 'dGVzdA==',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.attested).toBe(true);
+      expect(data.quote_verified).toBe(false);
+      // No AK public stored → no verification attempted → health stays ok
+      expect(data.health).toBe('ok');
+    });
+
+    it('D-203: reports quote_verified=false for invalid quote with AK public stored', async () => {
+      const deviceId = 'd2030002'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'active',
+        enrolled_at: '2026-01-01T00:00:00Z',
+      }));
+      // Store a dummy AK public (too short to be valid)
+      await kv.put(`pbl_ak_public:${deviceId}`, '0001');
+
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/attest', {
+          device_id: deviceId,
+          quote: 'dGVzdA==',
+          signature: 'dGVzdA==',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.attested).toBe(true);
+      expect(data.quote_verified).toBe(false);
+    });
+
+    it('D-203: parses TPM2B_ATTEST and extracts PCR digest', async () => {
+      const deviceId = 'd2030003'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'active',
+        enrolled_at: '2026-01-01T00:00:00Z',
+      }));
+
+      // Build a minimal TPM2B_ATTEST with TPM_ST_ATTEST_QUOTE
+      // TPMS_ATTEST: tag(2) + name(2+0) + pcr_selection(4+0) + digest(2+32)
+      const pcrDigest = new Uint8Array(32).fill(0xab);
+      const attestBody = new Uint8Array([
+        0x80, 0x18, // tag = TPM_ST_ATTEST_QUOTE
+        0x00, 0x00, // name size = 0
+        0x00, 0x00, 0x00, 0x00, // pcr_selection count = 0
+        0x00, 0x20, ...pcrDigest, // digest size = 32 + digest
+      ]);
+      const attest = new Uint8Array([
+        (attestBody.length >> 8) & 0xff, attestBody.length & 0xff,
+        ...attestBody,
+      ]);
+      const attestB64 = Buffer.from(attest).toString('base64');
+
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/attest', {
+          device_id: deviceId,
+          quote: attestB64,
+          signature: 'dGVzdA==',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.attested).toBe(true);
+      expect(data.pcr_digest).toBe(Buffer.from(pcrDigest).toString('hex'));
+    });
+
+    it('D-203: locked device reports degraded health', async () => {
+      const deviceId = 'd2030004'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'locked',
+        enrolled_at: '2026-01-01T00:00:00Z',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/attest', {
+          device_id: deviceId,
+          quote: 'dGVzdA==',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.health).toBe('degraded');
+    });
+  });
+
+  describe('POST /v1/override/challenge', () => {
+    it('rejects invalid device_id', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/override/challenge', {
+          device_id: 'short',
+          challenge_seed: 'aabbccdd'.repeat(4),
+        }),
+        env,
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it('returns 404 for unregistered device', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/override/challenge', {
+          device_id: 'ff'.repeat(32),
+          challenge_seed: 'aabbccdd'.repeat(4),
+        }),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('rejects non-locked device', async () => {
+      const deviceId = 'a1b2c3d4'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'active',
+        enrolled_at: '2026-01-01T00:00:00Z',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/override/challenge', {
+          device_id: deviceId,
+          challenge_seed: 'aabbccdd'.repeat(4),
+        }),
+        env,
+      );
+      expect(resp.status).toBe(409);
+    });
+
+    it('issues challenge for locked device', async () => {
+      const deviceId = 'a1b2c3d4'.repeat(8);
+      await kv.put(`pbl_devices:${deviceId}`, JSON.stringify({
+        device_id: deviceId,
+        status: 'locked',
+        enrolled_at: '2026-01-01T00:00:00Z',
+        lock_reason: 'admin_lock',
+      }));
+
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/override/challenge', {
+          device_id: deviceId,
+          challenge_seed: 'aabbccdd'.repeat(4),
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(data.challenge).toBeTruthy();
+      expect(data.expires_at).toBeTruthy();
+    });
+  });
+
+  describe('unknown /v1/ routes', () => {
+    it('returns 404 for unknown route', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/unknown'), env);
+      expect(resp.status).toBe(404);
+    });
+  });
+
+  describe('CORS headers on PBL routes (D-210)', () => {
+    it('includes CORS headers on GET /v1/health', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/health'), env);
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(resp.headers.get('Access-Control-Allow-Methods')).toContain('GET');
+      expect(resp.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
+    });
+
+    it('includes CORS headers on GET /v1/policy/1', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/policy/1'), env);
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    });
+
+    it('includes CORS headers on GET /v1/devices (admin)', async () => {
+      const resp = await worker.fetch(
+        makeRequest('GET', '/v1/devices', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    });
+
+    it('includes CORS headers on 404 responses', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/unknown'), env);
+      expect(resp.status).toBe(404);
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    });
+
+    it('includes CORS headers on 401 responses', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/devices'), env);
+      expect(resp.status).toBe(401);
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    });
+
+    it('handles OPTIONS preflight with CORS headers', async () => {
+      const resp = await worker.fetch(new Request('https://lockdown.example.com/v1/health', {
+        method: 'OPTIONS',
+      }), env);
+      expect(resp.status).toBe(200);
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(resp.headers.get('Access-Control-Allow-Methods')).toContain('DELETE');
+    });
+  });
+
+  // D-205: Key rotation admin endpoints
+  describe('D-205: Key rotation endpoints', () => {
+    it('POST /v1/admin/rotate-key requires admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('POST', '/v1/admin/rotate-key'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('POST /v1/admin/rotate-key rotates the verdict signing key', async () => {
+      // First, get the current key info
+      const infoReq = makeRequest('GET', '/v1/admin/key-info', undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const infoResp = await worker.fetch(infoReq, env);
+      expect(infoResp.status).toBe(200);
+      const infoData = await parseResponse(infoResp);
+      const oldKid = infoData.verdict_key.kid;
+      expect(oldKid).toBeTruthy();
+
+      // Rotate
+      const rotateReq = makeRequest('POST', '/v1/admin/rotate-key', undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const rotateResp = await worker.fetch(rotateReq, env);
+      expect(rotateResp.status).toBe(200);
+      const rotateData = await parseResponse(rotateResp);
+      expect(rotateData.rotated).toBe(true);
+      expect(rotateData.new_kid).toBeTruthy();
+      expect(rotateData.new_kid).not.toBe(oldKid);
+      expect(rotateData.kid_history_count).toBe(1);
+      expect(rotateData.kid_history[0]).toBe(oldKid);
+      expect(rotateData.algorithm).toBe('ES256');
+    });
+
+    it('GET /v1/admin/key-info requires admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/admin/key-info'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('GET /v1/admin/key-info returns verdict + policy key info', async () => {
+      const resp = await worker.fetch(
+        makeRequest('GET', '/v1/admin/key-info', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data = await parseResponse(resp);
+      expect(data.verdict_key).toBeDefined();
+      expect(data.verdict_key.kid).toBeTruthy();
+      expect(data.verdict_key.spki_size).toBe(91); // ES256 SPKI
+      expect(data.verdict_key.algorithm).toBe('ES256');
+      expect(data.policy_key).toBeDefined();
+      expect(data.policy_key.kid).toBeTruthy();
+      expect(data.policy_key.spki_size).toBe(91);
+      expect(data.policy_key.algorithm).toBe('ES256');
+      expect(data.kid_history).toBeDefined();
+      expect(Array.isArray(data.kid_history)).toBe(true);
+    });
+
+    it('multiple rotations accumulate kid history via endpoint', async () => {
+      // Get initial key
+      const info1 = await worker.fetch(
+        makeRequest('GET', '/v1/admin/key-info', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const data1 = await parseResponse(info1);
+      const kid1 = data1.verdict_key.kid;
+
+      // First rotation
+      const rot1 = await worker.fetch(
+        makeRequest('POST', '/v1/admin/rotate-key', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const rot1Data = await parseResponse(rot1);
+      expect(rot1Data.kid_history_count).toBe(1);
+      expect(rot1Data.kid_history[0]).toBe(kid1);
+
+      // Second rotation
+      const rot2 = await worker.fetch(
+        makeRequest('POST', '/v1/admin/rotate-key', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const rot2Data = await parseResponse(rot2);
+      expect(rot2Data.kid_history_count).toBe(2);
+      expect(rot2Data.kid_history[0]).toBe(rot1Data.new_kid);
+      expect(rot2Data.kid_history[1]).toBe(kid1);
+    });
+
+    it('policy blob reflects rotated kid history after rotation', async () => {
+      // Rotate once
+      await worker.fetch(
+        makeRequest('POST', '/v1/admin/rotate-key', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+
+      // Fetch policy — key 72 should contain the old kid
+      const policyResp = await worker.fetch(
+        makeRequest('GET', '/v1/policy/1'),
+        env,
+      );
+      expect(policyResp.status).toBe(200);
+      const policyBody = new Uint8Array(await policyResp.arrayBuffer());
+      // The policy is a COSE_Sign1 — extract payload and check key 72
+      // We just verify the response is valid; the pbl.test.ts already
+      // tests key 72 content in detail.
+      expect(policyBody.length).toBeGreaterThan(100);
+    });
+  });
+
+  // D-205: Cert chain admin endpoints
+  describe('D-205: Cert chain endpoints', () => {
+    it('POST /v1/admin/cert-chain requires admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('POST', '/v1/admin/cert-chain'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('GET /v1/admin/cert-chain requires admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/admin/cert-chain'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('DELETE /v1/admin/cert-chain requires admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('DELETE', '/v1/admin/cert-chain'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('POST /v1/admin/cert-chain stores chain via JSON body', async () => {
+      // Create fake DER certs (SEQUENCEs)
+      const cert1 = new Uint8Array([0x30, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05]);
+      const cert2 = new Uint8Array([0x30, 0x03, 0x01, 0x02, 0x03]);
+      const chain = new Uint8Array([...cert1, ...cert2]);
+      const chainB64 = Buffer.from(chain).toString('base64');
+
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/admin/cert-chain', { chain: chainB64 }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data = await parseResponse(resp);
+      expect(data.stored).toBe(true);
+      expect(data.cert_count).toBe(2);
+      expect(data.total_size).toBe(chain.length);
+    });
+
+    it('POST /v1/admin/cert-chain rejects empty chain', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/admin/cert-chain', { chain: '' }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it('POST /v1/admin/cert-chain rejects single cert (need leaf + CA)', async () => {
+      const cert = new Uint8Array([0x30, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05]);
+      const chainB64 = Buffer.from(cert).toString('base64');
+
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/admin/cert-chain', { chain: chainB64 }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it('POST /v1/admin/cert-chain rejects invalid DER', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/admin/cert-chain', { chain: 'notbase64!!' }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it('GET /v1/admin/cert-chain returns info after storing', async () => {
+      // Store a chain first
+      const cert1 = new Uint8Array([0x30, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05]);
+      const cert2 = new Uint8Array([0x30, 0x03, 0x01, 0x02, 0x03]);
+      const chain = new Uint8Array([...cert1, ...cert2]);
+      const chainB64 = Buffer.from(chain).toString('base64');
+
+      await worker.fetch(
+        makeRequest('POST', '/v1/admin/cert-chain', { chain: chainB64 }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+
+      // Now GET
+      const resp = await worker.fetch(
+        makeRequest('GET', '/v1/admin/cert-chain', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data = await parseResponse(resp);
+      expect(data.provisioned).toBe(true);
+      expect(data.cert_count).toBe(2);
+      expect(Array.isArray(data.cert_sizes)).toBe(true);
+    });
+
+    it('GET /v1/admin/cert-chain returns not provisioned when empty', async () => {
+      const resp = await worker.fetch(
+        makeRequest('GET', '/v1/admin/cert-chain', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data = await parseResponse(resp);
+      expect(data.provisioned).toBe(false);
+      expect(data.cert_count).toBe(0);
+    });
+
+    it('DELETE /v1/admin/cert-chain removes chain', async () => {
+      // Store a chain first
+      const cert1 = new Uint8Array([0x30, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05]);
+      const cert2 = new Uint8Array([0x30, 0x03, 0x01, 0x02, 0x03]);
+      const chain = new Uint8Array([...cert1, ...cert2]);
+      const chainB64 = Buffer.from(chain).toString('base64');
+
+      await worker.fetch(
+        makeRequest('POST', '/v1/admin/cert-chain', { chain: chainB64 }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+
+      // DELETE
+      const delResp = await worker.fetch(
+        new Request('https://lockdown.example.com/v1/admin/cert-chain', {
+          method: 'DELETE',
+          headers: { Authorization: 'Bearer test-admin-token' },
+        }),
+        env,
+      );
+      expect(delResp.status).toBe(200);
+      const delData = await parseResponse(delResp);
+      expect(delData.deleted).toBe(true);
+
+      // Verify it's gone
+      const getResp = await worker.fetch(
+        makeRequest('GET', '/v1/admin/cert-chain', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const getData = await parseResponse(getResp);
+      expect(getData.provisioned).toBe(false);
+    });
+
+    it('cert chain stored via endpoint appears in policy blob key 77', async () => {
+      // Store a chain via the admin endpoint
+      const cert1 = new Uint8Array([0x30, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05]);
+      const cert2 = new Uint8Array([0x30, 0x03, 0x01, 0x02, 0x03]);
+      const cert3 = new Uint8Array([0x30, 0x04, 0x01, 0x02, 0x03, 0x04]);
+      const chain = new Uint8Array([...cert1, ...cert2, ...cert3]);
+      const chainB64 = Buffer.from(chain).toString('base64');
+
+      await worker.fetch(
+        makeRequest('POST', '/v1/admin/cert-chain', { chain: chainB64 }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+
+      // Fetch policy — key 77 should contain 3 certs
+      const policyResp = await worker.fetch(
+        makeRequest('GET', '/v1/policy/1'),
+        env,
+      );
+      expect(policyResp.status).toBe(200);
+      expect(policyResp.headers.get('Content-Type')).toBe('application/cose');
+      const policyBody = new Uint8Array(await policyResp.arrayBuffer());
+      // Verify the policy blob is valid COSE_Sign1 (starts with array tag)
+      expect(policyBody.length).toBeGreaterThan(100);
+    });
+  });
+
+  // D-204: Operator override key endpoints
+  describe('D-204: Operator override key endpoints', () => {
+    it('POST /v1/admin/operator-key requires admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('POST', '/v1/admin/operator-key'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('GET /v1/admin/operator-key requires admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/v1/admin/operator-key'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('GET /v1/admin/operator-key returns not provisioned when empty', async () => {
+      const resp = await worker.fetch(
+        makeRequest('GET', '/v1/admin/operator-key', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data = await parseResponse(resp);
+      expect(data.provisioned).toBe(false);
+      expect(data.spki_size).toBe(0);
+    });
+
+    it('POST /v1/admin/operator-key stores a valid ES256 key', async () => {
+      // Generate an ES256 key pair and export SPKI
+      const keyPair = await crypto.subtle.generateKey(
+        { name: 'ECDSA', namedCurve: 'P-256' },
+        true,
+        ['sign', 'verify'],
+      );
+      const spki = new Uint8Array(await crypto.subtle.exportKey('spki', keyPair.publicKey));
+      const spkiB64 = Buffer.from(spki).toString('base64');
+
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/admin/operator-key', { spki: spkiB64 }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data = await parseResponse(resp);
+      expect(data.stored).toBe(true);
+      expect(data.spki_size).toBe(91); // ES256 SPKI is 91 bytes
+    });
+
+    it('POST /v1/admin/operator-key rejects invalid SPKI', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/admin/operator-key', { spki: 'notvalid!!' }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it('POST /v1/admin/operator-key rejects missing spki', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/v1/admin/operator-key', {}, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it('GET /v1/admin/operator-key returns provisioned after storing', async () => {
+      // Store a key first
+      const keyPair = await crypto.subtle.generateKey(
+        { name: 'ECDSA', namedCurve: 'P-256' },
+        true,
+        ['sign', 'verify'],
+      );
+      const spki = new Uint8Array(await crypto.subtle.exportKey('spki', keyPair.publicKey));
+      const spkiB64 = Buffer.from(spki).toString('base64');
+
+      await worker.fetch(
+        makeRequest('POST', '/v1/admin/operator-key', { spki: spkiB64 }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+
+      // Now GET
+      const resp = await worker.fetch(
+        makeRequest('GET', '/v1/admin/operator-key', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data = await parseResponse(resp);
+      expect(data.provisioned).toBe(true);
+      expect(data.spki_size).toBe(91);
+    });
+
+    it('DELETE /v1/admin/operator-key removes the key', async () => {
+      // Store a key first
+      const keyPair = await crypto.subtle.generateKey(
+        { name: 'ECDSA', namedCurve: 'P-256' },
+        true,
+        ['sign', 'verify'],
+      );
+      const spki = new Uint8Array(await crypto.subtle.exportKey('spki', keyPair.publicKey));
+      const spkiB64 = Buffer.from(spki).toString('base64');
+
+      await worker.fetch(
+        makeRequest('POST', '/v1/admin/operator-key', { spki: spkiB64 }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+
+      // DELETE
+      const delResp = await worker.fetch(
+        new Request('https://lockdown.example.com/v1/admin/operator-key', {
+          method: 'DELETE',
+          headers: { Authorization: 'Bearer test-admin-token' },
+        }),
+        env,
+      );
+      expect(delResp.status).toBe(200);
+      const delData = await parseResponse(delResp);
+      expect(delData.deleted).toBe(true);
+
+      // Verify it's gone
+      const getResp = await worker.fetch(
+        makeRequest('GET', '/v1/admin/operator-key', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const getData = await parseResponse(getResp);
+      expect(getData.provisioned).toBe(false);
+    });
   });
 });

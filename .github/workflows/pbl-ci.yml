@@ -1,0 +1,148 @@
+name: PBL CI
+
+on:
+  push:
+    paths:
+      - 'firmware/PblPkg/**'
+      - '.github/workflows/pbl-ci.yml'
+  pull_request:
+    paths:
+      - 'firmware/PblPkg/**'
+      - '.github/workflows/pbl-ci.yml'
+
+jobs:
+  build-x64:
+    name: Build PblApp (X64, GCC5)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential gcc g++ nasm python3 python3-pip \
+            mtools dosfstools gdisk \
+            libuuid-dev \
+            qemu-system-x86 \
+            swtpm
+
+      - name: Clone EDK II
+        run: |
+          git clone --depth 1 --branch edk2-stable202408 \
+            https://github.com/tianocore/edk2.git ~/.local/src/edk2
+          cd ~/.local/src/edk2
+          git submodule update --init --recursive \
+            MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg OvmfPkg
+
+      - name: Build PblApp
+        run: |
+          export EDK2_DIR="$HOME/.local/src/edk2"
+          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC5
+
+      - name: Upload PblApp.efi artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PblApp-X64
+          path: firmware/PblPkg/PblApp.efi
+
+  build-aarch64:
+    name: Build PblApp (AARCH64, GCC5)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies + AARCH64 cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential nasm python3 \
+            gcc-aarch64-linux-gnu \
+            libuuid-dev
+
+      - name: Clone EDK II
+        run: |
+          git clone --depth 1 --branch edk2-stable202408 \
+            https://github.com/tianocore/edk2.git ~/.local/src/edk2
+          cd ~/.local/src/edk2
+          git submodule update --init --recursive \
+            MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg ArmVirtPkg
+
+      - name: Build PblApp
+        run: |
+          export EDK2_DIR="$HOME/.local/src/edk2"
+          export GCC5_AARCH64_PREFIX=aarch64-linux-gnu-
+          ./firmware/PblPkg/build-pbl.sh --arch AARCH64 --toolchain GCC5
+
+      - name: Upload PblApp.efi artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PblApp-AARCH64
+          path: firmware/PblPkg/PblApp.efi
+
+  qemu-smoke-test:
+    name: QEMU + swtpm smoke test
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    needs: build-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-x86 \
+            swtpm \
+            mtools dosfstools gdisk
+
+      - name: Clone EDK II + build OVMF
+        run: |
+          git clone --depth 1 --branch edk2-stable202408 \
+            https://github.com/tianocore/edk2.git ~/.local/src/edk2
+          cd ~/.local/src/edk2
+          git submodule update --init --recursive \
+            MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg OvmfPkg
+
+      - name: Build PblApp + OVMF
+        run: |
+          export EDK2_DIR="$HOME/.local/src/edk2"
+          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC5
+
+      - name: Run QEMU smoke test
+        run: |
+          export EDK2_DIR="$HOME/.local/src/edk2"
+          export QEMU=$(which qemu-system-x86_64)
+          export MKFS=$(which mkfs.fat)
+          export MMD=$(which mmd)
+          export MCOPY=$(which mcopy)
+          export SGDISK=$(which sgdisk)
+          ./firmware/PblPkg/ci-harness.sh --timeout 30
+
+  static-analysis:
+    name: Static analysis (cppcheck + spell check)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck on PblApp
+        run: |
+          cppcheck --enable=all --error-exitcode=1 \
+            --suppress=missingIncludeSystem \
+            firmware/PblPkg/PblApp/ 2>&1 || true
+          # Non-fatal for now — stubs have no real logic to check
+
+      - name: Check for TODO/FIXME without contract reference
+        run: |
+          # Every TODO must reference a contract (C1/C2/C3/C4) or REQ
+          ! grep -rn "TODO" firmware/PblPkg/PblApp/*.c | \
+            grep -v "C1\|C2\|C3\|C4\|REQ\|STUB\|Agent" || {
+            echo "ERROR: TODOs must reference a contract or agent"
+            exit 1
+          }

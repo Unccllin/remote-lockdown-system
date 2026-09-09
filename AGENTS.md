@@ -31,8 +31,16 @@ order it must be done in, and what evidence is required to call something "done.
    graph spec. Do NOT edit by hand. Read `.devin/graph/trace.md` on demand
    for full session history. Old sessions are archived to
    `.devin/graph/trace-archive-*.md` by `make archive-trace`.
-3. `docs/adr/DEBT-LEDGER.md` — open debt items and close criteria
-4. `docs/adr/GRAPH-SPEC.md` — human-readable ADR for the graph
+3. `docs/adr/DEBT-LEDGER.md` — legacy debt items (D-001..D-021, all CLOSED)
+4. `docs/adr/PBL-DEBT-LEDGER.md` — PBL debt items (D-100..D-211, 37 OPEN)
+5. `docs/adr/GRAPH-SPEC.md` — human-readable ADR for the graph
+
+**CRITICAL: The debt ledger can be stale.** Before treating any debt item's
+"Blocker" text as ground truth, verify the actual codebase state. Multiple
+sessions have "discovered" that code was already implemented when the ledger
+said it wasn't. Always check: `wc -l <file>` for stub vs. real implementation,
+`grep -c` for route/function existence, and `grep -c "it(" <test>` for test
+coverage. Update stale ledger entries during RULE-ZERO, not after.
 
 **Mandatory node types (a node of each type MUST exist in the graph):**
 

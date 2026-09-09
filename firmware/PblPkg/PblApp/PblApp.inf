@@ -1,0 +1,122 @@
+## @file
+# PblApp.inf — Module information for the PBL UEFI application.
+#
+# PBL runs in the BDS phase before the Windows Boot Manager.
+# It is a UEFI_APPLICATION (not a DXE driver) — it does not install
+# protocols, hook LoadImage, or intercept other images. Those are bootkit
+# techniques and will fail the Agent E audit.
+#
+# Copyright (c) 2026 Remote Lockdown System. All rights reserved.
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = PblApp
+  FILE_GUID                      = 9C5D7E4F-3A6B-4C8D-0E2F-A34567890123
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1.0
+  ENTRY_POINT                    = PblAppEntryPoint
+  UEFI_SPECIFICATION_VERSION     = 2.70
+
+[Sources]
+  PblApp.c
+  PlatformState.c
+  SpiProtections.c
+  Policy.c
+  Svn.c
+  AmtCheck.c
+  DciCheck.c
+  DmaProtection.c
+  Mor.c
+  TpmClient.c
+  TcgLog.c
+  HttpsClient.c
+  TlsVerify.c
+  CborEncode.c
+  CborDecode.c
+  CoseVerify.c
+  PolicyRootOfTrust.c
+  Verdict.c
+  Decision.c
+  LockScreen.c
+  Override.c
+  ChainLoad.c
+  Sbat.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  NetworkPkg/NetworkPkg.dec
+  SecurityPkg/SecurityPkg.dec
+  CryptoPkg/CryptoPkg.dec
+  PblPkg/PblPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  IoLib
+  MemoryAllocationLib
+  PcdLib
+  PrintLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  UefiRuntimeServicesTableLib
+  BaseCryptLib
+  IntrinsicLib
+
+[Protocols]
+  ## EFI_TCG2_PROTOCOL — for TPM 2.0 access (C2, REQ-05/06/11/12)
+  gEfiTcg2ProtocolGuid
+
+  ## EFI_HTTP_PROTOCOL — for HTTPS POST (C3)
+  gEfiHttpProtocolGuid
+
+  ## EFI_TLS_PROTOCOL — for TLS handshake (C3)
+  gEfiTlsProtocolGuid
+
+  ## EFI_TLS_CONFIGURATION_PROTOCOL — for TLS config (C3)
+  gEfiTlsConfigurationProtocolGuid
+
+  ## EFI_SMBIOS_PROTOCOL — for firmware version / vendor (REQ-04)
+  gEfiSmbiosProtocolGuid
+
+  ## EFI_RNG_PROTOCOL — for nonce generation (C3 §5)
+  gEfiRngProtocolGuid
+
+  ## EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL — for lock screen (REQ-14)
+  gEfiSimpleTextOutProtocolGuid
+
+  ## EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL — for lock screen input (REQ-14)
+  gEfiSimpleTextInputExProtocolGuid
+
+  ## EFI_GRAPHICS_OUTPUT_PROTOCOL — for lock screen graphics (optional)
+  gEfiGraphicsOutputProtocolGuid
+
+  ## EFI_SIMPLE_FILE_SYSTEM_PROTOCOL — for ESP file discovery (ChainLoad)
+  gEfiSimpleFileSystemProtocolGuid
+
+  ## EFI_DEVICE_PATH_PROTOCOL — for building boot manager device path
+  gEfiDevicePathProtocolGuid
+
+[Guids]
+  gPblNvGuid
+  gPblEventGuid
+  gEfiImageSecurityDatabaseGuid
+  gEfiCertX509Guid
+  gEfiCertSha256Guid
+  gEfiCertX509Sha256Guid
+  gEfiRngAlgorithmRaw
+  gEfiRngAlgorithmSp80090Hash256Guid
+  gEfiFileInfoGuid
+
+[Pcd]
+  gPblPkgTokenSpaceGuid.PcdPblVersion
+  gPblPkgTokenSpaceGuid.PcdNvIndexBase
+  gPblPkgTokenSpaceGuid.PcdHttpsConnectTimeoutMs
+  gPblPkgTokenSpaceGuid.PcdHttpsTotalTimeoutMs
+  gPblPkgTokenSpaceGuid.PcdHttpsMaxRetries
+  gPblPkgTokenSpaceGuid.PcdMaxResponseSize
+  gPblPkgTokenSpaceGuid.PcdMaxPolicySize
+  gPblPkgTokenSpaceGuid.PcdDegradedNoticeSeconds

@@ -33,4 +33,46 @@ async function getDeviceByHardwareIdentity(hostname, macAddress, hardwareUuid) {
   return device || null;
 }
 
-module.exports = { getDeviceById, getDeviceByApiKeyHash, getDeviceByHostname, getDeviceByHardwareIdentity };
+// D-206: PBL device identity mapping.
+// PBL devices are identified by SHA-256(AK public area) hex (64 chars).
+// Agent devices use UUID primary keys. These queries link the two.
+
+/** Find an agent device by its PBL device_id (SHA-256 of AK public area). */
+async function getDeviceByPblDeviceId(pblDeviceId) {
+  const result = await pool.query(
+    'SELECT * FROM devices WHERE pbl_device_id = $1 LIMIT 1',
+    [pblDeviceId],
+  );
+  return result.rows[0] || null;
+}
+
+/** Link a PBL device_id to an existing agent device record.
+ *  Returns the updated device, or null if the agent device was not found.
+ *  Throws if the PBL device_id is already linked to a different agent device. */
+async function setPblDeviceId(deviceId, pblDeviceId) {
+  const result = await pool.query(
+    'UPDATE devices SET pbl_device_id = $2 WHERE id = $1 RETURNING *',
+    [deviceId, pblDeviceId],
+  );
+  return result.rows[0] || null;
+}
+
+/** Unlink a PBL device_id from an agent device record.
+ *  Returns the updated device, or null if the agent device was not found. */
+async function clearPblDeviceId(deviceId) {
+  const result = await pool.query(
+    'UPDATE devices SET pbl_device_id = NULL WHERE id = $1 RETURNING *',
+    [deviceId],
+  );
+  return result.rows[0] || null;
+}
+
+module.exports = {
+  getDeviceById,
+  getDeviceByApiKeyHash,
+  getDeviceByHostname,
+  getDeviceByHardwareIdentity,
+  getDeviceByPblDeviceId,
+  setPblDeviceId,
+  clearPblDeviceId,
+};

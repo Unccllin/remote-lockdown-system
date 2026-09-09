@@ -1,0 +1,42 @@
+# Dockerfile.qemu — QEMU + swtpm test environment for PBL firmware.
+#
+# Builds a Docker image with QEMU, swtpm, OVMF, and tools needed to
+# boot PblApp.efi in a virtual UEFI environment with TPM 2.0 emulation.
+#
+# Usage:
+#   docker build -t pbl-qemu -f Dockerfile.qemu firmware/
+#   docker run --rm -v $(pwd)/firmware:/firmware pbl-qemu /firmware/PblPkg/ci-harness.sh
+#
+# This unblocks D-100/D-101 (QEMU + swtpm not installed locally).
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install QEMU, swtpm, OVMF, and disk image tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    qemu-system-x86 \
+    swtpm \
+    swtpm-tools \
+    ovmf \
+    mtools \
+    dosfstools \
+    gdisk \
+    socat \
+    expect \
+    strace \
+    python3 \
+    coreutils \
+    util-linux \
+    grep \
+    && rm -rf /var/lib/apt/lists/*
+
+# OVMF firmware paths (Ubuntu 24.04 uses 4M split firmware)
+ENV OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+ENV OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
+
+# Create working directory
+WORKDIR /build
+
+# Default command — run the CI harness
+CMD ["/bin/bash"]

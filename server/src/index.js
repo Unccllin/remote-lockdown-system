@@ -21,6 +21,7 @@ const healthRoutes = require('./routes/health');
 const metricsRoutes = require('./routes/metrics');
 const adminsRoutes = require('./routes/admins');
 const hwTestArtifactRoutes = require('./routes/hwTestArtifact');
+const pblRoutes = require('./routes/pbl');
 const { startAlertScheduler } = require('./jobs/alertScheduler');
 
 const app = express();
@@ -122,6 +123,18 @@ app.use('/api/health', healthRoutes); // No rate limit — health checks
 app.use('/metrics', metricsRoutes);    // No rate limit — Prometheus scraping
 app.use('/api/admins', dashboardLimiter, adminsRoutes);
 app.use('/api/hw-test-artifact', dashboardLimiter, hwTestArtifactRoutes);
+
+// D-200/D-201/D-202/D-210: PBL routes (/v1/*) — CBOR/COSE firmware protocol.
+// Mounted at /v1 (not /api) to match the serverless Worker URL scheme.
+// Uses express.raw() for application/cbor content type.
+app.use('/v1', (req, res, next) => {
+  const ct = (req.headers['content-type'] || '').split(';')[0].trim();
+  if (ct === 'application/cbor') {
+    express.raw({ type: 'application/cbor', limit: '256kb' })(req, res, next);
+  } else {
+    next();
+  }
+}, pblRoutes.router);
 
 app.get('/api/health', async (req, res) => {
   // FA6: Extended health check — DB probe + scheduler status

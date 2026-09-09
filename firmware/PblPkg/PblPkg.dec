@@ -1,0 +1,60 @@
+## @file
+# PblPkg.dec — Package declarations for the Pre-Boot Lock (PBL) UEFI application.
+#
+# PBL is a signed UEFI application that runs in the BDS phase before the
+# Windows Boot Manager, determines whether the machine is administratively
+# LOCKED, and if so prevents the machine from reaching Windows in a way that
+# survives OS reinstall, disk replacement, and firmware reflash attempts —
+# while never bricking a machine.
+#
+# Survivability comes from three independent anchors (not from the app):
+#   (a) TPM NV-index lock state (Platform hierarchy, C2 contract)
+#   (b) BitLocker VMK sealed to PCR+NV policy (C2 §4.3)
+#   (c) Server-side state (C1 LockVerdict)
+#
+# See docs/adr/PBL-IMPLEMENTATION-PLAN.md for the full design.
+#
+# Copyright (c) 2026 Remote Lockdown System. All rights reserved.
+
+[Defines]
+  PACKAGE_NAME                   = PblPkg
+  PACKAGE_GUID                   = 7A3B5C2D-1E4F-4A6B-8C0D-E12345678901
+  PACKAGE_VERSION                = 0.1.0
+  DEC_SPECIFICATION              = 0x00010005
+
+[Guids]
+  ## PBL NV variable namespace GUID
+  # All PBL UEFI variables use this GUID.
+  gPblNvGuid                     = { 0x7A3B5C2D, 0x1E4F, 0x4A6B, { 0x8C, 0x0D, 0xE1, 0x23, 0x45, 0x67, 0x89, 0x01 } }
+
+  ## PBL TCG event log event GUID (for HashLogExtendEvent)
+  gPblEventGuid                  = { 0x7A3B5C2D, 0x1E4F, 0x4A6B, { 0x8C, 0x0D, 0xE1, 0x23, 0x45, 0x67, 0x89, 0x02 } }
+
+  ## PBL PCD token space GUID
+  gPblPkgTokenSpaceGuid          = { 0x7A3B5C2D, 0x1E4F, 0x4A6B, { 0x8C, 0x0D, 0xE1, 0x23, 0x45, 0x67, 0x89, 0x03 } }
+
+[PcdsFixedAtBuild]
+  ## PBL binary version (monotonic; compared against C4 min_pbl_version)
+  gPblPkgTokenSpaceGuid.PcdPblVersion|0|UINT32|0x00000001
+
+  ## NV index base offset (C2 §1, C4 §2.5 key 43)
+  # Default 0x01C00000. Override if OEM collides.
+  gPblPkgTokenSpaceGuid.PcdNvIndexBase|0x01C00000|UINT32|0x00000002
+
+  ## Connect timeout in milliseconds (C3 §6)
+  gPblPkgTokenSpaceGuid.PcdHttpsConnectTimeoutMs|2000|UINT32|0x00000003
+
+  ## Total timeout in milliseconds (C3 §6)
+  gPblPkgTokenSpaceGuid.PcdHttpsTotalTimeoutMs|3000|UINT32|0x00000004
+
+  ## Max retries (C3 §6)
+  gPblPkgTokenSpaceGuid.PcdHttpsMaxRetries|2|UINT8|0x00000005
+
+  ## Max response body size in bytes (C3 §8, DoS guard)
+  gPblPkgTokenSpaceGuid.PcdMaxResponseSize|4096|UINT32|0x00000006
+
+  ## Max policy blob size in bytes (C4 §1.1)
+  gPblPkgTokenSpaceGuid.PcdMaxPolicySize|65536|UINT32|0x00000007
+
+  ## Lock screen display timeout in seconds (for DEGRADED notice)
+  gPblPkgTokenSpaceGuid.PcdDegradedNoticeSeconds|10|UINT8|0x00000008

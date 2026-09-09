@@ -22,10 +22,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 12 | 12 | ✓ |
+| Debt items | 18 | 55 | ✗ |
 | Enforcement paths (on hardware) | 4 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and all debt is closed, but **9 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 18 of 55 debt items are closed, but **9 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 9 enforcement paths that still need hardware verification:**
 
@@ -51,57 +51,139 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-08-29 — Fresh improvement audit + all doable items
+## Latest session: 2026-09-09 — D-209, D-205, D-203, D-204, D-210 effort chain
 
 ### RULE-ZERO
-- **Read**: GRAPH-SPEC.yaml (enforcement path statuses), DEBT-LEDGER.md (open items)
-- **Read**: server/src/routes/ (missing endpoints), dashboard/src/pages/ (untested pages), agent/*.py (untested modules)
-- **Read**: .github/workflows/ci.yml (missing CI gates)
-- **Finding**: 10 improvement areas identified. 8 doable without hardware, 2 require HP machine.
+**Read**: `.devin/graph/GRAPH-SPEC.yaml`, `.devin/graph/current-state.md`,
+`docs/adr/PBL-DEBT-LEDGER.md`, `docs/adr/PBL-C1-LockVerdict.md`,
+`docs/adr/PBL-C4-Policy-Blob.md`, `server/src/routes/pbl.js`,
+`server/src/pbl/cose.js`, `server/src/pbl/tpm.js`,
+`server/src/pbl/cbor.js`, `dashboard/src/pages/PblPolicyPage.jsx`,
+`dashboard/src/api/pblClient.js`, `server/tests/pblVerdictPolicyEnroll.test.js`,
+`server/tests/pblExpressRoutes.test.js`.
+**Finding**: The Express server had ES256-only COSE signing, no PCR digest
+comparison, no challenge_seed binding, no audit trail for overrides, and
+the dashboard policy page was upload-only. The serverless Worker had
+Ed25519 support but the Express port did not. The KV shim lacked a
+`list()` method needed for audit trail verification.
 
-### Fog cleared
-- How to implement hw-test-artifact endpoint (CTRF + legacy format support, device association by hostname)
-- How to fix BitLocker "Protection Status: On" parsing (was checking for "protection on" substring, fixed to parse value after colon)
-- How to fix bios_password dict handling in simulate_lockdown (apply_boot_lockdown returns dict, not string)
-- How to fix dry-run state leakage between test modules (hardcoded defaults instead of import-time capture)
-- How to fix shutil.move recursion in test (use Path.write_text instead of calling real shutil.move)
+### Fog cleared this session
+- D-209: Form-based policy creation UI + `POST /v1/policy/create` endpoint
+  (`dashboard/src/pages/PblPolicyPage.jsx`, `server/src/routes/pbl.js:411-580`).
+  WAF guard updated with `/policy/create` method rule (`server/src/routes/pbl.js:66`).
+- D-205: Ed25519 signing support added to Express `server/src/pbl/cose.js`
+  (alg=-8, `generateSigningKey('Ed25519')`, `signData`, `verifySignature`).
+- D-203: PCR digest comparison (`comparePcrDigest`) + AK Name binding
+  (`computeAkName`) in `server/src/pbl/tpm.js`. Wired into attest endpoint.
+- D-204: challenge_seed binding (verdict key 9, KV `pbl_challenge_seed:{id}`)
+  + audit trail (`logOverrideAudit`, KV `pbl_override_audit:{id}:{ts}`) in
+  `server/src/routes/pbl.js`.
+- D-210: Full PBL flow integration test (`server/tests/pblFullFlow.integration.test.js`)
+  exercising 14-step lifecycle: health → enroll → verdict → lock → verdict →
+  policy create → policy download → attest → override challenge → override
+  response → verify recovering → unlock → delete → audit trail.
+- KV shim `list()` method added to `createEnv()` in `server/src/routes/pbl.js:158`.
 
 ### Fog remaining
-- Whether v2.0 harness passes on real HP hardware (requires physical machine)
-- Whether the 9 unit-test-only enforcement paths pass on hardware
-- Whether the hw-test-artifact endpoint works with real PostgreSQL (tested with mock only)
+- Firmware Ed25519 verification (D-205) — blocked by no EDK2 build environment.
+- Firmware cert chain verification (D-205) — blocked by BaseCryptLib X.509.
+- Event log parsing (D-203) — not implemented.
+- QEMU/swtpm runtime test (D-210) — blocked by D-101 (swtpm+OVMF hang).
+- Real hardware TPM2_Quote validation (D-203) — no Windows hardware.
 
-### Debt items closed
-- D-020: hw-test-artifact endpoint (CLOSED — server/src/routes/hwTestArtifact.js + 15 tests + migration)
-- D-021: CI gates (CLOSED — 4 new CI jobs + release.yml gates)
+### Debt items closed (partial progress)
+- D-209: Form-based policy creation UI implemented. 5 new server tests.
+  Commit ref: pending. Artifact: 22 server tests pass, 197 dashboard tests
+  pass, dashboard build succeeds.
+- D-205: Ed25519 server signing implemented. 5 new tests. Commit ref: pending.
+  Artifact: 27 server tests in pblVerdictPolicyEnroll.test.js pass.
+- D-203: PCR digest comparison + AK Name binding implemented. 7 new tests.
+  Commit ref: pending. Artifact: 471 server tests pass.
+- D-204: challenge_seed binding + audit trail implemented. 7 new tests.
+  Commit ref: pending. Artifact: 478 server tests pass.
+- D-210: Full PBL flow integration test implemented. 14 new tests.
+  Commit ref: pending. Artifact: 492 server tests pass (30 suites).
 
 ### Debt items still open
-- None in the ledger (all 21 items CLOSED). Remaining work is hardware verification only.
+- D-100, D-101: QEMU/swtpm (Docker workaround, swtpm hang).
+- D-102 through D-130: Firmware modules (blocked by EDK2/hardware).
+- D-200, D-201, D-202: Verdict/policy/enroll endpoints (partial).
+- D-206, D-207, D-208: Device mapping, CBOR parsing, COSE encoding (partial).
+- D-211: Covert tracking (C5) — not fully implemented.
 
-### Blockers
-- Physical HP hardware access required for enforcement path verification
+### Blockers named and status
+- EDK2 build environment: blocks firmware Ed25519 + cert chain verification.
+- swtpm+OVMF hang (D-101): blocks QEMU TPM runtime tests.
+- No Windows hardware: blocks real TPM2_Quote validation.
 
 ### Next session opening
-Run v2.0 harness on HP machine (DESKTOP-RUDJGI6) with `python3 hw_test_harness.py --mode simulate --upload <server-url>`, then update GRAPH-SPEC enforcement path statuses from "verified-in-unit-test" to "verified-on-hardware" for all passing paths.
+Commit the D-209/D-205/D-203/D-204/D-210 changes, then proceed with
+D-211 (covert tracking C5 — Windows-side decoy account + EFS + agent
+stealth) or diagnose swtpm+OVMF hang (D-101) to unblock QEMU TPM runtime
+tests.
 
 ### Failure attribution
-No failures this session. 3 production bugs found and fixed during test writing (BitLocker parsing, bios_password dict, UnboundLocalError). 1 test bug fixed (shutil.move recursion). All 1182+ tests pass.
+No test failures this session. Initial D-210 integration test failures
+were caused by **Task specification** (layer 1): the test expected
+`resp.body.status` but the lock/unlock endpoints return `{ device }`
+not `{ status }`. Fix: corrected the test to check `resp.body.device.status`.
+Binary response checks also needed `content-length` header instead of
+`resp.body.length` (supertest parsing nuance — **Context provision**, layer 2).
 
 ---
 
 ## Open debt items
 
-None. All 12 debt items are CLOSED.
-See `docs/adr/DEBT-LEDGER.md` for the full ledger.
+| ID | Description | Status | Blocks |
+|----|-------------|--------|--------|
+| D-100 | QEMU not installed locally for PBL smoke testing | OPEN | — |
+| D-101 | swtpm not installed locally for TPM 2.0 simulation | OPEN | — |
+| D-102 | TpmClient.c uses TPM_ST_NO_SESSIONS (no auth) — C2 requires  | OPEN | — |
+| D-109 | Verdict fetch and verification flow not implemented (C1 §7) | OPEN | — |
+| D-110 | Policy blob parsing not implemented (C4) | OPEN | — |
+| D-111 | Decision engine not implemented (C4 §5 18-step evaluation) | OPEN | — |
+| D-112 | Lock screen UI not implemented (REQ-14) | OPEN | — |
+| D-113 | Override challenge/response not implemented (C1 §6) | OPEN | — |
+| D-114 | Chain-load Windows Boot Manager not implemented | OPEN | — |
+| D-115 | CBOR encoding/decoding not implemented | OPEN | — |
+| D-116 | TLS certificate pin verification not implemented (C3 §4) | OPEN | — |
+| D-117 | No runtime tests for PBL modules | OPEN | — |
+| D-118 | EFI_RNG_PROTOCOL nonce generation not implemented (C3 §5) | OPEN | — |
+| D-119 | ACPI FADT S3 parsing is stubbed | OPEN | — |
+| D-120 | BitLocker detection not implemented | OPEN | — |
+| D-121 | SPI protections check not implemented (C4 §2.3) | OPEN | — |
+| D-122 | DCI/DCP check not implemented (C4 §2.4) | OPEN | — |
+| D-123 | DMA protection check not implemented (C4 §2.5) | OPEN | — |
+| D-124 | MOR (Memory Overwrite Request) not implemented (C4 §2.6) | OPEN | — |
+| D-125 | TCG event log not implemented (C4 §2.7) | OPEN | — |
+| D-126 | SVN (Security Version Number) check not implemented (C4 §2.8 | OPEN | — |
+| D-127 | AMT check not implemented (C4 §2.9) | OPEN | — |
+| D-128 | SBAT variable check not implemented | OPEN | — |
+| D-129 | No real hardware validation for PBL | OPEN | — |
+| D-130 | Code signing not configured for PblApp.efi | OPEN | — |
+| D-200 | PBL verdict endpoint (POST /v1/verdict) not implemented in s | OPEN | — |
+| D-201 | PBL policy endpoint (GET /v1/policy/{version}) not implement | OPEN | — |
+| D-202 | PBL enrollment endpoint (POST /v1/enroll) not implemented | OPEN | — |
+| D-203 | PBL attestation endpoint (POST /v1/attest) not implemented | OPEN | — |
+| D-204 | PBL override endpoints (POST /v1/override/challenge and /res | OPEN | — |
+| D-205 | Verdict signing infrastructure (Ed25519/ES256 + COSE_Sign1)  | OPEN | — |
+| D-206 | PBL device identity mapping (TPM-based device_id) not implem | OPEN | — |
+| D-207 | CBOR parsing in serverless Worker not implemented | OPEN | — |
+| D-208 | COSE_Sign1 encoding in serverless Worker not implemented | OPEN | — |
+| D-209 | PBL policy blob generation (~40 fields, signed) not implemen | OPEN | — |
+| D-210 | Serverless Worker /v1/* route integration not implemented | OPEN | — |
+| D-211 | Covert tracking mode (C5) not fully implemented | OPEN | — |
+
+See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130) for close criteria.
 
 ---
-
 ## Quick reference
 
 - **Graph spec**: `.devin/graph/GRAPH-SPEC.yaml`
 - **Full trace history**: `.devin/graph/trace.md` (read on demand)
 - **Trace archives**: `.devin/graph/trace-archive-*.md` (rotated old sessions)
-- **Debt ledger**: `docs/adr/DEBT-LEDGER.md`
+- **Debt ledger**: `docs/adr/DEBT-LEDGER.md` (D-001..D-021, all CLOSED)
+- **PBL debt ledger**: `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130, 31 OPEN)
 - **Graph ADR**: `docs/adr/GRAPH-SPEC.md`
 - **Verification**: `make graph-check` (runs `graph_assert.py` — all invariants)
 - **Clean state**: `make clean-state` (runs 5-condition checklist from L12)

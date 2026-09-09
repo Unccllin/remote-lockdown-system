@@ -1,0 +1,20 @@
+## @file
+# PblPkg.fdf — Flash description file for PBL.
+#
+# PBL is a UEFI application (not a firmware image), so the FDF is minimal.
+# The application is built as a standalone .efi and installed on the ESP
+# at \EFI\PBL\PblApp.efi, then registered as a Boot#### entry.
+#
+# For OVMF/QEMU testing, build-pbl.sh creates a disk image with the .efi
+# on the ESP. For real hardware, the OS agent (Agent D) installs the .efi
+# and configures BootOrder.
+#
+# Copyright (c) 2026 Remote Lockdown System. All rights reserved.
+
+[Defines]
+  FLASH_DEFINITION               = PblPkg/PblPkg.fdf
+  FDF_SPECIFICATION              = 0x00010005
+
+# No flash layout — PBL is an application, not a firmware image.
+# The FDF exists only to satisfy the DSC FLASH_DEFINITION reference.
+# The actual deployment is via ESP file copy + BootOrder configuration.

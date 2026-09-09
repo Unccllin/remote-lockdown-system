@@ -53,6 +53,8 @@ help:
 	@echo "  make graph-status         print convergence report (phases, debt, enforcement gaps)"
 	@echo "  make gen-state            regenerate current-state.md from trace.md (compact, auto-derived)"
 	@echo "  make archive-trace        rotate old sessions from trace.md to archive files"
+	@echo "  make trace-review         check trace.md claims against actual repo state"
+	@echo "  make trace-review-all     review all PBL sessions (not just latest)"
 	@echo "  make clean-state          run 5-condition clean state checklist (L12)"
 	@echo "  make clean                remove all dist/ directories"
 
@@ -237,6 +239,17 @@ gen-state:
 archive-trace:
 	@python3 scripts/graph_session.py archive-trace
 
+# Trace reviewer — checks trace.md claims against actual repo state.
+# Verifies file existence, line counts, function definitions, SHA-256 hashes,
+# and build artifacts mentioned in session blocks.
+.PHONY: trace-review
+
+trace-review:
+	@python3 scripts/trace_reviewer.py --verbose
+
+trace-review-all:
+	@python3 scripts/trace_reviewer.py --all --verbose
+
 # ---------------------------------------------------------------------------
 # Clean state checklist — 5 conditions from Lecture 12
 # Run at session end to verify the system is in a clean state.
@@ -247,6 +260,22 @@ archive-trace:
 
 clean-state:
 	@bash .devin/orchestration/orchestrator.sh clean-state
+
+# ---------------------------------------------------------------------------
+# D-205: Policy signing key root of trust provisioning
+# Generates a policy signing key + emits PolicyRootOfTrust.generated.h
+# ---------------------------------------------------------------------------
+
+.PHONY: provision-policy-key
+
+provision-policy-key:
+	@export PATH="/home/cllin/.local/node/bin:$$PATH" && \
+	node scripts/generate-policy-root-of-trust.js
+
+.PHONY: provision-cert-chain
+
+provision-cert-chain:
+	@bash scripts/generate-cert-chain.sh --force
 
 # ---------------------------------------------------------------------------
 # Clean — remove all build outputs.

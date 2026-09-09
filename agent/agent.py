@@ -2235,8 +2235,40 @@ def handle_status(cfg: dict, command: dict) -> None:
 
 
 def handle_track(cfg: dict, command: dict) -> None:
-    """Switch to covert tracking mode. No visible action — just report location."""
+    """Switch to covert tracking mode.
+
+    C5 covert tracking: the machine boots normally and the thief can use
+    it, but the agent silently reports location. Data protection is
+    applied via three invisible layers:
+      1. Disable the real user's Windows account
+      2. Enable a decoy account for the thief to use
+      3. EFS-encrypt the real user's sensitive files
+
+    On non-Windows platforms, only location reporting is performed
+    (account management and EFS are Windows-specific).
+    """
     log.info("TRACK command received — entering covert tracking mode")
+
+    # Ensure stealth persistence is active (survives reboot, restarts if killed)
+    ensure_tracking_stealth(cfg)
+
+    # Apply data protection (Windows only — silently skip on other platforms)
+    tracking_state = apply_tracking_data_protection(cfg)
+
+    # Store tracking state so handle_stop_track can reverse it
+    tracking_state_file = cfg.get(
+        "tracking_state_file",
+        Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData"))
+        / "LockdownSystem"
+        / "tracking_state.json",
+    )
+    try:
+        tracking_state_file.parent.mkdir(parents=True, exist_ok=True)
+        tracking_state_file.write_text(json.dumps(tracking_state))
+        log.info("Tracking state saved: %s", tracking_state_file)
+    except OSError as e:
+        log.warning("Could not save tracking state: %s", e)
+
     # Report location immediately
     report_location(cfg)
     # ACK as executed — server will set status to 'tracking'
@@ -2244,9 +2276,401 @@ def handle_track(cfg: dict, command: dict) -> None:
 
 
 def handle_stop_track(cfg: dict, command: dict) -> None:
-    """Exit covert tracking mode — return to normal active status."""
+    """Exit covert tracking mode — reverse data protection and return to active."""
     log.info("STOP_TRACK command received — exiting tracking mode")
+
+    # Reverse data protection
+    remove_tracking_data_protection(cfg)
+
+    # ACK as executed — server will set status to 'active'
     ack_command(cfg, command["id"], "executed")
+
+
+# ---------------------------------------------------------------------------
+# C5: Covert tracking data protection
+# ---------------------------------------------------------------------------
+
+# Decoy account configuration
+DECOY_ACCOUNT_NAME = "GuestUser"
+DECOY_ACCOUNT_PASSWORD_LENGTH = 16
+
+# Default paths to EFS-encrypt in the real user's profile
+DEFAULT_EFS_PATHS = [
+    "Documents",
+    "Desktop",
+    "Downloads",
+    "Pictures",
+]
+
+
+def _get_real_username() -> str | None:
+    """Get the real (last logged-in) user's username on Windows.
+
+    Uses the WMIC or `query user` command to find the most recent
+    interactive user. Falls back to the USERNAME environment variable.
+    """
+    if platform.system() != "Windows":
+        return None
+
+    # Try `query user` — shows interactive sessions
+    try:
+        output = subprocess.check_output(
+            ["query", "user"], timeout=5, stderr=subprocess.DEVNULL
+        ).decode("utf-8", errors="replace")
+        for line in output.splitlines()[1:]:
+            parts = line.split()
+            if parts:
+                username = parts[0]
+                # Strip domain prefix if present
+                if "\\" in username:
+                    username = username.split("\\")[1]
+                # Skip the decoy account itself
+                if username.lower() != DECOY_ACCOUNT_NAME.lower():
+                    return username
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+        IndexError,
+    ):
+        pass
+
+    # Fallback: check who was the last logged-in user via registry
+    try:
+        output = subprocess.check_output(
+            [
+                "reg",
+                "query",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI",
+                "/v",
+                "LastLoggedOnUser",
+            ],
+            timeout=5,
+            stderr=subprocess.DEVNULL,
+        ).decode("utf-8", errors="replace")
+        for line in output.splitlines():
+            if "LastLoggedOnUser" in line and "REG_SZ" in line:
+                val = line.split("REG_SZ")[-1].strip()
+                if "\\" in val:
+                    return val.split("\\")[1]
+                return val
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+
+    # Final fallback: USERNAME env var
+    return os.environ.get("USERNAME")
+
+
+def _run_net_user(args: list[str]) -> bool:
+    """Run a `net user` command. Returns True on success."""
+    try:
+        result = subprocess.run(["net", "user"] + args, capture_output=True, timeout=10, text=True)
+        if result.returncode != 0:
+            log.warning("net user %s failed: %s", " ".join(args), result.stderr.strip())
+            return False
+        return True
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        log.warning("net user command error: %s", e)
+        return False
+
+
+def _run_cipher(action: str, path: str) -> bool:
+    """Run a `cipher` command to encrypt/decrypt a directory. Returns True on success."""
+    try:
+        result = subprocess.run(
+            ["cipher", f"/{action}", "/s:{path}"], capture_output=True, timeout=60, text=True
+        )
+        if result.returncode != 0:
+            log.warning("cipher /%s /s:%s failed: %s", action, path, result.stderr.strip())
+            return False
+        return True
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        log.warning("cipher command error: %s", e)
+        return False
+
+
+def _backup_efs_certificate(username: str) -> tuple[str, str] | None:
+    """Back up a user's EFS certificate to a .pfx file.
+
+    Uses `cipher /x:username` to export the user's EFS certificate
+    and private key to a password-protected .pfx file. The file is
+    stored in the agent's state directory and can be uploaded to
+    the server for safekeeping.
+
+    Returns (cert_path, cert_password) on success, or None on failure.
+    """
+    if platform.system() != "Windows":
+        return None
+
+    cert_dir = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownSystem"
+    cert_dir.mkdir(parents=True, exist_ok=True)
+    cert_path = cert_dir / f"efs_cert_{username}.pfx"
+    cert_password = secrets.token_urlsafe(20)
+
+    try:
+        # cipher /x exports the EFS certificate to a .pfx file
+        # The password is passed as the second argument
+        result = subprocess.run(
+            ["cipher", "/x:" + username, str(cert_path), cert_password],
+            capture_output=True,
+            timeout=30,
+            text=True,
+        )
+        if result.returncode == 0 and cert_path.exists():
+            log.info("EFS certificate backed up: %s", cert_path)
+            return (str(cert_path), cert_password)
+        log.warning("EFS cert backup failed: %s", result.stderr.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        log.warning("EFS cert backup error: %s", e)
+
+    return None
+
+
+def upload_efs_certificate(cfg: dict, cert_path: str, cert_password: str) -> bool:
+    """Upload an EFS certificate backup to the server.
+
+    Reads the .pfx file, base64-encodes it, and sends it to
+    POST /api/agent/efs-cert with HMAC agent auth. The server
+    stores it in KV so the admin can download it later for recovery.
+
+    Returns True on success, False on failure.
+    """
+    try:
+        cert_bytes = Path(cert_path).read_bytes()
+    except OSError as e:
+        log.warning("Could not read EFS cert file: %s", e)
+        return False
+
+    cert_b64 = base64.b64encode(cert_bytes).decode("ascii")
+    payload = {"cert_base64": cert_b64, "cert_password": cert_password}
+
+    try:
+        resp = _post_with_fallback(
+            "/api/agent/efs-cert",
+            cfg,
+            payload,
+            timeout=30,
+            verify=cfg.get("verify_tls", True),
+        )
+        resp.raise_for_status()
+        log.info("EFS certificate uploaded to server")
+        return True
+    except requests.RequestException as e:
+        log.warning("EFS cert upload failed: %s — cert stored locally only", e)
+        return False
+
+
+def apply_tracking_data_protection(cfg: dict) -> dict:
+    """Apply C5 data protection layers for covert tracking mode.
+
+    Layer 1: Disable the real user's Windows account.
+    Layer 2: Create and enable a decoy account.
+    Layer 3: EFS-encrypt the real user's sensitive files.
+
+    Returns a state dict with the information needed to reverse
+    the protection in remove_tracking_data_protection().
+
+    On non-Windows platforms, returns an empty dict (no-op).
+    """
+    state: dict = {"platform": platform.system(), "applied": []}
+
+    if platform.system() != "Windows":
+        log.info("Tracking data protection skipped (not Windows)")
+        return state
+
+    # Layer 1: Disable the real user's account
+    real_user = _get_real_username()
+    if real_user:
+        log.info("Disabling real user account: %s", real_user)
+        if _run_net_user([real_user, "/active:no"]):
+            state["real_user"] = real_user
+            state["applied"].append("disable_real_user")
+        else:
+            log.warning("Could not disable real user account")
+    else:
+        log.warning("Could not determine real username — skipping account lockout")
+
+    # Layer 2: Create and enable decoy account
+    decoy_password = secrets.token_urlsafe(DECOY_ACCOUNT_PASSWORD_LENGTH)
+    log.info("Creating decoy account: %s", DECOY_ACCOUNT_NAME)
+    if _run_net_user([DECOY_ACCOUNT_NAME, decoy_password, "/add"]):
+        state["applied"].append("create_decoy")
+    else:
+        # Account may already exist — try to set password
+        _run_net_user([DECOY_ACCOUNT_NAME, decoy_password])
+
+    if _run_net_user([DECOY_ACCOUNT_NAME, "/active:yes"]):
+        state["applied"].append("enable_decoy")
+
+    # Add decoy to Users group so they can log in
+    try:
+        subprocess.run(
+            ["net", "localgroup", "Users", DECOY_ACCOUNT_NAME, "/add"],
+            capture_output=True,
+            timeout=10,
+            text=True,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+
+    state["decoy_account"] = DECOY_ACCOUNT_NAME
+    state["decoy_password"] = decoy_password
+
+    # Layer 3: EFS-encrypt the real user's sensitive files
+    if real_user:
+        # Use the real user's profile path, not the agent's (USERPROFILE
+        # points to the agent's account when running as SYSTEM)
+        real_profile = Path(f"C:\\Users\\{real_user}")
+        efs_paths = cfg.get("tracking_efs_paths", DEFAULT_EFS_PATHS)
+
+        # Back up the real user's EFS certificate before encrypting,
+        # so recovery is possible if the certificate is lost.
+        cert_result = _backup_efs_certificate(real_user)
+        if cert_result:
+            cert_path, cert_password = cert_result
+            state["efs_cert_backup"] = cert_path
+            state["efs_cert_password"] = cert_password
+            state["applied"].append("efs_cert_backup")
+            # Upload cert to server for off-device backup
+            upload_efs_certificate(cfg, cert_path, cert_password)
+
+        encrypted_paths = []
+        for subdir in efs_paths:
+            target = real_profile / subdir
+            if target.exists():
+                log.info("EFS-encrypting: %s", target)
+                if _run_cipher("e", str(target)):
+                    encrypted_paths.append(str(target))
+
+        if encrypted_paths:
+            state["efs_paths"] = encrypted_paths
+            state["applied"].append("efs_encrypt")
+
+    log.info("Tracking data protection applied: %s", state["applied"])
+    return state
+
+
+def remove_tracking_data_protection(cfg: dict) -> None:
+    """Reverse C5 data protection when exiting tracking mode.
+
+    1. Decrypt EFS-encrypted files.
+    2. Re-enable the real user's account.
+    3. Disable and delete the decoy account.
+
+    Reads the tracking state saved by apply_tracking_data_protection().
+    """
+    tracking_state_file = cfg.get(
+        "tracking_state_file",
+        Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData"))
+        / "LockdownSystem"
+        / "tracking_state.json",
+    )
+
+    try:
+        state = json.loads(tracking_state_file.read_text())
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        log.warning("Could not read tracking state: %s — cannot fully reverse", e)
+        return
+
+    if platform.system() != "Windows":
+        log.info("Tracking data protection reversal skipped (not Windows)")
+        return
+
+    applied = state.get("applied", [])
+
+    # Reverse Layer 3: Decrypt EFS files
+    if "efs_encrypt" in applied:
+        for path in state.get("efs_paths", []):
+            log.info("EFS-decrypting: %s", path)
+            _run_cipher("d", path)
+
+    # Clean up EFS certificate backup (no longer needed after decryption)
+    if "efs_cert_backup" in applied:
+        cert_path = state.get("efs_cert_backup")
+        if cert_path:
+            try:
+                Path(cert_path).unlink()
+                log.info("EFS cert backup cleaned up: %s", cert_path)
+            except OSError:
+                pass
+
+    # Reverse Layer 1: Re-enable real user's account
+    if "disable_real_user" in applied:
+        real_user = state.get("real_user")
+        if real_user:
+            log.info("Re-enabling real user account: %s", real_user)
+            _run_net_user([real_user, "/active:yes"])
+
+    # Reverse Layer 2: Delete decoy account
+    if "create_decoy" in applied or "enable_decoy" in applied:
+        decoy = state.get("decoy_account", DECOY_ACCOUNT_NAME)
+        log.info("Deleting decoy account: %s", decoy)
+        _run_net_user([decoy, "/delete"])
+
+    # Clean up state file
+    try:
+        tracking_state_file.unlink()
+    except OSError:
+        pass
+
+    log.info("Tracking data protection reversed")
+
+
+# ---------------------------------------------------------------------------
+# C5: Agent stealth — ensure persistence is active during tracking mode
+# ---------------------------------------------------------------------------
+
+# Generic names for stealth (matches service_installer.py)
+STEALTH_TASK_NAME = "SystemHealthMonitor"
+STEALTH_TASK_INTERVAL_MIN = 5  # restart check interval
+
+
+def ensure_tracking_stealth(cfg: dict) -> bool:
+    """Ensure the agent's stealth persistence is active for tracking mode.
+
+    Verifies that the scheduled task watchdog is installed and running.
+    If not, attempts to install it. This ensures the agent survives
+    reboots and is restarted if killed — critical for covert tracking.
+
+    Returns True if stealth is confirmed active, False otherwise.
+    On non-Windows platforms, returns True (no-op — stealth is not
+    applicable).
+    """
+    if platform.system() != "Windows":
+        log.info("Tracking stealth check skipped (not Windows)")
+        return True
+
+    # Check if the scheduled task exists
+    try:
+        result = subprocess.run(
+            ["schtasks", "/Query", "/TN", STEALTH_TASK_NAME],
+            capture_output=True,
+            timeout=10,
+            text=True,
+        )
+        if result.returncode == 0:
+            log.info("Stealth scheduled task active: %s", STEALTH_TASK_NAME)
+            return True
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        log.warning("Could not query scheduled task: %s", e)
+
+    # Task not found — try to install it via service_installer
+    log.info("Stealth task not found — attempting install")
+    try:
+        import service_installer
+
+        if service_installer.install():
+            log.info("Stealth persistence installed successfully")
+            return True
+        log.warning("Stealth persistence install failed")
+        return False
+    except ImportError:
+        log.warning("service_installer module not available — cannot install stealth")
+        return False
+    except Exception as e:
+        log.warning("Stealth install error: %s", e)
+        return False
 
 
 def handle_locate(cfg: dict, command: dict) -> None:

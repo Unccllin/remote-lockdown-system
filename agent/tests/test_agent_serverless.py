@@ -280,18 +280,26 @@ class TestGeolocation:
 
 
 class TestTrackHandlers:
-    def test_handle_track_reports_location_and_acks(self, cfg):
+    def test_handle_track_reports_location_and_acks(self, cfg, tmp_path):
+        cfg["tracking_state_file"] = tmp_path / "tracking_state.json"
         with (
             patch.object(agent, "report_location") as mock_loc,
             patch.object(agent, "ack_command") as mock_ack,
+            patch.object(agent, "apply_tracking_data_protection") as mock_protect,
         ):
+            mock_protect.return_value = {"platform": "Linux", "applied": []}
             agent.handle_track(cfg, {"id": "cmd-1"})
+            mock_protect.assert_called_once_with(cfg)
             mock_loc.assert_called_once_with(cfg)
             mock_ack.assert_called_once_with(cfg, "cmd-1", "executed")
 
     def test_handle_stop_track_acks(self, cfg):
-        with patch.object(agent, "ack_command") as mock_ack:
+        with (
+            patch.object(agent, "ack_command") as mock_ack,
+            patch.object(agent, "remove_tracking_data_protection") as mock_remove,
+        ):
             agent.handle_stop_track(cfg, {"id": "cmd-1"})
+            mock_remove.assert_called_once_with(cfg)
             mock_ack.assert_called_once_with(cfg, "cmd-1", "executed")
 
     def test_command_handlers_include_track(self):
@@ -299,3 +307,273 @@ class TestTrackHandlers:
         assert "stop_track" in agent.COMMAND_HANDLERS
         assert agent.COMMAND_HANDLERS["track"] == agent.handle_track
         assert agent.COMMAND_HANDLERS["stop_track"] == agent.handle_stop_track
+
+
+class TestTrackingDataProtection:
+    """C5: Covert tracking data protection — decoy account + EFS."""
+
+    def test_apply_protection_non_windows_is_noop(self, cfg):
+        """On non-Windows, data protection should be a no-op."""
+        with patch.object(agent.platform, "system", return_value="Linux"):
+            state = agent.apply_tracking_data_protection(cfg)
+            assert state["platform"] == "Linux"
+            assert state["applied"] == []
+
+    def test_apply_protection_windows_disables_real_user(self, cfg):
+        """On Windows, should disable the real user's account."""
+        with (
+            patch.object(agent.platform, "system", return_value="Windows"),
+            patch.object(agent, "_get_real_username", return_value="john"),
+            patch.object(agent, "_run_net_user", return_value=True),
+            patch.object(agent, "_run_cipher", return_value=True),
+            patch("pathlib.Path.exists", return_value=False),
+        ):
+            state = agent.apply_tracking_data_protection(cfg)
+            assert "disable_real_user" in state["applied"]
+            assert state["real_user"] == "john"
+
+    def test_apply_protection_windows_creates_decoy(self, cfg):
+        """On Windows, should create and enable a decoy account."""
+        with (
+            patch.object(agent.platform, "system", return_value="Windows"),
+            patch.object(agent, "_get_real_username", return_value="john"),
+            patch.object(agent, "_run_net_user", return_value=True),
+            patch.object(agent, "_run_cipher", return_value=True),
+            patch("pathlib.Path.exists", return_value=False),
+            patch("subprocess.run") as mock_run,
+        ):
+            state = agent.apply_tracking_data_protection(cfg)
+            assert "create_decoy" in state["applied"]
+            assert "enable_decoy" in state["applied"]
+            assert state["decoy_account"] == agent.DECOY_ACCOUNT_NAME
+            assert "decoy_password" in state
+            # Verify localgroup add was called
+            localgroup_calls = [
+                c for c in mock_run.call_args_list
+                if "localgroup" in str(c)
+            ]
+            assert len(localgroup_calls) > 0
+
+    def test_apply_protection_windows_efs_encrypts(self, cfg):
+        """On Windows, should EFS-encrypt the real user's profile dirs."""
+        with (
+            patch.object(agent.platform, "system", return_value="Windows"),
+            patch.object(agent, "_get_real_username", return_value="john"),
+            patch.object(agent, "_run_net_user", return_value=True),
+            patch.object(agent, "_run_cipher", return_value=True) as mock_cipher,
+            patch("pathlib.Path.exists", return_value=True),
+        ):
+            state = agent.apply_tracking_data_protection(cfg)
+            assert "efs_encrypt" in state["applied"]
+            assert len(state["efs_paths"]) == len(agent.DEFAULT_EFS_PATHS)
+            # Verify cipher was called for each path
+            assert mock_cipher.call_count == len(agent.DEFAULT_EFS_PATHS)
+
+    def test_remove_protection_reverses_all_layers(self, cfg, tmp_path):
+        """remove_tracking_data_protection should reverse all applied layers."""
+        state_file = tmp_path / "tracking_state.json"
+        state = {
+            "platform": "Windows",
+            "applied": ["disable_real_user", "create_decoy", "enable_decoy", "efs_encrypt"],
+            "real_user": "john",
+            "decoy_account": "GuestUser",
+            "decoy_password": "secret",
+            "efs_paths": ["C:\\Users\\john\\Documents", "C:\\Users\\john\\Desktop"],
+        }
+        state_file.write_text(json.dumps(state))
+        cfg["tracking_state_file"] = state_file
+
+        with (
+            patch.object(agent.platform, "system", return_value="Windows"),
+            patch.object(agent, "_run_net_user", return_value=True) as mock_net,
+            patch.object(agent, "_run_cipher", return_value=True) as mock_cipher,
+        ):
+            agent.remove_tracking_data_protection(cfg)
+
+            # Should decrypt EFS paths
+            assert mock_cipher.call_count == 2
+            # Should re-enable real user and delete decoy
+            net_calls = [str(c) for c in mock_net.call_args_list]
+            assert any("john" in c and "/active:yes" in c for c in net_calls)
+            assert any("GuestUser" in c and "/delete" in c for c in net_calls)
+
+        # State file should be cleaned up
+        assert not state_file.exists()
+
+    def test_remove_protection_missing_state_file(self, cfg, tmp_path):
+        """Should not crash if tracking state file is missing."""
+        cfg["tracking_state_file"] = tmp_path / "nonexistent.json"
+        # Should not raise
+        agent.remove_tracking_data_protection(cfg)
+
+    def test_handle_track_saves_tracking_state(self, cfg, tmp_path):
+        """handle_track should save tracking state for later reversal."""
+        cfg["tracking_state_file"] = tmp_path / "tracking_state.json"
+        with (
+            patch.object(agent, "report_location"),
+            patch.object(agent, "ack_command"),
+            patch.object(agent, "apply_tracking_data_protection") as mock_protect,
+            patch.object(agent, "ensure_tracking_stealth"),
+        ):
+            mock_protect.return_value = {"platform": "Windows", "applied": ["disable_real_user"]}
+            agent.handle_track(cfg, {"id": "cmd-1"})
+
+            state_file = tmp_path / "tracking_state.json"
+            assert state_file.exists()
+            saved = json.loads(state_file.read_text())
+            assert "applied" in saved
+
+
+class TestTrackingStealth:
+    """C5: Agent stealth — scheduled task persistence for tracking mode."""
+
+    def test_ensure_stealth_non_windows_returns_true(self, cfg):
+        """On non-Windows, stealth check should be a no-op (return True)."""
+        with patch.object(agent.platform, "system", return_value="Linux"):
+            assert agent.ensure_tracking_stealth(cfg) is True
+
+    def test_ensure_stealth_windows_task_exists(self, cfg):
+        """On Windows, should return True if scheduled task exists."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        with (
+            patch.object(agent.platform, "system", return_value="Windows"),
+            patch("subprocess.run", return_value=mock_result),
+        ):
+            assert agent.ensure_tracking_stealth(cfg) is True
+
+    def test_ensure_stealth_windows_task_missing_installs(self, cfg):
+        """On Windows, should try to install if task is missing."""
+        mock_missing = MagicMock()
+        mock_missing.returncode = 1
+        with (
+            patch.object(agent.platform, "system", return_value="Windows"),
+            patch("subprocess.run", return_value=mock_missing),
+            patch.dict("sys.modules", {"service_installer": MagicMock(install=MagicMock(return_value=True))}),
+        ):
+            assert agent.ensure_tracking_stealth(cfg) is True
+
+    def test_ensure_stealth_windows_install_fails(self, cfg):
+        """On Windows, should return False if install fails."""
+        mock_missing = MagicMock()
+        mock_missing.returncode = 1
+        with (
+            patch.object(agent.platform, "system", return_value="Windows"),
+            patch("subprocess.run", return_value=mock_missing),
+            patch.dict("sys.modules", {"service_installer": MagicMock(install=MagicMock(return_value=False))}),
+        ):
+            assert agent.ensure_tracking_stealth(cfg) is False
+
+    def test_handle_track_calls_ensure_stealth(self, cfg, tmp_path):
+        """handle_track should call ensure_tracking_stealth before data protection."""
+        cfg["tracking_state_file"] = tmp_path / "tracking_state.json"
+        with (
+            patch.object(agent, "ensure_tracking_stealth") as mock_stealth,
+            patch.object(agent, "apply_tracking_data_protection") as mock_protect,
+            patch.object(agent, "report_location"),
+            patch.object(agent, "ack_command"),
+        ):
+            mock_protect.return_value = {"platform": "Linux", "applied": []}
+            agent.handle_track(cfg, {"id": "cmd-1"})
+            mock_stealth.assert_called_once_with(cfg)
+
+
+class TestEfsCertificateBackup:
+    """C5: EFS certificate backup before encrypting user files."""
+
+    def test_backup_efs_cert_non_windows_returns_none(self):
+        """On non-Windows, EFS cert backup should be a no-op."""
+        with patch.object(agent.platform, "system", return_value="Linux"):
+            assert agent._backup_efs_certificate("john") is None
+
+    def test_backup_efs_cert_windows_success(self, tmp_path):
+        """On Windows, should export cert via cipher /x and return (path, password)."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        with (
+            patch.object(agent.platform, "system", return_value="Windows"),
+            patch("subprocess.run", return_value=mock_result),
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.mkdir"),
+        ):
+            result = agent._backup_efs_certificate("john")
+            assert result is not None
+            cert_path, cert_password = result
+            assert "efs_cert_john.pfx" in cert_path
+            assert len(cert_password) > 0
+
+    def test_backup_efs_cert_windows_failure(self):
+        """On Windows, should return None if cipher fails."""
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = "error"
+        with (
+            patch.object(agent.platform, "system", return_value="Windows"),
+            patch("subprocess.run", return_value=mock_result),
+            patch("pathlib.Path.exists", return_value=False),
+            patch("pathlib.Path.mkdir"),
+        ):
+            assert agent._backup_efs_certificate("john") is None
+
+    def test_remove_protection_cleans_up_cert_backup(self, cfg, tmp_path):
+        """remove_tracking_data_protection should delete the cert backup file."""
+        cert_file = tmp_path / "efs_cert_john.pfx"
+        cert_file.write_text("fake cert")
+        state_file = tmp_path / "tracking_state.json"
+        state = {
+            "platform": "Windows",
+            "applied": ["efs_encrypt", "efs_cert_backup"],
+            "efs_paths": [],
+            "efs_cert_backup": str(cert_file),
+        }
+        state_file.write_text(json.dumps(state))
+        cfg["tracking_state_file"] = state_file
+
+        with (
+            patch.object(agent.platform, "system", return_value="Windows"),
+            patch.object(agent, "_run_cipher", return_value=True),
+            patch.object(agent, "_run_net_user", return_value=True),
+        ):
+            agent.remove_tracking_data_protection(cfg)
+            assert not cert_file.exists()
+
+
+class TestEfsCertUpload:
+    """C5: EFS certificate upload to server."""
+
+    def test_upload_efs_cert_success(self, cfg, tmp_path):
+        """Should base64-encode cert and POST to /api/agent/efs-cert."""
+        cert_file = tmp_path / "cert.pfx"
+        cert_file.write_bytes(b"fake cert data")
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+
+        with (
+            patch.object(agent, "_post_with_fallback", return_value=mock_resp) as mock_post,
+        ):
+            result = agent.upload_efs_certificate(cfg, str(cert_file), "password123")
+            assert result is True
+            mock_post.assert_called_once()
+            # Verify the endpoint
+            call_args = mock_post.call_args
+            assert call_args[0][0] == "/api/agent/efs-cert"
+            # Verify payload contains base64-encoded cert
+            payload = call_args[0][2]
+            assert "cert_base64" in payload
+            assert "cert_password" in payload
+            assert payload["cert_password"] == "password123"
+
+    def test_upload_efs_cert_file_missing(self, cfg, tmp_path):
+        """Should return False if cert file doesn't exist."""
+        result = agent.upload_efs_certificate(cfg, str(tmp_path / "nonexistent.pfx"), "pw")
+        assert result is False
+
+    def test_upload_efs_cert_server_failure(self, cfg, tmp_path):
+        """Should return False if server returns error."""
+        cert_file = tmp_path / "cert.pfx"
+        cert_file.write_bytes(b"fake cert data")
+
+        with patch.object(agent, "_post_with_fallback", side_effect=agent.requests.RequestException("server error")):
+            result = agent.upload_efs_certificate(cfg, str(cert_file), "pw")
+            assert result is False

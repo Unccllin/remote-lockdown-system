@@ -158,8 +158,10 @@ def generate_convergence_status(graph: dict) -> str:
     ]
 
     if enforce_converged == "✗":
+        debt_status = ("all debt is closed" if debt_total > 0 and len(debt_closed) == debt_total
+                       else f"{len(debt_closed)} of {debt_total} debt items are closed")
         lines.append(f"**The project is NOT converged.** All phases are complete and "
-                      f"all debt is closed, but **{len(unit_tested)} of {enforcement_total} "
+                      f"{debt_status}, but **{len(unit_tested)} of {enforcement_total} "
                       f"enforcement paths are only `verified-in-unit-test`**, "
                       f"not `verified-on-hardware`. Graph invariant I3 blocks marking them "
                       f"`verified-on-hardware` without a real hardware artifact.")
@@ -210,7 +212,7 @@ def generate_open_debt_section(graph: dict) -> str:
     if not open_debt:
         return (f"## Open debt items\n\n"
                 f"None. All {len(closed_debt)} debt items are CLOSED.\n"
-                f"See `docs/adr/DEBT-LEDGER.md` for the full ledger.\n\n---\n")
+                f"See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for the full ledger.\n\n---\n")
 
     lines = ["## Open debt items", ""]
     lines.append("| ID | Description | Status | Blocks |")
@@ -220,7 +222,8 @@ def generate_open_debt_section(graph: dict) -> str:
         blocks = ", ".join(d.get("blocks", [])) or "—"
         lines.append(f"| {d['id']} | {desc} | {d['status']} | {blocks} |")
     lines.append("")
-    lines.append("See `docs/adr/DEBT-LEDGER.md` for close criteria.")
+    lines.append("See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and "
+                 "`docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130) for close criteria.")
     lines.append("")
     lines.append("---")
     return "\n".join(lines)
@@ -253,7 +256,8 @@ _FOOTER = """## Quick reference
 - **Graph spec**: `.devin/graph/GRAPH-SPEC.yaml`
 - **Full trace history**: `.devin/graph/trace.md` (read on demand)
 - **Trace archives**: `.devin/graph/trace-archive-*.md` (rotated old sessions)
-- **Debt ledger**: `docs/adr/DEBT-LEDGER.md`
+- **Debt ledger**: `docs/adr/DEBT-LEDGER.md` (D-001..D-021, all CLOSED)
+- **PBL debt ledger**: `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130, 31 OPEN)
 - **Graph ADR**: `docs/adr/GRAPH-SPEC.md`
 - **Verification**: `make graph-check` (runs `graph_assert.py` — all invariants)
 - **Clean state**: `make clean-state` (runs 5-condition checklist from L12)

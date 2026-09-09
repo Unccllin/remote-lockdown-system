@@ -13,6 +13,9 @@ import MapPage from './pages/MapPage';
 import HealthPage from './pages/HealthPage';
 import AdminsPage from './pages/AdminsPage';
 import AlertsPage from './pages/AlertsPage';
+import PblDevicesPage from './pages/PblDevicesPage';
+import PblDeviceDetailPage from './pages/PblDeviceDetailPage';
+import PblPolicyPage from './pages/PblPolicyPage';
 import RequireRole from './components/RequireRole';
 
 function PrivateRoute({ children }) {
@@ -41,6 +44,9 @@ export default function App() {
         <Route path="audit" element={<AuditPage />} />
         <Route path="health" element={<HealthPage />} />
         <Route path="alerts" element={<AlertsPage />} />
+        <Route path="pbl-devices" element={<RequireRole role="operator"><PblDevicesPage /></RequireRole>} />
+        <Route path="pbl-devices/:id" element={<RequireRole role="operator"><PblDeviceDetailPage /></RequireRole>} />
+        <Route path="pbl-policy" element={<RequireRole role="super-admin"><PblPolicyPage /></RequireRole>} />
         <Route path="admins" element={<RequireRole role="super-admin"><AdminsPage /></RequireRole>} />
       </Route>
     </Routes>

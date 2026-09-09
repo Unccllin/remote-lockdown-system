@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../db/pool');
-const { getDeviceById } = require('../db/deviceQueries');
+const { getDeviceById, getDeviceByPblDeviceId, setPblDeviceId, clearPblDeviceId } = require('../db/deviceQueries');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { withTransaction } = require('../db/withTransaction');
 const { generateApiKey, hashApiKey } = require('../db/apiKey');
@@ -573,6 +573,89 @@ router.get('/:id/pba-credentials', requireAuth, requireRole('super-admin'), asyn
   );
 
   res.json(credentials);
+});
+
+// ---------------------------------------------------------------------------
+// D-206: PBL device identity mapping
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/devices/:id/link-pbl
+ * Link an agent device to its PBL (pre-boot) identity.
+ * Body: { pbl_device_id: string } — 64 hex chars (32 bytes).
+ * Operator+ only. The PBL device_id must not be linked to another agent device.
+ */
+router.post('/:id/link-pbl', requireAuth, requireRole('operator'), async (req, res) => {
+  const { pbl_device_id } = req.body;
+  if (!pbl_device_id || typeof pbl_device_id !== 'string') {
+    return res.status(400).json({ error: 'pbl_device_id is required' });
+  }
+  if (pbl_device_id.length !== 64 || !/^[0-9a-fA-F]+$/.test(pbl_device_id)) {
+    return res.status(400).json({ error: 'pbl_device_id must be 64 hex chars (32 bytes)' });
+  }
+
+  const device = await getDeviceById(req.params.id);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+
+  // Check if PBL device_id is already linked to a different agent device
+  const existing = await getDeviceByPblDeviceId(pbl_device_id);
+  if (existing && existing.id !== device.id) {
+    return res.status(409).json({
+      error: 'PBL device_id already linked to another agent device',
+      linked_device_id: existing.id,
+    });
+  }
+
+  const updated = await setPblDeviceId(device.id, pbl_device_id);
+  if (!updated) return res.status(404).json({ error: 'Device not found' });
+
+  await pool.query(
+    'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
+    [device.id, req.admin.id, 'pbl_device_linked', { pbl_device_id }],
+  );
+
+  res.json({ linked: true, device_id: device.id, pbl_device_id });
+});
+
+/**
+ * POST /api/devices/:id/unlink-pbl
+ * Unlink a PBL device_id from an agent device.
+ * Operator+ only.
+ */
+router.post('/:id/unlink-pbl', requireAuth, requireRole('operator'), async (req, res) => {
+  const device = await getDeviceById(req.params.id);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+
+  if (!device.pbl_device_id) {
+    return res.status(400).json({ error: 'Device has no PBL device_id linked' });
+  }
+
+  const updated = await clearPblDeviceId(device.id);
+  if (!updated) return res.status(404).json({ error: 'Device not found' });
+
+  await pool.query(
+    'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
+    [device.id, req.admin.id, 'pbl_device_unlinked', { pbl_device_id: device.pbl_device_id }],
+  );
+
+  res.json({ unlinked: true, device_id: device.id });
+});
+
+/**
+ * GET /api/devices/by-pbl/:pblDeviceId
+ * Look up an agent device by its PBL device_id.
+ * Operator+ only.
+ */
+router.get('/by-pbl/:pblDeviceId', requireAuth, requireRole('operator'), async (req, res) => {
+  const { pblDeviceId } = req.params;
+  if (pblDeviceId.length !== 64 || !/^[0-9a-fA-F]+$/.test(pblDeviceId)) {
+    return res.status(400).json({ error: 'pbl_device_id must be 64 hex chars' });
+  }
+
+  const device = await getDeviceByPblDeviceId(pblDeviceId);
+  if (!device) return res.status(404).json({ error: 'No agent device linked to this PBL device_id' });
+
+  res.json(device);
 });
 
 module.exports = router;
