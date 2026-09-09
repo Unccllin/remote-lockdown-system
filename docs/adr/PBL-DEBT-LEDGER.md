@@ -42,38 +42,42 @@
   stages, lock screen). Serial log: 1616 bytes.
 - **Artifact**: `docker run --rm -v $(pwd)/firmware:/firmware pbl-qemu /firmware/PblPkg/ci-harness-docker.sh 20`
   Output: `10 PASS / 0 FAIL`.
-- **Remaining**: swtpm causes QEMU to hang during OVMF TPM initialization
-  (see D-101). swtpm is optional in the harness (`USE_SWTPM=1`).
+- **Remaining**: swtpm TPM simulation now works (D-101 CLOSED). swtpm is
+  optional in the harness (`USE_SWTPM=1`).
 
 ### D-101 — swtpm not installed locally for TPM simulation
-- **Status**: PARTIAL (QEMU+swtpm hang FIXED; firmware hangs at "Collecting platform state")
+- **Status**: CLOSED
 - **Category**: ENV
-- **Blocker**: QEMU+swtpm hang was the root cause — now FIXED (commit 47a2ca4).
-  The fix: start swtpm with ONLY the `--ctrl` (control) socket, NOT the
-  `--server` (data) socket. QEMU's TPM emulator backend sends CMD_SET_DATAFD
-  (0x10) to establish the data channel by passing a file descriptor via
-  SCM_RIGHTS. When swtpm already has a `--server` socket, the data fd is
-  already set and CMD_SET_DATAFD fails with TPM_RC_BAD_PARAMETER (0x1F),
-  causing QEMU to hang waiting for a response that never comes.
-  Evidence: swtpm log now shows TPM2_GetCapability commands and responses
-  exchanged. PBL firmware boots, displays banner, reaches step [1/8]
-  "Collecting platform state" (TPM operations begin). Previously: 0 bytes
-  serial output, QEMU hung indefinitely.
-  Remaining issue: firmware hangs at "Collecting platform state" — this is
-  a firmware-level issue (the firmware may be waiting for a specific TPM
-  response or making an unsupported TPM command), NOT a QEMU/swtpm
-  configuration issue. The QEMU/swtpm infrastructure is now working.
-- **Close criteria**: QEMU+swtpm boot produces a run artifact showing PBL
-  TPM initialization (lock-state read, PCR read). **PARTIALLY MET**:
-  QEMU+swtpm now communicates (TPM commands exchanged), but firmware hangs
-  at "Collecting platform state" before reaching TPM NV read or PCR read.
-- **Workaround**: TPM command construction is verified by compilation only.
-  Runtime behavior without swtpm is verified (TPM NV reads return "Not
-  Found" as expected). Runtime behavior WITH swtpm now partially tested
-  (TPM2_GetCapability works, firmware hangs at later TPM operations).
-- **Next step**: Debug why firmware hangs at "Collecting platform state"
-  after TPM2_GetCapability. Check if firmware is making a TPM command that
-  swtpm doesn't support, or waiting for a response that never comes.
+- **Closed**: 2026-09-09 session
+- **Commit ref**: 6898dce
+- **Artifact ref**: PblApp.efi SHA-256 b05dfc3105b36cc7d6172d6994353cf21c6db7bd5635bc31c36297610642cdb8
+- **Evidence**: Two-part fix:
+  1. QEMU+swtpm transport (commit 47a2ca4): start swtpm with ONLY the
+  `--ctrl` (control) socket, NOT the `--server` (data) socket. QEMU's
+  TPM emulator backend sends CMD_SET_DATAFD (0x10) to establish the data
+  channel by passing a file descriptor via SCM_RIGHTS. When swtpm
+  already has a `--server` socket, CMD_SET_DATAFD fails with
+  TPM_RC_BAD_PARAMETER (0x1F), causing QEMU to hang.
+  2. TPM command header byte-order (commit 6898dce): PBL's
+  PblTpmBeginCommand/PblTpmBeginCommandWithSessionAuth/
+  PblTpmFinalizeCommand stored the TPM2 command header fields (Tag,
+  CommandSize, CommandCode) in native little-endian byte order. TPM 2.0
+  requires big-endian. The QEMU TIS emulation reads CommandSize from the
+  header to know when a command is complete — with little-endian
+  encoding, it read a huge size and waited forever for more bytes,
+  causing the firmware to hang at "[1/8] Collecting platform state..."
+  during the first TPM2_PCR_Read. Fix: added SwapBytes16/SwapBytes32 to
+  all command header field writes and response header field reads.
+  Runtime artifact: TPM-enabled QEMU+swtpm harness now progresses
+  through all 8 PBL steps (platform state, policy parse, TPM NV state,
+  verdict fetch, verification, decision, PCR extend, lock screen)
+  without hanging. PBL banner, all 8 step messages, and lock screen
+  appear in serial output. TPM commands (TPM2_PCR_Read,
+  TPM2_GetCapability, TPM2_NV_Read, TPM2_GetRandom) are exchanged with
+  swtpm successfully.
+- **Close criteria**: QEMU+swtpm boot produces a run artifact showing
+  PBL TPM initialization (lock-state read, PCR read). **MET**: All 8
+  PBL steps complete, lock screen displayed, TPM commands exchanged.
 
 ### D-102 — TPM commands use no-session (TPM_ST_NO_SESSIONS)
 - **Status**: OPEN (partial — HMAC session + AES-256-CFB implemented, builds, QEMU 10/10)
