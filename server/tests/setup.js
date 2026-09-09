@@ -12,3 +12,5 @@ process.env.CORS_ORIGIN = 'http://localhost:5173';
 process.env.FIELD_ENCRYPTION_KEY = 'a'.repeat(64);
 process.env.LOCATION_FIELD_KEY = 'b'.repeat(64);
 process.env.LOCATION_RETENTION_DAYS = '90';
+// D-206: Force PBL KV store to use in-memory Map in tests (no DB pool)
+process.env.PBL_KV_IN_MEMORY = '1';

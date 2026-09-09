@@ -7,6 +7,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 
 const { router, createEnv } = require('../src/routes/pbl');
+const { setSharedKvStore } = require('../src/pbl/kvStore');
 const cbor = require('../src/pbl/cbor');
 
 const JWT_SECRET = 'test-secret-key-that-is-long-enough-for-validation-32';
@@ -48,6 +49,11 @@ function createApp(env) {
 }
 
 const DEVICE_ID = 'ab'.repeat(32);
+
+// D-206: Reset the shared KV store before each test to prevent state leakage
+beforeEach(() => {
+  setSharedKvStore(new Map());
+});
 
 describe('D-210: Express attest endpoint', () => {
   it('rejects missing device_id', async () => {

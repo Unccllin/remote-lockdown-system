@@ -9,6 +9,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 
 const { router, createEnv } = require('../src/routes/pbl');
+const { setSharedKvStore } = require('../src/pbl/kvStore');
 const cbor = require('../src/pbl/cbor');
 const cose = require('../src/pbl/cose');
 
@@ -57,6 +58,11 @@ function buildEnrollRequest(deviceId, ekCert, akPublic) {
     [cbor.encodeUint(3), cbor.encodeBstr(akPublic)],
   ]);
 }
+
+// D-206: Reset the shared KV store before each test to prevent state leakage
+beforeEach(() => {
+  setSharedKvStore(new Map());
+});
 
 describe('D-200: POST /v1/verdict', () => {
   it('returns a COSE_Sign1 verdict for an unknown device', async () => {

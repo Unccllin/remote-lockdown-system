@@ -51,84 +51,98 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-09-09 — D-209, D-205, D-203, D-204, D-210 effort chain
+## Latest session: 2026-09-09 (cont. 10) — D-206 persistent KV store + sync tests
 
 ### RULE-ZERO
-**Read**: `.devin/graph/GRAPH-SPEC.yaml`, `.devin/graph/current-state.md`,
-`docs/adr/PBL-DEBT-LEDGER.md`, `docs/adr/PBL-C1-LockVerdict.md`,
-`docs/adr/PBL-C4-Policy-Blob.md`, `server/src/routes/pbl.js`,
-`server/src/pbl/cose.js`, `server/src/pbl/tpm.js`,
-`server/src/pbl/cbor.js`, `dashboard/src/pages/PblPolicyPage.jsx`,
-`dashboard/src/api/pblClient.js`, `server/tests/pblVerdictPolicyEnroll.test.js`,
-`server/tests/pblExpressRoutes.test.js`.
-**Finding**: The Express server had ES256-only COSE signing, no PCR digest
-comparison, no challenge_seed binding, no audit trail for overrides, and
-the dashboard policy page was upload-only. The serverless Worker had
-Ed25519 support but the Express port did not. The KV shim lacked a
-`list()` method needed for audit trail verification.
+**Read**: pool.js (PostgreSQL + SQLite pool), migrationRunner.js (migration
+ordering), existing migration 011 (pbl_device_mapping), kvStore.js (shared
+in-memory KV store), pbl.js (syncPblStatusToAgent), devices.js
+(syncAgentStatusToPbl), jest.config.js (setupFiles), tests/setup.js (env vars).
+**Finding**: The shared KV store was in-memory only. Need a database-backed
+implementation with migration 012. Tests need PBL_KV_IN_MEMORY=1 to force
+in-memory mode. Sync functions need to be exported and tested with mocked
+DB pool.
 
-### Fog cleared this session
-- D-209: Form-based policy creation UI + `POST /v1/policy/create` endpoint
-  (`dashboard/src/pages/PblPolicyPage.jsx`, `server/src/routes/pbl.js:411-580`).
-  WAF guard updated with `/policy/create` method rule (`server/src/routes/pbl.js:66`).
-- D-205: Ed25519 signing support added to Express `server/src/pbl/cose.js`
-  (alg=-8, `generateSigningKey('Ed25519')`, `signData`, `verifySignature`).
-- D-203: PCR digest comparison (`comparePcrDigest`) + AK Name binding
-  (`computeAkName`) in `server/src/pbl/tpm.js`. Wired into attest endpoint.
-- D-204: challenge_seed binding (verdict key 9, KV `pbl_challenge_seed:{id}`)
-  + audit trail (`logOverrideAudit`, KV `pbl_override_audit:{id}:{ts}`) in
-  `server/src/routes/pbl.js`.
-- D-210: Full PBL flow integration test (`server/tests/pblFullFlow.integration.test.js`)
-  exercising 14-step lifecycle: health → enroll → verdict → lock → verdict →
-  policy create → policy download → attest → override challenge → override
-  response → verify recovering → unlock → delete → audit trail.
-- KV shim `list()` method added to `createEnv()` in `server/src/routes/pbl.js:158`.
+### D-206 Work completed (continued)
+
+1. **Persistent KV store migration** (migration 012) — Added
+   `012_pbl_kv_store.sql` (Postgres) and `012_pbl_kv_store.sql` (SQLite).
+   Creates a `pbl_kv_store` table with key (TEXT PK), value (TEXT),
+   created_at, updated_at. Index on key for prefix scans.
+
+2. **DB-backed KV implementation** (`server/src/pbl/kvStore.js`) —
+   `createDbKv(pool)` returns a KV interface backed by the `pbl_kv_store`
+   table. `createSharedEnv()` now tries the DB pool first, falls back to
+   in-memory Map. `PBL_KV_IN_MEMORY=1` env var forces in-memory mode
+   (for tests). `tryGetDbPool()` loads the pool lazily, returns null on
+   error or when in-memory mode is forced.
+
+3. **Test setup** (`server/tests/setup.js`) — Added
+   `process.env.PBL_KV_IN_MEMORY = '1'` to force in-memory KV in all tests.
+
+4. **Sync function exports** — `syncPblStatusToAgent` exported from pbl.js,
+   `syncAgentStatusToPbl` exported from devices.js.
+
+5. **Sync function tests** (`server/tests/pblStatusSync.test.js`) — 14 new
+   tests covering:
+   - PBL → Agent: locked, tracking→stolen, active, no linked device, unknown
+     status, DB query failure (best-effort), getDeviceByPblDeviceId failure.
+   - Agent → PBL: locked, tracking, active (clears lock_reason), no
+     pbl_device_id, null device, PBL device not in KV.
+   - Bidirectional integration: PBL lock → agent locked → agent recover →
+     PBL active round-trip.
+   Mocks: `../src/db/pool` (mock query), `../src/db/deviceQueries` (mock
+   getDeviceByPblDeviceId).
+
+### Verification
+- Server tests: 506 PASS / 0 FAIL (was 492, +14 new sync tests)
+- Serverless tests: PASS
+- Dashboard tests: 197 PASS
+- Agent tests: PASS
+- Graph invariants: All pass
+
+### Fog cleared
+- D-206 persistent KV store: `pbl_kv_store` table (migration 012) backs
+  the shared KV store in production. In-memory Map used in tests.
+- D-206 sync tests: 14 tests covering both directions, edge cases, error
+  handling, and a round-trip integration test.
 
 ### Fog remaining
-- Firmware Ed25519 verification (D-205) — blocked by no EDK2 build environment.
-- Firmware cert chain verification (D-205) — blocked by BaseCryptLib X.509.
-- Event log parsing (D-203) — not implemented.
-- QEMU/swtpm runtime test (D-210) — blocked by D-101 (swtpm+OVMF hang).
-- Real hardware TPM2_Quote validation (D-203) — no Windows hardware.
+- D-206: The DB-backed KV store is implemented but not runtime-tested
+  with a real database (only mocked). Needs an integration test with
+  PGlite or a real Postgres instance.
+- D-206: The serverless Worker (Cloudflare KV) and Express server (DB
+  KV) use different backing stores. They need to be kept in sync or one
+  should be canonical.
 
-### Debt items closed (partial progress)
-- D-209: Form-based policy creation UI implemented. 5 new server tests.
-  Commit ref: pending. Artifact: 22 server tests pass, 197 dashboard tests
-  pass, dashboard build succeeds.
-- D-205: Ed25519 server signing implemented. 5 new tests. Commit ref: pending.
-  Artifact: 27 server tests in pblVerdictPolicyEnroll.test.js pass.
-- D-203: PCR digest comparison + AK Name binding implemented. 7 new tests.
-  Commit ref: pending. Artifact: 471 server tests pass.
-- D-204: challenge_seed binding + audit trail implemented. 7 new tests.
-  Commit ref: pending. Artifact: 478 server tests pass.
-- D-210: Full PBL flow integration test implemented. 14 new tests.
-  Commit ref: pending. Artifact: 492 server tests pass (30 suites).
+### Debt items closed
+- None fully closed this session
 
 ### Debt items still open
-- D-100, D-101: QEMU/swtpm (Docker workaround, swtpm hang).
-- D-102 through D-130: Firmware modules (blocked by EDK2/hardware).
-- D-200, D-201, D-202: Verdict/policy/enroll endpoints (partial).
-- D-206, D-207, D-208: Device mapping, CBOR parsing, COSE encoding (partial).
-- D-211: Covert tracking (C5) — not fully implemented.
+- D-100: QEMU local installation (swtpm hang persists)
+- D-101: swtpm/QEMU TPM device hangs in Docker (root cause: QEMU 8.2.2)
+- D-102: TPM session auth (code complete, runtime test blocked by D-101)
+- D-109 through D-128: firmware items (code complete, runtime test blocked by D-101)
+- D-117: Runtime tests (QEMU harness 10/10 without swtpm)
+- D-200 through D-210: server-side items (mostly partial)
+- D-206: PBL device identity mapping (auto-link + bidirectional sync +
+  persistent KV store + sync tests done; DB-backed KV integration test
+  with real DB pending; serverless/Express KV store sync pending)
+- D-211: Covert tracking (fully implemented, runtime test pending)
 
 ### Blockers named and status
-- EDK2 build environment: blocks firmware Ed25519 + cert chain verification.
-- swtpm+OVMF hang (D-101): blocks QEMU TPM runtime tests.
-- No Windows hardware: blocks real TPM2_Quote validation.
-
-### Next session opening
-Commit the D-209/D-205/D-203/D-204/D-210 changes, then proceed with
-D-211 (covert tracking C5 — Windows-side decoy account + EFS + agent
-stealth) or diagnose swtpm+OVMF hang (D-101) to unblock QEMU TPM runtime
-tests.
+- D-101 (QEMU 8.2.2 TPM device hang): Blocks all TPM runtime testing.
+- D-206 (DB-backed KV integration test): The DB-backed KV store is
+  implemented but only tested with mocked pool. Needs an integration
+  test with PGlite or a real Postgres instance.
 
 ### Failure attribution
-No test failures this session. Initial D-210 integration test failures
-were caused by **Task specification** (layer 1): the test expected
-`resp.body.status` but the lock/unlock endpoints return `{ device }`
-not `{ status }`. Fix: corrected the test to check `resp.body.device.status`.
-Binary response checks also needed `content-length` header instead of
-`resp.body.length` (supertest parsing nuance — **Context provision**, layer 2).
+No failures this session. All test suites pass.
+
+### Next session opening
+D-206 is nearly complete. Remaining: (1) DB-backed KV integration test
+  with PGlite, (2) serverless/Express KV store sync strategy. After D-206,
+  move to another open debt item (D-109-D-128 firmware, D-200-D-210 server).
 
 ---
 

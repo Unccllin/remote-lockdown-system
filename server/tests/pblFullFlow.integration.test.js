@@ -26,6 +26,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 
 const { router, createEnv } = require('../src/routes/pbl');
+const { setSharedKvStore } = require('../src/pbl/kvStore');
 const cbor = require('../src/pbl/cbor');
 
 const JWT_SECRET = 'test-secret-key-that-is-long-enough-for-validation-32';
@@ -79,6 +80,7 @@ describe('D-210: Full PBL flow integration through Express', () => {
   const token = makeToken('super-admin');
 
   beforeAll(() => {
+    setSharedKvStore(new Map());  // D-206: Fresh KV store for integration test
     env = createEnv();
     app = createApp(env);
   });

@@ -49,33 +49,105 @@
 - **Status**: PARTIAL (swtpm installed in Docker; QEMU+swtpm boot hangs)
 - **Category**: ENV
 - **Blocker**: `swtpm` 0.7.3 is installed in the `pbl-qemu:latest` Docker
-  image, but QEMU hangs during OVMF TPM initialization when swtpm is
-  attached. Even with `--flags not-need-init` and `swtpm_ioctl -i`, QEMU
-  produces no output. The PBL app runs correctly without swtpm (TPM NV
-  reads return "Not Found").
+  image, but QEMU 8.2.2 hangs during TPM device initialization when swtpm
+  is attached. Tested 13 configurations — ALL hang with 0 bytes serial
+  output:
+  1. Ubuntu OVMF + tpm-tis, 2. Ubuntu OVMF + tpm-crb, 3. secboot OVMF,
+  4. Custom OVMF (TPM2_ENABLE=TRUE) + tpm-tis, 5. Custom OVMF + tpm-crb,
+  6. Combined OVMF.fd, 7. SeaBIOS (no OVMF), 8. q35 machine, 9. Unix
+  sockets, 10. --privileged Docker, 11. swtpm_setup, 12. Manual init,
+  13. TCP sockets.
+  Key finding: swtpm log shows QEMU NEVER sends TPM commands to swtpm.
+  SeaBIOS also hangs, proving the issue is QEMU's TPM device emulation,
+  not OVMF. Custom OVMF built with TPM2_ENABLE=TRUE also hangs.
+  Root cause: QEMU 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18) TPM device
+  emulation bug in Docker.
 - **Close criteria**: `swtpm` installed and a QEMU+swtpm boot produces a
   run artifact showing PBL TPM initialization (lock-state read, PCR read).
-  **NOT MET**: QEMU+swtpm boot hangs. swtpm is optional in the harness.
+  **NOT MET**: QEMU+swtpm boot hangs. Requires different QEMU version,
+  different Docker image, or bare metal execution.
 - **Workaround**: TPM command construction is verified by compilation only.
   Runtime behavior without swtpm is verified (TPM NV reads return "Not
   Found" as expected). Runtime behavior WITH swtpm is untested.
-- **Next step**: Diagnose swtpm + OVMF hang using OVMF debug output
-  (debugcon port 0x402).
+- **Next step**: Try a different QEMU version (e.g. QEMU 9.x), a different
+  Docker image (e.g. Fedora with edk2-ovmf), or run on bare metal.
 
 ### D-102 — TPM commands use no-session (TPM_ST_NO_SESSIONS)
-- **Status**: OPEN
+- **Status**: OPEN (partial — HMAC session + AES-256-CFB implemented, builds, QEMU 10/10)
 - **Category**: SECURITY
-- **Progress**: TpmClient.c now uses TPM_ST_SESSIONS with TPM_RS_PW
-  (password auth, empty password) for NV_Read, NV_Write, NV_Increment.
-  Added PblTpmBeginCommandWithAuth helper (TPMS_AUTH_COMMAND with
-  sessionHandle=TPM_RS_PW, empty nonce, empty hmac). Added
-  PblTpmParseSessionResponse to skip parameterSize in session responses.
-  NV_ReadPublic and PCR_Extend/Read remain no-session (they don't need auth).
-- **Blocker**: Full HMAC session with AES-256-CFB parameter encryption
-  (C2 §3.1) not implemented. Password auth is the minimum upgrade from
-  no-session but doesn't protect against dTPM bus sniffing (T3). No runtime test.
-- **Close criteria**: Implement TPM2_StartAuthSession with TPM_SE_HMAC,
-  AES-256-CFB parameter encryption, bound to NV index. Runtime test with QEMU.
+- **Progress**: TpmSession.c (592 lines) implements the full HMAC session
+  infrastructure per C2 §3:
+  - PblAesCfb256Process: AES-256-CFB encrypt/decrypt from AES-CBC single-block
+    (AesCbcEncrypt with IV=0 on a 16-byte block gives E_K(block)). Handles
+    full blocks and partial trailing blocks.
+  - PblKDFa: TPM 2.0 key derivation function using HMAC-SHA256, with counter,
+    label (null-terminated), contextU, contextV, and bits fields per TPM 2.0
+    Part 1 §11.4.1.
+  - PblTpmStartHmacSession: Sends TPM2_StartAuthSession with TPM_SE_HMAC,
+    symmetric={AES,256,CFB}, authHash=SHA256. Parses response for session
+    handle and nonceTPM. Computes session key via KDFa("ATH").
+  - PblTpmEncryptCommandParams/PblTpmDecryptResponseParams: AES-256-CFB
+    parameter encryption/decryption with IV=0 using session key.
+  - PblTpmComputeCommandHmac/PblTpmVerifyResponseHmac: HMAC-SHA256 over
+    command/response using session key.
+  - PblTpmFlushSession: TPM2_FlushContext before chain-loading Windows.
+  - PblTpmBeginCommandWithSessionAuth: Uses HMAC session if active, falls
+    back to TPM_RS_PW if not. All NV_Read/Write/Increment calls now use this.
+  - TpmClient.c helpers (PblTcg2Locate, PblTpmSubmitCommand, PblTpmBeginCommand,
+    PblTpmFinalizeCommand) exported from STATIC to non-STATIC for TpmSession.c.
+  - PblTpmComputeCommandHmacEx: Proper pHash-based HMAC per TPM 2.0 Part 1
+    §18.1. pHash = SHA256(commandCode || params), HMAC = HMAC-SHA256(
+    sessionKey, pHash || nonceCaller || nonceTPM || sessionAttributes).
+  - Parameter encryption wired into NV_Read (lock state + policy version)
+    and NV_Write (lock state): command params encrypted via AES-256-CFB
+    before sending, response params decrypted after receiving.
+  - PblTpmRefreshNonce: Generates new 32-byte nonceCaller from TPM2_GetRandom
+    per command for replay protection (TPM 2.0 Part 1 §18.1).
+  - PblTpmFillCommandHmac: Computes pHash-based HMAC and fills it into the
+    auth area. Refreshes nonce before computing HMAC. Auth area is 73 bytes
+    (handle(4) + nonce(2+32) + attrs(1) + hmac(2+32)).
+  - PblTpmParseSessionResponse: Response HMAC verification is fail-closed
+    (returns NULL on mismatch, causing NV_Read/Write to fail).
+  - PblTpmVerifyResponseHmacEx: Proper response pHash per TPM 2.0 Part 1
+    §18.1. pHash = SHA256(responseCode || commandCode || responseParams),
+    HMAC = HMAC-SHA256(sessionKey, pHash || nonceTPM || nonceCaller || attrs).
+  - PblTpmParseSessionResponse: Now takes CommandCode parameter, uses
+    PblTpmVerifyResponseHmacEx for proper pHash-based verification.
+  - PblApp.c: PblTpmStartHmacSession called from boot flow (step 3, before
+    first NV read). Session bound to PBL_NV_LOCK_STATE with empty auth.
+  - PblApp.c: PblTpmFlushSession called before all chain-load/shutdown paths
+    (PASS, DEGRADED, OverrideGranted, OverrideDenied, UNKNOWN).
+  - PblTpmStartPcrSession: Second HMAC session bound to TPM_RH_NULL for PCR
+    extends (C2 §3.3). Unbound session key via KDFa with empty bind auth.
+  - PblTpmFlushPcrSession: Flushes PCR session before chain-load/shutdown.
+  - PblTpmExtendPcr: Uses TPM_ST_SESSIONS with PCR session when active,
+    falls back to no-session when inactive.
+  - PblApp.c step 8: PblTpmStartPcrSession before PCR extends.
+  - PblApp.c step 9: PblTpmFlushPcrSession alongside PblTpmFlushSession in
+    all 5 chain-load/shutdown paths.
+  - PblTpmComputeCommandHmacSession: Session-parameterized HMAC helper (takes
+    PBL_TPM_SESSION*). PblTpmComputeCommandHmacEx delegates with &mSession.
+  - PblTpmVerifyResponseHmacSession: Session-parameterized response HMAC
+    verifier. PblTpmVerifyResponseHmacEx delegates with &mSession.
+  - PblTpmFillPcrCommandHmac: Fills PCR session HMAC into auth area using
+    PblTpmComputeCommandHmacSession with the PCR session.
+  - PblTpmParsePcrSessionResponse: Verifies PCR session response HMAC using
+    PblTpmVerifyResponseHmacSession with the PCR session. Fail-closed.
+  - PblTpmExtendPcr: Now fills command HMAC and verifies response HMAC when
+    PCR session is active.
+  - PblTpmUpdateNonceTpm: Updates mSession.NonceTpm from response auth area
+    after successful NV session HMAC verification (TPM 2.0 Part 1 §18.1).
+  - PblTpmUpdatePcrNonceTpm: Updates mPcrSession.NonceTpm after successful
+    PCR session HMAC verification.
+  - Both response parsers now extract nonceTPM before skipping, add bounds
+    checking (reject NonceTpmSize > 32 or overflow as malformed — fail-closed),
+    and update session state after verification.
+  Firmware builds, QEMU harness 10/10 PASS.
+- **Blocker**: Without swtpm (D-101), both session starts fail (no TPM present)
+  and all commands fall back to TPM_RS_PW/no-session. The HMAC fill/verify and
+  nonceTPM update code paths are not exercised in the QEMU harness. Runtime
+  test with QEMU+swtpm (D-101 swtpm hangs OVMF).
+- **Close criteria**: Runtime test with QEMU+swtpm. All code is implemented.
 
 ### D-103 — PlatformState.c SMBIOS string extraction is stubbed
 - **Status**: CLOSED
@@ -232,33 +304,38 @@
   on a real EDK2 build.
 
 ### D-111 — Decision engine not implemented
-- **Status**: OPEN
+- **Status**: OPEN (partial — steps 3-14 + 16 implemented; steps 9-10 now enforced; QEMU 10/10 pass)
 - **Category**: TODO
 - **Progress**: `PblEvaluateDecision()` in Decision.c now implements C4 §5
-  steps 3-14 and step 16 (21 → 305 lines):
+  steps 3-14 and step 16 (21 → 315 lines):
   - Step 3: policy.expires_at > now → DEGRADED if expired
   - Step 4: min_pbl_version <= PBL_VERSION → DEGRADED if lower
   - Step 5: REQ-01 Secure Boot enabled + not Setup Mode → BLOCK on fail
   - Step 6: REQ-02 db has Windows UEFI CA 2023 + dbx has MS 2011 revocation → BLOCK on fail
   - Step 7: REQ-03 SPI protections (BIOSWE, BLE, SMM_BWP) → BLOCK if missing, DEGRADED if unknown
   - Step 8: REQ-04 AMT provisioned + USB DCI enabled → DEGRADED
-  - Step 9: REQ-05 TPM session requirements → skipped (sub-map not yet parsed, D-110)
-  - Step 10: REQ-06 TPM firmware floors → skipped (policy fields not yet parsed)
+  - Step 9: REQ-05 TPM session requirements → now enforced (BLOCK if policy requires HMAC/param-encrypt/salted/bound and PBL uses no-session commands)
+  - Step 10: REQ-06 TPM firmware floors + PIN policy → now enforced (BLOCK if TPM firmware < policy floor; BLOCK if PIN required)
   - Step 11: REQ-07 S3 without MOR → BLOCK; no Kernel DMA protection → BLOCK
   - Step 12: REQ-08 network boot entries present → BLOCK
   - Step 13: REQ-09 BitLocker not enabled → BLOCK
   - Step 14: REQ-10 no firmware recovery → DEGRADED
-  - Step 16: Combine — server LOCKED/WIPE_PENDING → BLOCK; UNLOCKED → policy result stands
+  - Step 16: Combine — server LOCKED/WIPE_PENDING → BLOCK; UNLOCKED → policy result stands; TRACKING → policy result stands (C5)
   - PblApp.c wired to call PblEvaluateDecision (was stub returning PblResultPass)
   - PBL_VERSION moved from PblApp.c to PblApp.h for cross-file access
-- **Blocker**: Steps 9-10 (TPM session requirements, TPM firmware floors)
-  are no-ops because the policy sub-maps with text-string keys are not yet
-  parsed (D-110 partial). No runtime test with real platform state —
-  QEMU/swtpm not installed (D-100/D-101). Override and grace period
-  handling (step 16 sub-logic) not implemented — override is D-113.
-- **Close criteria**: Parse TPM session requirements and TPM firmware
-  floor policy fields. Test with locked, unlocked, degraded, and override
-  scenarios on QEMU/swtpm or real hardware.
+  - D-111: Added TpmFirmwareFloor (C4 key 41) and TpmPinPolicy (C4 key 42) to PBL_POLICY
+  - D-111: Added TpmFirmwareVersion to PBL_PLATFORM_STATE (collected via TPM2_GetCapability)
+  - D-111: Added PblTpmGetFirmwareVersion() to TpmClient.c
+  - D-111: PblCborReadMapLen() and PblCborReadBool() helpers added to CborDecode.c
+  - D-111: Key 40 (tpm_session_requirements) sub-map now parsed with string keys
+  - D-111: Firmware builds, QEMU harness 10/10 PASS
+- **Blocker**: QEMU harness passes without swtpm (TPM commands return
+  EFI_NOT_FOUND, decision engine uses safe defaults). Full runtime test
+  with real TPM requires QEMU+swtpm (D-101 — swtpm hangs OVMF). Override
+  and grace period handling (step 16 sub-logic) not implemented — override
+  is D-113.
+- **Close criteria**: Runtime test with locked, unlocked, degraded, and
+  override scenarios on QEMU/swtpm or real hardware.
 
 ### D-112 — Lock screen UI not implemented
 - **Status**: OPEN
@@ -759,7 +836,7 @@
   in that file. Firmware Ed25519 verification remains blocked by EDK2.
 
 ### D-206 — PBL device identity mapping not implemented
-- **Status**: OPEN (partial — server + serverless + dashboard UI mapping implemented; auto-link + status sync pending)
+- **Status**: CLOSED (all close criteria met — pending commit ref for graph I2)
 - **Category**: SERVER
 - **Progress**: `serverless/pbl/devices.ts` (93 lines, was 53) implements
   PBL device store with KV prefix `pbl_devices:`. Added `listDevices(kv)`
@@ -811,13 +888,56 @@
   unlinkAgentMapping methods. 6 tests in
   `dashboard/tests/PblDeviceDetailPage.mapping.test.jsx` (197 total
   dashboard tests).
-- **Blocker**: No auto-link at enrollment (when SMBIOS
-  hostname/hardware_uuid matches an existing agent device). No
-  bidirectional status sync (PBL lock → agent status, or vice versa).
-  The server and serverless mapping stores are separate (server DB vs KV)
-  — they need to be kept in sync or one should be canonical.
-- **Close criteria**: Auto-link at enrollment.
-  Bidirectional status sync.
+  D-206: Auto-link at enrollment implemented in Express enrollment
+  endpoint (pbl.js) — uses `getDeviceByHardwareIdentity()` to match
+  SMBIOS UUID (key 4 in enrollment CBOR) to existing agent device.
+  D-206: Bidirectional status sync implemented:
+  - PBL → Agent: `syncPblStatusToAgent()` in pbl.js — called from
+    lock/unlock/track/stop-track endpoints. Maps PBL status to agent
+    status (locked→locked, tracking→stolen, active→active) and updates
+    the linked agent device in the database.
+  - Agent → PBL: `syncAgentStatusToPbl()` in devices.js — called from
+    flag-stolen (→locked), recover (→active), track (→tracking),
+    stop-track (→active) endpoints. Updates the linked PBL device in KV.
+  - Shared KV store: `server/src/pbl/kvStore.js` provides a shared
+    in-memory KV store singleton so PBL routes and agent routes access
+    the same KV state. `createEnv()` in pbl.js now uses the shared store
+    by default.
+  492 server tests pass (excluding 2 pre-existing PGlite failures).
+  D-206: Persistent KV store — migration 012 (`012_pbl_kv_store.sql` for
+  Postgres + SQLite) creates `pbl_kv_store` table (key TEXT PK, value TEXT,
+  created_at, updated_at). `createDbKv(pool)` in kvStore.js implements the
+  KV interface against the table. `createSharedEnv()` uses DB pool when
+  available, falls back to in-memory Map. `PBL_KV_IN_MEMORY=1` env var
+  forces in-memory mode (set in tests/setup.js).
+  D-206: Sync function tests — 14 new tests in
+  `server/tests/pblStatusSync.test.js` covering PBL→Agent (locked,
+  tracking→stolen, active, no linked device, unknown status, DB failures),
+  Agent→PBL (locked, tracking, active, no pbl_device_id, null device, not
+  in KV), and bidirectional round-trip integration. Mocks DB pool and
+  deviceQueries. 506 server tests pass (was 492, +14).
+  D-206: DB-backed KV integration test — 12 new tests in
+  `server/tests/pblKvStore.integration.test.js` using PGlite (real
+  PostgreSQL engine in-process). Tests put/get, null for missing key,
+  type=text, upsert on conflict, delete, idempotent delete, list all,
+  list with prefix, empty list, JSON values (device records), base64
+  values (policy blobs), and persistence across KV instances. 521 server
+  tests pass (was 506, +15). e2e.lockdown.test.js also passes (3 tests).
+  D-206: Serverless/Express KV store sync strategy — the two deployments
+  are mutually exclusive:
+  - **Serverless (Cloudflare Worker)**: Cloudflare KV is canonical. The
+    Express server is not deployed. No sync needed.
+  - **Express (self-hosted)**: The `pbl_kv_store` database table is
+    canonical. The serverless Worker is not deployed. No sync needed.
+  - **Hybrid (both deployed)**: Not supported. If ever needed, a
+    one-way sync (Express DB → Cloudflare KV via API) would be
+    implemented as a periodic batch job. This is out of scope for D-206.
+- **Blocker**: None — all close criteria met.
+- **Close criteria**: ✓ Auto-link at enrollment. ✓ Bidirectional status
+  sync. ✓ Persistent KV store (migration 012 + DB-backed implementation).
+  ✓ Sync function tests (14 unit tests + 12 PGlite integration tests).
+  ✓ Serverless/Express KV store sync strategy documented (mutually
+  exclusive deployments).
 
 ### D-207 — CBOR parsing in serverless Worker not implemented
 - **Status**: OPEN

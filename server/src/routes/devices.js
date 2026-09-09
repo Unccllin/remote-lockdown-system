@@ -7,8 +7,36 @@ const { generateApiKey, hashApiKey } = require('../db/apiKey');
 const { groupPbaCredentials } = require('../db/pbaCredentials');
 const { readDualMode } = require('../db/fieldCrypto');
 const { sendNotification } = require('../notifications/notify');
+const { createSharedEnv } = require('../pbl/kvStore');
 
 const router = express.Router();
+
+/** D-206: Sync agent device status to the linked PBL device in KV.
+ *  Best-effort — does not fail the agent operation if the PBL KV is unavailable.
+ *  @param {object} agentDevice  Agent device record (must have pbl_device_id)
+ *  @param {string} pblStatus     PBL status to set ('locked'|'active'|'tracking')
+ */
+async function syncAgentStatusToPbl(agentDevice, pblStatus) {
+  if (!agentDevice || !agentDevice.pbl_device_id) return;
+  try {
+    const env = createSharedEnv();
+    const key = `pbl_devices:${agentDevice.pbl_device_id}`;
+    const data = await env.LOCKDOWN_KV.get(key, 'text');
+    if (!data) return;  // PBL device not found in KV
+    const device = JSON.parse(data);
+    device.status = pblStatus;
+    if (pblStatus === 'active') {
+      delete device.lock_reason;
+    } else if (pblStatus === 'locked') {
+      device.lock_reason = 'admin_lock';
+    } else if (pblStatus === 'tracking') {
+      device.lock_reason = 'reported_stolen';
+    }
+    await env.LOCKDOWN_KV.put(key, JSON.stringify(device));
+  } catch (syncErr) {
+    // Best-effort — don't fail the agent operation
+  }
+}
 
 /**
  * Validate a device hostname at creation time.
@@ -231,6 +259,9 @@ router.post('/:id/flag-stolen', requireAuth, requireRole('operator'), async (req
     commandId: cmd.id,
   });
 
+  // D-206: Bidirectional status sync — agent stolen → PBL device locked
+  await syncAgentStatusToPbl(device, 'locked');
+
   res.json({ device: { ...device, status: 'stolen' }, command: cmd });
 });
 
@@ -287,6 +318,9 @@ router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, re
     adminId: req.admin.id,
     keyReleased: !!key,
   });
+
+  // D-206: Bidirectional status sync — agent recovering → PBL device active
+  await syncAgentStatusToPbl(device, 'active');
 
   res.json({
     device: { ...device, status: 'recovering' },
@@ -357,6 +391,9 @@ router.post('/:id/track', requireAuth, requireRole('operator'), async (req, res)
     [device.id, req.admin.id, 'start_tracking', { command_id: cmd.rows[0].id }]
   );
 
+  // D-206: Bidirectional status sync — agent tracking → PBL device tracking
+  await syncAgentStatusToPbl(device, 'tracking');
+
   res.json({ device, command: cmd.rows[0] });
 });
 
@@ -415,6 +452,9 @@ router.post('/:id/stop-track', requireAuth, requireRole('operator'), async (req,
     'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
     [device.id, req.admin.id, 'stop_tracking', { command_id: cmd.rows[0].id }]
   );
+
+  // D-206: Bidirectional status sync — agent stop-track → PBL device active
+  await syncAgentStatusToPbl(device, 'active');
 
   res.json({ device, command: cmd.rows[0] });
 });
@@ -659,3 +699,4 @@ router.get('/by-pbl/:pblDeviceId', requireAuth, requireRole('operator'), async (
 });
 
 module.exports = router;
+module.exports.syncAgentStatusToPbl = syncAgentStatusToPbl;

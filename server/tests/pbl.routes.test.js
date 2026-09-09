@@ -16,6 +16,12 @@ const {
   METHOD_RULES,
   createEnv,
 } = require('../src/routes/pbl');
+const { setSharedKvStore } = require('../src/pbl/kvStore');
+
+// D-206: Reset the shared KV store before each test to prevent state leakage
+beforeEach(() => {
+  setSharedKvStore(new Map());
+});
 
 function createApp() {
   const app = express();

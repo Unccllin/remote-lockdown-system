@@ -138,9 +138,18 @@ router.use(pblWafGuard);
  * persistent store. The serverless route handlers call:
  *   env.LOCKDOWN_KV.get(key) / put(key, value)
  * This shim provides that interface.
+ *
+ * D-206: When no kvStore is provided, uses the shared KV store singleton
+ * from pbl/kvStore.js so that agent routes can sync status to PBL devices.
  */
+const { createSharedEnv, getSharedKvStore } = require('../pbl/kvStore');
+
 function createEnv(kvStore) {
-  const store = kvStore || new Map();
+  if (!kvStore) {
+    // Use the shared KV store singleton
+    return createSharedEnv();
+  }
+  const store = kvStore;
   return {
     LOCKDOWN_KV: {
       async get(key, type) {
@@ -640,6 +649,22 @@ router.post('/enroll', async (req, res) => {
       await env.LOCKDOWN_KV.put(`pbl_devices:${deviceIdHex}`, JSON.stringify(device));
       await env.LOCKDOWN_KV.put(`pbl_ek_cert:${deviceIdHex}`, ekCert.toString('base64'));
       await env.LOCKDOWN_KV.put(`pbl_ak_public:${deviceIdHex}`, akPublic.toString('hex'));
+
+      // D-206: Auto-link to existing agent device by hardware_uuid if available.
+      // The firmware sends SMBIOS Type 1 UUID as key 4 in the enrollment CBOR.
+      // If the agent has already enrolled with the same hardware_uuid, link them.
+      const smbiosUuid = reqMap.get(4);
+      if (smbiosUuid && typeof smbiosUuid === 'string') {
+        try {
+          const { getDeviceByHardwareIdentity, setPblDeviceId } = require('../db/deviceQueries');
+          const agentDevice = await getDeviceByHardwareIdentity(null, null, smbiosUuid);
+          if (agentDevice && !agentDevice.pbl_device_id) {
+            await setPblDeviceId(agentDevice.id, deviceIdHex);
+          }
+        } catch (linkErr) {
+          // Auto-link is best-effort — don't fail enrollment if it fails
+        }
+      }
     }
 
     // Return CBOR map: {1: status(0=success, 1=already), 2: policy_version}
@@ -982,6 +1007,40 @@ router.get('/devices/:id', requireAuth, requireRole('operator'), async (req, res
   res.json({ device: JSON.parse(deviceData) });
 });
 
+// ---------------------------------------------------------------------------
+// D-206: PBL device admin endpoints (lock/unlock/track/stop-track/delete)
+// ---------------------------------------------------------------------------
+
+/** D-206: Sync PBL device status to the linked agent device.
+ *  Best-effort — does not fail the PBL operation if the agent DB is unavailable.
+ *  @param {string} pblDeviceId  PBL device ID (hex)
+ *  @param {string} pblStatus     New PBL status ('locked'|'active'|'tracking')
+ */
+async function syncPblStatusToAgent(pblDeviceId, pblStatus) {
+  try {
+    const { getDeviceByPblDeviceId } = require('../db/deviceQueries');
+    const agentDevice = await getDeviceByPblDeviceId(pblDeviceId);
+    if (!agentDevice) return;  // No linked agent device
+
+    // Map PBL status to agent status
+    let agentStatus;
+    switch (pblStatus) {
+      case 'locked':   agentStatus = 'locked'; break;
+      case 'tracking': agentStatus = 'stolen'; break;
+      case 'active':   agentStatus = 'active'; break;
+      default: return;
+    }
+
+    const pool = require('../db/pool');
+    await pool.query(
+      'UPDATE devices SET status = $2 WHERE id = $1 AND status != $2',
+      [agentDevice.id, agentStatus],
+    );
+  } catch (syncErr) {
+    // Best-effort — don't fail the PBL operation
+  }
+}
+
 router.post('/devices/:id/lock', requireAuth, requireRole('operator'), async (req, res) => {
   const env = req._pblEnv || createEnv();
   const { id } = req.params;
@@ -993,6 +1052,8 @@ router.post('/devices/:id/lock', requireAuth, requireRole('operator'), async (re
   device.status = 'locked';
   device.lock_reason = 'admin_lock';
   await env.LOCKDOWN_KV.put(`pbl_devices:${id}`, JSON.stringify(device));
+  // D-206: Bidirectional status sync — PBL lock → agent device status
+  await syncPblStatusToAgent(id, 'locked');
   res.json({ device });
 });
 
@@ -1007,6 +1068,8 @@ router.post('/devices/:id/unlock', requireAuth, requireRole('operator'), async (
   device.status = 'active';
   delete device.lock_reason;
   await env.LOCKDOWN_KV.put(`pbl_devices:${id}`, JSON.stringify(device));
+  // D-206: Bidirectional status sync — PBL unlock → agent device status
+  await syncPblStatusToAgent(id, 'active');
   res.json({ device });
 });
 
@@ -1021,6 +1084,8 @@ router.post('/devices/:id/track', requireAuth, requireRole('operator'), async (r
   device.status = 'tracking';
   device.lock_reason = 'reported_stolen';
   await env.LOCKDOWN_KV.put(`pbl_devices:${id}`, JSON.stringify(device));
+  // D-206: Bidirectional status sync — PBL tracking → agent device status
+  await syncPblStatusToAgent(id, 'tracking');
   res.json({ device });
 });
 
@@ -1035,6 +1100,8 @@ router.post('/devices/:id/stop-track', requireAuth, requireRole('operator'), asy
   device.status = 'active';
   delete device.lock_reason;
   await env.LOCKDOWN_KV.put(`pbl_devices:${id}`, JSON.stringify(device));
+  // D-206: Bidirectional status sync — PBL stop-track → agent device status
+  await syncPblStatusToAgent(id, 'active');
   res.json({ device });
 });
 
@@ -1242,4 +1309,5 @@ module.exports = {
   ALLOWED_CONTENT_TYPES,
   METHOD_RULES,
   createEnv,
+  syncPblStatusToAgent,
 };
