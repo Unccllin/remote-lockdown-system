@@ -333,6 +333,77 @@ PblCborReadMapKey (
   return PblCborReadUint (Cursor, Key);
 }
 
+/** Read a CBOR map length (major type 5).
+
+  @param  Cursor  The CBOR cursor.
+  @param  Len     Output: number of key-value pairs in the map.
+
+  @retval EFI_SUCCESS         Map length read.
+  @retval EFI_PROTOCOL_ERROR  Not a CBOR map.
+**/
+STATIC
+EFI_STATUS
+PblCborReadMapLen (
+  IN OUT CBOR_CURSOR *Cursor,
+  OUT    UINTN       *Len
+  )
+{
+  UINT8    MajorType;
+  UINT64   RawValue;
+  EFI_STATUS Status;
+
+  Status = PblCborReadHead (Cursor, &MajorType, &RawValue);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  if (MajorType != CBOR_MAJOR_MAP) {
+    return EFI_PROTOCOL_ERROR;
+  }
+
+  *Len = (UINTN)RawValue;
+  return EFI_SUCCESS;
+}
+
+/** Read a CBOR boolean (simple value false=0xF4 or true=0xF5).
+
+  @param  Cursor  The CBOR cursor.
+  @param  Value   Output: TRUE or FALSE.
+
+  @retval EFI_SUCCESS         Boolean read.
+  @retval EFI_PROTOCOL_ERROR  Not a CBOR boolean.
+**/
+STATIC
+EFI_STATUS
+PblCborReadBool (
+  IN OUT CBOR_CURSOR *Cursor,
+  OUT    BOOLEAN     *Value
+  )
+{
+  UINT8    MajorType;
+  UINT64   RawValue;
+  EFI_STATUS Status;
+
+  Status = PblCborReadHead (Cursor, &MajorType, &RawValue);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  if (MajorType != CBOR_MAJOR_SIMPLE) {
+    return EFI_PROTOCOL_ERROR;
+  }
+
+  if (RawValue == 20) {  // false
+    *Value = FALSE;
+  } else if (RawValue == 21) {  // true
+    *Value = TRUE;
+  } else {
+    return EFI_PROTOCOL_ERROR;
+  }
+
+  return EFI_SUCCESS;
+}
+
 // ============================================================================
 // COSE_Sign1 parsing
 // ============================================================================
@@ -674,10 +745,51 @@ PblCborDecodePolicy (
 
       case 40: {  // tpm_session_requirements (map)
         // C4 §2.5: {hmac: bool, param_encrypt: bool, salted: bool, bound: bool}
-        // Keys are text strings. We skip the sub-map for now — the
-        // TpmSessionReq fields can be parsed on demand from RawCbor.
-        Status = PblCborSkipItem (&Cursor);
+        // Parse the sub-map with string keys.
+        UINTN MapLen40;
+        Status = PblCborReadMapLen (&Cursor, &MapLen40);
         if (EFI_ERROR (Status)) return Status;
+        for (UINTN I40 = 0; I40 < MapLen40; I40++) {
+          CHAR8 Key40[24];
+          Status = PblCborReadTstr (&Cursor, Key40, sizeof (Key40));
+          if (EFI_ERROR (Status)) return Status;
+          BOOLEAN Val40;
+          Status = PblCborReadBool (&Cursor, &Val40);
+          if (EFI_ERROR (Status)) {
+            // Not a bool — skip the value
+            PblCborSkipItem (&Cursor);
+            continue;
+          }
+          if (AsciiStrCmp (Key40, "hmac") == 0) {
+            Policy->TpmSessionReq.HmacRequired = Val40;
+          } else if (AsciiStrCmp (Key40, "param_encrypt") == 0) {
+            Policy->TpmSessionReq.ParamEncryptRequired = Val40;
+          } else if (AsciiStrCmp (Key40, "salted") == 0) {
+            Policy->TpmSessionReq.SaltedRequired = Val40;
+          } else if (AsciiStrCmp (Key40, "bound") == 0) {
+            Policy->TpmSessionReq.BoundRequired = Val40;
+          }
+        }
+        break;
+      }
+
+      case 41:  // tpm_firmware_floors (uint)
+        Status = PblCborReadUint (&Cursor, &Key);
+        if (EFI_ERROR (Status)) return Status;
+        Policy->TpmFirmwareFloor = (UINT32)Key;
+        break;
+
+      case 42: {  // tpm_pin_policy (tstr)
+        CHAR8 PinPolicy[16];
+        Status = PblCborReadTstr (&Cursor, PinPolicy, sizeof (PinPolicy));
+        if (EFI_ERROR (Status)) return Status;
+        if (AsciiStrCmp (PinPolicy, "required") == 0) {
+          Policy->TpmPinPolicy = 1;
+        } else if (AsciiStrCmp (PinPolicy, "preferred") == 0) {
+          Policy->TpmPinPolicy = 2;
+        } else {
+          Policy->TpmPinPolicy = 0;  // "none" or unknown
+        }
         break;
       }
 

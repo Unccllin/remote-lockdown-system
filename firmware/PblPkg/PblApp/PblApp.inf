@@ -28,6 +28,7 @@
   DmaProtection.c
   Mor.c
   TpmClient.c
+  TpmSession.c
   TcgLog.c
   HttpsClient.c
   TlsVerify.c

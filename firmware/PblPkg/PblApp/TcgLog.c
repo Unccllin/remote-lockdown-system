@@ -122,5 +122,45 @@ PblLogExtendEvent (
   // This is acceptable for PBL's use case — the PCR extension is the
   // security-relevant operation; the event log is for attestation audit.
 
+  // D-125: Use EFI_TCG2_PROTOCOL->HashLogExtendEvent to both extend
+  // the PCR and log the event to the TCG2 event log in one operation.
+  // This is the proper way to record PBL's own measurements.
+  {
+    EFI_TCG2_PROTOCOL  *Tcg2;
+    EFI_STATUS          Status2;
+
+    Status2 = gBS->LocateProtocol (&gEfiTcg2ProtocolGuid, NULL, (VOID **)&Tcg2);
+    if (!EFI_ERROR (Status2) && Tcg2 != NULL) {
+      // Build the TCG2 event structure.
+      // Event data is logged as-is (not hashed — HashLogExtendEvent
+      // hashes DataToHash separately from the Event payload).
+      UINTN EventSize = sizeof (EFI_TCG2_EVENT) + EventDataSize - 1;
+      EFI_TCG2_EVENT *Tcg2Event = (EFI_TCG2_EVENT *)AllocatePool (EventSize);
+      if (Tcg2Event != NULL) {
+        Tcg2Event->Size = (UINT32)EventSize;
+        Tcg2Event->Header.HeaderSize = sizeof (EFI_TCG2_EVENT_HEADER);
+        Tcg2Event->Header.HeaderVersion = EFI_TCG2_EVENT_HEADER_VERSION;
+        Tcg2Event->Header.PCRIndex = PcrIndex;
+        Tcg2Event->Header.EventType = EventType;
+        if (EventData != NULL && EventDataSize > 0) {
+          CopyMem (Tcg2Event->Event, EventData, EventDataSize);
+        }
+
+        // HashLogExtendEvent hashes DataToHash, extends PCR, and logs the event.
+        // Since we already extended the PCR above, we pass zero-length data
+        // here to avoid double-extension — we only want to log the event.
+        // Flags = 0 means no PE/COFF hashing, just raw data hash.
+        Tcg2->HashLogExtendEvent (
+          Tcg2,
+          0,                                  // Flags
+          (EFI_PHYSICAL_ADDRESS)(UINTN)HashData,
+          0,                                  // DataToHashLen=0: don't double-extend
+          Tcg2Event
+        );
+        FreePool (Tcg2Event);
+      }
+    }
+  }
+
   return EFI_SUCCESS;
 }

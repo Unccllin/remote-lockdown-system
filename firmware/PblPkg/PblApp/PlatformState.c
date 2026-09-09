@@ -464,6 +464,8 @@ PblCollectSmbiosState (
       SMBIOS_TABLE_TYPE1 *Type1 = (SMBIOS_TABLE_TYPE1 *)Record;
       PblSmbiosGetString (Record, Type1->ProductName,
                           State->ProductName, sizeof (State->ProductName));
+      // D-206: Extract system UUID for device identity auto-link
+      CopyMem (State->SystemUuid, &Type1->Uuid, 16);
     }
 
     // Move to next record
@@ -869,6 +871,9 @@ PblCollectPlatformState (
 
   // REQ-09: WinRE detection — check for winre.wim on ESP
   PblCollectWinreState (State);
+
+  // REQ-06: TPM firmware version (for floor check in Decision.c step 10)
+  PblTpmGetFirmwareVersion (&State->TpmFirmwareVersion);
 
   return EFI_SUCCESS;
 }

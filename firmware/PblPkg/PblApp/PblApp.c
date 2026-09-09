@@ -84,6 +84,19 @@ PblAppEntryPoint (
   // Step 3: Read cached lock state + policy version from TPM NV (C2 §5.1)
   //
   Print (L"[3/8] Reading TPM NV state...\n");
+
+  // D-102: Start HMAC session bound to PBL_NV_LOCK_STATE (C2 §3.1, §3.3).
+  // The session provides AES-256-CFB parameter encryption for all NV reads/writes.
+  // In development mode (no auth value provisioned), bindAuth is empty.
+  // If session start fails, commands fall back to TPM_RS_PW (C2 §3.2 minimum).
+  Status = PblTpmStartHmacSession (PBL_NV_LOCK_STATE, NULL, 0);
+  if (EFI_ERROR (Status)) {
+    Print (L"  [INFO] HMAC session start failed: %r — using password auth\n", Status);
+    // Continue — PblTpmBeginCommandWithSessionAuth falls back to TPM_RS_PW
+  } else {
+    Print (L"  [OK] HMAC session established (AES-256-CFB)\n");
+  }
+
   Status = PblTpmReadLockState (&LockCache);
   if (EFI_ERROR (Status)) {
     Print (L"  [INFO] No cached lock state: %r\n", Status);
@@ -301,6 +314,16 @@ PblAppEntryPoint (
   // Step 8: Extend PCR 12/13 (C2 §4, REQ-12)
   //
   Print (L"[7/8] Extending PCR 12/13...\n");
+
+  // D-102: Start PCR session (bound to TPM_RH_NULL, C2 §3.3) for PCR extends.
+  Status = PblTpmStartPcrSession ();
+  if (EFI_ERROR (Status)) {
+    Print (L"  [INFO] PCR session start failed: %r — using no-session\n", Status);
+    // Continue — PblTpmExtendPcr falls back to no-session
+  } else {
+    Print (L"  [OK] PCR HMAC session established\n");
+  }
+
   // STUB: PblTpmExtendPcr (PBL_PCR_INPUTS, inputs_hash, 32)
   // STUB: PblTpmExtendPcr (PBL_PCR_DECISION, decision_hash, 32)
 
@@ -311,12 +334,16 @@ PblAppEntryPoint (
   switch (Result) {
     case PblResultPass:
       Print (L"PASS — chain-loading Windows\n");
+      PblTpmFlushSession ();
+      PblTpmFlushPcrSession ();
       PblChainLoadWindows (ImageHandle);
       break;
     case PblResultDegraded:
       Print (L"DEGRADED — notice + chain-load\n");
       PblShowDegradedNotice ("Security degradation detected",
         FixedPcdGet32(PcdDegradedNoticeSeconds));
+      PblTpmFlushSession ();
+      PblTpmFlushPcrSession ();
       PblChainLoadWindows (ImageHandle);
       break;
     case PblResultBlock: {
@@ -329,15 +356,21 @@ PblAppEntryPoint (
       PblHandleOverride (&Verdict, &OverrideGranted);
       if (OverrideGranted) {
         Print (L"Override granted — chain-loading Windows\n");
+        PblTpmFlushSession ();
+        PblTpmFlushPcrSession ();
         PblChainLoadWindows (ImageHandle);
       } else {
         Print (L"Override denied — shutting down\n");
+        PblTpmFlushSession ();
+        PblTpmFlushPcrSession ();
         gRT->ResetSystem (EfiResetShutdown, EFI_SUCCESS, 0, NULL);
       }
       break;
     }
     default:
       Print (L"UNKNOWN — fail-closed to BLOCK\n");
+      PblTpmFlushSession ();
+      PblTpmFlushPcrSession ();
       gRT->ResetSystem (EfiResetShutdown, EFI_SUCCESS, 0, NULL);
       break;
   }

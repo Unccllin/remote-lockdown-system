@@ -211,20 +211,34 @@ PblEvaluateDecision (
   // Step 9: REQ-05 — TPM session requirements (BLOCK on fail)
   // ------------------------------------------------------------------
   // The policy specifies whether HMAC sessions, parameter encryption,
-  // salted sessions, and bound sessions are required. Since we don't
-  // yet parse the tpm_session_requirements sub-map (D-110 partial),
-  // we skip this check. When the sub-map is parsed, this will enforce:
-  //   if (Policy->TpmSessionReq.HmacRequired && !hmac_session_active)
-  //     → BLOCK
-  // For now, this is a no-op.
+  // salted sessions, and bound sessions are required.
+  // Since PBL uses TPM2_GetRandom and TPM2_PCR_Read without sessions
+  // (D-102: TPM_ST_NO_SESSIONS), any policy requiring sessions blocks.
+  if (Policy->TpmSessionReq.HmacRequired ||
+      Policy->TpmSessionReq.ParamEncryptRequired ||
+      Policy->TpmSessionReq.SaltedRequired ||
+      Policy->TpmSessionReq.BoundRequired) {
+    // D-102: PBL currently uses no-session TPM commands. If the policy
+    // requires sessions, we must BLOCK until session support is added.
+    PolicyResult = PblResultBlock;
+  }
 
   // ------------------------------------------------------------------
   // Step 10: REQ-06 — TPM firmware floors + PIN policy (BLOCK on fail)
   // ------------------------------------------------------------------
-  // TPM firmware version floor and PIN policy are not yet parsed from
-  // the policy blob. Skip for now. When implemented, this will check:
-  //   if (tpm_firmware_version < policy.min_tpm_firmware)
-  //     → BLOCK
+  // Check TPM firmware version against policy floor.
+  if (Policy->TpmFirmwareFloor > 0 &&
+      State->TpmFirmwareVersion > 0 &&
+      State->TpmFirmwareVersion < Policy->TpmFirmwareFloor) {
+    // TPM firmware is below the minimum required version
+    PolicyResult = PblResultBlock;
+  }
+  // PIN policy "required" — we can't enforce PIN in pre-boot without
+  // a user input mechanism. If the policy requires PIN, BLOCK.
+  if (Policy->TpmPinPolicy == 1) {
+    // PIN required but PBL has no PIN entry UI in this flow
+    PolicyResult = PblResultBlock;
+  }
 
   // ------------------------------------------------------------------
   // Step 11: REQ-07 — S3 + DMA + MOR (BLOCK on fail)

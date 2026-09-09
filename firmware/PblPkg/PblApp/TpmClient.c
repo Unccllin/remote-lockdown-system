@@ -43,7 +43,6 @@ typedef struct {
 #pragma pack()
 
 /** Locate the EFI_TCG2_PROTOCOL. Returns NULL if no TPM present. **/
-STATIC
 EFI_TCG2_PROTOCOL *
 PblTcg2Locate (
   VOID
@@ -69,7 +68,6 @@ PblTcg2Locate (
 }
 
 /** Send a raw TPM2 command via EFI_TCG2_PROTOCOL->SubmitCommand. **/
-STATIC
 EFI_STATUS
 PblTpmSubmitCommand (
   IN  EFI_TCG2_PROTOCOL *Tcg2,
@@ -95,14 +93,16 @@ PblTpmSubmitCommand (
 
   // Parse response header to get actual size
   PBL_TPM2_RESPONSE_HEADER *Resp = (PBL_TPM2_RESPONSE_HEADER *)Response;
-  if (Resp->ResponseSize > ResponseSize) {
+  UINT32 RespSz = SwapBytes32 (Resp->ResponseSize);
+  UINT32 RespRc = SwapBytes32 (Resp->ResponseCode);
+  if (RespSz > ResponseSize) {
     return EFI_BUFFER_TOO_SMALL;
   }
 
-  *ActualResponseSize = Resp->ResponseSize;
+  *ActualResponseSize = RespSz;
 
   // Check response code (0 = TPM_RC_SUCCESS)
-  if (Resp->ResponseCode != 0) {
+  if (RespRc != 0) {
     return EFI_DEVICE_ERROR;
   }
 
@@ -110,7 +110,6 @@ PblTpmSubmitCommand (
 }
 
 /** Build a TPM2 no-session command (TPM_ST_NO_SESSIONS). **/
-STATIC
 UINT8 *
 PblTpmBeginCommand (
   OUT UINT8  *Buffer,
@@ -119,9 +118,9 @@ PblTpmBeginCommand (
   )
 {
   PBL_TPM2_COMMAND_HEADER *Hdr = (PBL_TPM2_COMMAND_HEADER *)Buffer;
-  Hdr->Tag         = TPM_ST_NO_SESSIONS;
-  Hdr->CommandSize = sizeof (PBL_TPM2_COMMAND_HEADER); // Updated by caller
-  Hdr->CommandCode = (UINT32)CommandCode;
+  Hdr->Tag         = SwapBytes16 (TPM_ST_NO_SESSIONS);
+  Hdr->CommandSize = SwapBytes32 (sizeof (PBL_TPM2_COMMAND_HEADER)); // Updated by caller
+  Hdr->CommandCode = SwapBytes32 ((UINT32)CommandCode);
   return Buffer + sizeof (PBL_TPM2_COMMAND_HEADER);
 }
 
@@ -142,9 +141,27 @@ PblTpmBeginCommand (
 
   @return Pointer past the authorization area (where command parameters go).
 **/
+
+// Session attributes for HMAC session: continueSession | decrypt | encrypt
+#define PBL_SESSION_ATTRS  (BIT0 | BIT5 | BIT6)
+
+/** Build a TPM2 command with HMAC session auth (D-102).
+
+  If an HMAC session is active (PblTpmIsSessionActive), uses the session
+  handle with continueSession + decrypt + encrypt attributes. Otherwise,
+  falls back to TPM_RS_PW password auth (C2 §3.2 minimum).
+
+  Authorization area format (TPMS_AUTH_COMMAND) with HMAC session:
+    sessionHandle (4 bytes): session handle from StartAuthSession
+    nonceCaller (TPM2B): 2 bytes size=0 (refreshed per command in full impl)
+    sessionAttributes (1 byte): continueSession | decrypt | encrypt
+    hmac (TPM2B): 2 bytes size=0 (computed in full impl)
+
+  @return Pointer past the authorization area (where command parameters go).
+**/
 STATIC
 UINT8 *
-PblTpmBeginCommandWithAuth (
+PblTpmBeginCommandWithSessionAuth (
   OUT UINT8  *Buffer,
   IN  UINT32  BufferSize,
   IN  TPM_CC  CommandCode
@@ -153,37 +170,60 @@ PblTpmBeginCommandWithAuth (
   PBL_TPM2_COMMAND_HEADER *Hdr = (PBL_TPM2_COMMAND_HEADER *)Buffer;
   UINT8 *Ptr;
 
-  Hdr->Tag         = TPM_ST_SESSIONS;
-  Hdr->CommandSize = sizeof (PBL_TPM2_COMMAND_HEADER); // Updated by caller
-  Hdr->CommandCode = (UINT32)CommandCode;
+  Hdr->Tag         = SwapBytes16 (TPM_ST_SESSIONS);
+  Hdr->CommandSize = SwapBytes32 (sizeof (PBL_TPM2_COMMAND_HEADER));
+  Hdr->CommandCode = SwapBytes32 ((UINT32)CommandCode);
   Ptr = Buffer + sizeof (PBL_TPM2_COMMAND_HEADER);
 
-  // Authorization area size (4 bytes, big-endian) — 9 bytes for password auth
-  *(UINT32 *)Ptr = SwapBytes32 (9);
-  Ptr += 4;
+  if (PblTpmIsSessionActive ()) {
+    // HMAC session auth — 73 bytes:
+    //   handle(4) + nonceCaller(2+32) + attrs(1) + hmac(2+32)
+    // Reserve full space upfront so PblTpmFillCommandHmac can fill in
+    // the nonce and HMAC after parameters are written.
+    *(UINT32 *)Ptr = SwapBytes32 (73);
+    Ptr += 4;
 
-  // TPMS_AUTH_COMMAND:
-  // sessionHandle = TPM_RS_PW
-  *(UINT32 *)Ptr = SwapBytes32 ((UINT32)TPM_RS_PW);
-  Ptr += 4;
+    // sessionHandle = active session handle
+    *(UINT32 *)Ptr = SwapBytes32 (PblTpmGetSessionHandle ());
+    Ptr += 4;
 
-  // nonceCaller = empty TPM2B
-  *(UINT16 *)Ptr = SwapBytes16 (0);
-  Ptr += 2;
+    // nonceCaller = placeholder TPM2B(32 bytes), filled by PblTpmFillCommandHmac
+    *(UINT16 *)Ptr = SwapBytes16 (32);
+    Ptr += 2;
+    ZeroMem (Ptr, 32);
+    Ptr += 32;
 
-  // sessionAttributes = 0 (no flags for password session)
-  *Ptr = 0;
-  Ptr += 1;
+    // sessionAttributes = continueSession | decrypt | encrypt
+    *Ptr = PBL_SESSION_ATTRS;
+    Ptr += 1;
 
-  // hmac/password = empty TPM2B
-  *(UINT16 *)Ptr = SwapBytes16 (0);
-  Ptr += 2;
+    // hmac = placeholder TPM2B(32 bytes), filled by PblTpmFillCommandHmac
+    *(UINT16 *)Ptr = SwapBytes16 (32);
+    Ptr += 2;
+    ZeroMem (Ptr, 32);
+    Ptr += 32;
+  } else {
+    // Fallback: TPM_RS_PW password auth (empty password)
+    *(UINT32 *)Ptr = SwapBytes32 (9);
+    Ptr += 4;
+
+    *(UINT32 *)Ptr = SwapBytes32 ((UINT32)TPM_RS_PW);
+    Ptr += 4;
+
+    *(UINT16 *)Ptr = SwapBytes16 (0);
+    Ptr += 2;
+
+    *Ptr = 0;
+    Ptr += 1;
+
+    *(UINT16 *)Ptr = SwapBytes16 (0);
+    Ptr += 2;
+  }
 
   return Ptr;
 }
 
 /** Finalize a TPM2 command buffer (set total size). **/
-STATIC
 VOID
 PblTpmFinalizeCommand (
   IN OUT UINT8 *CommandBuffer,
@@ -191,7 +231,82 @@ PblTpmFinalizeCommand (
   )
 {
   PBL_TPM2_COMMAND_HEADER *Hdr = (PBL_TPM2_COMMAND_HEADER *)CommandBuffer;
-  Hdr->CommandSize = TotalSize;
+  Hdr->CommandSize = SwapBytes32 (TotalSize);
+}
+
+/** D-102: Fill the HMAC into the auth area of a TPM2 command.
+
+  After PblTpmBeginCommandWithSessionAuth builds the command with a placeholder
+  HMAC (32 zero bytes), and the caller fills in the command parameters, this
+  function computes the proper pHash-based HMAC and writes it into the auth area.
+
+  Command buffer layout (TPM_ST_SESSIONS with HMAC session):
+    offset 0:  header (10 bytes: tag(2) + size(4) + commandCode(4))
+    offset 10: authAreaSize (4 bytes) = 73
+    offset 14: sessionHandle (4 bytes)
+    offset 18: nonceCaller (2 bytes size + 32 bytes)
+    offset 52: sessionAttributes (1 byte)
+    offset 53: hmac (2 bytes size + 32 bytes)
+    offset 87: parameters start
+
+  @param  CommandBuffer  The TPM2 command buffer.
+  @param  TotalSize      Total command size (as set by PblTpmFinalizeCommand).
+
+  @retval EFI_SUCCESS       HMAC filled.
+  @retval EFI_NOT_STARTED   No active session (no-op, password auth).
+  @retval EFI_DEVICE_ERROR  HMAC computation failed.
+**/
+STATIC
+EFI_STATUS
+PblTpmFillCommandHmac (
+  IN OUT UINT8  *CommandBuffer,
+  IN     UINT32  TotalSize
+  )
+{
+  PBL_TPM2_COMMAND_HEADER *Hdr;
+  UINT32  CommandCode;
+  UINT8  *ParamsStart;
+  UINTN  ParamsSize;
+  UINT8   Hmac[32];
+  CONST UINT8 *Nonce;
+  EFI_STATUS Status;
+
+  if (!PblTpmIsSessionActive ()) {
+    return EFI_NOT_STARTED;
+  }
+
+  // D-102: Refresh nonceCaller for replay protection (TPM 2.0 Part 1 §18.1)
+  Status = PblTpmRefreshNonce ();
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Hdr = (PBL_TPM2_COMMAND_HEADER *)CommandBuffer;
+  CommandCode = SwapBytes32 (Hdr->CommandCode);
+
+  // Write the refreshed nonceCaller into the auth area at offset 20
+  // Auth area layout: sessionHandle(4) | nonceCaller(2+32) | attrs(1) | hmac(2+32)
+  // nonceCaller TPM2B: size(2) at offset 18, data(32) at offset 20
+  Nonce = PblTpmGetNonceCaller ();
+  if (Nonce != NULL) {
+    *(UINT16 *)(CommandBuffer + 18) = SwapBytes16 (32);
+    CopyMem (CommandBuffer + 20, Nonce, 32);
+  }
+
+  // Parameters start at offset 87 (header(10) + authAreaSize(4) + authArea(73))
+  ParamsStart = CommandBuffer + 87;
+  ParamsSize = TotalSize - 87;
+
+  // Compute pHash-based HMAC
+  Status = PblTpmComputeCommandHmacEx (CommandCode, ParamsStart, ParamsSize, Hmac);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  // Fill HMAC into auth area at offset 55 (after hmac TPM2B size field at offset 53)
+  CopyMem (CommandBuffer + 55, Hmac, 32);
+
+  return EFI_SUCCESS;
 }
 
 /** Skip the authorization area in a TPM_ST_SESSIONS response.
@@ -201,17 +316,23 @@ PblTpmFinalizeCommand (
   This function returns a pointer to the response parameters (past the
   parameterSize field) and sets *ParamSize to the parameter area size.
 
+  D-102: If an HMAC session is active, verifies the response HMAC using
+  proper pHash (SHA256 of responseCode || commandCode || responseParameters).
+  Returns NULL on HMAC mismatch (fail-closed).
+
   @param RespBuf      Response buffer.
   @param RespSize     Total response size.
+  @param CommandCode  The TPM command code (for pHash computation).
   @param ParamSize    Output: size of the parameter area.
 
-  @return Pointer to the start of response parameters, or NULL on error.
+  @return Pointer to the start of response parameters, or NULL on error/HMAC mismatch.
 **/
 STATIC
 UINT8 *
 PblTpmParseSessionResponse (
   IN  UINT8   *RespBuf,
   IN  UINT32   RespSize,
+  IN  UINT32   CommandCode,
   OUT UINT32  *ParamSize
   )
 {
@@ -226,6 +347,186 @@ PblTpmParseSessionResponse (
   }
 
   *ParamSize = Param;
+
+  // D-102: Verify response HMAC if session is active (fail-closed)
+  // Response layout: header(10) | parameterSize(4) | params(Param) | authArea
+  // Auth area: nonceTPM(TPM2B) | sessionAttributes(1) | hmac(TPM2B)
+  if (PblTpmIsSessionActive () && RespSize > 14 + Param + 2) {
+    UINT8 *AuthPtr = RespBuf + 14 + Param;
+
+    // Extract nonceTPM (TPM2B) — will update session state after verification
+    UINT16 NonceTpmSize = SwapBytes16 (*(UINT16 *)AuthPtr);
+    UINT8 *NonceTpmPtr = AuthPtr + 2;
+    if (NonceTpmSize > 32 || (NonceTpmPtr + NonceTpmSize) > (RespBuf + RespSize)) {
+      return NULL;  // Malformed auth area — fail-closed
+    }
+    AuthPtr += 2 + NonceTpmSize;
+
+    // Skip sessionAttributes (1 byte)
+    AuthPtr += 1;
+
+    // Read response HMAC (TPM2B)
+    UINT16 RespHmacSize = SwapBytes16 (*(UINT16 *)AuthPtr);
+    AuthPtr += 2;
+
+    if (RespHmacSize == 32 && (AuthPtr + 32) <= (RespBuf + RespSize)) {
+      // D-102: Fail-closed — return NULL on HMAC mismatch
+      // Use proper pHash-based verification (SHA256 of responseCode || commandCode || responseParams)
+      EFI_STATUS HmacStatus = PblTpmVerifyResponseHmacEx (
+                                CommandCode,
+                                RespBuf + 10,           // starts at responseCode
+                                (UINTN)(4 + Param),     // responseCode(4) + responseParams(Param)
+                                AuthPtr);
+      if (EFI_ERROR (HmacStatus)) {
+        return NULL;
+      }
+
+      // D-102: Update nonceTPM from response for next command's HMAC
+      PblTpmUpdateNonceTpm (NonceTpmPtr, NonceTpmSize);
+    }
+  }
+
+  return RespBuf + 14;
+}
+
+/** D-102: Fill the PCR session HMAC into a TPM2 command's auth area.
+
+  Parallel to PblTpmFillCommandHmac but uses the PCR session (mPcrSession)
+  instead of the NV session (mSession). Computes pHash-based HMAC and writes
+  it into the pre-reserved auth area.
+
+  @param  CommandBuffer  The TPM2 command buffer.
+  @param  TotalSize      Total command size.
+
+  @retval EFI_SUCCESS       HMAC filled.
+  @retval EFI_NOT_STARTED   No active PCR session.
+  @retval EFI_DEVICE_ERROR  HMAC computation failed.
+**/
+STATIC
+EFI_STATUS
+PblTpmFillPcrCommandHmac (
+  IN OUT UINT8  *CommandBuffer,
+  IN     UINT32  TotalSize
+  )
+{
+  PBL_TPM2_COMMAND_HEADER *Hdr;
+  UINT32  CommandCode;
+  UINT8  *ParamsStart;
+  UINTN  ParamsSize;
+  UINT8   Hmac[32];
+  CONST UINT8 *Nonce;
+  EFI_STATUS Status;
+
+  if (!PblTpmIsPcrSessionActive ()) {
+    return EFI_NOT_STARTED;
+  }
+
+  // Refresh PCR session nonceCaller for replay protection
+  Status = PblTpmRefreshPcrNonce ();
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Hdr = (PBL_TPM2_COMMAND_HEADER *)CommandBuffer;
+  CommandCode = SwapBytes32 (Hdr->CommandCode);
+
+  // Write refreshed nonceCaller into auth area at offset 20
+  Nonce = PblTpmGetPcrNonceCaller ();
+  if (Nonce != NULL) {
+    *(UINT16 *)(CommandBuffer + 18) = SwapBytes16 (32);
+    CopyMem (CommandBuffer + 20, Nonce, 32);
+  }
+
+  // Parameters start at offset 87 (header(10) + authAreaSize(4) + authArea(73))
+  ParamsStart = CommandBuffer + 87;
+  ParamsSize = TotalSize - 87;
+
+  // Compute pHash-based HMAC using the PCR session
+  PBL_TPM_SESSION *PcrSession = PblTpmGetPcrSession ();
+  if (PcrSession == NULL) {
+    return EFI_NOT_STARTED;
+  }
+  Status = PblTpmComputeCommandHmacSession (
+             PcrSession, CommandCode, ParamsStart, ParamsSize, Hmac);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  // Fill HMAC into auth area at offset 55
+  CopyMem (CommandBuffer + 55, Hmac, 32);
+
+  return EFI_SUCCESS;
+}
+
+/** D-102: Parse a TPM_ST_SESSIONS response for a PCR session command.
+
+  Parallel to PblTpmParseSessionResponse but verifies the response HMAC
+  using the PCR session (mPcrSession). Returns NULL on HMAC mismatch
+  (fail-closed).
+
+  @param RespBuf      Response buffer.
+  @param RespSize     Total response size.
+  @param CommandCode  The TPM command code (for pHash computation).
+  @param ParamSize    Output: size of the parameter area.
+
+  @return Pointer to response parameters, or NULL on error/HMAC mismatch.
+**/
+STATIC
+UINT8 *
+PblTpmParsePcrSessionResponse (
+  IN  UINT8   *RespBuf,
+  IN  UINT32   RespSize,
+  IN  UINT32   CommandCode,
+  OUT UINT32  *ParamSize
+  )
+{
+  if (RespSize < 14) {
+    return NULL;
+  }
+
+  UINT32 Param = SwapBytes32 (*(UINT32 *)(RespBuf + 10));
+  if (Param > RespSize - 14) {
+    return NULL;
+  }
+
+  *ParamSize = Param;
+
+  // Verify response HMAC using PCR session (fail-closed)
+  if (PblTpmIsPcrSessionActive () && RespSize > 14 + Param + 2) {
+    UINT8 *AuthPtr = RespBuf + 14 + Param;
+
+    // Extract nonceTPM (TPM2B) — will update session state after verification
+    UINT16 NonceTpmSize = SwapBytes16 (*(UINT16 *)AuthPtr);
+    UINT8 *NonceTpmPtr = AuthPtr + 2;
+    if (NonceTpmSize > 32 || (NonceTpmPtr + NonceTpmSize) > (RespBuf + RespSize)) {
+      return NULL;  // Malformed auth area — fail-closed
+    }
+    AuthPtr += 2 + NonceTpmSize;
+    AuthPtr += 1;  // sessionAttributes
+
+    UINT16 RespHmacSize = SwapBytes16 (*(UINT16 *)AuthPtr);
+    AuthPtr += 2;
+
+    if (RespHmacSize == 32 && (AuthPtr + 32) <= (RespBuf + RespSize)) {
+      PBL_TPM_SESSION *PcrSession = PblTpmGetPcrSession ();
+      if (PcrSession == NULL) {
+        return NULL;
+      }
+      EFI_STATUS HmacStatus = PblTpmVerifyResponseHmacSession (
+                                PcrSession,
+                                CommandCode,
+                                RespBuf + 10,
+                                (UINTN)(4 + Param),
+                                AuthPtr);
+      if (EFI_ERROR (HmacStatus)) {
+        return NULL;
+      }
+
+      // D-102: Update nonceTPM from response for next command's HMAC
+      PblTpmUpdatePcrNonceTpm (NonceTpmPtr, NonceTpmSize);
+    }
+  }
+
   return RespBuf + 14;
 }
 
@@ -329,16 +630,26 @@ PblTpmReadLockState (
     return EFI_NOT_FOUND;
   }
 
-  // TPM2_NV_Read(0x01C00001, offset=0, size=64) with password auth
-  // Uses TPM_ST_SESSIONS with TPM_RS_PW (empty password).
-  // Full HMAC session with parameter encryption is tracked in D-102.
-  UINT8 *Ptr = PblTpmBeginCommandWithAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read);
+  // TPM2_NV_Read(0x01C00001, offset=0, size=64) with HMAC session auth.
+  // D-102: When HMAC session is active, command parameters are encrypted
+  // with AES-256-CFB before sending, and response parameters are decrypted.
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read);
+  UINT8 *ParamsStart = Ptr;  // Save start of parameters for encryption
   *(UINT32 *)Ptr = SwapBytes32 (PBL_NV_LOCK_STATE);  // NV index
   Ptr += 4;
   *(UINT16 *)Ptr = SwapBytes16 (0);   // offset
   Ptr += 2;
   *(UINT16 *)Ptr = SwapBytes16 (PBL_LOCK_STATE_SIZE);  // size
   Ptr += 2;
+  UINTN ParamsSize = (UINTN)(Ptr - ParamsStart);
+
+  // D-102: Fill HMAC into auth area (over plaintext params, before encryption)
+  PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
+
+  // D-102: Encrypt command parameters if HMAC session is active
+  if (PblTpmIsSessionActive ()) {
+    PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
+  }
 
   PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
@@ -350,9 +661,15 @@ PblTpmReadLockState (
 
   // Response: header(10) + parameterSize(4) + TPM2B_MAX_BUFFER(2 + data) + auth
   UINT32 ParamSize;
-  UINT8 *RespPtr = PblTpmParseSessionResponse (RespBuf, RespSize, &ParamSize);
+  UINT8 *RespPtr = PblTpmParseSessionResponse (RespBuf, RespSize, TPM_CC_NV_Read, &ParamSize);
   if (RespPtr == NULL || ParamSize < 4) {
     return EFI_DEVICE_ERROR;
+  }
+
+  // D-102: Decrypt response parameters if HMAC session is active
+  // The response parameters are the TPM2B buffer containing the NV data
+  if (PblTpmIsSessionActive ()) {
+    PblTpmDecryptResponseParams (RespPtr, ParamSize);
   }
 
   UINT16 DataSize = SwapBytes16 (*(UINT16 *)RespPtr);
@@ -399,14 +716,24 @@ PblTpmReadPolicyVersion (
     return EFI_NOT_FOUND;
   }
 
-  // TPM2_NV_Read(0x01C00002, offset=0, size=8) with password auth
-  UINT8 *Ptr = PblTpmBeginCommandWithAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read);
+  // TPM2_NV_Read(0x01C00002, offset=0, size=8) with HMAC session auth.
+  // D-102: Encrypt command parameters if session is active.
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read);
+  UINT8 *ParamsStart = Ptr;
   *(UINT32 *)Ptr = SwapBytes32 (PBL_NV_POLICY_VERSION);
   Ptr += 4;
   *(UINT16 *)Ptr = SwapBytes16 (0);   // offset
   Ptr += 2;
   *(UINT16 *)Ptr = SwapBytes16 (8);   // size (uint64)
   Ptr += 2;
+  UINTN ParamsSize = (UINTN)(Ptr - ParamsStart);
+
+  // D-102: Fill HMAC into auth area (over plaintext params, before encryption)
+  PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
+
+  if (PblTpmIsSessionActive ()) {
+    PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
+  }
 
   PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
@@ -418,9 +745,14 @@ PblTpmReadPolicyVersion (
 
   // Response: header(10) + parameterSize(4) + TPM2B_MAX_BUFFER(2 + 8) + auth
   UINT32 ParamSize;
-  UINT8 *RespPtr = PblTpmParseSessionResponse (RespBuf, RespSize, &ParamSize);
+  UINT8 *RespPtr = PblTpmParseSessionResponse (RespBuf, RespSize, TPM_CC_NV_Read, &ParamSize);
   if (RespPtr == NULL || ParamSize < 10) {
     return EFI_DEVICE_ERROR;
+  }
+
+  // D-102: Decrypt response parameters if session is active
+  if (PblTpmIsSessionActive ()) {
+    PblTpmDecryptResponseParams (RespPtr, ParamSize);
   }
 
   UINT16 DataSize = SwapBytes16 (*(UINT16 *)RespPtr);
@@ -459,7 +791,7 @@ PblTpmIncrementPolicyVersion (
   }
 
   // TPM2_NV_Increment(0x01C00002) with password auth
-  UINT8 *Ptr = PblTpmBeginCommandWithAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Increment);
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Increment);
   *(UINT32 *)Ptr = SwapBytes32 (PBL_NV_POLICY_VERSION);
   Ptr += 4;
 
@@ -494,8 +826,11 @@ PblTpmWriteLockState (
     return EFI_NOT_FOUND;
   }
 
-  // TPM2_NV_Write(0x01C00001, offset=0, data=64 bytes) with password auth
-  UINT8 *Ptr = PblTpmBeginCommandWithAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Write);
+  // TPM2_NV_Write(0x01C00001, offset=0, data=64 bytes) with HMAC session auth.
+  // D-102: When HMAC session is active, command parameters (including the
+  // data being written) are encrypted with AES-256-CFB before sending.
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Write);
+  UINT8 *ParamsStart = Ptr;  // Save start of parameters for encryption
   *(UINT32 *)Ptr = SwapBytes32 (PBL_NV_LOCK_STATE);  // NV index
   Ptr += 4;
   // TPM2B_NV_BUFFER: 2-byte size + data
@@ -506,6 +841,15 @@ PblTpmWriteLockState (
   // offset
   *(UINT16 *)Ptr = SwapBytes16 (0);
   Ptr += 2;
+  UINTN ParamsSize = (UINTN)(Ptr - ParamsStart);
+
+  // D-102: Fill HMAC into auth area (over plaintext params, before encryption)
+  PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
+
+  // D-102: Encrypt command parameters if HMAC session is active
+  if (PblTpmIsSessionActive ()) {
+    PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
+  }
 
   PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
@@ -619,10 +963,38 @@ PblTpmExtendPcr (
   }
 
   // TPM2_PCR_Extend(pcrIndex, digest)
-  // No-session version (scaffold)
-  // Command: tag(2) + size(4) + cc(4) + pcrHandle(4) + digestCount(4) +
-  //          alg(2) + digest(32) = 52 bytes
-  UINT8 *Ptr = PblTpmBeginCommand (CmdBuf, sizeof (CmdBuf), TPM_CC_PCR_Extend);
+  // D-102: Use HMAC session for PCR extends (C2 §3.3). If PCR session is
+  // active, use it; otherwise fall back to no-session (scaffold).
+  UINT8 *Ptr;
+  if (PblTpmIsPcrSessionActive ()) {
+    // Use PCR HMAC session — same layout as PblTpmBeginCommandWithSessionAuth
+    // but with the PCR session handle.
+    PBL_TPM2_COMMAND_HEADER *Hdr = (PBL_TPM2_COMMAND_HEADER *)CmdBuf;
+    Hdr->Tag         = SwapBytes16 (TPM_ST_SESSIONS);
+    Hdr->CommandSize = SwapBytes32 (sizeof (PBL_TPM2_COMMAND_HEADER));
+    Hdr->CommandCode = SwapBytes32 ((UINT32)TPM_CC_PCR_Extend);
+    Ptr = CmdBuf + sizeof (PBL_TPM2_COMMAND_HEADER);
+
+    // Auth area: 73 bytes (handle(4) + nonce(2+32) + attrs(1) + hmac(2+32))
+    *(UINT32 *)Ptr = SwapBytes32 (73);
+    Ptr += 4;
+    *(UINT32 *)Ptr = SwapBytes32 (PblTpmGetPcrSessionHandle ());
+    Ptr += 4;
+    *(UINT16 *)Ptr = SwapBytes16 (32);
+    Ptr += 2;
+    ZeroMem (Ptr, 32);
+    Ptr += 32;
+    *Ptr = PBL_SESSION_ATTRS;
+    Ptr += 1;
+    *(UINT16 *)Ptr = SwapBytes16 (32);
+    Ptr += 2;
+    ZeroMem (Ptr, 32);
+    Ptr += 32;
+  } else {
+    // Fallback: no-session (TPM_ST_NO_SESSIONS)
+    Ptr = PblTpmBeginCommand (CmdBuf, sizeof (CmdBuf), TPM_CC_PCR_Extend);
+  }
+
   *(UINT32 *)Ptr = SwapBytes32 (PcrIndex);  // PCR handle
   Ptr += 4;
   *(UINT32 *)Ptr = SwapBytes32 (1);  // digest count
@@ -634,8 +1006,30 @@ PblTpmExtendPcr (
 
   PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
+  // D-102: Fill PCR session HMAC into auth area (after params are written)
+  if (PblTpmIsPcrSessionActive ()) {
+    Status = PblTpmFillPcrCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
+  }
+
   Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
                                 RespBuf, sizeof (RespBuf), &RespSize);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  // D-102: Verify response HMAC for PCR session (fail-closed)
+  if (PblTpmIsPcrSessionActive ()) {
+    UINT32 ParamSize;
+    UINT8 *RespPtr = PblTpmParsePcrSessionResponse (
+                       RespBuf, RespSize, TPM_CC_PCR_Extend, &ParamSize);
+    if (RespPtr == NULL) {
+      return EFI_SECURITY_VIOLATION;
+    }
+  }
+
   return Status;
 }
 
@@ -772,4 +1166,89 @@ PblTpmFlushContext (
   Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
                                 RespBuf, sizeof (RespBuf), &RespSize);
   return Status;
+}
+
+/** D-111: Get TPM firmware version via TPM2_GetCapability.
+
+  Sends TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES,
+  TPM_PT_FIRMWARE_VERSION_1, 1) and returns the firmware version
+  as a UINT32. The version format is vendor-specific but typically
+  major.minor packed as 0x00MMmm00.
+
+  @param  Version  Output: firmware version (0 if TPM not present).
+
+  @retval EFI_SUCCESS       Version retrieved.
+  @retval EFI_NOT_FOUND     No TPM present.
+  @retval EFI_DEVICE_ERROR  TPM command failed.
+**/
+EFI_STATUS
+PblTpmGetFirmwareVersion (
+  OUT UINT32  *Version
+  )
+{
+  EFI_TCG2_PROTOCOL *Tcg2;
+  EFI_STATUS         Status;
+  UINT8              CmdBuf[64];
+  UINT8              RespBuf[128];
+  UINT32             RespSize;
+  UINT8             *Ptr;
+  UINT8             *RespPtr;
+  UINT32             CapResult;
+  UINT32             PropCount;
+
+  if (Version == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  *Version = 0;
+
+  Tcg2 = PblTcg2Locate ();
+  if (Tcg2 == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  // TPM2_GetCapability(capability=TPM_CAP_TPM_PROPERTIES,
+  //                    property=TPM_PT_FIRMWARE_VERSION_1, propertyCount=1)
+  Ptr = PblTpmBeginCommand (CmdBuf, sizeof (CmdBuf), TPM_CC_GetCapability);
+  *(UINT32 *)Ptr = SwapBytes32 (TPM_CAP_TPM_PROPERTIES);  Ptr += 4;
+  *(UINT32 *)Ptr = SwapBytes32 ((UINT32)TPM_PT_FIRMWARE_VERSION_1);  Ptr += 4;
+  *(UINT32 *)Ptr = SwapBytes32 (1);  Ptr += 4;
+
+  PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
+
+  Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
+                                RespBuf, sizeof (RespBuf), &RespSize);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  // Parse response: TPMI_ST_COMMAND_TAG(2) + UINT32(paramSize) +
+  // UINT32(responseCode) + UINT32(capability) + UINT32(count) +
+  // TPMS_TAGGED_PROPERTY(property + value)
+  if (RespSize < 2 + 4 + 4 + 4 + 4 + 4 + 4) {
+    return EFI_DEVICE_ERROR;
+  }
+
+  RespPtr = RespBuf;
+  RespPtr += 2;   // tag
+  RespPtr += 4;   // paramSize
+  RespPtr += 4;   // responseCode (check for TPM_RC_SUCCESS = 0)
+  if (*(UINT32 *)RespPtr != 0) {
+    return EFI_DEVICE_ERROR;
+  }
+  RespPtr += 4;
+  CapResult = SwapBytes32 (*(UINT32 *)RespPtr);
+  RespPtr += 4;
+  if (CapResult != TPM_CAP_TPM_PROPERTIES) {
+    return EFI_DEVICE_ERROR;
+  }
+  PropCount = SwapBytes32 (*(UINT32 *)RespPtr);
+  RespPtr += 4;
+  if (PropCount < 1) {
+    return EFI_DEVICE_ERROR;
+  }
+  RespPtr += 4;  // property (TPM_PT_FIRMWARE_VERSION_1)
+  *Version = SwapBytes32 (*(UINT32 *)RespPtr);
+
+  return EFI_SUCCESS;
 }

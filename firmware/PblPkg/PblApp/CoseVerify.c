@@ -332,26 +332,28 @@ PblVerifyCoseSign1 (
       }
 
       // Use BaseCryptLib ECDSA verification.
-      // EcDsaVerify takes: context, hash, hash_size, signature, sig_size
-      // The public key is set from SPKI DER bytes.
-      VOID *EcCtx = EcDsaNewCtx ();
-      if (EcCtx == NULL) {
-        FreePool (SigStructure);
-        return EFI_OUT_OF_RESOURCES;
-      }
-
-      BOOLEAN Ok = FALSE;
-      if (EcDsaSetPubKey (EcCtx, PublicKeySpki, PublicKeySpkiSize)) {
-        Ok = EcDsaVerify (EcCtx, Hash, sizeof (Hash), Signature, SignatureSize);
-      }
-
-      EcDsaFreeCtx (EcCtx);
+      // EDK2 BaseCryptLib provides EcDsaVerify(EcContext, HashNid, Hash, HashSize, Sig, SigSize)
+      // but does NOT provide a way to load an EC public key from raw SPKI DER.
+      // EcGetPublicKeyFromX509() requires a full X.509 certificate, not SPKI.
+      //
+      // Until the policy provides a cert chain (C4 key 77) alongside the SPKI
+      // (C4 key 76), ES256 signature verification from SPKI alone is not
+      // supported. The server already generates cert chains (D-205), but the
+      // firmware policy parser only extracts key 76 (SPKI), not key 77 (cert
+      // chain).
+      //
+      // TODO: Parse C4 key 77 (signing_cert_chain) in Policy.c and pass the
+      //       leaf cert DER here instead of SPKI. Then use:
+      //   VOID *EcCtx = NULL;
+      //   if (EcGetPublicKeyFromX509 (CertDer, CertDerSize, &EcCtx)) {
+      //     Ok = EcDsaVerify (EcCtx, CRYPTO_NID_SHA256,
+      //                       Hash, sizeof (Hash), Signature, SignatureSize);
+      //     EcFree (EcCtx);
+      //   }
+      //
+      // For now, ES256 verification from SPKI is not supported.
       FreePool (SigStructure);
-
-      if (!Ok) {
-        return EFI_SECURITY_VIOLATION;
-      }
-      break;
+      return EFI_UNSUPPORTED;
     }
 
     case COSE_ALG_ED25519: {

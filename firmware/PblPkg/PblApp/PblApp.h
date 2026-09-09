@@ -37,6 +37,9 @@
 #include <Protocol/SimpleTextOut.h>
 #include <Protocol/SimpleTextInEx.h>
 #include <Protocol/DevicePath.h>
+#include <Protocol/Http.h>
+#include <Protocol/Tls.h>
+#include <Protocol/TlsConfig.h>
 
 // ============================================================================
 // Constants (from contracts)
@@ -148,6 +151,8 @@ typedef struct {
   // Firmware floors (REQ-04) — parsed on demand
   PBL_TPM_SESSION_REQ       TpmSessionReq;     // REQ-05
   // TPM firmware floors (REQ-06) — parsed on demand
+  UINT32                    TpmFirmwareFloor;   // C4 §2.5 key 41
+  UINT8                     TpmPinPolicy;       // C4 §2.5 key 42: 0=none,1=required,2=preferred
   UINT32                    NvIndexBase;        // C4 §2.5 key 43
   UINT8                     BitLockerTier;      // 0=standard, 1=high_assurance
   // Boot config (REQ-07,08,09) — parsed on demand
@@ -201,6 +206,12 @@ typedef struct {
   CHAR8     ProductName[64];
   BOOLEAN   AmtProvisioned;
   BOOLEAN   UsbDciEnabled;
+
+  // D-206: SMBIOS Type 1 UUID for device identity auto-link
+  UINT8     SystemUuid[16];     // SMBIOS Type 1 UUID (mixed-endian)
+
+  // REQ-06: TPM firmware version (for floor check)
+  UINT32    TpmFirmwareVersion;  // e.g., 0x00070002 = 7.2
 
   // REQ-07: Boot config
   BOOLEAN   S3Enabled;
@@ -348,6 +359,200 @@ EFI_STATUS
 PblTpmGetRandom (
   OUT UINT8  *Buffer,
   IN  UINTN   Size
+  );
+
+// TpmClient.c — D-111: TPM firmware version for floor check (step 10)
+EFI_STATUS
+PblTpmGetFirmwareVersion (
+  OUT UINT32  *Version
+  );
+
+// TpmClient.c — D-102: HMAC session with AES-256-CFB (C2 §3)
+// Helper functions exported from TpmClient.c for TpmSession.c
+EFI_TCG2_PROTOCOL *
+PblTcg2Locate (
+  VOID
+  );
+
+EFI_STATUS
+PblTpmSubmitCommand (
+  IN  EFI_TCG2_PROTOCOL *Tcg2,
+  IN  UINT8             *Command,
+  IN  UINT32            CommandSize,
+  OUT UINT8             *Response,
+  IN  UINT32            ResponseSize,
+  OUT UINT32            *ActualResponseSize
+  );
+
+UINT8 *
+PblTpmBeginCommand (
+  OUT UINT8  *Buffer,
+  IN  UINT32  BufferSize,
+  IN  TPM_CC  CommandCode
+  );
+
+VOID
+PblTpmFinalizeCommand (
+  IN OUT UINT8 *CommandBuffer,
+  IN     UINT32 TotalSize
+  );
+
+// TpmSession.c — D-102: HMAC session with AES-256-CFB (C2 §3)
+EFI_STATUS
+PblTpmStartHmacSession (
+  IN  UINT32        BindHandle,
+  IN  CONST UINT8  *BindAuth,
+  IN  UINTN         BindAuthSize
+  );
+
+UINT32
+PblTpmGetSessionHandle (
+  VOID
+  );
+
+BOOLEAN
+PblTpmIsSessionActive (
+  VOID
+  );
+
+EFI_STATUS
+PblTpmRefreshNonce (
+  VOID
+  );
+
+CONST UINT8 *
+PblTpmGetNonceCaller (
+  VOID
+  );
+
+EFI_STATUS
+PblTpmEncryptCommandParams (
+  IN OUT UINT8  *Data,
+  IN     UINTN  DataSize
+  );
+
+EFI_STATUS
+PblTpmDecryptResponseParams (
+  IN OUT UINT8  *Data,
+  IN     UINTN  DataSize
+  );
+
+EFI_STATUS
+PblTpmComputeCommandHmac (
+  IN  CONST UINT8  *CommandBuffer,
+  IN  UINTN         CommandSize,
+  OUT UINT8        *Hmac
+  );
+
+// ============================================================================
+// D-102: HMAC session state (TpmSession.c)
+// ============================================================================
+
+/** PBL HMAC session state. */
+typedef struct {
+  UINT32   SessionHandle;     // TPM handle returned by StartAuthSession
+  UINT8    SessionKey[32];    // AES-256-CFB + HMAC key
+  UINT8    NonceCaller[32];   // Our nonce (from EFI_RNG)
+  UINT8    NonceTpm[32];      // TPM's nonce (from StartAuthSession response)
+  UINT32   BindHandle;        // The NV index this session is bound to
+  BOOLEAN  Active;            // TRUE if session is established
+} PBL_TPM_SESSION;
+
+// Session-parameterized HMAC helpers (internal — used by TpmClient.c for PCR session)
+EFI_STATUS
+PblTpmComputeCommandHmacSession (
+  IN  PBL_TPM_SESSION  *Session,
+  IN  UINT32            CommandCode,
+  IN  CONST UINT8      *Params,
+  IN  UINTN             ParamsSize,
+  OUT UINT8            *Hmac
+  );
+
+EFI_STATUS
+PblTpmVerifyResponseHmacSession (
+  IN  PBL_TPM_SESSION  *Session,
+  IN  UINT32            CommandCode,
+  IN  CONST UINT8      *ResponseBuffer,
+  IN  UINTN             ResponseSize,
+  IN  CONST UINT8      *ResponseHmac
+  );
+
+// D-102: PCR session nonce refresh (parallel to PblTpmRefreshNonce for mSession)
+EFI_STATUS
+PblTpmRefreshPcrNonce (
+  VOID
+  );
+
+CONST UINT8 *
+PblTpmGetPcrNonceCaller (
+  VOID
+  );
+
+// D-102: Update nonceTPM from response auth area (after HMAC verification)
+EFI_STATUS
+PblTpmUpdateNonceTpm (
+  IN  CONST UINT8  *NewNonceTpm,
+  IN  UINTN         NonceSize
+  );
+
+EFI_STATUS
+PblTpmUpdatePcrNonceTpm (
+  IN  CONST UINT8  *NewNonceTpm,
+  IN  UINTN         NonceSize
+  );
+
+EFI_STATUS
+PblTpmComputeCommandHmacEx (
+  IN  UINT32        CommandCode,
+  IN  CONST UINT8  *Params,
+  IN  UINTN         ParamsSize,
+  OUT UINT8        *Hmac
+  );
+
+EFI_STATUS
+PblTpmVerifyResponseHmac (
+  IN  CONST UINT8  *ResponseBuffer,
+  IN  UINTN         ResponseSize,
+  IN  CONST UINT8  *ResponseHmac
+  );
+
+EFI_STATUS
+PblTpmVerifyResponseHmacEx (
+  IN  UINT32        CommandCode,
+  IN  CONST UINT8  *ResponseBuffer,
+  IN  UINTN         ResponseSize,
+  IN  CONST UINT8  *ResponseHmac
+  );
+
+EFI_STATUS
+PblTpmFlushSession (
+  VOID
+  );
+
+// D-102: PCR session (bound to TPM_RH_NULL, C2 §3.3)
+EFI_STATUS
+PblTpmStartPcrSession (
+  VOID
+  );
+
+BOOLEAN
+PblTpmIsPcrSessionActive (
+  VOID
+  );
+
+UINT32
+PblTpmGetPcrSessionHandle (
+  VOID
+  );
+
+PBL_TPM_SESSION *
+PblTpmGetPcrSession (
+  VOID
+  );
+
+EFI_STATUS
+PblTpmFlushPcrSession (
+  VOID
   );
 
 // TcgLog.c — REQ-12

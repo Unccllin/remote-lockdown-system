@@ -1,14 +1,14 @@
 #!/bin/bash
 # build-pbl.sh — Reproducible build script for PblPkg.
 #
-# Builds the PBL UEFI application for X64 and AARCH64 with GCC5.
+# Builds the PBL UEFI application for X64 and AARCH64 with GCC.
 # Produces hash-stable binaries (reproducible build) via:
 #   - SOURCE_DATE_EPOCH pinned to the last commit timestamp
 #   - -ffile-prefix-map to strip absolute paths
 #   - deterministic ar/archive ordering
 #
 # Usage:
-#   ./build-pbl.sh [--arch X64|AARCH64] [--toolchain GCC5|VS2019] [--debug]
+#   ./build-pbl.sh [--arch X64|AARCH64] [--toolchain GCC|VS2019] [--debug]
 #
 # Environment (from AGENTS.md):
 #   EDK2_DIR   — path to EDK II source tree (default ~/.local/src/edk2)
@@ -20,7 +20,7 @@ set -eo pipefail
 
 # === Defaults ===
 ARCH="${PBL_ARCH:-X64}"
-TOOLCHAIN="${PBL_TOOLCHAIN:-GCC5}"
+TOOLCHAIN="${PBL_TOOLCHAIN:-GCC}"
 BUILD_TYPE="RELEASE"
 EDK2_DIR="${EDK2_DIR:-/home/cllin/.local/src/edk2}"
 FIRMWARE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
     --toolchain) TOOLCHAIN="$2"; shift 2 ;;
     --debug)     BUILD_TYPE="DEBUG"; shift ;;
     --help|-h)
-      echo "Usage: $0 [--arch X64|AARCH64] [--toolchain GCC5|VS2019] [--debug]"
+      echo "Usage: $0 [--arch X64|AARCH64] [--toolchain GCC|VS2019] [--debug]"
       exit 0 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
