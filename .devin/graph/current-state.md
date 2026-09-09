@@ -51,97 +51,84 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-09-09 (cont. 16) — D-101 QEMU+swtpm hang FIXED
+## Latest session: 089 — 2026-09-09 — D-101 CLOSED: TPM header byte-order fix
 
 ### RULE-ZERO
-**Read**: ci-harness-docker.sh (swtpm configuration), QEMU TPM emulator
-source code (tpm_emulator.c, tpm_ioctl.h), swtpm ctrlchannel.c source
-code, strace output showing QEMU sending CMD_SET_DATAFD (0x10) via
-SCM_RIGHTS, swtpm log showing error 0x1F (TPM_RC_BAD_PARAMETER).
-**Finding**: The QEMU+swtpm hang was caused by a swtpm configuration
-error. swtpm was started with both --ctrl (control) and --server (data)
-sockets. QEMU's TPM emulator backend sends CMD_SET_DATAFD (0x10) to
-establish the data channel by passing a file descriptor via SCM_RIGHTS.
-When swtpm already has a --server socket, the data fd is already set
-and CMD_SET_DATAFD fails with TPM_RC_BAD_PARAMETER (0x1F), causing QEMU
-to hang waiting for a response that never comes. Fix: start swtpm with
-ONLY the --ctrl socket (no --server). QEMU then successfully sends
-CMD_SET_DATAFD to establish the data channel itself.
+**Read**: .devin/graph/current-state.md, docs/adr/PBL-DEBT-LEDGER.md (D-101),
+firmware/PblPkg/PblApp/PlatformState.c, firmware/PblPkg/PblApp/TpmClient.c,
+EDK2 SecurityPkg/Library/Tpm2CommandLib/Tpm2Integrity.c (for reference),
+EDK2 SecurityPkg/Library/Tpm2DeviceLibDTpm/Tpm2Tis.c (TIS command flow),
+EDK2 SecurityPkg/Tcg/Tcg2Dxe/Tcg2Dxe.c (Tcg2SubmitCommand).
+**Finding**: PBL's TPM command builders stored the TPM2 command header
+fields (Tag, CommandSize, CommandCode) in native little-endian byte order.
+TPM 2.0 requires big-endian. The QEMU TIS emulation reads CommandSize from
+the header to know when a command is complete — with little-endian
+encoding, it read a huge size and waited forever for more bytes.
 
-### D-101 Work completed
-
-1. **QEMU+swtpm hang FIXED** (commit 47a2ca4):
-   - Root cause: swtpm started with both --ctrl and --server sockets.
-     QEMU's CMD_SET_DATAFD fails because data fd is already set.
-   - Fix: Start swtpm with ONLY --ctrl socket (no --server).
-   - Evidence: swtpm log shows TPM2_GetCapability commands and responses
-     exchanged. PBL firmware boots, displays banner, reaches step [1/8]
-     "Collecting platform state" (TPM operations begin).
-   - Previously: 0 bytes serial output, QEMU hung indefinitely.
-   - Tested with: QEMU 6.2+swtpm 0.6.3, QEMU 7.2+swtpm 0.7.1, QEMU
-     8.2.2+swtpm 0.7.3 — all work with the fix.
-
-2. **Firmware hangs at "Collecting platform state"** — remaining issue:
-   - The firmware boots and starts TPM operations (TPM2_GetCapability
-     works), but hangs at step [1/8] "Collecting platform state".
-   - This is a firmware-level issue (the firmware may be waiting for a
-     specific TPM response or making an unsupported TPM command), NOT a
-     QEMU/swtpm configuration issue.
-   - The QEMU/swtpm infrastructure is now working.
-
-### Verification
-- QEMU+swtpm: TPM commands exchanged (TPM2_GetCapability works)
-- PBL firmware: boots, displays banner, reaches step [1/8]
-- Server tests: 579 PASS / 0 FAIL
-- Serverless tests: 305 PASS
-- Dashboard tests: 197 PASS
-- Agent tests: PASS
-- Graph invariants: All pass
-
-### Fog cleared
-- D-101 QEMU+swtpm hang is FIXED. The root cause was a swtpm
-  configuration error (both --ctrl and --server sockets). The fix is to
-  start swtpm with ONLY the --ctrl socket.
-- QEMU+swtpm now communicate — TPM2_GetCapability commands and responses
-  are exchanged successfully.
-- PBL firmware boots with TPM support and reaches step [1/8].
+### Fog cleared this session
+- **Which sub-function hangs at "Collecting platform state"**: Identified
+  via debug prints — PblCollectPcrReadings() → PblTpmReadPcr(4) →
+  PblTpmSubmitCommand() → Tcg2->SubmitCommand() hangs. Source:
+  firmware/PblPkg/PblApp/PlatformState.c:857, TpmClient.c:90.
+- **Why SubmitCommand hangs**: The TPM2_PCR_Read command header was in
+  little-endian. The QEMU TIS reads CommandSize (offset 2-5) as big-endian
+  to know when the command is complete. With LE encoding, CommandSize=21
+  (0x15) was stored as 0x15 0x00 0x00 0x00, which the TIS read as
+  0x15000000 (352MB). The TIS waited forever for 352MB of data. Source:
+  firmware/PblPkg/PblApp/TpmClient.c:121-123 (PblTpmBeginCommand).
+  Reference: EDK2 Tpm2CommandLib/Tpm2Integrity.c:357-358 uses
+  SwapBytes16/SwapBytes32 for all header fields.
+- **All TPM header byte-order issues**: Fixed in PblTpmBeginCommand,
+  PblTpmBeginCommandWithSessionAuth, PblTpmFinalizeCommand,
+  PblTpmSubmitCommand (response parsing), PblTpmFillCommandHmac,
+  PblTpmFillPcrCommandHmac, and inline PCR Extend header. Source:
+  firmware/PblPkg/PblApp/TpmClient.c (7 locations fixed).
 
 ### Fog remaining
-- Firmware hangs at "Collecting platform state" after TPM2_GetCapability.
-  This is a firmware-level issue, not a QEMU/swtpm config issue.
-- D-211: Covert tracking requires real Windows hardware testing.
+- PCR reads return "Device Error" — the TPM2_PCR_Read response code is
+  non-zero. swtpm likely returns TPM_RC_HANDLE for unselected PCRs or
+  the response parsing has a remaining issue. This is fail-soft (PCRs
+  are zeroed). Not a hang. Needs investigation if PCR values are needed.
+- HMAC session start fails ("Device Error") — the TPM2_StartAuthSession
+  command may have a similar byte-order issue in the session parameters,
+  or swtpm doesn't support the session configuration. Falls back to
+  password auth. Not a hang.
+- D-102 (HMAC session) runtime verification still blocked — session
+  start fails in swtpm. Needs investigation of StartAuthSession command
+  construction.
 
 ### Debt items closed
-- D-206: PBL device identity mapping (commit 60c0a78)
-- D-207: CBOR parsing (commit 4ed2f48)
-- D-208: COSE_Sign1 encoding (commit ee311de)
-- D-209: Policy blob generation (commit d111ada)
-- D-210: Serverless Worker PBL route integration (commit 9612fbb)
+- D-101 — swtpm TPM simulation: CLOSED. Commit 6898dce + 47a2ca4.
+  Artifact: PblApp.efi SHA-256
+  b05dfc3105b36cc7d6172d6994353cf21c6db7bd5635bc31c36297610642cdb8.
+  Evidence: All 8 PBL steps complete in QEMU+swtpm harness, lock screen
+  displayed, TPM commands exchanged.
 
 ### Debt items still open
-- D-100: QEMU local installation (now works via Docker)
-- D-101: swtpm QEMU+swtpm hang FIXED, firmware hangs at platform state
-- D-102: TPM session auth (code complete, runtime now partially testable)
-- D-109 through D-128: firmware items (code complete, runtime now partially testable)
-- D-200 through D-205: server-side items (mostly partial)
-- D-211: Covert tracking (requires real Windows hardware)
+- D-102 — HMAC session: OPEN (session start fails in swtpm, falls back
+  to password auth)
+- D-109 — Verdict fetch/verification: OPEN (HTTPS client not implemented)
+- D-110 — Policy blob parsing: OPEN (partial)
+- D-211 — Real Windows hardware testing: OPEN
+- D-102, D-103-D-108, D-111+ — various firmware runtime items
 
 ### Blockers named and status
-- D-101 (QEMU+swtpm hang): FIXED. Firmware hangs at "Collecting
-  platform state" — firmware-level issue, not QEMU/swtpm config issue.
-- D-211 (real Windows hardware): Blocks covert tracking runtime test.
+- PCR reads return Device Error: not a blocker (fail-soft, PCRs zeroed)
+- HMAC session start fails: not a blocker (falls back to password auth)
+- HTTPS client not implemented: blocks D-109 online verdict fetch
 
 ### Failure attribution
-No failures this session. All test suites pass. The QEMU+swtpm hang was
-a configuration error (swtpm started with both --ctrl and --server
-sockets), now fixed.
+- Layer 2 (Context provision): The TPM 2.0 byte-order requirement was
+  not documented in the PBL codebase. The PblTpmBeginCommand function
+  did not have a comment noting that header fields must be big-endian.
+  Harness change: add a byte-order test to the firmware unit tests that
+  verifies TPM command headers are in big-endian before sending.
 
 ### Next session opening
-D-101 QEMU+swtpm hang is FIXED. Next: debug why firmware hangs at
-  "Collecting platform state" after TPM2_GetCapability. Check if
-  firmware is making a TPM command that swtpm doesn't support, or
-  waiting for a response that never comes. This is a firmware-level
-  issue, not a QEMU/swtpm configuration issue.
+Investigate why TPM2_PCR_Read returns Device Error in swtpm — check if
+the response code is TPM_RC_HANDLE (PCR not initialized) or a parsing
+issue, and whether HMAC session start (D-102) can be made to work with
+swtpm by fixing the StartAuthSession command construction.
 
 ---
 

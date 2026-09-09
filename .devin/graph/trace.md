@@ -6470,3 +6470,83 @@ D-101 QEMU+swtpm hang is FIXED. Next: debug why firmware hangs at
   firmware is making a TPM command that swtpm doesn't support, or
   waiting for a response that never comes. This is a firmware-level
   issue, not a QEMU/swtpm configuration issue.
+
+## Session 089 — 2026-09-09 — D-101 CLOSED: TPM header byte-order fix
+
+### RULE-ZERO
+**Read**: .devin/graph/current-state.md, docs/adr/PBL-DEBT-LEDGER.md (D-101),
+firmware/PblPkg/PblApp/PlatformState.c, firmware/PblPkg/PblApp/TpmClient.c,
+EDK2 SecurityPkg/Library/Tpm2CommandLib/Tpm2Integrity.c (for reference),
+EDK2 SecurityPkg/Library/Tpm2DeviceLibDTpm/Tpm2Tis.c (TIS command flow),
+EDK2 SecurityPkg/Tcg/Tcg2Dxe/Tcg2Dxe.c (Tcg2SubmitCommand).
+**Finding**: PBL's TPM command builders stored the TPM2 command header
+fields (Tag, CommandSize, CommandCode) in native little-endian byte order.
+TPM 2.0 requires big-endian. The QEMU TIS emulation reads CommandSize from
+the header to know when a command is complete — with little-endian
+encoding, it read a huge size and waited forever for more bytes.
+
+### Fog cleared this session
+- **Which sub-function hangs at "Collecting platform state"**: Identified
+  via debug prints — PblCollectPcrReadings() → PblTpmReadPcr(4) →
+  PblTpmSubmitCommand() → Tcg2->SubmitCommand() hangs. Source:
+  firmware/PblPkg/PblApp/PlatformState.c:857, TpmClient.c:90.
+- **Why SubmitCommand hangs**: The TPM2_PCR_Read command header was in
+  little-endian. The QEMU TIS reads CommandSize (offset 2-5) as big-endian
+  to know when the command is complete. With LE encoding, CommandSize=21
+  (0x15) was stored as 0x15 0x00 0x00 0x00, which the TIS read as
+  0x15000000 (352MB). The TIS waited forever for 352MB of data. Source:
+  firmware/PblPkg/PblApp/TpmClient.c:121-123 (PblTpmBeginCommand).
+  Reference: EDK2 Tpm2CommandLib/Tpm2Integrity.c:357-358 uses
+  SwapBytes16/SwapBytes32 for all header fields.
+- **All TPM header byte-order issues**: Fixed in PblTpmBeginCommand,
+  PblTpmBeginCommandWithSessionAuth, PblTpmFinalizeCommand,
+  PblTpmSubmitCommand (response parsing), PblTpmFillCommandHmac,
+  PblTpmFillPcrCommandHmac, and inline PCR Extend header. Source:
+  firmware/PblPkg/PblApp/TpmClient.c (7 locations fixed).
+
+### Fog remaining
+- PCR reads return "Device Error" — the TPM2_PCR_Read response code is
+  non-zero. swtpm likely returns TPM_RC_HANDLE for unselected PCRs or
+  the response parsing has a remaining issue. This is fail-soft (PCRs
+  are zeroed). Not a hang. Needs investigation if PCR values are needed.
+- HMAC session start fails ("Device Error") — the TPM2_StartAuthSession
+  command may have a similar byte-order issue in the session parameters,
+  or swtpm doesn't support the session configuration. Falls back to
+  password auth. Not a hang.
+- D-102 (HMAC session) runtime verification still blocked — session
+  start fails in swtpm. Needs investigation of StartAuthSession command
+  construction.
+
+### Debt items closed
+- D-101 — swtpm TPM simulation: CLOSED. Commit 6898dce + 47a2ca4.
+  Artifact: PblApp.efi SHA-256
+  b05dfc3105b36cc7d6172d6994353cf21c6db7bd5635bc31c36297610642cdb8.
+  Evidence: All 8 PBL steps complete in QEMU+swtpm harness, lock screen
+  displayed, TPM commands exchanged.
+
+### Debt items still open
+- D-102 — HMAC session: OPEN (session start fails in swtpm, falls back
+  to password auth)
+- D-109 — Verdict fetch/verification: OPEN (HTTPS client not implemented)
+- D-110 — Policy blob parsing: OPEN (partial)
+- D-211 — Real Windows hardware testing: OPEN
+- D-102, D-103-D-108, D-111+ — various firmware runtime items
+
+### Blockers named and status
+- PCR reads return Device Error: not a blocker (fail-soft, PCRs zeroed)
+- HMAC session start fails: not a blocker (falls back to password auth)
+- HTTPS client not implemented: blocks D-109 online verdict fetch
+
+### Failure attribution
+- Layer 2 (Context provision): The TPM 2.0 byte-order requirement was
+  not documented in the PBL codebase. The PblTpmBeginCommand function
+  did not have a comment noting that header fields must be big-endian.
+  Harness change: add a byte-order test to the firmware unit tests that
+  verifies TPM command headers are in big-endian before sending.
+
+### Next session opening
+Investigate why TPM2_PCR_Read returns Device Error in swtpm — check if
+the response code is TPM_RC_HANDLE (PCR not initialized) or a parsing
+issue, and whether HMAC session start (D-102) can be made to work with
+swtpm by fixing the StartAuthSession command construction.
+
