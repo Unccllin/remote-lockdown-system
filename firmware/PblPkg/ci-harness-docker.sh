@@ -38,24 +38,29 @@ if [ ! -f "${OVMF_CODE}" ]; then
 fi
 
 # === Start swtpm (TPM 2.0 simulator) ===
-# swtpm is optional. In some Docker/QEMU configurations, swtpm causes QEMU
-# to hang during OVMF TPM initialization. Set USE_SWTPM=1 to enable.
+# swtpm is optional. Set USE_SWTPM=1 to enable.
+#
+# KEY FIX for D-101: Start swtpm with ONLY the --ctrl (control) socket,
+# NOT the --server (data) socket. QEMU's TPM emulator backend sends
+# CMD_SET_DATAFD to pass a file descriptor for the data channel via
+# SCM_RIGHTS. If swtpm already has a --server socket, the data fd is
+# already set and CMD_SET_DATAFD fails with TPM_RC_BAD_PARAMETER (0x1F).
+# By omitting --server, QEMU can establish the data channel itself.
 echo "=== Starting swtpm (TPM 2.0 simulator) ==="
 SWTPM_DIR="${BUILD_DIR}/swtpm-state"
 rm -rf "${SWTPM_DIR}"
 mkdir -p "${SWTPM_DIR}"
 
 SWTPM_ARGS=""
-if [ "${USE_SWTPM:-0}" = "1" ] && command -v swtpm >/dev/null 2>&1; then
+if [ "${USE_SWTPM:-1}" = "1" ] && command -v swtpm >/dev/null 2>&1; then
   swtpm socket --tpmstate dir="${SWTPM_DIR}" \
-    --ctrl type=tcp,port=2322 \
-    --server type=tcp,port=2321 \
+    --ctrl type=unixio,path="${BUILD_DIR}/swtpm-ctrl.sock" \
     --tpm2 \
     --daemon \
     --flags not-need-init \
     --pid file="${BUILD_DIR}/swtpm.pid"
-  swtpm_ioctl --tcp :2322 -i 2>/dev/null || true
-  SWTPM_ARGS="-chardev socket,id=chrtpm,host=127.0.0.1,port=2321 -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0"
+  swtpm_ioctl --unix "${BUILD_DIR}/swtpm-ctrl.sock" -i 2>/dev/null || true
+  SWTPM_ARGS="-chardev socket,id=chrtpm,path=${BUILD_DIR}/swtpm-ctrl.sock -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0"
   echo "  swtpm started (PID $(cat "${BUILD_DIR}/swtpm.pid" 2>/dev/null || echo '?'))"
 else
   echo "  [INFO] swtpm disabled (set USE_SWTPM=1 to enable) — running without TPM"
