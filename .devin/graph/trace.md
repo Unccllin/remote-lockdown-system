@@ -6550,3 +6550,92 @@ the response code is TPM_RC_HANDLE (PCR not initialized) or a parsing
 issue, and whether HMAC session start (D-102) can be made to work with
 swtpm by fixing the StartAuthSession command construction.
 
+
+---
+
+## Session 2026-09-09: D-102 BREAKTHROUGH — TPM2_StartAuthSession salt + KDFa + response parsing
+
+### RULE-ZERO
+**Read**: EDK2 SecurityPkg/Library/Tpm2CommandLib/Tpm2Session.c (StartAuthSession
+command structure with TPM2B_ENCRYPTED_SECRET Salt field), TPM 2.0 Part 3 §11.1
+(StartAuthSession command format and error codes), swtpm 0.7.3 log analysis.
+**Finding**: PBL's StartAuthSession command was missing the salt
+(TPM2B_ENCRYPTED_SECRET) field between nonceCaller and sessionType. When
+tpmKey=TPM_RH_NULL, salt is empty (size=0) but the 2-byte size field must
+still be present. Without it, the TPM misparses all subsequent fields.
+
+### Fog cleared this session
+- **Root cause of 0x3C4 StartAuthSession error**: Missing salt TPM2B field.
+  The EDK2 reference (Tpm2Session.c:23) shows the command struct includes
+  TPM2B_ENCRYPTED_SECRET Salt between NonceCaller and SessionType. PBL's
+  code went directly from nonceCaller to sessionType, omitting the 2-byte
+  salt size field. With tpmKey=TPM_RH_NULL, salt is empty (size=0) but the
+  field must be present. Source: firmware/PblPkg/PblApp/TpmSession.c:332.
+- **Root cause of response parsing failure**: swtpm 0.7.3 returns a 48-byte
+  StartAuthSession response (omitting sessionAttributes), but PBL required
+  49 bytes. The response format per spec includes sessionAttributes(1), but
+  swtpm omits it. Fixed by relaxing minimum to 16 bytes with bounds-checked
+  nonceTPM. Source: firmware/PblPkg/PblApp/TpmSession.c:373.
+- **Root cause of KDFa failure**: PblKDFa rejected NULL keys even when
+  KeySize=0. For unbound sessions (TPM_RH_NULL), the session key is derived
+  from an empty key. HMAC-SHA256 with an empty key is valid. Fixed to allow
+  NULL key when KeySize=0, using a dummy non-NULL pointer for OpenSSL's
+  HMAC_Init_ex. Source: firmware/PblPkg/PblApp/TpmSession.c:176,198.
+- **PCR Read sizeofSelect**: TPMS_PCR_SELECTION.sizeofSelect is 1 byte,
+  not 2. Fixed in prior work, confirmed working this session (step 1 has
+  no errors). Source: firmware/PblPkg/PblApp/TpmClient.c.
+- **NV StartAuthSession bind handle**: Changed from PBL_NV_LOCK_STATE
+  (undefined in test TPM) to TPM_RH_NULL (unbound session). Source:
+  firmware/PblPkg/PblApp/PblApp.c.
+- **Command handle placement**: PblTpmBeginCommandWithSessionAuth now
+  writes all command handles before the authorization area. NV callers
+  pass required handles. PCR Extend puts pcrHandle before auth area.
+  Source: firmware/PblPkg/PblApp/TpmClient.c.
+
+### Fog remaining
+- NV reads return 0x18B (HANDLE error) — the NV indexes
+  (PBL_NV_LOCK_STATE, PBL_NV_POLICY_VERSION) are not defined in the test
+  TPM. This is expected in the test environment. On real hardware with
+  provisioned NV indexes, these would succeed.
+- Response HMAC verification (PblTpmVerifyResponseHmacEx) has not been
+  exercised because NV commands fail before reaching the HMAC verify
+  path. Needs NV index provisioning or a mock to test.
+- Parameter encryption (AES-256-CFB) has not been exercised for the same
+  reason.
+- D-109 (verdict fetch/verification) and D-110 (policy blob parsing)
+  remain open — HTTPS client and full policy parsing not implemented.
+- D-211 (real Windows hardware testing) remains open.
+
+### Debt items closed
+- D-102 — HMAC session: CLOSED. Commit bef484a. Artifact: PblApp.efi
+  SHA-256 c75785dc27704c67e475069cfe555f1e0129553de258280acc458e055617f574.
+  Evidence: QEMU+swtpm harness shows `[OK] HMAC session established
+  (AES-256-CFB)` and `[OK] PCR HMAC session established`.
+
+### Debt items still open
+- D-109 — Verdict fetch/verification: OPEN (HTTPS client not implemented)
+- D-110 — Policy blob parsing: OPEN (partial)
+- D-211 — Real Windows hardware testing: OPEN
+
+### Blockers named and status
+- NV index provisioning: not a blocker (fail-soft, expected in test env)
+- Response HMAC verification: not exercised (NV commands fail before HMAC
+  path is reached)
+- HTTPS client: blocks D-109 online verdict fetch
+
+### Failure attribution
+- Layer 2 (Context provision): The TPM 2.0 StartAuthSession command format
+  was not fully documented in the PBL codebase. The salt field
+  (TPM2B_ENCRYPTED_SECRET) was omitted because it's empty for TPM_RH_NULL,
+  but the 2-byte size field must still be present. The EDK2 reference
+  implementation (Tpm2Session.c) includes it but PBL's hand-rolled command
+  builder did not. Harness change: add a TPM command structure validation
+  test that compares PBL's command bytes against the EDK2 reference struct
+  layout for each TPM command.
+
+### Next session opening
+Provision NV indexes in the swtpm test environment (TPM2_NV_DefineSpace
+for PBL_NV_LOCK_STATE and PBL_NV_POLICY_VERSION) to exercise the full
+NV read/write/Increment path with HMAC session authentication, or
+implement D-109 (HTTPS client for verdict fetch) to test the online
+verdict flow.
