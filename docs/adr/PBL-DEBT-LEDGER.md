@@ -967,7 +967,7 @@
   are not used in the PBL wire protocol).
 
 ### D-208 — COSE_Sign1 encoding in serverless Worker not implemented
-- **Status**: CLOSED (commit pending, artifact: 575 server tests + 305 serverless tests pass)
+- **Status**: CLOSED (commit ee311de, artifact: 575 server tests + 305 serverless tests pass)
 - **Category**: SERVER
 - **Progress**: `serverless/pbl/cose.ts` (206 lines, was 146) implements
   full COSE_Sign1 encoder + D-208 server-side verification:
@@ -1256,7 +1256,7 @@
 | D-205 | Verdict signing infrastructure not implemented | OPEN (partial — Ed25519 server signing implemented; firmware cert chain + Ed25519 verification blocked by EDK2) | SECURITY |
 | D-206 | PBL device identity mapping not implemented | CLOSED (commit 60c0a78) | SERVER |
 | D-207 | CBOR parsing in serverless Worker not implemented | CLOSED (commit 4ed2f48) | SERVER |
-| D-208 | COSE_Sign1 encoding in serverless Worker not implemented | CLOSED (commit pending) | SERVER |
+| D-208 | COSE_Sign1 encoding in serverless Worker not implemented | CLOSED (commit ee311de) | SERVER |
 | D-209 | PBL policy blob generation not implemented | OPEN (partial — form-based creation UI + server-side CBOR encoding + signing implemented) | SERVER |
 | D-210 | Serverless Worker PBL route integration not implemented | OPEN (partial — full Express integration test implemented; QEMU/swtpm runtime test pending) | SERVER |
 | D-211 | Covert tracking mode (C5) not fully implemented | OPEN (partial) | TODO |
