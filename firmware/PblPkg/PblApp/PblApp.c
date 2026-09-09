@@ -19,6 +19,137 @@
 
 #include "PblApp.h"
 
+/** D-110: Read a file from a UEFI filesystem.
+
+  Uses EFI_SIMPLE_FILE_SYSTEM_PROTOCOL to open the volume, then opens
+  the file and reads its contents into an allocated buffer. The caller
+  must free the buffer with gBS->FreePool.
+
+  @param  FilePath  UEFI-style path (e.g., L"\\EFI\\PBL\\policy.cose").
+  @param  Buffer    On success, allocated buffer containing file data.
+  @param  BufferSize On success, size of Buffer in bytes.
+
+  @retval EFI_SUCCESS           File read.
+  @retval EFI_NOT_FOUND         Filesystem or file not found.
+  @retval EFI_OUT_OF_RESOURCES  Allocation failed.
+**/
+STATIC
+EFI_STATUS
+PblReadFileFromFs (
+  IN  CONST CHAR16 *FilePath,
+  OUT UINT8       **Buffer,
+  OUT UINTN        *BufferSize
+  )
+{
+  EFI_STATUS                       Status;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Sfs = NULL;
+  EFI_FILE_PROTOCOL               *Root = NULL;
+  EFI_FILE_PROTOCOL               *File = NULL;
+  EFI_FILE_INFO                   *Info = NULL;
+  UINTN                            InfoSize;
+  UINT8                           *FileBuf = NULL;
+
+  if (Buffer == NULL || BufferSize == NULL || FilePath == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  *Buffer = NULL;
+  *BufferSize = 0;
+
+  // Locate the simple filesystem protocol (first available volume)
+  EFI_HANDLE *Handles = NULL;
+  UINTN       HandleCount = 0;
+  Status = gBS->LocateHandleBuffer (
+                  ByProtocol,
+                  &gEfiSimpleFileSystemProtocolGuid,
+                  NULL,
+                  &HandleCount,
+                  &Handles
+                  );
+  if (EFI_ERROR (Status) || HandleCount == 0) {
+    return EFI_NOT_FOUND;
+  }
+
+  // Try each volume until we find the file
+  for (UINTN i = 0; i < HandleCount; i++) {
+    Sfs = NULL;
+    Status = gBS->HandleProtocol (Handles[i], &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Sfs);
+    if (EFI_ERROR (Status) || Sfs == NULL) {
+      continue;
+    }
+
+    Status = Sfs->OpenVolume (Sfs, &Root);
+    if (EFI_ERROR (Status)) {
+      continue;
+    }
+
+    Status = Root->Open (Root, &File, (CHAR16 *)FilePath, EFI_FILE_MODE_READ, 0);
+    if (EFI_ERROR (Status)) {
+      Root->Close (Root);
+      continue;
+    }
+
+    // Get file size
+    InfoSize = 0;
+    Info = NULL;
+    Status = File->GetInfo (File, &gEfiFileInfoGuid, &InfoSize, Info);
+    if (Status == EFI_BUFFER_TOO_SMALL) {
+      Info = AllocatePool (InfoSize);
+      if (Info == NULL) {
+        File->Close (File);
+        Root->Close (Root);
+        gBS->FreePool (Handles);
+        return EFI_OUT_OF_RESOURCES;
+      }
+      Status = File->GetInfo (File, &gEfiFileInfoGuid, &InfoSize, Info);
+    }
+    if (EFI_ERROR (Status)) {
+      if (Info != NULL) FreePool (Info);
+      File->Close (File);
+      Root->Close (Root);
+      continue;
+    }
+
+    *BufferSize = (UINTN)Info->FileSize;
+    FreePool (Info);
+
+    if (*BufferSize == 0) {
+      File->Close (File);
+      Root->Close (Root);
+      // Empty file — treat as not found
+      continue;
+    }
+
+    FileBuf = AllocatePool (*BufferSize);
+    if (FileBuf == NULL) {
+      File->Close (File);
+      Root->Close (Root);
+      gBS->FreePool (Handles);
+      return EFI_OUT_OF_RESOURCES;
+    }
+
+    // Read file contents
+    UINTN ReadSize = *BufferSize;
+    Status = File->Read (File, &ReadSize, FileBuf);
+    File->Close (File);
+    Root->Close (Root);
+
+    if (EFI_ERROR (Status) || ReadSize != *BufferSize) {
+      FreePool (FileBuf);
+      continue;
+    }
+
+    // Success
+    *Buffer = FileBuf;
+    *BufferSize = ReadSize;
+    gBS->FreePool (Handles);
+    return EFI_SUCCESS;
+  }
+
+  gBS->FreePool (Handles);
+  return EFI_NOT_FOUND;
+}
+
 EFI_STATUS
 EFIAPI
 PblAppEntryPoint (
@@ -70,10 +201,17 @@ PblAppEntryPoint (
 
   //
   // Step 2: Parse + verify policy blob (C4, REQ-11)
-  // TODO: read from ESP \EFI\PBL\policy.cose or fetch via C3 GET /v1/policy
+  // D-110: Read from ESP \EFI\PBL\policy.cose
   //
   Print (L"[2/8] Parsing policy blob...\n");
-  // STUB: PolicyCose is NULL — Agent A reads from ESP or fetches via C3
+  Status = PblReadFileFromFs (L"\\EFI\\PBL\\policy.cose", &PolicyCose, &PolicyCoseSize);
+  if (EFI_ERROR (Status)) {
+    Print (L"  [INFO] No policy.cose on ESP: %r — using DEGRADED\n", Status);
+    PolicyCose = NULL;
+    PolicyCoseSize = 0;
+  } else {
+    Print (L"  [INFO] policy.cose: %u bytes\n", (UINT32)PolicyCoseSize);
+  }
   Status = PblParsePolicy (PolicyCose, PolicyCoseSize, &Policy);
   if (EFI_ERROR (Status)) {
     Print (L"  [WARN] Policy parse: %r — using DEGRADED\n", Status);

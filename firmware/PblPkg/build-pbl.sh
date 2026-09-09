@@ -80,8 +80,9 @@ if [ "${ARCH}" = "X64" ]; then
       -D NETWORK_HTTP_ENABLE=TRUE \
       -D NETWORK_HTTP_BOOT_ENABLE=FALSE \
       -D NETWORK_TLS_ENABLE=TRUE \
-      -D NETWORK_ALLOW_HTTP_CONNECTIONS=FALSE \
-      -D NETWORK_IP6_ENABLE=TRUE
+      -D NETWORK_ALLOW_HTTP_CONNECTIONS=TRUE \
+      -D NETWORK_IP6_ENABLE=TRUE \
+      -D TPM2_ENABLE=TRUE
   else
     echo "=== OVMF already built — skipping ==="
   fi

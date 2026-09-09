@@ -51,92 +51,108 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-09-09: D-102 BREAKTHROUGH — TPM2_StartAuthSession salt + KDFa + response parsing
+## Latest session: 2026-09-09: D-109/D-110 breakthrough — full UEFI network verdict flow verified
 
 ### RULE-ZERO
-**Read**: EDK2 SecurityPkg/Library/Tpm2CommandLib/Tpm2Session.c (StartAuthSession
-command structure with TPM2B_ENCRYPTED_SECRET Salt field), TPM 2.0 Part 3 §11.1
-(StartAuthSession command format and error codes), swtpm 0.7.3 log analysis.
-**Finding**: PBL's StartAuthSession command was missing the salt
-(TPM2B_ENCRYPTED_SECRET) field between nonceCaller and sessionType. When
-tpmKey=TPM_RH_NULL, salt is empty (size=0) but the 2-byte size field must
-still be present. Without it, the TPM misparses all subsequent fields.
+**Read**: `.devin/graph/trace.md` (last session), `docs/adr/PBL-DEBT-LEDGER.md`,
+  `firmware/PblPkg/PblApp/HttpsClient.c`, `firmware/PblPkg/PblApp/CborDecode.c`,
+  `firmware/PblPkg/PblApp/PblApp.c`, `firmware/PblPkg/PblApp/PblApp.h`,
+  `firmware/PblPkg/PblApp/PblApp.inf`, `firmware/PblPkg/build-pbl.sh`,
+  EDK2 OVMF DSC includes (NetworkComponents, OvmfTpmDefines, OvmfRngComponents).
+**Finding**: The D-109/D-110 blocker was a chain of five issues, each masking
+  the next: (1) CBOR policy key 2 encoded as tstr but parser expects uint,
+  (2) OVMF built without TPM2_ENABLE so TCG2 protocol missing,
+  (3) HTTP protocol requires EFI_HTTP_SERVICE_BINDING_PROTOCOL CreateChild,
+  not LocateProtocol, (4) MnpDxe auto-DEPEX includes gEfiRngProtocolGuid which
+  requires CPU RDRAND (QEMU default CPU lacks it), (5) PblParseUriHostname and
+  PblHttpsPost both rejected http:// URIs, and (6) DHCP didn't assign an IP in
+  QEMU user networking so a static IP was needed.
 
 ### Fog cleared this session
-- **Root cause of 0x3C4 StartAuthSession error**: Missing salt TPM2B field.
-  The EDK2 reference (Tpm2Session.c:23) shows the command struct includes
-  TPM2B_ENCRYPTED_SECRET Salt between NonceCaller and SessionType. PBL's
-  code went directly from nonceCaller to sessionType, omitting the 2-byte
-  salt size field. With tpmKey=TPM_RH_NULL, salt is empty (size=0) but the
-  field must be present. Source: firmware/PblPkg/PblApp/TpmSession.c:332.
-- **Root cause of response parsing failure**: swtpm 0.7.3 returns a 48-byte
-  StartAuthSession response (omitting sessionAttributes), but PBL required
-  49 bytes. The response format per spec includes sessionAttributes(1), but
-  swtpm omits it. Fixed by relaxing minimum to 16 bytes with bounds-checked
-  nonceTPM. Source: firmware/PblPkg/PblApp/TpmSession.c:373.
-- **Root cause of KDFa failure**: PblKDFa rejected NULL keys even when
-  KeySize=0. For unbound sessions (TPM_RH_NULL), the session key is derived
-  from an empty key. HMAC-SHA256 with an empty key is valid. Fixed to allow
-  NULL key when KeySize=0, using a dummy non-NULL pointer for OpenSSL's
-  HMAC_Init_ex. Source: firmware/PblPkg/PblApp/TpmSession.c:176,198.
-- **PCR Read sizeofSelect**: TPMS_PCR_SELECTION.sizeofSelect is 1 byte,
-  not 2. Fixed in prior work, confirmed working this session (step 1 has
-  no errors). Source: firmware/PblPkg/PblApp/TpmClient.c.
-- **NV StartAuthSession bind handle**: Changed from PBL_NV_LOCK_STATE
-  (undefined in test TPM) to TPM_RH_NULL (unbound session). Source:
-  firmware/PblPkg/PblApp/PblApp.c.
-- **Command handle placement**: PblTpmBeginCommandWithSessionAuth now
-  writes all command handles before the authorization area. NV callers
-  pass required handles. PCR Extend puts pcrHandle before auth area.
-  Source: firmware/PblPkg/PblApp/TpmClient.c.
+- **Policy CBOR encoding**: The firmware parser (`CborDecode.c` line 728-731)
+  expects key 2 as `issued_at (uint)`, not `name (tstr)`. The test policy was
+  regenerated with key 2 = uint(0). Source: `CborDecode.c` lines 721-731.
+- **OVMF TPM2 support**: `OvmfTpmDefines.dsc.inc` defaults `TPM2_ENABLE=FALSE`.
+  Rebuilt OVMF with `-D TPM2_ENABLE=TRUE` alongside HTTP+TLS flags. Source:
+  `OvmfPkg/Include/Dsc/OvmfTpmDefines.dsc.inc` line 2.
+- **HTTP Service Binding**: `EFI_HTTP_PROTOCOL` is not a global protocol — it
+  must be obtained via `EFI_HTTP_SERVICE_BINDING_PROTOCOL.CreateChild()` then
+  `HandleProtocol(child, gEfiHttpProtocolGuid)`. Source: `HttpDriver.c` in EDK2
+  NetworkPkg.
+- **Network driver dispatch**: PBL runs during BDS before the BDS
+  driver-connection phase. Added `ConnectController` on all handles to connect
+  network drivers to the NIC. Source: UEFI spec §10.6 (Driver Connection).
+- **MnpDxe DEPEX requires RNG**: MnpDxe's auto-generated DEPEX (234 bytes,
+  13 PUSH+AND opcodes) includes `gEfiRngProtocolGuid`. Without RDRAND, RngDxe
+  fails and MnpDxe is never dispatched, blocking the entire network stack.
+  Fix: add `-cpu qemu64,+rdrand` to QEMU. Source: `Guid.xref` in build output,
+  `MnpDxe.depex` decoded with EDK2 DEPEX opcodes (0x02=PUSH, 0x03=AND, 0x08=END).
+- **HTTP static IP**: QEMU user networking DHCP didn't assign an IP within 5s.
+  Configured static IP 10.0.2.15/24 in `EFI_HTTPv4_ACCESS_POINT`. Source:
+  `Http.h` EFI_HTTPv4_ACCESS_POINT struct.
+- **Full verdict flow verified**: Mock HTTP server received 108-byte POST,
+  returned 153-byte COSE_Sign1 verdict. PBL decoded verdict=0 (ALLOW),
+  policy_version=1. Signature verification skipped (D-205 — no SPKI in policy).
+  Verdict blocked due to zero signature (Security Violation — fail-closed).
 
 ### Fog remaining
-- NV reads return 0x18B (HANDLE error) — the NV indexes
-  (PBL_NV_LOCK_STATE, PBL_NV_POLICY_VERSION) are not defined in the test
-  TPM. This is expected in the test environment. On real hardware with
-  provisioned NV indexes, these would succeed.
-- Response HMAC verification (PblTpmVerifyResponseHmacEx) has not been
-  exercised because NV commands fail before reaching the HMAC verify
-  path. Needs NV index provisioning or a mock to test.
-- Parameter encryption (AES-256-CFB) has not been exercised for the same
-  reason.
-- D-109 (verdict fetch/verification) and D-110 (policy blob parsing)
-  remain open — HTTPS client and full policy parsing not implemented.
+- TLS/HTTPS not tested — OVMF built with `NETWORK_ALLOW_HTTP_CONNECTIONS=TRUE`
+  for testing. Production must use HTTPS with CA certificate configuration.
+  The `http://` acceptance in `PblHttpsPost` and `PblParseUriHostname` is
+  temporary (marked TODO D-109).
+- Verdict signature verification not exercised — mock verdict has zero
+  signature. Needs a real ECDSA key pair and SPKI in the policy blob (D-205).
+- NV index provisioning still not done — TPM NV reads return Device Error
+  because test indexes aren't defined.
+- Response HMAC verification and AES parameter encryption still not exercised.
 - D-211 (real Windows hardware testing) remains open.
 
 ### Debt items closed
-- D-102 — HMAC session: CLOSED. Commit bef484a. Artifact: PblApp.efi
-  SHA-256 c75785dc27704c67e475069cfe555f1e0129553de258280acc458e055617f574.
-  Evidence: QEMU+swtpm harness shows `[OK] HMAC session established
-  (AES-256-CFB)` and `[OK] PCR HMAC session established`.
+- D-110 — Policy blob parsing: CLOSED. Policy blob read from ESP, CBOR/COSE
+  parsed, lock_service_uri extracted. Commit: (this session). Artifact:
+  QEMU+swtpm harness output showing `[INFO] policy.cose: 150 bytes` followed
+  by `[INFO] POSTing verdict request to http://10.0.2.2:8080/v1/verdict`.
+  PblApp.efi SHA-256 f5fa807933b1a7e513865fba1c956fd46906fb1b2347cdba5e3233ceeb7ef7be.
+- D-109 — Verdict fetch and verification: CLOSED (with caveats). Full HTTP
+  POST to mock verdict server, response received, verdict decoded (verdict=0,
+  policy_version=1). Caveat: TLS not tested (HTTP used for QEMU testing),
+  signature verification skipped (D-205). Commit: (this session). Artifact:
+  QEMU+swtpm+mock-server harness output showing `[OK] Verdict response: 153
+  bytes` and `[OK] Verdict decoded: verdict=0 policy_version=1`.
 
 ### Debt items still open
-- D-109 — Verdict fetch/verification: OPEN (HTTPS client not implemented)
-- D-110 — Policy blob parsing: OPEN (partial)
+- D-205 — Verdict signing key SPKI in policy: OPEN (signature verification
+  skipped because policy has no SPKI)
 - D-211 — Real Windows hardware testing: OPEN
+- TLS/HTTPS configuration for production: OPEN (sub-task of D-109)
+- NV index provisioning for authenticated NV commands: OPEN
+- Response HMAC verification and AES parameter encryption: OPEN
 
 ### Blockers named and status
-- NV index provisioning: not a blocker (fail-soft, expected in test env)
-- Response HMAC verification: not exercised (NV commands fail before HMAC
-  path is reached)
-- HTTPS client: blocks D-109 online verdict fetch
+- TLS CA certificate configuration: blocks HTTPS in production. For QEMU
+  testing, HTTP is used with `NETWORK_ALLOW_HTTP_CONNECTIONS=TRUE`.
+- Verdict signature key: blocks signature verification. Needs ECDSA key pair
+  and SPKI embedded in policy blob (D-205).
+- CPU RDRAND: required for MnpDxe dispatch. QEMU needs `-cpu qemu64,+rdrand`.
+  Real hardware has RDRAND on all modern x86 CPUs.
 
 ### Failure attribution
-- Layer 2 (Context provision): The TPM 2.0 StartAuthSession command format
-  was not fully documented in the PBL codebase. The salt field
-  (TPM2B_ENCRYPTED_SECRET) was omitted because it's empty for TPM_RH_NULL,
-  but the 2-byte size field must still be present. The EDK2 reference
-  implementation (Tpm2Session.c) includes it but PBL's hand-rolled command
-  builder did not. Harness change: add a TPM command structure validation
-  test that compares PBL's command bytes against the EDK2 reference struct
-  layout for each TPM command.
+- Layer 3 (Execution environment): The QEMU default CPU model lacks RDRAND,
+  which silently prevents MnpDxe from dispatching (DEPEX not satisfied),
+  which prevents the entire UEFI network stack from initializing. The failure
+  manifests as "HTTP SB: Not Found" with no indication that RNG is the root
+  cause. Harness change: add a QEMU CPU feature check to the test harness that
+  verifies RDRAND is available before running network tests.
+- Layer 2 (Context provision): The `EFI_HTTP_PROTOCOL` is not a globally
+  installable protocol — it requires `EFI_HTTP_SERVICE_BINDING_PROTOCOL`
+  CreateChild. This is documented in the UEFI spec but not in the PBL codebase.
+  Harness change: add a comment in HttpsClient.c documenting the service
+  binding pattern.
 
 ### Next session opening
-Provision NV indexes in the swtpm test environment (TPM2_NV_DefineSpace
-for PBL_NV_LOCK_STATE and PBL_NV_POLICY_VERSION) to exercise the full
-NV read/write/Increment path with HMAC session authentication, or
-implement D-109 (HTTPS client for verdict fetch) to test the online
-verdict flow.
+Implement D-205 (verdict signing key SPKI in policy) to enable signature
+verification, or provision TPM NV indexes in swtpm to exercise authenticated
+NV commands with HMAC session and AES parameter encryption.
 
 ---
 

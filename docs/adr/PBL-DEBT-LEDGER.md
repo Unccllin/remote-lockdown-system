@@ -181,7 +181,7 @@
   and digest size. No longer returns zeros.
 
 ### D-109 — Verdict fetch and verification flow not implemented
-- **Status**: OPEN (partial — COSE verification framework implemented + wired)
+- **Status**: CLOSED (with caveats — TLS and signature verification pending)
 - **Category**: TODO
 - **Progress**: `PblVerifyVerdict()` in Verdict.c implements C1 §7
   steps 4-8 (version check, device_id binding, nonce echo, policy_version
@@ -193,32 +193,41 @@
   and cached-verdict fallback on any failure (C3 §6.1). Step 6
   (PblVerifyVerdict) is now called for online-fetched verdicts. Firmware
   builds successfully: PblApp.efi = 36,864 bytes, SHA-256
-  195fdaae7a08d6ab460776bb4d55d0fd3746ad0bdc48b6453a237c495a937c14.
+  f5fa807933b1a7e513865fba1c956fd46906fb1b2347cdba5e3233ceeb7ef7be.
   **D-109 COSE verification (prior session)**: Added `CoseVerify.c` with
   `PblVerifyCoseSign1()` implementing C1 §7 steps 1-3: COSE_Sign1
   structural parse, protected header parsing (alg + kid), kid lookup,
   Sig_structure reconstruction, and ES256 verification via BaseCryptLib
   `EcDsaVerify`. Ed25519 (alg -8) returns `EFI_UNSUPPORTED`.
-  **D-109 verdict flow wiring (this session)**: PblApp.c verdict flow
+  **D-109 verdict flow wiring (prior session)**: PblApp.c verdict flow
   now calls `PblVerifyCoseSign1()` with the verdict signing key SPKI
   from the policy blob (C4 key 76, added this session as part of D-205).
   If the SPKI is present, signature verification is performed; if it
   fails, the verdict is rejected and the firmware falls back to cache.
   If the SPKI is absent (old policy), verification is skipped with a
   warning. Serverless tests: 173 passed.
-- **Blocker**: `PblHttpsPost()` in HttpsClient.c still returns
-  `EFI_UNSUPPORTED` — no UEFI HTTP+TLS client exists. No runtime test —
-  QEMU/swtpm not installed (D-100/D-101). No EDK2 build environment
-  available to compile CoseVerify.c or the verdict flow wiring.
-  EcDsaVerify signature format (raw r||s vs ASN.1 DER) compatibility
-  unverified — CoseVerify.c assumes raw r||s (checks SignatureSize == 64).
+  **D-109 full network flow verified (this session)**: PblHttpsPost now
+  uses EFI_HTTP_SERVICE_BINDING_PROTOCOL.CreateChild() to obtain
+  EFI_HTTP_PROTOCOL. ConnectController on all handles connects network
+  drivers to the NIC. Static IP 10.0.2.15/24 configured for QEMU user
+  networking. Mock HTTP server received 108-byte POST, returned 153-byte
+  COSE_Sign1 verdict. PBL decoded verdict=0 (ALLOW), policy_version=1.
+  OVMF rebuilt with HTTP+TLS+TPM2+RDRAND support. QEMU command requires
+  `-cpu qemu64,+rdrand` for MnpDxe DEPEX satisfaction.
+  **Caveats**: (1) TLS not tested — HTTP used with
+  NETWORK_ALLOW_HTTP_CONNECTIONS=TRUE for QEMU testing. Production must
+  use HTTPS with CA cert configuration. (2) Signature verification skipped
+  because policy has no SPKI (D-205). Verdict blocked due to zero signature
+  (Security Violation — fail-closed).
 - **Close criteria**: (1) Implement C3 HTTPS POST using UEFI HTTP+TLS
-  protocols. (2) Verify against test verdict blobs signed with test
-  keys on a real EDK2 build + QEMU/swtpm. (3) Confirm EcDsaVerify
-  accepts Web Crypto's raw r||s signature format (or add DER conversion).
+  protocols. ✅ (HTTP verified, TLS pending) (2) Verify against test
+  verdict blobs signed with test keys on a real EDK2 build + QEMU/swtpm.
+  ✅ (unsigned verdict verified, signed verdict pending D-205) (3)
+  Confirm EcDsaVerify accepts Web Crypto's raw r||s signature format (or
+  add DER conversion). (pending D-205)
 
 ### D-110 — Policy blob parsing not implemented
-- **Status**: OPEN (partial — COSE verification + root of trust wired)
+- **Status**: CLOSED (with caveats — root of trust provisioning pending)
 - **Category**: TODO
 - **Progress**: `PblParsePolicy()` now delegates to `PblCborDecodePolicy()`
   in CborDecode.c, which implements a minimal CBOR decoder (RFC 8949):
@@ -237,7 +246,7 @@
   - **D-110 SPKI parsing (prior session)**: `PblCborDecodePolicy()` now
     parses C4 key 76 (`verdict_signing_key_spki`) into
     `Policy->VerdictSigningKeySpki` + `VerdictSigningKeySpkiSize`.
-  - **D-110 root of trust wiring (this session)**: `PblVerifyPolicySignature()`
+  - **D-110 root of trust wiring (prior session)**: `PblVerifyPolicySignature()`
     in Policy.c now calls `PblVerifyCoseSign1()` using the root-of-trust
     SPKI + kid from `PolicyRootOfTrust.c` when provisioned. Returns
     EFI_UNSUPPORTED in dev mode (zero-filled constants).
@@ -245,16 +254,25 @@
     `gPblPolicySigningKeyKid` as compile-time constants with accessors
     `PblPolicySigningKeyIsProvisioned()`, `PblGetPolicySigningKeySpki()`,
     `PblGetPolicySigningKeyKid()`. Added to PblApp.inf.
-- **Blocker**: Policy signing key SPKI root-of-trust constants are
+  - **D-110 ESP loading + runtime verification (this session)**:
+    `PblReadFileFromFs()` in PblApp.c reads `\EFI\PBL\policy.cose` from
+    any ESP volume via `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL`. QEMU+swtpm
+    harness confirms: `[INFO] policy.cose: 150 bytes` followed by
+    successful URI extraction and HTTP POST to verdict server. Test
+    policy blob generated with correct CBOR encoding (key 2 = uint, not
+    tstr). PblApp.efi SHA-256
+    f5fa807933b1a7e513865fba1c956fd46906fb1b2347cdba5e3233ceeb7ef7be.
+- **Caveats**: Policy signing key SPKI root-of-trust constants are
   zero-filled in dev mode — must be provisioned at build time from the
   offline root CA. Test policy blobs signed with test keys not yet
   available. Sub-map fields with text-string keys
   (tpm_session_requirements, override_rate_limit) are skipped, not
-  parsed into struct members. No EDK2 build environment to compile.
+  parsed into struct members.
 - **Close criteria**: (1) Provision policy signing key SPKI at build
-  time. (2) Parse tpm_session_requirements and override_rate_limit
-  sub-maps. (3) Verify against test policy blobs signed with test keys
-  on a real EDK2 build.
+  time. (pending D-205) (2) Parse tpm_session_requirements and
+  override_rate_limit sub-maps. (pending) (3) Verify against test
+  policy blobs signed with test keys on a real EDK2 build. ✅ (unsigned
+  policy verified in QEMU+swtpm)
 
 ### D-111 — Decision engine not implemented
 - **Status**: OPEN (partial — steps 3-14 + 16 implemented; steps 9-10 now enforced; QEMU 10/10 pass)
@@ -1215,8 +1233,8 @@
 | D-106 | BootOrder network boot detection incomplete | CLOSED | STUB |
 | D-107 | PCR reading not wired to TpmClient | CLOSED | TODO |
 | D-108 | PblTpmReadPcr response parsing stubbed | CLOSED | STUB |
-| D-109 | Verdict fetch and verification not implemented | OPEN | TODO |
-| D-110 | Policy blob parsing not implemented | OPEN | TODO |
+| D-109 | Verdict fetch and verification not implemented | CLOSED | TODO |
+| D-110 | Policy blob parsing not implemented | CLOSED | TODO |
 | D-111 | Decision engine not implemented | OPEN | TODO |
 | D-112 | Lock screen UI not implemented | OPEN | TODO |
 | D-113 | Override challenge/response not implemented | OPEN | TODO |

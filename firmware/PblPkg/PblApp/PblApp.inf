@@ -73,6 +73,11 @@
 
   ## EFI_HTTP_PROTOCOL — for HTTPS POST (C3)
   gEfiHttpProtocolGuid
+  gEfiHttpServiceBindingProtocolGuid
+  gEfiSimpleNetworkProtocolGuid
+  gEfiTcp4ServiceBindingProtocolGuid
+  gEfiIp4ServiceBindingProtocolGuid
+  gEfiManagedNetworkServiceBindingProtocolGuid
 
   ## EFI_TLS_PROTOCOL — for TLS handshake (C3)
   gEfiTlsProtocolGuid

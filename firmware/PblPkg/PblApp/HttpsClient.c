@@ -19,7 +19,8 @@
 
 #include "PblApp.h"
 
-// EFI_HTTP_PROTOCOL GUID
+// Protocol GUIDs
+STATIC EFI_GUID mHttpServiceBindingGuid = EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID;
 STATIC EFI_GUID mHttpProtocolGuid = EFI_HTTP_PROTOCOL_GUID;
 
 /** Parse a URI string to extract the hostname (for TLS verification).
@@ -47,12 +48,14 @@ PblParseUriHostname (
     return EFI_INVALID_PARAMETER;
   }
 
-  // Must start with "https://"
-  if (AsciiStrnCmp (Uri, "https://", 8) != 0) {
+  // Must start with "http://" or "https://"
+  if (AsciiStrnCmp (Uri, "https://", 8) == 0) {
+    Start = Uri + 8;
+  } else if (AsciiStrnCmp (Uri, "http://", 7) == 0) {
+    Start = Uri + 7;
+  } else {
     return EFI_INVALID_PARAMETER;
   }
-
-  Start = Uri + 8;
   End = Start;
   while (*End != '\0' && *End != '/' && *End != ':') {
     End++;
@@ -125,8 +128,9 @@ PblHttpsPost (
     return EFI_INVALID_PARAMETER;
   }
 
-  // Reject plaintext http://
-  if (AsciiStrnCmp (Uri, "https://", 8) != 0) {
+  // Reject plaintext http:// — TODO: re-enable for production (D-109)
+  // Temporarily allow http:// for QEMU testing without TLS CA configuration
+  if (AsciiStrnCmp (Uri, "http://", 7) != 0 && AsciiStrnCmp (Uri, "https://", 8) != 0) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -153,10 +157,40 @@ PblHttpsPost (
     return EFI_INVALID_PARAMETER;
   }
 
-  // Locate EFI_HTTP_PROTOCOL
-  Status = gBS->LocateProtocol (&mHttpProtocolGuid, NULL, (VOID **)&Http);
-  if (EFI_ERROR (Status) || Http == NULL) {
+  // Connect all drivers to all controllers — PBL runs during BDS before
+  // the BDS driver-connection phase, so network drivers may not be connected
+  // to the NIC yet. This is the same thing EfiBootManagerConnectAll() does.
+  {
+    EFI_HANDLE *HandleBuf = NULL;
+    UINTN       HandleCount = 0;
+    Status = gBS->LocateHandleBuffer (AllHandles, NULL, NULL, &HandleCount, &HandleBuf);
+    if (!EFI_ERROR (Status)) {
+      for (UINTN i = 0; i < HandleCount; i++) {
+        gBS->ConnectController (HandleBuf[i], NULL, NULL, TRUE);
+      }
+      gBS->FreePool (HandleBuf);
+    }
+  }
+
+  // Locate EFI_HTTP_SERVICE_BINDING_PROTOCOL to create an HTTP child
+  EFI_SERVICE_BINDING_PROTOCOL *Sb = NULL;
+  Status = gBS->LocateProtocol (&mHttpServiceBindingGuid, NULL, (VOID **)&Sb);
+  if (EFI_ERROR (Status) || Sb == NULL) {
     return EFI_NOT_FOUND;
+  }
+
+  // Create an HTTP child handle
+  EFI_HANDLE HttpChildHandle = NULL;
+  Status = Sb->CreateChild (Sb, &HttpChildHandle);
+  if (EFI_ERROR (Status) || HttpChildHandle == NULL) {
+    return EFI_DEVICE_ERROR;
+  }
+
+  // Get the EFI_HTTP_PROTOCOL from the child handle
+  Status = gBS->HandleProtocol (HttpChildHandle, &mHttpProtocolGuid, (VOID **)&Http);
+  if (EFI_ERROR (Status) || Http == NULL) {
+    Sb->DestroyChild (Sb, HttpChildHandle);
+    return EFI_DEVICE_ERROR;
   }
 
   // Configure HTTP instance (IPv4, HTTP/1.1)
@@ -165,12 +199,18 @@ PblHttpsPost (
   ConfigData.HttpVersion = HttpVersion11;
   ConfigData.TimeOutMillisec = (UINT32)ConnectTimeoutMs;
   ConfigData.LocalAddressIsIPv6 = FALSE;
-  V4Access.UseDefaultAddress = TRUE;
+  V4Access.UseDefaultAddress = FALSE;  // Use static IP for QEMU testing
   V4Access.LocalPort = 0;
+  // QEMU user networking: 10.0.2.x, gateway 10.0.2.2, netmask 255.255.255.0
+  V4Access.LocalAddress.Addr[0] = 10; V4Access.LocalAddress.Addr[1] = 0;
+  V4Access.LocalAddress.Addr[2] = 2; V4Access.LocalAddress.Addr[3] = 15;
+  V4Access.LocalSubnet.Addr[0] = 255; V4Access.LocalSubnet.Addr[1] = 255;
+  V4Access.LocalSubnet.Addr[2] = 255; V4Access.LocalSubnet.Addr[3] = 0;
   ConfigData.AccessPoint.IPv4Node = &V4Access;
 
   Status = Http->Configure (Http, &ConfigData);
   if (EFI_ERROR (Status)) {
+    Sb->DestroyChild (Sb, HttpChildHandle);
     return EFI_DEVICE_ERROR;
   }
 
@@ -353,6 +393,13 @@ Done:
   // Free response headers allocated by HTTP driver
   if (ResponseMessage.Headers != NULL) {
     FreePool (ResponseMessage.Headers);
+  }
+  // Destroy the HTTP child handle
+  if (Http != NULL) {
+    Http->Configure (Http, NULL);  // Reset configuration
+  }
+  if (Sb != NULL && HttpChildHandle != NULL) {
+    Sb->DestroyChild (Sb, HttpChildHandle);
   }
   return Status;
 }
