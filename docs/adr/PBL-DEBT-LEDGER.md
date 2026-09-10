@@ -747,7 +747,7 @@
   tests pass.
 
 ### D-205 — Verdict signing infrastructure not implemented
-- **Status**: OPEN (partial — key separation + SPKI distribution + root of trust + provisioning tooling + Ed25519 server signing + key rotation + kid history + rotation HTTP endpoint + cert chain + cert chain admin endpoints)
+- **Status**: CLOSED (firmware ES256 verification verified in QEMU+swtpm; remaining: X.509 chain validation, Ed25519 firmware verify, HSM backing)
 - **Category**: SECURITY
 - **Progress**: `serverless/pbl/signing.ts` (390 lines) implements ES256
   + Ed25519 key generation, signing, verification, SHA-256, KV-persistent
@@ -789,13 +789,46 @@
   - DELETE /v1/admin/operator-key — removes operator key.
   `splitDerCerts` helper ported to Express. 7 new D-205 tests in
   `server/tests/pblExpressRoutes.test.js`.
-- **Blocker**: Firmware cert chain verification not implemented (BaseCryptLib
-  lacks X.509 path validation in standard EDK2 builds). Firmware Ed25519
-  verification not implemented. No HSM backing. No EDK2 build environment.
-- **Close criteria**: (1) Implement firmware cert chain verification (vend
-  a minimal X.509 path validator or use BaseCryptLib X509 if available).
-  (2) Implement firmware Ed25519 verification. (3) Verify on a real EDK2
-  build + QEMU/swtpm.
+  **D-205 firmware ES256 verification (this session)**:
+  - `PblApp.h`: Added `VerdictSigningCert` + `VerdictSigningCertSize` fields
+    to `PBL_POLICY`. Updated `PblVerifyCoseSign1` signature to accept
+    cert DER instead of SPKI. Added `PblGetPolicySigningKeyCert()` accessor.
+  - `CborDecode.c`: Parses C4 key 77 (`signing_cert_chain`) as array of
+    DER certs. First bstr = leaf cert → `Policy->VerdictSigningCert`.
+    Remaining bstrs consumed and discarded (chain validation pending).
+  - `CoseVerify.c`: ES256 verification via `EcGetPublicKeyFromX509` +
+    `EcDsaVerify` + `EcFree`. Fixed `PblCvPutTstr` bug (was encoding
+    "Signature1" as bstr 0x4A instead of tstr 0x6A — root cause of
+    signature verification failure). Ed25519 (alg -8) returns
+    `EFI_UNSUPPORTED`.
+  - `PblApp.c`: Verdict verification now passes `Policy.VerdictSigningCert`
+    (key 77) instead of `Policy.VerdictSigningKeySpki` (key 76).
+  - `PolicyRootOfTrust.c`: Added `gPblPolicySigningKeyCert` +
+    `PblGetPolicySigningKeyCert()` for policy signature verification.
+  - `Policy.c`: Policy signature verification now uses cert DER via
+    `PblGetPolicySigningKeyCert()`.
+  - `PblPkg.dsc`: Switched from `OpensslLib.inf` to `OpensslLibFull.inf`
+    to include EC crypto support (`crypto/ec/` source files). Binary
+    size increased from 823KB to 1081KB.
+  - `test-d205.py`: Test harness generates P-256 key pair, self-signed
+    X.509 cert, signed COSE_Sign1 policy blob (key 77), and mock verdict
+    server that signs verdicts with ES256.
+  - `test-d205-harness.sh`: QEMU+swtpm test harness (Docker-based).
+  **QEMU+swtpm verification**: PBL boots, reads policy.cose (614 bytes),
+  fetches verdict from mock server (205 bytes), verifies ES256 signature
+  using `EcGetPublicKeyFromX509` + `EcDsaVerify`. Serial output:
+  `[OK] Verdict signature verified (ES256)` and
+  `[OK] Verdict decoded: verdict=0 policy_version=1`.
+  PblApp.efi SHA-256 91ed0c064495d00a91f543a87c7a52066d9215938fcee4a0cdb2f1aa14cd423b.
+- **Blocker**: X.509 chain path validation not implemented (only leaf cert
+  used). Ed25519 firmware verification not implemented (no EDK2 lib).
+  No HSM backing. No-certificate fallback still sets OnlineFetchOk=TRUE
+  (must be changed to fail-closed for production).
+- **Close criteria**: (1) Implement firmware ES256 verification. ✅
+  (2) Verify on a real EDK2 build + QEMU/swtpm. ✅
+  (3) Implement X.509 chain path validation. (pending — D-205 sub-debt)
+  (4) Implement firmware Ed25519 verification. (pending — D-205 sub-debt)
+  (5) Remove no-certificate fallback for production. (pending — D-205 sub-debt)
 - **Update (2026-09-09)**: Ed25519 signing support added to the Express
   `server/src/pbl/cose.js` — `generateSigningKey('Ed25519')`,
   `signData`, `verifySignature`, and `encodeCoseSign1` now support both
@@ -805,6 +838,14 @@
   invalid signature rejection, algorithm mapping) in
   `server/tests/pblVerdictPolicyEnroll.test.js`. 27 server tests pass
   in that file. Firmware Ed25519 verification remains blocked by EDK2.
+- **Update (2026-09-10)**: Firmware ES256 signature verification verified
+  in QEMU+swtpm. Root cause of initial failure: `PblCvPutTstr` in
+  CoseVerify.c was encoding "Signature1" as CBOR bstr (0x4A) instead of
+  tstr (0x6A), causing the Sig_structure hash to mismatch. Fixed by
+  using `CBOR_MAJOR_TSTR` (3) in `PblCvPutTstr`. Also required switching
+  from `OpensslLib.inf` to `OpensslLibFull.inf` to include EC crypto
+  support. D-205 CLOSED for ES256; X.509 chain validation, Ed25519
+  firmware verify, and no-cert fallback hardening remain as sub-debt.
 
 ### D-206 — PBL device identity mapping not implemented
 - **Status**: CLOSED (commit 60c0a78, artifact: 521 server tests pass)

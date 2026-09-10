@@ -851,6 +851,34 @@ PblCborDecodePolicy (
         break;
       }
 
+      case 77: {  // signing_cert_chain (array of bstr, D-205)
+        // D-205: X.509 cert chain [leaf, intermediate, root] as DER bytes.
+        // Extract the first cert (leaf) for EcGetPublicKeyFromX509().
+        // Remaining certs are skipped (chain validation is future work).
+        UINT8        Mt77;
+        UINT64       ArrLen;
+        Status = PblCborReadHead (&Cursor, &Mt77, &ArrLen);
+        if (EFI_ERROR (Status)) return Status;
+        if (Mt77 != CBOR_MAJOR_ARRAY) return EFI_PROTOCOL_ERROR;
+        if (ArrLen > 0) {
+          // Read the first cert (leaf)
+          CONST UINT8 *CertDer;
+          UINTN        CertDerLen;
+          Status = PblCborReadBstr (&Cursor, &CertDer, &CertDerLen);
+          if (EFI_ERROR (Status)) return Status;
+          Policy->VerdictSigningCert = CertDer;
+          Policy->VerdictSigningCertSize = CertDerLen;
+          // Skip remaining certs in the chain
+          for (UINT64 Ci = 1; Ci < ArrLen; Ci++) {
+            CONST UINT8 *Skip;
+            UINTN        SkipLen;
+            Status = PblCborReadBstr (&Cursor, &Skip, &SkipLen);
+            if (EFI_ERROR (Status)) return Status;
+          }
+        }
+        break;
+      }
+
       case 80:  // verdict_freshness_seconds (uint)
         Status = PblCborReadUint (&Cursor, &Key);
         if (EFI_ERROR (Status)) return Status;

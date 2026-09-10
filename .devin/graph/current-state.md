@@ -51,108 +51,103 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-09-09: D-109/D-110 breakthrough — full UEFI network verdict flow verified
+## Latest session: 2026-09-10: D-205 firmware ES256 signature verification
 
 ### RULE-ZERO
-**Read**: `.devin/graph/trace.md` (last session), `docs/adr/PBL-DEBT-LEDGER.md`,
-  `firmware/PblPkg/PblApp/HttpsClient.c`, `firmware/PblPkg/PblApp/CborDecode.c`,
-  `firmware/PblPkg/PblApp/PblApp.c`, `firmware/PblPkg/PblApp/PblApp.h`,
-  `firmware/PblPkg/PblApp/PblApp.inf`, `firmware/PblPkg/build-pbl.sh`,
-  EDK2 OVMF DSC includes (NetworkComponents, OvmfTpmDefines, OvmfRngComponents).
-**Finding**: The D-109/D-110 blocker was a chain of five issues, each masking
-  the next: (1) CBOR policy key 2 encoded as tstr but parser expects uint,
-  (2) OVMF built without TPM2_ENABLE so TCG2 protocol missing,
-  (3) HTTP protocol requires EFI_HTTP_SERVICE_BINDING_PROTOCOL CreateChild,
-  not LocateProtocol, (4) MnpDxe auto-DEPEX includes gEfiRngProtocolGuid which
-  requires CPU RDRAND (QEMU default CPU lacks it), (5) PblParseUriHostname and
-  PblHttpsPost both rejected http:// URIs, and (6) DHCP didn't assign an IP in
-  QEMU user networking so a static IP was needed.
+**Read**: `.devin/graph/trace.md` (last session), `docs/adr/PBL-DEBT-LEDGER.md`
+  (D-205 entry), `firmware/PblPkg/PblApp/CoseVerify.c`, `CborDecode.c`,
+  `PblApp.c`, `PblApp.h`, `Policy.c`, `PolicyRootOfTrust.c`, `Verdict.c`,
+  `PblPkg.dsc`, `test-d205.py`.
+**Finding**: D-205 was partially implemented in a prior session — policy key
+  77 parsing, ES256 verification scaffolding, and the test harness were all
+  in place, but `EcDsaVerify` returned FALSE despite matching kid, successful
+  cert loading, and a 64-byte signature. The Sig_structure reconstruction
+  in `PblBuildSigStructure()` was the prime suspect.
 
 ### Fog cleared this session
-- **Policy CBOR encoding**: The firmware parser (`CborDecode.c` line 728-731)
-  expects key 2 as `issued_at (uint)`, not `name (tstr)`. The test policy was
-  regenerated with key 2 = uint(0). Source: `CborDecode.c` lines 721-731.
-- **OVMF TPM2 support**: `OvmfTpmDefines.dsc.inc` defaults `TPM2_ENABLE=FALSE`.
-  Rebuilt OVMF with `-D TPM2_ENABLE=TRUE` alongside HTTP+TLS flags. Source:
-  `OvmfPkg/Include/Dsc/OvmfTpmDefines.dsc.inc` line 2.
-- **HTTP Service Binding**: `EFI_HTTP_PROTOCOL` is not a global protocol — it
-  must be obtained via `EFI_HTTP_SERVICE_BINDING_PROTOCOL.CreateChild()` then
-  `HandleProtocol(child, gEfiHttpProtocolGuid)`. Source: `HttpDriver.c` in EDK2
-  NetworkPkg.
-- **Network driver dispatch**: PBL runs during BDS before the BDS
-  driver-connection phase. Added `ConnectController` on all handles to connect
-  network drivers to the NIC. Source: UEFI spec §10.6 (Driver Connection).
-- **MnpDxe DEPEX requires RNG**: MnpDxe's auto-generated DEPEX (234 bytes,
-  13 PUSH+AND opcodes) includes `gEfiRngProtocolGuid`. Without RDRAND, RngDxe
-  fails and MnpDxe is never dispatched, blocking the entire network stack.
-  Fix: add `-cpu qemu64,+rdrand` to QEMU. Source: `Guid.xref` in build output,
-  `MnpDxe.depex` decoded with EDK2 DEPEX opcodes (0x02=PUSH, 0x03=AND, 0x08=END).
-- **HTTP static IP**: QEMU user networking DHCP didn't assign an IP within 5s.
-  Configured static IP 10.0.2.15/24 in `EFI_HTTPv4_ACCESS_POINT`. Source:
-  `Http.h` EFI_HTTPv4_ACCESS_POINT struct.
-- **Full verdict flow verified**: Mock HTTP server received 108-byte POST,
-  returned 153-byte COSE_Sign1 verdict. PBL decoded verdict=0 (ALLOW),
-  policy_version=1. Signature verification skipped (D-205 — no SPKI in policy).
-  Verdict blocked due to zero signature (Security Violation — fail-closed).
+- **Root cause of EcDsaVerify FALSE**: `PblCvPutTstr()` in CoseVerify.c
+  delegated to `PblCvPutBstr()`, which used `CBOR_MAJOR_BSTR` (2) instead of
+  `CBOR_MAJOR_TSTR` (3). This encoded "Signature1" as `0x4A` (bstr) instead
+  of `0x6A` (tstr), causing the Sig_structure hash to mismatch the signer's
+  hash. Fixed by using `CBOR_MAJOR_TSTR` directly in `PblCvPutTstr`.
+  Source: `CoseVerify.c` lines 108-130.
+- **EC crypto support in OpenSSL**: The standard `OpensslLib.inf` omits
+  `crypto/ec/` source files, so `EcGetPublicKeyFromX509` failed at runtime.
+  Switched `PblPkg.dsc` to `OpensslLibFull.inf` which includes EC support.
+  Binary size increased from ~823KB to ~1081KB. Source: `PblPkg.dsc`.
+- **Mock server nonce/device_id echo**: The mock verdict server returned
+  zeros for device_id and nonce, causing `PblVerifyVerdict` (step 5/6) to
+  fail with Security Violation. Fixed by parsing the request body and
+  echoing back the device_id (key 1) and nonce (key 2). Source:
+  `test-d205.py` lines 250-282.
+- **Full ES256 verification flow verified**: QEMU+swtpm serial output
+  shows `[OK] Verdict signature verified (ES256)` and
+  `[OK] Verdict decoded: verdict=0 policy_version=1`. The subsequent
+  `Device Error` is from the UEFI clock (QEMU has no RTC), not a signature
+  issue. PblApp.efi SHA-256
+  91ed0c064495d00a91f543a87c7a52066d9215938fcee4a0cdb2f1aa14cd423b.
 
 ### Fog remaining
-- TLS/HTTPS not tested — OVMF built with `NETWORK_ALLOW_HTTP_CONNECTIONS=TRUE`
-  for testing. Production must use HTTPS with CA certificate configuration.
-  The `http://` acceptance in `PblHttpsPost` and `PblParseUriHostname` is
-  temporary (marked TODO D-109).
-- Verdict signature verification not exercised — mock verdict has zero
-  signature. Needs a real ECDSA key pair and SPKI in the policy blob (D-205).
-- NV index provisioning still not done — TPM NV reads return Device Error
-  because test indexes aren't defined.
-- Response HMAC verification and AES parameter encryption still not exercised.
+- X.509 chain path validation not implemented — only the leaf cert is used
+  for ECDSA verification. The remaining certs in the chain (key 77 array)
+  are consumed and discarded. Production requires full path validation.
+- Ed25519 firmware verification not implemented — `CoseVerify.c` returns
+  `EFI_UNSUPPORTED` for alg -8. EDK2 BaseCryptLib does not expose Ed25519
+  verify in standard builds.
+- No-certificate fallback in `PblApp.c` still sets `OnlineFetchOk = TRUE`
+  when policy has no cert chain. This must be changed to fail-closed for
+  production (sub-debt of D-205).
+- UEFI clock returns 0 in QEMU (no RTC), causing `PblVerifyVerdict` step 8
+  (issued_at/grace_until time validation) to fail with Device Error. Real
+  hardware has RTC. QEMU can be configured with `-rtc base=...`.
+- TLS/HTTPS not tested — OVMF built with `NETWORK_ALLOW_HTTP_CONNECTIONS=TRUE`.
+- NV index provisioning still not done — TPM NV reads return Device Error.
 - D-211 (real Windows hardware testing) remains open.
 
 ### Debt items closed
-- D-110 — Policy blob parsing: CLOSED. Policy blob read from ESP, CBOR/COSE
-  parsed, lock_service_uri extracted. Commit: (this session). Artifact:
-  QEMU+swtpm harness output showing `[INFO] policy.cose: 150 bytes` followed
-  by `[INFO] POSTing verdict request to http://10.0.2.2:8080/v1/verdict`.
-  PblApp.efi SHA-256 f5fa807933b1a7e513865fba1c956fd46906fb1b2347cdba5e3233ceeb7ef7be.
-- D-109 — Verdict fetch and verification: CLOSED (with caveats). Full HTTP
-  POST to mock verdict server, response received, verdict decoded (verdict=0,
-  policy_version=1). Caveat: TLS not tested (HTTP used for QEMU testing),
-  signature verification skipped (D-205). Commit: (this session). Artifact:
-  QEMU+swtpm+mock-server harness output showing `[OK] Verdict response: 153
-  bytes` and `[OK] Verdict decoded: verdict=0 policy_version=1`.
+- D-205 — Verdict signing infrastructure: CLOSED (firmware ES256
+  verification verified in QEMU+swtpm). Commit: (this session). Artifact:
+  QEMU+swtpm serial output showing `[OK] Verdict signature verified (ES256)`
+  and `[OK] Verdict decoded: verdict=0 policy_version=1`.
+  PblApp.efi SHA-256
+  91ed0c064495d00a91f543a87c7a52066d9215938fcee4a0cdb2f1aa14cd423b.
+  Sub-debt remains: X.509 chain validation, Ed25519 firmware verify,
+  no-cert fallback hardening.
 
 ### Debt items still open
-- D-205 — Verdict signing key SPKI in policy: OPEN (signature verification
-  skipped because policy has no SPKI)
+- D-205 sub-debt — X.509 chain path validation (only leaf cert used)
+- D-205 sub-debt — Ed25519 firmware verification (EFI_UNSUPPORTED)
+- D-205 sub-debt — No-certificate fallback must fail-closed for production
 - D-211 — Real Windows hardware testing: OPEN
 - TLS/HTTPS configuration for production: OPEN (sub-task of D-109)
 - NV index provisioning for authenticated NV commands: OPEN
-- Response HMAC verification and AES parameter encryption: OPEN
 
 ### Blockers named and status
-- TLS CA certificate configuration: blocks HTTPS in production. For QEMU
-  testing, HTTP is used with `NETWORK_ALLOW_HTTP_CONNECTIONS=TRUE`.
-- Verdict signature key: blocks signature verification. Needs ECDSA key pair
-  and SPKI embedded in policy blob (D-205).
-- CPU RDRAND: required for MnpDxe dispatch. QEMU needs `-cpu qemu64,+rdrand`.
-  Real hardware has RDRAND on all modern x86 CPUs.
+- X.509 chain validation: blocks full D-205 production readiness. Only
+  the leaf cert is used; intermediate/root certs are discarded.
+- Ed25519 firmware verify: blocks Ed25519 algorithm support in firmware.
+  EDK2 BaseCryptLib does not expose Ed25519 in standard builds.
+- No-certificate fallback: blocks production fail-closed behavior.
+  `PblApp.c` sets `OnlineFetchOk = TRUE` when policy has no cert chain.
+- UEFI clock in QEMU: blocks full verdict time validation in virtualized
+  testing. QEMU has no RTC by default.
 
 ### Failure attribution
-- Layer 3 (Execution environment): The QEMU default CPU model lacks RDRAND,
-  which silently prevents MnpDxe from dispatching (DEPEX not satisfied),
-  which prevents the entire UEFI network stack from initializing. The failure
-  manifests as "HTTP SB: Not Found" with no indication that RNG is the root
-  cause. Harness change: add a QEMU CPU feature check to the test harness that
-  verifies RDRAND is available before running network tests.
-- Layer 2 (Context provision): The `EFI_HTTP_PROTOCOL` is not a globally
-  installable protocol — it requires `EFI_HTTP_SERVICE_BINDING_PROTOCOL`
-  CreateChild. This is documented in the UEFI spec but not in the PBL codebase.
-  Harness change: add a comment in HttpsClient.c documenting the service
-  binding pattern.
+- Layer 2 (Context provision): The CBOR major type for text strings (3)
+  vs byte strings (2) is an implicit RFC 8949 convention that was not
+  documented in the PBL codebase. `PblCvPutTstr` silently delegated to
+  `PblCvPutBstr`, producing a valid-but-wrong CBOR encoding. Harness
+  change: add a comment in `PblCvPutTstr` documenting the major type
+  distinction and a unit test that verifies "Signature1" encodes as 0x6A.
+- Layer 3 (Execution environment): The standard `OpensslLib.inf` omits
+  EC crypto source files, causing `EcGetPublicKeyFromX509` to fail at
+  runtime with no build-time warning. Harness change: document in
+  `PblPkg.dsc` that `OpensslLibFull.inf` is required for EC support.
 
 ### Next session opening
-Implement D-205 (verdict signing key SPKI in policy) to enable signature
-verification, or provision TPM NV indexes in swtpm to exercise authenticated
-NV commands with HMAC session and AES parameter encryption.
+Implement X.509 chain path validation in firmware (D-205 sub-debt), or
+harden the no-certificate fallback to fail-closed for production, or
+provision TPM NV indexes in swtpm to exercise authenticated NV commands.
 
 ---
 

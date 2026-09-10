@@ -6744,3 +6744,103 @@ verdict flow.
 Implement D-205 (verdict signing key SPKI in policy) to enable signature
 verification, or provision TPM NV indexes in swtpm to exercise authenticated
 NV commands with HMAC session and AES parameter encryption.
+
+---
+
+## Session 2026-09-10: D-205 firmware ES256 signature verification
+
+### RULE-ZERO
+**Read**: `.devin/graph/trace.md` (last session), `docs/adr/PBL-DEBT-LEDGER.md`
+  (D-205 entry), `firmware/PblPkg/PblApp/CoseVerify.c`, `CborDecode.c`,
+  `PblApp.c`, `PblApp.h`, `Policy.c`, `PolicyRootOfTrust.c`, `Verdict.c`,
+  `PblPkg.dsc`, `test-d205.py`.
+**Finding**: D-205 was partially implemented in a prior session — policy key
+  77 parsing, ES256 verification scaffolding, and the test harness were all
+  in place, but `EcDsaVerify` returned FALSE despite matching kid, successful
+  cert loading, and a 64-byte signature. The Sig_structure reconstruction
+  in `PblBuildSigStructure()` was the prime suspect.
+
+### Fog cleared this session
+- **Root cause of EcDsaVerify FALSE**: `PblCvPutTstr()` in CoseVerify.c
+  delegated to `PblCvPutBstr()`, which used `CBOR_MAJOR_BSTR` (2) instead of
+  `CBOR_MAJOR_TSTR` (3). This encoded "Signature1" as `0x4A` (bstr) instead
+  of `0x6A` (tstr), causing the Sig_structure hash to mismatch the signer's
+  hash. Fixed by using `CBOR_MAJOR_TSTR` directly in `PblCvPutTstr`.
+  Source: `CoseVerify.c` lines 108-130.
+- **EC crypto support in OpenSSL**: The standard `OpensslLib.inf` omits
+  `crypto/ec/` source files, so `EcGetPublicKeyFromX509` failed at runtime.
+  Switched `PblPkg.dsc` to `OpensslLibFull.inf` which includes EC support.
+  Binary size increased from ~823KB to ~1081KB. Source: `PblPkg.dsc`.
+- **Mock server nonce/device_id echo**: The mock verdict server returned
+  zeros for device_id and nonce, causing `PblVerifyVerdict` (step 5/6) to
+  fail with Security Violation. Fixed by parsing the request body and
+  echoing back the device_id (key 1) and nonce (key 2). Source:
+  `test-d205.py` lines 250-282.
+- **Full ES256 verification flow verified**: QEMU+swtpm serial output
+  shows `[OK] Verdict signature verified (ES256)` and
+  `[OK] Verdict decoded: verdict=0 policy_version=1`. The subsequent
+  `Device Error` is from the UEFI clock (QEMU has no RTC), not a signature
+  issue. PblApp.efi SHA-256
+  91ed0c064495d00a91f543a87c7a52066d9215938fcee4a0cdb2f1aa14cd423b.
+
+### Fog remaining
+- X.509 chain path validation not implemented — only the leaf cert is used
+  for ECDSA verification. The remaining certs in the chain (key 77 array)
+  are consumed and discarded. Production requires full path validation.
+- Ed25519 firmware verification not implemented — `CoseVerify.c` returns
+  `EFI_UNSUPPORTED` for alg -8. EDK2 BaseCryptLib does not expose Ed25519
+  verify in standard builds.
+- No-certificate fallback in `PblApp.c` still sets `OnlineFetchOk = TRUE`
+  when policy has no cert chain. This must be changed to fail-closed for
+  production (sub-debt of D-205).
+- UEFI clock returns 0 in QEMU (no RTC), causing `PblVerifyVerdict` step 8
+  (issued_at/grace_until time validation) to fail with Device Error. Real
+  hardware has RTC. QEMU can be configured with `-rtc base=...`.
+- TLS/HTTPS not tested — OVMF built with `NETWORK_ALLOW_HTTP_CONNECTIONS=TRUE`.
+- NV index provisioning still not done — TPM NV reads return Device Error.
+- D-211 (real Windows hardware testing) remains open.
+
+### Debt items closed
+- D-205 — Verdict signing infrastructure: CLOSED (firmware ES256
+  verification verified in QEMU+swtpm). Commit: (this session). Artifact:
+  QEMU+swtpm serial output showing `[OK] Verdict signature verified (ES256)`
+  and `[OK] Verdict decoded: verdict=0 policy_version=1`.
+  PblApp.efi SHA-256
+  91ed0c064495d00a91f543a87c7a52066d9215938fcee4a0cdb2f1aa14cd423b.
+  Sub-debt remains: X.509 chain validation, Ed25519 firmware verify,
+  no-cert fallback hardening.
+
+### Debt items still open
+- D-205 sub-debt — X.509 chain path validation (only leaf cert used)
+- D-205 sub-debt — Ed25519 firmware verification (EFI_UNSUPPORTED)
+- D-205 sub-debt — No-certificate fallback must fail-closed for production
+- D-211 — Real Windows hardware testing: OPEN
+- TLS/HTTPS configuration for production: OPEN (sub-task of D-109)
+- NV index provisioning for authenticated NV commands: OPEN
+
+### Blockers named and status
+- X.509 chain validation: blocks full D-205 production readiness. Only
+  the leaf cert is used; intermediate/root certs are discarded.
+- Ed25519 firmware verify: blocks Ed25519 algorithm support in firmware.
+  EDK2 BaseCryptLib does not expose Ed25519 in standard builds.
+- No-certificate fallback: blocks production fail-closed behavior.
+  `PblApp.c` sets `OnlineFetchOk = TRUE` when policy has no cert chain.
+- UEFI clock in QEMU: blocks full verdict time validation in virtualized
+  testing. QEMU has no RTC by default.
+
+### Failure attribution
+- Layer 2 (Context provision): The CBOR major type for text strings (3)
+  vs byte strings (2) is an implicit RFC 8949 convention that was not
+  documented in the PBL codebase. `PblCvPutTstr` silently delegated to
+  `PblCvPutBstr`, producing a valid-but-wrong CBOR encoding. Harness
+  change: add a comment in `PblCvPutTstr` documenting the major type
+  distinction and a unit test that verifies "Signature1" encodes as 0x6A.
+- Layer 3 (Execution environment): The standard `OpensslLib.inf` omits
+  EC crypto source files, causing `EcGetPublicKeyFromX509` to fail at
+  runtime with no build-time warning. Harness change: document in
+  `PblPkg.dsc` that `OpensslLibFull.inf` is required for EC support.
+
+### Next session opening
+Implement X.509 chain path validation in firmware (D-205 sub-debt), or
+harden the no-certificate fallback to fail-closed for production, or
+provision TPM NV indexes in swtpm to exercise authenticated NV commands.

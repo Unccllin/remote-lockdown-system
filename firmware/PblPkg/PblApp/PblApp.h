@@ -167,11 +167,17 @@ typedef struct {
   UINT8                     LockServiceCertPin[32]; // C4 key 71
   UINT8                     TlsCaPin[32];          // C4 key 73
   // D-205: Verdict signing key SPKI (full DER, not just SHA-256 fingerprint).
-  // Used by PblVerifyCoseSign1() for EcDsaVerify on verdict COSE_Sign1.
   // kid (LockServiceCertPin) = SHA-256 of this SPKI.
   // Pointer into RawCbor — valid as long as the policy buffer is alive.
   CONST UINT8               *VerdictSigningKeySpki; // C4 key 76
   UINTN                     VerdictSigningKeySpkiSize;
+  // D-205: Verdict signing cert chain (C4 key 77) — array of DER certs.
+  // The leaf cert (first element) is used with EcGetPublicKeyFromX509()
+  // to obtain an EC context for EcDsaVerify. This is required because
+  // BaseCryptLib has no EcSetPubKey — only EcGetPublicKeyFromX509.
+  // Pointer into RawCbor — valid as long as the policy buffer is alive.
+  CONST UINT8               *VerdictSigningCert;    // C4 key 77 (leaf cert)
+  UINTN                     VerdictSigningCertSize;
   UINT32                    VerdictFreshnessSec;   // C4 key 80
   UINT32                    GracePeriodSec;        // C4 key 81
   UINT32                    WipeDeadlineSec;       // C4 key 82
@@ -647,14 +653,14 @@ PblCoseParseProtectedHeader (
   OUT UINTN       *KidSize
   );
 
-// CoseVerify.c — COSE_Sign1 signature verification (D-109/D-110)
+// CoseVerify.c — COSE_Sign1 signature verification (D-109/D-110/D-205)
 EFI_STATUS
 PblVerifyCoseSign1 (
   IN CONST UINT8  *CoseData,
   IN UINTN         CoseSize,
-  IN CONST UINT8   *PublicKeySpki,    // SPKI DER bytes of the signing key
-  IN UINTN          PublicKeySpkiSize,
-  IN CONST UINT8   *ExpectedKid,      // 32-byte SHA-256 of SPKI (from policy)
+  IN CONST UINT8   *SigningCertDer,    // X.509 leaf cert DER (from policy key 77)
+  IN UINTN          SigningCertDerSize,
+  IN CONST UINT8   *ExpectedKid,       // 32-byte SHA-256 of SPKI (from policy key 71)
   IN UINTN          ExpectedKidSize
   );
 
@@ -672,6 +678,11 @@ PblGetPolicySigningKeySpki (
 CONST UINT8 *
 PblGetPolicySigningKeyKid (
   VOID
+  );
+
+CONST UINT8 *
+PblGetPolicySigningKeyCert (
+  OUT UINTN  *CertSize
   );
 
 // Verdict.c — C1 §7 (9-step verification)

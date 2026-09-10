@@ -59,7 +59,7 @@
   # Crypto (for COSE_Sign1 verification, C1/C4)
   BaseCryptLib|CryptoPkg/Library/BaseCryptLib/BaseCryptLib.inf
   IntrinsicLib|CryptoPkg/Library/IntrinsicLib/IntrinsicLib.inf
-  OpensslLib|CryptoPkg/Library/OpensslLib/OpensslLib.inf
+  OpensslLib|CryptoPkg/Library/OpensslLib/OpensslLibFull.inf
   SynchronizationLib|MdePkg/Library/BaseSynchronizationLib/BaseSynchronizationLib.inf
   TimerLib|MdePkg/Library/SecPeiDxeTimerLibCpu/SecPeiDxeTimerLibCpu.inf
   RngLib|MdeModulePkg/Library/BaseRngLibTimerLib/BaseRngLibTimerLib.inf

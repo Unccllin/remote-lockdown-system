@@ -114,9 +114,19 @@ PblCvPutTstr (
   IN     CONST CHAR8  *Str
   )
 {
-  UINTN Len = 0;
+  UINTN       Len = 0;
+  EFI_STATUS  Status;
+
   while (Str[Len] != '\0') Len++;
-  return PblCvPutBstr (Out, End, (CONST UINT8 *)Str, Len);
+
+  // D-205 fix: use CBOR_MAJOR_TSTR (3), not CBOR_MAJOR_BSTR (2).
+  // "Signature1" must be a text string (0x6A) not a byte string (0x4A).
+  Status = PblCvPutHead (Out, End, CBOR_MAJOR_TSTR, Len);
+  if (EFI_ERROR (Status)) return Status;
+  if (*Out + Len > End) return EFI_BUFFER_TOO_SMALL;
+  CopyMem (*Out, Str, Len);
+  *Out += Len;
+  return EFI_SUCCESS;
 }
 
 // ============================================================================
@@ -229,15 +239,16 @@ PblBuildSigStructure (
 
   The caller provides:
     - The raw COSE_Sign1 bytes (CoseData/CoseSize)
-    - The signing key's SPKI DER bytes (PublicKeySpki/PublicKeySpkiSize)
+    - The signing key's X.509 leaf cert DER bytes (SigningCertDer/SigningCertDerSize)
+      from policy key 77 (signing_cert_chain)
     - The expected kid (32-byte SHA-256 of SPKI, from policy.lock_service_cert_pin)
 
-  @param  CoseData          The COSE_Sign1 bytes.
-  @param  CoseSize          Size of CoseData.
-  @param  PublicKeySpki     The signing key's SPKI DER bytes.
-  @param  PublicKeySpkiSize Size of PublicKeySpki.
-  @param  ExpectedKid       The expected kid (32-byte SHA-256 of SPKI).
-  @param  ExpectedKidSize   Size of ExpectedKid (should be 32).
+  @param  CoseData           The COSE_Sign1 bytes.
+  @param  CoseSize           Size of CoseData.
+  @param  SigningCertDer     The signing key's X.509 leaf cert DER bytes.
+  @param  SigningCertDerSize Size of SigningCertDer.
+  @param  ExpectedKid        The expected kid (32-byte SHA-256 of SPKI).
+  @param  ExpectedKidSize    Size of ExpectedKid (should be 32).
 
   @retval EFI_SUCCESS            Signature valid.
   @retval EFI_INVALID_PARAMETER  NULL parameter.
@@ -249,8 +260,8 @@ EFI_STATUS
 PblVerifyCoseSign1 (
   IN CONST UINT8  *CoseData,
   IN UINTN         CoseSize,
-  IN CONST UINT8   *PublicKeySpki,
-  IN UINTN          PublicKeySpkiSize,
+  IN CONST UINT8   *SigningCertDer,
+  IN UINTN          SigningCertDerSize,
   IN CONST UINT8   *ExpectedKid,
   IN UINTN          ExpectedKidSize
   )
@@ -270,7 +281,7 @@ PblVerifyCoseSign1 (
   EFI_STATUS   Status;
 
   if (CoseData == NULL || CoseSize == 0 ||
-      PublicKeySpki == NULL || PublicKeySpkiSize == 0 ||
+      SigningCertDer == NULL || SigningCertDerSize == 0 ||
       ExpectedKid == NULL || ExpectedKidSize == 0) {
     return EFI_INVALID_PARAMETER;
   }
@@ -331,37 +342,33 @@ PblVerifyCoseSign1 (
         return EFI_SECURITY_VIOLATION;
       }
 
-      // Use BaseCryptLib ECDSA verification.
-      // EDK2 BaseCryptLib provides EcDsaVerify(EcContext, HashNid, Hash, HashSize, Sig, SigSize)
-      // but does NOT provide a way to load an EC public key from raw SPKI DER.
-      // EcGetPublicKeyFromX509() requires a full X.509 certificate, not SPKI.
-      //
-      // Until the policy provides a cert chain (C4 key 77) alongside the SPKI
-      // (C4 key 76), ES256 signature verification from SPKI alone is not
-      // supported. The server already generates cert chains (D-205), but the
-      // firmware policy parser only extracts key 76 (SPKI), not key 77 (cert
-      // chain).
-      //
-      // TODO: Parse C4 key 77 (signing_cert_chain) in Policy.c and pass the
-      //       leaf cert DER here instead of SPKI. Then use:
-      //   VOID *EcCtx = NULL;
-      //   if (EcGetPublicKeyFromX509 (CertDer, CertDerSize, &EcCtx)) {
-      //     Ok = EcDsaVerify (EcCtx, CRYPTO_NID_SHA256,
-      //                       Hash, sizeof (Hash), Signature, SignatureSize);
-      //     EcFree (EcCtx);
-      //   }
-      //
-      // For now, ES256 verification from SPKI is not supported.
+      // D-205: Use EcGetPublicKeyFromX509 to load the EC public key from
+      // the X.509 leaf cert (policy key 77). BaseCryptLib does not provide
+      // EcSetPubKey for raw SPKI — only EcGetPublicKeyFromX509 for certs.
+      VOID *EcCtx = NULL;
+      if (!EcGetPublicKeyFromX509 (SigningCertDer, SigningCertDerSize, &EcCtx)) {
+        FreePool (SigStructure);
+        return EFI_SECURITY_VIOLATION;
+      }
+
+      BOOLEAN Ok = EcDsaVerify (
+        EcCtx,
+        CRYPTO_NID_SHA256,
+        Hash, sizeof (Hash),
+        Signature, SignatureSize
+      );
+
+      EcFree (EcCtx);
       FreePool (SigStructure);
-      return EFI_UNSUPPORTED;
+
+      return Ok ? EFI_SUCCESS : EFI_SECURITY_VIOLATION;
     }
 
     case COSE_ALG_ED25519: {
       // Ed25519: EdDSA with Ed25519
-      // BaseCryptLib does not expose Ed25519 verify in standard EDK2 builds.
+      // BaseCryptLib only supports Ed448 (CRYPTO_NID_ED448), not Ed25519.
       // TODO: Implement Ed25519 verification when BaseCryptLib adds support
       //       or use a third-party Ed25519 library.
-      // For now, Ed25519 is not supported in firmware.
       FreePool (SigStructure);
       return EFI_UNSUPPORTED;
     }

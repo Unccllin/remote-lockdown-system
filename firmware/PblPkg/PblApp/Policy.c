@@ -101,17 +101,17 @@ PblVerifyPolicySignature (
     return EFI_UNSUPPORTED;
   }
 
-  UINTN        SpkiSize;
-  CONST UINT8 *Spki = PblGetPolicySigningKeySpki (&SpkiSize);
+  UINTN        CertSize;
+  CONST UINT8 *Cert = PblGetPolicySigningKeyCert (&CertSize);
   CONST UINT8 *Kid  = PblGetPolicySigningKeyKid ();
 
-  if (Spki == NULL || Kid == NULL || SpkiSize == 0) {
+  if (Cert == NULL || Kid == NULL || CertSize == 0) {
     return EFI_UNSUPPORTED;
   }
 
   return PblVerifyCoseSign1 (
     CoseData, CoseSize,
-    Spki, SpkiSize,
+    Cert, CertSize,
     Kid, 32
   );
 }

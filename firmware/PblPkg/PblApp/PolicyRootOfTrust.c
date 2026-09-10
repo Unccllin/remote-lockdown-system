@@ -50,6 +50,10 @@
 static CONST UINT8 gPblPolicySigningKeySpki[1] = { 0x00 };
 static CONST UINTN gPblPolicySigningKeySpkiSize = 0;
 static CONST UINT8 gPblPolicySigningKeyKid[32] = { 0 };
+// D-205: Policy signing key cert DER (for EcGetPublicKeyFromX509).
+// In production, this is a self-signed root CA cert pinned at build time.
+static CONST UINT8 gPblPolicySigningKeyCert[1] = { 0x00 };
+static CONST UINTN gPblPolicySigningKeyCertSize = 0;
 #endif
 
 /** Check whether the policy signing key root of trust is provisioned.
@@ -99,4 +103,29 @@ PblGetPolicySigningKeyKid (
     return NULL;
   }
   return gPblPolicySigningKeyKid;
+}
+
+/** Get the pinned policy signing key X.509 cert DER (D-205).
+
+  Used by PblVerifyPolicySignature() to obtain an EC context via
+  EcGetPublicKeyFromX509(). In production, this is a self-signed
+  root CA cert pinned at build time.
+
+  @param  CertSize  Output: size of the cert DER (0 if not provisioned).
+
+  @retval Pointer to the cert DER bytes, or NULL if not provisioned.
+**/
+CONST UINT8 *
+PblGetPolicySigningKeyCert (
+  OUT UINTN  *CertSize
+  )
+{
+  if (CertSize == NULL) {
+    return NULL;
+  }
+  *CertSize = gPblPolicySigningKeyCertSize;
+  if (gPblPolicySigningKeyCertSize == 0) {
+    return NULL;
+  }
+  return gPblPolicySigningKeyCert;
 }

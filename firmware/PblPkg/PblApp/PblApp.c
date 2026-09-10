@@ -340,12 +340,13 @@ PblAppEntryPoint (
         Status = PblCborDecodeVerdict (VerdictCose, VerdictCoseSize, &Verdict);
         if (!EFI_ERROR (Status)) {
           // D-109/D-205: C1 §7 steps 1-3 — COSE signature verification.
-          // The verdict signing key's SPKI comes from the policy blob (C4 key 76).
-          // The expected kid is LockServiceCertPin (C4 key 71, SHA-256 of SPKI).
-          if (Policy.VerdictSigningKeySpki != NULL && Policy.VerdictSigningKeySpkiSize > 0) {
+          // The verdict signing key's X.509 leaf cert comes from the policy
+          // blob (C4 key 77, signing_cert_chain). The expected kid is
+          // LockServiceCertPin (C4 key 71, SHA-256 of SPKI).
+          if (Policy.VerdictSigningCert != NULL && Policy.VerdictSigningCertSize > 0) {
             Status = PblVerifyCoseSign1 (
               VerdictCose, VerdictCoseSize,
-              Policy.VerdictSigningKeySpki, Policy.VerdictSigningKeySpkiSize,
+              Policy.VerdictSigningCert, Policy.VerdictSigningCertSize,
               Policy.LockServiceCertPin, 32
             );
             if (EFI_ERROR (Status)) {
@@ -359,9 +360,9 @@ PblAppEntryPoint (
                 Verdict.Verdict, Verdict.PolicyVersion);
             }
           } else {
-            // D-205: No SPKI in policy — can't verify signature.
+            // D-205: No cert chain in policy — can't verify signature.
             // This is a policy configuration error, not a verdict error.
-            Print (L"  [WARN] Verdict signature verification skipped — policy has no SPKI (D-205)\n");
+            Print (L"  [WARN] Verdict signature verification skipped — policy has no cert chain (D-205)\n");
             OnlineFetchOk = TRUE;
             Print (L"  [OK] Verdict decoded: verdict=%d policy_version=%d\n",
               Verdict.Verdict, Verdict.PolicyVersion);
