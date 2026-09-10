@@ -893,16 +893,19 @@ PblCborDecodePolicy (
           Policy->VerdictSigningRootCert = CertPtrs[NumCerts - 1];
           Policy->VerdictSigningRootCertSize = CertSizes[NumCerts - 1];
 
-          // Concatenate all certs EXCEPT the root for X509VerifyCertChain.
+          // Concatenate all certs EXCEPT the root for X509VerifyCertChain,
+          // in REVERSED order (intermediate first, leaf last).
           // X509VerifyCertChain(RootCert, CertChain) verifies each cert in
           // CertChain against the preceding cert, starting with RootCert.
-          // Including the root in the chain would cause it to be verified
-          // against the leaf (which fails — the leaf doesn't sign the root).
+          // So the chain must be ordered: [intermediate, ..., leaf] so that
+          // root verifies intermediate, intermediate verifies leaf, etc.
+          // C4 key 77 is [leaf, intermediate, root] — we reverse excluding root.
           UINTN ChainSize = TotalChainSize - CertSizes[NumCerts - 1];
           Policy->VerdictSigningCertChain = AllocatePool (ChainSize);
           if (Policy->VerdictSigningCertChain != NULL) {
             UINT8 *P = Policy->VerdictSigningCertChain;
-            for (UINT64 Ci = 0; Ci < NumCerts - 1; Ci++) {
+            // Write certs in reverse order (excluding root at index NumCerts-1)
+            for (INT64 Ci = (INT64)NumCerts - 2; Ci >= 0; Ci--) {
               CopyMem (P, CertPtrs[Ci], CertSizes[Ci]);
               P += CertSizes[Ci];
             }

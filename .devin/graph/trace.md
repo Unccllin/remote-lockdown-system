@@ -7416,3 +7416,98 @@ with RootCert as the trust anchor.
 Implement Ed25519 firmware verification (D-205 sub-debt, blocked by
 BaseCryptLib), or run the firmware on real Windows hardware to test the
 PASS path (D-211), or test a 3-cert chain (leaf + intermediate + root).
+
+---
+
+## Session 2026-08-30 (continued 6): D-205 3-cert chain + stale debt ledger cleanup
+
+### RULE-ZERO
+**Read**: `CborDecode.c` key 77 chain building (lines 896-913),
+`CryptX509.c` X509VerifyCertChain implementation, `PBL-DEBT-LEDGER.md`
+D-111..D-128 table entries, `Decision.c`, `LockScreen.c`, `Override.c`,
+`ChainLoad.c`, `CborEncode.c`, `CborDecode.c`, `SpiProtections.c`,
+`DciCheck.c`, `DmaProtection.c`, `Svn.c`, `Sbat.c`, `TcgLog.c`,
+`AmtCheck.c`, `PlatformState.c`.
+**Finding**: Two issues identified:
+1. The 2-cert chain (leaf + root) worked, but the 3-cert chain
+   (leaf + intermediate + root) failed because X509VerifyCertChain
+   expects certs ordered from intermediate (signed by root) down to
+   leaf, not leaf-first.
+2. The debt ledger had 18 stale entries (D-111..D-128) marked OPEN
+   even though the code was fully implemented.
+
+### Fog cleared
+- **3-cert chain ordering fix**: X509VerifyCertChain(RootCert, CertChain)
+  verifies each cert in CertChain against the preceding cert, starting
+  with RootCert. C4 key 77 is [leaf, intermediate, root]. The firmware
+  must reverse the order (excluding root) to [intermediate, leaf] so
+  that: (1) root verifies intermediate, (2) intermediate verifies leaf.
+  Fix: CborDecode.c now writes certs in reverse order (excluding root).
+  Source: `CborDecode.c` lines 896-913.
+- **3-cert chain verified in QEMU+swtpm**: Full end-to-end flow with
+  root CA → intermediate CA → leaf cert chain:
+  ```
+  [OK] Cert chain validated
+  [OK] Verdict signature verified (ES256)
+  [OK] Verdict verified
+  [OK] Lock state cached to TPM NV
+  ```
+- **Stale debt ledger entries updated**: 18 entries (D-111..D-128)
+  verified as implemented and marked CLOSED in the debt ledger:
+  - D-111: Decision engine (Decision.c, 329 lines)
+  - D-112: Lock screen UI (LockScreen.c, 210 lines)
+  - D-113: Override challenge/response (Override.c, PblHandleOverride)
+  - D-114: Chain-load Windows (ChainLoad.c, PblChainLoadWindows)
+  - D-115: CBOR encoding/decoding (CborEncode.c + CborDecode.c)
+  - D-117: Runtime tests (8 QEMU+swtpm test-output logs)
+  - D-118: EFI_RNG_PROTOCOL (5 references in PblApp.c)
+  - D-119: ACPI FADT S3 (14 references in PlatformState.c)
+  - D-120: BitLocker detection (23 references in PlatformState.c)
+  - D-121: SPI protections (SpiProtections.c, 85 lines)
+  - D-122: DCI/DCP (DciCheck.c, 57 lines)
+  - D-123: DMA protection (DmaProtection.c, 63 lines)
+  - D-124: MOR (PblRequestMor in PblApp.c)
+  - D-125: TCG event log (TcgLog.c, 166 lines)
+  - D-126: SVN (Svn.c, 57 lines)
+  - D-127: AMT (AmtCheck.c, 66 lines)
+  - D-128: SBAT (Sbat.c, 109 lines)
+- **D-205 status updated**: X.509 chain validation now verified with
+  both 2-cert and 3-cert chains.
+
+### Fog remaining
+- Ed25519 firmware verification still not implemented (BaseCryptLib
+  does not expose Ed25519 verify).
+- D-116 (TLS certificate pin verification) remains OPEN.
+- D-129 (real hardware validation) remains OPEN.
+- D-130 (code signing) remains OPEN.
+
+### Debt items closed
+- D-205 sub-debt (3-cert chain validation): CLOSED. Root CA →
+  intermediate CA → leaf cert chain validated in QEMU+swtpm.
+  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d205-certchain-3cert.log`
+  Build SHA-256: `7688a2b0728e4ef5689706c1eda582979cd5adbc183b3a6da367676beff1f323`
+- D-111..D-128: Stale entries updated to CLOSED in debt ledger.
+
+### Debt items still open
+- D-116 — TLS certificate pin verification: OPEN
+- D-129 — Real hardware validation: OPEN
+- D-130 — Code signing: OPEN
+- D-205 sub-debt — Ed25519 firmware verification: OPEN (blocked by BaseCryptLib)
+- D-211 — Covert tracking mode (C5): OPEN (partial)
+
+### Blockers named and status
+- Ed25519 firmware verify: blocks Ed25519 algorithm support in firmware.
+  BaseCryptLib only supports Ed448, not Ed25519.
+- Real hardware: blocks PASS path and TRACKING verdict testing.
+
+### Failure attribution
+- Layer 2 (Context provision): The X509VerifyCertChain API expects certs
+  ordered from intermediate (signed by root) down to leaf. C4 key 77
+  is [leaf, intermediate, root] — the opposite order. This API contract
+  was not documented. Harness change: document the chain ordering
+  requirement in the C4 ADR.
+
+### Next session opening
+Implement D-116 (TLS certificate pin verification), or investigate
+Ed25519 verification options (third-party library), or run on real
+hardware (D-129/D-211).

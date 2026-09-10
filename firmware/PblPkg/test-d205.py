@@ -39,16 +39,18 @@ import cbor2
 KEY_PATH = "/tmp/pbl-d205-key.pem"
 CERT_PATH = "/tmp/pbl-d205-cert.der"
 ROOT_CERT_PATH = "/tmp/pbl-d205-root-cert.der"
+INT_CERT_PATH = "/tmp/pbl-d205-int-cert.der"
 SPKI_PATH = "/tmp/pbl-d205-spki.der"
 KID_PATH = "/tmp/pbl-d205-kid.bin"
 POLICY_DIR = "/tmp/pbl-d205"
 
 
 def generate_key_and_cert():
-    """Generate a P-256 root CA + leaf cert signed by root CA.
+    """Generate a P-256 root CA + intermediate CA + leaf cert.
 
+    Chain: root CA (self-signed) → intermediate CA → leaf (verdict signer).
     Returns (leaf_private_key, leaf_cert_der, leaf_spki_der, kid,
-             root_cert_der).
+             root_cert_der, intermediate_cert_der).
     """
     # Generate root CA key pair
     root_key = ec.generate_private_key(ec.SECP256R1())
@@ -68,23 +70,40 @@ def generate_key_and_cert():
     )
     root_cert_der = root_cert.public_bytes(serialization.Encoding.DER)
 
-    # Generate leaf (verdict signing) key pair
+    # Generate intermediate CA key pair (signed by root CA)
+    int_key = ec.generate_private_key(ec.SECP256R1())
+    int_subject = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, "PBL Test Intermediate CA"),
+    ])
+    int_cert = (
+        x509.CertificateBuilder()
+        .subject_name(int_subject)
+        .issuer_name(root_subject)  # signed by root CA
+        .public_key(int_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime(2026, 1, 1, tzinfo=timezone.utc))
+        .not_valid_after(datetime(2036, 1, 1, tzinfo=timezone.utc))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(root_key, hashes.SHA256())
+    )
+    int_cert_der = int_cert.public_bytes(serialization.Encoding.DER)
+
+    # Generate leaf (verdict signing) key pair (signed by intermediate CA)
     private_key = ec.generate_private_key(ec.SECP256R1())
     public_key = private_key.public_key()
 
-    # Create leaf cert signed by root CA
     leaf_subject = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, "PBL Test Verdict Signer"),
     ])
     cert = (
         x509.CertificateBuilder()
         .subject_name(leaf_subject)
-        .issuer_name(root_subject)  # signed by root CA
+        .issuer_name(int_subject)  # signed by intermediate CA
         .public_key(public_key)
         .serial_number(x509.random_serial_number())
         .not_valid_before(datetime(2026, 1, 1, tzinfo=timezone.utc))
         .not_valid_after(datetime(2036, 1, 1, tzinfo=timezone.utc))
-        .sign(root_key, hashes.SHA256())  # signed by root CA key
+        .sign(int_key, hashes.SHA256())  # signed by intermediate CA key
     )
 
     # Export
@@ -111,6 +130,10 @@ def generate_key_and_cert():
     with open(ROOT_CERT_PATH, "wb") as f:
         f.write(root_cert_der)
 
+    # Save intermediate cert DER
+    with open(INT_CERT_PATH, "wb") as f:
+        f.write(int_cert_der)
+
     # Save SPKI DER
     with open(SPKI_PATH, "wb") as f:
         f.write(spki_der)
@@ -119,14 +142,15 @@ def generate_key_and_cert():
     with open(KID_PATH, "wb") as f:
         f.write(kid)
 
-    print(f"[OK] P-256 key pair + root CA generated")
+    print(f"[OK] P-256 key pair + root CA + intermediate CA generated")
     print(f"  Leaf cert DER: {len(cert_der)} bytes -> {CERT_PATH}")
+    print(f"  Intermediate cert DER: {len(int_cert_der)} bytes -> {INT_CERT_PATH}")
     print(f"  Root cert DER: {len(root_cert_der)} bytes -> {ROOT_CERT_PATH}")
     print(f"  SPKI DER: {len(spki_der)} bytes -> {SPKI_PATH}")
     print(f"  kid (SHA-256 of SPKI): {kid.hex()} -> {KID_PATH}")
     print(f"  Private key: {KEY_PATH}")
 
-    return private_key, cert_der, spki_der, kid, root_cert_der
+    return private_key, cert_der, spki_der, kid, root_cert_der, int_cert_der
 
 
 def load_key_and_cert():
@@ -140,12 +164,14 @@ def load_key_and_cert():
         cert_der = f.read()
     with open(ROOT_CERT_PATH, "rb") as f:
         root_cert_der = f.read()
+    with open(INT_CERT_PATH, "rb") as f:
+        int_cert_der = f.read()
     with open(SPKI_PATH, "rb") as f:
         spki_der = f.read()
     with open(KID_PATH, "rb") as f:
         kid = f.read()
 
-    return private_key, cert_der, spki_der, kid, root_cert_der
+    return private_key, cert_der, spki_der, kid, root_cert_der, int_cert_der
 
 
 # ============================================================================
@@ -220,7 +246,7 @@ def encode_cose_sign1(payload, private_key, kid):
 
 def generate_policy(output_path, lock_service_uri="http://10.0.2.2:8080/v1/verdict"):
     """Generate a test policy blob with keys 70, 71, 76, 77."""
-    private_key, cert_der, spki_der, kid, root_cert_der = load_key_and_cert()
+    private_key, cert_der, spki_der, kid, root_cert_der, int_cert_der = load_key_and_cert()
 
     # Build the policy payload (CBOR map)
     # Key 1: version (uint)
@@ -228,14 +254,14 @@ def generate_policy(output_path, lock_service_uri="http://10.0.2.2:8080/v1/verdi
     # Key 70: lock_service_uri (tstr)
     # Key 71: lock_service_cert_pin (bstr 32) = SHA-256 of SPKI = kid
     # Key 76: verdict_signing_key_spki (bstr) = SPKI DER
-    # Key 77: signing_cert_chain (array of bstr) = [leaf_cert_der, root_cert_der]
+    # Key 77: signing_cert_chain (array of bstr) = [leaf, intermediate, root]
     policy_payload = cbor2.dumps({
         1: 1,                    # version
         2: 0,                    # issued_at (uint!)
         70: lock_service_uri,    # lock_service_uri
         71: kid,                 # lock_service_cert_pin
         76: spki_der,            # verdict_signing_key_spki
-        77: [cert_der, root_cert_der],  # signing_cert_chain [leaf, root]
+        77: [cert_der, int_cert_der, root_cert_der],  # 3-cert chain
     })
 
     # Wrap in COSE_Sign1 with a dummy signature (policy signing key not provisioned)
@@ -312,7 +338,7 @@ class VerdictHandler(BaseHTTPRequestHandler):
         })
 
         # Sign the verdict with ES256
-        private_key, cert_der, spki_der, kid, root_cert_der = load_key_and_cert()
+        private_key, cert_der, spki_der, kid, root_cert_der, int_cert_der = load_key_and_cert()
         verdict_cose = encode_cose_sign1(verdict_payload, private_key, kid)
 
         print(f"[SERVER] Returning {len(verdict_cose)} bytes signed verdict")
@@ -331,7 +357,7 @@ class VerdictHandler(BaseHTTPRequestHandler):
 
 def serve(port=8080):
     """Start the mock verdict server."""
-    private_key, cert_der, spki_der, kid, root_cert_der = load_key_and_cert()
+    private_key, cert_der, spki_der, kid, root_cert_der, int_cert_der = load_key_and_cert()
     print(f"[OK] Mock verdict server starting on port {port}")
     print(f"  Endpoint: http://0.0.0.0:{port}/v1/verdict")
     print(f"  Algorithm: ES256 (ECDSA P-256 SHA-256)")

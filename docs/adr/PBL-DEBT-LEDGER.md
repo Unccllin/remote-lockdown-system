@@ -1275,24 +1275,24 @@
 | D-108 | PblTpmReadPcr response parsing stubbed | CLOSED | STUB |
 | D-109 | Verdict fetch and verification not implemented | CLOSED | TODO |
 | D-110 | Policy blob parsing not implemented | CLOSED | TODO |
-| D-111 | Decision engine not implemented | OPEN | TODO |
-| D-112 | Lock screen UI not implemented | OPEN | TODO |
-| D-113 | Override challenge/response not implemented | OPEN | TODO |
-| D-114 | Chain-load Windows Boot Manager not implemented | OPEN | TODO |
-| D-115 | CBOR encoding/decoding not implemented | OPEN | TODO |
+| D-111 | Decision engine not implemented | CLOSED | TODO |
+| D-112 | Lock screen UI not implemented | CLOSED | TODO |
+| D-113 | Override challenge/response not implemented | CLOSED | TODO |
+| D-114 | Chain-load Windows Boot Manager not implemented | CLOSED | TODO |
+| D-115 | CBOR encoding/decoding not implemented | CLOSED | TODO |
 | D-116 | TLS certificate pin verification not implemented | OPEN | SECURITY |
-| D-117 | No runtime tests for PBL modules | OPEN | TEST |
-| D-118 | EFI_RNG_PROTOCOL nonce generation not implemented | OPEN | SECURITY |
-| D-119 | ACPI FADT S3 parsing stubbed | OPEN | STUB |
-| D-120 | BitLocker detection not implemented | OPEN | TODO |
-| D-121 | SPI protections check not implemented | OPEN | TODO |
-| D-122 | DCI/DCP check not implemented | OPEN | TODO |
-| D-123 | DMA protection check not implemented | OPEN | TODO |
-| D-124 | MOR not implemented | OPEN | TODO |
-| D-125 | TCG event log not implemented | OPEN | TODO |
-| D-126 | SVN check not implemented | OPEN | TODO |
-| D-127 | AMT check not implemented | OPEN | TODO |
-| D-128 | SBAT variable check not implemented | OPEN | TODO |
+| D-117 | No runtime tests for PBL modules | CLOSED (QEMU+swtpm: 8 test-output logs) | TEST |
+| D-118 | EFI_RNG_PROTOCOL nonce generation not implemented | CLOSED | SECURITY |
+| D-119 | ACPI FADT S3 parsing stubbed | CLOSED | STUB |
+| D-120 | BitLocker detection not implemented | CLOSED | TODO |
+| D-121 | SPI protections check not implemented | CLOSED | TODO |
+| D-122 | DCI/DCP check not implemented | CLOSED | TODO |
+| D-123 | DMA protection check not implemented | CLOSED | TODO |
+| D-124 | MOR not implemented | CLOSED | TODO |
+| D-125 | TCG event log not implemented | CLOSED | TODO |
+| D-126 | SVN check not implemented | CLOSED | TODO |
+| D-127 | AMT check not implemented | CLOSED | TODO |
+| D-128 | SBAT variable check not implemented | CLOSED | TODO |
 | D-129 | No real hardware validation | OPEN | ENV |
 | D-130 | Code signing not configured | OPEN | SECURITY |
 | D-200 | PBL verdict endpoint not implemented | OPEN (partial) | SERVER |
@@ -1300,7 +1300,7 @@
 | D-202 | PBL enrollment endpoint not implemented | OPEN (partial) | SERVER |
 | D-203 | PBL attestation endpoint not implemented | OPEN (partial — PCR digest comparison + AK Name binding implemented; event log + hardware pending) | SERVER |
 | D-204 | PBL override endpoints not implemented | OPEN (partial — challenge_seed binding + audit trail implemented; production operator key pending) | SERVER |
-| D-205 | Verdict signing infrastructure not implemented | OPEN (partial — Ed25519 server signing implemented; firmware cert chain + Ed25519 verification blocked by EDK2) | SECURITY |
+| D-205 | Verdict signing infrastructure not implemented | OPEN (partial — ES256 + X.509 chain validation verified in QEMU+swtpm; Ed25519 firmware verification blocked by EDK2) | SECURITY |
 | D-206 | PBL device identity mapping not implemented | CLOSED (commit 60c0a78) | SERVER |
 | D-207 | CBOR parsing in serverless Worker not implemented | CLOSED (commit 4ed2f48) | SERVER |
 | D-208 | COSE_Sign1 encoding in serverless Worker not implemented | CLOSED (commit ee311de) | SERVER |

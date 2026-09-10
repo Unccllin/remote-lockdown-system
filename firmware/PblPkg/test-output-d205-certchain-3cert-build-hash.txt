@@ -1,0 +1,4 @@
+Build SHA-256: 7688a2b0728e4ef5689706c1eda582979cd5adbc183b3a6da367676beff1f323
+QEMU+swtpm 3-cert chain validation test: 2026-09-10T09:08:30Z
+Result: PASS — 3-cert chain (root CA → intermediate CA → leaf) validated
+Chain order fix: C4 key 77 is [leaf, intermediate, root]; firmware reverses to [intermediate, leaf] for X509VerifyCertChain
