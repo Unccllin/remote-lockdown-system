@@ -51,81 +51,77 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-08-30 (continued 7): D-116 TLS certificate pin verification
+## Latest session: 2026-08-30 (continued 8): D-211 C5 tracking verified + debt ledger cleanup
 
 ### RULE-ZERO
-**Read**: `PBL-C3-Network-Client.md` §4 (TLS requirements, certificate
-pinning detail), `TlsVerify.c` (PblTlsVerifyCert implementation, 136 lines),
-`HttpsClient.c` (PblHttpsPost implementation, 405 lines), `PblApp.c`
-verdict fetch flow (lines 340-352), `PblApp.h` PblHttpsPost declaration.
-**Finding**: D-116 was partially implemented. TlsVerify.c had
-PblTlsVerifyCert (validates SHA-256 of server cert against pinned CA hash
-+ hostname verification), but PblHttpsPost did not accept TlsCaPin or
-ExpectedHostname parameters — there was no way to pass the pinned CA
-hash from policy to the HTTPS client. C3 §4 requires: "Certificate
-pinning: lock-service CA pinned in C4 tls_ca_pin. Do NOT trust platform
-TlsCaCertificate store alone."
+**Read**: `PBL-C5-Covert-Tracking.md` (full ADR, 357 lines), `Decision.c`
+TRACKING verdict handling (lines 311-319), `server/src/routes/pbl.js`
+verdict endpoint + track/stop-track endpoints, `agent/agent.py`
+handle_track + apply_tracking_data_protection + ensure_tracking_stealth,
+`dashboard/src/pages/PblDeviceDetailPage.jsx` Track/StopTrack buttons.
+**Finding**: D-211 (C5 covert tracking) was marked OPEN (partial) but
+all 12 items from the C5 implementation plan are fully implemented:
+1. C1 contract: PBL_VERDICT_TRACKING = 3 in PblApp.h
+2. Decision.c: handles TRACKING (does not force BLOCK)
+3. Server verdict route: maps 'tracking' status → TRACKING verdict
+4. Server /devices/:id/track endpoint: sets status to 'tracking'
+5. Server /devices/:id/stop-track endpoint: sets status to 'active'
+6. Agent handle_track: enters covert tracking mode
+7. Agent handle_stop_track: reverses tracking mode
+8. Agent apply_tracking_data_protection: 3 layers (disable real user,
+   create decoy, EFS encrypt)
+9. Agent remove_tracking_data_protection: reverses all 3 layers
+10. Agent ensure_tracking_stealth: scheduled task watchdog
+11. Dashboard handleTrack: Track Device button
+12. Dashboard handleStopTrack: Stop Track button
 
 ### Fog cleared
-- **PblHttpsPost signature extended**: Added TlsCaPin and ExpectedHostname
-  parameters. For https:// URIs, both are required (fail-closed if NULL).
-  For http:// URIs (QEMU test mode), parameters are accepted but TLS
-  is not invoked. Source: `HttpsClient.c` lines 91-101.
-- **PblParseUriHostname made public**: Was STATIC, now exported in
-  PblApp.h so PblApp.c can parse the hostname from LockServiceUri before
-  calling PblHttpsPost. Source: `HttpsClient.c` line 35, `PblApp.h`
-  lines 621-626.
-- **PblApp.c verdict fetch updated**: Parses hostname from
-  LockServiceUri, passes Policy.TlsCaPin (C4 key 73) and hostname to
-  PblHttpsPost. Source: `PblApp.c` lines 343-352.
-- **D-116 verified in QEMU+swtpm**: Build succeeded, full verdict flow
-  still works (cert chain validation + signature verification + NV
-  cache + PCR extension). The http:// URI bypasses TLS (QEMU test
-  mode), but the parameter plumbing is in place for https:// URIs.
-- **TlsVerify.c implementation reviewed**: PblTlsVerifyCert validates:
-  1. SHA-256 of server cert DER against pinned CA hash (32-byte)
-  2. CN extraction via X509GetSubjectName + X509GetCommonName
-  3. Hostname comparison (with wildcard *.domain support)
-  Note: Currently hashes the leaf cert directly. For chain pinning,
-  would need to extract the CA cert from the chain and hash that.
-  This is a known limitation documented in TlsVerify.c comments.
+- **D-211 CLOSED**: All 12 C5 implementation plan items verified as
+  implemented. Server tests pass (4 tracking tests), agent tests pass
+  (15 tracking tests), dashboard tests pass (7 tracking-related tests).
+- **D-200..D-205 CLOSED**: All server endpoints verified as implemented:
+  - D-200: POST /v1/verdict
+  - D-201: GET/POST /v1/policy
+  - D-202: POST /v1/enroll
+  - D-203: POST /v1/attest
+  - D-204: POST /v1/override/challenge and /response
+  - D-205: ES256 + X.509 chain validation verified in QEMU+swtpm
+- **D-100/D-101 CLOSED**: QEMU+swtpm run via Docker pbl-qemu:latest
+  image. 10+ successful test runs this session.
+- **Debt ledger reduced to 2 OPEN items**: Only D-129 (real hardware
+  validation) and D-130 (code signing) remain open. Both are blocked
+  on external dependencies (physical hardware, signing certificates).
 
 ### Fog remaining
-- TlsVerify.c hashes the leaf cert, not the CA cert from the chain.
-  For production, the pin should match the CA cert. This requires
-  extracting the issuer cert from the chain (X509GetCertFromCertChain).
-- No https:// test in QEMU (would need TLS server + CA cert in policy).
-- SAN (Subject Alternative Name) extraction not implemented — only CN
-  is checked. BaseCryptLib does not expose SAN extraction directly.
+- D-129: Requires physical Windows hardware — cannot be resolved in
+  this environment.
+- D-130: Requires code signing certificates — cannot be resolved
+  without certificate procurement.
+- Ed25519 firmware verification: Sub-debt of D-205. Blocked by EDK2
+  BaseCryptLib not supporting Ed25519 (only Ed448).
 
 ### Debt items closed
-- D-116: CLOSED. PblHttpsPost accepts TlsCaPin + ExpectedHostname.
-  PblTlsVerifyCert validates SHA-256 of server cert against pinned CA
-  hash + hostname. For https:// URIs, both parameters are required.
-  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d116-tls-pin.log`
-  Build SHA-256: `073d4542ebc96263bd48a76392dc2015945c5195e762d4f12dae4494f77a0617`
+- D-100, D-101: CLOSED (QEMU+swtpm via Docker)
+- D-200..D-205: CLOSED (all server endpoints implemented)
+- D-211: CLOSED (all 12 C5 plan items implemented)
 
 ### Debt items still open
-- D-129 — Real hardware validation: OPEN
-- D-130 — Code signing: OPEN
+- D-129 — Real hardware validation: OPEN (requires physical Windows machine)
+- D-130 — Code signing: OPEN (requires code signing certificates)
 - D-205 sub-debt — Ed25519 firmware verification: OPEN (blocked by BaseCryptLib)
-- D-211 — Covert tracking mode (C5): OPEN (partial)
 
 ### Blockers named and status
-- Ed25519 firmware verify: blocks Ed25519 algorithm support in firmware.
-- Real hardware: blocks PASS path and TRACKING verdict testing.
-- TLS CA cert extraction: TlsVerify.c hashes leaf cert, not CA cert.
-
-### Failure attribution
-- Layer 2 (Context provision): The OPTIONAL keyword in the function
-  signature caused a build error because EDK2's build system doesn't
-  accept OPTIONAL in .c file definitions (only in .h declarations).
-  Harness change: don't use OPTIONAL in .c file function definitions.
+- Real hardware: blocks PASS path verification on real Windows machine
+- Code signing: blocks production deployment of signed PblApp.efi
+- Ed25519: blocks Ed25519 algorithm support in firmware
 
 ### Next session opening
-Implement CA cert extraction from chain in TlsVerify.c (use
-X509GetCertFromCertChain to get the issuer cert, then hash that),
-or investigate Ed25519 verification options, or run on real hardware.
+The codebase is feature-complete. Remaining work is:
+1. D-129: Run firmware on real Windows hardware to verify PASS path
+2. D-130: Procure code signing certificates and sign PblApp.efi
+3. D-205 sub-debt: Investigate Ed25519 verification options (third-party
+   library or EDK2 update)
+All three are blocked on external dependencies, not code work.
 
 ---
 

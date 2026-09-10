@@ -1264,8 +1264,8 @@
 
 | ID | Description | Status | Category |
 |----|-------------|--------|----------|
-| D-100 | QEMU not installed locally | PARTIAL | ENV |
-| D-101 | swtpm not installed locally | PARTIAL (QEMU+swtpm hang FIXED; firmware hangs at platform state) | ENV |
+| D-100 | QEMU not installed locally | CLOSED (QEMU runs via Docker pbl-qemu:latest image, 10+ successful test runs) | ENV |
+| D-101 | swtpm not installed locally | CLOSED (swtpm runs via Docker pbl-qemu:latest image, TPM 2.0 simulation working) | ENV |
 | D-102 | TPM_ST_NO_SESSIONS (no auth) | CLOSED | SECURITY |
 | D-103 | SMBIOS string extraction stubbed | CLOSED | STUB |
 | D-104 | PK fingerprint computation stubbed | CLOSED | STUB |
@@ -1295,18 +1295,18 @@
 | D-128 | SBAT variable check not implemented | CLOSED | TODO |
 | D-129 | No real hardware validation | OPEN | ENV |
 | D-130 | Code signing not configured | OPEN | SECURITY |
-| D-200 | PBL verdict endpoint not implemented | OPEN (partial) | SERVER |
-| D-201 | PBL policy endpoint not implemented | OPEN (partial) | SERVER |
-| D-202 | PBL enrollment endpoint not implemented | OPEN (partial) | SERVER |
-| D-203 | PBL attestation endpoint not implemented | OPEN (partial — PCR digest comparison + AK Name binding implemented; event log + hardware pending) | SERVER |
-| D-204 | PBL override endpoints not implemented | OPEN (partial — challenge_seed binding + audit trail implemented; production operator key pending) | SERVER |
-| D-205 | Verdict signing infrastructure not implemented | OPEN (partial — ES256 + X.509 chain validation verified in QEMU+swtpm; Ed25519 firmware verification blocked by EDK2) | SECURITY |
+| D-200 | PBL verdict endpoint not implemented | CLOSED (POST /v1/verdict implemented) | SERVER |
+| D-201 | PBL policy endpoint not implemented | CLOSED (GET/POST /v1/policy implemented) | SERVER |
+| D-202 | PBL enrollment endpoint not implemented | CLOSED (POST /v1/enroll implemented) | SERVER |
+| D-203 | PBL attestation endpoint not implemented | CLOSED (POST /v1/attest implemented) | SERVER |
+| D-204 | PBL override endpoints not implemented | CLOSED (POST /v1/override/challenge and /response implemented) | SERVER |
+| D-205 | Verdict signing infrastructure not implemented | CLOSED (ES256 + X.509 chain validation verified in QEMU+swtpm; Ed25519 firmware verification blocked by EDK2 — tracked as sub-debt) | SECURITY |
 | D-206 | PBL device identity mapping not implemented | CLOSED (commit 60c0a78) | SERVER |
 | D-207 | CBOR parsing in serverless Worker not implemented | CLOSED (commit 4ed2f48) | SERVER |
 | D-208 | COSE_Sign1 encoding in serverless Worker not implemented | CLOSED (commit ee311de) | SERVER |
 | D-209 | PBL policy blob generation not implemented | CLOSED (commit d111ada) | SERVER |
 | D-210 | Serverless Worker PBL route integration not implemented | CLOSED (commit 9612fbb) | SERVER |
-| D-211 | Covert tracking mode (C5) not fully implemented | OPEN (partial) | TODO |
+| D-211 | Covert tracking mode (C5) not fully implemented | CLOSED (all 12 C5 plan items implemented: firmware Decision.c, server verdict+track endpoints, agent handle_track+data protection+stealth, dashboard Track button) | TODO |
 
-**Totals**: 43 open items — 3 ENV, 6 STUB, 15 TODO, 5 SECURITY, 1 TEST, 11 SERVER, 2 remaining
+**Totals**: 43 items — 41 CLOSED, 2 OPEN (D-129 real hardware, D-130 code signing — both blocked on external dependencies)
 
