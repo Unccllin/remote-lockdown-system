@@ -1092,10 +1092,10 @@ PblTpmNvDefineSpace (
     // Check if the TPM returned TPM_RC_NV_DEFINED (0x14C) — already exists
     if (RespSize >= 10) {
       UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
-      Print (L"  [DBG] NV_DefineSpace(0x%x) RC=0x%x\n", NvIndex, Rc);
       if (Rc == 0x14C) {
         return EFI_ALREADY_STARTED;
       }
+      Print (L"  [WARN] NV_DefineSpace(0x%x) RC=0x%x\n", NvIndex, Rc);
     }
     return EFI_DEVICE_ERROR;
   }
@@ -1209,7 +1209,7 @@ PblTpmReadLockState (
   if (EFI_ERROR (Status)) {
     if (RespSize >= 10) {
       UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
-      Print (L"  [DBG] NV_Read(LOCK_STATE) RC=0x%x\n", Rc);
+      Print (L"  [WARN] NV_Read(LOCK_STATE) RC=0x%x\n", Rc);
       // D-206: TPM_RC_NV_UNINITIALIZED (0x14A) means the index was defined but
       // never written. This is the expected state on first boot — treat as
       // "no cached value" (EFI_NOT_FOUND), not a device error.
@@ -1303,7 +1303,7 @@ PblTpmReadPolicyVersion (
   if (EFI_ERROR (Status)) {
     if (RespSize >= 10) {
       UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
-      Print (L"  [DBG] NV_Read(POLICY_VERSION) RC=0x%x\n", Rc);
+      Print (L"  [WARN] NV_Read(POLICY_VERSION) RC=0x%x\n", Rc);
       // D-206: TPM_RC_NV_UNINITIALIZED (0x14A) — counter not yet incremented
       if (Rc == 0x14A) {
         return EFI_NOT_FOUND;
@@ -1374,7 +1374,7 @@ PblTpmIncrementPolicyVersion (
                                 RespBuf, sizeof (RespBuf), &RespSize);
   if (EFI_ERROR (Status) && RespSize >= 10) {
     UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
-    Print (L"  [DBG] NV_Increment(POLICY_VERSION) RC=0x%x\n", Rc);
+    Print (L"  [WARN] NV_Increment(POLICY_VERSION) RC=0x%x\n", Rc);
   }
   return Status;
 }
@@ -1433,7 +1433,7 @@ PblTpmWriteLockState (
                                 RespBuf, sizeof (RespBuf), &RespSize);
   if (EFI_ERROR (Status) && RespSize >= 10) {
     UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
-    Print (L"  [DBG] NV_Write(LOCK_STATE) RC=0x%x\n", Rc);
+    Print (L"  [WARN] NV_Write(LOCK_STATE) RC=0x%x\n", Rc);
   }
   return Status;
 }

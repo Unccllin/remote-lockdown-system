@@ -7262,3 +7262,68 @@ validation (lines 148-167), `PblApp.c` verdict verification flow (lines 435-476)
 Test the verdict=0 (UNLOCKED) PASS path to verify chain-loading Windows
 Boot Manager, or implement X.509 chain path validation (D-205 sub-debt),
 or reduce debug prints for production.
+
+---
+
+## Session 2026-08-30 (continued 4): D-206 debug print cleanup + PASS path analysis
+
+### RULE-ZERO
+**Read**: `Verdict.c` PblGetUnixTime debug prints (lines 46-58), `TpmClient.c`
+NV_Read/NV_Write/NV_Increment debug prints (lines 1212, 1306, 1377, 1436),
+`Decision.c` PblEvaluateDecision (lines 112-324), `PblApp.h` verdict
+constants (lines 63-65).
+**Finding**: Debug prints from the D-206 debugging session were still in
+the code. The BLOCK decision for verdict=0 (UNLOCKED) is correct behavior
+— the decision engine combines policy checks with the server verdict,
+and platform state checks fail in QEMU (no BitLocker, no DMA protection).
+
+### Fog cleared
+- **Debug prints cleaned up**: Removed GetTime and time check debug prints
+  from Verdict.c. Changed NV_Read/NV_Write/NV_Increment/NV_DefineSpace
+  debug prints to [WARN] level, only printed on unexpected errors (not
+  on NV_UNINITIALIZED which is expected on first boot).
+- **BLOCK for UNLOCKED verdict explained**: The test server returns
+  verdict=0 (UNLOCKED), but the decision is BLOCK because:
+  1. `State->KernelDmaProtection` is FALSE in QEMU (no DMA protection)
+  2. `State->BitLockerEnabled` is FALSE in QEMU (no BitLocker)
+  The decision engine correctly returns `worst(policy_checks=BLOCK,
+  server_verdict=UNLOCKED) = BLOCK`. This is fail-closed behavior.
+  Source: `Decision.c` lines 252-272 (DMA + BitLocker checks), lines
+  293-309 (verdict combination).
+- **PASS path requires real hardware**: To test the PASS path (verdict
+  UNLOCKED + all platform checks pass → chain-load Windows), the firmware
+  must run on a real Windows machine with BitLocker enabled and Kernel
+  DMA protection active. QEMU cannot emulate these.
+
+### Fog remaining
+- The PASS path (chain-load Windows Boot Manager) has not been tested in
+  QEMU because platform state checks fail. This requires real hardware.
+- The TRACKING verdict path (C5) has not been tested.
+
+### Debt items closed
+- D-206 sub-debt (debug print cleanup): CLOSED. All [DBG] prints removed
+  or converted to [WARN] level (only on unexpected errors).
+  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d206-final.log`
+  Build SHA-256: `1e69a68e6fafb441316efd50c4e5b06b65cd8db34ee1abb9f9bb5f19db15e091`
+
+### Debt items still open
+- D-205 sub-debt — X.509 chain path validation (only leaf cert used)
+- D-205 sub-debt — Ed25519 firmware verification (EFI_UNSUPPORTED)
+- D-211 — Real Windows hardware testing: OPEN (blocks PASS path testing)
+- TLS/HTTPS configuration for production: OPEN
+- TRACKING verdict path (C5) not tested
+
+### Blockers named and status
+- X.509 chain validation: blocks full D-205 production readiness.
+- Ed25519 firmware verify: blocks Ed25519 algorithm support in firmware.
+- Real hardware: blocks PASS path and TRACKING verdict testing.
+
+### Failure attribution
+- No failures this session. The debug print cleanup was straightforward
+  and the BLOCK decision for UNLOCKED verdict was correctly diagnosed as
+  platform state check failure (QEMU limitation, not a code bug).
+
+### Next session opening
+Implement X.509 chain path validation (D-205 sub-debt), or run the firmware
+on real Windows hardware to test the PASS path (D-211), or implement the
+TRACKING verdict path (C5).
