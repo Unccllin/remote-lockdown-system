@@ -91,7 +91,6 @@ sign_test() {
     # Generate self-signed cert
     local KEY_FILE="/tmp/pbl-test-signing.key"
     local CERT_FILE="/tmp/pbl-test-signing.crt"
-    local PFX_TMP="/tmp/pbl-test-signing.p12"
 
     info "Generating self-signed certificate..."
     openssl req -new -x509 -newkey rsa:2048 -keyout "$KEY_FILE" \
@@ -110,6 +109,9 @@ sign_test() {
     if [[ $? -eq 0 && -f "$OUTPUT_FILE" ]]; then
       ok "Signed EFI: $OUTPUT_FILE"
       ok "Certificate: $CERT_FILE"
+      # Export DER for UEFI db enrollment
+      openssl x509 -in "$CERT_FILE" -outform DER -out "$(dirname "$EFI_FILE")/pbl-test-signing.der"
+      cp "$CERT_FILE" "$(dirname "$EFI_FILE")/pbl-test-signing.crt"
       ok ""
       ok "To use with Secure Boot, enroll the public key in db:"
       ok "  # Convert cert to DER format for UEFI db enrollment"
@@ -118,9 +120,58 @@ sign_test() {
       ok "  # Or use sbctl: sudo sbctl enroll-keys --microsoft --tpm-eventlog"
       ok ""
       ok "To verify the signature:"
-      ok "  sbverify $OUTPUT_FILE"
+      ok "  sbverify --cert $CERT_FILE $OUTPUT_FILE"
     else
       err "Signing failed"
+      exit 1
+    fi
+
+  elif command -v docker &>/dev/null; then
+    info "sbsign not found locally — using Docker (pbl-qemu image)"
+
+    local WORK_DIR
+    WORK_DIR="$(dirname "$EFI_FILE")"
+    local EFI_NAME
+    EFI_NAME="$(basename "$EFI_FILE")"
+    local OUT_NAME
+    OUT_NAME="$(basename "$OUTPUT_FILE")"
+
+    docker run --rm \
+      -v "$WORK_DIR:/work" \
+      pbl-qemu:latest bash -c "
+set -e
+apt-get update -qq 2>/dev/null && apt-get install -y -qq sbsigntool 2>&1 | tail -1
+
+echo '=== Generating self-signed certificate ==='
+openssl req -new -x509 -newkey rsa:2048 -keyout /tmp/pbl-signing.key \
+  -out /tmp/pbl-signing.crt -days 365 -nodes \
+  -subj '/CN=PBL Test Signing/O=Remote Lockdown System' 2>/dev/null
+
+echo '=== Signing $EFI_NAME ==='
+sbsign --key /tmp/pbl-signing.key --cert /tmp/pbl-signing.crt \
+  --output /work/$OUT_NAME /work/$EFI_NAME
+
+echo '=== Verifying ==='
+sbverify --cert /tmp/pbl-signing.crt /work/$OUT_NAME
+
+echo '=== Exporting cert ==='
+cp /tmp/pbl-signing.crt /work/pbl-test-signing.crt
+openssl x509 -in /tmp/pbl-signing.crt -outform DER -out /work/pbl-test-signing.der
+chmod 644 /work/$OUT_NAME /work/pbl-test-signing.crt /work/pbl-test-signing.der
+
+echo '=== Done ==='
+openssl x509 -in /work/pbl-test-signing.crt -noout -subject -fingerprint -sha256
+" 2>&1
+
+    if [[ $? -eq 0 && -f "$OUTPUT_FILE" ]]; then
+      ok "Signed EFI: $OUTPUT_FILE"
+      ok "Certificate: $WORK_DIR/pbl-test-signing.crt"
+      ok "DER cert: $WORK_DIR/pbl-test-signing.der"
+      ok ""
+      ok "To use with Secure Boot, enroll pbl-test-signing.der in db"
+      ok "To verify: sbverify --cert $WORK_DIR/pbl-test-signing.crt $OUTPUT_FILE"
+    else
+      err "Docker signing failed"
       exit 1
     fi
 
@@ -135,11 +186,12 @@ sign_test() {
     fi
 
   else
-    err "Neither sbsign nor sbctl found."
+    err "Neither sbsign, Docker, nor sbctl found."
     err "Install one of:"
     err "  Debian/Ubuntu: sudo apt install sbsigntool"
     err "  Arch:          sudo pacman -S sbctl"
     err "  macOS:          brew install sbctl"
+    err "  Or use Docker with pbl-qemu image"
     exit 2
   fi
 }

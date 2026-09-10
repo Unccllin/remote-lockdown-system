@@ -64,6 +64,8 @@ firmware/Build/
 firmware/Conf/
 firmware/capsule-output/
 firmware/PblPkg/PblApp.efi
+firmware/PblPkg/PblApp.signed.efi
+firmware/PblPkg/pbl-test-signing.*
 libs-extract/
 # Python cache
 __pycache__/
