@@ -176,6 +176,14 @@ PblTpmSessionAttrsForCommand (
 {
   UINT8 Attrs = PBL_SESSION_CONTINUE;
 
+  // D-206: When session key is empty (unbound, no salt), the TPM ignores
+  // decrypt/encrypt attributes and returns plaintext. PBL's encrypt/decrypt
+  // functions would corrupt data if applied to plaintext, so skip these
+  // attributes entirely when SessionKeySize == 0.
+  if (PblTpmGetSessionKeySize () == 0) {
+    return Attrs;
+  }
+
   switch ((UINT32)CommandCode) {
     // Commands that support parameter DECRYPTION (command params encrypted):
     case TPM_CC_NV_DefineSpace:
@@ -777,8 +785,20 @@ PblTpmFillPcrCommandHmac (
     CopyMem (CommandBuffer + PcrAuthOffset + 10, Nonce, 32);
   }
 
-  // Parameters start after: header(10) + handles(4*N) + authAreaSize(4) + authArea(73)
-  UINT32 PcrParamsOffset = PcrAuthOffset + 4 + 73;
+  // D-206: When PCR session key is empty (unbound, no salt), the expected HMAC
+  // is empty (0 bytes). Write 0x0000 for the HMAC size and skip computation.
+  PBL_TPM_SESSION *PcrSession = PblTpmGetPcrSession ();
+  if (PcrSession == NULL) {
+    return EFI_NOT_STARTED;
+  }
+  if (PcrSession->SessionKeySize == 0) {
+    // HMAC size field is at PcrAuthOffset + 4 + 4 + 2 + 32 + 1 = PcrAuthOffset + 43
+    *(UINT16 *)(CommandBuffer + PcrAuthOffset + 43) = SwapBytes16 (0);
+    return EFI_SUCCESS;
+  }
+
+  // Parameters start after: header(10) + handles(4*N) + authAreaSize(4) + authArea(45+HmacSize)
+  UINT32 PcrParamsOffset = PcrAuthOffset + 4 + 45 + PcrSession->SessionKeySize;
   ParamsStart = CommandBuffer + PcrParamsOffset;
   ParamsSize = TotalSize - PcrParamsOffset;
 
@@ -792,11 +812,6 @@ PblTpmFillPcrCommandHmac (
   CopyMem (PcrHashInput + PcrHandleBytes, ParamsStart, ParamsSize);
 
   // Compute pHash-based HMAC using the PCR session
-  PBL_TPM_SESSION *PcrSession = PblTpmGetPcrSession ();
-  if (PcrSession == NULL) {
-    FreePool (PcrHashInput);
-    return EFI_NOT_STARTED;
-  }
   Status = PblTpmComputeCommandHmacSession (
              PcrSession, CommandCode, PcrHashInput, PcrHashInputSize, Hmac);
   FreePool (PcrHashInput);
@@ -859,7 +874,11 @@ PblTpmParsePcrSessionResponse (
     UINT16 RespHmacSize = SwapBytes16 (*(UINT16 *)AuthPtr);
     AuthPtr += 2;
 
-    if (RespHmacSize == 32 && (AuthPtr + 32) <= (RespBuf + RespSize)) {
+    // D-206: When PCR session key is empty, response HMAC is empty (0 bytes).
+    // Skip HMAC verification but still update nonceTPM.
+    if (RespHmacSize == 0) {
+      PblTpmUpdatePcrNonceTpm (NonceTpmPtr, NonceTpmSize);
+    } else if (RespHmacSize == 32 && (AuthPtr + 32) <= (RespBuf + RespSize)) {
       PBL_TPM_SESSION *PcrSession = PblTpmGetPcrSession ();
       if (PcrSession == NULL) {
         return NULL;
@@ -1061,7 +1080,7 @@ PblTpmNvDefineSpace (
   PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
   // Encrypt command parameters if HMAC session is active
-  if (PblTpmIsSessionActive () && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
+  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
     PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
   }
 
@@ -1070,11 +1089,11 @@ PblTpmNvDefineSpace (
   Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
                                 RespBuf, sizeof (RespBuf), &RespSize);
   if (EFI_ERROR (Status)) {
-    // Check if the TPM returned TPM_RC_NV_DEFINED (0x0000011C) — already exists
+    // Check if the TPM returned TPM_RC_NV_DEFINED (0x14C) — already exists
     if (RespSize >= 10) {
       UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
       Print (L"  [DBG] NV_DefineSpace(0x%x) RC=0x%x\n", NvIndex, Rc);
-      if (Rc == 0x0000011C) {
+      if (Rc == 0x14C) {
         return EFI_ALREADY_STARTED;
       }
     }
@@ -1179,7 +1198,7 @@ PblTpmReadLockState (
   PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
   // D-102: Encrypt command parameters if HMAC session is active
-  if (PblTpmIsSessionActive () && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
+  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
     PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
   }
 
@@ -1210,7 +1229,7 @@ PblTpmReadLockState (
 
   // D-102: Decrypt response parameters if HMAC session is active
   // The response parameters are the TPM2B buffer containing the NV data
-  if (PblTpmIsSessionActive () && PblTpmCommandSupportsEncrypt (mCurrentCmdCode)) {
+  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 && PblTpmCommandSupportsEncrypt (mCurrentCmdCode)) {
     PblTpmDecryptResponseParams (RespPtr, ParamSize);
   }
 
@@ -1273,7 +1292,7 @@ PblTpmReadPolicyVersion (
   // D-102: Fill HMAC into auth area (over plaintext params, before encryption)
   PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
-  if (PblTpmIsSessionActive () && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
+  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
     PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
   }
 
@@ -1301,7 +1320,7 @@ PblTpmReadPolicyVersion (
   }
 
   // D-102: Decrypt response parameters if session is active
-  if (PblTpmIsSessionActive () && PblTpmCommandSupportsEncrypt (mCurrentCmdCode)) {
+  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 && PblTpmCommandSupportsEncrypt (mCurrentCmdCode)) {
     PblTpmDecryptResponseParams (RespPtr, ParamSize);
   }
 
@@ -1404,7 +1423,7 @@ PblTpmWriteLockState (
   PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
   // D-102: Encrypt command parameters if HMAC session is active
-  if (PblTpmIsSessionActive () && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
+  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
     PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
   }
 
@@ -1529,8 +1548,14 @@ PblTpmExtendPcr (
   UINT8 *Ptr;
   if (PblTpmIsPcrSessionActive ()) {
     // Use PCR HMAC session with pcrHandle BEFORE the auth area.
-    // TPM 2.0 wire format: header(10) + pcrHandle(4) + authAreaSize(4) + auth(73) + params
+    // TPM 2.0 wire format: header(10) + pcrHandle(4) + authAreaSize(4) + auth + params
+    // D-206: PCR session is unbound (SessionKeySize=0), so auth area uses
+    // 41-byte layout with 0-byte HMAC (same pattern as main NV session).
     mCurrentCmdHandleCount = 1;
+    mCurrentCmdCode = TPM_CC_PCR_Extend;
+    PBL_TPM_SESSION *PcrSession = PblTpmGetPcrSession ();
+    UINT8 PcrHmacSize = PcrSession ? PcrSession->SessionKeySize : 0;
+    UINT32 PcrAuthAreaSize = (UINT32)(4 + 2 + 32 + 1 + 2 + PcrHmacSize);
     PBL_TPM2_COMMAND_HEADER *Hdr = (PBL_TPM2_COMMAND_HEADER *)CmdBuf;
     Hdr->Tag         = SwapBytes16 (TPM_ST_SESSIONS);
     Hdr->CommandSize = SwapBytes32 (sizeof (PBL_TPM2_COMMAND_HEADER));
@@ -1541,8 +1566,8 @@ PblTpmExtendPcr (
     *(UINT32 *)Ptr = SwapBytes32 (PcrIndex);
     Ptr += 4;
 
-    // Auth area: 73 bytes (handle(4) + nonce(2+32) + attrs(1) + hmac(2+32))
-    *(UINT32 *)Ptr = SwapBytes32 (73);
+    // Auth area: handle(4) + nonce(2+32) + attrs(1) + hmac(2+PcrHmacSize)
+    *(UINT32 *)Ptr = SwapBytes32 (PcrAuthAreaSize);
     Ptr += 4;
     *(UINT32 *)Ptr = SwapBytes32 (PblTpmGetPcrSessionHandle ());
     Ptr += 4;
@@ -1552,10 +1577,12 @@ PblTpmExtendPcr (
     Ptr += 32;
     *Ptr = PblTpmSessionAttrsForCommand (TPM_CC_PCR_Extend);
     Ptr += 1;
-    *(UINT16 *)Ptr = SwapBytes16 (32);
+    *(UINT16 *)Ptr = SwapBytes16 (PcrHmacSize);
     Ptr += 2;
-    ZeroMem (Ptr, 32);
-    Ptr += 32;
+    if (PcrHmacSize > 0) {
+      ZeroMem (Ptr, PcrHmacSize);
+      Ptr += PcrHmacSize;
+    }
   } else {
     // Fallback: no-session (TPM_ST_NO_SESSIONS)
     Ptr = PblTpmBeginCommand (CmdBuf, sizeof (CmdBuf), TPM_CC_PCR_Extend);

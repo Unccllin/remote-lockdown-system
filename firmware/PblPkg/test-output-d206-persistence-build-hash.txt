@@ -1,0 +1,5 @@
+Build SHA-256: 71113acf60813ad40104366c007c21052db0e3467071d0b669582d38cd206ff0
+QEMU+swtpm two-boot persistence test: 2026-09-10T08:04:36Z
+Result: PASS — NV counter persists across reboots (boot 1 increments to 1, boot 2 reads 1)
+Boot 2: NV_DefineSpace RC=0x14C (NV_DEFINED) correctly handled as EFI_ALREADY_STARTED
+Boot 2: NV_Read(POLICY_VERSION) succeeded (no 0x14A, no error) — counter value 1 read from TPM
