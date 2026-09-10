@@ -854,26 +854,59 @@ PblCborDecodePolicy (
       case 77: {  // signing_cert_chain (array of bstr, D-205)
         // D-205: X.509 cert chain [leaf, intermediate, root] as DER bytes.
         // Extract the first cert (leaf) for EcGetPublicKeyFromX509().
-        // Remaining certs are skipped (chain validation is future work).
+        // Store all certs as concatenated DER for X509VerifyCertChain.
+        // The last cert is the root CA (self-signed in test, or pinned root).
         UINT8        Mt77;
         UINT64       ArrLen;
         Status = PblCborReadHead (&Cursor, &Mt77, &ArrLen);
         if (EFI_ERROR (Status)) return Status;
         if (Mt77 != CBOR_MAJOR_ARRAY) return EFI_PROTOCOL_ERROR;
         if (ArrLen > 0) {
-          // Read the first cert (leaf)
-          CONST UINT8 *CertDer;
-          UINTN        CertDerLen;
-          Status = PblCborReadBstr (&Cursor, &CertDer, &CertDerLen);
-          if (EFI_ERROR (Status)) return Status;
-          Policy->VerdictSigningCert = CertDer;
-          Policy->VerdictSigningCertSize = CertDerLen;
-          // Skip remaining certs in the chain
-          for (UINT64 Ci = 1; Ci < ArrLen; Ci++) {
+          // Read all certs into a concatenated DER buffer
+          UINTN TotalChainSize = 0;
+          CONST UINT8 *CertPtrs[8];
+          UINTN        CertSizes[8];
+          UINT64       NumCerts = ArrLen < 8 ? ArrLen : 8;
+
+          for (UINT64 Ci = 0; Ci < NumCerts; Ci++) {
+            CONST UINT8 *CertDer;
+            UINTN        CertDerLen;
+            Status = PblCborReadBstr (&Cursor, &CertDer, &CertDerLen);
+            if (EFI_ERROR (Status)) return Status;
+            CertPtrs[Ci] = CertDer;
+            CertSizes[Ci] = CertDerLen;
+            TotalChainSize += CertDerLen;
+          }
+          // Skip any remaining certs beyond 8
+          for (UINT64 Ci = NumCerts; Ci < ArrLen; Ci++) {
             CONST UINT8 *Skip;
             UINTN        SkipLen;
             Status = PblCborReadBstr (&Cursor, &Skip, &SkipLen);
             if (EFI_ERROR (Status)) return Status;
+          }
+
+          // First cert = leaf
+          Policy->VerdictSigningCert = CertPtrs[0];
+          Policy->VerdictSigningCertSize = CertSizes[0];
+
+          // Last cert = root
+          Policy->VerdictSigningRootCert = CertPtrs[NumCerts - 1];
+          Policy->VerdictSigningRootCertSize = CertSizes[NumCerts - 1];
+
+          // Concatenate all certs EXCEPT the root for X509VerifyCertChain.
+          // X509VerifyCertChain(RootCert, CertChain) verifies each cert in
+          // CertChain against the preceding cert, starting with RootCert.
+          // Including the root in the chain would cause it to be verified
+          // against the leaf (which fails — the leaf doesn't sign the root).
+          UINTN ChainSize = TotalChainSize - CertSizes[NumCerts - 1];
+          Policy->VerdictSigningCertChain = AllocatePool (ChainSize);
+          if (Policy->VerdictSigningCertChain != NULL) {
+            UINT8 *P = Policy->VerdictSigningCertChain;
+            for (UINT64 Ci = 0; Ci < NumCerts - 1; Ci++) {
+              CopyMem (P, CertPtrs[Ci], CertSizes[Ci]);
+              P += CertSizes[Ci];
+            }
+            Policy->VerdictSigningCertChainSize = ChainSize;
           }
         }
         break;

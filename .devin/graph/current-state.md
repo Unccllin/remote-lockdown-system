@@ -51,68 +51,92 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-08-30 (continued 4): D-206 debug print cleanup + PASS path analysis
+## Latest session: 2026-08-30 (continued 5): D-205 X.509 cert chain path validation
 
 ### RULE-ZERO
-**Read**: `Verdict.c` PblGetUnixTime debug prints (lines 46-58), `TpmClient.c`
-NV_Read/NV_Write/NV_Increment debug prints (lines 1212, 1306, 1377, 1436),
-`Decision.c` PblEvaluateDecision (lines 112-324), `PblApp.h` verdict
-constants (lines 63-65).
-**Finding**: Debug prints from the D-206 debugging session were still in
-the code. The BLOCK decision for verdict=0 (UNLOCKED) is correct behavior
-— the decision engine combines policy checks with the server verdict,
-and platform state checks fail in QEMU (no BitLocker, no DMA protection).
+**Read**: `CoseVerify.c` PblVerifyCoseSign1 (lines 260-383), `CborDecode.c`
+key 77 parsing (lines 854-912), `PblApp.h` PBL_POLICY struct (lines 174-188),
+`PBL-C1-LockVerdict.md` §5 (signing key management), `PBL-C4-Policy-Blob.md`
+key 77 (signing_cert_chain), `BaseCryptLib.h` X509VerifyCertChain (line 3118),
+`CryptX509.c` X509VerifyCertChain implementation.
+**Finding**: The firmware was using only the leaf cert from the cert chain
+for signature verification, without validating the chain back to a trusted
+root CA. C1 §5 requires: "The cert chain is validated up to the root pinned
+in C4." EDK2's BaseCryptLib provides X509VerifyCertChain(RootCert, CertChain)
+which validates each cert in the chain against the preceding cert, starting
+with RootCert as the trust anchor.
 
 ### Fog cleared
-- **Debug prints cleaned up**: Removed GetTime and time check debug prints
-  from Verdict.c. Changed NV_Read/NV_Write/NV_Increment/NV_DefineSpace
-  debug prints to [WARN] level, only printed on unexpected errors (not
-  on NV_UNINITIALIZED which is expected on first boot).
-- **BLOCK for UNLOCKED verdict explained**: The test server returns
-  verdict=0 (UNLOCKED), but the decision is BLOCK because:
-  1. `State->KernelDmaProtection` is FALSE in QEMU (no DMA protection)
-  2. `State->BitLockerEnabled` is FALSE in QEMU (no BitLocker)
-  The decision engine correctly returns `worst(policy_checks=BLOCK,
-  server_verdict=UNLOCKED) = BLOCK`. This is fail-closed behavior.
-  Source: `Decision.c` lines 252-272 (DMA + BitLocker checks), lines
-  293-309 (verdict combination).
-- **PASS path requires real hardware**: To test the PASS path (verdict
-  UNLOCKED + all platform checks pass → chain-load Windows), the firmware
-  must run on a real Windows machine with BitLocker enabled and Kernel
-  DMA protection active. QEMU cannot emulate these.
+- **X.509 chain validation implemented**: Added PblVerifyCertChain() to
+  CoseVerify.c, which calls EDK2's X509VerifyCertChain(). The function
+  validates that the leaf cert was issued by the root CA (or an intermediate
+  in the chain signed by the root). Source: `CoseVerify.c` lines 248-267.
+- **Cert chain parsing updated**: CborDecode.c now stores all certs from
+  key 77 (signing_cert_chain), separates the leaf cert (first) and root
+  cert (last), and builds a concatenated DER chain excluding the root for
+  X509VerifyCertChain. Source: `CborDecode.c` lines 854-912.
+- **PBL_POLICY struct extended**: Added VerdictSigningCertChain,
+  VerdictSigningCertChainSize, VerdictSigningRootCert,
+  VerdictSigningRootCertSize fields. Source: `PblApp.h` lines 181-186.
+- **Test server updated**: test-d205.py now generates a root CA (self-signed)
+  and a leaf cert signed by the root CA, instead of a single self-signed
+  cert. The policy blob includes both certs in key 77: [leaf, root].
+  Source: `test-d205.py` lines 47-129.
+- **X509VerifyCertChain API understood**: The function takes RootCert
+  (trust anchor) and CertChain (concatenated DER, leaf first). It verifies
+  each cert in CertChain against the preceding cert, starting with RootCert.
+  The root must NOT be in CertChain — it would be verified against the leaf
+  (which fails — the leaf doesn't sign the root). Fix: exclude the root
+  from the chain buffer, pass it separately as RootCert.
+- **Chain validation verified in QEMU+swtpm**: Full end-to-end flow with
+  cert chain validation:
+  ```
+  [OK] Cert chain validated
+  [OK] Verdict signature verified (ES256)
+  [OK] Verdict decoded: verdict=0 policy_version=1
+  [OK] Verdict verified
+  [OK] Lock state cached to TPM NV
+  ```
 
 ### Fog remaining
-- The PASS path (chain-load Windows Boot Manager) has not been tested in
-  QEMU because platform state checks fail. This requires real hardware.
-- The TRACKING verdict path (C5) has not been tested.
+- Ed25519 firmware verification still not implemented (BaseCryptLib does
+  not expose Ed25519 verify).
+- The test only covers a 2-cert chain (leaf + root). A 3-cert chain
+  (leaf + intermediate + root) has not been tested.
+- Cert validity period (not_valid_before/not_valid_after) is not checked
+  by X509VerifyCertChain — it only checks the signature chain. Time
+  validity is implicitly checked by the verdict time validation (IssuedAt
+  and GraceUntil), but expired certs would still pass chain validation.
 
 ### Debt items closed
-- D-206 sub-debt (debug print cleanup): CLOSED. All [DBG] prints removed
-  or converted to [WARN] level (only on unexpected errors).
-  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d206-final.log`
-  Build SHA-256: `1e69a68e6fafb441316efd50c4e5b06b65cd8db34ee1abb9f9bb5f19db15e091`
+- D-205 sub-debt (X.509 chain path validation): CLOSED. Chain validation
+  implemented using EDK2's X509VerifyCertChain. Verified in QEMU+swtpm
+  with a root CA + leaf cert chain.
+  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d205-certchain.log`
+  Build SHA-256: `2726d113c684e07a5e6deaa80da07cf93b1d7c965863e1a653f98a560c1a15d0`
 
 ### Debt items still open
-- D-205 sub-debt — X.509 chain path validation (only leaf cert used)
 - D-205 sub-debt — Ed25519 firmware verification (EFI_UNSUPPORTED)
-- D-211 — Real Windows hardware testing: OPEN (blocks PASS path testing)
+- D-211 — Real Windows hardware testing: OPEN
 - TLS/HTTPS configuration for production: OPEN
-- TRACKING verdict path (C5) not tested
 
 ### Blockers named and status
-- X.509 chain validation: blocks full D-205 production readiness.
 - Ed25519 firmware verify: blocks Ed25519 algorithm support in firmware.
+  BaseCryptLib only supports Ed448, not Ed25519.
 - Real hardware: blocks PASS path and TRACKING verdict testing.
 
 ### Failure attribution
-- No failures this session. The debug print cleanup was straightforward
-  and the BLOCK decision for UNLOCKED verdict was correctly diagnosed as
-  platform state check failure (QEMU limitation, not a code bug).
+- Layer 2 (Context provision): The X509VerifyCertChain API expects the
+  root cert to be passed separately, not included in the chain. Including
+  the root in the chain causes it to be verified against the leaf cert
+  (which fails — the leaf doesn't sign the root). This API contract was
+  not documented in the C4 spec. Harness change: document the
+  X509VerifyCertChain API contract in the C4 ADR.
 
 ### Next session opening
-Implement X.509 chain path validation (D-205 sub-debt), or run the firmware
-on real Windows hardware to test the PASS path (D-211), or implement the
-TRACKING verdict path (C5).
+Implement Ed25519 firmware verification (D-205 sub-debt, blocked by
+BaseCryptLib), or run the firmware on real Windows hardware to test the
+PASS path (D-211), or test a 3-cert chain (leaf + intermediate + root).
 
 ---
 

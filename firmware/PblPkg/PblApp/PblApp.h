@@ -178,6 +178,12 @@ typedef struct {
   // Pointer into RawCbor — valid as long as the policy buffer is alive.
   CONST UINT8               *VerdictSigningCert;    // C4 key 77 (leaf cert)
   UINTN                     VerdictSigningCertSize;
+  // D-205: Full cert chain as concatenated DER bytes (for X509VerifyCertChain).
+  // Allocated by CborDecode.c (not a pointer into RawCbor — must FreePool).
+  UINT8                     *VerdictSigningCertChain;  // concatenated DER
+  UINTN                     VerdictSigningCertChainSize;
+  CONST UINT8               *VerdictSigningRootCert;    // last cert in chain
+  UINTN                     VerdictSigningRootCertSize;
   UINT32                    VerdictFreshnessSec;   // C4 key 80
   UINT32                    GracePeriodSec;        // C4 key 81
   UINT32                    WipeDeadlineSec;       // C4 key 82
@@ -680,6 +686,14 @@ PblCoseParseProtectedHeader (
   );
 
 // CoseVerify.c — COSE_Sign1 signature verification (D-109/D-110/D-205)
+EFI_STATUS
+PblVerifyCertChain (
+  IN CONST UINT8  *RootCert,
+  IN UINTN         RootCertSize,
+  IN CONST UINT8  *CertChain,
+  IN UINTN         CertChainSize
+  );
+
 EFI_STATUS
 PblVerifyCoseSign1 (
   IN CONST UINT8  *CoseData,

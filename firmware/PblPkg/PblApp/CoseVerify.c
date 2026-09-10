@@ -227,6 +227,46 @@ PblBuildSigStructure (
 #define COSE_ALG_ED25519  (-8)   // EdDSA with Ed25519
 
 // ============================================================================
+// Public API — PblVerifyCertChain (D-205)
+// ============================================================================
+
+/** Verify an X.509 cert chain (C1 §5, D-205 sub-debt).
+
+  Validates that the leaf cert was issued by the root CA (or an intermediate
+  in the chain signed by the root). Uses EDK2's X509VerifyCertChain.
+
+  @param  RootCert       The trusted root CA cert (DER-encoded).
+  @param  RootCertSize   Size of RootCert in bytes.
+  @param  CertChain       The cert chain as concatenated DER bytes
+                         (leaf first, then intermediates, then root).
+  @param  CertChainSize  Size of CertChain in bytes.
+
+  @retval EFI_SUCCESS            Chain valid.
+  @retval EFI_INVALID_PARAMETER  NULL parameter.
+  @retval EFI_SECURITY_VIOLATION  Chain validation failed.
+**/
+EFI_STATUS
+PblVerifyCertChain (
+  IN CONST UINT8  *RootCert,
+  IN UINTN         RootCertSize,
+  IN CONST UINT8  *CertChain,
+  IN UINTN         CertChainSize
+  )
+{
+  if (RootCert == NULL || RootCertSize == 0 ||
+      CertChain == NULL || CertChainSize == 0) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  BOOLEAN Ok = X509VerifyCertChain (RootCert, RootCertSize, CertChain, CertChainSize);
+  if (!Ok) {
+    return EFI_SECURITY_VIOLATION;
+  }
+
+  return EFI_SUCCESS;
+}
+
+// ============================================================================
 // Public API — PblVerifyCoseSign1
 // ============================================================================
 

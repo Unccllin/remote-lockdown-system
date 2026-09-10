@@ -358,6 +358,27 @@ PblAppEntryPoint (
           // blob (C4 key 77, signing_cert_chain). The expected kid is
           // LockServiceCertPin (C4 key 71, SHA-256 of SPKI).
           if (Policy.VerdictSigningCert != NULL && Policy.VerdictSigningCertSize > 0) {
+            // D-205: Validate the X.509 cert chain before using the leaf
+            // cert for signature verification. C1 §5: "The cert chain is
+            // validated up to the root pinned in C4."
+            if (Policy.VerdictSigningCertChain != NULL &&
+                Policy.VerdictSigningCertChainSize > 0 &&
+                Policy.VerdictSigningRootCert != NULL &&
+                Policy.VerdictSigningRootCertSize > 0) {
+              Status = PblVerifyCertChain (
+                Policy.VerdictSigningRootCert,
+                Policy.VerdictSigningRootCertSize,
+                Policy.VerdictSigningCertChain,
+                Policy.VerdictSigningCertChainSize
+              );
+              if (EFI_ERROR (Status)) {
+                Print (L"  [WARN] Cert chain validation failed: %r — falling back to cache\n", Status);
+                OnlineFetchOk = FALSE;
+                goto VerdictDone;
+              }
+              Print (L"  [OK] Cert chain validated\n");
+            }
+
             Status = PblVerifyCoseSign1 (
               VerdictCose, VerdictCoseSize,
               Policy.VerdictSigningCert, Policy.VerdictSigningCertSize,
@@ -392,6 +413,7 @@ PblAppEntryPoint (
       Print (L"  [INFO] No lock_service_uri in policy — skipping online fetch\n");
     }
   }
+VerdictDone:
 
   // Step 5f: Fall back to cached verdict if online fetch failed (C2 §1.1, C3 §6.1)
   if (!OnlineFetchOk) {
