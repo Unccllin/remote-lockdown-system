@@ -321,6 +321,11 @@ PblRequestMor (
 
 // TpmClient.c — C2 (REQ-05,06,11,12,13)
 EFI_STATUS
+PblTpmProvisionNvIndices (
+  VOID
+  );
+
+EFI_STATUS
 PblTpmReadLockState (
   OUT PBL_LOCK_STATE_CACHE  *Cache
   );
@@ -462,12 +467,33 @@ PblTpmComputeCommandHmac (
 /** PBL HMAC session state. */
 typedef struct {
   UINT32   SessionHandle;     // TPM handle returned by StartAuthSession
-  UINT8    SessionKey[32];    // AES-256-CFB + HMAC key
+  UINT8    SessionKey[32];    // AES-256-CFB + HMAC key (empty when unbound)
+  UINT8    SessionKeySize;    // Size of session key (0 when bind=NULL + no salt)
   UINT8    NonceCaller[32];   // Our nonce (from EFI_RNG)
   UINT8    NonceTpm[32];      // TPM's nonce (from StartAuthSession response)
   UINT32   BindHandle;        // The NV index this session is bound to
   BOOLEAN  Active;            // TRUE if session is established
 } PBL_TPM_SESSION;
+
+// D-206: Compute per-command session attributes (continueSession + decrypt/encrypt)
+UINT8
+PblTpmSessionAttrsForCommand (
+  IN  TPM_CC  CommandCode
+  );
+
+// D-206: Cache NV index name after provisioning (for cpHash computation)
+VOID
+PblTpmCacheNvName (
+  IN UINT32  NvIndex,
+  IN UINT32  Attributes,
+  IN UINT16  DataSize
+  );
+
+// D-206: Get session key size (0 for unbound sessions — no KDFa)
+UINT8
+PblTpmGetSessionKeySize (
+  VOID
+  );
 
 // Session-parameterized HMAC helpers (internal — used by TpmClient.c for PCR session)
 EFI_STATUS

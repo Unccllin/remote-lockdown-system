@@ -223,6 +223,20 @@ PblAppEntryPoint (
   //
   Print (L"[3/8] Reading TPM NV state...\n");
 
+  // D-205: Provision NV indices on first boot (C2 §5.4).
+  // If the NV indices don't exist yet (first boot or TPM cleared),
+  // define them using TPM_RH_PLATFORM auth. If they already exist,
+  // the error is ignored. This runs BEFORE the HMAC session starts
+  // so it uses TPM_RS_PW password auth (empty platform password in
+  // dev/swtpm), avoiding HMAC session parameter encryption issues
+  // with NV_DefineSpace.
+  Status = PblTpmProvisionNvIndices ();
+  if (EFI_ERROR (Status) && Status != EFI_ALREADY_STARTED) {
+    Print (L"  [WARN] NV index provisioning failed: %r\n", Status);
+  } else if (!EFI_ERROR (Status)) {
+    Print (L"  [OK] NV indices provisioned\n");
+  }
+
   // D-102: Start HMAC session bound to TPM_RH_NULL (C2 §3.1, §3.3).
   // The session provides AES-256-CFB parameter encryption for all NV reads/writes.
   // Binding to TPM_RH_NULL creates an unbound session that still provides

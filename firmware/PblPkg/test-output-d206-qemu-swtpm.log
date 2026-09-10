@@ -1,0 +1,52 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1,0x1)/Ata(Primary,Master,0x0)
+BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1,0x1)/Ata(Primary,Master,0x0)
+
+========================================
+  PBL — Pre-Boot Lock v0
+  Contracts: C1-C4 (frozen 2026-09-05)
+========================================
+
+[1/8] Collecting platform state...
+[2/8] Parsing policy blob...
+  [INFO] policy.cose: 614 bytes
+[3/8] Reading TPM NV state...
+  [OK] NV indices provisioned
+  [OK] HMAC session established (AES-256-CFB)
+  [DBG] NV_Read(LOCK_STATE) RC=0x14A
+  [INFO] No cached lock state: Not Found
+  [DBG] NV_Read(POLICY_VERSION) RC=0x14A
+  [INFO] No policy version counter: Not Found
+  [OK] New policy version 1 (was 0) — incrementing NV counter
+[4/8] Fetching verdict...
+  [INFO] POSTing verdict request to http://10.0.2.2:8080/v1/verdict
+  [OK] Verdict response: 205 bytes
+  [OK] Verdict signature verified (ES256)
+  [OK] Verdict decoded: verdict=0 policy_version=1
+[5/8] Verifying verdict...
+  [OK] Verdict verified
+[6/8] Evaluating decision...
+[7/8] Extending PCR 12/13...
+  [OK] PCR HMAC session established
+[8/8] Decision: BLOCK — lock screen
+[2J[01;01H[0m[37m[44m
+
+
+                    ========================================
+                              THIS DEVICE IS LOCKED
+                    ========================================
+
+
+                                   Device ID:
+  0000000000000000000000000000000000000000000000000000000000000000
+
+                                    Reason:
+  test
+
+                 This device has been administratively locked.
+                      Do not attempt to bypass this lock.
+
+
+
+No override challenge available for this device.
+Contact your administrator for recovery.
+Override denied — shutting down

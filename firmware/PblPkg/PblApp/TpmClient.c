@@ -47,6 +47,8 @@ typedef struct {
 // PblTpmFillCommandHmac and PblTpmFillPcrCommandHmac use this to compute
 // correct offsets for nonceCaller, HMAC, and pHash (which includes handles).
 STATIC UINT32 mCurrentCmdHandleCount = 0;
+// D-206: Track current command code for per-command encrypt/decrypt decisions
+STATIC TPM_CC mCurrentCmdCode = 0;
 
 /** Locate the EFI_TCG2_PROTOCOL. Returns NULL if no TPM present. **/
 EFI_TCG2_PROTOCOL *
@@ -148,8 +150,119 @@ PblTpmBeginCommand (
   @return Pointer past the authorization area (where command parameters go).
 **/
 
-// Session attributes for HMAC session: continueSession | decrypt | encrypt
+// D-206: Session attributes must be set per-command based on what the TPM
+// supports. Not all commands support both decrypt and encrypt. If the session
+// has decrypt set but the command doesn't support decrypt (DecryptSize==0),
+// the TPM returns TPM_RCS_ATTRIBUTES. Same for encrypt.
+// TPMA_SESSION bits: bit0=continueSession, bit5=decrypt, bit6=encrypt
+#define PBL_SESSION_CONTINUE  BIT0
+#define PBL_SESSION_DECRYPT   BIT5
+#define PBL_SESSION_ENCRYPT   BIT6
+
+/** D-206: Compute session attributes for a given TPM command code.
+
+  Returns continueSession plus decrypt/encrypt as appropriate for the command.
+  The TPM rejects sessions with decrypt set for commands that don't support
+  parameter decryption (DecryptSize==0), and similarly for encrypt.
+
+  @param  CommandCode  The TPM_CC_* command code.
+
+  @return TPMA_SESSION byte for the auth area.
+**/
+UINT8
+PblTpmSessionAttrsForCommand (
+  IN  TPM_CC  CommandCode
+  )
+{
+  UINT8 Attrs = PBL_SESSION_CONTINUE;
+
+  switch ((UINT32)CommandCode) {
+    // Commands that support parameter DECRYPTION (command params encrypted):
+    case TPM_CC_NV_DefineSpace:
+    case TPM_CC_NV_Write:
+    case TPM_CC_NV_Extend:
+    case TPM_CC_NV_ChangeAuth:
+    case TPM_CC_PCR_Extend:
+    case TPM_CC_PCR_Event:
+      Attrs |= PBL_SESSION_DECRYPT;
+      break;
+
+    // Commands that support parameter ENCRYPTION (response params encrypted):
+    case TPM_CC_NV_Read:
+      Attrs |= PBL_SESSION_ENCRYPT;
+      break;
+
+    // Commands that support BOTH decrypt and encrypt:
+    // (none in the PBL command set currently)
+
+    // Commands that support NEITHER (no parameters to encrypt):
+    case TPM_CC_NV_Increment:
+    default:
+      // continueSession only
+      break;
+  }
+
+  return Attrs;
+}
+
+// Legacy: continueSession | decrypt | encrypt (used by callers that haven't
+// been updated to per-command attributes)
 #define PBL_SESSION_ATTRS  (BIT0 | BIT5 | BIT6)
+
+/** D-206: Check if a command supports parameter decryption (encrypt before sending).
+
+  The TPM only decrypts command parameters if the session has the decrypt
+  attribute set AND the command supports parameter decryption (DecryptSize > 0).
+  Encrypting parameters for commands that don't support decrypt causes BAD_AUTH
+  because the TPM computes cpHash over the encrypted (not decrypted) params.
+
+  @param  CommandCode  The TPM_CC_* command code.
+
+  @retval TRUE   Command supports decrypt — parameters should be encrypted.
+  @retval FALSE  Command does not support decrypt — parameters sent in plaintext.
+**/
+STATIC
+BOOLEAN
+PblTpmCommandSupportsDecrypt (
+  IN  TPM_CC  CommandCode
+  )
+{
+  switch ((UINT32)CommandCode) {
+    case TPM_CC_NV_DefineSpace:
+    case TPM_CC_NV_Write:
+    case TPM_CC_NV_Extend:
+    case TPM_CC_NV_ChangeAuth:
+    case TPM_CC_PCR_Extend:
+    case TPM_CC_PCR_Event:
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+
+/** D-206: Check if a command supports parameter encryption (response params encrypted).
+
+  The TPM only encrypts response parameters if the session has the encrypt
+  attribute set AND the command supports parameter encryption (EncryptSize > 0).
+
+  @param  CommandCode  The TPM_CC_* command code.
+
+  @retval TRUE   Command supports encrypt — response parameters are encrypted.
+  @retval FALSE  Command does not support encrypt — response parameters in plaintext.
+**/
+STATIC
+BOOLEAN
+PblTpmCommandSupportsEncrypt (
+  IN  TPM_CC  CommandCode
+  )
+{
+  switch ((UINT32)CommandCode) {
+    case TPM_CC_NV_Read:
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
 
 /** Build a TPM2 command with HMAC session auth (D-102).
 
@@ -191,6 +304,7 @@ PblTpmBeginCommandWithSessionAuth (
   UINT32 i;
 
   mCurrentCmdHandleCount = HandleCount;
+  mCurrentCmdCode = CommandCode;
 
   Hdr->Tag         = SwapBytes16 (TPM_ST_SESSIONS);
   Hdr->CommandSize = SwapBytes32 (sizeof (PBL_TPM2_COMMAND_HEADER));
@@ -204,11 +318,14 @@ PblTpmBeginCommandWithSessionAuth (
   }
 
   if (PblTpmIsSessionActive ()) {
-    // HMAC session auth — 73 bytes:
-    //   handle(4) + nonceCaller(2+32) + attrs(1) + hmac(2+32)
-    // Reserve full space upfront so PblTpmFillCommandHmac can fill in
-    // the nonce and HMAC after parameters are written.
-    *(UINT32 *)Ptr = SwapBytes32 (73);
+    // D-206: HMAC session auth. When the session key is empty (unbound, no salt)
+    // and the entity auth is empty, the expected HMAC is empty (0 bytes).
+    // Auth area layout:
+    //   With 32-byte HMAC: handle(4) + nonceCaller(2+32) + attrs(1) + hmac(2+32) = 73
+    //   With  0-byte HMAC: handle(4) + nonceCaller(2+32) + attrs(1) + hmac(2+0)  = 41
+    UINT8 HmacSize = PblTpmGetSessionKeySize ();
+    UINT32 AuthAreaSize = (UINT32)(4 + 2 + 32 + 1 + 2 + HmacSize);
+    *(UINT32 *)Ptr = SwapBytes32 (AuthAreaSize);
     Ptr += 4;
 
     // sessionHandle = active session handle
@@ -221,15 +338,19 @@ PblTpmBeginCommandWithSessionAuth (
     ZeroMem (Ptr, 32);
     Ptr += 32;
 
-    // sessionAttributes = continueSession | decrypt | encrypt
-    *Ptr = PBL_SESSION_ATTRS;
+    // sessionAttributes = continueSession + per-command decrypt/encrypt
+    // D-206: TPM rejects decrypt/encrypt attributes for commands that don't
+    // support parameter encryption. Compute attributes per command code.
+    *Ptr = PblTpmSessionAttrsForCommand (CommandCode);
     Ptr += 1;
 
-    // hmac = placeholder TPM2B(32 bytes), filled by PblTpmFillCommandHmac
-    *(UINT16 *)Ptr = SwapBytes16 (32);
+    // hmac = placeholder TPM2B(HmacSize bytes), filled by PblTpmFillCommandHmac
+    *(UINT16 *)Ptr = SwapBytes16 (HmacSize);
     Ptr += 2;
-    ZeroMem (Ptr, 32);
-    Ptr += 32;
+    if (HmacSize > 0) {
+      ZeroMem (Ptr, HmacSize);
+      Ptr += HmacSize;
+    }
   } else {
     // Fallback: TPM_RS_PW password auth (empty password)
     *(UINT32 *)Ptr = SwapBytes32 (9);
@@ -260,6 +381,138 @@ PblTpmFinalizeCommand (
 {
   PBL_TPM2_COMMAND_HEADER *Hdr = (PBL_TPM2_COMMAND_HEADER *)CommandBuffer;
   Hdr->CommandSize = SwapBytes32 (TotalSize);
+}
+
+// ============================================================================
+// D-206: NV index name computation
+// ============================================================================
+// TPM 2.0 Part 1 §16: The NAME of an NV index is:
+//   nameAlg(2 bytes) || H(nameAlg, TPMS_NV_PUBLIC)
+// where TPMS_NV_PUBLIC is serialized as:
+//   nvIndex(4) + nameAlg(2) + attributes(4) + authPolicy(TPM2B) + dataSize(2)
+// For hierarchy handles (TPM_RH_OWNER, etc.), the name IS the handle (4 bytes).
+
+#define PBL_NV_NAME_MAX  34  // 2 (nameAlg) + 32 (SHA-256 digest)
+
+typedef struct {
+  UINT32  NvIndex;
+  UINT8   Name[PBL_NV_NAME_MAX];
+  UINT8   NameSize;
+  BOOLEAN Valid;
+} PBL_NV_NAME_ENTRY;
+
+STATIC PBL_NV_NAME_ENTRY mNvNameCache[3] = { 0 };
+
+/** D-206: Compute the TPM NAME for an NV index.
+
+  The name is nameAlg || H(nameAlg, TPMS_NV_PUBLIC) where TPMS_NV_PUBLIC
+  is the serialized public info (14 bytes for our indices).
+
+  @param  NvIndex    The NV index handle.
+  @param  Attributes The TPMA_NV attributes.
+  @param  DataSize   The data size.
+  @param  Name       Output buffer (at least 34 bytes).
+  @param  NameSize   Output: name size (34 for SHA-256).
+
+  @retval EFI_SUCCESS  Name computed.
+**/
+STATIC
+EFI_STATUS
+PblTpmComputeNvName (
+  IN  UINT32  NvIndex,
+  IN  UINT32  Attributes,
+  IN  UINT16  DataSize,
+  OUT UINT8  *Name,
+  OUT UINT8  *NameSize
+  )
+{
+  // Serialize TPMS_NV_PUBLIC (14 bytes):
+  // nvIndex(4) + nameAlg(2) + attributes(4) + authPolicy(2+0) + dataSize(2)
+  UINT8 NvPublic[14];
+  UINT8 *Ptr = NvPublic;
+
+  *(UINT32 *)Ptr = SwapBytes32 (NvIndex);
+  Ptr += 4;
+  *(UINT16 *)Ptr = SwapBytes16 (0x000B);  // nameAlg = TPM_ALG_SHA256
+  Ptr += 2;
+  *(UINT32 *)Ptr = SwapBytes32 (Attributes);
+  Ptr += 4;
+  *(UINT16 *)Ptr = SwapBytes16 (0);  // authPolicy size = 0
+  Ptr += 2;
+  *(UINT16 *)Ptr = SwapBytes16 (DataSize);
+  Ptr += 2;
+
+  // Name = nameAlg(2) || SHA256(TPMS_NV_PUBLIC)
+  *(UINT16 *)Name = SwapBytes16 (0x000B);  // nameAlg = TPM_ALG_SHA256
+  if (!Sha256HashAll (NvPublic, sizeof (NvPublic), Name + 2)) {
+    return EFI_DEVICE_ERROR;
+  }
+  *NameSize = 34;
+  return EFI_SUCCESS;
+}
+
+/** D-206: Cache the name for a provisioned NV index.
+
+  Called after successful NV_DefineSpace to register the name for later
+  use in cpHash computation.
+
+  @param  NvIndex    The NV index handle.
+  @param  Attributes The TPMA_NV attributes used to define the index.
+  @param  DataSize   The data size.
+**/
+VOID
+PblTpmCacheNvName (
+  IN UINT32  NvIndex,
+  IN UINT32  Attributes,
+  IN UINT16  DataSize
+  )
+{
+  UINTN i;
+  for (i = 0; i < ARRAY_SIZE (mNvNameCache); i++) {
+    if (!mNvNameCache[i].Valid) {
+      mNvNameCache[i].NvIndex = NvIndex;
+      mNvNameCache[i].Valid = TRUE;
+      PblTpmComputeNvName (NvIndex, Attributes, DataSize,
+                           mNvNameCache[i].Name, &mNvNameCache[i].NameSize);
+      return;
+    }
+  }
+}
+
+/** D-206: Get the TPM NAME for a handle.
+
+  For NV indices in our cache, returns the computed name (34 bytes).
+  For hierarchy handles (TPM_RH_OWNER, etc.), the name is the handle (4 bytes).
+
+  @param  Handle    The TPM handle.
+  @param  Name      Output buffer (at least 34 bytes).
+  @param  NameSize  Output: name size.
+
+  @retval EFI_SUCCESS  Name retrieved.
+**/
+STATIC
+EFI_STATUS
+PblTpmGetHandleName (
+  IN  UINT32  Handle,
+  OUT UINT8  *Name,
+  OUT UINT8  *NameSize
+  )
+{
+  UINTN i;
+
+  // Check NV index name cache
+  for (i = 0; i < ARRAY_SIZE (mNvNameCache); i++) {
+    if (mNvNameCache[i].Valid && mNvNameCache[i].NvIndex == Handle) {
+      CopyMem (Name, mNvNameCache[i].Name, mNvNameCache[i].NameSize);
+      *NameSize = mNvNameCache[i].NameSize;
+      return EFI_SUCCESS;
+    }
+  }
+
+  // For hierarchy handles, the name IS the handle (4 bytes, big-endian)
+  *(UINT32 *)Name = SwapBytes32 (Handle);
+  *NameSize = 4;
+  return EFI_SUCCESS;
 }
 
 /** D-102: Fill the HMAC into the auth area of a TPM2 command.
@@ -317,7 +570,7 @@ PblTpmFillCommandHmac (
   UINT32 AuthOffset = 10 + HandleBytes;
 
   // Write the refreshed nonceCaller into the auth area
-  // Auth area layout: authAreaSize(4) + sessionHandle(4) + nonceCaller(2+32) + attrs(1) + hmac(2+32)
+  // Auth area layout: authAreaSize(4) + sessionHandle(4) + nonceCaller(2+32) + attrs(1) + hmac(2+HmacSize)
   // nonceCaller TPM2B: size(2) at AuthOffset+8, data(32) at AuthOffset+10
   Nonce = PblTpmGetNonceCaller ();
   if (Nonce != NULL) {
@@ -325,20 +578,53 @@ PblTpmFillCommandHmac (
     CopyMem (CommandBuffer + AuthOffset + 10, Nonce, 32);
   }
 
-  // Parameters start after: header(10) + handles(4*N) + authAreaSize(4) + authArea(73)
-  UINT32 ParamsOffset = AuthOffset + 4 + 73;
+  // D-206: When session key is empty (unbound, no salt) and entity auth is empty,
+  // the expected HMAC is empty (0 bytes). The auth area was built with a 0-byte
+  // HMAC placeholder. Just write 0x0000 for the HMAC size and skip computation.
+  UINT8 HmacSize = PblTpmGetSessionKeySize ();
+  if (HmacSize == 0) {
+    // HMAC size field is at AuthOffset + 4 + 4 + 2 + 32 + 1 = AuthOffset + 43
+    *(UINT16 *)(CommandBuffer + AuthOffset + 43) = SwapBytes16 (0);
+    return EFI_SUCCESS;
+  }
+
+  // Parameters start after: header(10) + handles(4*N) + authAreaSize(4) + authArea(45+HmacSize)
+  UINT32 ParamsOffset = AuthOffset + 4 + 45 + HmacSize;
   ParamsStart = CommandBuffer + ParamsOffset;
   ParamsSize = TotalSize - ParamsOffset;
 
-  // Build pHash input: handles + parameters (per TPM 2.0 Part 1 §18.1,
-  // cpHash = H(TPM_CC || handles || params), auth area excluded)
-  UINTN HashInputSize = HandleBytes + ParamsSize;
+  // D-206: Build pHash input: handle NAMES + parameters (per TPM 2.0 Part 1 §18.1,
+  // cpHash = H(TPM_CC || authName1 || ... || authNameN || params))
+  // The TPM uses entity NAMES, not raw handle values. For NV indices, the name
+  // is nameAlg || H(nameAlg, TPMS_NV_PUBLIC) = 34 bytes. For hierarchy handles,
+  // the name IS the handle (4 bytes).
+  UINT8  HandleName[PBL_NV_NAME_MAX];
+  UINT8  HandleNameSize;
+  UINTN  NamesSize = 0;
+  UINTN  i;
+
+  // First pass: compute total name size
+  for (i = 0; i < mCurrentCmdHandleCount; i++) {
+    UINT32 Handle = SwapBytes32 (*(UINT32 *)(CommandBuffer + 10 + 4 * i));
+    PblTpmGetHandleName (Handle, HandleName, &HandleNameSize);
+    NamesSize += HandleNameSize;
+  }
+
+  UINTN HashInputSize = NamesSize + ParamsSize;
   UINT8 *HashInput = AllocatePool (HashInputSize);
   if (HashInput == NULL) {
     return EFI_OUT_OF_RESOURCES;
   }
-  CopyMem (HashInput, CommandBuffer + 10, HandleBytes);  // handles
-  CopyMem (HashInput + HandleBytes, ParamsStart, ParamsSize);  // params
+
+  // Second pass: copy names + params into hash input
+  UINT8 *HPtr = HashInput;
+  for (i = 0; i < mCurrentCmdHandleCount; i++) {
+    UINT32 Handle = SwapBytes32 (*(UINT32 *)(CommandBuffer + 10 + 4 * i));
+    PblTpmGetHandleName (Handle, HandleName, &HandleNameSize);
+    CopyMem (HPtr, HandleName, HandleNameSize);
+    HPtr += HandleNameSize;
+  }
+  CopyMem (HPtr, ParamsStart, ParamsSize);  // params
 
   // Compute pHash-based HMAC
   Status = PblTpmComputeCommandHmacEx (CommandCode, HashInput, HashInputSize, Hmac);
@@ -413,7 +699,13 @@ PblTpmParseSessionResponse (
     UINT16 RespHmacSize = SwapBytes16 (*(UINT16 *)AuthPtr);
     AuthPtr += 2;
 
-    if (RespHmacSize == 32 && (AuthPtr + 32) <= (RespBuf + RespSize)) {
+    // D-206: When session key is empty (unbound, no salt) and entity auth is empty,
+    // the response HMAC is empty (0 bytes). Skip HMAC verification but still
+    // update nonceTPM for the next command.
+    if (RespHmacSize == 0) {
+      // Update nonceTPM from response for next command's HMAC
+      PblTpmUpdateNonceTpm (NonceTpmPtr, NonceTpmSize);
+    } else if (RespHmacSize == 32 && (AuthPtr + 32) <= (RespBuf + RespSize)) {
       // D-102: Fail-closed — return NULL on HMAC mismatch
       // Use proper pHash-based verification (SHA256 of responseCode || commandCode || responseParams)
       EFI_STATUS HmacStatus = PblTpmVerifyResponseHmacEx (
@@ -665,6 +957,185 @@ PblTpmReadAkName (
 }
 
 // ============================================================================
+// C2 §5.4: NV index provisioning (first-boot self-provisioning)
+// ============================================================================
+
+/** Define a single TPM NV index using TPM2_NV_DefineSpace.
+
+  Authorizes with TPM_RH_PLATFORM (empty password in dev/swtpm).
+  If the index already exists, returns EFI_ALREADY_STARTED (caller ignores).
+
+  @param  NvIndex     The NV index handle (e.g., PBL_NV_LOCK_STATE).
+  @param  DataSize    Size of the NV space in bytes.
+  @param  IsCounter   TRUE for TPMA_NV_COUNTER, FALSE for regular NV.
+
+  @retval EFI_SUCCESS           NV space defined.
+  @retval EFI_ALREADY_STARTED  NV space already exists (TPM_RC_NV_DEFINED).
+  @retval EFI_DEVICE_ERROR      TPM command failed.
+**/
+STATIC
+EFI_STATUS
+PblTpmNvDefineSpace (
+  IN UINT32   NvIndex,
+  IN UINT16   DataSize,
+  IN BOOLEAN  IsCounter
+  )
+{
+  EFI_TCG2_PROTOCOL *Tcg2;
+  EFI_STATUS         Status;
+  UINT8              CmdBuf[256];
+  UINT8              RespBuf[256];
+  UINT32             RespSize;
+
+  Tcg2 = PblTcg2Locate ();
+  if (Tcg2 == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  // D-206: Use TPM_RH_OWNER instead of TPM_RH_PLATFORM.
+  // OVMF's Tcg2PlatformDxe randomizes the platform hierarchy auth via
+  // HierarchyChangeAuth(PLATFORM, empty, random), making platform auth
+  // unusable from our UEFI application. The owner hierarchy auth remains
+  // empty by default, so we use TPM_RH_OWNER with empty password auth.
+  UINT32 DefHandles[] = { (UINT32)TPM_RH_OWNER };
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (
+                 CmdBuf, sizeof (CmdBuf), TPM_CC_NV_DefineSpace, 1, DefHandles);
+  UINT8 *ParamsStart = Ptr;
+
+  // D-206: TPM2_NV_DefineSpace wire parameter order (per NV_DefineSpace_In):
+  //   1. TPM2B_AUTH        auth        (the index auth value)
+  //   2. TPM2B_NV_PUBLIC   publicInfo  (the NV index public info)
+  // The firmware previously serialized publicInfo before auth, which caused
+  // the TPM to read the publicInfo size prefix (0x000E) as the auth size,
+  // consume 14 bytes of "auth", and then read the actual auth (0x0000) as the
+  // publicInfo size — triggering TPM_RC_SIZE on publicInfo (0x2D5).
+
+  // TPM2B_AUTH: empty (no auth value on the NV index)
+  *(UINT16 *)Ptr = SwapBytes16 (0);
+  Ptr += 2;
+
+  // TPM2B_NV_PUBLIC: UINT16 size + TPMS_NV_PUBLIC
+  // TPMS_NV_PUBLIC:
+  //   nvIndex (UINT32) + nameAlg (UINT16) + attributes (UINT32) +
+  //   authPolicy (TPM2B: UINT16 size=0) + dataSize (UINT16)
+  // Total TPMS_NV_PUBLIC = 4+2+4+2+2 = 14 bytes
+  *(UINT16 *)Ptr = SwapBytes16 (14);  // TPM2B_NV_PUBLIC size
+  Ptr += 2;
+
+  *(UINT32 *)Ptr = SwapBytes32 (NvIndex);  // nvIndex
+  Ptr += 4;
+
+  *(UINT16 *)Ptr = SwapBytes16 (0x000B);  // nameAlg = TPM_ALG_SHA256
+  Ptr += 2;
+
+  // D-206: TPMA_NV attributes — use AUTHREAD/AUTHWRITE only (no PPREAD/PPWRITE).
+  // PPREAD/PPWRITE require platform hierarchy auth, which OVMF randomizes.
+  // AUTHREAD/AUTHWRITE use the NV index auth value (empty), so reads/writes
+  // work with empty password auth via TPM_RS_PW session.
+  // Do NOT set PLATFORMCREATE (bit 30) — when clear, either owner or platform
+  // hierarchy can define the index. No OWNERCREATE bit exists in TPM 2.0.
+  // TPMA_NV bit layout (per TPM 2.0 Part 2 Table 2:208):
+  //   bit 0:  PPWRITE         bit 16: PPREAD
+  //   bit 1:  OWNERWRITE      bit 17: OWNERREAD
+  //   bit 2:  AUTHWRITE       bit 18: AUTHREAD
+  //   bit 3:  POLICYWRITE     bit 19: POLICYREAD
+  //   bits 4-7: TPM_NT        bit 25: NO_DA
+  //     TPM_NT_ORDINARY=0, TPM_NT_COUNTER=1, TPM_NT_BITS=2, TPM_NT_EXTEND=4
+  //   bit 30: PLATFORMCREATE
+  UINT32 Attr = 0x02040004;  // AUTHWRITE|AUTHREAD|NO_DA, TPM_NT=ORDINARY
+  if (IsCounter) {
+    Attr |= (1 << 4);  // TPM_NT_COUNTER = 1 (bits 4-7)
+  }
+  *(UINT32 *)Ptr = SwapBytes32 (Attr);
+  Ptr += 4;
+
+  *(UINT16 *)Ptr = SwapBytes16 (0);  // authPolicy size = 0 (empty)
+  Ptr += 2;
+
+  *(UINT16 *)Ptr = SwapBytes16 (DataSize);  // dataSize
+  Ptr += 2;
+
+  UINTN ParamsSize = (UINTN)(Ptr - ParamsStart);
+
+  // Fill HMAC into auth area (over plaintext params, before encryption)
+  PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
+
+  // Encrypt command parameters if HMAC session is active
+  if (PblTpmIsSessionActive () && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
+    PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
+  }
+
+  PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
+
+  Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
+                                RespBuf, sizeof (RespBuf), &RespSize);
+  if (EFI_ERROR (Status)) {
+    // Check if the TPM returned TPM_RC_NV_DEFINED (0x0000011C) — already exists
+    if (RespSize >= 10) {
+      UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
+      Print (L"  [DBG] NV_DefineSpace(0x%x) RC=0x%x\n", NvIndex, Rc);
+      if (Rc == 0x0000011C) {
+        return EFI_ALREADY_STARTED;
+      }
+    }
+    return EFI_DEVICE_ERROR;
+  }
+
+  return EFI_SUCCESS;
+}
+
+/** Provision all three PBL NV indices (C2 §5.4).
+
+  Called on first boot when NV reads fail. Defines:
+    - PBL_NV_LOCK_STATE (64 bytes, regular NV)
+    - PBL_NV_POLICY_VERSION (8 bytes, counter)
+    - PBL_NV_AK_NAME (34 bytes, regular NV)
+
+  If an index already exists, the error is ignored.
+
+  @retval EFI_SUCCESS  All indices provisioned (or already existed).
+**/
+EFI_STATUS
+PblTpmProvisionNvIndices (
+  VOID
+  )
+{
+  EFI_STATUS Status;
+
+  // D-206: OVMF's Tcg2PlatformDxe randomizes platform hierarchy auth via
+  // HierarchyChangeAuth(PLATFORM, empty, random). We use TPM_RH_OWNER with
+  // empty password auth instead. The owner hierarchy auth is empty by default
+  // and OVMF does not change it. No Startup or Clear needed — OVMF already
+  // started the TPM and we must not call Clear (destructive: clears NV indices).
+
+  // Lock state: 64 bytes, regular NV
+  Status = PblTpmNvDefineSpace (PBL_NV_LOCK_STATE, PBL_LOCK_STATE_SIZE, FALSE);
+  if (EFI_ERROR (Status) && Status != EFI_ALREADY_STARTED) {
+    Print (L"  [WARN] NV_DefineSpace(LOCK_STATE): %r\n", Status);
+    return Status;
+  }
+  PblTpmCacheNvName (PBL_NV_LOCK_STATE, 0x02040004, PBL_LOCK_STATE_SIZE);
+
+  // Policy version: 8 bytes, counter
+  Status = PblTpmNvDefineSpace (PBL_NV_POLICY_VERSION, 8, TRUE);
+  if (EFI_ERROR (Status) && Status != EFI_ALREADY_STARTED) {
+    Print (L"  [WARN] NV_DefineSpace(POLICY_VERSION): %r\n", Status);
+    return Status;
+  }
+  PblTpmCacheNvName (PBL_NV_POLICY_VERSION, 0x02040004 | (1 << 4), 8);
+
+  // AK name: 34 bytes, regular NV
+  Status = PblTpmNvDefineSpace (PBL_NV_AK_NAME, 34, FALSE);
+  if (EFI_ERROR (Status) && Status != EFI_ALREADY_STARTED) {
+    Print (L"  [WARN] NV_DefineSpace(AK_NAME): %r\n", Status);
+    return Status;
+  }
+  PblTpmCacheNvName (PBL_NV_AK_NAME, 0x02040004, 34);
+
+  return EFI_SUCCESS;
+}
+
+// ============================================================================
 // C2 §5.1 step 4: Read lock state from NV
 // ============================================================================
 
@@ -690,16 +1161,17 @@ PblTpmReadLockState (
     return EFI_NOT_FOUND;
   }
 
-  // TPM2_NV_Read(0x01C00001, offset=0, size=64) with HMAC session auth.
+  // TPM2_NV_Read(0x01C00001, size=64, offset=0) with HMAC session auth.
   // D-102: When HMAC session is active, command parameters are encrypted
   // with AES-256-CFB before sending, and response parameters are decrypted.
   // NV_Read has two handles: authHandle + nvIndex (both = NV index).
+  // NV_Read_In wire order: size (UINT16) then offset (UINT16).
   UINT32 NvHandles[] = { PBL_NV_LOCK_STATE, PBL_NV_LOCK_STATE };
   UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read, 2, NvHandles);
   UINT8 *ParamsStart = Ptr;  // Save start of parameters for encryption
-  *(UINT16 *)Ptr = SwapBytes16 (0);   // offset
-  Ptr += 2;
   *(UINT16 *)Ptr = SwapBytes16 (PBL_LOCK_STATE_SIZE);  // size
+  Ptr += 2;
+  *(UINT16 *)Ptr = SwapBytes16 (0);   // offset
   Ptr += 2;
   UINTN ParamsSize = (UINTN)(Ptr - ParamsStart);
 
@@ -707,7 +1179,7 @@ PblTpmReadLockState (
   PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
   // D-102: Encrypt command parameters if HMAC session is active
-  if (PblTpmIsSessionActive ()) {
+  if (PblTpmIsSessionActive () && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
     PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
   }
 
@@ -716,6 +1188,16 @@ PblTpmReadLockState (
   Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
                                 RespBuf, sizeof (RespBuf), &RespSize);
   if (EFI_ERROR (Status)) {
+    if (RespSize >= 10) {
+      UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
+      Print (L"  [DBG] NV_Read(LOCK_STATE) RC=0x%x\n", Rc);
+      // D-206: TPM_RC_NV_UNINITIALIZED (0x14A) means the index was defined but
+      // never written. This is the expected state on first boot — treat as
+      // "no cached value" (EFI_NOT_FOUND), not a device error.
+      if (Rc == 0x14A) {
+        return EFI_NOT_FOUND;
+      }
+    }
     return Status;
   }
 
@@ -728,7 +1210,7 @@ PblTpmReadLockState (
 
   // D-102: Decrypt response parameters if HMAC session is active
   // The response parameters are the TPM2B buffer containing the NV data
-  if (PblTpmIsSessionActive ()) {
+  if (PblTpmIsSessionActive () && PblTpmCommandSupportsEncrypt (mCurrentCmdCode)) {
     PblTpmDecryptResponseParams (RespPtr, ParamSize);
   }
 
@@ -776,21 +1258,22 @@ PblTpmReadPolicyVersion (
     return EFI_NOT_FOUND;
   }
 
-  // TPM2_NV_Read(0x01C00002, offset=0, size=8) with HMAC session auth.
+  // TPM2_NV_Read(0x01C00002, size=8, offset=0) with HMAC session auth.
   // D-102: Encrypt command parameters if session is active.
+  // NV_Read_In wire order: size (UINT16) then offset (UINT16).
   UINT32 PvHandles[] = { PBL_NV_POLICY_VERSION, PBL_NV_POLICY_VERSION };
   UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read, 2, PvHandles);
   UINT8 *ParamsStart = Ptr;
-  *(UINT16 *)Ptr = SwapBytes16 (0);   // offset
-  Ptr += 2;
   *(UINT16 *)Ptr = SwapBytes16 (8);   // size (uint64)
+  Ptr += 2;
+  *(UINT16 *)Ptr = SwapBytes16 (0);   // offset
   Ptr += 2;
   UINTN ParamsSize = (UINTN)(Ptr - ParamsStart);
 
   // D-102: Fill HMAC into auth area (over plaintext params, before encryption)
   PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
-  if (PblTpmIsSessionActive ()) {
+  if (PblTpmIsSessionActive () && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
     PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
   }
 
@@ -799,6 +1282,14 @@ PblTpmReadPolicyVersion (
   Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
                                 RespBuf, sizeof (RespBuf), &RespSize);
   if (EFI_ERROR (Status)) {
+    if (RespSize >= 10) {
+      UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
+      Print (L"  [DBG] NV_Read(POLICY_VERSION) RC=0x%x\n", Rc);
+      // D-206: TPM_RC_NV_UNINITIALIZED (0x14A) — counter not yet incremented
+      if (Rc == 0x14A) {
+        return EFI_NOT_FOUND;
+      }
+    }
     return Status;
   }
 
@@ -810,7 +1301,7 @@ PblTpmReadPolicyVersion (
   }
 
   // D-102: Decrypt response parameters if session is active
-  if (PblTpmIsSessionActive ()) {
+  if (PblTpmIsSessionActive () && PblTpmCommandSupportsEncrypt (mCurrentCmdCode)) {
     PblTpmDecryptResponseParams (RespPtr, ParamSize);
   }
 
@@ -850,13 +1341,22 @@ PblTpmIncrementPolicyVersion (
   }
 
   // TPM2_NV_Increment(0x01C00002) with session auth
+  // NV_Increment has no command parameters (just two handles), but the
+  // HMAC must still be computed and filled into the auth area.
   UINT32 IncHandles[] = { PBL_NV_POLICY_VERSION, PBL_NV_POLICY_VERSION };
   UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Increment, 2, IncHandles);
+
+  // D-206: Fill HMAC into auth area (no params to encrypt, but HMAC is required)
+  PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
   PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
   Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
                                 RespBuf, sizeof (RespBuf), &RespSize);
+  if (EFI_ERROR (Status) && RespSize >= 10) {
+    UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
+    Print (L"  [DBG] NV_Increment(POLICY_VERSION) RC=0x%x\n", Rc);
+  }
   return Status;
 }
 
@@ -904,7 +1404,7 @@ PblTpmWriteLockState (
   PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
   // D-102: Encrypt command parameters if HMAC session is active
-  if (PblTpmIsSessionActive ()) {
+  if (PblTpmIsSessionActive () && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
     PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
   }
 
@@ -912,6 +1412,10 @@ PblTpmWriteLockState (
 
   Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
                                 RespBuf, sizeof (RespBuf), &RespSize);
+  if (EFI_ERROR (Status) && RespSize >= 10) {
+    UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
+    Print (L"  [DBG] NV_Write(LOCK_STATE) RC=0x%x\n", Rc);
+  }
   return Status;
 }
 
@@ -1046,7 +1550,7 @@ PblTpmExtendPcr (
     Ptr += 2;
     ZeroMem (Ptr, 32);
     Ptr += 32;
-    *Ptr = PBL_SESSION_ATTRS;
+    *Ptr = PblTpmSessionAttrsForCommand (TPM_CC_PCR_Extend);
     Ptr += 1;
     *(UINT16 *)Ptr = SwapBytes16 (32);
     Ptr += 2;

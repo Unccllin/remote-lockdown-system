@@ -400,15 +400,27 @@ PblTpmStartHmacSession (
   }
   RespPtr += NonceTpmSize;
 
-  // Compute session key via KDFa
-  // sessionKey = KDFa(SHA256, tpmKey||bindAuth, "ATH",
-  //                   nonceCaller||nonceTPM, 256)
-  // tpmKey is empty (TPM_RH_NULL), so key = bindAuth only
-  if (!PblKDFa (BindAuth, BindAuthSize, "ATH",
-                mSession.NonceCaller, 32,
-                mSession.NonceTpm, 32,
-                256, mSession.SessionKey, sizeof (mSession.SessionKey))) {
-    return EFI_DEVICE_ERROR;
+  // D-206: Compute session key via KDFa.
+  // Per libtpms Session.c, the session key is ONLY computed when bind != TPM_RH_NULL
+  // or seed (salt) is non-empty. When bind=NULL and no salt (our case), the session
+  // key stays empty (0 bytes). The HMAC key then becomes:
+  //   sessionKey(empty) || authValue(of the entity)
+  // For NV indices with empty auth, this is empty. When the HMAC key is empty AND
+  // the input auth is empty, the expected HMAC is empty (0 bytes).
+  // Previously PBL computed a 32-byte session key from KDFa with an empty key,
+  // which produced a non-empty HMAC that didn't match the TPM's expected empty HMAC.
+  mSession.SessionKeySize = 0;
+  if (BindAuthSize > 0) {
+    // Only compute session key if there's a bind auth value
+    // sessionKey = KDFa(SHA256, bindAuth, "ATH", nonceTPM, nonceCaller, 256)
+    // Per libtpms Session.c, contextU = nonceTPM and contextV = nonceCaller.
+    if (!PblKDFa (BindAuth, BindAuthSize, "ATH",
+                  mSession.NonceTpm, 32,       // contextU = nonceTPM
+                  mSession.NonceCaller, 32,    // contextV = nonceCaller
+                  256, mSession.SessionKey, sizeof (mSession.SessionKey))) {
+      return EFI_DEVICE_ERROR;
+    }
+    mSession.SessionKeySize = 32;
   }
 
   mSession.Active = TRUE;
@@ -422,6 +434,15 @@ PblTpmGetSessionHandle (
   )
 {
   return mSession.Active ? mSession.SessionHandle : 0;
+}
+
+/** D-206: Get the session key size. Returns 0 for unbound sessions (no KDFa). **/
+UINT8
+PblTpmGetSessionKeySize (
+  VOID
+  )
+{
+  return mSession.Active ? mSession.SessionKeySize : 0;
 }
 
 /** Check if an HMAC session is active. **/
@@ -738,7 +759,8 @@ PblTpmComputeCommandHmacSession (
   // Build HMAC input: pHash || nonceCaller(32) || nonceTPM(32) || sessionAttributes(1)
   // Per TPM 2.0 Part 1 §18.1, the HMAC input is:
   //   pHash || nonceCaller || nonceTPM || sessionAttributes
-  // (nonceCaller and nonceTPM are the current session nonces)
+  // D-206: CryptDigestUpdate2B in libtpms only includes the data (not the
+  // 2-byte TPM2B size prefix), so nonces are raw 32 bytes.
   UINTN HmacInputSize = 32 + 32 + 32 + 1;
   UINT8 *HmacBuf = AllocatePool (HmacInputSize);
   if (HmacBuf == NULL) {
@@ -752,7 +774,7 @@ PblTpmComputeCommandHmacSession (
   HPtr += 32;
   CopyMem (HPtr, Session->NonceTpm, 32);
   HPtr += 32;
-  *HPtr = PBL_SESSION_ATTRS;
+  *HPtr = PblTpmSessionAttrsForCommand ((TPM_CC)CommandCode);
   HPtr += 1;
 
   if (!HmacSha256All (HmacBuf, HmacInputSize, Session->SessionKey, 32, Hmac)) {
@@ -948,6 +970,7 @@ PblTpmVerifyResponseHmacSession (
 
   // Build HMAC input: pHash || nonceTPM(32) || nonceCaller(32) || sessionAttributes(1)
   // Per TPM 2.0 Part 1 §18.1, the response HMAC uses nonceTPM first, then nonceCaller.
+  // D-206: Nonces are raw 32 bytes (CryptDigestUpdate2B excludes the size prefix).
   UINT8  HmacInput[32 + 32 + 32 + 1];
   UINT8 *HPtr = HmacInput;
 
@@ -957,7 +980,7 @@ PblTpmVerifyResponseHmacSession (
   HPtr += 32;
   CopyMem (HPtr, Session->NonceCaller, 32);
   HPtr += 32;
-  *HPtr = PBL_SESSION_ATTRS;
+  *HPtr = PblTpmSessionAttrsForCommand ((TPM_CC)CommandCode);
   HPtr += 1;
 
   if (!HmacSha256All (HmacInput, sizeof (HmacInput), Session->SessionKey, 32, ComputedHmac)) {
@@ -1111,13 +1134,10 @@ PblTpmStartPcrSession (
     ZeroMem (mPcrSession.NonceTpm + NonceTpmSize, 32 - NonceTpmSize);
   }
 
-  // Compute session key via KDFa (unbound: key = KDFa(empty, "ATH", ...))
-  if (!PblKDFa (NULL, 0, "ATH",
-                mPcrSession.NonceCaller, 32,
-                mPcrSession.NonceTpm, 32,
-                256, mPcrSession.SessionKey, sizeof (mPcrSession.SessionKey))) {
-    return EFI_DEVICE_ERROR;
-  }
+  // D-206: PCR session is unbound (bind=TPM_RH_NULL, no salt), so session key
+  // stays empty (0 bytes). Don't compute KDFa — matches libtpms Session.c which
+  // only computes session key when bind != TPM_RH_NULL or seed is non-empty.
+  mPcrSession.SessionKeySize = 0;
 
   mPcrSession.Active = TRUE;
   return EFI_SUCCESS;

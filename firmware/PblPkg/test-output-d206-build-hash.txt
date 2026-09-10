@@ -1,0 +1,3 @@
+Build SHA-256: 73c50ef49ba9ba1b2f91b1d8d3add65236034ca22e99feeaeeb94573c1d92aa5
+QEMU+swtpm test: 2026-09-10T07:35:55Z
+Result: PASS — NV provisioning, HMAC session, NV reads (NV_UNINITIALIZED), NV increment, verdict verification, fail-closed BLOCK
