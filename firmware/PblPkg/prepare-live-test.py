@@ -211,69 +211,135 @@ def create_usb_image(output_path, efi_path, policy_path):
     print(f"       EFI/BOOT/BOOTX64.EFI  ({os.path.getsize(efi_path)} bytes)")
     print(f"       EFI/PBL/policy.cose   ({os.path.getsize(policy_path)} bytes)")
 
-    # Try to create a full USB image if mtools is available
+    # Try to create a full USB image
+    # Method 1: mtools (mmd/mcopy) — no root required
+    # Method 2: Docker with pbl-qemu image — no root required
+    # Method 3: Manual copy — user copies files to a FAT32 USB drive
+
+    has_mtools = False
     try:
         subprocess.run(["which", "mmd"], capture_output=True, check=True)
-
-        print(f"  [...] Creating USB image: {output_path}")
-        img_size = 50 * 1024 * 1024
-        with open(output_path, "wb") as f:
-            f.truncate(img_size)
-
-        print("  [...] Creating GPT partition table...")
-        result = subprocess.run(
-            ["sgdisk", "--clear", "--new=1:2048:0", "--typecode=1:EF00",
-             "--change-name=1:ESP", output_path],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            print(f"  [WARN] sgdisk failed: {result.stderr}")
-            print(f"         Copy files manually from {staging_dir}/ to a FAT32 USB drive")
-            return staging_dir
-
-        print("  [...] Creating FAT32 filesystem...")
-        esp_img = output_path + ".esp"
-        result = subprocess.run(
-            ["mkfs.fat", "-F", "32", "-n", "PBLTEST", "-C", esp_img, "50176"],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            print(f"  [WARN] mkfs.fat failed: {result.stderr}")
-            print(f"         Copy files manually from {staging_dir}/ to a FAT32 USB drive")
-            return staging_dir
-
-        print("  [...] Copying firmware and policy to ESP...")
-        for cmd in [
-            ["mmd", "-i", esp_img, "::/EFI"],
-            ["mmd", "-i", esp_img, "::/EFI/BOOT"],
-            ["mmd", "-i", esp_img, "::/EFI/PBL"],
-            ["mcopy", "-i", esp_img, efi_path, "::/EFI/BOOT/BOOTX64.EFI"],
-            ["mcopy", "-i", esp_img, policy_path, "::/EFI/PBL/policy.cose"],
-        ]:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"  [WARN] {cmd[0]} failed: {result.stderr}")
-                print(f"         Copy files manually from {staging_dir}/ to a FAT32 USB drive")
-                return staging_dir
-
-        print("  [...] Writing ESP to image...")
-        with open(esp_img, "rb") as f:
-            esp_data = f.read()
-        with open(output_path, "r+b") as f:
-            f.seek(2048 * 512)
-            f.write(esp_data)
-
-        os.unlink(esp_img)
-        print(f"  [OK] USB image created: {output_path}")
-        print(f"       Flash to USB: dd if={output_path} of=/dev/sdX bs=4M")
-        return output_path
-
+        has_mtools = True
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print(f"  [INFO] mtools not installed — manual copy required")
-        print(f"         1. Format a USB drive as FAT32 with GPT")
-        print(f"         2. Copy {staging_dir}/EFI/ to the USB drive root")
-        print(f"         Or install mtools: sudo apt install mtools")
+        pass
+
+    has_docker = False
+    try:
+        subprocess.run(["which", "docker"], capture_output=True, check=True)
+        has_docker = True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    if has_mtools:
+        print(f"  [...] Creating USB image with mtools: {output_path}")
+        return _create_usb_image_mtools(output_path, efi_path, policy_path, staging_dir)
+
+    if has_docker:
+        print(f"  [...] Creating USB image with Docker: {output_path}")
+        return _create_usb_image_docker(output_path, staging_dir)
+
+    print(f"  [INFO] mtools/Docker not available — manual copy required")
+    print(f"         1. Format a USB drive as FAT32 with GPT partition table")
+    print(f"         2. Copy {staging_dir}/EFI/ to the USB drive root")
+    print(f"         Or install mtools: sudo apt install mtools")
+    return staging_dir
+
+
+def _create_usb_image_mtools(output_path, efi_path, policy_path, staging_dir):
+    """Create USB image using mtools (mmd/mcopy)."""
+    img_size = 50 * 1024 * 1024
+    with open(output_path, "wb") as f:
+        f.truncate(img_size)
+
+    print("  [...] Creating GPT partition table...")
+    result = subprocess.run(
+        ["sgdisk", "--clear", "--new=1:2048:0", "--typecode=1:EF00",
+         "--change-name=1:ESP", output_path],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"  [WARN] sgdisk failed: {result.stderr}")
+        print(f"         Copy files manually from {staging_dir}/ to a FAT32 USB drive")
         return staging_dir
+
+    print("  [...] Creating FAT32 filesystem...")
+    esp_img = output_path + ".esp"
+    result = subprocess.run(
+        ["mkfs.fat", "-F", "32", "-n", "PBLTEST", "-C", esp_img, "50176"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"  [WARN] mkfs.fat failed: {result.stderr}")
+        print(f"         Copy files manually from {staging_dir}/ to a FAT32 USB drive")
+        return staging_dir
+
+    print("  [...] Copying firmware and policy to ESP...")
+    for cmd in [
+        ["mmd", "-i", esp_img, "::/EFI"],
+        ["mmd", "-i", esp_img, "::/EFI/BOOT"],
+        ["mmd", "-i", esp_img, "::/EFI/PBL"],
+        ["mcopy", "-i", esp_img, efi_path, "::/EFI/BOOT/BOOTX64.EFI"],
+        ["mcopy", "-i", esp_img, policy_path, "::/EFI/PBL/policy.cose"],
+    ]:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"  [WARN] {cmd[0]} failed: {result.stderr}")
+            print(f"         Copy files manually from {staging_dir}/ to a FAT32 USB drive")
+            return staging_dir
+
+    print("  [...] Writing ESP to image...")
+    with open(esp_img, "rb") as f:
+        esp_data = f.read()
+    with open(output_path, "r+b") as f:
+        f.seek(2048 * 512)
+        f.write(esp_data)
+
+    os.unlink(esp_img)
+    print(f"  [OK] USB image created: {output_path}")
+    print(f"       Flash to USB: dd if={output_path} of=/dev/sdX bs=4M")
+    return output_path
+
+
+def _create_usb_image_docker(output_path, staging_dir):
+    """Create USB image using Docker (pbl-qemu image has mtools)."""
+    out_dir = os.path.dirname(os.path.abspath(output_path)) or "."
+    out_name = os.path.basename(output_path)
+
+    # Ensure output directory is writable by Docker
+    os.makedirs(out_dir, exist_ok=True)
+
+    cmd = [
+        "docker", "run", "--rm",
+        "-v", f"{staging_dir}:/staging",
+        "-v", f"{out_dir}:/output",
+        "pbl-qemu:latest",
+        "bash", "-c", f"""
+set -e
+OUTPUT="/output/{out_name}"
+dd if=/dev/zero of="$OUTPUT" bs=1M count=50 status=none
+sgdisk --clear --new=1:2048:0 --typecode=1:EF00 --change-name=1:ESP "$OUTPUT" 2>&1 | grep -v "^Warning" || true
+ESP_IMG="/tmp/pbl-esp.img"
+mkfs.fat -F 32 -n "PBLTEST" -C "$ESP_IMG" 50176 2>&1
+mmd -i "$ESP_IMG" ::/EFI
+mmd -i "$ESP_IMG" ::/EFI/BOOT
+mmd -i "$ESP_IMG" ::/EFI/PBL
+mcopy -i "$ESP_IMG" /staging/EFI/BOOT/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
+mcopy -i "$ESP_IMG" /staging/EFI/PBL/policy.cose ::/EFI/PBL/policy.cose
+dd if="$ESP_IMG" of="$OUTPUT" bs=512 seek=2048 conv=notrunc status=none
+rm "$ESP_IMG"
+echo "USB image created: $OUTPUT"
+""",
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        print(f"  [WARN] Docker USB image creation failed: {result.stderr}")
+        print(f"         Copy files manually from {staging_dir}/ to a FAT32 USB drive")
+        return staging_dir
+
+    print(f"  [OK] USB image created: {output_path}")
+    print(f"       Flash to USB: dd if={output_path} of=/dev/sdX bs=4M")
+    return output_path
 
 
 # ============================================================================
