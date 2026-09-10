@@ -51,77 +51,65 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-08-30 (continued 8): D-211 C5 tracking verified + debt ledger cleanup
+## Latest session: 2026-08-30 (continued 9): Hardware test plan + code signing guide
 
 ### RULE-ZERO
-**Read**: `PBL-C5-Covert-Tracking.md` (full ADR, 357 lines), `Decision.c`
-TRACKING verdict handling (lines 311-319), `server/src/routes/pbl.js`
-verdict endpoint + track/stop-track endpoints, `agent/agent.py`
-handle_track + apply_tracking_data_protection + ensure_tracking_stealth,
-`dashboard/src/pages/PblDeviceDetailPage.jsx` Track/StopTrack buttons.
-**Finding**: D-211 (C5 covert tracking) was marked OPEN (partial) but
-all 12 items from the C5 implementation plan are fully implemented:
-1. C1 contract: PBL_VERDICT_TRACKING = 3 in PblApp.h
-2. Decision.c: handles TRACKING (does not force BLOCK)
-3. Server verdict route: maps 'tracking' status → TRACKING verdict
-4. Server /devices/:id/track endpoint: sets status to 'tracking'
-5. Server /devices/:id/stop-track endpoint: sets status to 'active'
-6. Agent handle_track: enters covert tracking mode
-7. Agent handle_stop_track: reverses tracking mode
-8. Agent apply_tracking_data_protection: 3 layers (disable real user,
-   create decoy, EFS encrypt)
-9. Agent remove_tracking_data_protection: reverses all 3 layers
-10. Agent ensure_tracking_stealth: scheduled task watchdog
-11. Dashboard handleTrack: Track Device button
-12. Dashboard handleStopTrack: Stop Track button
+**Read**: `agent/hw_test_harness.py` (existing HIL harness for agent
+enforcement paths, 1602 lines), `scripts/setup-signing.sh` (Electron
+app signing setup), `scripts/verify-signing.sh` (signature verification),
+`.devin/skills/phase-5-signing-autoupdate/SKILL.md` (Phase 5 signing
+skill), `PBL-C5-Covert-Tracking.md` (C5 ADR).
+**Finding**: The existing hw_test_harness.py tests agent enforcement
+paths on Windows, not PBL firmware on real UEFI hardware. A separate
+hardware test plan is needed for PBL firmware. Code signing scripts
+exist for Electron apps but not for EFI binaries. User confirmed:
+hardware is available, but company has no legitimate Windows or code
+signing certificates.
 
 ### Fog cleared
-- **D-211 CLOSED**: All 12 C5 implementation plan items verified as
-  implemented. Server tests pass (4 tracking tests), agent tests pass
-  (15 tracking tests), dashboard tests pass (7 tracking-related tests).
-- **D-200..D-205 CLOSED**: All server endpoints verified as implemented:
-  - D-200: POST /v1/verdict
-  - D-201: GET/POST /v1/policy
-  - D-202: POST /v1/enroll
-  - D-203: POST /v1/attest
-  - D-204: POST /v1/override/challenge and /response
-  - D-205: ES256 + X.509 chain validation verified in QEMU+swtpm
-- **D-100/D-101 CLOSED**: QEMU+swtpm run via Docker pbl-qemu:latest
-  image. 10+ successful test runs this session.
-- **Debt ledger reduced to 2 OPEN items**: Only D-129 (real hardware
-  validation) and D-130 (code signing) remain open. Both are blocked
-  on external dependencies (physical hardware, signing certificates).
+- **Hardware test plan created**: `firmware/PblPkg/HARDWARE-TEST-PLAN.md`
+  guides the user through testing PBL firmware on a physical machine.
+  Covers: USB preparation, policy blob generation, mock server setup,
+  boot from USB, serial output capture, expected output verification,
+  second boot (NV persistence), troubleshooting. Tests the BLOCK path
+  (does not require legitimate Windows or BitLocker).
+- **Code signing guide created**: `firmware/PblPkg/CODE-SIGNING-GUIDE.md`
+  documents three signing options:
+  1. Self-signed cert (free, for testing — enroll in db)
+  2. OEM certificate (for OEM-specific deployment)
+  3. Microsoft UEFI signing portal (free, for universal deployment)
+- **Signing script created**: `firmware/PblPkg/sign-efi.sh` handles:
+  - `--test` mode: generates self-signed cert, signs with sbsign
+  - `--pfx` mode: signs with PFX certificate
+  - `--azure` mode: documents Azure Trusted Signing limitation for EFI
+  Uses sbsign (sbsigntool) on Linux, sbctl as fallback.
 
 ### Fog remaining
-- D-129: Requires physical Windows hardware — cannot be resolved in
-  this environment.
-- D-130: Requires code signing certificates — cannot be resolved
-  without certificate procurement.
-- Ed25519 firmware verification: Sub-debt of D-205. Blocked by EDK2
-  BaseCryptLib not supporting Ed25519 (only Ed448).
+- D-129: Hardware test plan is ready but not yet executed on real
+  hardware. User needs to follow the plan on the physical machine.
+- D-130: Code signing guide is ready but no certificates are available.
+  User can use `sign-efi.sh --test` for self-signed testing, or submit
+  to Microsoft's UEFI signing portal for production.
 
 ### Debt items closed
-- D-100, D-101: CLOSED (QEMU+swtpm via Docker)
-- D-200..D-205: CLOSED (all server endpoints implemented)
-- D-211: CLOSED (all 12 C5 plan items implemented)
+- None (D-129 and D-130 remain OPEN — documentation/scripts prepared
+  but not executed)
 
 ### Debt items still open
-- D-129 — Real hardware validation: OPEN (requires physical Windows machine)
-- D-130 — Code signing: OPEN (requires code signing certificates)
+- D-129 — Real hardware validation: OPEN (test plan ready, awaiting execution)
+- D-130 — Code signing: OPEN (script ready, awaiting certificates)
 - D-205 sub-debt — Ed25519 firmware verification: OPEN (blocked by BaseCryptLib)
 
 ### Blockers named and status
-- Real hardware: blocks PASS path verification on real Windows machine
-- Code signing: blocks production deployment of signed PblApp.efi
-- Ed25519: blocks Ed25519 algorithm support in firmware
+- D-129: User has hardware but needs to execute the test plan
+- D-130: User needs to procure certificates or use self-signed for testing
+- Ed25519: Blocked by EDK2 BaseCryptLib
 
 ### Next session opening
-The codebase is feature-complete. Remaining work is:
-1. D-129: Run firmware on real Windows hardware to verify PASS path
-2. D-130: Procure code signing certificates and sign PblApp.efi
-3. D-205 sub-debt: Investigate Ed25519 verification options (third-party
-   library or EDK2 update)
-All three are blocked on external dependencies, not code work.
+User executes the hardware test plan on the physical machine and reports
+the serial output. Or user runs `sign-efi.sh --test` to generate a
+self-signed cert for testing. Or submit PblApp.efi to Microsoft's UEFI
+signing portal for production signing.
 
 ---
 

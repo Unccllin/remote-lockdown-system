@@ -7663,3 +7663,65 @@ The codebase is feature-complete. Remaining work is:
 3. D-205 sub-debt: Investigate Ed25519 verification options (third-party
    library or EDK2 update)
 All three are blocked on external dependencies, not code work.
+
+---
+
+## Session 2026-08-30 (continued 9): Hardware test plan + code signing guide
+
+### RULE-ZERO
+**Read**: `agent/hw_test_harness.py` (existing HIL harness for agent
+enforcement paths, 1602 lines), `scripts/setup-signing.sh` (Electron
+app signing setup), `scripts/verify-signing.sh` (signature verification),
+`.devin/skills/phase-5-signing-autoupdate/SKILL.md` (Phase 5 signing
+skill), `PBL-C5-Covert-Tracking.md` (C5 ADR).
+**Finding**: The existing hw_test_harness.py tests agent enforcement
+paths on Windows, not PBL firmware on real UEFI hardware. A separate
+hardware test plan is needed for PBL firmware. Code signing scripts
+exist for Electron apps but not for EFI binaries. User confirmed:
+hardware is available, but company has no legitimate Windows or code
+signing certificates.
+
+### Fog cleared
+- **Hardware test plan created**: `firmware/PblPkg/HARDWARE-TEST-PLAN.md`
+  guides the user through testing PBL firmware on a physical machine.
+  Covers: USB preparation, policy blob generation, mock server setup,
+  boot from USB, serial output capture, expected output verification,
+  second boot (NV persistence), troubleshooting. Tests the BLOCK path
+  (does not require legitimate Windows or BitLocker).
+- **Code signing guide created**: `firmware/PblPkg/CODE-SIGNING-GUIDE.md`
+  documents three signing options:
+  1. Self-signed cert (free, for testing — enroll in db)
+  2. OEM certificate (for OEM-specific deployment)
+  3. Microsoft UEFI signing portal (free, for universal deployment)
+- **Signing script created**: `firmware/PblPkg/sign-efi.sh` handles:
+  - `--test` mode: generates self-signed cert, signs with sbsign
+  - `--pfx` mode: signs with PFX certificate
+  - `--azure` mode: documents Azure Trusted Signing limitation for EFI
+  Uses sbsign (sbsigntool) on Linux, sbctl as fallback.
+
+### Fog remaining
+- D-129: Hardware test plan is ready but not yet executed on real
+  hardware. User needs to follow the plan on the physical machine.
+- D-130: Code signing guide is ready but no certificates are available.
+  User can use `sign-efi.sh --test` for self-signed testing, or submit
+  to Microsoft's UEFI signing portal for production.
+
+### Debt items closed
+- None (D-129 and D-130 remain OPEN — documentation/scripts prepared
+  but not executed)
+
+### Debt items still open
+- D-129 — Real hardware validation: OPEN (test plan ready, awaiting execution)
+- D-130 — Code signing: OPEN (script ready, awaiting certificates)
+- D-205 sub-debt — Ed25519 firmware verification: OPEN (blocked by BaseCryptLib)
+
+### Blockers named and status
+- D-129: User has hardware but needs to execute the test plan
+- D-130: User needs to procure certificates or use self-signed for testing
+- Ed25519: Blocked by EDK2 BaseCryptLib
+
+### Next session opening
+User executes the hardware test plan on the physical machine and reports
+the serial output. Or user runs `sign-efi.sh --test` to generate a
+self-signed cert for testing. Or submit PblApp.efi to Microsoft's UEFI
+signing portal for production signing.
