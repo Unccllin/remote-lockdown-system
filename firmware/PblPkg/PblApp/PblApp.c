@@ -360,12 +360,13 @@ PblAppEntryPoint (
                 Verdict.Verdict, Verdict.PolicyVersion);
             }
           } else {
-            // D-205: No cert chain in policy — can't verify signature.
-            // This is a policy configuration error, not a verdict error.
-            Print (L"  [WARN] Verdict signature verification skipped — policy has no cert chain (D-205)\n");
-            OnlineFetchOk = TRUE;
-            Print (L"  [OK] Verdict decoded: verdict=%d policy_version=%d\n",
-              Verdict.Verdict, Verdict.PolicyVersion);
+            // D-205 fail-closed: No cert chain in policy — cannot verify
+            // signature. C1 §1.2: "No other verification path exists — PBL
+            // does not trust the platform TLS store for verdict
+            // verification." An unsigned verdict is not trustworthy.
+            // Reject and fall back to cache (or BLOCK if no cache).
+            Print (L"  [WARN] Verdict rejected — policy has no cert chain (D-205 fail-closed)\n");
+            OnlineFetchOk = FALSE;
           }
         } else {
           Print (L"  [WARN] Verdict decode failed: %r — falling back to cache\n", Status);

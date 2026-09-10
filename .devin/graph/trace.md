@@ -6844,3 +6844,69 @@ NV commands with HMAC session and AES parameter encryption.
 Implement X.509 chain path validation in firmware (D-205 sub-debt), or
 harden the no-certificate fallback to fail-closed for production, or
 provision TPM NV indexes in swtpm to exercise authenticated NV commands.
+
+---
+
+## Session 2026-09-10b: D-205 fail-closed hardening
+
+### RULE-ZERO
+**Read**: `firmware/PblPkg/PblApp/PblApp.c` (verdict flow, lines 335-410),
+  `docs/adr/PBL-C1-LockVerdict.md` (§1.2 signature, §3 replay protection).
+**Finding**: The no-cert fallback in PblApp.c (lines 362-369) set
+  `OnlineFetchOk = TRUE` when policy had no cert chain, silently trusting
+  unsigned verdicts. C1 §1.2 states: "No other verification path exists —
+  PBL does not trust the platform TLS store for verdict verification."
+  This is a production security hole.
+
+### Fog cleared this session
+- **No-cert fallback security hole**: PblApp.c line 366 set
+  `OnlineFetchOk = TRUE` when `Policy.VerdictSigningCert == NULL`, allowing
+  unsigned verdicts to be trusted. Fixed: set `OnlineFetchOk = FALSE` so
+  the firmware falls back to cache (or BLOCK if no cache). Source:
+  `PblApp.c` lines 362-370.
+- **Fail-closed verified in QEMU+swtpm**: Two test scenarios verified:
+  (1) Policy WITH cert chain (key 77) → `[OK] Verdict signature verified
+  (ES256)` — signature verified, verdict decoded.
+  (2) Policy WITHOUT cert chain → `[WARN] Verdict rejected — policy has
+  no cert chain (D-205 fail-closed)` — verdict rejected, falls back to
+  cache, BLOCKs with lock screen.
+
+### Fog remaining
+- X.509 chain path validation not implemented (only leaf cert used).
+- Ed25519 firmware verification not implemented (EFI_UNSUPPORTED).
+- UEFI clock in QEMU returns 0 (no RTC), causing PblVerifyVerdict step 8
+  to fail with Device Error. Real hardware has RTC.
+- TLS/HTTPS not tested.
+- NV index provisioning still not done.
+
+### Debt items closed
+- D-205 sub-debt (no-cert fallback hardening): CLOSED. Commit: (this
+  session). Artifact: QEMU+swtpm serial output showing
+  `[WARN] Verdict rejected — policy has no cert chain (D-205 fail-closed)`
+  for no-cert policy, and `[OK] Verdict signature verified (ES256)` for
+  cert-chain policy.
+
+### Debt items still open
+- D-205 sub-debt — X.509 chain path validation (only leaf cert used)
+- D-205 sub-debt — Ed25519 firmware verification (EFI_UNSUPPORTED)
+- D-211 — Real Windows hardware testing: OPEN
+- TLS/HTTPS configuration for production: OPEN
+- NV index provisioning for authenticated NV commands: OPEN
+
+### Blockers named and status
+- X.509 chain validation: blocks full D-205 production readiness.
+- Ed25519 firmware verify: blocks Ed25519 algorithm support in firmware.
+- UEFI clock in QEMU: blocks full verdict time validation in virtualized
+  testing.
+
+### Failure attribution
+- Layer 1 (Task specification): The original D-205 implementation did not
+  specify fail-closed behavior for the no-cert fallback case. The code
+  was written to allow unsigned verdicts during development, which is
+  appropriate for testing but not for production. Harness change: the
+  fix explicitly documents C1 §1.2 as the authority for fail-closed.
+
+### Next session opening
+Implement X.509 chain path validation in firmware (D-205 sub-debt), or
+provision TPM NV indexes in swtpm to exercise authenticated NV commands,
+or implement TLS/HTTPS for production verdict transport.

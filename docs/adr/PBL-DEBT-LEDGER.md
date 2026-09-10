@@ -822,13 +822,12 @@
   PblApp.efi SHA-256 91ed0c064495d00a91f543a87c7a52066d9215938fcee4a0cdb2f1aa14cd423b.
 - **Blocker**: X.509 chain path validation not implemented (only leaf cert
   used). Ed25519 firmware verification not implemented (no EDK2 lib).
-  No HSM backing. No-certificate fallback still sets OnlineFetchOk=TRUE
-  (must be changed to fail-closed for production).
+  No HSM backing.
 - **Close criteria**: (1) Implement firmware ES256 verification. ✅
   (2) Verify on a real EDK2 build + QEMU/swtpm. ✅
   (3) Implement X.509 chain path validation. (pending — D-205 sub-debt)
   (4) Implement firmware Ed25519 verification. (pending — D-205 sub-debt)
-  (5) Remove no-certificate fallback for production. (pending — D-205 sub-debt)
+  (5) Remove no-certificate fallback for production. ✅ (closed 2026-09-10b)
 - **Update (2026-09-09)**: Ed25519 signing support added to the Express
   `server/src/pbl/cose.js` — `generateSigningKey('Ed25519')`,
   `signData`, `verifySignature`, and `encodeCoseSign1` now support both
