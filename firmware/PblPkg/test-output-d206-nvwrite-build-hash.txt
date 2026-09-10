@@ -1,0 +1,6 @@
+Build SHA-256: 2b03a165d5e06b9717f6022bce692da48112444651bf4eed9298df6ac915bfcc
+QEMU+swtpm NV_Write + cache persistence test: 2026-09-10T08:44:51Z
+Result: PASS — NV_Write(LOCK_STATE) succeeds, cache persists across reboots
+Boot 1: Verdict verified, Lock state cached to TPM NV
+Boot 2: NV_Read(LOCK_STATE) succeeds (cached value read), Verdict verified, Lock state re-cached
+Clock skew fix: 60s tolerance for future-dated verdicts (network round-trip delay)

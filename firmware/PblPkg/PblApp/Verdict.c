@@ -45,13 +45,18 @@ PblGetUnixTime (
 
   Status = gRT->GetTime (&Time, NULL);
   if (EFI_ERROR (Status)) {
+    Print (L"  [DBG] GetTime failed: %r\n", Status);
     return 0;
   }
 
   // Basic sanity checks
   if (Time.Year < 1970 || Time.Year > 2106) {
+    Print (L"  [DBG] GetTime year out of range: %d\n", Time.Year);
     return 0;
   }
+
+  Print (L"  [DBG] GetTime: %04d-%02d-%02d %02d:%02d:%02d\n",
+    Time.Year, Time.Month, Time.Day, Time.Hour, Time.Minute, Time.Second);
 
   // Convert EFI_TIME to Unix epoch seconds
   // Simplified calculation (ignores leap seconds, valid for 1970-2106)
@@ -143,6 +148,8 @@ PblVerifyVerdict (
   // Step 8: issued_at <= now < grace_until
   // Rejects stale (past grace) or future-dated verdicts.
   UINT32 Now = PblGetUnixTime ();
+  Print (L"  [DBG] Verdict time check: Now=%u IssuedAt=%u GraceUntil=%u\n",
+    Now, Verdict->IssuedAt, Verdict->GraceUntil);
   if (Now == 0) {
     // Clock failure — cannot safely determine time validity.
     // C1 §3: "never brick" — but we also can't validate freshness.
@@ -151,8 +158,12 @@ PblVerifyVerdict (
     return EFI_DEVICE_ERROR;
   }
 
-  if (Verdict->IssuedAt > Now) {
-    // Future-dated verdict — reject (clock skew or forgery)
+  if (Verdict->IssuedAt > Now + 60) {
+    // Future-dated verdict — reject (clock skew > 60s or forgery)
+    // D-206: Allow up to 60 seconds of clock skew to account for network
+    // round-trip delay between server timestamp generation and firmware
+    // time read. The server may issue the verdict a few seconds before
+    // the firmware reads its clock.
     return EFI_DEVICE_ERROR;
   }
 

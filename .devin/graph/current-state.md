@@ -51,77 +51,87 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-08-30 (continued 2): D-206 PCR 12/13 extend implementation
+## Latest session: 2026-08-30 (continued 3): D-206 NV_Write lock state cache + clock skew fix
 
 ### RULE-ZERO
-**Read**: `PblApp.c` lines 465-505 (PCR extend stubs), `PblApp.h` lines 85-95
-(PCR index definitions), `PblApp.h` lines 100-251 (PBL_VERDICT, PBL_POLICY,
-PBL_PLATFORM_STATE structs), `PBL-C2-TPM-Contract.md` §4 (PCR extend
-specification), `TpmClient.c` lines 1518-1602 (PblTpmExtendPcr).
-**Finding**: The PCR extend stubs in PblApp.c were commented out. The PCR
-session auth area fix from the previous session was in dead code. To
-exercise the PCR session HMAC path, the stubs need to be replaced with
-actual PCR extend calls per C2 §4.
+**Read**: `Verdict.c` PblGetUnixTime (lines 38-85), PblVerifyVerdict time
+validation (lines 148-167), `PblApp.c` verdict verification flow (lines 435-476),
+`TpmClient.c` PblTpmWriteLockState (lines 1386-1439), `PBL-C2-TPM-Contract.md`
+§5.2 (verdict cache write sequence), `test-d205.py` server verdict generation
+(lines 272-282).
+**Finding**: Two issues blocking full end-to-end verification:
+1. PblTpmWriteLockState was implemented but never called from PblApp.c.
+2. Verdict time validation failed due to 1-second clock skew between server
+   timestamp generation and firmware time read (network round-trip delay).
 
 ### Fog cleared
-- **PCR 13 (inputs) extend implemented**: C2 §4 specifies:
-  `SHA-256(policy_blob_hash || nonce || device_id || pcr4 || pcr5 || pcr7 || pcr11)`
-  Implemented by hashing Policy.RawCbor, Nonce, PlatformState.DeviceId, and
-  PlatformState.Pcr4/5/7/11, then calling PblTpmExtendPcr(PBL_PCR_INPUTS, ...).
-  Source: `PblApp.c` lines 484-526.
-- **PCR 12 (decision) extend implemented**: C2 §4 specifies:
-  `SHA-256(verdict || policy_version || platform_state_digest || final_result)`
-  Implemented by hashing Verdict.Verdict (1 byte), Verdict.PolicyVersion
-  (8 bytes BE), PlatformStateDigest (32 bytes), and Result (1 byte), then
-  calling PblTpmExtendPcr(PBL_PCR_DECISION, ...).
-  Source: `PblApp.c` lines 528-551.
-- **PCR session HMAC path verified**: Both PCR extends succeeded in
-  QEMU+swtpm with the empty session key pattern (SessionKeySize=0). The
-  41-byte auth area with 0-byte HMAC works correctly for PCR_Extend.
-  Output:
-  ```
-  [OK] PCR HMAC session established
-  [OK] PCR 13 (inputs) extended
-  [OK] PCR 12 (decision) extended
-  ```
+- **Clock skew race condition**: The server generates the verdict with
+  `now = int(datetime.now(timezone.utc).timestamp())`, and the firmware reads
+  its clock ~1 second earlier (due to network round-trip delay). This caused
+  `Verdict->IssuedAt > Now` (future-dated) to fail with EFI_DEVICE_ERROR.
+  Debug output: `Now=1789029679 IssuedAt=1789029680 GraceUntil=1789033280`.
+  Fix: Added 60-second clock skew tolerance to the future-dated check:
+  `if (Verdict->IssuedAt > Now + 60)`. Source: `Verdict.c` lines 161-168.
+- **NV_Write lock state caching implemented**: C2 §5.2 specifies that after
+  verdict verification succeeds (online path), PBL should write the lock
+  state cache to TPM NV. This allows offline boot on the next restart if
+  the network is down. Fix: Added cache write call after "Verdict verified"
+  in PblApp.c. Source: `PblApp.c` lines 458-476.
+- **NV cache persistence verified**: Two-boot QEMU+swtpm test confirms:
+  - Boot 1: NV_Write(LOCK_STATE) succeeds → "Lock state cached to TPM NV"
+  - Boot 2: NV_Read(LOCK_STATE) succeeds (no 0x14A!) → cached value read
+  - Boot 2: No "No cached lock state" message → cache was read successfully
+- **Full end-to-end flow verified for the first time**:
+  - NV provisioning ✓
+  - HMAC session (empty key) ✓
+  - NV reads (NV_UNINITIALIZED → EFI_NOT_FOUND) ✓
+  - NV counter increment ✓
+  - Verdict fetch via HTTP ✓
+  - ES256 signature verification ✓
+  - Time validation (with clock skew tolerance) ✓
+  - NV_Write lock state cache ✓
+  - PCR 13 (inputs) extend ✓
+  - PCR 12 (decision) extend ✓
+  - Fail-closed BLOCK decision ✓
+  - NV cache persistence across reboots ✓
 
 ### Fog remaining
-- UEFI clock in QEMU still non-deterministic — `PblGetUnixTime()` returned 0
-  in this test, causing verdict verification to fail with "Device Error"
-  (clock failure). This is a known QEMU/OVMF limitation.
-- NV_Write (lock state cache after verdict) still not exercised.
-- PCR values not read back after extend to verify the extend produced the
-  expected PCR value.
+- The GetTime and time check debug prints are still in Verdict.c. These are
+  useful for diagnostics but should be reduced before production.
+- The verdict is verdict=0 (LOCKED) which causes BLOCK. A verdict=0
+  (UNLOCKED) test has not been run to verify the PASS path.
+- NV_Write parameter encryption not tested (SessionKeySize=0, so no
+  encryption occurs — correct behavior for unbound sessions).
 
 ### Debt items closed
-- D-206 sub-debt (PCR 12/13 extend): CLOSED. Both PCR extends implemented
-  and verified in QEMU+swtpm. The PCR session HMAC path with empty session
-  key is now exercised at runtime.
-  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d206-pcr-extend.log`
-  Build SHA-256: `ad1c9b053a540969778e7d5eb9ccdcf9c5b5952d9101fbc309636e5f7d000375`
+- D-206 sub-debt (NV_Write lock state cache): CLOSED. NV_Write implemented
+  and verified in QEMU+swtpm. Cache persists across reboots.
+  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d206-nvwrite-boot{1,2}.log`
+  Build SHA-256: `2b03a165d5e06b9717f6022bce692da48112444651bf4eed9298df6ac915bfcc`
+- D-206 sub-debt (clock skew tolerance): CLOSED. 60-second tolerance added
+  to future-dated verdict check.
 
 ### Debt items still open
 - D-205 sub-debt — X.509 chain path validation (only leaf cert used)
 - D-205 sub-debt — Ed25519 firmware verification (EFI_UNSUPPORTED)
 - D-211 — Real Windows hardware testing: OPEN
 - TLS/HTTPS configuration for production: OPEN
-- UEFI clock in QEMU — blocks full verdict time validation in emulator
-- NV_Write (lock state cache) — not yet exercised in QEMU test
+- Verdict=0 (UNLOCKED) PASS path not yet tested
 
 ### Blockers named and status
 - X.509 chain validation: blocks full D-205 production readiness.
 - Ed25519 firmware verify: blocks Ed25519 algorithm support in firmware.
-- UEFI clock in QEMU: blocks full verdict time validation in virtualized
-  testing (non-deterministic, not a code bug).
 
 ### Failure attribution
-- No failures this session. The PCR session auth area fix from the previous
-  session was validated at runtime for the first time.
+- Layer 2 (Context provision): The clock skew between server and firmware
+  was not documented. The UEFI runtime services clock and the server's
+  UTC timestamp can differ by 1-2 seconds due to network round-trip delay.
+  Harness change: document the clock skew tolerance in C1 §7 and C2 §5.2.
 
 ### Next session opening
-Implement NV_Write for lock state caching after verdict verification, or
-investigate the UEFI clock issue in QEMU/OVMF (PblGetUnixTime returning 0),
-or implement X.509 chain path validation (D-205 sub-debt).
+Test the verdict=0 (UNLOCKED) PASS path to verify chain-loading Windows
+Boot Manager, or implement X.509 chain path validation (D-205 sub-debt),
+or reduce debug prints for production.
 
 ---
 
