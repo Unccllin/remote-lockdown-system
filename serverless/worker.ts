@@ -1729,6 +1729,8 @@ import { handlePolicy, handleStorePolicy } from './pbl/routes/policy';
 import { handleEnrollPbl } from './pbl/routes/enroll';
 import { handleAttest } from './pbl/routes/attest';
 import { handleOverrideChallenge, handleOverrideResponse } from './pbl/routes/override';
+import { handleSigningKey } from './pbl/routes/signingKey';
+import { handleFirmwareDownload } from './pbl/routes/firmware';
 import { listDevices as listPblDevices, deleteDevice as deletePblDevice, getDevice as getPblDevice, setDeviceStatus as setPblDeviceStatus } from './pbl/devices';
 import { checkDeviceRateLimit, checkIpRateLimit, rateLimitResponse, DEVICE_RATE_LIMITS, IP_RATE_LIMITS } from './pbl/rateLimit';
 
@@ -1822,6 +1824,18 @@ async function handlePblRoute(
     if (path === '/v1/override/response' && method === 'POST') {
       const keys = await getSigningKeys(env);
       return handleOverrideResponse(request, env, keys);
+    }
+
+    // GET /v1/signing-key — return server's verdict signing key info (D-205)
+    // Public endpoint — returns kid + SPKI for policy blob construction
+    if (path === '/v1/signing-key' && method === 'GET') {
+      return handleSigningKey(request, env);
+    }
+
+    // GET /v1/firmware — download PblApp.efi from KV (D-130)
+    // Public endpoint — firmware binary is not secret
+    if (path === '/v1/firmware' && method === 'GET') {
+      return handleFirmwareDownload(request, env);
     }
 
     // GET /v1/devices — list all PBL devices (admin only, D-206)

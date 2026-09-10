@@ -1,6 +1,7 @@
 name = "lockdown-serverless"
 main = "worker.ts"
 compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat_v2"]
 
 # KV Namespace for device state
 # Create with: wrangler kv:namespace create LOCKDOWN_KV

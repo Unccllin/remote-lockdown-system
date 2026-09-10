@@ -51,65 +51,87 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-08-30 (continued 9): Hardware test plan + code signing guide
+## Latest session: 2026-08-30 (continued 10): Live test endpoints + prepare-live-test.py
 
 ### RULE-ZERO
-**Read**: `agent/hw_test_harness.py` (existing HIL harness for agent
-enforcement paths, 1602 lines), `scripts/setup-signing.sh` (Electron
-app signing setup), `scripts/verify-signing.sh` (signature verification),
-`.devin/skills/phase-5-signing-autoupdate/SKILL.md` (Phase 5 signing
-skill), `PBL-C5-Covert-Tracking.md` (C5 ADR).
-**Finding**: The existing hw_test_harness.py tests agent enforcement
-paths on Windows, not PBL firmware on real UEFI hardware. A separate
-hardware test plan is needed for PBL firmware. Code signing scripts
-exist for Electron apps but not for EFI binaries. User confirmed:
-hardware is available, but company has no legitimate Windows or code
-signing certificates.
+**Read**: `serverless/worker.ts` (route handling, Env interface, signing
+key caching), `serverless/pbl/signing.ts` (loadOrGenerateSigningKey,
+Buffer usage), `serverless/pbl/routes/verdict.ts` (verdict endpoint),
+`serverless/pbl/routes/policy.ts` (policy endpoint), `serverless/wrangler.toml`
+(deployment config), `firmware/PblPkg/HARDWARE-TEST-PLAN.md` (existing
+test plan).
+**Finding**: The serverless Worker is deployed at
+`https://lockdown-serverless.mainacollins196.workers.dev` but had no
+endpoint to download the firmware binary or fetch the signing key info.
+The verdict endpoint was broken (Buffer not defined — Cloudflare Workers
+don't have Node.js Buffer by default). User wants live tests, not mock.
 
 ### Fog cleared
-- **Hardware test plan created**: `firmware/PblPkg/HARDWARE-TEST-PLAN.md`
-  guides the user through testing PBL firmware on a physical machine.
-  Covers: USB preparation, policy blob generation, mock server setup,
-  boot from USB, serial output capture, expected output verification,
-  second boot (NV persistence), troubleshooting. Tests the BLOCK path
-  (does not require legitimate Windows or BitLocker).
-- **Code signing guide created**: `firmware/PblPkg/CODE-SIGNING-GUIDE.md`
-  documents three signing options:
-  1. Self-signed cert (free, for testing — enroll in db)
-  2. OEM certificate (for OEM-specific deployment)
-  3. Microsoft UEFI signing portal (free, for universal deployment)
-- **Signing script created**: `firmware/PblPkg/sign-efi.sh` handles:
-  - `--test` mode: generates self-signed cert, signs with sbsign
-  - `--pfx` mode: signs with PFX certificate
-  - `--azure` mode: documents Azure Trusted Signing limitation for EFI
-  Uses sbsign (sbsigntool) on Linux, sbctl as fallback.
+- **Added GET /v1/signing-key endpoint**: Returns the server's verdict
+  signing key info (kid_hex, spki_base64, algorithm) as JSON. Public
+  endpoint — needed for policy blob construction. Source:
+  `serverless/pbl/routes/signingKey.ts`.
+- **Added GET /v1/firmware endpoint**: Serves PblApp.efi from KV storage
+  (key `pbl_firmware:current`). Public endpoint — firmware binary is
+  not secret. Source: `serverless/pbl/routes/firmware.ts`.
+- **Fixed Buffer not defined**: Added `nodejs_compat_v2` compatibility
+  flag to `wrangler.toml`. This enables Node.js Buffer in Cloudflare
+  Workers. The verdict endpoint now works (returns signed COSE_Sign1).
+- **Uploaded firmware to KV**: PblApp.efi (1,232,896 bytes) uploaded to
+  KV. SHA-256 verified: download matches original.
+- **Created prepare-live-test.py**: One-command script that:
+  1. Downloads PblApp.efi from the server (or uses local copy)
+  2. Fetches the server's signing key info
+  3. Enrolls a test device on the server
+  4. Sets device status (active/locked/tracking)
+  5. Builds a policy blob matching the server's signing key
+  6. Stages USB files (EFI/BOOT/BOOTX64.EFI + EFI/PBL/policy.cose)
+  7. Creates a USB image if mtools is available
+- **Updated HARDWARE-TEST-PLAN.md**: Added "Mode A: Live test" section
+  with prepare-live-test.py usage. Live test is now the recommended
+  mode. Mock test remains as "Mode B" for offline testing.
+- **Verified live endpoints**:
+  - `curl https://...workers.dev/v1/signing-key` → JSON with kid + SPKI
+  - `curl -o PblApp.efi https://...workers.dev/v1/firmware` → 1.2MB EFI
+  - `curl -X POST https://...workers.dev/v1/verdict` → signed COSE_Sign1
+- **All 305 serverless tests pass** after changes.
 
 ### Fog remaining
-- D-129: Hardware test plan is ready but not yet executed on real
-  hardware. User needs to follow the plan on the physical machine.
-- D-130: Code signing guide is ready but no certificates are available.
-  User can use `sign-efi.sh --test` for self-signed testing, or submit
-  to Microsoft's UEFI signing portal for production.
+- D-129: Hardware test plan is ready with live testing support. User
+  needs to execute the plan on physical hardware.
+- D-130: Code signing guide is ready. User can use `sign-efi.sh --test`
+  for self-signed testing.
+- The policy blob generated by prepare-live-test.py uses a dummy
+  signature (policy signing key not provisioned on the server). The
+  firmware will need to handle this — either skip policy signature
+  verification for the test, or provision a policy signing key.
 
 ### Debt items closed
-- None (D-129 and D-130 remain OPEN — documentation/scripts prepared
-  but not executed)
+- None (D-129 and D-130 remain OPEN — infrastructure ready, awaiting
+  user execution)
 
 ### Debt items still open
-- D-129 — Real hardware validation: OPEN (test plan ready, awaiting execution)
+- D-129 — Real hardware validation: OPEN (live test infrastructure ready)
 - D-130 — Code signing: OPEN (script ready, awaiting certificates)
 - D-205 sub-debt — Ed25519 firmware verification: OPEN (blocked by BaseCryptLib)
 
 ### Blockers named and status
-- D-129: User has hardware but needs to execute the test plan
+- D-129: User has hardware — needs to run prepare-live-test.py and boot
 - D-130: User needs to procure certificates or use self-signed for testing
-- Ed25519: Blocked by EDK2 BaseCryptLib
+- Policy signature: prepare-live-test.py uses dummy signature — may need
+  to provision policy signing key on server or skip verification in test
+
+### Failure attribution
+- Layer 3 (Execution environment): Cloudflare Workers don't have Node.js
+  Buffer by default. The existing code used Buffer.from() which threw
+  ReferenceError. Fix: added `nodejs_compat_v2` flag to wrangler.toml.
+  Harness change: test worker deployment after every code change, not
+  just local vitest.
 
 ### Next session opening
-User executes the hardware test plan on the physical machine and reports
-the serial output. Or user runs `sign-efi.sh --test` to generate a
-self-signed cert for testing. Or submit PblApp.efi to Microsoft's UEFI
-signing portal for production signing.
+User runs prepare-live-test.py on their machine, copies files to USB,
+boots physical hardware, captures serial output. Or provision policy
+signing key on server so policy blobs are properly signed.
 
 ---
 
