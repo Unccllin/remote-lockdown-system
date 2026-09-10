@@ -51,61 +51,54 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-08-30 (continued): D-206 PCR session fix and NV counter persistence
+## Latest session: 2026-08-30 (continued 2): D-206 PCR 12/13 extend implementation
 
 ### RULE-ZERO
-**Read**: `TpmClient.c` PCR session command building (lines 1525-1602),
-`PblTpmFillPcrCommandHmac` (lines 740-811), `PblTpmParsePcrSessionResponse`
-(lines 826-883), `PblTpmSessionAttrsForCommand` (lines 172-206),
-`PblTpmGetHandleName` (lines 495-516), `Verdict.c` PblVerifyVerdict
-(lines 108-167).
-**Finding**: Three additional bugs found during NV counter persistence testing:
+**Read**: `PblApp.c` lines 465-505 (PCR extend stubs), `PblApp.h` lines 85-95
+(PCR index definitions), `PblApp.h` lines 100-251 (PBL_VERDICT, PBL_POLICY,
+PBL_PLATFORM_STATE structs), `PBL-C2-TPM-Contract.md` §4 (PCR extend
+specification), `TpmClient.c` lines 1518-1602 (PblTpmExtendPcr).
+**Finding**: The PCR extend stubs in PblApp.c were commented out. The PCR
+session auth area fix from the previous session was in dead code. To
+exercise the PCR session HMAC path, the stubs need to be replaced with
+actual PCR extend calls per C2 §4.
 
 ### Fog cleared
-- **PCR session auth area used fixed 73-byte layout**: The PCR session
-  command builder hard-coded a 73-byte auth area (32-byte HMAC placeholder)
-  even though the PCR session is unbound (SessionKeySize=0). Fix: auth area
-  now uses 41-byte layout with 0-byte HMAC when SessionKeySize==0, matching
-  the main NV session pattern. Source: `TpmClient.c` lines 1530-1566.
-  Note: This code is currently dead (PCR_Extend is stubbed in PblApp.c),
-  so the build hash didn't change until the encrypt/decrypt gating fix.
-- **TPM_RC_NV_DEFINED value was wrong**: The code checked for 0x0000011C
-  but the correct TPM 2.0 value is 0x14C. This caused provisioning to fail
-  on second boot when NV indices already existed. Fix: changed 0x11C to
-  0x14C. Source: `TpmClient.c` line 1088.
-- **Response parameter decryption with empty session key**: When
-  SessionKeySize==0, the TPM ignores the encrypt attribute and returns
-  plaintext. PBL's decrypt function was still applied, corrupting the
-  response data. This caused NV_Read(POLICY_VERSION) to return garbage
-  (-722132644 instead of 1) on boot 2. Fix: `PblTpmSessionAttrsForCommand()`
-  returns continueSession-only when SessionKeySize==0; all encrypt/decrypt
-  gating conditions now check `PblTpmGetSessionKeySize() > 0`. Source:
-  `TpmClient.c` lines 179-185, 1083, 1201, 1232, 1295, 1323, 1426.
-- **NV counter persistence verified**: Two-boot QEMU+swtpm test with
-  persistent swtpm state confirms:
-  - Boot 1: NV counter incremented from 0 to 1 (NV_Increment succeeded)
-  - Boot 2: NV_Read(POLICY_VERSION) succeeds, returns counter value 1
-  - Boot 2: No "New policy version" increment (policy version 1 == NV 1)
-  - Boot 2: NV_DefineSpace returns 0x14C (NV_DEFINED) → EFI_ALREADY_STARTED
+- **PCR 13 (inputs) extend implemented**: C2 §4 specifies:
+  `SHA-256(policy_blob_hash || nonce || device_id || pcr4 || pcr5 || pcr7 || pcr11)`
+  Implemented by hashing Policy.RawCbor, Nonce, PlatformState.DeviceId, and
+  PlatformState.Pcr4/5/7/11, then calling PblTpmExtendPcr(PBL_PCR_INPUTS, ...).
+  Source: `PblApp.c` lines 484-526.
+- **PCR 12 (decision) extend implemented**: C2 §4 specifies:
+  `SHA-256(verdict || policy_version || platform_state_digest || final_result)`
+  Implemented by hashing Verdict.Verdict (1 byte), Verdict.PolicyVersion
+  (8 bytes BE), PlatformStateDigest (32 bytes), and Result (1 byte), then
+  calling PblTpmExtendPcr(PBL_PCR_DECISION, ...).
+  Source: `PblApp.c` lines 528-551.
+- **PCR session HMAC path verified**: Both PCR extends succeeded in
+  QEMU+swtpm with the empty session key pattern (SessionKeySize=0). The
+  41-byte auth area with 0-byte HMAC works correctly for PCR_Extend.
+  Output:
+  ```
+  [OK] PCR HMAC session established
+  [OK] PCR 13 (inputs) extended
+  [OK] PCR 12 (decision) extended
+  ```
 
 ### Fog remaining
-- UEFI clock in QEMU is non-deterministic — `PblGetUnixTime()` sometimes
-  returns 0, causing `PblVerifyVerdict` to return EFI_DEVICE_ERROR ("Clock
-  failure"). This is a known QEMU/OVMF limitation, not a code bug. Boot 1
-  of the persistence test hit this; boot 2 did not.
-- NV_Write (lock state cache after verdict) still not exercised — the test
-  verdict is BLOCK and no cache write occurs in the current flow.
-- PCR_Extend is still stubbed in PblApp.c — the PCR session auth area fix
-  is in dead code until the stubs are uncommented.
+- UEFI clock in QEMU still non-deterministic — `PblGetUnixTime()` returned 0
+  in this test, causing verdict verification to fail with "Device Error"
+  (clock failure). This is a known QEMU/OVMF limitation.
+- NV_Write (lock state cache after verdict) still not exercised.
+- PCR values not read back after extend to verify the extend produced the
+  expected PCR value.
 
 ### Debt items closed
-- D-206 sub-debt (PCR session HMAC auth area): CLOSED. The 41-byte layout
-  with 0-byte HMAC is now used for both NV and PCR sessions.
-- D-206 sub-debt (NV counter persistence): CLOSED. Two-boot QEMU+swtpm
-  test with persistent swtpm state confirms counter survives reboot.
-  Artifact: `firmware/PblPkg/test-output-d206-persistence-boot1.log` and
-  `test-output-d206-persistence-boot2.log`.
-  Build SHA-256: `71113acf60813ad40104366c007c21052db0e3467071d0b669582d38cd206ff0`
+- D-206 sub-debt (PCR 12/13 extend): CLOSED. Both PCR extends implemented
+  and verified in QEMU+swtpm. The PCR session HMAC path with empty session
+  key is now exercised at runtime.
+  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d206-pcr-extend.log`
+  Build SHA-256: `ad1c9b053a540969778e7d5eb9ccdcf9c5b5952d9101fbc309636e5f7d000375`
 
 ### Debt items still open
 - D-205 sub-debt — X.509 chain path validation (only leaf cert used)
@@ -114,7 +107,6 @@
 - TLS/HTTPS configuration for production: OPEN
 - UEFI clock in QEMU — blocks full verdict time validation in emulator
 - NV_Write (lock state cache) — not yet exercised in QEMU test
-- PCR_Extend stubs — need to be uncommented to exercise PCR session
 
 ### Blockers named and status
 - X.509 chain validation: blocks full D-205 production readiness.
@@ -123,21 +115,13 @@
   testing (non-deterministic, not a code bug).
 
 ### Failure attribution
-- Layer 2 (Context provision): The TPM_RC_NV_DEFINED value (0x14C) was
-  incorrectly documented as 0x11C in the code comment. The TPM 2.0 Part 2
-  spec Table 17 is the authoritative source. Harness change: add a TPM RC
-  decode table to the firmware to prevent value mismatches.
-- Layer 4 (Verification feedback): The response parameter decryption with
-  empty session key was not caught by the single-boot test because the NV
-  reads returned NV_UNINITIALIZED (error responses have no parameters to
-  decrypt). The two-boot test was needed to expose this bug, since boot 2
-  reads a successfully written counter value. Harness change: always run
-  multi-boot tests when verifying NV persistence.
+- No failures this session. The PCR session auth area fix from the previous
+  session was validated at runtime for the first time.
 
 ### Next session opening
-Uncomment PCR_Extend stubs in PblApp.c to exercise the PCR session HMAC
-path, or implement NV_Write for lock state caching after verdict
-verification, or investigate the UEFI clock issue in QEMU/OVMF.
+Implement NV_Write for lock state caching after verdict verification, or
+investigate the UEFI clock issue in QEMU/OVMF (PblGetUnixTime returning 0),
+or implement X.509 chain path validation (D-205 sub-debt).
 
 ---
 

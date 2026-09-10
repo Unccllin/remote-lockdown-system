@@ -7104,3 +7104,77 @@ keeping swtpm state between runs.
 Uncomment PCR_Extend stubs in PblApp.c to exercise the PCR session HMAC
 path, or implement NV_Write for lock state caching after verdict
 verification, or investigate the UEFI clock issue in QEMU/OVMF.
+
+---
+
+## Session 2026-08-30 (continued 2): D-206 PCR 12/13 extend implementation
+
+### RULE-ZERO
+**Read**: `PblApp.c` lines 465-505 (PCR extend stubs), `PblApp.h` lines 85-95
+(PCR index definitions), `PblApp.h` lines 100-251 (PBL_VERDICT, PBL_POLICY,
+PBL_PLATFORM_STATE structs), `PBL-C2-TPM-Contract.md` §4 (PCR extend
+specification), `TpmClient.c` lines 1518-1602 (PblTpmExtendPcr).
+**Finding**: The PCR extend stubs in PblApp.c were commented out. The PCR
+session auth area fix from the previous session was in dead code. To
+exercise the PCR session HMAC path, the stubs need to be replaced with
+actual PCR extend calls per C2 §4.
+
+### Fog cleared
+- **PCR 13 (inputs) extend implemented**: C2 §4 specifies:
+  `SHA-256(policy_blob_hash || nonce || device_id || pcr4 || pcr5 || pcr7 || pcr11)`
+  Implemented by hashing Policy.RawCbor, Nonce, PlatformState.DeviceId, and
+  PlatformState.Pcr4/5/7/11, then calling PblTpmExtendPcr(PBL_PCR_INPUTS, ...).
+  Source: `PblApp.c` lines 484-526.
+- **PCR 12 (decision) extend implemented**: C2 §4 specifies:
+  `SHA-256(verdict || policy_version || platform_state_digest || final_result)`
+  Implemented by hashing Verdict.Verdict (1 byte), Verdict.PolicyVersion
+  (8 bytes BE), PlatformStateDigest (32 bytes), and Result (1 byte), then
+  calling PblTpmExtendPcr(PBL_PCR_DECISION, ...).
+  Source: `PblApp.c` lines 528-551.
+- **PCR session HMAC path verified**: Both PCR extends succeeded in
+  QEMU+swtpm with the empty session key pattern (SessionKeySize=0). The
+  41-byte auth area with 0-byte HMAC works correctly for PCR_Extend.
+  Output:
+  ```
+  [OK] PCR HMAC session established
+  [OK] PCR 13 (inputs) extended
+  [OK] PCR 12 (decision) extended
+  ```
+
+### Fog remaining
+- UEFI clock in QEMU still non-deterministic — `PblGetUnixTime()` returned 0
+  in this test, causing verdict verification to fail with "Device Error"
+  (clock failure). This is a known QEMU/OVMF limitation.
+- NV_Write (lock state cache after verdict) still not exercised.
+- PCR values not read back after extend to verify the extend produced the
+  expected PCR value.
+
+### Debt items closed
+- D-206 sub-debt (PCR 12/13 extend): CLOSED. Both PCR extends implemented
+  and verified in QEMU+swtpm. The PCR session HMAC path with empty session
+  key is now exercised at runtime.
+  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d206-pcr-extend.log`
+  Build SHA-256: `ad1c9b053a540969778e7d5eb9ccdcf9c5b5952d9101fbc309636e5f7d000375`
+
+### Debt items still open
+- D-205 sub-debt — X.509 chain path validation (only leaf cert used)
+- D-205 sub-debt — Ed25519 firmware verification (EFI_UNSUPPORTED)
+- D-211 — Real Windows hardware testing: OPEN
+- TLS/HTTPS configuration for production: OPEN
+- UEFI clock in QEMU — blocks full verdict time validation in emulator
+- NV_Write (lock state cache) — not yet exercised in QEMU test
+
+### Blockers named and status
+- X.509 chain validation: blocks full D-205 production readiness.
+- Ed25519 firmware verify: blocks Ed25519 algorithm support in firmware.
+- UEFI clock in QEMU: blocks full verdict time validation in virtualized
+  testing (non-deterministic, not a code bug).
+
+### Failure attribution
+- No failures this session. The PCR session auth area fix from the previous
+  session was validated at runtime for the first time.
+
+### Next session opening
+Implement NV_Write for lock state caching after verdict verification, or
+investigate the UEFI clock issue in QEMU/OVMF (PblGetUnixTime returning 0),
+or implement X.509 chain path validation (D-205 sub-debt).

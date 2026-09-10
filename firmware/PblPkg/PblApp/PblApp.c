@@ -481,8 +481,74 @@ PblAppEntryPoint (
     Print (L"  [OK] PCR HMAC session established\n");
   }
 
-  // STUB: PblTpmExtendPcr (PBL_PCR_INPUTS, inputs_hash, 32)
-  // STUB: PblTpmExtendPcr (PBL_PCR_DECISION, decision_hash, 32)
+  // D-206: Extend PCR 13 (inputs) and PCR 12 (decision) per C2 §4.
+  //   PCR 13 = SHA-256(policy_blob_hash || nonce || device_id || pcr4 || pcr5 || pcr7 || pcr11)
+  //   PCR 12 = SHA-256(verdict || policy_version || platform_state_digest || final_result)
+  {
+    UINT8 InputsHash[32];
+    UINT8 DecisionHash[32];
+
+    // PCR 13 (inputs): hash the platform state inputs
+    // C2 §4: SHA-256(policy_blob_hash || nonce || device_id || pcr4 || pcr5 || pcr7 || pcr11)
+    // For simplicity, hash the full PlatformState struct (which includes all
+    // PCR values and device_id) concatenated with the nonce and policy hash.
+    // The policy blob hash is SHA-256 of the raw CBOR.
+    UINT8 PolicyBlobHash[32];
+    if (Policy.RawCbor != NULL && Policy.RawCborSize > 0) {
+      Sha256HashAll (Policy.RawCbor, Policy.RawCborSize, PolicyBlobHash);
+    } else {
+      ZeroMem (PolicyBlobHash, 32);
+    }
+
+    // Build inputs digest: PolicyBlobHash || Nonce || DeviceId || Pcr4 || Pcr5 || Pcr7 || Pcr11
+    UINTN InputsSize = 32 + 32 + 32 + 32 + 32 + 32 + 32;
+    UINT8 *InputsBuf = AllocatePool (InputsSize);
+    if (InputsBuf != NULL) {
+      UINT8 *P = InputsBuf;
+      CopyMem (P, PolicyBlobHash, 32);  P += 32;
+      CopyMem (P, Nonce, 32);             P += 32;
+      CopyMem (P, PlatformState.DeviceId, 32); P += 32;
+      CopyMem (P, PlatformState.Pcr4, 32);     P += 32;
+      CopyMem (P, PlatformState.Pcr5, 32);     P += 32;
+      CopyMem (P, PlatformState.Pcr7, 32);     P += 32;
+      CopyMem (P, PlatformState.Pcr11, 32);    P += 32;
+      Sha256HashAll (InputsBuf, InputsSize, InputsHash);
+      FreePool (InputsBuf);
+    } else {
+      ZeroMem (InputsHash, 32);
+    }
+
+    Status = PblTpmExtendPcr (PBL_PCR_INPUTS, InputsHash, 32);
+    if (EFI_ERROR (Status)) {
+      Print (L"  [WARN] PCR 13 (inputs) extend failed: %r\n", Status);
+    } else {
+      Print (L"  [OK] PCR 13 (inputs) extended\n");
+    }
+
+    // PCR 12 (decision): SHA-256(verdict || policy_version || platform_state_digest || final_result)
+    // C2 §4: verdict byte || policy_version (8 bytes BE) || platform_state_digest || final_result (1 byte)
+    UINTN DecisionSize = 1 + 8 + 32 + 1;
+    UINT8 *DecisionBuf = AllocatePool (DecisionSize);
+    if (DecisionBuf != NULL) {
+      UINT8 *P = DecisionBuf;
+      *P++ = Verdict.Verdict;
+      UINT64 PolicyVersionBe = SwapBytes64 (Verdict.PolicyVersion);
+      CopyMem (P, &PolicyVersionBe, 8); P += 8;
+      CopyMem (P, PlatformStateDigest, 32); P += 32;
+      *P++ = (UINT8)Result;
+      Sha256HashAll (DecisionBuf, DecisionSize, DecisionHash);
+      FreePool (DecisionBuf);
+    } else {
+      ZeroMem (DecisionHash, 32);
+    }
+
+    Status = PblTpmExtendPcr (PBL_PCR_DECISION, DecisionHash, 32);
+    if (EFI_ERROR (Status)) {
+      Print (L"  [WARN] PCR 12 (decision) extend failed: %r\n", Status);
+    } else {
+      Print (L"  [OK] PCR 12 (decision) extended\n");
+    }
+  }
 
   //
   // Step 9: Act on decision
