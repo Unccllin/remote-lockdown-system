@@ -32,7 +32,6 @@ STATIC EFI_GUID mHttpProtocolGuid = EFI_HTTP_PROTOCOL_GUID;
   @retval EFI_SUCCESS  Hostname extracted.
   @retval EFI_INVALID_PARAMETER  URI is not https:// or malformed.
 **/
-STATIC
 EFI_STATUS
 PblParseUriHostname (
   IN  CONST CHAR8  *Uri,
@@ -95,6 +94,8 @@ PblHttpsPost (
   IN  CONST CHAR8   *Uri,
   IN  CONST UINT8   *Body,
   IN  UINTN          BodyLen,
+  IN  CONST UINT8   *TlsCaPin,
+  IN  CONST CHAR8   *ExpectedHostname,
   OUT UINT8        **Resp,
   OUT UINTN         *RespLen
   )
@@ -132,6 +133,16 @@ PblHttpsPost (
   // Temporarily allow http:// for QEMU testing without TLS CA configuration
   if (AsciiStrnCmp (Uri, "http://", 7) != 0 && AsciiStrnCmp (Uri, "https://", 8) != 0) {
     return EFI_INVALID_PARAMETER;
+  }
+
+  // D-116: For https:// URIs, require TlsCaPin and hostname for verification
+  // C3 §4: "Plaintext fallback: never (http:// rejected)"
+  // For now, http:// is allowed in QEMU testing (no TLS stack configured).
+  // When https:// is used, TlsCaPin must be provided for cert pinning.
+  if (AsciiStrnCmp (Uri, "https://", 8) == 0) {
+    if (TlsCaPin == NULL || ExpectedHostname == NULL) {
+      return EFI_INVALID_PARAMETER;
+    }
   }
 
   // Body size check

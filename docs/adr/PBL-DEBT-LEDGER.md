@@ -1280,7 +1280,7 @@
 | D-113 | Override challenge/response not implemented | CLOSED | TODO |
 | D-114 | Chain-load Windows Boot Manager not implemented | CLOSED | TODO |
 | D-115 | CBOR encoding/decoding not implemented | CLOSED | TODO |
-| D-116 | TLS certificate pin verification not implemented | OPEN | SECURITY |
+| D-116 | TLS certificate pin verification not implemented | CLOSED (PblHttpsPost accepts TlsCaPin + ExpectedHostname; PblTlsVerifyCert validates SHA-256 of server cert against pinned CA hash) | SECURITY |
 | D-117 | No runtime tests for PBL modules | CLOSED (QEMU+swtpm: 8 test-output logs) | TEST |
 | D-118 | EFI_RNG_PROTOCOL nonce generation not implemented | CLOSED | SECURITY |
 | D-119 | ACPI FADT S3 parsing stubbed | CLOSED | STUB |

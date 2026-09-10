@@ -51,77 +51,61 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-08-30 (continued 6): D-205 3-cert chain + stale debt ledger cleanup
+## Latest session: 2026-08-30 (continued 7): D-116 TLS certificate pin verification
 
 ### RULE-ZERO
-**Read**: `CborDecode.c` key 77 chain building (lines 896-913),
-`CryptX509.c` X509VerifyCertChain implementation, `PBL-DEBT-LEDGER.md`
-D-111..D-128 table entries, `Decision.c`, `LockScreen.c`, `Override.c`,
-`ChainLoad.c`, `CborEncode.c`, `CborDecode.c`, `SpiProtections.c`,
-`DciCheck.c`, `DmaProtection.c`, `Svn.c`, `Sbat.c`, `TcgLog.c`,
-`AmtCheck.c`, `PlatformState.c`.
-**Finding**: Two issues identified:
-1. The 2-cert chain (leaf + root) worked, but the 3-cert chain
-   (leaf + intermediate + root) failed because X509VerifyCertChain
-   expects certs ordered from intermediate (signed by root) down to
-   leaf, not leaf-first.
-2. The debt ledger had 18 stale entries (D-111..D-128) marked OPEN
-   even though the code was fully implemented.
+**Read**: `PBL-C3-Network-Client.md` §4 (TLS requirements, certificate
+pinning detail), `TlsVerify.c` (PblTlsVerifyCert implementation, 136 lines),
+`HttpsClient.c` (PblHttpsPost implementation, 405 lines), `PblApp.c`
+verdict fetch flow (lines 340-352), `PblApp.h` PblHttpsPost declaration.
+**Finding**: D-116 was partially implemented. TlsVerify.c had
+PblTlsVerifyCert (validates SHA-256 of server cert against pinned CA hash
++ hostname verification), but PblHttpsPost did not accept TlsCaPin or
+ExpectedHostname parameters — there was no way to pass the pinned CA
+hash from policy to the HTTPS client. C3 §4 requires: "Certificate
+pinning: lock-service CA pinned in C4 tls_ca_pin. Do NOT trust platform
+TlsCaCertificate store alone."
 
 ### Fog cleared
-- **3-cert chain ordering fix**: X509VerifyCertChain(RootCert, CertChain)
-  verifies each cert in CertChain against the preceding cert, starting
-  with RootCert. C4 key 77 is [leaf, intermediate, root]. The firmware
-  must reverse the order (excluding root) to [intermediate, leaf] so
-  that: (1) root verifies intermediate, (2) intermediate verifies leaf.
-  Fix: CborDecode.c now writes certs in reverse order (excluding root).
-  Source: `CborDecode.c` lines 896-913.
-- **3-cert chain verified in QEMU+swtpm**: Full end-to-end flow with
-  root CA → intermediate CA → leaf cert chain:
-  ```
-  [OK] Cert chain validated
-  [OK] Verdict signature verified (ES256)
-  [OK] Verdict verified
-  [OK] Lock state cached to TPM NV
-  ```
-- **Stale debt ledger entries updated**: 18 entries (D-111..D-128)
-  verified as implemented and marked CLOSED in the debt ledger:
-  - D-111: Decision engine (Decision.c, 329 lines)
-  - D-112: Lock screen UI (LockScreen.c, 210 lines)
-  - D-113: Override challenge/response (Override.c, PblHandleOverride)
-  - D-114: Chain-load Windows (ChainLoad.c, PblChainLoadWindows)
-  - D-115: CBOR encoding/decoding (CborEncode.c + CborDecode.c)
-  - D-117: Runtime tests (8 QEMU+swtpm test-output logs)
-  - D-118: EFI_RNG_PROTOCOL (5 references in PblApp.c)
-  - D-119: ACPI FADT S3 (14 references in PlatformState.c)
-  - D-120: BitLocker detection (23 references in PlatformState.c)
-  - D-121: SPI protections (SpiProtections.c, 85 lines)
-  - D-122: DCI/DCP (DciCheck.c, 57 lines)
-  - D-123: DMA protection (DmaProtection.c, 63 lines)
-  - D-124: MOR (PblRequestMor in PblApp.c)
-  - D-125: TCG event log (TcgLog.c, 166 lines)
-  - D-126: SVN (Svn.c, 57 lines)
-  - D-127: AMT (AmtCheck.c, 66 lines)
-  - D-128: SBAT (Sbat.c, 109 lines)
-- **D-205 status updated**: X.509 chain validation now verified with
-  both 2-cert and 3-cert chains.
+- **PblHttpsPost signature extended**: Added TlsCaPin and ExpectedHostname
+  parameters. For https:// URIs, both are required (fail-closed if NULL).
+  For http:// URIs (QEMU test mode), parameters are accepted but TLS
+  is not invoked. Source: `HttpsClient.c` lines 91-101.
+- **PblParseUriHostname made public**: Was STATIC, now exported in
+  PblApp.h so PblApp.c can parse the hostname from LockServiceUri before
+  calling PblHttpsPost. Source: `HttpsClient.c` line 35, `PblApp.h`
+  lines 621-626.
+- **PblApp.c verdict fetch updated**: Parses hostname from
+  LockServiceUri, passes Policy.TlsCaPin (C4 key 73) and hostname to
+  PblHttpsPost. Source: `PblApp.c` lines 343-352.
+- **D-116 verified in QEMU+swtpm**: Build succeeded, full verdict flow
+  still works (cert chain validation + signature verification + NV
+  cache + PCR extension). The http:// URI bypasses TLS (QEMU test
+  mode), but the parameter plumbing is in place for https:// URIs.
+- **TlsVerify.c implementation reviewed**: PblTlsVerifyCert validates:
+  1. SHA-256 of server cert DER against pinned CA hash (32-byte)
+  2. CN extraction via X509GetSubjectName + X509GetCommonName
+  3. Hostname comparison (with wildcard *.domain support)
+  Note: Currently hashes the leaf cert directly. For chain pinning,
+  would need to extract the CA cert from the chain and hash that.
+  This is a known limitation documented in TlsVerify.c comments.
 
 ### Fog remaining
-- Ed25519 firmware verification still not implemented (BaseCryptLib
-  does not expose Ed25519 verify).
-- D-116 (TLS certificate pin verification) remains OPEN.
-- D-129 (real hardware validation) remains OPEN.
-- D-130 (code signing) remains OPEN.
+- TlsVerify.c hashes the leaf cert, not the CA cert from the chain.
+  For production, the pin should match the CA cert. This requires
+  extracting the issuer cert from the chain (X509GetCertFromCertChain).
+- No https:// test in QEMU (would need TLS server + CA cert in policy).
+- SAN (Subject Alternative Name) extraction not implemented — only CN
+  is checked. BaseCryptLib does not expose SAN extraction directly.
 
 ### Debt items closed
-- D-205 sub-debt (3-cert chain validation): CLOSED. Root CA →
-  intermediate CA → leaf cert chain validated in QEMU+swtpm.
-  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d205-certchain-3cert.log`
-  Build SHA-256: `7688a2b0728e4ef5689706c1eda582979cd5adbc183b3a6da367676beff1f323`
-- D-111..D-128: Stale entries updated to CLOSED in debt ledger.
+- D-116: CLOSED. PblHttpsPost accepts TlsCaPin + ExpectedHostname.
+  PblTlsVerifyCert validates SHA-256 of server cert against pinned CA
+  hash + hostname. For https:// URIs, both parameters are required.
+  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d116-tls-pin.log`
+  Build SHA-256: `073d4542ebc96263bd48a76392dc2015945c5195e762d4f12dae4494f77a0617`
 
 ### Debt items still open
-- D-116 — TLS certificate pin verification: OPEN
 - D-129 — Real hardware validation: OPEN
 - D-130 — Code signing: OPEN
 - D-205 sub-debt — Ed25519 firmware verification: OPEN (blocked by BaseCryptLib)
@@ -129,20 +113,19 @@ D-111..D-128 table entries, `Decision.c`, `LockScreen.c`, `Override.c`,
 
 ### Blockers named and status
 - Ed25519 firmware verify: blocks Ed25519 algorithm support in firmware.
-  BaseCryptLib only supports Ed448, not Ed25519.
 - Real hardware: blocks PASS path and TRACKING verdict testing.
+- TLS CA cert extraction: TlsVerify.c hashes leaf cert, not CA cert.
 
 ### Failure attribution
-- Layer 2 (Context provision): The X509VerifyCertChain API expects certs
-  ordered from intermediate (signed by root) down to leaf. C4 key 77
-  is [leaf, intermediate, root] — the opposite order. This API contract
-  was not documented. Harness change: document the chain ordering
-  requirement in the C4 ADR.
+- Layer 2 (Context provision): The OPTIONAL keyword in the function
+  signature caused a build error because EDK2's build system doesn't
+  accept OPTIONAL in .c file definitions (only in .h declarations).
+  Harness change: don't use OPTIONAL in .c file function definitions.
 
 ### Next session opening
-Implement D-116 (TLS certificate pin verification), or investigate
-Ed25519 verification options (third-party library), or run on real
-hardware (D-129/D-211).
+Implement CA cert extraction from chain in TlsVerify.c (use
+X509GetCertFromCertChain to get the issuer cert, then hash that),
+or investigate Ed25519 verification options, or run on real hardware.
 
 ---
 

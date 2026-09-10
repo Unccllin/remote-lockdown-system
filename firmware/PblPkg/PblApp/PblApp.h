@@ -619,11 +619,20 @@ PblLogExtendEvent (
 
 // HttpsClient.c — C3
 EFI_STATUS
+PblParseUriHostname (
+  IN  CONST CHAR8   *Uri,
+  OUT CHAR8         *Hostname,
+  IN  UINTN          HostnameSize
+  );
+
+EFI_STATUS
 EFIAPI
 PblHttpsPost (
   IN  CONST CHAR8   *Uri,
   IN  CONST UINT8   *Body,
   IN  UINTN          BodyLen,
+  IN  CONST UINT8   *TlsCaPin,       // 32-byte SHA-256 of CA cert (C4 key 73)
+  IN  CONST CHAR8   *ExpectedHostname, // for TLS hostname verification
   OUT UINT8        **Resp,
   OUT UINTN         *RespLen
   );

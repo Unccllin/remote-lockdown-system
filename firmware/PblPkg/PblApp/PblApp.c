@@ -174,6 +174,7 @@ PblAppEntryPoint (
   UINTN                   RequestBodySize = 0;
   UINT8                   PlatformStateDigest[32];
   BOOLEAN                 OnlineFetchOk = FALSE;
+  CHAR8                   Hostname[256];    // D-116: parsed from LockServiceUri for TLS pin
 
   // Suppress unused-variable warnings for scaffold stubs
   (VOID)VerdictCose;
@@ -340,11 +341,16 @@ PblAppEntryPoint (
     // The verdict URI comes from the policy blob (C4 §2.8 key 70).
     // If the policy has no URI, skip online fetch.
     if (Policy.LockServiceUri[0] != '\0') {
+      // D-116: Parse hostname from LockServiceUri for TLS pin verification
+      ZeroMem (Hostname, sizeof (Hostname));
+      PblParseUriHostname (Policy.LockServiceUri, Hostname, sizeof (Hostname));
       Print (L"  [INFO] POSTing verdict request to %a\n", Policy.LockServiceUri);
       Status = PblHttpsPost (
         Policy.LockServiceUri,
         RequestBody,
         RequestBodySize,
+        Policy.TlsCaPin,     // D-116: C4 key 73 (32-byte SHA-256 of CA cert)
+        Hostname,             // D-116: parsed from LockServiceUri
         &VerdictCose,
         &VerdictCoseSize
       );

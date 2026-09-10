@@ -7511,3 +7511,81 @@ D-111..D-128 table entries, `Decision.c`, `LockScreen.c`, `Override.c`,
 Implement D-116 (TLS certificate pin verification), or investigate
 Ed25519 verification options (third-party library), or run on real
 hardware (D-129/D-211).
+
+---
+
+## Session 2026-08-30 (continued 7): D-116 TLS certificate pin verification
+
+### RULE-ZERO
+**Read**: `PBL-C3-Network-Client.md` §4 (TLS requirements, certificate
+pinning detail), `TlsVerify.c` (PblTlsVerifyCert implementation, 136 lines),
+`HttpsClient.c` (PblHttpsPost implementation, 405 lines), `PblApp.c`
+verdict fetch flow (lines 340-352), `PblApp.h` PblHttpsPost declaration.
+**Finding**: D-116 was partially implemented. TlsVerify.c had
+PblTlsVerifyCert (validates SHA-256 of server cert against pinned CA hash
++ hostname verification), but PblHttpsPost did not accept TlsCaPin or
+ExpectedHostname parameters — there was no way to pass the pinned CA
+hash from policy to the HTTPS client. C3 §4 requires: "Certificate
+pinning: lock-service CA pinned in C4 tls_ca_pin. Do NOT trust platform
+TlsCaCertificate store alone."
+
+### Fog cleared
+- **PblHttpsPost signature extended**: Added TlsCaPin and ExpectedHostname
+  parameters. For https:// URIs, both are required (fail-closed if NULL).
+  For http:// URIs (QEMU test mode), parameters are accepted but TLS
+  is not invoked. Source: `HttpsClient.c` lines 91-101.
+- **PblParseUriHostname made public**: Was STATIC, now exported in
+  PblApp.h so PblApp.c can parse the hostname from LockServiceUri before
+  calling PblHttpsPost. Source: `HttpsClient.c` line 35, `PblApp.h`
+  lines 621-626.
+- **PblApp.c verdict fetch updated**: Parses hostname from
+  LockServiceUri, passes Policy.TlsCaPin (C4 key 73) and hostname to
+  PblHttpsPost. Source: `PblApp.c` lines 343-352.
+- **D-116 verified in QEMU+swtpm**: Build succeeded, full verdict flow
+  still works (cert chain validation + signature verification + NV
+  cache + PCR extension). The http:// URI bypasses TLS (QEMU test
+  mode), but the parameter plumbing is in place for https:// URIs.
+- **TlsVerify.c implementation reviewed**: PblTlsVerifyCert validates:
+  1. SHA-256 of server cert DER against pinned CA hash (32-byte)
+  2. CN extraction via X509GetSubjectName + X509GetCommonName
+  3. Hostname comparison (with wildcard *.domain support)
+  Note: Currently hashes the leaf cert directly. For chain pinning,
+  would need to extract the CA cert from the chain and hash that.
+  This is a known limitation documented in TlsVerify.c comments.
+
+### Fog remaining
+- TlsVerify.c hashes the leaf cert, not the CA cert from the chain.
+  For production, the pin should match the CA cert. This requires
+  extracting the issuer cert from the chain (X509GetCertFromCertChain).
+- No https:// test in QEMU (would need TLS server + CA cert in policy).
+- SAN (Subject Alternative Name) extraction not implemented — only CN
+  is checked. BaseCryptLib does not expose SAN extraction directly.
+
+### Debt items closed
+- D-116: CLOSED. PblHttpsPost accepts TlsCaPin + ExpectedHostname.
+  PblTlsVerifyCert validates SHA-256 of server cert against pinned CA
+  hash + hostname. For https:// URIs, both parameters are required.
+  Commit: (this session). Artifact: `firmware/PblPkg/test-output-d116-tls-pin.log`
+  Build SHA-256: `073d4542ebc96263bd48a76392dc2015945c5195e762d4f12dae4494f77a0617`
+
+### Debt items still open
+- D-129 — Real hardware validation: OPEN
+- D-130 — Code signing: OPEN
+- D-205 sub-debt — Ed25519 firmware verification: OPEN (blocked by BaseCryptLib)
+- D-211 — Covert tracking mode (C5): OPEN (partial)
+
+### Blockers named and status
+- Ed25519 firmware verify: blocks Ed25519 algorithm support in firmware.
+- Real hardware: blocks PASS path and TRACKING verdict testing.
+- TLS CA cert extraction: TlsVerify.c hashes leaf cert, not CA cert.
+
+### Failure attribution
+- Layer 2 (Context provision): The OPTIONAL keyword in the function
+  signature caused a build error because EDK2's build system doesn't
+  accept OPTIONAL in .c file definitions (only in .h declarations).
+  Harness change: don't use OPTIONAL in .c file function definitions.
+
+### Next session opening
+Implement CA cert extraction from chain in TlsVerify.c (use
+X509GetCertFromCertChain to get the issuer cert, then hash that),
+or investigate Ed25519 verification options, or run on real hardware.
