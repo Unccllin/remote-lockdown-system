@@ -188,6 +188,11 @@ typedef struct {
   UINT32                    GracePeriodSec;        // C4 key 81
   UINT32                    WipeDeadlineSec;       // C4 key 82
   PBL_OVERRIDE_RATE_LIMIT   OverrideRateLimit;     // C4 key 83
+  // RE-hardening #2: Expected SHA-256 of bootmgfw.efi (C4 key 58).
+  // If present, PBL hashes bootmgfw.efi before LoadImage and compares.
+  // If absent (zero), no hash check is performed (dev mode / old policy).
+  UINT8                     BootMgrHash[32];       // C4 key 58
+  BOOLEAN                   BootMgrHashPresent;    // TRUE if key 58 present
   // Raw CBOR for on-demand field access
   UINT8                     *RawCbor;
   UINTN                     RawCborSize;
@@ -775,7 +780,8 @@ PblHandleOverride (
 // ChainLoad.c — load bootmgfw.efi
 EFI_STATUS
 PblChainLoadWindows (
-  IN EFI_HANDLE  ImageHandle
+  IN EFI_HANDLE         ImageHandle,
+  IN CONST PBL_POLICY   *Policy
   );
 
 // Sbat.c — SBAT section

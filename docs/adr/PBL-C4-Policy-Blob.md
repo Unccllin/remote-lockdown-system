@@ -106,6 +106,7 @@ CBOR map, canonical encoding. Fields grouped by purpose:
 | 55 | winre_wim_hash | bstr(32) | yes | REQ-09: SHA-256 of expected winre.wim. |
 | 56 | recoverysequence_target | tstr | yes | REQ-09: expected BCD recoverysequence target. |
 | 57 | bitlocker_required | bool | yes | REQ-09: OS volume must be BitLocker-protected with escrowed recovery key. |
+| 58 | bootmgr_hash | bstr(32) | no | RE-hardening #2: SHA-256 of expected bootmgfw.efi. If present, PBL hashes bootmgfw.efi before LoadImage and compares. Absent = no check (dev mode / old policy). |
 
 ### 2.7 Recovery capability (REQ-10)
 

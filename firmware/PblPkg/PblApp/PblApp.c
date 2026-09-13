@@ -635,7 +635,7 @@ VerdictDone:
       Print (L"PASS — chain-loading Windows\n");
       PblTpmFlushSession ();
       PblTpmFlushPcrSession ();
-      PblChainLoadWindows (ImageHandle);
+      PblChainLoadWindows (ImageHandle, &Policy);
       break;
     case PblResultDegraded:
       Print (L"DEGRADED — notice + chain-load\n");
@@ -643,7 +643,7 @@ VerdictDone:
         FixedPcdGet32(PcdDegradedNoticeSeconds));
       PblTpmFlushSession ();
       PblTpmFlushPcrSession ();
-      PblChainLoadWindows (ImageHandle);
+      PblChainLoadWindows (ImageHandle, &Policy);
       break;
     case PblResultBlock: {
       BOOLEAN OverrideGranted = FALSE;
@@ -657,7 +657,7 @@ VerdictDone:
         Print (L"Override granted — chain-loading Windows\n");
         PblTpmFlushSession ();
         PblTpmFlushPcrSession ();
-        PblChainLoadWindows (ImageHandle);
+        PblChainLoadWindows (ImageHandle, &Policy);
       } else {
         Print (L"Override denied — shutting down\n");
         PblTpmFlushSession ();

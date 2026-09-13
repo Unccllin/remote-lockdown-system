@@ -811,6 +811,20 @@ PblCborDecodePolicy (
         break;
       }
 
+      case 58: {  // bootmgr_hash (bstr 32, RE-hardening #2)
+        // Expected SHA-256 of bootmgfw.efi. If present, PBL hashes
+        // bootmgfw.efi before LoadImage and compares against this value.
+        CONST UINT8 *Hash;
+        UINTN        HashLen;
+        Status = PblCborReadBstr (&Cursor, &Hash, &HashLen);
+        if (EFI_ERROR (Status)) return Status;
+        if (HashLen == 32) {
+          CopyMem (Policy->BootMgrHash, Hash, 32);
+          Policy->BootMgrHashPresent = TRUE;
+        }
+        break;
+      }
+
       case 70:  // lock_service_uri (tstr)
         Status = PblCborReadTstr (&Cursor, Policy->LockServiceUri,
                                   sizeof (Policy->LockServiceUri));
