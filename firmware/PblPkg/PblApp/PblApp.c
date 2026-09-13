@@ -217,6 +217,37 @@ PblAppEntryPoint (
   if (EFI_ERROR (Status)) {
     Print (L"  [WARN] Policy parse: %r — using DEGRADED\n", Status);
     // No policy → DEGRADED (availability issue, not security violation)
+  } else if (PolicyCose != NULL && PolicyCoseSize > 0) {
+    // D-205/RE-hardening: Verify the policy blob's COSE_Sign1 signature
+    // against the pinned policy signing key root of trust. The policy
+    // blob cannot self-certify its own signing key (circular dependency),
+    // so the key must come from PolicyRootOfTrust.c (compile-time constant
+    // or read-only NV index provisioned at manufacturing time).
+    //
+    // Return values:
+    //   EFI_SUCCESS     — signature verified, policy is authentic
+    //   EFI_UNSUPPORTED — root of trust not provisioned (dev mode)
+    //   other           — signature invalid or verification error → BLOCK
+    //
+    // In dev mode (EFI_UNSUPPORTED), we continue with a warning. When the
+    // root of trust IS provisioned and verification fails, we fail-closed
+    // to prevent an attacker from injecting a malicious policy blob with
+    // arbitrary verdict signing keys, lock service URI, or TLS pins.
+    Status = PblVerifyPolicySignature (&Policy, PolicyCose, PolicyCoseSize);
+    if (Status == EFI_UNSUPPORTED) {
+      Print (L"  [INFO] Policy sig verify skipped — root of trust not provisioned (dev mode)\n");
+    } else if (EFI_ERROR (Status)) {
+      Print (L"  [BLOCK] Policy signature verification FAILED: %r\n", Status);
+      Print (L"  [BLOCK] Policy blob may be tampered — refusing to boot\n");
+      // Fail-closed: a policy with an invalid signature cannot be trusted.
+      // The verdict signing key, lock service URI, and TLS pins all come
+      // from the policy blob — if the blob is tampered, an attacker could
+      // redirect verdict fetches to a malicious server or inject their own
+      // signing key. Block immediately.
+      return EFI_SECURITY_VIOLATION;
+    } else {
+      Print (L"  [OK] Policy signature verified (root of trust)\n");
+    }
   }
 
   //
