@@ -12,6 +12,8 @@
 
 // Standard Windows Boot Manager path on the ESP
 #define PBL_BOOTMGR_PATH  L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi"
+// Backup path (used when PBL replaces bootmgfw.efi on the ESP)
+#define PBL_BOOTMGR_BAK_PATH  L"\\EFI\\Microsoft\\Boot\\bootmgfw_orig.efi"
 
 /** Find the ESP by locating a filesystem that contains bootmgfw.efi.
 
@@ -64,8 +66,13 @@ PblFindEsp (
       continue;
     }
 
-    Status = Root->Open (Root, &BootMgr, PBL_BOOTMGR_PATH,
+    // Try backup path first (bootmgfw_orig.efi), then standard path
+    Status = Root->Open (Root, &BootMgr, PBL_BOOTMGR_BAK_PATH,
                          EFI_FILE_MODE_READ, 0);
+    if (EFI_ERROR (Status)) {
+      Status = Root->Open (Root, &BootMgr, PBL_BOOTMGR_PATH,
+                           EFI_FILE_MODE_READ, 0);
+    }
     Root->Close (Root);
 
     if (!EFI_ERROR (Status)) {
@@ -118,8 +125,11 @@ PblChainLoadWindows (
     return EFI_DEVICE_ERROR;
   }
 
-  // Build full device path: ESP device path + file path
-  FullDevicePath = FileDevicePath (EspHandle, PBL_BOOTMGR_PATH);
+  // Build full device path: try backup path first, then standard path
+  FullDevicePath = FileDevicePath (EspHandle, PBL_BOOTMGR_BAK_PATH);
+  if (FullDevicePath == NULL) {
+    FullDevicePath = FileDevicePath (EspHandle, PBL_BOOTMGR_PATH);
+  }
   if (FullDevicePath == NULL) {
     return EFI_OUT_OF_RESOURCES;
   }

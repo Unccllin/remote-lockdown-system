@@ -19,6 +19,7 @@
 
 [Sources]
   PblApp.c
+  ForceReloc.c
   PlatformState.c
   SpiProtections.c
   Policy.c
@@ -126,3 +127,8 @@
   gPblPkgTokenSpaceGuid.PcdMaxResponseSize
   gPblPkgTokenSpaceGuid.PcdMaxPolicySize
   gPblPkgTokenSpaceGuid.PcdDegradedNoticeSeconds
+
+[BuildOptions]
+  # Strict warnings for PBL code only (not EDK2 libraries)
+  GCC:RELEASE_*_*_CC_FLAGS = -Werror -Wall -Wextra -Wno-unused-parameter -fno-stack-protector -DUEFI_BUILD
+  GCC:DEBUG_*_*_CC_FLAGS   = -Werror -Wall -Wextra -Wno-unused-parameter -fno-stack-protector -DUEFI_BUILD -DPBL_DEBUG

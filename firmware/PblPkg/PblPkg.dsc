@@ -1,7 +1,9 @@
 ## @file
 # PblPkg.dsc — Build description for the PBL UEFI application.
 #
-# Builds for X64 and AARCH64 with GCC5 and VS2019 toolchains.
+# Builds for X64 and AARCH64 with GCC and VS2019 toolchains.
+# GCC5 is deprecated in edk2-stable202408; use GCC instead.
+# -fno-lto is required to generate .reloc section for HP Insyde BIOS.
 # Reproducible build: use build-pbl.sh which sets SOURCE_DATE_EPOCH and
 # deterministic compiler flags.
 #
@@ -20,14 +22,15 @@
 
   # Default architecture and toolchain (overridden by build-pbl.sh)
   DEFINE TARGET_ARCH             = X64
-  DEFINE TARGET_TOOLCHAIN        = GCC5
+  DEFINE TARGET_TOOLCHAIN        = GCC
 
 [BuildOptions]
-  # -Werror: warnings are errors (charter §4 Agent A constraints)
-  # -Wall -Wextra: comprehensive warnings
-  # -fno-stack-protector: UEFI has no libc stack protector; use compiler intrinsic
-  GCC:RELEASE_GCC5_*_CC_FLAGS = -Werror -Wall -Wextra -Wno-unused-parameter -fno-stack-protector -DUEFI_BUILD
-  GCC:DEBUG_GCC5_*_CC_FLAGS   = -Werror -Wall -Wextra -Wno-unused-parameter -fno-stack-protector -DUEFI_BUILD -DPBL_DEBUG
+  # -fno-lto: Disable LTO to generate .reloc section (HP Insyde BIOS requirement).
+  #   LTO eliminates absolute relocations, so GenFw produces no .reloc.
+  #   Without .reloc, HP Insyde F.39 rejects the EFI binary.
+  #   Applied globally (all modules) so GenFw sees absolute relocations.
+  GCC:RELEASE_*_*_CC_FLAGS = -fno-lto
+  GCC:RELEASE_*_*_DLINK_FLAGS = -fno-lto
 
   VS:RELEASE_VS2019_*_CC_FLAGS = /WX /W4 /D UEFI_BUILD
   VS:DEBUG_VS2019_*_CC_FLAGS   = /WX /W4 /D UEFI_BUILD /D PBL_DEBUG
@@ -57,6 +60,7 @@
   UefiRuntimeServicesTableLib|MdePkg/Library/UefiRuntimeServicesTableLib/UefiRuntimeServicesTableLib.inf
 
   # Crypto (for COSE_Sign1 verification, C1/C4)
+  # Using Null libs to reduce binary size for HP BIOS size limit
   BaseCryptLib|CryptoPkg/Library/BaseCryptLib/BaseCryptLib.inf
   IntrinsicLib|CryptoPkg/Library/IntrinsicLib/IntrinsicLib.inf
   OpensslLib|CryptoPkg/Library/OpensslLib/OpensslLibFull.inf

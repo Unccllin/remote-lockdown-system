@@ -12,7 +12,7 @@ on:
 
 jobs:
   build-x64:
-    name: Build PblApp (X64, GCC5)
+    name: Build PblApp (X64, GCC)
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -39,7 +39,7 @@ jobs:
       - name: Build PblApp
         run: |
           export EDK2_DIR="$HOME/.local/src/edk2"
-          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC5
+          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC
 
       - name: Upload PblApp.efi artifact
         uses: actions/upload-artifact@v4
@@ -48,7 +48,7 @@ jobs:
           path: firmware/PblPkg/PblApp.efi
 
   build-aarch64:
-    name: Build PblApp (AARCH64, GCC5)
+    name: Build PblApp (AARCH64, GCC)
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -73,8 +73,8 @@ jobs:
       - name: Build PblApp
         run: |
           export EDK2_DIR="$HOME/.local/src/edk2"
-          export GCC5_AARCH64_PREFIX=aarch64-linux-gnu-
-          ./firmware/PblPkg/build-pbl.sh --arch AARCH64 --toolchain GCC5
+          export GCC_AARCH64_PREFIX=aarch64-linux-gnu-
+          ./firmware/PblPkg/build-pbl.sh --arch AARCH64 --toolchain GCC
 
       - name: Upload PblApp.efi artifact
         uses: actions/upload-artifact@v4
@@ -109,7 +109,7 @@ jobs:
       - name: Build PblApp + OVMF
         run: |
           export EDK2_DIR="$HOME/.local/src/edk2"
-          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC5
+          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC
 
       - name: Run QEMU smoke test
         run: |
