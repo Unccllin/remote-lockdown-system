@@ -559,10 +559,40 @@ VerdictDone:
 
   // D-206: Extend PCR 13 (inputs) and PCR 12 (decision) per C2 §4.
   //   PCR 13 = SHA-256(policy_blob_hash || nonce || device_id || pcr4 || pcr5 || pcr7 || pcr11)
-  //   PCR 12 = SHA-256(verdict || policy_version || platform_state_digest || final_result)
+  //   PCR 12 = SHA-256(self_image_hash || verdict || policy_version || platform_state_digest || final_result)
   {
     UINT8 InputsHash[32];
     UINT8 DecisionHash[32];
+
+    // RE-hardening #4: Self-integrity measurement.
+    // Hash PBL's own image (via EFI_LOADED_IMAGE_PROTOCOL) and extend it
+    // into PCR 12 before the decision measurement. This creates an
+    // attestation trail — if an attacker patches PBL's code in memory
+    // (e.g., NOPs out the lock check), the PCR 12 value will differ
+    // from the expected value, and remote attestation can detect it.
+    //
+    // We hash the full image (not just .text) because the loaded image
+    // buffer includes all sections. This is simpler and more robust
+    // than parsing PE section headers at runtime.
+    UINT8 SelfImageHash[32];
+    {
+      EFI_LOADED_IMAGE *LoadedImage = NULL;
+      Status = gBS->HandleProtocol (
+        ImageHandle,
+        &gEfiLoadedImageProtocolGuid,
+        (VOID **)&LoadedImage
+      );
+      if (EFI_ERROR (Status) || LoadedImage == NULL ||
+          LoadedImage->ImageBase == NULL || LoadedImage->ImageSize == 0) {
+        Print (L"  [WARN] Could not get self image: %r — zero hash\n", Status);
+        ZeroMem (SelfImageHash, 32);
+      } else {
+        Sha256HashAll ((CONST UINT8 *)LoadedImage->ImageBase,
+                       LoadedImage->ImageSize, SelfImageHash);
+        Print (L"  [OK] Self image hash: %02x%02x%02x%02x...\n",
+          SelfImageHash[0], SelfImageHash[1], SelfImageHash[2], SelfImageHash[3]);
+      }
+    }
 
     // PCR 13 (inputs): hash the platform state inputs
     // C2 §4: SHA-256(policy_blob_hash || nonce || device_id || pcr4 || pcr5 || pcr7 || pcr11)
@@ -601,12 +631,13 @@ VerdictDone:
       Print (L"  [OK] PCR 13 (inputs) extended\n");
     }
 
-    // PCR 12 (decision): SHA-256(verdict || policy_version || platform_state_digest || final_result)
-    // C2 §4: verdict byte || policy_version (8 bytes BE) || platform_state_digest || final_result (1 byte)
-    UINTN DecisionSize = 1 + 8 + 32 + 1;
+    // PCR 12 (decision): SHA-256(self_image_hash || verdict || policy_version || platform_state_digest || final_result)
+    // C2 §4 + RE-hardening #4: self_image_hash (32) || verdict byte || policy_version (8 bytes BE) || platform_state_digest || final_result (1 byte)
+    UINTN DecisionSize = 32 + 1 + 8 + 32 + 1;
     UINT8 *DecisionBuf = AllocatePool (DecisionSize);
     if (DecisionBuf != NULL) {
       UINT8 *P = DecisionBuf;
+      CopyMem (P, SelfImageHash, 32); P += 32;  // RE-hardening #4
       *P++ = Verdict.Verdict;
       UINT64 PolicyVersionBe = SwapBytes64 (Verdict.PolicyVersion);
       CopyMem (P, &PolicyVersionBe, 8); P += 8;
