@@ -107,6 +107,9 @@
   ## EFI_DEVICE_PATH_PROTOCOL — for building boot manager device path
   gEfiDevicePathProtocolGuid
 
+  ## EFI_LOADED_IMAGE_PROTOCOL — for enumerating loaded EFI images (RE-hardening #3)
+  gEfiLoadedImageProtocolGuid
+
 [Guids]
   gPblNvGuid
   gPblEventGuid

@@ -37,6 +37,7 @@
 #include <Protocol/SimpleTextOut.h>
 #include <Protocol/SimpleTextInEx.h>
 #include <Protocol/DevicePath.h>
+#include <Protocol/LoadedImage.h>
 #include <Protocol/Http.h>
 #include <Protocol/ServiceBinding.h>
 #include <Protocol/SimpleNetwork.h>
@@ -256,6 +257,13 @@ typedef struct {
   UINT8     Pcr5[32];
   UINT8     Pcr7[32];
   UINT8     Pcr11[32];
+
+  // RE-hardening #3: Loaded EFI image count (bootkit detection).
+  // PBL enumerates all loaded EFI images via gEfiLoadedImageProtocolGuid.
+  // If the count exceeds an expected baseline, a bootkit may have installed
+  // itself as a DXE driver before PBL ran. The count is included in the
+  // platform_state_digest so the server can flag anomalies.
+  UINT32    LoadedImageCount;
 
   // C2 §1.3: device_id
   UINT8     DeviceId[32];     // SHA-256(AK public Area)

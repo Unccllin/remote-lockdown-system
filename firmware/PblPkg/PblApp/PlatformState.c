@@ -828,6 +828,8 @@ PblCollectPlatformState (
   OUT PBL_PLATFORM_STATE  *State
   )
 {
+  EFI_STATUS  Status;
+
   if (State == NULL) {
     return EFI_INVALID_PARAMETER;
   }
@@ -874,6 +876,30 @@ PblCollectPlatformState (
 
   // REQ-06: TPM firmware version (for floor check in Decision.c step 10)
   PblTpmGetFirmwareVersion (&State->TpmFirmwareVersion);
+
+  // RE-hardening #3: Enumerate loaded EFI images (bootkit detection).
+  // A UEFI bootkit (e.g., LoJax, EFiGuard) that installs itself as a DXE
+  // driver before PBL runs would be visible in the loaded image list.
+  // The count is included in the platform_state_digest so the server can
+  // flag anomalies. This is a detection signal, not a block — the server
+  // decides based on the expected baseline for this device model.
+  {
+    EFI_HANDLE *Handles = NULL;
+    UINTN       HandleCount = 0;
+    Status = gBS->LocateHandleBuffer (
+      ByProtocol,
+      &gEfiLoadedImageProtocolGuid,
+      NULL,
+      &HandleCount,
+      &Handles
+    );
+    if (!EFI_ERROR (Status) && Handles != NULL) {
+      State->LoadedImageCount = (UINT32)HandleCount;
+      gBS->FreePool (Handles);
+    } else {
+      State->LoadedImageCount = 0;
+    }
+  }
 
   return EFI_SUCCESS;
 }
