@@ -532,6 +532,23 @@ VerdictDone:
       } else {
         Print (L"  [OK] Lock state cached to TPM NV\n");
       }
+
+      // RE-hardening #5: If the verdict is LOCKED or WIPE_PENDING, lock
+      // the NV index against further writes. This prevents an attacker
+      // with TPM owner hierarchy access from overwriting the LOCKED
+      // verdict cache with an UNLOCKED one before the next boot.
+      // UNLOCKED and TRACKING verdicts are NOT locked — the server may
+      // need to update the cache on the next boot (e.g., grace period
+      // extension, tracking state change).
+      if (Verdict.Verdict == PBL_VERDICT_LOCKED ||
+          Verdict.Verdict == PBL_VERDICT_WIPE_PENDING) {
+        Status = PblTpmNvWriteLockState ();
+        if (EFI_ERROR (Status)) {
+          Print (L"  [WARN] NV_WriteLock(LOCK_STATE) failed: %r\n", Status);
+        } else {
+          Print (L"  [OK] Verdict cache NV index write-locked (LOCKED/WIPE)\n");
+        }
+      }
     }
   } else {
     Print (L"  [INFO] Skipping verification for cached verdict\n");

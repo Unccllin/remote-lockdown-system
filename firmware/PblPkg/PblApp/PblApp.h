@@ -354,6 +354,12 @@ PblTpmWriteLockState (
   IN CONST PBL_LOCK_STATE_CACHE  *Cache
   );
 
+// RE-hardening #5: Lock verdict cache NV index against further writes
+EFI_STATUS
+PblTpmNvWriteLockState (
+  VOID
+  );
+
 EFI_STATUS
 PblTpmReadPolicyVersion (
   OUT UINT64  *Version
