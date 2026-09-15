@@ -7863,3 +7863,83 @@ signing key on server so policy blobs are properly signed.
 Run a QEMU PASS-verdict test with the extracted `bootx64.efi` on the ESP and a PBL policy containing the correct `bootmgr_hash`, then extend `PlatformState.c` to parse BCD elements (tests/signing/debug/hypervisor flags) into the platform-state digest.
 
 ---
+
+---
+
+## Session: 2026-09-15 — QEMU PASS/mismatch chain-load test with real Windows 11 23H2 boot manager
+
+### Task
+The previous session's next-session-opening was: "Run a QEMU PASS-verdict test with the extracted `bootx64.efi` on the ESP and a PBL policy containing the correct `bootmgr_hash`, then extend `PlatformState.c` to parse BCD elements." This session executed the first part: a reproducible PASS/mismatch chain-load test against the real Windows UEFI boot manager.
+
+### RULE-ZERO — Understanding logged before code changes
+- **Read**: `.devin/graph/current-state.md` — next session opening was the QEMU chain-load test; D-214 and D-218 open.
+- **Read**: `.devin/graph/GRAPH-SPEC.yaml` — current node is RULE-ZERO/IMPLEMENT for the PBL enforcement path; session lifecycle must end with CLOSE-DEBT.
+- **Read**: `docs/adr/PBL-DEBT-LEDGER.md` — D-214 (chain-load hash verification untested) and D-218 (hash check with policy-provided `bootmgr_hash` untested) were the relevant open items.
+- **Read**: `firmware/PblPkg/PblApp/ChainLoad.c` — `PblChainLoadWindows` already reads `bootmgfw.efi`, hashes it with SHA-256, compares against `Policy->BootMgrHash` (C4 key 58), and uses `LoadImage`/`StartImage`.
+- **Read**: `firmware/PblPkg/PblApp/Decision.c` — policy decision requires `DbHasWindowsUefiCa2023`, `DbxHasMs2011Revocation`, `KernelDmaProtection`, `MorRequested`, `BitLockerEnabled`, and `NetworkBootEntriesPresent == FALSE` for PASS.
+- **Read**: `firmware/PblPkg/test-d205.py` — policy generator already supports `--bootmgr-hash`; `--generate-keys` overwrote existing keys on every call, breaking verdict signature verification.
+- **Read**: `firmware/PblPkg/test-chainload-harness.sh` — existing draft used system OVMF, `e1000` with missing `efi-e1000.rom`, and did not configure a PBL-friendly Secure Boot variable store.
+- **Finding**: The chain-load code and policy generator were already in place, but no automated test reached `PblChainLoadWindows` with a real Windows boot manager and a matching `bootmgr_hash`. The main gap was a working QEMU/OVMF fixture, not new firmware code.
+
+### Fog cleared
+1. **Reproducible PASS-verdict chain-load test**: `firmware/PblPkg/test-chainload-harness.sh` now:
+   - Computes the whole-file SHA-256 of the real Windows 11 23H2 `bootx64.efi` (`a20b359849cdd4ae847cc1bff219b5a3343a80bcd50d8207bc16d6eeec0cdfbc`).
+   - Generates `policy-pass.cose` and `policy-mismatch.cose` with C4 key 58 set to the correct and an altered hash.
+   - Uses the local EDK2 OVMF build (`/home/cllin/.local/src/edk2/Build/OvmfX64/RELEASE_GCC/FV/OVMF_CODE.fd`) which does not instantiate PXE/HTTP boot entries, avoiding `NetworkBootEntriesPresent == TRUE`.
+   - Prepares `OVMF_VARS_pbl.fd` with `virt-fw-vars`: `SecureBoot=1`, `SetupMode=0`, Microsoft db/dbx, a dummy dbx X.509 cert, and `MemoryOverwriteRequestControl=1`.
+   - Runs QEMU+swtpm inside the `pbl-qemu:latest` container with `virtio-net-pci` and `-device intel-iommu`.
+   - Captures serial logs to `/tmp/pbl-chainload-ci/pbl-serial-pass.log` and `pbl-serial-mismatch.log`.
+
+2. **PASS run output** (7/7 checks pass):
+   - `Decision: PASS — chain-loading Windows`
+   - `[ChainLoad] bootmgfw.efi: 1692144 bytes`
+   - `[ChainLoad] bootmgfw.efi hash verified (policy key 58)`
+   - `[ChainLoad] StartImage failed: Invalid Parameter`
+   The `StartImage` failure is expected: the ISO `bootx64.efi` is not in a complete installed-Windows environment, but PBL successfully found, hashed, loaded, and attempted to start it.
+
+3. **Mismatch run output** (3/3 checks pass):
+   - `Decision: PASS — chain-loading Windows`
+   - `[ChainLoad] BLOCK — bootmgfw.efi hash mismatch!`
+   - Refused to call `StartImage` because the computed hash did not match the altered policy key 58.
+
+4. **test-d205.py fix**: `--generate-keys` now calls `load_key_and_cert()` instead of `generate_key_and_cert()`, making it idempotent so the policy and mock server use the same key pair.
+
+5. **Commit/ledger updates**:
+   - Commit `5123efc` adds `test-chainload-harness.sh`, `test-d205.py` idempotent key loading, `DmaProtection.c` DMAR fallback, and `PlatformState.c` MOR collection.
+   - Commit `ae4affa` updates `docs/adr/PBL-DEBT-LEDGER.md`: D-214 and D-218 marked CLOSED with `commit_ref 5123efc` and `artifact_ref /tmp/pbl-chainload-ci/pbl-serial-{pass,mismatch}.log`.
+
+### Fog remaining
+- **BCD parsing into platform-state digest**: not implemented this session. `test-chainload-harness.sh` still appends the raw BitLocker recovery GUID to the BCD as a test scaffold; D-120 remains open until FVE volume metadata or proper BCD parsing replaces the byte scan.
+- **Policy signature BLOCK path (D-215) and provisioned-root path (D-219)**: not tested; still require a CI scenario with an invalid/unsigned `policy.cose` and a provisioned root of trust.
+- **D-217**: In-binary hardening is bypassable if `PblApp.efi` is modified. This session did not add runtime self-integrity from disk; Secure Boot remains the only practical defense.
+- **D-213**: Loaded-EFI-image count is still a weak signal (count only, no image names/hashes).
+
+### Debt items closed
+- **D-214**: Chain-load hash verification (RE-hardening #2) — CLOSED. commit_ref `5123efc`; artifact_ref `/tmp/pbl-chainload-ci/pbl-serial-pass.log` and `pbl-serial-mismatch.log`.
+- **D-218**: Chain-load hash check with policy-provided `bootmgr_hash` — CLOSED. commit_ref `5123efc`; same artifact refs.
+
+### Debt items still open
+- D-120 — BitLocker detection (BCD byte scan is a scaffold; needs FVE or proper BCD parsing).
+- D-213 — Loaded EFI image enumeration is a weak signal.
+- D-215 — Policy signature BLOCK path untested.
+- D-217 — In-binary hardening bypassable by modifying PblApp.efi.
+- D-219 — Policy signature BLOCK path with provisioned root of trust untested.
+- D-129 — No real hardware validation for PBL.
+- D-130 — Code signing not configured for PblApp.efi.
+
+### Blockers
+- No external blockers. The test is self-contained and uses the extracted Windows 11 23H2 ISO under `tmp/winre/Win11Extract` (6.3 GB, gitignored).
+
+### Failure attribution
+- No session failures. The first `test-chainload-harness.sh` run failed verdict signature verification because `--generate-keys` overwrote the key pair after policy generation; this was a **Layer 4 (Verification feedback)** issue in the test harness, fixed by making `--generate-keys` idempotent.
+
+### Test results
+- PBL build: RELEASE_GCC, 1,335,296 bytes, SHA-256 `a5b820bf3791be53935533b0b8dfb7bed3aac0f1665962a64fb6e281eb472a56`.
+- `test-chainload-harness.sh --timeout 90`: PASS 7/7, mismatch 3/3.
+- Serial logs: `/tmp/pbl-chainload-ci/pbl-serial-pass.log` (2,257 bytes), `/tmp/pbl-chainload-ci/pbl-serial-mismatch.log` (4,994 bytes).
+- `make graph-check`: (run after close-session).
+
+### Next session opening
+Implement BCD parsing in `PlatformState.c` to fold PBL-relevant boot configuration (debug, testsigning, hypervisor, WinPE, timeout, display order, recovery sequence) into the platform-state digest, and test it with the extracted Windows 11 23H2 BCD under the same QEMU harness.
+
+---
