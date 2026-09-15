@@ -1308,5 +1308,15 @@
 | D-210 | Serverless Worker PBL route integration not implemented | CLOSED (commit 9612fbb) | SERVER |
 | D-211 | Covert tracking mode (C5) not fully implemented | CLOSED (all 12 C5 plan items implemented: firmware Decision.c, server verdict+track endpoints, agent handle_track+data protection+stealth, dashboard Track button) | TODO |
 
-**Totals**: 43 items — 41 CLOSED, 2 OPEN (D-129 real hardware, D-130 code signing — both blocked on external dependencies)
+### RE-hardening review (2026-09-15)
+
+| # | Description | Status | Category |
+|---|-------------|--------|----------|
+| D-212 | Self-image hash into PCR 12 (RE-hardening #4) — REVERTED | CLOSED (reverted: PBL PE has ImageBase=0, so DIR64 relocations make in-memory hash non-deterministic across boots. Secure Boot already provides PE integrity. Commit 6c4b294 + this commit) | SECURITY |
+| D-213 | Loaded EFI image enumeration (RE-hardening #3) — weak signal | OPEN (count alone doesn't identify which images are loaded; baseline varies by firmware updates. Future: hash each image's device path or record image names) | SECURITY |
+| D-214 | Chain-load hash verification (RE-hardening #2) — untested | OPEN (CI harness always produces LOCKED verdict, so PblChainLoadWindows is never called. Path order, hash verification, and marker logic are untested by CI. Need a PASS-verdict CI scenario) | TEST |
+| D-215 | Policy signature BLOCK path (RE-hardening #1) — untested | OPEN (CI uses dev mode with EFI_UNSUPPORTED → continue. The fail-closed path (signature invalid → EFI_SECURITY_VIOLATION) is never exercised. Need a provisioned-root-of-trust CI scenario) | TEST |
+| D-216 | Verdict cache anti-replay (RE-hardening #5) — REVERTED | CLOSED (reverted: NV index lacks TPMA_NV_WRITE_STCLEAR so NV_WriteLock fails; even with the attribute, TPM2_Startup(CLEAR) clears it every boot. Need a monotonic counter or PCR-based approach. Commit 6c4b294) | SECURITY |
+
+**Totals**: 48 items — 43 CLOSED, 5 OPEN (D-129 real hardware, D-130 code signing, D-213 loaded image hash, D-214 chain-load test, D-215 policy sig test)
 

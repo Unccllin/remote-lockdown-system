@@ -883,6 +883,13 @@ PblCollectPlatformState (
   // The count is included in the platform_state_digest so the server can
   // flag anomalies. This is a detection signal, not a block — the server
   // decides based on the expected baseline for this device model.
+  //
+  // LIMITATION (D-213): The count alone is a weak signal. It doesn't tell
+  // the server WHICH images are loaded, and the baseline varies by
+  // firmware/driver updates. A more useful implementation would hash each
+  // image's device path or record image names. The count is kept because
+  // it's non-zero cost and any change to the count changes the digest,
+  // which the server can track over time.
   {
     EFI_HANDLE *Handles = NULL;
     UINTN       HandleCount = 0;
