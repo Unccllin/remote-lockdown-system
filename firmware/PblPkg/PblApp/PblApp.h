@@ -249,6 +249,30 @@ typedef struct {
   UINT8     WinreWimHash[32];
   BOOLEAN   BitLockerEnabled;
 
+  // REQ-09: BCD element parsing (D-120)
+  // These are deterministic summaries of the BCD store that feed the
+  // platform-state digest. 0xFF means "not present / unknown" for the
+  // UINT8 fields. Booleans default to FALSE.
+  UINT32    BcdObjectCount;           // Number of BCD objects enumerated
+  UINT32    BcdDisplayOrderCount;     // Non-empty GUIDs in DisplayOrder (24000001)
+  UINT32    BcdRecoverySequenceCount; // Non-empty GUIDs in RecoverySequence (24000010)
+  UINT32    BcdInheritCount;          // Non-empty GUIDs in Inherit lists (14000006)
+  UINT8     BcdTimeout;               // Display boot menu timeout (25000004), 0xFF=absent
+  BOOLEAN   BcdNoIntegrityChecks;     // Element 16000048
+  BOOLEAN   BcdTestSigning;           // Element 16000049
+  BOOLEAN   BcdBootDebug;             // Element 16000010
+  BOOLEAN   BcdDebug;                 // Element 260000A0
+  BOOLEAN   BcdWinPEMode;             // Element 26000022
+  BOOLEAN   BcdSafeMode;              // Element 26000081
+  BOOLEAN   BcdDetectHal;             // Element 26000010 (same object as BootDebug? no, different IDs; 26000010 is DetectHal, 16000010 is BootDebug)
+  BOOLEAN   BcdDisplayAdvancedOptions; // Element 16000040
+  BOOLEAN   BcdOptionsEdit;           // Element 16000050
+  BOOLEAN   BcdEmsEnabled;            // Element 16000020
+  UINT8     BcdBootMenuPolicy;        // Element 250000C2, 0xFF=absent
+  UINT8     BcdHypervisorLaunchType;  // Element 250000F0, 0xFF=absent
+  UINT8     BcdHypervisorDebugEnabled; // Element 250000F3, 0xFF=absent
+  UINT8     BcdHypervisorDebugType;   // Element 250000F4, 0xFF=absent
+
   // REQ-10: Recovery
   UINT8     FirmwareRecovery; // 0=dual_image, 1=intel_pfr, 2=none
 
@@ -285,6 +309,14 @@ PblAppEntryPoint (
 EFI_STATUS
 PblCollectPlatformState (
   OUT PBL_PLATFORM_STATE  *State
+  );
+
+// Bcd.c — REQ-09 BCD registry hive parser
+EFI_STATUS
+PblBcdParse (
+  IN  CONST UINT8       *BcdData,
+  IN  UINTN              BcdSize,
+  OUT PBL_PLATFORM_STATE *State
   );
 
 // SpiProtections.c — REQ-03

@@ -452,27 +452,38 @@
 - **Close criteria**: Runtime test with QEMU verifying FADT parsing.
   Optional: DSDT AML parsing for S3 package.
 
-### D-120 — BitLocker detection still defaults false; BCD parsing missing
+### D-120 — BitLocker detection still defaults false; BCD parsing now implemented
 - **Status**: OPEN
 - **Category**: TODO
-- **Progress**: PlatformState.c PblCollectBitLockerState now implements
-  BCD-based BitLocker detection (130 lines). Enumerates all
-  SimpleFileSystem handles, opens EFI\Microsoft\Boot\BCD on each, reads
-  the file, and searches for the BitLocker recovery GUID
-  {8EC7B6F1-61CA-4D1F-BC36-9DFF1B523B17} in the raw BCD data.
-  Sets BitLockerEnabled=TRUE if found.
-- **Blocker**: Raw GUID search is heuristic, may false-positive if
-  the GUID appears in non-BitLocker context. No full BCD registry hive
-  parsing. No runtime test.
-- **Update (2026-09-15)**: Real Windows 11 23H2 BCD was dumped and decoded
-  from a retail ISO. BCD objects contain boot configuration (loader path,
-  device, debug/testsigning/hypervisor flags) and recovery sequence lists,
-  but **not** the actual BitLocker locked/unlocked state. That state lives
-  in the volume's FVE metadata and the TPM. See
-  `docs/research/windows-11-23h2-iso-RE-findings.md`.
-- **Close criteria**: Runtime test with QEMU + real BCD file.
-  Optional: Full BCD registry hive parsing for recovery entries;
-  later, FVE volume metadata inspection for true lock state.
+- **Progress**: PlatformState.c `PblCollectBcdState` (renamed from
+  `PblCollectBitLockerState`) now:
+  1. Enumerates all SimpleFileSystem handles and opens
+     `\EFI\Microsoft\Boot\BCD`.
+  2. Hashes the BCD hive bytes up to the header-declared HBIN extent
+     (`BcdHash` in `PBL_PLATFORM_STATE`).
+  3. Runs a bounded Windows registry hive parser in `firmware/PblPkg/PblApp/Bcd.c`
+     that walks HBINs, `nk`/`vk` cells, `lf`/`lh`/`li` subkey lists, and
+     `Objects` → object-GUID → `Elements` → element-ID → `Element` values.
+  4. Extracts deterministic boot-configuration state into
+     `PBL_PLATFORM_STATE` (object count, timeout, DisplayOrder/RecoverySeq
+     counts, debug/testsigning/hypervisor/WinPE/SafeMode flags, etc.).
+  5. Retains the raw BitLocker recovery GUID byte scan for backward
+     compatibility; the GUID is now appended by the test harness, proving
+     the parser does not crash on trailing bytes outside the hive.
+- **Blocker**: Raw GUID search is still a heuristic.  BCD still does not
+  contain the actual BitLocker locked/unlocked state; that requires FVE
+  volume metadata and TPM state.  Full BCD parsing is now implemented and
+  tested, but it is a deterministic measurement input, not lock-state proof.
+- **Update (2026-09-15)**: Real Windows 11 23H2 BCD from a retail ISO was
+  parsed in QEMU.  Serial output confirmed:
+  `[Bcd] objects=9 timeout=0x1E ... WinPE=1 DetectHal=1 BootMenuPolicy=0x01
+  HVDebugType=0x01 DisplayOrder=1 RecoverySeq=1 Inherit=7`.  The harness
+  also appended the BitLocker GUID and the parser completed without error.
+  See `docs/research/windows-11-23h2-iso-RE-findings.md` and the
+  `pbl-serial-pass.log` artifact.
+- **Close criteria**: Real BitLocker locked/unlocked state requires FVE
+  volume metadata + TPM inspection.  Keep open until true FVE lock-state
+  detection is implemented and tested.
 
 ### D-121 — SPI protections check not implemented
 - **Status**: OPEN

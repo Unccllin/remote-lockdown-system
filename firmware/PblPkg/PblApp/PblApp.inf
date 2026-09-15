@@ -21,6 +21,7 @@
   PblApp.c
   ForceReloc.c
   PlatformState.c
+  Bcd.c
   SpiProtections.c
   Policy.c
   Svn.c

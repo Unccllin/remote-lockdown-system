@@ -665,34 +665,22 @@ PblCollectPcrReadings (
 // BitLocker detection (REQ-09)
 // ============================================================================
 
-/** REQ-09: Check if OS volume is BitLocker-protected.
+/** REQ-09: Read and parse the Windows BCD store.
 
-  BitLocker detection in UEFI pre-boot is done by checking for the
-  BitLocker metadata on the system volume. BitLocker stores metadata
-  in the volume boot sector and in a separate metadata region at the
-  beginning of the encrypted volume.
+  The BCD store at \EFI\Microsoft\Boot\BCD is a Windows registry hive.
+  PBL now parses it defensively to extract boot-configuration state
+  (debug, testsigning, hypervisor, WinPE, timeout, display/recovery order,
+  etc.) into the platform-state digest.  The raw BCD file is also hashed.
 
-  In UEFI pre-boot, we can check:
-  1. The presence of the BitLocker system volume GUID in the GPT
-  2. The BitLocker metadata header signature ("FVE-FS" or "-FVE-FS-")
-  3. The BCD store for BitLocker recovery entries
-
-  The most reliable pre-boot check is to look for the BitLocker metadata
-  signature on the ESP or the OS volume. However, the OS volume may not
-  be mounted in UEFI pre-boot.
-
-  A practical approach is to check the BCD store for the BitLocker
-  recovery sequence entry. The BCD store is a Windows registry hive at
-  \EFI\Microsoft\Boot\BCD on the ESP. Parsing the registry hive format
-  is complex, so we check for the BCD file existence and look for the
-  BitLocker GUID pattern in the raw file.
-
-  BitLocker recovery GUID: {8EC7B6F1-61CA-4D1F-BC36-9DFF1B523B17}
-  This appears in the BCD store when BitLocker is configured.
+  BitLocker locked/unlocked state is NOT in the BCD (it lives in FVE
+  volume metadata and the TPM), so for now we keep the existing raw
+  scan for the BitLocker recovery GUID as a positive signal that the
+  GUID is present in the BCD file.  This is a heuristic, not proof of
+  BitLocker being on.
 **/
 STATIC
 VOID
-PblCollectBitLockerState (
+PblCollectBcdState (
   OUT PBL_PLATFORM_STATE *State
   )
 {
@@ -804,6 +792,15 @@ PblCollectBitLockerState (
       continue;
     }
 
+    // Parse the BCD hive for boot configuration state. This also hashes the
+    // validated hive bytes into State->BcdHash (see Bcd.c). Failures are
+    // ignored — a bad BCD must not crash PBL or change the lock decision.
+    Status = PblBcdParse (BcdBuf, ReadSize, State);
+    if (EFI_ERROR (Status)) {
+      // D-120: malformed BCD; keep default/unknown BCD state.
+      (VOID)Status;
+    }
+
     // Search for BitLocker recovery GUID in the BCD raw data
     for (UINTN j = 0; j + 16 <= ReadSize; j++) {
       if (CompareMem (BcdBuf + j, BitLockerGuid, 16) == 0) {
@@ -885,8 +882,8 @@ PblCollectPlatformState (
   // REQ-08: BootOrder network boot entries
   PblCollectBootOrderState (State);
 
-  // REQ-09: BitLocker state
-  PblCollectBitLockerState (State);
+  // REQ-09: BCD + BitLocker state
+  PblCollectBcdState (State);
 
   // REQ-12: PCR readings (4, 5, 7, 11)
   PblCollectPcrReadings (State);
