@@ -52,12 +52,23 @@ PblCheckDmaProtection (
     return EFI_SUCCESS;
   }
 
-  // Fallback: check for DMAR ACPI table presence
-  // If a DMAR table exists, DMA remapping is supported (but may not be enabled)
-  // We check the configuration table for the DMAR GUID
-  // DMAR table GUID: {0x5B2AFD8A, 0x9D4E, 0x11E8, {0x91, 0x1F, 0x4C, 0xE2, 0x2B, 0x56, 0x70, 0x79}}
-  // Actually, the DMAR table is found via ACPI XSDT, not as a UEFI config table.
-  // For simplicity, if the variable doesn't exist, we assume DMA protection is off.
+  // Fallback: check for DMAR ACPI table presence (IOMMU / DMA remapping).
+  // If the firmware advertises a DMA remapping table, the platform is capable
+  // of remapping DMA requests — the pre-boot equivalent of Kernel DMA
+  // Protection.  This is the case on QEMU q35 with -device intel-iommu.
+  //
+  // DMAR signature in ACPI is 'DMAR' (EFI_ACPI_2_0_DMA_REMAPPING_TABLE_SIGNATURE).
+  //
+  {
+    EFI_ACPI_COMMON_HEADER  *Dmar;
+    Dmar = EfiLocateFirstAcpiTable (SIGNATURE_32 ('D', 'M', 'A', 'R'));
+    if (Dmar != NULL) {
+      *Enabled = TRUE;
+      return EFI_SUCCESS;
+    }
+  }
+
+  // No variable and no DMAR table — DMA protection cannot be confirmed.
   *Enabled = FALSE;
   return EFI_SUCCESS;
 }

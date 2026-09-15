@@ -568,6 +568,39 @@ PblCollectAcpiState (
   }
 }
 
+/** REQ-07: Collect Memory Overwrite Request (MOR) state.
+
+  Reads the MemoryOverwriteRequestControl UEFI variable. Bit 0 set means the
+  firmware has been requested to clear memory on next boot. This prevents
+  cold-boot attacks and is required when S3 is enabled.
+**/
+STATIC
+VOID
+PblCollectMorState (
+  OUT PBL_PLATFORM_STATE *State
+  )
+{
+  UINT8       MorControl;
+  UINTN       Size;
+  EFI_STATUS  Status;
+
+  State->MorRequested = FALSE;
+
+  Size = sizeof (MorControl);
+  Status = gRT->GetVariable (
+    L"MemoryOverwriteRequestControl",
+    &mGlobalVariableGuid,
+    NULL,
+    &Size,
+    &MorControl
+    );
+
+  if (!EFI_ERROR (Status)) {
+    // Bit 0 (MOR_CLEAR) set = memory clear requested
+    State->MorRequested = ((MorControl & 0x01) != 0);
+  }
+}
+
 // ============================================================================
 // PCR readings (REQ-12, C2 §4.2)
 // ============================================================================
@@ -907,6 +940,9 @@ PblCollectPlatformState (
       State->LoadedImageCount = 0;
     }
   }
+
+  // REQ-07: Memory Overwrite Request (MOR) state
+  PblCollectMorState (State);
 
   return EFI_SUCCESS;
 }

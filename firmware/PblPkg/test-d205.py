@@ -244,25 +244,31 @@ def encode_cose_sign1(payload, private_key, kid):
 # Policy blob generation
 # ============================================================================
 
-def generate_policy(output_path, lock_service_uri="http://10.0.2.2:8080/v1/verdict"):
-    """Generate a test policy blob with keys 70, 71, 76, 77."""
+def generate_policy(output_path, lock_service_uri="http://10.0.2.2:8080/v1/verdict", bootmgr_hash=None):
+    """Generate a test policy blob with keys 70, 71, 76, 77, and optionally 58."""
     private_key, cert_der, spki_der, kid, root_cert_der, int_cert_der = load_key_and_cert()
 
     # Build the policy payload (CBOR map)
     # Key 1: version (uint)
     # Key 2: issued_at (uint) — MUST be uint, not tstr!
+    # Key 58: bootmgr_hash (bstr 32) — RE-hardening #2
     # Key 70: lock_service_uri (tstr)
     # Key 71: lock_service_cert_pin (bstr 32) = SHA-256 of SPKI = kid
     # Key 76: verdict_signing_key_spki (bstr) = SPKI DER
     # Key 77: signing_cert_chain (array of bstr) = [leaf, intermediate, root]
-    policy_payload = cbor2.dumps({
+    policy_map = {
         1: 1,                    # version
         2: 0,                    # issued_at (uint!)
         70: lock_service_uri,    # lock_service_uri
         71: kid,                 # lock_service_cert_pin
         76: spki_der,            # verdict_signing_key_spki
         77: [cert_der, int_cert_der, root_cert_der],  # 3-cert chain
-    })
+    }
+    if bootmgr_hash is not None:
+        if isinstance(bootmgr_hash, str):
+            bootmgr_hash = bytes.fromhex(bootmgr_hash)
+        policy_map[58] = bootmgr_hash
+    policy_payload = cbor2.dumps(policy_map)
 
     # Wrap in COSE_Sign1 with a dummy signature (policy signing key not provisioned)
     # The firmware's PblVerifyPolicySignature returns EFI_UNSUPPORTED in dev mode.
@@ -281,6 +287,8 @@ def generate_policy(output_path, lock_service_uri="http://10.0.2.2:8080/v1/verdi
     print(f"  kid: {kid.hex()}")
     print(f"  cert_der: {len(cert_der)} bytes")
     print(f"  spki_der: {len(spki_der)} bytes")
+    if 58 in policy_map:
+        print(f"  bootmgr_hash: {policy_map[58].hex()}")
 
     return policy_cose
 
@@ -393,13 +401,15 @@ def main():
                         help="Port for mock server (default: 8080)")
     parser.add_argument("--uri", default="http://10.0.2.2:8080/v1/verdict",
                         help="lock_service_uri for policy (default: http://10.0.2.2:8080/v1/verdict)")
+    parser.add_argument("--bootmgr-hash", default=None,
+                        help="SHA-256 of bootmgfw.efi for policy key 58 (hex)")
 
     args = parser.parse_args()
 
     if args.generate_keys:
-        generate_key_and_cert()
+        load_key_and_cert()
     elif args.generate_policy:
-        generate_policy(args.generate_policy, args.uri)
+        generate_policy(args.generate_policy, args.uri, args.bootmgr_hash)
     elif args.serve:
         serve(args.port)
     else:
