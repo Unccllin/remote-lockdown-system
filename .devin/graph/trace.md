@@ -7943,3 +7943,82 @@ The previous session's next-session-opening was: "Run a QEMU PASS-verdict test w
 Implement BCD parsing in `PlatformState.c` to fold PBL-relevant boot configuration (debug, testsigning, hypervisor, WinPE, timeout, display order, recovery sequence) into the platform-state digest, and test it with the extracted Windows 11 23H2 BCD under the same QEMU harness.
 
 ---
+
+---
+
+## Session 2026-09-16: BCD registry parser for PBL platform-state digest
+
+### RULE-ZERO — Understanding logged before code changes
+- **Read**: `firmware/PblPkg/PblApp/PblApp.h` — `PBL_PLATFORM_STATE` has `BcdHash[32]`, `WinreWimHash[32]`, `BitLockerEnabled`, and the new BCD summary fields (object count, timeout, debug/testsigning/hypervisor/WinPE flags, display/recovery/inherit counts).
+- **Read**: `firmware/PblPkg/PblApp/PlatformState.c` — `PblCollectBcdState` (renamed from `PblCollectBitLockerState`) reads `\EFI\Microsoft\Boot\BCD`, then calls `PblBcdParse()` and does a raw 16-byte GUID scan for the BitLocker recovery GUID.
+- **Read**: `docs/research/windows-11-23h2-iso-RE-findings.md` — BCD is a Windows registry hive; boot objects live under `Objects\{guid}\Elements\{element_id}\` with a value named `Element`; relevant IDs include `16000010` (BootDebug), `16000048` (NoIntegrityChecks), `16000049` (TestSigning), `25000004` (Timeout), `250000C2` (BootMenuPolicy), `26000022` (WinPE), `24000001` (DisplayOrder), `24000010` (RecoverySequence).
+- **Read**: `firmware/PblPkg/test-chainload-harness.sh` — the test harness appends the BitLocker recovery GUID to the BCD copy, so `BitLockerEnabled` remains true; the parser must not crash on the 16 extra bytes and must use the header's declared HBIN size as its upper bound.
+- **Finding**: The parser must implement a bounded, minimal Windows registry hive walker (REGF header → HBIN cells → root key → `Objects` → object-GUID → `Elements` → element-ID → `Element` value) and fail safely if any cell offset, list type, or value data is out of bounds or unsupported.
+- **Finding**: BitLocker locked/unlocked state is NOT in the BCD (it lives in FVE volume metadata), so `BitLockerEnabled` stays on the GUID scan for now and D-120 should be updated to reflect that only BCD parsing is complete, not BitLocker state detection.
+
+### IMPLEMENT — What changed
+- **Created** `firmware/PblPkg/PblApp/Bcd.c`: bounded Windows registry hive parser (REGF header, HBIN cells, `nk`/`vk` records, `lf`/`lh`/`li` subkey lists, `Objects` → object → `Elements` → element → `Element` value dispatch).
+- **Updated** `firmware/PblPkg/PblApp/PblApp.h`: added BCD summary fields to `PBL_PLATFORM_STATE` and declared `PblBcdParse()`.
+- **Updated** `firmware/PblPkg/PblApp/PblApp.inf`: added `Bcd.c` to the build.
+- **Updated** `firmware/PblPkg/PblApp/PlatformState.c`: renamed `PblCollectBitLockerState` to `PblCollectBcdState`, calls `PblBcdParse()`, and keeps the raw BitLocker recovery GUID scan as a heuristic.
+- **Updated** `docs/adr/PBL-DEBT-LEDGER.md` D-120: reflects that full BCD parsing is now implemented and tested, but BitLocker true lock state still requires FVE volume metadata + TPM.
+
+### VERIFY — Evidence
+- **Build**: PBL RELEASE_GCC X64, 1343488 bytes, SHA-256 `e1cda018e07b4f6b5d0009ce39839e3e3a4a6b035fb8df35b33a7f26df8f65a5`.
+- **Test**: `firmware/PblPkg/test-chainload-harness.sh --timeout 90` with the real Windows 11 23H2 `bootx64.efi` and BCD:
+  - PASS scenario: 7/7 checks (verdict verified, hash verified, `StartImage` attempted as expected).
+  - Mismatch scenario: 3/3 checks (hash mismatch blocked chain-load).
+- **BCD parser serial output** (PASS log):
+  `[Bcd] objects=9 timeout=0x1E BootDebug=0 TestSigning=0 NoIntegrityChecks=0 Debug=0 WinPE=1 SafeMode=0 DetectHal=1 DispAdv=0 OptEdit=0 EMS=0 BootMenuPolicy=0x01 HVLaunch=0xFF HVDebugEn=0x00 HVDebugType=0x01 DisplayOrder=1 RecoverySeq=1 Inherit=7`
+- **Verification sweep**: `make graph-check` all invariants pass; `make verify-env` 61 PASS / 0 FAIL / 1 SKIP.
+
+### ARTIFACT — Run references
+- Serial log (PASS): `/tmp/pbl-chainload-ci/pbl-serial-pass.log`
+- Serial log (mismatch): `/tmp/pbl-chainload-ci/pbl-serial-mismatch.log`
+- Build output: `/home/cllin/.local/src/edk2/Build/PblPkg/RELEASE_GCC/X64/PblApp.efi` (copied to `firmware/PblPkg/PblApp.efi`)
+- Commit: `9dc07a4`
+
+### CLOSE-DEBT — What was closed or advanced
+- **D-120** — not fully closed.  Advanced: full BCD structural parsing implemented and tested; raw GUID scan preserved; true BitLocker locked/unlocked state still requires FVE volume metadata and TPM state.  `commit_ref 9dc07a4`; `artifact_ref /tmp/pbl-chainload-ci/pbl-serial-pass.log`, `/tmp/pbl-chainload-ci/pbl-serial-mismatch.log`.
+
+### Fog cleared this session
+- Real Windows 11 23H2 BCD is parsed defensively in QEMU without crashing, even with the test-harness BitLocker GUID appended beyond the hive's declared HBIN extent.
+- Deterministic BCD boot configuration (debug/testsigning/hypervisor/WinPE/timeout/display/recovery/inherit) now feeds the platform-state digest.
+- The parser's upper-bound design (header HBIN size, not file size) prevents trailing bytes from being treated as part of the registry.
+
+### Fog remaining
+- **True BitLocker lock/unlock state**: BCD parsing is a measurement, not proof. FVE volume metadata and TPM state still needed (D-120).
+- **D-213**: Loaded-EFI-image count is still a weak signal (count only, no image names/hashes).
+- **D-215 / D-219**: Policy signature fail-closed paths (invalid/unsigned policy and provisioned root of trust) remain untested.
+- **D-217**: In-binary hardening is bypassable if `PblApp.efi` is modified; Secure Boot / code signing (D-130) still the real defense.
+- **D-129 / D-130**: Real hardware validation and code signing not done.
+
+### Debt items closed
+- None fully closed this session. D-120 was advanced with evidence but remains OPEN pending FVE/TPM BitLocker state detection.
+
+### Debt items still open
+- D-120 — BCD parsing done, true BitLocker state not yet.
+- D-213 — Loaded EFI image count is a weak signal.
+- D-215 — Policy signature BLOCK path untested.
+- D-217 — In-binary hardening bypassable without Secure Boot.
+- D-219 — Provisioned-root policy signature path untested.
+- D-129 — No real hardware validation.
+- D-130 — Code signing not configured.
+
+### Blockers
+- No external blockers. The test is self-contained and uses the extracted Windows 11 23H2 ISO under `tmp/winre/Win11Extract` (6.3 GB, gitignored).
+
+### Failure attribution
+- No session failures. The parser's first build compiled cleanly with `-Werror`, and the QEMU harness exercised both the PASS and mismatch paths. The BCD hash matches the expected `6e0611d2...` SHA-256 of the original hive.
+
+### Test results
+- PBL build: RELEASE_GCC, 1343488 bytes, SHA-256 `e1cda018e07b4f6b5d0009ce39839e3e3a4a6b035fb8df35b33a7f26df8f65a5`.
+- `test-chainload-harness.sh --timeout 90`: PASS 7/7, mismatch 3/3.
+- Serial logs: `/tmp/pbl-chainload-ci/pbl-serial-pass.log`, `/tmp/pbl-chainload-ci/pbl-serial-mismatch.log`.
+- `make graph-check`: all invariants pass.
+- `make verify-env`: 61 PASS / 0 FAIL / 1 SKIP.
+
+### Next session opening
+Implement true BitLocker volume lock-state detection by inspecting FVE metadata on the encrypted volume and/or TPM PCR state, or test the policy-signature fail-closed paths (D-215/D-219) with an invalid `policy.cose` and a provisioned root of trust.
+
+---
