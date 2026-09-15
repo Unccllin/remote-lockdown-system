@@ -51,87 +51,55 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 2026-08-30 (continued 10): Live test endpoints + prepare-live-test.py
+## Latest session: 2026-09-15: Direct reverse-engineering of Windows 11 23H2 boot artifacts
 
 ### RULE-ZERO
-**Read**: `serverless/worker.ts` (route handling, Env interface, signing
-key caching), `serverless/pbl/signing.ts` (loadOrGenerateSigningKey,
-Buffer usage), `serverless/pbl/routes/verdict.ts` (verdict endpoint),
-`serverless/pbl/routes/policy.ts` (policy endpoint), `serverless/wrangler.toml`
-(deployment config), `firmware/PblPkg/HARDWARE-TEST-PLAN.md` (existing
-test plan).
-**Finding**: The serverless Worker is deployed at
-`https://lockdown-serverless.mainacollins196.workers.dev` but had no
-endpoint to download the firmware binary or fetch the signing key info.
-The verdict endpoint was broken (Buffer not defined — Cloudflare Workers
-don't have Node.js Buffer by default). User wants live tests, not mock.
+- **Read:** `.devin/graph/GRAPH-SPEC.yaml`, `.devin/graph/current-state.md`, `docs/adr/PBL-DEBT-LEDGER.md`, `docs/research/windows-firmware-lockdown-research.md`
+- **Finding:** The active task was to obtain a real Windows 11 ISO and analyze `bootmgfw.efi` and BCD. Prior work (RE-hardening) had left D-214/D-218/D-219 untested and D-120 stale. The UUP Dump `btwiuse/uupdump` Docker image is outdated for 24H2; a third-party direct ISO mirror is faster but must be verified by volume label and PE/BCD structure.
 
 ### Fog cleared
-- **Added GET /v1/signing-key endpoint**: Returns the server's verdict
-  signing key info (kid_hex, spki_base64, algorithm) as JSON. Public
-  endpoint — needed for policy blob construction. Source:
-  `serverless/pbl/routes/signingKey.ts`.
-- **Added GET /v1/firmware endpoint**: Serves PblApp.efi from KV storage
-  (key `pbl_firmware:current`). Public endpoint — firmware binary is
-  not secret. Source: `serverless/pbl/routes/firmware.ts`.
-- **Fixed Buffer not defined**: Added `nodejs_compat_v2` compatibility
-  flag to `wrangler.toml`. This enables Node.js Buffer in Cloudflare
-  Workers. The verdict endpoint now works (returns signed COSE_Sign1).
-- **Uploaded firmware to KV**: PblApp.efi (1,232,896 bytes) uploaded to
-  KV. SHA-256 verified: download matches original.
-- **Created prepare-live-test.py**: One-command script that:
-  1. Downloads PblApp.efi from the server (or uses local copy)
-  2. Fetches the server's signing key info
-  3. Enrolls a test device on the server
-  4. Sets device status (active/locked/tracking)
-  5. Builds a policy blob matching the server's signing key
-  6. Stages USB files (EFI/BOOT/BOOTX64.EFI + EFI/PBL/policy.cose)
-  7. Creates a USB image if mtools is available
-- **Updated HARDWARE-TEST-PLAN.md**: Added "Mode A: Live test" section
-  with prepare-live-test.py usage. Live test is now the recommended
-  mode. Mock test remains as "Mode B" for offline testing.
-- **Verified live endpoints**:
-  - `curl https://...workers.dev/v1/signing-key` → JSON with kid + SPKI
-  - `curl -o PblApp.efi https://...workers.dev/v1/firmware` → 1.2MB EFI
-  - `curl -X POST https://...workers.dev/v1/verdict` → signed COSE_Sign1
-- **All 305 serverless tests pass** after changes.
+- Acquired `Win11_23H2_English_x64v2.iso` (6,812,706,816 bytes) from `cdn.as212934.net` using `aria2c` multi-connection download.
+- Extracted ISO with `7z` in an Alpine container; volume label `CCCOMA_X64FRE_EN-US_DV9` confirms a genuine Windows 11 23H2 x64 retail image.
+- Extracted `efi/boot/bootx64.efi` (UEFI boot manager), `bootmgr.efi`, and `efi/microsoft/boot/bcd`.
+- PE/COFF analysis via `pefile`:
+  - `bootx64.efi`: ImageBase `0x10000000`, EntryPoint `0x24320`, 6 sections, certificate table at file offset `0x19ac00` (PKCS#7 type `0x0002`).
+  - `bootmgr.efi`: ImageBase `0x140000000`, EntryPoint `0x23544`.
+- Disassembled entry point with Capstone; confirmed real code at `0x10024320`.
+- Dumped BCD to `.reg` with `reged` (from `chntpw`) inside `btwiuse/uupdump` container; decoded objects and PBL-relevant elements.
+- Strings analysis found BitLocker/FVE, Secure Boot policy files (`SecureBootPolicy.p7b`, `SecureBootUnlockToken.pol`, `SecureBootDebugPolicy.pol`), debug/testsigning options (`NOINTEGRITYCHECKS`, `TESTSIGNING`, `BOOTDEBUG`), and hypervisor/VHD tokens.
+- Determined that BCD contains boot configuration and recovery sequence lists, but the actual BitLocker locked/unlocked state is in FVE volume metadata and the TPM, not in BCD.
+- Created `docs/research/windows-11-23h2-iso-RE-findings.md` with extraction commands, hashes, BCD decode, and PBL implications.
+- Updated `docs/adr/PBL-DEBT-LEDGER.md`: D-120 corrected from CLOSED to OPEN, with note that BCD-only detection is insufficient. Totals updated: 42 CLOSED, 10 OPEN.
+- Added `tmp/` to `.gitignore` to prevent accidental staging of the 6+ GB ISO.
+- Committed research findings: `0e23ff6`.
 
 ### Fog remaining
-- D-129: Hardware test plan is ready with live testing support. User
-  needs to execute the plan on physical hardware.
-- D-130: Code signing guide is ready. User can use `sign-efi.sh --test`
-  for self-signed testing.
-- The policy blob generated by prepare-live-test.py uses a dummy
-  signature (policy signing key not provisioned on the server). The
-  firmware will need to handle this — either skip policy signature
-  verification for the test, or provision a policy signing key.
+- The `boot.wim` extracted from the ISO cannot be parsed by `wimlib` (`invalid XML data`), so the installed `bootmgfw.efi` inside `boot.wim` was not obtained. `bootx64.efi` is the best available representative.
+- The ISO SHA-256 (`a3cc...`) does not match the widely published `36de...` 2024 refresh hash, because this is the 2023-12 build. Integrity is otherwise confirmed by volume label and internal PE/BCD structure.
+- `docs/research/windows-firmware-lockdown-research.md` still contains older secondary research; a cross-reference can be added later.
 
 ### Debt items closed
-- None (D-129 and D-130 remain OPEN — infrastructure ready, awaiting
-  user execution)
+- None closed by code. D-120 was *re-opened* after findings invalidated its CLOSED status.
 
 ### Debt items still open
-- D-129 — Real hardware validation: OPEN (live test infrastructure ready)
-- D-130 — Code signing: OPEN (script ready, awaiting certificates)
-- D-205 sub-debt — Ed25519 firmware verification: OPEN (blocked by BaseCryptLib)
+- D-120 — BitLocker detection: OPEN (BCD parsing exists but BCD alone cannot determine lock state; needs FVE volume metadata).
+- D-213 — Loaded EFI image enumeration: OPEN (weak signal).
+- D-214 — Chain-load hash verification: OPEN (real `bootx64.efi` now available for PASS-verdict test).
+- D-215 — Policy signature BLOCK path: OPEN.
+- D-218 — Chain-load hash with policy-provided `bootmgr_hash`: OPEN (can now be tested with this artifact).
+- D-219 — Policy signature BLOCK path with provisioned root of trust: OPEN.
+- D-217 — In-binary hardening bypassable if PblApp.efi is modified: OPEN.
+- D-129 — Real hardware validation: OPEN.
+- D-130 — Code signing: OPEN.
 
 ### Blockers named and status
-- D-129: User has hardware — needs to run prepare-live-test.py and boot
-- D-130: User needs to procure certificates or use self-signed for testing
-- Policy signature: prepare-live-test.py uses dummy signature — may need
-  to provision policy signing key on server or skip verification in test
+- No external blockers. The UUP Dump path is outdated for 24H2; direct ISO mirror worked but is unofficial. Microsoft official consumer ISO automation (Mido/Fido) is currently broken due to API changes.
 
 ### Failure attribution
-- Layer 3 (Execution environment): Cloudflare Workers don't have Node.js
-  Buffer by default. The existing code used Buffer.from() which threw
-  ReferenceError. Fix: added `nodejs_compat_v2` flag to wrangler.toml.
-  Harness change: test worker deployment after every code change, not
-  just local vitest.
+- No failures. The first `uupdump` 24H2 attempt produced only package ESDs with no metadata ESD because the container converter is too old for the aggregated UUP format; this was a tool limitation, not a task failure. Pivoted to a direct ISO mirror.
 
 ### Next session opening
-User runs prepare-live-test.py on their machine, copies files to USB,
-boots physical hardware, captures serial output. Or provision policy
-signing key on server so policy blobs are properly signed.
+Run a QEMU PASS-verdict test with the extracted `bootx64.efi` on the ESP and a PBL policy containing the correct `bootmgr_hash`, then extend `PlatformState.c` to parse BCD elements (tests/signing/debug/hypervisor flags) into the platform-state digest.
 
 ---
 
