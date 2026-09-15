@@ -169,34 +169,42 @@ PblFindAndReadBootMgr (
       continue;
     }
 
-    // Try standard path first (bootmgfw.efi)
-    Status = PblReadFile (Root, PBL_BOOTMGR_PATH, BootMgrBuf, BootMgrSize);
-    if (!EFI_ERROR (Status)) {
-      Root->Close (Root);
-      *EspHandle = Handles[Index];
-      gBS->FreePool (Handles);
-      return EFI_SUCCESS;
-    }
-
-    // Standard path failed — try backup path, but ONLY if the PBL backup
-    // marker file exists. This prevents an attacker from planting a
-    // malicious bootmgfw_orig.efi to get loaded instead of the real boot
-    // manager.
+    // Determine path order based on deployment model:
+    // - If the PBL backup marker exists, PBL replaced bootmgfw.efi with
+    //   itself and saved the original as bootmgfw_orig.efi. Try the
+    //   backup (original) first.
+    // - If no marker, PBL is at BOOTX64.EFI and bootmgfw.efi is the real
+    //   boot manager. Try the standard path first.
+    // The marker prevents an attacker from planting a malicious
+    // bootmgfw_orig.efi — without the marker, the backup is ignored.
+    BOOLEAN UseBackup = FALSE;
     {
       EFI_FILE_PROTOCOL *Marker = NULL;
       Status = Root->Open (Root, &Marker, PBL_BOOTMGR_BAK_MARKER,
                            EFI_FILE_MODE_READ, 0);
       if (!EFI_ERROR (Status) && Marker != NULL) {
         Marker->Close (Marker);
-        // Marker exists — safe to try backup path
-        Status = PblReadFile (Root, PBL_BOOTMGR_BAK_PATH, BootMgrBuf, BootMgrSize);
-        if (!EFI_ERROR (Status)) {
-          Root->Close (Root);
-          *EspHandle = Handles[Index];
-          gBS->FreePool (Handles);
-          return EFI_SUCCESS;
-        }
+        UseBackup = TRUE;
       }
+    }
+
+    if (UseBackup) {
+      // Replacement deployment: try backup (original bootmgr) first
+      Status = PblReadFile (Root, PBL_BOOTMGR_BAK_PATH, BootMgrBuf, BootMgrSize);
+      if (EFI_ERROR (Status)) {
+        // Backup failed — fall back to standard path
+        Status = PblReadFile (Root, PBL_BOOTMGR_PATH, BootMgrBuf, BootMgrSize);
+      }
+    } else {
+      // BOOTX64.EFI deployment: try standard path first
+      Status = PblReadFile (Root, PBL_BOOTMGR_PATH, BootMgrBuf, BootMgrSize);
+    }
+
+    if (!EFI_ERROR (Status)) {
+      Root->Close (Root);
+      *EspHandle = Handles[Index];
+      gBS->FreePool (Handles);
+      return EFI_SUCCESS;
     }
 
     Root->Close (Root);

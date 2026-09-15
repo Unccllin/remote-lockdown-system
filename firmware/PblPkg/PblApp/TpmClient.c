@@ -1439,64 +1439,6 @@ PblTpmWriteLockState (
 }
 
 // ============================================================================
-// RE-hardening #5: NV_WriteLock for verdict cache anti-replay
-// ============================================================================
-
-/** RE-hardening #5: Lock the verdict cache NV index against further writes.
-
-  Calls TPM2_NV_WriteLock on PBL_NV_LOCK_STATE. After this, any NV_Write
-  to the index will fail with TPM_RC_LOCKED until the next TPM reset
-  (power cycle). This prevents an attacker with TPM owner hierarchy
-  access from overwriting a LOCKED verdict cache with an UNLOCKED one.
-
-  Reads are still allowed after WriteLock — only writes are blocked.
-
-  @retval EFI_SUCCESS  Index locked.
-  @retval other       TPM command failed.
-**/
-EFI_STATUS
-PblTpmNvWriteLockState (
-  VOID
-  )
-{
-  EFI_TCG2_PROTOCOL *Tcg2;
-  EFI_STATUS         Status;
-  UINT8              CmdBuf[128];
-  UINT8              RespBuf[128];
-  UINT32             RespSize;
-
-  Tcg2 = PblTcg2Locate ();
-  if (Tcg2 == NULL) {
-    return EFI_NOT_FOUND;
-  }
-
-  // TPM2_NV_WriteLock(authHandle=PBL_NV_LOCK_STATE, index=PBL_NV_LOCK_STATE)
-  UINT32 LockHandles[] = { PBL_NV_LOCK_STATE, PBL_NV_LOCK_STATE };
-  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf),
-                                                   TPM_CC_NV_WriteLock, 2, LockHandles);
-  UINT8 *ParamsStart = Ptr;
-
-  UINTN ParamsSize = (UINTN)(Ptr - ParamsStart);
-
-  PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
-
-  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 &&
-      PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
-    PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
-  }
-
-  PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
-
-  Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
-                                RespBuf, sizeof (RespBuf), &RespSize);
-  if (EFI_ERROR (Status) && RespSize >= 10) {
-    UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
-    Print (L"  [WARN] NV_WriteLock(LOCK_STATE) RC=0x%x\n", Rc);
-  }
-  return Status;
-}
-
-// ============================================================================
 // D-118: TPM2_GetRandom fallback for nonce generation
 // ============================================================================
 
