@@ -1318,5 +1318,13 @@
 | D-215 | Policy signature BLOCK path (RE-hardening #1) — untested | OPEN (CI uses dev mode with EFI_UNSUPPORTED → continue. The fail-closed path (signature invalid → EFI_SECURITY_VIOLATION) is never exercised. Need a provisioned-root-of-trust CI scenario) | TEST |
 | D-216 | Verdict cache anti-replay (RE-hardening #5) — REVERTED | CLOSED (reverted: NV index lacks TPMA_NV_WRITE_STCLEAR so NV_WriteLock fails; even with the attribute, TPM2_Startup(CLEAR) clears it every boot. Need a monotonic counter or PCR-based approach. Commit 6c4b294) | SECURITY |
 
-**Totals**: 48 items — 43 CLOSED, 5 OPEN (D-129 real hardware, D-130 code signing, D-213 loaded image hash, D-214 chain-load test, D-215 policy sig test)
+**RE stress-test session (2026-09-15, QEMU, PblApp.efi patched in-place):**
+
+| # | Description | Status | Category |
+|---|-------------|--------|----------|
+| D-217 | All in-binary hardening bypassable if PblApp.efi is modified | OPEN (verified empirically: 9-byte patch to PblEvaluateDecision at 0x7c03 made it always return PASS, bypassing the lock screen. PBL code is not self-protecting — Secure Boot is the only defense against binary modification. Need runtime self-integrity that hashes the PE file from disk, or a Secure Boot deployment checklist) | SECURITY |
+| D-218 | Chain-load hash check untested with policy-provided hash | OPEN (PblChainLoadWindows runs and reads bootmgfw.efi, but CI has no policy with bootmgr_hash, so the hash comparison path was not exercised. Need a CI scenario with policy key 58 and a mismatched bootmgfw.efi) | TEST |
+| D-219 | Policy signature BLOCK path untested | OPEN (dev build returns EFI_UNSUPPORTED before COSE verification. Need a provisioned-root-of-trust CI scenario with an invalid policy.cose) | TEST |
+
+**Totals**: 52 items — 43 CLOSED, 9 OPEN
 
