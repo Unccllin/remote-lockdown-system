@@ -464,8 +464,15 @@
 - **Blocker**: Raw GUID search is heuristic, may false-positive if
   the GUID appears in non-BitLocker context. No full BCD registry hive
   parsing. No runtime test.
+- **Update (2026-09-15)**: Real Windows 11 23H2 BCD was dumped and decoded
+  from a retail ISO. BCD objects contain boot configuration (loader path,
+  device, debug/testsigning/hypervisor flags) and recovery sequence lists,
+  but **not** the actual BitLocker locked/unlocked state. That state lives
+  in the volume's FVE metadata and the TPM. See
+  `docs/research/windows-11-23h2-iso-RE-findings.md`.
 - **Close criteria**: Runtime test with QEMU + real BCD file.
-  Optional: Full BCD registry hive parsing for recovery entries.
+  Optional: Full BCD registry hive parsing for recovery entries;
+  later, FVE volume metadata inspection for true lock state.
 
 ### D-121 — SPI protections check not implemented
 - **Status**: OPEN
@@ -1284,7 +1291,7 @@
 | D-117 | No runtime tests for PBL modules | CLOSED (QEMU+swtpm: 8 test-output logs) | TEST |
 | D-118 | EFI_RNG_PROTOCOL nonce generation not implemented | CLOSED | SECURITY |
 | D-119 | ACPI FADT S3 parsing stubbed | CLOSED | STUB |
-| D-120 | BitLocker detection not implemented | CLOSED | TODO |
+| D-120 | BitLocker detection not implemented | OPEN (PlatformState.c has raw GUID search; real BCD/FVE analysis in `docs/research/windows-11-23h2-iso-RE-findings.md` shows BCD only gives boot config, not BitLocker lock state) | TODO |
 | D-121 | SPI protections check not implemented | CLOSED | TODO |
 | D-122 | DCI/DCP check not implemented | CLOSED | TODO |
 | D-123 | DMA protection check not implemented | CLOSED | TODO |
@@ -1326,5 +1333,5 @@
 | D-218 | Chain-load hash check untested with policy-provided hash | OPEN (PblChainLoadWindows runs and reads bootmgfw.efi, but CI has no policy with bootmgr_hash, so the hash comparison path was not exercised. Need a CI scenario with policy key 58 and a mismatched bootmgfw.efi) | TEST |
 | D-219 | Policy signature BLOCK path untested | OPEN (dev build returns EFI_UNSUPPORTED before COSE verification. Need a provisioned-root-of-trust CI scenario with an invalid policy.cose) | TEST |
 
-**Totals**: 52 items — 43 CLOSED, 9 OPEN
+**Totals**: 52 items — 42 CLOSED, 10 OPEN
 
