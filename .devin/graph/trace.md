@@ -1285,3 +1285,47 @@ Resolve the four EDK II/PBL source gaps (package-resolution order, Tcg2 protocol
 - D-213 LoadedImageCount enrichment, or remaining D-1xx hardware-debt items (SPI/DCI/DMA/MOR/SBAT checks).
 
 ---
+
+## Session 111 — 2026-09-16 — D-213 loaded-image enumeration enrichment (per-image identity digest)
+
+**RULE-ZERO — Understanding logged before code changes**
+
+**Read:** `PlatformState.c` (loaded-image enumeration block, ~line 910), `PblApp.h` (`PBL_PLATFORM_STATE`), `PblApp.c` (platform_state_digest computation + logging site), `PBL-DEBT-LEDGER.md` D-213 row.
+
+**Finding:** `platform_state_digest = SHA-256(PBL_PLATFORM_STATE)` — adding a `LoadedImageDigest[32]` field to the struct automatically enriches the digest sent to the server; no CBOR schema change needed (struct is hashed, never marshalled field-by-field). Ledger wanted "hash each image's device path" — implemented as per-image `SHA-256(DevicePath(DeviceHandle) || FilePath)` sorted then aggregated, making the result independent of LocateHandleBuffer order.
+
+**What changed**
+
+- `PblApp.h` — `PBL_PLATFORM_STATE.LoadedImageDigest[32]` after `LoadedImageCount`.
+- `PlatformState.c` — enumeration now per-image: HandleProtocol → LoadedImage + DevicePath on `Loaded->DeviceHandle`, hash `DevPathSize||DevPath||FilePathSize||FilePath` per image, insertion-sort the 32B hashes, aggregate SHA-256 → `LoadedImageDigest`. Count retained.
+- `PblApp.c` — serial line `Loaded images: N (digest %08x…)` after collection.
+- `ci-harness-docker.sh` — new D-213 check.
+
+**Test results**
+
+- Build: `PblApp.efi` SHA-256 `e6be03fba1f1df1a88cdb416bba12b3aa117a91a2dc5ed35204fef9536e51bdc`.
+- `ci-harness-docker.sh`: **15 PASS / 0 FAIL** (new check included).
+- `ci-harness-persistence.sh`: **16 PASS / 0 FAIL**; digest `32FB22F41C5469B9` identical across both boots (deterministic); differs from the single-boot digest `650224876D9C939F` because the persistence ESP lives on a GPT disk — different device paths → different image-set identity. This is the intended sensitivity.
+- Artifact: `/tmp/pbl-ci-persist-host/pbl-persistence-result.txt`, serial logs in `/tmp/pbl-persist-mount/`.
+
+**Fog cleared this session:**
+- `platform_state_digest` covers the whole `PBL_PLATFORM_STATE` struct — enrichment fields ride along without wire-format changes.
+- Device-path identity is layout-sensitive by design: the same image set on a different disk topology produces a different digest (GPT-disk ESP vs raw-ESP harness runs differ). Server baselines must be per deployment layout.
+
+**Fog remaining:**
+- Server-side baseline tracking for `LoadedImageDigest` not implemented — the server only sees the opaque `platform_state_digest` change today; a dedicated field in the attestation payload would let the server report WHICH aspect changed.
+- Digest is detection-only; no local decision logic consumes it.
+- QEMU device-path determinism may not match real hardware (USB/NVMe path nodes vary more).
+
+**Debt items closed:** D-213 (commit 56c4728; artifacts above).
+**Debt items still open:** D-100..D-130 hardware items (D-121 SPI, D-122 DCI, D-123 DMA, D-124 MOR, D-126 SVN, D-127 AMT, D-128 SBAT, D-129 real-hardware validation, D-130 signing), D-200..D-211 server-side items.
+
+**Blockers** — none.
+
+**Failure attribution**
+- None — clean first-run verification.
+
+**Next session opening**
+- Remaining D-1xx hardware-debt items (SPI/DCI/DMA/MOR/SVN/AMT/SBAT) — most are emulated/stubbed checks needing real-hardware or deeper emulation evidence; or D-200..D-211 server-side attestation/policy work.
+
+---
