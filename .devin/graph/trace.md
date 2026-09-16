@@ -1017,3 +1017,63 @@ Resolve the four EDK II/PBL source gaps (package-resolution order, Tcg2 protocol
 - Harden the cache write to use a C2-bound HMAC session and test with a real salt/bind, or pick up D-215/D-213.
 
 ---
+
+---
+
+## Session 107 — C2 bound HMAC session: includeAuth semantics + WRITTEN-aware NV names
+
+**Rule Zero:**
+- **Read:** `firmware/PblPkg/PblApp/TpmSession.c`, `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/PblApp/PblApp.h`, `firmware/PblPkg/PblApp/PblApp.c`, `firmware/PblPkg/ci-harness-persistence.sh`, `firmware/PblPkg/ci-harness-docker.sh`, `docs/adr/PBL-C2-TPM-Contract.md`, libtpms 0.9.3 source (`SessionProcess.c`, `Session.c`, `NV_spt.c`, `NV_DefineSpace.c`, `TpmTypes.h`, `TpmError.h`), plus standalone swtpm repro scripts `scripts/tpm-authhandle-debug.py` and `scripts/tpm-bound-hmac-minimal.py`.
+- **Finding:** Session 106 left the NV cache write on an unbound session. Binding the session to `PBL_NV_LOCK_STATE` with a real auth value surfaced `0x09A2` (session-1 BAD_AUTH). Root-caused against libtpms source + minimal swtpm repro.
+
+**Fog cleared this session:**
+- `includeAuth` semantics (libtpms `ComputeCommandHmac`/`IsSessionBindEntity`): a bound session uses `sessionKey` alone while it authorizes its bound entity; `sessionKey || authValue` is only correct for other entities. Appending `bindAuth` unconditionally caused `0x9A2`.
+- Return-code corrections: `0x014A` is `TPM_RC_NV_UNINITIALIZED` (empty index), not `NV_AUTHORIZATION` (`0x0149`). Earlier sessions misread it.
+- TPMA_NV layout in libtpms is the standard layout (read bits 16-19, PLATFORMCREATE bit 30): `0x420D000D` was always correct.
+- NV index Name mutates when `TPMA_NV_WRITTEN` flips on first write — the bound-entity match then breaks, and both the HMAC key (`sessionKey || authValue`) and the cpHash Name must follow the new Name.
+- `rpHash` for response HMAC excludes the `parameterSize` transport field: `responseCode || commandCode || responseParameters` only. The old code hashed parameterSize too, which broke post-write `NV_Read` verification (boot-2 "Device Error").
+- `PblTpmSubmitCommand` masked the TPM return code by not reporting `ActualResponseSize` on the error path — the RC warn print read an uninitialized variable.
+
+**Implementation (commit `e2b107c`):**
+- `PBL_TPM_SESSION` gains `BoundEntityName`, `IncludeAuth`, `CmdAuthValue` — `PblTpmStartHmacSession` captures the bound entity Name at session start.
+- `PblTpmSetupSessionAuth` (TpmClient.c) computes per-command `includeAuth` by comparing the associated handle's current Name to the captured bound Name, and loads the authorized entity's authValue from `PcdPblTpmNvAuthValue` for NV handles.
+- All four HMAC-key constructions now use `sessionKey || (includeAuth ? cmdAuthValue : "")`.
+- NV name cache stores authoritative attributes: `PblTpmNvRefreshName` (TPM2_NV_ReadPublic) after provisioning; `PblTpmNvMarkWritten` after successful `NV_Write`/`NV_Increment`; `PblTpmGetHandleName` recomputes Names on demand.
+- `PblTpmNvRefreshName` also fixes the WRITTEN=1 case on second boot (index persisted from prior boot).
+- Harness greps updated for the `(bound to lock-state NV)` banner (all three harnesses).
+
+**ARTIFACT — Run references**
+- `PblApp.efi` SHA-256 `852a73334fb9a19952a02bd47971de4b01d6ef4d3d689b6ebef90dcca1bd56ee` (built via `firmware/PblPkg/build-pbl.sh`).
+- `pbl-persistence-artifacts/pbl-persistence-result.txt` — **16 PASS / 0 FAIL** two-boot.
+- `pbl-persistence-artifacts/pbl-persistence-serial.log` — combined serial output; boot 2 shows `Using cached verdict` via the bound session.
+- `ci-harness-docker.sh` single-boot regression: **12 PASS / 0 FAIL**.
+
+**Debt items closed:**
+- None newly closed — this is correctness hardening of already-closed D-102 (bound session was specified but the includeAuth/WRITTEN semantics were wrong).
+
+**Debt items still open:**
+- D-215 (policy-signature fail-closed tests; also tracks AES-CFB parameter encryption — still disabled via `PcdPblTpmUseParameterEncryption=FALSE`), D-213 (LoadedImageCount), D-100..D-130, D-200..D-211 per `current-state.md`.
+
+**Fog remaining:**
+- `NV_Read(POLICY_VERSION)` still returns `0x14A` on both boots — the counter is never incremented in this flow; acceptable (not yet exercised).
+- Response HMAC is verified only on the `NV_Read` parse path; `NV_Write`/`NV_Increment` responses skip verification (RC-only) and do not roll `nonceTPM` — harmless today since no session command follows a write in one boot, but a future command-after-write sequence would need the update.
+- Parameter encryption (AES-256-CFB `sessionValue` KDFa derivation) remains disabled by design.
+- QEMU/swtpm only — real platform-hierarchy auth, physical presence, Boot Guard remain unverified on hardware.
+
+**Blockers**
+- None.
+
+**Failure attribution**
+- The `0x9A2`/`0x14A` debugging loop was prolonged by layer 2 (context provision): libtpms includeAuth semantics and the TPMA_NV bit layout were not documented in-repo; resolved by reading libtpms source and writing standalone swtpm repro scripts.
+- Masked RC (layer 4 verification feedback): `PblTpmSubmitCommand` hid the real return code; now fixed.
+
+**Test results**
+- Build: `PblApp.efi` SHA-256 `852a7333...`.
+- `ci-harness-persistence.sh` (Docker, two boots): **16 PASS / 0 FAIL**.
+- `ci-harness-docker.sh`: **12 PASS / 0 FAIL**.
+- `make graph-check`: all invariants pass.
+
+**Next session opening**
+- D-215 policy-signature fail-closed tests, D-213 LoadedImageCount enrichment, or AES-256-CFB parameter encryption (sessionValue KDFa-CFB derivation) to complete C2 REQ-05.
+
+---

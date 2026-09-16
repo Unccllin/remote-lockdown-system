@@ -51,54 +51,61 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 106 — Persist PBL lock state across QEMU+swtpm reboots
+## Latest session: 107 — C2 bound HMAC session: includeAuth semantics + WRITTEN-aware NV names
 
 **Rule Zero:**
-- **Read:** `.devin/graph/current-state.md`, `firmware/PblPkg/PblApp/PblApp.c`, `firmware/PblPkg/PblApp/PblApp.h`, `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/ci-harness-docker.sh`, `docs/adr/PBL-C2-TPM-Contract.md`, `docs/adr/PBL-DEBT-LEDGER.md`.
-- **Finding:** The next opening from session 105 was to implement and test `PblTpmWriteLockState` so the lock verdict persists across reboots. The code path was already implemented but was only exercised for online-verified verdicts; the QEMU smoke test has no network or policy.cose, so the write path was never hit and the cache was never written. A two-boot harness is needed to prove persistence.
+- **Read:** `firmware/PblPkg/PblApp/TpmSession.c`, `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/PblApp/PblApp.h`, `firmware/PblPkg/PblApp/PblApp.c`, `firmware/PblPkg/ci-harness-persistence.sh`, `firmware/PblPkg/ci-harness-docker.sh`, `docs/adr/PBL-C2-TPM-Contract.md`, libtpms 0.9.3 source (`SessionProcess.c`, `Session.c`, `NV_spt.c`, `NV_DefineSpace.c`, `TpmTypes.h`, `TpmError.h`), plus standalone swtpm repro scripts `scripts/tpm-authhandle-debug.py` and `scripts/tpm-bound-hmac-minimal.py`.
+- **Finding:** Session 106 left the NV cache write on an unbound session. Binding the session to `PBL_NV_LOCK_STATE` with a real auth value surfaced `0x09A2` (session-1 BAD_AUTH). Root-caused against libtpms source + minimal swtpm repro.
 
 **Fog cleared this session:**
-- Refactored `PblApp.c` so the final verdict is written to `PBL_LOCK_STATE` NV regardless of whether it came from an online fetch, the local cache, or the fail-closed offline path. This makes offline lockdown persist across reboots.
-- Built `PblApp.efi` (SHA-256 `7509bed4704b41dd192b59cce10b00ec4aad0d6f76b9c6c09b6392fe0f781fc7`) and confirmed the single-boot Docker smoke test still passes 12/0.
-- Discovered that `swtpm` is killed when QEMU exits under `timeout` in the `pbl-qemu` image, so a single long-running swtpm cannot be reused across two QEMU boots. Created `ci-harness-persistence.sh` with per-boot swtpm start/stop that reuses the same `--tpmstate` directory so NV state persists.
-- Two-boot persistence test passes **16 PASS / 0 FAIL**:
-  - Boot 1: provisions NV indices, shows `No cached lock state`, then `[OK] Lock state cached to TPM NV`.
-  - Boot 2: reads the cached value and shows `[INFO] Using cached verdict`, then `[OK] Lock state cached to TPM NV`.
-- Added `pbl-persistence-artifacts/` to `.gitignore` so generated serial logs/result files are not committed.
+- `includeAuth` semantics (libtpms `ComputeCommandHmac`/`IsSessionBindEntity`): a bound session uses `sessionKey` alone while it authorizes its bound entity; `sessionKey || authValue` is only correct for other entities. Appending `bindAuth` unconditionally caused `0x9A2`.
+- Return-code corrections: `0x014A` is `TPM_RC_NV_UNINITIALIZED` (empty index), not `NV_AUTHORIZATION` (`0x0149`). Earlier sessions misread it.
+- TPMA_NV layout in libtpms is the standard layout (read bits 16-19, PLATFORMCREATE bit 30): `0x420D000D` was always correct.
+- NV index Name mutates when `TPMA_NV_WRITTEN` flips on first write — the bound-entity match then breaks, and both the HMAC key (`sessionKey || authValue`) and the cpHash Name must follow the new Name.
+- `rpHash` for response HMAC excludes the `parameterSize` transport field: `responseCode || commandCode || responseParameters` only. The old code hashed parameterSize too, which broke post-write `NV_Read` verification (boot-2 "Device Error").
+- `PblTpmSubmitCommand` masked the TPM return code by not reporting `ActualResponseSize` on the error path — the RC warn print read an uninitialized variable.
+
+**Implementation (commit `e2b107c`):**
+- `PBL_TPM_SESSION` gains `BoundEntityName`, `IncludeAuth`, `CmdAuthValue` — `PblTpmStartHmacSession` captures the bound entity Name at session start.
+- `PblTpmSetupSessionAuth` (TpmClient.c) computes per-command `includeAuth` by comparing the associated handle's current Name to the captured bound Name, and loads the authorized entity's authValue from `PcdPblTpmNvAuthValue` for NV handles.
+- All four HMAC-key constructions now use `sessionKey || (includeAuth ? cmdAuthValue : "")`.
+- NV name cache stores authoritative attributes: `PblTpmNvRefreshName` (TPM2_NV_ReadPublic) after provisioning; `PblTpmNvMarkWritten` after successful `NV_Write`/`NV_Increment`; `PblTpmGetHandleName` recomputes Names on demand.
+- `PblTpmNvRefreshName` also fixes the WRITTEN=1 case on second boot (index persisted from prior boot).
+- Harness greps updated for the `(bound to lock-state NV)` banner (all three harnesses).
 
 **ARTIFACT — Run references**
-- `firmware/PblPkg/PblApp/PblApp.c` — final-verdict cache write.
-- `firmware/PblPkg/ci-harness-persistence.sh` — two-boot QEMU+swtpm persistence harness.
-- `firmware/PblPkg/PblApp.efi` (SHA-256 `7509bed...`) built successfully.
-- `/home/cllin/remote-lockdown-system/pbl-persistence-artifacts/pbl-persistence-result.txt` — 16 PASS / 0 FAIL artifact.
-- `/home/cllin/remote-lockdown-system/pbl-persistence-artifacts/pbl-persistence-serial.log` — combined serial output.
+- `PblApp.efi` SHA-256 `852a73334fb9a19952a02bd47971de4b01d6ef4d3d689b6ebef90dcca1bd56ee` (built via `firmware/PblPkg/build-pbl.sh`).
+- `pbl-persistence-artifacts/pbl-persistence-result.txt` — **16 PASS / 0 FAIL** two-boot.
+- `pbl-persistence-artifacts/pbl-persistence-serial.log` — combined serial output; boot 2 shows `Using cached verdict` via the bound session.
+- `ci-harness-docker.sh` single-boot regression: **12 PASS / 0 FAIL**.
 
 **Debt items closed:**
-- None specifically (no existing PBL debt item tracked the offline cache persistence gap). D-215 (policy-signature fail-closed tests) and D-213 (LoadedImageCount enrichment) remain open.
+- None newly closed — this is correctness hardening of already-closed D-102 (bound session was specified but the includeAuth/WRITTEN semantics were wrong).
 
 **Debt items still open:**
-- D-100..D-130 and D-200..D-211 as listed in `current-state.md`. This session did not address verdict signing hardening, attestation, Windows chain-load, or real hardware validation.
+- D-215 (policy-signature fail-closed tests; also tracks AES-CFB parameter encryption — still disabled via `PcdPblTpmUseParameterEncryption=FALSE`), D-213 (LoadedImageCount), D-100..D-130, D-200..D-211 per `current-state.md`.
 
 **Fog remaining:**
-- The cache is written with an empty `IssuedAt`/`GraceUntil` in the offline fail-closed path. A future session should decide whether offline-fail-closed should set a grace period or a hard lock.
-- The override response code is not computed; the test harness sends `test\n` which does not satisfy the challenge, so PBL remains on the lock screen and is killed by `timeout`. This is acceptable for the persistence test but not a real override test.
-- The `PblTpmWriteLockState` HMAC session is unbound (`TPM_RH_NULL`) and the session key is empty. This works with swtpm but is not the C2-mandated bound HMAC session with KDFa for production.
-- Real platform hierarchy authorization and physical-presence requirements are still unverified on hardware.
+- `NV_Read(POLICY_VERSION)` still returns `0x14A` on both boots — the counter is never incremented in this flow; acceptable (not yet exercised).
+- Response HMAC is verified only on the `NV_Read` parse path; `NV_Write`/`NV_Increment` responses skip verification (RC-only) and do not roll `nonceTPM` — harmless today since no session command follows a write in one boot, but a future command-after-write sequence would need the update.
+- Parameter encryption (AES-256-CFB `sessionValue` KDFa derivation) remains disabled by design.
+- QEMU/swtpm only — real platform-hierarchy auth, physical presence, Boot Guard remain unverified on hardware.
 
 **Blockers**
 - None.
 
 **Failure attribution**
-- First attempt at `ci-harness-persistence.sh` reused a single `swtpm` instance and boot 2 failed because the control socket disappeared after `timeout` killed QEMU. Cause: harness layer 3 (execution environment) — swtpm lifecycle assumptions. Fix: start/stop swtpm per boot while preserving the `tpmstate` directory.
+- The `0x9A2`/`0x14A` debugging loop was prolonged by layer 2 (context provision): libtpms includeAuth semantics and the TPMA_NV bit layout were not documented in-repo; resolved by reading libtpms source and writing standalone swtpm repro scripts.
+- Masked RC (layer 4 verification feedback): `PblTpmSubmitCommand` hid the real return code; now fixed.
 
 **Test results**
-- Build: `firmware/PblPkg/build-pbl.sh` → `PblApp.efi` SHA-256 `7509bed...`.
-- `ci-harness-docker.sh` → 12 PASS / 0 FAIL (regression check).
-- `ci-harness-persistence.sh` (Docker, two boots) → **16 PASS / 0 FAIL**.
-- `bash -n` passed for `ci-harness-persistence.sh` and `ci-harness-docker.sh`.
+- Build: `PblApp.efi` SHA-256 `852a7333...`.
+- `ci-harness-persistence.sh` (Docker, two boots): **16 PASS / 0 FAIL**.
+- `ci-harness-docker.sh`: **12 PASS / 0 FAIL**.
+- `make graph-check`: all invariants pass.
 
 **Next session opening**
-- Harden the cache write to use a C2-bound HMAC session and test with a real salt/bind, or pick up D-215/D-213.
+- D-215 policy-signature fail-closed tests, D-213 LoadedImageCount enrichment, or AES-256-CFB parameter encryption (sessionValue KDFa-CFB derivation) to complete C2 REQ-05.
 
 ---
 
