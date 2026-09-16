@@ -168,6 +168,17 @@ TPM2_StartAuthSession:
   (e.g., the auth value, the data being written).
 - `TPMA_SESSION_ENCRYPT` (also called `encrypt`): encrypts response
   parameters (e.g., the data being read).
+
+> **Implementation note (session 110).** Parameter encryption is implemented
+> per TPM 2.0 Part 1 and enabled via `PcdPblTpmUseParameterEncryption=TRUE`.
+> The symmetric key is `KDFa(SHA-256, sessionKey || authValue(entity), "CFB",
+> nonceCaller, nonceTPM, 384)` for command parameters and
+> `KDFa(..., nonceTPM, nonceCaller, 384)` (fresh response nonce) for response
+> parameters; output = AES-256 key (32B) ‖ IV (16B). Only the first TPM2B
+> parameter's buffer is encrypted; cpHash covers the ciphertext. Wire-verified
+> against swtpm/libtpms 0.9.3 (NV_Write attrs=0x21 with ciphertext param;
+> NV_Read attrs=0x41 with ciphertext response). The empty-key PCR session
+> uses continueSession only.
 - The session is **salted** if `tpmKey != TPM_RH_NULL`, **bound** because
   `bind = index handle`. A bound session means the session key incorporates
   the index's auth value, so an attacker who sniffs the bus cannot compute

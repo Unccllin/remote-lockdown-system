@@ -182,21 +182,18 @@ PblTpmSessionAttrsForCommand (
   // decrypt/encrypt attributes and returns plaintext. PBL's encrypt/decrypt
   // functions would corrupt data if applied to plaintext, so skip these
   // attributes entirely when SessionKeySize == 0.
-  //
-  // D-215: AES-256-CFB parameter encryption from sessionValue is not yet
-  // fully implemented. When disabled, keep HMAC-only sessions (continue only).
   if (PblTpmGetSessionKeySize () == 0 || !PblTpmParameterEncryptionEnabled ()) {
     return Attrs;
   }
 
   switch ((UINT32)CommandCode) {
     // Commands that support parameter DECRYPTION (command params encrypted):
+    // (PCR_Extend/PCR_Event are sent on the empty-key PCR session, which
+    // uses continueSession only — see PblTpmExtendPcrWithSessionAuth.)
     case TPM_CC_NV_DefineSpace:
     case TPM_CC_NV_Write:
     case TPM_CC_NV_Extend:
     case TPM_CC_NV_ChangeAuth:
-    case TPM_CC_PCR_Extend:
-    case TPM_CC_PCR_Event:
       Attrs |= PBL_SESSION_DECRYPT;
       break;
 
@@ -240,8 +237,10 @@ PblTpmCommandSupportsDecrypt (
   IN  TPM_CC  CommandCode
   )
 {
-  // D-215: Skip parameter encryption until CFB key/IV derivation is implemented.
-  if (!PblTpmParameterEncryptionEnabled ()) {
+  // Only encrypt when the session actually claims the decrypt attribute:
+  // requires a non-empty sessionKey (PblTpmSessionAttrsForCommand skips the
+  // attr for empty-key sessions) and the REQ-05 PCD.
+  if (PblTpmGetSessionKeySize () == 0 || !PblTpmParameterEncryptionEnabled ()) {
     return FALSE;
   }
   switch ((UINT32)CommandCode) {
@@ -249,8 +248,6 @@ PblTpmCommandSupportsDecrypt (
     case TPM_CC_NV_Write:
     case TPM_CC_NV_Extend:
     case TPM_CC_NV_ChangeAuth:
-    case TPM_CC_PCR_Extend:
-    case TPM_CC_PCR_Event:
       return TRUE;
     default:
       return FALSE;
@@ -706,6 +703,29 @@ PblTpmFillCommandHmac (
   // The TPM uses entity NAMES, not raw handle values. For NV indices, the name
   // is nameAlg || H(nameAlg, TPMS_NV_PUBLIC) = 34 bytes. For hierarchy handles,
   // the name IS the handle (4 bytes).
+  // D-206: Set includeAuth + the authorized entity's authValue on the session.
+  // Session 0 authorizes the first handle (the authHandle). For a session bound
+  // to that entity whose Name is unchanged, the HMAC key is sessionKey alone.
+  if (mCurrentCmdHandleCount > 0) {
+    PBL_TPM_SESSION *Session = PblTpmGetSession ();
+    if (Session != NULL) {
+      UINT32 AssocHandle = SwapBytes32 (*(UINT32 *)(CommandBuffer + 10));
+      PblTpmSetupSessionAuth (Session, AssocHandle);
+    }
+  }
+
+  // C2 §3 REQ-05: when the session has the decrypt attribute for this
+  // command, encrypt the first TPM2B parameter's buffer BEFORE the HMAC —
+  // the TPM computes cpHash over the marshalled (encrypted) parameters.
+  // Requires CmdAuthValue (the CFB extraKey), so it runs after
+  // PblTpmSetupSessionAuth.
+  if (PblTpmCommandSupportsDecrypt (CommandCode) && ParamsSize >= 2) {
+    Status = PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
+  }
+
   UINT8  HandleName[PBL_NV_NAME_MAX];
   UINT8  HandleNameSize;
   UINTN  NamesSize = 0;
@@ -732,18 +752,7 @@ PblTpmFillCommandHmac (
     CopyMem (HPtr, HandleName, HandleNameSize);
     HPtr += HandleNameSize;
   }
-  CopyMem (HPtr, ParamsStart, ParamsSize);  // params
-
-  // D-206: Set includeAuth + the authorized entity's authValue on the session.
-  // Session 0 authorizes the first handle (the authHandle). For a session bound
-  // to that entity whose Name is unchanged, the HMAC key is sessionKey alone.
-  if (mCurrentCmdHandleCount > 0) {
-    PBL_TPM_SESSION *Session = PblTpmGetSession ();
-    if (Session != NULL) {
-      UINT32 AssocHandle = SwapBytes32 (*(UINT32 *)(CommandBuffer + 10));
-      PblTpmSetupSessionAuth (Session, AssocHandle);
-    }
-  }
+  CopyMem (HPtr, ParamsStart, ParamsSize);  // params (encrypted if decrypt attr set)
 
   // Compute pHash-based HMAC
   Status = PblTpmComputeCommandHmacEx (CommandCode, HashInput, HashInputSize, Hmac);
@@ -1161,7 +1170,6 @@ PblTpmNvDefineSpace (
   UINT32 DefHandles[] = { NvAuthHierarchy };
   UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (
                  CmdBuf, sizeof (CmdBuf), TPM_CC_NV_DefineSpace, 1, DefHandles);
-  UINT8 *ParamsStart = Ptr;
 
   // D-206: TPM2_NV_DefineSpace wire parameter order (per NV_DefineSpace_In):
   //   1. TPM2B_AUTH        auth        (the index auth value)
@@ -1226,15 +1234,9 @@ PblTpmNvDefineSpace (
   *(UINT16 *)Ptr = SwapBytes16 (DataSize);  // dataSize
   Ptr += 2;
 
-  UINTN ParamsSize = (UINTN)(Ptr - ParamsStart);
-
   // Fill HMAC into auth area (over plaintext params, before encryption)
   PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
-  // Encrypt command parameters if HMAC session is active
-  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
-    PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
-  }
 
   PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
@@ -1415,20 +1417,13 @@ PblTpmReadLockState (
   // NV_Read_In wire order: size (UINT16) then offset (UINT16).
   UINT32 NvHandles[] = { PBL_NV_LOCK_STATE, PBL_NV_LOCK_STATE };
   UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read, 2, NvHandles);
-  UINT8 *ParamsStart = Ptr;  // Save start of parameters for encryption
   *(UINT16 *)Ptr = SwapBytes16 (PBL_LOCK_STATE_SIZE);  // size
   Ptr += 2;
   *(UINT16 *)Ptr = SwapBytes16 (0);   // offset
   Ptr += 2;
-  UINTN ParamsSize = (UINTN)(Ptr - ParamsStart);
-
   // D-102: Fill HMAC into auth area (over plaintext params, before encryption)
   PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
-  // D-102: Encrypt command parameters if HMAC session is active
-  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
-    PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
-  }
 
   PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
@@ -1510,19 +1505,13 @@ PblTpmReadPolicyVersion (
   // NV_Read_In wire order: size (UINT16) then offset (UINT16).
   UINT32 PvHandles[] = { PBL_NV_POLICY_VERSION, PBL_NV_POLICY_VERSION };
   UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read, 2, PvHandles);
-  UINT8 *ParamsStart = Ptr;
   *(UINT16 *)Ptr = SwapBytes16 (8);   // size (uint64)
   Ptr += 2;
   *(UINT16 *)Ptr = SwapBytes16 (0);   // offset
   Ptr += 2;
-  UINTN ParamsSize = (UINTN)(Ptr - ParamsStart);
-
-  // D-102: Fill HMAC into auth area (over plaintext params, before encryption)
+  // D-102: Fill HMAC into auth area (parameter encryption, when enabled,
+  // happens inside FillCommandHmac before cpHash).
   PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
-
-  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
-    PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
-  }
 
   PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
@@ -1567,6 +1556,47 @@ PblTpmReadPolicyVersion (
   return EFI_SUCCESS;
 }
 
+/** Roll mSession.NonceTpm from a TPM_ST_SESSIONS response that carries no
+  parameters (NV_Write, NV_Increment).
+
+  The TPM returns a fresh nonceTPM in every session response; the next
+  command's HMAC must use it. These callers skip PblTpmParseSessionResponse
+  because they have no response params to consume — this helper updates
+  just the nonce so a subsequent NV-session command does not compute its
+  HMAC with a stale nonceTPM (which would fail with TPM_RC_BAD_AUTH).
+
+  Response layout: header(10) + parameterSize(4) + params(parameterSize)
+  + nonceTPM TPM2B + attributes(1) + hmac TPM2B.
+
+  @param RespBuf   Response buffer.
+  @param RespSize  Response size.
+**/
+STATIC
+VOID
+PblTpmRollNonceFromSessionResponse (
+  IN UINT8   *RespBuf,
+  IN UINT32  RespSize
+  )
+{
+  UINT32 ParamSize;
+  UINT8  *NoncePtr;
+  UINT16 NonceSize;
+
+  if (!PblTpmIsSessionActive () || RespBuf == NULL || RespSize < 16) {
+    return;
+  }
+  ParamSize = SwapBytes32 (*(UINT32 *)(RespBuf + 10));
+  if (14 + ParamSize + 2 > RespSize) {
+    return;
+  }
+  NoncePtr  = RespBuf + 14 + ParamSize;
+  NonceSize = SwapBytes16 (*(UINT16 *)NoncePtr);
+  if ((UINT32)(NoncePtr + 2 - RespBuf) + NonceSize > RespSize) {
+    return;
+  }
+  PblTpmUpdateNonceTpm (NoncePtr + 2, NonceSize);
+}
+
 // ============================================================================
 // C2 §5.3: Increment policy version counter
 // ============================================================================
@@ -1607,6 +1637,8 @@ PblTpmIncrementPolicyVersion (
   if (!EFI_ERROR (Status)) {
     // D-206: First increment sets TPMA_NV_WRITTEN — keep the Name cache current.
     PblTpmNvMarkWritten (PBL_NV_POLICY_VERSION);
+    // Roll nonceTPM so a subsequent session command uses the fresh nonce.
+    PblTpmRollNonceFromSessionResponse (RespBuf, RespSize);
   }
   return Status;
 }
@@ -1640,7 +1672,6 @@ PblTpmWriteLockState (
   // data being written) are encrypted with AES-256-CFB before sending.
   UINT32 WriteHandles[] = { PBL_NV_LOCK_STATE, PBL_NV_LOCK_STATE };
   UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Write, 2, WriteHandles);
-  UINT8 *ParamsStart = Ptr;  // Save start of parameters for encryption
   // TPM2B_NV_BUFFER: 2-byte size + data
   *(UINT16 *)Ptr = SwapBytes16 (PBL_LOCK_STATE_SIZE);
   Ptr += 2;
@@ -1649,15 +1680,9 @@ PblTpmWriteLockState (
   // offset
   *(UINT16 *)Ptr = SwapBytes16 (0);
   Ptr += 2;
-  UINTN ParamsSize = (UINTN)(Ptr - ParamsStart);
-
   // D-102: Fill HMAC into auth area (over plaintext params, before encryption)
   PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
-  // D-102: Encrypt command parameters if HMAC session is active
-  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 && PblTpmCommandSupportsDecrypt (mCurrentCmdCode)) {
-    PblTpmEncryptCommandParams (ParamsStart, ParamsSize);
-  }
 
   PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
@@ -1672,6 +1697,8 @@ PblTpmWriteLockState (
     // the cached attributes so cpHash and the bound-session includeAuth
     // decision use the post-write Name.
     PblTpmNvMarkWritten (PBL_NV_LOCK_STATE);
+    // Roll nonceTPM so a subsequent session command uses the fresh nonce.
+    PblTpmRollNonceFromSessionResponse (RespBuf, RespSize);
   }
   return Status;
 }
@@ -1813,7 +1840,10 @@ PblTpmExtendPcr (
     Ptr += 2;
     ZeroMem (Ptr, 32);
     Ptr += 32;
-    *Ptr = PblTpmSessionAttrsForCommand (TPM_CC_PCR_Extend);
+    // PCR session has an empty sessionKey — continueSession only. Parameter
+    // encryption (decrypt attr) is NV-session-only; a decrypt attr here would
+    // make the TPM CFB-decrypt the digest list with an empty sessionValue.
+    *Ptr = PBL_SESSION_CONTINUE;
     Ptr += 1;
     *(UINT16 *)Ptr = SwapBytes16 (PcrHmacSize);
     Ptr += 2;

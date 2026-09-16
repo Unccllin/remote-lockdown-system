@@ -655,17 +655,93 @@ PblTpmUpdatePcrNonceTpm (
   return EFI_SUCCESS;
 }
 
-/** Encrypt command parameters using AES-256-CFB with the session key.
+/** Derive the AES-256 key + IV for session parameter encryption (CFB mode).
 
-  TPM 2.0 parameter encryption uses AES-256-CFB with IV=0. Only the
-  parameters after the handles area are encrypted.
+  Per TPM 2.0 Part 1 (session parameter encryption) and libtpms
+  ParmDecryptSym/ParmEncryptSym:
 
-  @param  Data      Data to encrypt (in-place).
-  @param  DataSize  Size of data.
+    symParmString = KDFa(hashAlg, sessionKey || extraKey, "CFB",
+                         nonceNewer, nonceOlder, keyBits + ivBits)
 
-  @retval EFI_SUCCESS       Data encrypted.
-  @retval EFI_NOT_STARTED   No active session.
-  @retval EFI_DEVICE_ERROR  AES operation failed.
+  - extraKey = the authValue of the entity the session authorizes. Unlike
+    the HMAC includeAuth rule, extraKey is appended whenever the session
+    is associated with a handle — even when it is the bound entity.
+  - Command direction (host encrypts, TPM decrypts — "decrypt" attr):
+    nonceNewer = nonceCaller, nonceOlder = nonceTPM.
+  - Response direction (TPM encrypts, host decrypts — "encrypt" attr):
+    nonceNewer = nonceTPM (the fresh one in the response auth area),
+    nonceOlder = nonceCaller.
+  - key = symParmString[0..31], iv = symParmString[32..47] (NOT IV=0).
+
+  @param  Session           The session state.
+  @param  CommandDirection  TRUE = encrypt command param; FALSE = decrypt response param.
+  @param  Key               Output 32-byte AES-256 key.
+  @param  Iv                Output 16-byte IV.
+
+  @retval TRUE   Derived.
+  @retval FALSE  Session inactive or KDFa failed.
+**/
+STATIC
+BOOLEAN
+PblTpmSessionCfbKeyIv (
+  IN  PBL_TPM_SESSION *Session,
+  IN  BOOLEAN          CommandDirection,
+  OUT UINT8            Key[32],
+  OUT UINT8            Iv[AES_BLOCK_SIZE]
+  )
+{
+  UINT8 KeyBuf[64];
+  UINTN KeySize;
+  UINT8 SymParmString[48];
+
+  if (Session == NULL || !Session->Active || Session->SessionKeySize == 0) {
+    return FALSE;
+  }
+
+  // extraKey = authorized entity authValue — always appended for an
+  // authorization session, regardless of bound-entity status.
+  KeySize = Session->SessionKeySize + Session->CmdAuthValueSize;
+  if (KeySize > sizeof (KeyBuf)) {
+    return FALSE;
+  }
+  CopyMem (KeyBuf, Session->SessionKey, Session->SessionKeySize);
+  CopyMem (KeyBuf + Session->SessionKeySize,
+           Session->CmdAuthValue, Session->CmdAuthValueSize);
+
+  if (CommandDirection) {
+    if (!PblKDFa (KeyBuf, KeySize, "CFB",
+                  Session->NonceCaller, 32, Session->NonceTpm, 32,
+                  384, SymParmString, sizeof (SymParmString))) {
+      return FALSE;
+    }
+  } else {
+    if (!PblKDFa (KeyBuf, KeySize, "CFB",
+                  Session->NonceTpm, 32, Session->NonceCaller, 32,
+                  384, SymParmString, sizeof (SymParmString))) {
+      return FALSE;
+    }
+  }
+
+  CopyMem (Key, SymParmString, 32);
+  CopyMem (Iv, SymParmString + 32, AES_BLOCK_SIZE);
+  return TRUE;
+}
+
+/** Encrypt the first command parameter using AES-256-CFB.
+
+  Per TPM 2.0 Part 1, only the FIRST parameter is encrypted, and only when
+  it is a TPM2B: the 2-byte size field stays plaintext (the TPM needs it
+  for unmarshalling) and the buffer contents are CFB-encrypted. This must
+  run BEFORE the command HMAC — cpHash covers the marshalled (encrypted)
+  parameters.
+
+  @param  Data      Start of the parameter area (first param's TPM2B).
+  @param  DataSize  Size of the parameter area.
+
+  @retval EFI_SUCCESS           First param encrypted (or nothing to encrypt).
+  @retval EFI_NOT_STARTED       No active session.
+  @retval EFI_INVALID_PARAMETER Malformed parameter area.
+  @retval EFI_DEVICE_ERROR      Crypto failed.
 **/
 EFI_STATUS
 PblTpmEncryptCommandParams (
@@ -673,34 +749,48 @@ PblTpmEncryptCommandParams (
   IN     UINTN  DataSize
   )
 {
-  UINT8 ZeroIv[AES_BLOCK_SIZE];
+  UINT8 Key[32];
+  UINT8 Iv[AES_BLOCK_SIZE];
+  UINTN CipherSize;
 
   if (!mSession.Active) {
     return EFI_NOT_STARTED;
   }
-  if (Data == NULL || DataSize == 0) {
+  if (Data == NULL || DataSize < 2) {
     return EFI_INVALID_PARAMETER;
   }
 
-  ZeroMem (ZeroIv, AES_BLOCK_SIZE);
-  if (!PblAesCfb256Process (mSession.SessionKey, ZeroIv, Data, DataSize, Data)) {
+  CipherSize = SwapBytes16 (*(UINT16 *)Data);
+  if (CipherSize == 0) {
+    return EFI_SUCCESS;  // empty TPM2B — nothing to encrypt
+  }
+  if (CipherSize + 2 > DataSize) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  if (!PblTpmSessionCfbKeyIv (&mSession, TRUE, Key, Iv)) {
+    return EFI_DEVICE_ERROR;
+  }
+  if (!PblAesCfb256Process (Key, Iv, Data + 2, CipherSize, Data + 2)) {
     return EFI_DEVICE_ERROR;
   }
 
   return EFI_SUCCESS;
 }
 
-/** Decrypt response parameters using AES-256-CFB with the session key.
+/** Decrypt the first response parameter using AES-256-CFB.
 
-  Same as encrypt — CFB is symmetric. The caller passes the encrypted
-  response parameters and gets back the decrypted ones.
+  Mirror of PblTpmEncryptCommandParams for the response direction — the
+  sessionValue nonces are reversed (nonceTPM first). Must be called after
+  the response auth area is parsed so NonceTpm holds the fresh value.
 
-  @param  Data      Encrypted data (in-place, will be decrypted).
-  @param  DataSize  Size of data.
+  @param  Data      Start of the response parameter area (TPM2B).
+  @param  DataSize  Size of the parameter area.
 
-  @retval EFI_SUCCESS       Data decrypted.
-  @retval EFI_NOT_STARTED   No active session.
-  @retval EFI_DEVICE_ERROR  AES operation failed.
+  @retval EFI_SUCCESS           First param decrypted (or nothing to decrypt).
+  @retval EFI_NOT_STARTED       No active session.
+  @retval EFI_INVALID_PARAMETER Malformed parameter area.
+  @retval EFI_DEVICE_ERROR      Crypto failed.
 **/
 EFI_STATUS
 PblTpmDecryptResponseParams (
@@ -708,8 +798,33 @@ PblTpmDecryptResponseParams (
   IN     UINTN  DataSize
   )
 {
-  // CFB is symmetric — same operation for encrypt and decrypt
-  return PblTpmEncryptCommandParams (Data, DataSize);
+  UINT8 Key[32];
+  UINT8 Iv[AES_BLOCK_SIZE];
+  UINTN CipherSize;
+
+  if (!mSession.Active) {
+    return EFI_NOT_STARTED;
+  }
+  if (Data == NULL || DataSize < 2) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  CipherSize = SwapBytes16 (*(UINT16 *)Data);
+  if (CipherSize == 0) {
+    return EFI_SUCCESS;
+  }
+  if (CipherSize + 2 > DataSize) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  if (!PblTpmSessionCfbKeyIv (&mSession, FALSE, Key, Iv)) {
+    return EFI_DEVICE_ERROR;
+  }
+  if (!PblAesCfb256Process (Key, Iv, Data + 2, CipherSize, Data + 2)) {
+    return EFI_DEVICE_ERROR;
+  }
+
+  return EFI_SUCCESS;
 }
 
 /** Compute the HMAC-SHA256 for a TPM2 command in the session.

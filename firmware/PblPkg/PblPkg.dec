@@ -71,11 +71,12 @@
   # library leaves platform auth empty, so this works under swtpm.
   gPblPkgTokenSpaceGuid.PcdPblTpmUsePlatformHierarchy|TRUE|BOOLEAN|0x00000009
 
-  ## D-215: AES-256-CFB parameter encryption is not yet fully implemented
-  ## (CFB key/IV derivation from sessionValue requires KDFa CFB mode).
-  ## When FALSE, PBL uses HMAC-only sessions: the session is still bound
-  ## to the NV index with KDFa, but parameters are sent/received plaintext.
-  gPblPkgTokenSpaceGuid.PcdPblTpmUseParameterEncryption|FALSE|BOOLEAN|0x0000000A
+  ## C2 REQ-05: AES-256-CFB parameter encryption for HMAC sessions.
+  ## When TRUE, the first TPM2B command parameter (decrypt attr) and the
+  ## first TPM2B response parameter (encrypt attr) are AES-256-CFB encrypted
+  ## using a key+IV derived by KDFa from sessionKey || authValue(entity).
+  ## Wire-verified against swtpm/libtpms 0.9.3 (session 110).
+  gPblPkgTokenSpaceGuid.PcdPblTpmUseParameterEncryption|TRUE|BOOLEAN|0x0000000A
 
   ## D-215: NV index auth value (PBL auth value for the lock-state index).
   ## This value is provisioned at enrolment; the development default is a

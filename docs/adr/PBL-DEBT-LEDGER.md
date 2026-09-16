@@ -101,6 +101,27 @@
     TPM accepts platform-created indices. Custom OVMF with
     `PeiDxeTpmPlatformHierarchyLibNull` keeps `platformAuth` empty under
     swtpm, allowing the platform-hierarchy path to be exercised end-to-end.
+  - **Session 110 — AES-256-CFB parameter encryption (C2 REQ-05) fully
+    implemented and enabled** (`PcdPblTpmUseParameterEncryption=TRUE`):
+    - sessionValue = `sessionKey || authValue(authorizedEntity)` — the
+      entity auth is appended unconditionally (unlike the HMAC includeAuth
+      rule), matching libtpms `CryptParameterDecryption/Encryption`.
+    - Key+IV = `KDFa(SHA-256, sessionValue, "CFB", nonceNewer, nonceOlder,
+      384)` → AES-256 key (32B) + IV (16B). Command direction uses
+      (nonceCaller, nonceTPM); response direction uses the fresh nonceTPM
+      then nonceCaller.
+    - Only the first TPM2B parameter's buffer is encrypted (size field
+      stays plaintext); cpHash/HMAC computed over the encrypted params —
+      encryption moved inside `PblTpmFillCommandHmac` before the hash.
+    - PCR session (empty sessionKey) stays continueSession-only.
+    - `PblTpmRollNonceFromSessionResponse` rolls nonceTPM after
+      NV_Write/NV_Increment (which carry no response params).
+    - Wire-verified vs swtpm (libtpms 0.9.3): NV_Write cmd attrs=0x21
+      (continue|decrypt) with 64B ciphertext param; NV_Read attrs=0x41
+      (continue|encrypt) with ciphertext response decrypted correctly
+      ("Using cached verdict" on boot 2). Artifact: swtpm level-20 log
+      capture + `ci-harness-persistence.sh` 16/0 + `ci-harness-docker.sh`
+      14/0.
 - **Close criteria**: Runtime test with QEMU+swtpm. **MET**: Docker
   `ci-harness-docker.sh` now shows `[OK] NV indices provisioned`,
   `[OK] HMAC session established (AES-256-CFB)`, and `[OK] PCR HMAC session
