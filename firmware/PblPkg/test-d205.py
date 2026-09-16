@@ -270,12 +270,29 @@ def generate_policy(output_path, lock_service_uri="http://10.0.2.2:8080/v1/verdi
         policy_map[58] = bootmgr_hash
     policy_payload = cbor2.dumps(policy_map)
 
-    # Wrap in COSE_Sign1 with a dummy signature (policy signing key not provisioned)
-    # The firmware's PblVerifyPolicySignature returns EFI_UNSUPPORTED in dev mode.
-    protected_header = build_protected_header(COSE_ALG_ES256, kid)
-    dummy_sig = b"\x00" * 64
-
-    policy_cose = cbor2.dumps([protected_header, {}, policy_payload, dummy_sig])
+    # D-215: Sign the policy blob with the policy signing key when it is
+    # provisioned (.pbl_policy_signing_key, base64 PKCS8 — produced by
+    # gen-policy-rot.py). With a RoT-provisioned firmware build the dummy
+    # signature would trigger the fail-closed BLOCK path; with a dev build
+    # PblVerifyPolicySignature returns EFI_UNSUPPORTED and either works.
+    policy_key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "..", "..", ".pbl_policy_signing_key")
+    if os.path.exists(policy_key_file):
+        import base64
+        with open(policy_key_file, "rb") as f:
+            policy_key = serialization.load_der_private_key(
+                base64.b64decode(f.read().strip()), password=None)
+        policy_spki = policy_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        policy_kid = hashlib.sha256(policy_spki).digest()
+        policy_cose = encode_cose_sign1(policy_payload, policy_key, policy_kid)
+        print(f"  policy signature: ES256 by policy key (kid {policy_kid.hex()[:16]}...)")
+    else:
+        # Dev mode: dummy signature — firmware returns EFI_UNSUPPORTED.
+        protected_header = build_protected_header(COSE_ALG_ES256, kid)
+        policy_cose = cbor2.dumps([protected_header, {}, policy_payload, b"\x00" * 64])
 
     # Write to file
     os.makedirs(os.path.dirname(output_path), exist_ok=True)

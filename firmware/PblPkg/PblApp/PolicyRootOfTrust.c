@@ -28,24 +28,35 @@
 // Pinned policy signing key (root of trust)
 // ============================================================================
 
-// D-205: The policy signing key SPKI + kid are provisioned at build time
-// by scripts/generate-policy-root-of-trust.js, which emits
+// D-205/D-215: The policy signing key SPKI + kid + cert are provisioned at
+// build time by firmware/PblPkg/gen-policy-rot.py, which emits
 // PolicyRootOfTrust.generated.h. When the header exists, it defines:
-//   #define PBL_POLICY_SIGNING_KEY_SPKI_SIZE  <n>
-//   static CONST UINT8 gPblPolicySigningKeySpki[<n>] = { ... };
-//   static CONST UINT8 gPblPolicySigningKeyKid[32] = { ... };
+//   static CONST UINT8 gPblPolicySigningKeySpki[<n>];
+//   static CONST UINTN gPblPolicySigningKeySpkiSize;
+//   static CONST UINT8 gPblPolicySigningKeyKid[32];
+//   static CONST UINT8 gPblPolicySigningKeyCert[<m>];
+//   static CONST UINTN gPblPolicySigningKeyCertSize;
 //
 // When the header does NOT exist (development without provisioning),
 // the SPKI size is 0 and PblVerifyPolicySignature() returns EFI_UNSUPPORTED.
 //
+// NOTE: the include is gated by __has_include — the header's own include
+// guard macro cannot be used here (it is only defined inside the header,
+// so an #ifdef on it would never fire and the generated file would be
+// dead code even when present).
+//
 // To provision:
-//   node scripts/generate-policy-root-of-trust.js
-//   export PBL_POLICY_SIGNING_KEY=$(cat .pbl_policy_signing_key)
+//   python3 firmware/PblPkg/gen-policy-rot.py --emit-header
 //   (rebuild firmware)
 
-#ifdef PBL_POLICY_ROOT_OF_TRUST_GENERATED_H_
-#include <PolicyRootOfTrust.generated.h>
-#else
+#if defined(__has_include)
+  #if __has_include("PolicyRootOfTrust.generated.h")
+    #include "PolicyRootOfTrust.generated.h"
+    #define PBL_POLICY_ROT_PROVISIONED  1
+  #endif
+#endif
+
+#if !defined(PBL_POLICY_ROT_PROVISIONED)
 // Development mode: root of trust not provisioned
 static CONST UINT8 gPblPolicySigningKeySpki[1] = { 0x00 };
 static CONST UINTN gPblPolicySigningKeySpkiSize = 0;
