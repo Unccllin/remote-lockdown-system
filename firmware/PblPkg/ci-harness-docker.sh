@@ -242,6 +242,7 @@ check "Decision action step" "\[8/8\] Decision:"
 check "NV indices provisioned" "\[OK\] NV indices provisioned"
 check "HMAC session established" "\[OK\] HMAC session established \(bound to lock-state NV\)"
 check "Self-image measured (D-217)" "PCR 13 \(self-image\) extended"
+check "Loaded image digest computed (D-213)" "Loaded images: [0-9]+ \(digest [0-9A-Fa-f]"
 check "Lock screen displayed" "THIS DEVICE IS LOCKED"
 
 # D-217: The self-image hash printed in the serial log must equal the

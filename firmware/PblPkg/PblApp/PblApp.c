@@ -324,6 +324,13 @@ PblAppEntryPoint (
     Print (L"  [WARN] Platform state collection: %r\n", Status);
     // Continue — missing state is DEGRADED, not fatal
   }
+  // D-213: log the loaded-image enumeration result (count + aggregate digest)
+  Print (L"  [INFO] Loaded images: %u (digest %02x%02x%02x%02x%02x%02x%02x%02x...)\n",
+         PlatformState.LoadedImageCount,
+         PlatformState.LoadedImageDigest[0], PlatformState.LoadedImageDigest[1],
+         PlatformState.LoadedImageDigest[2], PlatformState.LoadedImageDigest[3],
+         PlatformState.LoadedImageDigest[4], PlatformState.LoadedImageDigest[5],
+         PlatformState.LoadedImageDigest[6], PlatformState.LoadedImageDigest[7]);
 
   //
   // Step 2: Parse + verify policy blob (C4, REQ-11)

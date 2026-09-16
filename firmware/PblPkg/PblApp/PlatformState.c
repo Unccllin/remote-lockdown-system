@@ -914,12 +914,12 @@ PblCollectPlatformState (
   // flag anomalies. This is a detection signal, not a block — the server
   // decides based on the expected baseline for this device model.
   //
-  // LIMITATION (D-213): The count alone is a weak signal. It doesn't tell
-  // the server WHICH images are loaded, and the baseline varies by
-  // firmware/driver updates. A more useful implementation would hash each
-  // image's device path or record image names. The count is kept because
-  // it's non-zero cost and any change to the count changes the digest,
-  // which the server can track over time.
+  // D-213: In addition to the count, compute LoadedImageDigest — an
+  // aggregate over per-image identity hashes, each covering
+  // DevicePath(image->DeviceHandle) || image->FilePath. Sorted before
+  // aggregation so the digest is independent of enumeration order. The
+  // server can now distinguish "same count, different image set" from a
+  // baseline shift.
   {
     EFI_HANDLE *Handles = NULL;
     UINTN       HandleCount = 0;
@@ -930,11 +930,73 @@ PblCollectPlatformState (
       &HandleCount,
       &Handles
     );
-    if (!EFI_ERROR (Status) && Handles != NULL) {
+    if (!EFI_ERROR (Status) && Handles != NULL && HandleCount > 0) {
       State->LoadedImageCount = (UINT32)HandleCount;
+
+      UINT8 (*Hashes)[32] = AllocatePool (HandleCount * 32);
+      if (Hashes != NULL) {
+        for (UINTN i = 0; i < HandleCount; i++) {
+          EFI_LOADED_IMAGE_PROTOCOL   *Loaded  = NULL;
+          EFI_DEVICE_PATH_PROTOCOL    *DevPath = NULL;
+          UINTN DevPathSize  = 0;
+          UINTN FilePathSize = 0;
+
+          Status = gBS->HandleProtocol (
+            Handles[i], &gEfiLoadedImageProtocolGuid, (VOID **)&Loaded
+          );
+          if (EFI_ERROR (Status) || Loaded == NULL) {
+            ZeroMem (Hashes[i], 32);
+            continue;
+          }
+          if (Loaded->DeviceHandle != NULL) {
+            gBS->HandleProtocol (
+              Loaded->DeviceHandle, &gEfiDevicePathProtocolGuid, (VOID **)&DevPath
+            );
+          }
+          if (DevPath != NULL) {
+            DevPathSize = GetDevicePathSize (DevPath);
+          }
+          if (Loaded->FilePath != NULL) {
+            FilePathSize = GetDevicePathSize (Loaded->FilePath);
+          }
+
+          UINT8 *Identity = AllocatePool (8 + DevPathSize + FilePathSize);
+          if (Identity == NULL) {
+            ZeroMem (Hashes[i], 32);
+            continue;
+          }
+          *(UINT32 *)Identity       = (UINT32)DevPathSize;
+          *(UINT32 *)(Identity + 4) = (UINT32)FilePathSize;
+          if (DevPathSize > 0) {
+            CopyMem (Identity + 8, DevPath, DevPathSize);
+          }
+          if (FilePathSize > 0) {
+            CopyMem (Identity + 8 + DevPathSize, Loaded->FilePath, FilePathSize);
+          }
+          Sha256HashAll (Identity, 8 + DevPathSize + FilePathSize, Hashes[i]);
+          FreePool (Identity);
+        }
+
+        // Insertion sort the 32-byte hashes for order independence.
+        for (UINTN i = 1; i < HandleCount; i++) {
+          UINT8 Tmp[32];
+          CopyMem (Tmp, Hashes[i], 32);
+          UINTN j = i;
+          while (j > 0 && CompareMem (Hashes[j - 1], Tmp, 32) > 0) {
+            CopyMem (Hashes[j], Hashes[j - 1], 32);
+            j--;
+          }
+          CopyMem (Hashes[j], Tmp, 32);
+        }
+        Sha256HashAll ((CONST UINT8 *)Hashes, HandleCount * 32, State->LoadedImageDigest);
+        FreePool (Hashes);
+      } else {
+        ZeroMem (State->LoadedImageDigest, 32);
+      }
       gBS->FreePool (Handles);
     } else {
       State->LoadedImageCount = 0;
+      ZeroMem (State->LoadedImageDigest, 32);
     }
   }
 

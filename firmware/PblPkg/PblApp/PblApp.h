@@ -288,6 +288,12 @@ typedef struct {
   // itself as a DXE driver before PBL ran. The count is included in the
   // platform_state_digest so the server can flag anomalies.
   UINT32    LoadedImageCount;
+  // D-213: Aggregate hash identifying WHICH images are loaded — SHA-256 over
+  // the sorted set of per-image hashes, where each per-image hash covers
+  // DevicePath(image->DeviceHandle) || image->FilePath. Sorting makes the
+  // digest independent of LocateHandleBuffer enumeration order; the count
+  // alone could not distinguish a changed image set from a baseline shift.
+  UINT8     LoadedImageDigest[32];
 
   // C2 §1.3: device_id
   UINT8     DeviceId[32];     // SHA-256(AK public Area)
