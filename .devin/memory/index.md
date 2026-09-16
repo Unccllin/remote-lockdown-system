@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-09-16 11:31:55
-Active memories: 415 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-09-16 16:07:07
+Active memories: 425 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -35,14 +35,24 @@ Active memories: 415 | Superseded: 0 | Decayed: 20
 | m-105 | MISTAKE: None — this was a verification session wi |  | 0.55 | 2026-09-15 | 0.272 | 0 |  |
 | m-432 | Binarly UEFI 2025: BYOVD taxonomy (5 classes, 7,15 |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
 | m-435 | MISTAKE: Initial ci-harness-docker.sh used stock O |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
+| m-438 | TPMA_NV standard layout: read bits 16-19, PLATFORM |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
+| m-444 | SECURE_BOOT_ENABLE=FALSE OVMF silently accepts eve |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
 | m-429 | Haruyama REcon 2022: SMM rootkits can MitM firmwar |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-441 | MISTAKE: mistake: assumed the stale JS generator o |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
 | m-431 | UEFI Forum plugfests: threat classes (buffer overf |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
 | m-428 | Korchok Wakulich REcon 2024 GOP Complex: LogoFAIL  |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-439 | MISTAKE: mistake: hashed parameterSize into rpHash |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
 | m-427 | Bulygin Black Hat 2013/2017: bypassing Windows 8 S |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
 | m-425 | ThunderStrike 2: first Mac firmware worm; Speed Ra |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-442 | On-disk PE bytes are deterministic (D-212 failed b |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
 | m-426 | Haukli Black Hat 2014: BIOS emulation, function po |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-443 | MISTAKE: mistake: first harness run appeared to pa |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
 | m-430 | CanSecWest 2014/2017: history of UEFI bootkits, CH |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
 | m-433 | PBL relevance: SpiProtections/S3/MOR/DMA checks, b |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-445 | MISTAKE: mistake: first tamper flipped a byte in . |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
+| m-440 | PolicyRootOfTrust.generated.h existed but was dead |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
+| m-436 | A two-boot CI harness is the only reliable way to  |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
+| m-437 | MISTAKE: Initial ci-harness-persistence.sh reused  |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
 | m-434 | Custom OVMF with PeiDxeTpmPlatformHierarchyLibNull |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
 | m-424 | Matrosov Black Hat Asia 2017 / OffensiveCon 2018:  |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
 | m-394 | There is no standalone TPM2_Seal; sealing is Creat |  | 0.50 | 2026-09-15 | 0.247 | 0 | PBL TPM behavior, PCR 12/13, N |

@@ -1188,3 +1188,53 @@ Resolve the four EDK II/PBL source gaps (package-resolution order, Tcg2 protocol
 ---
 
 ---
+
+---
+
+## Session 109b — 2026-09-16 — Secure Boot rejection of tampered PblApp.efi proven in emulation
+
+**RULE-ZERO — Understanding logged before code changes**
+
+**Read:** `test-d215-harness.sh` (boot_scenario pattern), `PBL-SECURE-BOOT-DEPLOYMENT.md` §2.6 (unverified list), OVMF build flags in `build-pbl.sh`, virt-firmware `peutils.pesign` (`pe_authenticode_hash`, `pe_check_hash`), `virt-fw-vars` CLI options.
+
+**Finding:** The existing OVMF was built with `SECURE_BOOT_ENABLE=FALSE` — `SecurityStubDxe` was the non-enforcing stub, so Secure Boot never actually rejected anything in our QEMU loop. Rebuilt with `-D SECURE_BOOT_ENABLE=TRUE` (snakeoil PK/KEK material already present in the FV dir). `virt-fw-vars` can create a vars store with generated PK + arbitrary `db` hash entries + `SecureBootEnable=ON`, and `pe_authenticode_hash` computes the exact digest `DxeImageVerificationLib` checks — no sbsigntool needed for a hash-enrollment test.
+
+**What changed**
+
+- Rebuilt OVMF with `SECURE_BOOT_ENABLE=TRUE` (kept in `Build/OvmfX64`; default `OVMF_VARS.fd` has no PK → SetupMode → unsigned binaries still boot, so existing harnesses unaffected — verified 14/0).
+- `build-pbl.sh` — OVMF build now carries `-D SECURE_BOOT_ENABLE=TRUE`.
+- `firmware/PblPkg/test-sb-harness.sh` (new) — host side computes the authenticode hash, builds `OVMF_VARS-sb.fd` via virt-fw-vars, creates a tampered PblApp.efi (1 byte appended past last section); container boots 3 scenarios.
+- `PBL-SECURE-BOOT-DEPLOYMENT.md` §2.6 — emulation proof recorded.
+- `PBL-DEBT-LEDGER.md` — D-217 entry updated with the emulation evidence.
+
+**Test results — 8 PASS / 0 FAIL**
+
+- `allowed`: enrolled-hash binary boots under Secure Boot; banner, decision, self-image SHA-256 printed.
+- `tampered-sb`: serial shows `BdsDxe: failed to load Boot0002 ... Access Denied -- rejected probably by Secure Boot`; NO banner, NO decision, NO lock screen.
+- `tampered-nosb` (control): same tampered binary boots under plain vars — rejection is Secure Boot, not corruption.
+
+**Fog cleared this session:**
+- `SECURE_BOOT_ENABLE=FALSE` OVMF silently accepts everything — "Secure Boot tested" claims require the enforcing build; check `DxeImageVerificationLib` in the FV, not just the flag's intent.
+- Authenticode hash ≠ file SHA-256: it excludes the checksum field, security-directory entry, and cert table. `pe_authenticode_hash` from virt-firmware computes it correctly.
+- A byte flip inside `.reloc` is NOT a clean tamper: the loader applies relocations and fails with `Unsupported` even without SB. Appending overlay bytes past the last section is covered by the authenticode hash but never mapped — clean tamper.
+- `virt-fw-vars --add-db-hash` + `--enroll-generate` + `--sb` fully provisions PK/db/SecureBootEnable into a raw edk2 varstore file — no in-guest enrollment step needed.
+
+**Fog remaining:**
+- Emulation used a db *hash* entry, not a signed binary — real deployments sign with an enrolled cert (sbsign/pesign) and the signature-verification path differs slightly (cert chain + image hash).
+- OVMF vars are unprotected (no SMM_REQUIRE) — a guest could rewrite vars in emulation; on hardware, SMM-protected var stores matter.
+- Real-hardware Secure Boot rejection still untested (I3).
+
+**Debt items closed:** none newly — strengthens already-closed D-217 with prevention-layer evidence.
+**Debt items still open:** D-213, D-100..D-130, D-200..D-211; AES-CFB parameter encryption (C2 REQ-05).
+
+**Blockers** — none.
+
+**Failure attribution**
+- Layer 2 (context provision): two test-design bugs — (a) `.reloc` byte flip corrupts the load path (learned: relocations are applied from that section), (b) checking for `PCR 13 extended` in a no-swtpm harness. Both fixed in-harness.
+
+**Next session opening**
+- D-213 LoadedImageCount enrichment, or AES-256-CFB parameter encryption (sessionValue KDFa-CFB) for C2 REQ-05.
+
+---
+
+---

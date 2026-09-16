@@ -51,53 +51,49 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 109 — 2026-09-16 — D-217 runtime self-integrity: PCR 13 self-image measurement + Secure Boot checklist
+## Latest session: 109b — 2026-09-16 — Secure Boot rejection of tampered PblApp.efi proven in emulation
 
 **RULE-ZERO — Understanding logged before code changes**
 
-**Read:** `PblApp.c` PCR-extend block (step [7/8]) incl. D-212 revert note, `TpmClient.c` `PblTpmExtendPcr`/`PblTpmReadPcr`, `PBL-C2-TPM-Contract.md` §4 (PCR 12 decision / PCR 13 inputs, high-assurance sealing tier), `Decision.c` REQ-01 (SecureBoot/SetupMode → BLOCK), `PblReadFileFromFs` SimpleFS pattern, `PlatformState.c` LoadedImage enumeration.
+**Read:** `test-d215-harness.sh` (boot_scenario pattern), `PBL-SECURE-BOOT-DEPLOYMENT.md` §2.6 (unverified list), OVMF build flags in `build-pbl.sh`, virt-firmware `peutils.pesign` (`pe_authenticode_hash`, `pe_check_hash`), `virt-fw-vars` CLI options.
 
-**Finding:** D-212 was reverted because hashing the **in-memory** image is non-deterministic (PE ImageBase=0 → DIR64 relocations at a random load address each boot). The on-disk PE file bytes ARE deterministic — hashable via `LoadedImage->DeviceHandle` + `FilePath` media node + SimpleFS. D-217's ledger close criteria allowed "runtime self-integrity that hashes the PE file from disk, or a Secure Boot deployment checklist" — both were delivered since self-measurement alone is detection, not prevention.
+**Finding:** The existing OVMF was built with `SECURE_BOOT_ENABLE=FALSE` — `SecurityStubDxe` was the non-enforcing stub, so Secure Boot never actually rejected anything in our QEMU loop. Rebuilt with `-D SECURE_BOOT_ENABLE=TRUE` (snakeoil PK/KEK material already present in the FV dir). `virt-fw-vars` can create a vars store with generated PK + arbitrary `db` hash entries + `SecureBootEnable=ON`, and `pe_authenticode_hash` computes the exact digest `DxeImageVerificationLib` checks — no sbsigntool needed for a hash-enrollment test.
 
 **What changed**
 
-- `PblApp.c` — new `PblHashSelfImage`: resolves `EFI_LOADED_IMAGE_PROTOCOL` on the image handle, walks `FilePath` device-path nodes for `MEDIA_FILEPATH_DP`, opens the PE via SimpleFS on `DeviceHandle`, SHA-256s the file. Result extended into PCR 13 BEFORE the inputs extend; serial prints `Self-image SHA-256: <hex>`.
-- `ci-harness-docker.sh` / `ci-harness.sh` — new checks: `PCR 13 (self-image) extended` present, and logged hash == `sha256sum(PblApp.efi)` (EDK II `Print %02x` emits uppercase; compare case-folded).
-- `PBL-C2-TPM-Contract.md` §4.1 — three-extend ordering documented (PCR13 self-image, PCR13 inputs, PCR12 decision).
-- `docs/adr/PBL-SECURE-BOOT-DEPLOYMENT.md` (new) — prevention-layer checklist: owner PK/KEK/db enrollment, sbsign, dbx/SBAT/min_svn, platform-hierarchy TPM NV, Boot Guard + SPI protection + firmware-volume placement, hardware-verification gaps.
+- Rebuilt OVMF with `SECURE_BOOT_ENABLE=TRUE` (kept in `Build/OvmfX64`; default `OVMF_VARS.fd` has no PK → SetupMode → unsigned binaries still boot, so existing harnesses unaffected — verified 14/0).
+- `build-pbl.sh` — OVMF build now carries `-D SECURE_BOOT_ENABLE=TRUE`.
+- `firmware/PblPkg/test-sb-harness.sh` (new) — host side computes the authenticode hash, builds `OVMF_VARS-sb.fd` via virt-fw-vars, creates a tampered PblApp.efi (1 byte appended past last section); container boots 3 scenarios.
+- `PBL-SECURE-BOOT-DEPLOYMENT.md` §2.6 — emulation proof recorded.
+- `PBL-DEBT-LEDGER.md` — D-217 entry updated with the emulation evidence.
 
-**Test results**
+**Test results — 8 PASS / 0 FAIL**
 
-- Build: `PblApp.efi` SHA-256 `b9fc20e9...`.
-- `ci-harness-docker.sh`: **14 PASS / 0 FAIL** — logged self-image hash matches `sha256sum` of the booted binary exactly.
-- `ci-harness-persistence.sh` (two boots): **16 PASS / 0 FAIL** — no regression.
-- `make graph-check`: all invariants pass (after adding missing Fog cleared section).
-
-**Debt items closed:**
-- **D-217** — both close criteria met (commit `5a59aa2`, artifact `/tmp/pbl-ci/pbl-serial.log`).
-
-**Debt items still open:**
-- D-213 (LoadedImageCount enrichment), D-100..D-130, D-200..D-211 per `current-state.md`; AES-256-CFB parameter encryption for C2 REQ-05.
+- `allowed`: enrolled-hash binary boots under Secure Boot; banner, decision, self-image SHA-256 printed.
+- `tampered-sb`: serial shows `BdsDxe: failed to load Boot0002 ... Access Denied -- rejected probably by Secure Boot`; NO banner, NO decision, NO lock screen.
+- `tampered-nosb` (control): same tampered binary boots under plain vars — rejection is Secure Boot, not corruption.
 
 **Fog cleared this session:**
-- Why D-212 failed: in-memory PE image has relocations applied at a random base; on-disk file bytes are stable — hashable deterministically.
-- EDK II `Print` with `%02x` emits UPPERCASE hex — harness comparisons must case-fold.
-- Self-measurement is complete for detection: tampered binary → different hash extended; patched binary that skips the code → missing extend. Both change PCR 13.
-- `ci-harness-docker.sh` `set -eo pipefail` kills the script silently on any failing command substitution — needs `|| true` guards on grep pipelines.
+- `SECURE_BOOT_ENABLE=FALSE` OVMF silently accepts everything — "Secure Boot tested" claims require the enforcing build; check `DxeImageVerificationLib` in the FV, not just the flag's intent.
+- Authenticode hash ≠ file SHA-256: it excludes the checksum field, security-directory entry, and cert table. `pe_authenticode_hash` from virt-firmware computes it correctly.
+- A byte flip inside `.reloc` is NOT a clean tamper: the loader applies relocations and fails with `Unsupported` even without SB. Appending overlay bytes past the last section is covered by the authenticode hash but never mapped — clean tamper.
+- `virt-fw-vars --add-db-hash` + `--enroll-generate` + `--sb` fully provisions PK/db/SecureBootEnable into a raw edk2 varstore file — no in-guest enrollment step needed.
 
 **Fog remaining:**
-- Self-image measurement runs AFTER decision evaluation (step [7/8]) — a tampered binary's damage (e.g. forced PASS) happens before detection. Ordering acceptable since detection is via attestation post-boot, but noted.
-- `LoadedImage->FilePath` may be absent for firmware-volume-loaded images — `PblHashSelfImage` returns NOT_FOUND → WARN; FV deployment will need a ROM-volume read path instead.
-- QEMU/swtpm only; real Secure Boot rejection of tampered binary untested (needs signed binary + enrolled keys on hardware or OVMF secure-boot vars).
+- Emulation used a db *hash* entry, not a signed binary — real deployments sign with an enrolled cert (sbsign/pesign) and the signature-verification path differs slightly (cert chain + image hash).
+- OVMF vars are unprotected (no SMM_REQUIRE) — a guest could rewrite vars in emulation; on hardware, SMM-protected var stores matter.
+- Real-hardware Secure Boot rejection still untested (I3).
 
-**Blockers**
-- None.
+**Debt items closed:** none newly — strengthens already-closed D-217 with prevention-layer evidence.
+**Debt items still open:** D-213, D-100..D-130, D-200..D-211; AES-CFB parameter encryption (C2 REQ-05).
+
+**Blockers** — none.
 
 **Failure attribution**
-- Layer 4 (verification feedback): first harness run failed silently — `set -eo pipefail` + failing `grep` in command substitution exited before printing FAIL. Guarded with `|| true`.
+- Layer 2 (context provision): two test-design bugs — (a) `.reloc` byte flip corrupts the load path (learned: relocations are applied from that section), (b) checking for `PCR 13 extended` in a no-swtpm harness. Both fixed in-harness.
 
 **Next session opening**
-- D-213 LoadedImageCount enrichment (hash each image's device path or record names), AES-256-CFB parameter encryption for C2 REQ-05, or OVMF Secure Boot vars test to prove tampered-binary rejection in emulation.
+- D-213 LoadedImageCount enrichment, or AES-256-CFB parameter encryption (sessionValue KDFa-CFB) for C2 REQ-05.
 
 ---
 
