@@ -82,6 +82,12 @@
 **Debt items still open:**
 - D-213 (LoadedImageCount enrichment), D-217 (in-binary hardening bypassable without Secure Boot — the real residual risk; a modified PblApp.efi skips policy verification entirely), D-100..D-130, D-200..D-211 per `current-state.md`.
 
+**Fog cleared this session:**
+- `PolicyRootOfTrust.generated.h` was dead code: `#ifdef PBL_POLICY_ROOT_OF_TRUST_GENERATED_H_` tested a macro defined only inside that header, so the provisioned root of trust never compiled in. `__has_include` fixes it.
+- The verifier needs the X.509 cert (`gPblPolicySigningKeyCert`) for `EcGetPublicKeyFromX509`, not just SPKI+kid — the old JS generator never emitted it; `gen-policy-rot.py` now emits all four (SPKI, kid, cert, sizes).
+- Fail-closed semantics confirmed empirically: invalid policy signature → `EFI_SECURITY_VIOLATION` → `[BLOCK]` before step [3/8], no lock screen, no TPM NV access.
+- swtpm must be restarted per QEMU boot while reusing `--tpmstate` — same lifecycle rule as the persistence harness.
+
 **Fog remaining:**
 - RoT is provisioned from a self-signed dev cert; production provisioning (OEM key ceremony, cert chain, `db` enrollment) is deployment work, not yet designed.
 - Harness uses `__has_include` — supported by GCC/Clang; if another toolchain is used the guard falls back to dev mode silently.
