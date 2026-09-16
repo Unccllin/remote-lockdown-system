@@ -51,49 +51,50 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 109b — 2026-09-16 — Secure Boot rejection of tampered PblApp.efi proven in emulation
+## Latest session: 110 — 2026-09-16 — AES-256-CFB TPM parameter encryption (C2 REQ-05) implemented and enabled
 
 **RULE-ZERO — Understanding logged before code changes**
 
-**Read:** `test-d215-harness.sh` (boot_scenario pattern), `PBL-SECURE-BOOT-DEPLOYMENT.md` §2.6 (unverified list), OVMF build flags in `build-pbl.sh`, virt-firmware `peutils.pesign` (`pe_authenticode_hash`, `pe_check_hash`), `virt-fw-vars` CLI options.
+**Read:** `TpmSession.c` (AES-CFB impl, `PblKDFa`, session state), `TpmClient.c` (`PblTpmSessionAttrsForCommand`, `PblTpmFillCommandHmac`, `PblTpmParseSessionResponse`, NV read/write call sites), libtpms 0.9.3 `SessionProcess.c`/`CryptUtil.c` (`ParmDecryptSym`, `ParmEncryptSym`, `CryptParameterDecryption`, `CryptParameterEncryption`), `PBL-C2-TPM-Contract.md` §3, `PblPkg.dec` PCD.
 
-**Finding:** The existing OVMF was built with `SECURE_BOOT_ENABLE=FALSE` — `SecurityStubDxe` was the non-enforcing stub, so Secure Boot never actually rejected anything in our QEMU loop. Rebuilt with `-D SECURE_BOOT_ENABLE=TRUE` (snakeoil PK/KEK material already present in the FV dir). `virt-fw-vars` can create a vars store with generated PK + arbitrary `db` hash entries + `SecureBootEnable=ON`, and `pe_authenticode_hash` computes the exact digest `DxeImageVerificationLib` checks — no sbsigntool needed for a hash-enrollment test.
+**Finding:** The previous parameter-encryption path used the raw `sessionKey` as the AES key with IV=0 — not TPM-compliant. Per libtpms: sessionValue = `sessionKey || authValue(authorizedEntity)` (extraKey appended unconditionally, unlike the HMAC includeAuth rule); key+IV = `KDFa(SHA-256, sessionValue, "CFB", nonceNewer, nonceOlder, 384)` → AES-256 key(32)‖IV(16). Command direction: (nonceCaller, nonceTPM); response: (fresh nonceTPM, nonceCaller). Only the first TPM2B param's buffer is encrypted; cpHash covers ciphertext, so encryption must precede HMAC. The PCR session has an empty sessionKey and must never claim decrypt.
 
 **What changed**
 
-- Rebuilt OVMF with `SECURE_BOOT_ENABLE=TRUE` (kept in `Build/OvmfX64`; default `OVMF_VARS.fd` has no PK → SetupMode → unsigned binaries still boot, so existing harnesses unaffected — verified 14/0).
-- `build-pbl.sh` — OVMF build now carries `-D SECURE_BOOT_ENABLE=TRUE`.
-- `firmware/PblPkg/test-sb-harness.sh` (new) — host side computes the authenticode hash, builds `OVMF_VARS-sb.fd` via virt-fw-vars, creates a tampered PblApp.efi (1 byte appended past last section); container boots 3 scenarios.
-- `PBL-SECURE-BOOT-DEPLOYMENT.md` §2.6 — emulation proof recorded.
-- `PBL-DEBT-LEDGER.md` — D-217 entry updated with the emulation evidence.
+- `TpmSession.c` — new `PblTpmSessionCfbKeyIv` (sessionValue concat + KDFa "CFB" 384-bit derive, direction-dependent nonce order); `PblTpmEncryptCommandParams`/`PblTpmDecryptResponseParams` rewritten: TPM2B-aware (size field plaintext), KDFa-derived key/IV, no more zero-IV.
+- `TpmClient.c` — `PblTpmFillCommandHmac` now runs `PblTpmSetupSessionAuth` then parameter encryption BEFORE building the cpHash input (nonce refresh → auth-area write → encrypt → HMAC); removed all four post-hoc encrypt call sites; `PblTpmCommandSupportsDecrypt`/`SessionAttrsForCommand` trimmed to the actual NV-session set and gated on non-empty sessionKey; PCR_Extend auth attrs hardcoded to continueSession; new `PblTpmRollNonceFromSessionResponse` rolls nonceTPM after NV_Write/NV_Increment (previously unparsed session responses — latent BAD_AUTH for any following command).
+- `PblPkg.dec` — `PcdPblTpmUseParameterEncryption=TRUE`.
+- `PBL-C2-TPM-Contract.md` §3 implementation note; `PBL-DEBT-LEDGER.md` D-102 progress.
 
-**Test results — 8 PASS / 0 FAIL**
+**Test results**
 
-- `allowed`: enrolled-hash binary boots under Secure Boot; banner, decision, self-image SHA-256 printed.
-- `tampered-sb`: serial shows `BdsDxe: failed to load Boot0002 ... Access Denied -- rejected probably by Secure Boot`; NO banner, NO decision, NO lock screen.
-- `tampered-nosb` (control): same tampered binary boots under plain vars — rejection is Secure Boot, not corruption.
+- Build: `PblApp.efi` SHA-256 `e839ce5534ee4168d576d0b6ce9918ee703d7013990ffe3b1b0f943971590147`; PCD compiled = 1U.
+- `ci-harness-persistence.sh` (two boots, shared swtpm state): **16 PASS / 0 FAIL**.
+- `ci-harness-docker.sh`: **14 PASS / 0 FAIL**.
+- Wire-level proof (swtpm level-20 log, `/tmp/pbl-cfb-host/swtpm{1,2}.log`): NV_Write cmd attrs=`0x21` (continue|decrypt), `data` param = 64B ciphertext (`E1 46 B4…`, plaintext starts `0x50`), rc=0; boot-2 NV_Read attrs=`0x41` (continue|encrypt), response `data` = 64B ciphertext (`A0 43 21 F3…`) decrypted correctly → "Using cached verdict: 1" + magic check passed.
+- Artifact: `/tmp/pbl-ci-persist-host/pbl-persistence-result.txt` + serial logs.
 
 **Fog cleared this session:**
-- `SECURE_BOOT_ENABLE=FALSE` OVMF silently accepts everything — "Secure Boot tested" claims require the enforcing build; check `DxeImageVerificationLib` in the FV, not just the flag's intent.
-- Authenticode hash ≠ file SHA-256: it excludes the checksum field, security-directory entry, and cert table. `pe_authenticode_hash` from virt-firmware computes it correctly.
-- A byte flip inside `.reloc` is NOT a clean tamper: the loader applies relocations and fails with `Unsupported` even without SB. Appending overlay bytes past the last section is covered by the authenticode hash but never mapped — clean tamper.
-- `virt-fw-vars --add-db-hash` + `--enroll-generate` + `--sb` fully provisions PK/db/SecureBootEnable into a raw edk2 varstore file — no in-guest enrollment step needed.
+- CFB extraKey rule differs from HMAC includeAuth: for parameter encryption the entity authValue is appended to sessionKey *even when the session is bound to that entity* (libtpms `CryptParameterDecryption`).
+- cpHash covers encrypted params — the TPM checks HMAC over ciphertext, then decrypts. Encryption after HMAC (previous code) would have produced BAD_AUTH once enabled.
+- Response decryption requires the *new* nonceTPM from the response auth area — `PblTpmParseSessionResponse` updates it before callers decrypt.
+- NV_Write/NV_Increment responses were never parsed — nonceTPM went stale; latent failure for any session command after them. Fixed via `PblTpmRollNonceFromSessionResponse`.
 
 **Fog remaining:**
-- Emulation used a db *hash* entry, not a signed binary — real deployments sign with an enrolled cert (sbsign/pesign) and the signature-verification path differs slightly (cert chain + image hash).
-- OVMF vars are unprotected (no SMM_REQUIRE) — a guest could rewrite vars in emulation; on hardware, SMM-protected var stores matter.
-- Real-hardware Secure Boot rejection still untested (I3).
+- swtpm/libtpms 0.9.3 only — real dTPM parameter-encryption behavior on hardware unverified (I3).
+- NV_DefineSpace/NV_ChangeAuth decrypt paths are code-correct but not exercised at runtime (provisioning uses password sessions before the HMAC session starts).
+- Salted sessions (tpmKey != TPM_RH_NULL) still not used — bus-sniffing defence relies on bound session + param encryption only.
 
-**Debt items closed:** none newly — strengthens already-closed D-217 with prevention-layer evidence.
-**Debt items still open:** D-213, D-100..D-130, D-200..D-211; AES-CFB parameter encryption (C2 REQ-05).
+**Debt items closed:** none new — completes the deferred REQ-05 scope inside already-closed D-102 (commit aa9a0cf, artifacts above).
+**Debt items still open:** D-213, D-100..D-130 (hardware items), D-200..D-211.
 
 **Blockers** — none.
 
 **Failure attribution**
-- Layer 2 (context provision): two test-design bugs — (a) `.reloc` byte flip corrupts the load path (learned: relocations are applied from that section), (b) checking for `PCR 13 extended` in a no-swtpm harness. Both fixed in-harness.
+- None this session — implementation verified on first harness run after build fixes (unused-variable cleanup).
 
 **Next session opening**
-- D-213 LoadedImageCount enrichment, or AES-256-CFB parameter encryption (sessionValue KDFa-CFB) for C2 REQ-05.
+- D-213 LoadedImageCount enrichment, or remaining D-1xx hardware-debt items (SPI/DCI/DMA/MOR/SBAT checks).
 
 ---
 
