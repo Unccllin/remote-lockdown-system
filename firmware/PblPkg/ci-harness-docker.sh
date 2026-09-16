@@ -241,7 +241,21 @@ check "PCR extend step" "\[7/8\] Extending PCR 12/13"
 check "Decision action step" "\[8/8\] Decision:"
 check "NV indices provisioned" "\[OK\] NV indices provisioned"
 check "HMAC session established" "\[OK\] HMAC session established \(bound to lock-state NV\)"
+check "Self-image measured (D-217)" "PCR 13 \(self-image\) extended"
 check "Lock screen displayed" "THIS DEVICE IS LOCKED"
+
+# D-217: The self-image hash printed in the serial log must equal the
+# SHA-256 of the PblApp.efi that was copied to the ESP — proves the
+# on-disk PE measurement is deterministic (unlike reverted D-212).
+LOGGED_HASH=$(grep -oE "Self-image SHA-256: [0-9A-Fa-f]{64}" "${SERIAL_LOG}" | awk '{print $3}' | tr 'A-F' 'a-f' || true)
+FILE_HASH=$(sha256sum "${PBL_APP}" | awk '{print $1}')
+if [ -n "${LOGGED_HASH}" ] && [ "${LOGGED_HASH}" = "${FILE_HASH}" ]; then
+  echo "  [PASS] Self-image hash matches PblApp.efi (${FILE_HASH:0:16}...)"
+  PASS=$((PASS + 1))
+else
+  echo "  [FAIL] Self-image hash mismatch (logged=${LOGGED_HASH:-none} file=${FILE_HASH})"
+  FAIL=$((FAIL + 1))
+fi
 
 echo ""
 echo "=== Results: ${PASS} PASS / ${FAIL} FAIL ==="

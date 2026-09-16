@@ -214,11 +214,12 @@ or PCR 11 (BitLocker access control — writing here would break BitLocker).
 
 ### 4.1 Extend operations
 
-PBL performs exactly two `TPM2_PCR_Extend` calls, in this order, before
+PBL performs exactly three `TPM2_PCR_Extend` calls, in this order, before
 chain-loading Windows (PASS/DEGRADED) or showing the lock screen (BLOCK):
 
-1. **PCR 13** (inputs): `TPM2_PCR_Extend(13, {SHA256(policy_blob_hash || nonce || device_id || pcr4 || pcr5 || pcr7 || pcr11)})`
-2. **PCR 12** (decision): `TPM2_PCR_Extend(12, {SHA256(verdict || policy_version || platform_state_digest || final_result)})`
+1. **PCR 13** (self-image, D-217): `TPM2_PCR_Extend(13, {SHA256(PblApp.efi file bytes)})` — the on-disk PE, deterministic across boots. A tampered or skipped PBL changes PCR 13; prevention itself is Secure Boot (PBL-SECURE-BOOT-DEPLOYMENT.md).
+2. **PCR 13** (inputs): `TPM2_PCR_Extend(13, {SHA256(policy_blob_hash || nonce || device_id || pcr4 || pcr5 || pcr7 || pcr11)})`
+3. **PCR 12** (decision): `TPM2_PCR_Extend(12, {SHA256(verdict || policy_version || platform_state_digest || final_result)})`
 
 `final_result` is a uint8: `0` = PASS, `1` = DEGRADED, `2` = BLOCK.
 

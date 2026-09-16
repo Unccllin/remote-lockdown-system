@@ -150,6 +150,131 @@ PblReadFileFromFs (
   return EFI_NOT_FOUND;
 }
 
+/** D-217: Hash the running PBL image's PE file from disk.
+
+  Unlike the reverted D-212 in-memory hash, the on-disk PE bytes are
+  deterministic — DIR64 relocations are applied to the loaded copy only.
+  The hash is extended into PCR 13 as a self-measurement: a tampered or
+  skipped PBL produces a different PCR 13 value, detectable by remote
+  attestation or by PCR-bound sealing (C2 §4.3 high-assurance tier).
+
+  This is detection, not prevention — a patched binary can skip the
+  extend, which itself changes PCR 13. Prevention requires Secure Boot
+  (see docs/adr/PBL-SECURE-BOOT-DEPLOYMENT.md).
+
+  @param  ImageHandle  PBL's own image handle.
+  @param  Hash         Output SHA-256 digest of the PE file.
+
+  @retval EFI_SUCCESS    Hash computed.
+  @retval EFI_NOT_FOUND  File path or filesystem unavailable.
+**/
+STATIC
+EFI_STATUS
+PblHashSelfImage (
+  IN  EFI_HANDLE  ImageHandle,
+  OUT UINT8       Hash[32]
+  )
+{
+  EFI_STATUS                       Status;
+  EFI_LOADED_IMAGE_PROTOCOL       *Loaded = NULL;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Sfs = NULL;
+  EFI_FILE_PROTOCOL               *Root = NULL;
+  EFI_FILE_PROTOCOL               *File = NULL;
+  EFI_FILE_INFO                   *Info = NULL;
+  UINTN                            InfoSize;
+  UINT8                           *FileBuf = NULL;
+  UINTN                            FileSize;
+  CONST CHAR16                    *PathName = NULL;
+
+  Status = gBS->HandleProtocol (
+                  ImageHandle,
+                  &gEfiLoadedImageProtocolGuid,
+                  (VOID **)&Loaded
+                  );
+  if (EFI_ERROR (Status) || Loaded == NULL ||
+      Loaded->DeviceHandle == NULL || Loaded->FilePath == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  // Extract the CHAR16 path from the MEDIA_FILEPATH device-path node.
+  EFI_DEVICE_PATH_PROTOCOL *Dp = Loaded->FilePath;
+  while (!IsDevicePathEnd (Dp)) {
+    if (DevicePathType (Dp) == MEDIA_DEVICE_PATH &&
+        DevicePathSubType (Dp) == MEDIA_FILEPATH_DP) {
+      PathName = ((FILEPATH_DEVICE_PATH *)Dp)->PathName;
+      break;
+    }
+    Dp = NextDevicePathNode (Dp);
+  }
+  if (PathName == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  Status = gBS->HandleProtocol (
+                  Loaded->DeviceHandle,
+                  &gEfiSimpleFileSystemProtocolGuid,
+                  (VOID **)&Sfs
+                  );
+  if (EFI_ERROR (Status) || Sfs == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  Status = Sfs->OpenVolume (Sfs, &Root);
+  if (EFI_ERROR (Status)) {
+    return EFI_NOT_FOUND;
+  }
+
+  Status = Root->Open (Root, &File, (CHAR16 *)PathName, EFI_FILE_MODE_READ, 0);
+  if (EFI_ERROR (Status)) {
+    Root->Close (Root);
+    return EFI_NOT_FOUND;
+  }
+
+  InfoSize = 0;
+  Status = File->GetInfo (File, &gEfiFileInfoGuid, &InfoSize, NULL);
+  if (Status != EFI_BUFFER_TOO_SMALL) {
+    File->Close (File);
+    Root->Close (Root);
+    return EFI_DEVICE_ERROR;
+  }
+  Info = AllocatePool (InfoSize);
+  if (Info == NULL) {
+    File->Close (File);
+    Root->Close (Root);
+    return EFI_OUT_OF_RESOURCES;
+  }
+  Status = File->GetInfo (File, &gEfiFileInfoGuid, &InfoSize, Info);
+  if (EFI_ERROR (Status)) {
+    FreePool (Info);
+    File->Close (File);
+    Root->Close (Root);
+    return EFI_DEVICE_ERROR;
+  }
+  FileSize = (UINTN)Info->FileSize;
+  FreePool (Info);
+
+  FileBuf = AllocatePool (FileSize);
+  if (FileBuf == NULL) {
+    File->Close (File);
+    Root->Close (Root);
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  UINTN ReadSize = FileSize;
+  Status = File->Read (File, &ReadSize, FileBuf);
+  File->Close (File);
+  Root->Close (Root);
+
+  if (EFI_ERROR (Status) || ReadSize != FileSize) {
+    FreePool (FileBuf);
+    return EFI_DEVICE_ERROR;
+  }
+
+  Sha256HashAll (FileBuf, FileSize, Hash);
+  FreePool (FileBuf);
+  return EFI_SUCCESS;
+}
+
 EFI_STATUS
 EFIAPI
 PblAppEntryPoint (
@@ -574,13 +699,31 @@ VerdictDone:
   //   PCR 13 = SHA-256(policy_blob_hash || nonce || device_id || pcr4 || pcr5 || pcr7 || pcr11)
   //   PCR 12 = SHA-256(verdict || policy_version || platform_state_digest || final_result)
   //
-  // RE-hardening #4 (REVERTED): Self-image hash was added to PCR 12 but
-  // produced a different hash every boot because PBL's PE has ImageBase=0,
-  // so UEFI applies DIR64 relocations at a different load address each
-  // boot. This made PCR 12 non-deterministic and broke attestation.
-  // Secure Boot already verifies the PE signature before PBL runs,
-  // providing the integrity guarantee that the self-image hash was
-  // meant to add. See D-212 in the debt ledger.
+  // D-217: Self-measurement — SHA-256 of the on-disk PblApp.efi (NOT the
+  // relocated in-memory image, which is non-deterministic — see D-212)
+  // extended into PCR 13 before the inputs extend. A tampered binary
+  // produces a different PCR 13 whether it extends a different hash or
+  // skips the extend entirely; prevention itself requires Secure Boot.
+  {
+    UINT8 SelfHash[32];
+    Status = PblHashSelfImage (ImageHandle, SelfHash);
+    if (EFI_ERROR (Status)) {
+      Print (L"  [WARN] Self-image measurement failed: %r\n", Status);
+    } else {
+      Print (L"  Self-image SHA-256: ");
+      for (UINTN i = 0; i < 32; i++) {
+        Print (L"%02x", SelfHash[i]);
+      }
+      Print (L"\n");
+      Status = PblTpmExtendPcr (PBL_PCR_INPUTS, SelfHash, 32);
+      if (EFI_ERROR (Status)) {
+        Print (L"  [WARN] PCR 13 (self-image) extend failed: %r\n", Status);
+      } else {
+        Print (L"  [OK] PCR 13 (self-image) extended\n");
+      }
+    }
+  }
+
   {
     UINT8 InputsHash[32];
     UINT8 DecisionHash[32];
