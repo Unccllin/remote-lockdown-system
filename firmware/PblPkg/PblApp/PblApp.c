@@ -515,26 +515,33 @@ VerdictDone:
       }
     } else {
       Print (L"  [OK] Verdict verified\n");
-
-      // D-206: Write lock state cache to TPM NV (C2 §5.2, online path only).
-      // This allows offline boot on the next restart if the network is down.
-      PBL_LOCK_STATE_CACHE NewCache;
-      ZeroMem (&NewCache, sizeof (NewCache));
-      NewCache.Magic = PBL_LOCK_STATE_MAGIC;
-      NewCache.Verdict = Verdict.Verdict;
-      NewCache.IssuedAt = Verdict.IssuedAt;
-      NewCache.GraceUntil = Verdict.GraceUntil;
-      CopyMem (NewCache.DeviceId, Verdict.DeviceId, 32);
-
-      Status = PblTpmWriteLockState (&NewCache);
-      if (EFI_ERROR (Status)) {
-        Print (L"  [WARN] NV_Write(LOCK_STATE) failed: %r\n", Status);
-      } else {
-        Print (L"  [OK] Lock state cached to TPM NV\n");
-      }
     }
   } else {
     Print (L"  [INFO] Skipping verification for cached verdict\n");
+  }
+
+  //
+  // Step 6c: Persist the final verdict to TPM NV (C2 §5.2).
+  // Regardless of whether the verdict came from the network or from the
+  // local cache/fail-closed path, write it back to the PBL_LOCK_STATE index
+  // so the next boot can use it offline. A write failure is logged but not
+  // fatal — PBL continues to act on the verdict already in memory.
+  //
+  {
+    PBL_LOCK_STATE_CACHE NewCache;
+    ZeroMem (&NewCache, sizeof (NewCache));
+    NewCache.Magic = PBL_LOCK_STATE_MAGIC;
+    NewCache.Verdict = Verdict.Verdict;
+    NewCache.IssuedAt = Verdict.IssuedAt;
+    NewCache.GraceUntil = Verdict.GraceUntil;
+    CopyMem (NewCache.DeviceId, Verdict.DeviceId, 32);
+
+    Status = PblTpmWriteLockState (&NewCache);
+    if (EFI_ERROR (Status)) {
+      Print (L"  [WARN] NV_Write(LOCK_STATE) failed: %r\n", Status);
+    } else {
+      Print (L"  [OK] Lock state cached to TPM NV\n");
+    }
   }
 
   //

@@ -51,59 +51,54 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 105 — Bind PBL lock state to TPM platform hierarchy and fix OVMF harness
+## Latest session: 106 — Persist PBL lock state across QEMU+swtpm reboots
 
 **Rule Zero:**
-- **Read:** `.devin/graph/current-state.md`, `.devin/graph/GRAPH-SPEC.yaml`, `docs/adr/PBL-DEBT-LEDGER.md`, `firmware/PblPkg/PblPkg.dec`, `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/PblApp/PblApp.c`, `firmware/PblPkg/PblApp/PblApp.h`, `firmware/PblPkg/ci-harness-docker.sh`, `firmware/PblPkg/ci-harness.sh`, `firmware/PblPkg/build-pbl.sh`, `AGENTS.md`, and the EDK II OVMF DSC TPM component includes.
-- **Finding:** The immediate goal was to stop the lock state from being erasable by binding it to the hardware root. C2 already specified platform-hierarchy NV with HMAC/AES-256-CFB sessions, but PBL was still using the owner hierarchy and the Docker smoke test was accidentally using the stock OVMF image (which randomizes `platformAuth`) instead of the custom OVMF build with `PeiDxeTpmPlatformHierarchyLibNull`.
-- **Note:** Code edits to `TpmClient.c` and `PblPkg.dec` were performed before the formal Rule Zero block was written because this was a direct continuation of the previous session's debugging work. The remaining edits (harness, ledger, graph) were done after Rule Zero was completed.
+- **Read:** `.devin/graph/current-state.md`, `firmware/PblPkg/PblApp/PblApp.c`, `firmware/PblPkg/PblApp/PblApp.h`, `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/ci-harness-docker.sh`, `docs/adr/PBL-C2-TPM-Contract.md`, `docs/adr/PBL-DEBT-LEDGER.md`.
+- **Finding:** The next opening from session 105 was to implement and test `PblTpmWriteLockState` so the lock verdict persists across reboots. The code path was already implemented but was only exercised for online-verified verdicts; the QEMU smoke test has no network or policy.cose, so the write path was never hit and the cache was never written. A two-boot harness is needed to prove persistence.
 
 **Fog cleared this session:**
-- Identified that `TPMA_NV_PLATFORMCREATE` must be set when `TPM2_NV_DefineSpace` is authorized with `TPM_RH_PLATFORM`; without it the TPM returns `TPM_RC_ATTRIBUTES` (`0x182`).
-- Changed `PblPkg.dec` so `PcdPblTpmUsePlatformHierarchy` defaults to `TRUE`, and updated `TpmClient.c` to set `TPMA_NV_PLATFORMCREATE` in the platform-hierarchy NV attributes.
-- Confirmed that the EDK2 OVMF build with `PeiDxeTpmPlatformHierarchyLibNull` leaves `platformAuth` empty, enabling the platform-hierarchy path under swtpm.
-- Fixed `ci-harness-docker.sh` to prefer `/ovmf/OVMF_CODE.fd` and `/ovmf/OVMF_VARS.fd` when mounted, overriding the `pbl-qemu` image's `OVMF_CODE`/`OVMF_VARS` environment variables that pointed at the stock Ubuntu OVMF.
-- Switched both `ci-harness-docker.sh` and `ci-harness.sh` to `--ctrl`-only swtpm startup with `swtpm_ioctl -i`, avoiding the `CMD_SET_DATAFD`/`TPM_RC_BAD_PARAMETER` problem.
-- Added smoke-test assertions for `[OK] NV indices provisioned` and `[OK] HMAC session established (AES-256-CFB)`.
-- Docker CI smoke test now passes **12 PASS / 0 FAIL** with the custom OVMF:
-  - PBL banner, all 8 PBL steps, NV provisioning, HMAC session, and lock screen.
+- Refactored `PblApp.c` so the final verdict is written to `PBL_LOCK_STATE` NV regardless of whether it came from an online fetch, the local cache, or the fail-closed offline path. This makes offline lockdown persist across reboots.
+- Built `PblApp.efi` (SHA-256 `7509bed4704b41dd192b59cce10b00ec4aad0d6f76b9c6c09b6392fe0f781fc7`) and confirmed the single-boot Docker smoke test still passes 12/0.
+- Discovered that `swtpm` is killed when QEMU exits under `timeout` in the `pbl-qemu` image, so a single long-running swtpm cannot be reused across two QEMU boots. Created `ci-harness-persistence.sh` with per-boot swtpm start/stop that reuses the same `--tpmstate` directory so NV state persists.
+- Two-boot persistence test passes **16 PASS / 0 FAIL**:
+  - Boot 1: provisions NV indices, shows `No cached lock state`, then `[OK] Lock state cached to TPM NV`.
+  - Boot 2: reads the cached value and shows `[INFO] Using cached verdict`, then `[OK] Lock state cached to TPM NV`.
+- Added `pbl-persistence-artifacts/` to `.gitignore` so generated serial logs/result files are not committed.
 
 **ARTIFACT — Run references**
-- `firmware/PblPkg/PblApp/TpmClient.c` — platform-hierarchy NV attributes and debug cleanup.
-- `firmware/PblPkg/PblPkg.dec` — default `PcdPblTpmUsePlatformHierarchy` TRUE.
-- `firmware/PblPkg/PblApp/PblApp.inf` — PCD referenced in `[PcdsFixedAtBuild]`.
-- `firmware/PblPkg/ci-harness-docker.sh` — custom OVMF selection and swtpm fix.
-- `firmware/PblPkg/ci-harness.sh` — `--ctrl`-only swtpm startup.
-- `/tmp/pbl-ci-artifact.txt` — Docker run showing `12 PASS / 0 FAIL`.
-- PblApp.efi SHA-256: `cc225def5d9a2ed84d2ad432f2dad088005875fd10521648f8f238f658c791e1`.
+- `firmware/PblPkg/PblApp/PblApp.c` — final-verdict cache write.
+- `firmware/PblPkg/ci-harness-persistence.sh` — two-boot QEMU+swtpm persistence harness.
+- `firmware/PblPkg/PblApp.efi` (SHA-256 `7509bed...`) built successfully.
+- `/home/cllin/remote-lockdown-system/pbl-persistence-artifacts/pbl-persistence-result.txt` — 16 PASS / 0 FAIL artifact.
+- `/home/cllin/remote-lockdown-system/pbl-persistence-artifacts/pbl-persistence-serial.log` — combined serial output.
 
 **Debt items closed:**
-- D-102 — TPM commands use no-session / HMAC sessions (reinforced with platform-hierarchy NV provisioning and updated artifact: commit 83bd5d2).
+- None specifically (no existing PBL debt item tracked the offline cache persistence gap). D-215 (policy-signature fail-closed tests) and D-213 (LoadedImageCount enrichment) remain open.
 
 **Debt items still open:**
-- D-100, D-101, D-109–D-130, D-200–D-211 and other PBL/server debt items remain open; this session did not address verdict signing, attestation, Windows chain-load, hardware validation, or server endpoints.
+- D-100..D-130 and D-200..D-211 as listed in `current-state.md`. This session did not address verdict signing hardening, attestation, Windows chain-load, or real hardware validation.
 
 **Fog remaining:**
-- `NV_Read(LOCK_STATE)` and `NV_Read(POLICY_VERSION)` still return `TPM_RC_NV_UNINITIALIZED` (`0x14A`) on first boot because the indices are defined but not yet written; the write path (`PblTpmWriteLockState`) exists but is only exercised on a verified online verdict.
-- Lock state persistence across reboots has not been explicitly tested with a written-and-read cycle.
-- Real platform authorization on physical hardware (OEM/BIOS configured `platformAuth`) is not addressed; the swtpm path is a development approximation.
-- `PblTpmComputeCommandHmacSession` uses an empty session key for unbound `TPM_RH_NULL` sessions; this works with swtpm but may need KDFa-derived key handling for bound sessions on real TPMs.
+- The cache is written with an empty `IssuedAt`/`GraceUntil` in the offline fail-closed path. A future session should decide whether offline-fail-closed should set a grace period or a hard lock.
+- The override response code is not computed; the test harness sends `test\n` which does not satisfy the challenge, so PBL remains on the lock screen and is killed by `timeout`. This is acceptable for the persistence test but not a real override test.
+- The `PblTpmWriteLockState` HMAC session is unbound (`TPM_RH_NULL`) and the session key is empty. This works with swtpm but is not the C2-mandated bound HMAC session with KDFa for production.
+- Real platform hierarchy authorization and physical-presence requirements are still unverified on hardware.
 
 **Blockers**
 - None.
 
 **Failure attribution**
-- Rule Zero was completed after the first code edits, not before. Cause: session was a continuation of prior debugging and the agent treated the user's "proceed" as an immediate implementation request rather than a new session start. Mitigation: the remaining work (harness, ledger, graph close) followed Rule Zero, and the failure is captured here.
-- `ci-harness-docker.sh` initially used stock OVMF due to the `pbl-qemu` image's `OVMF_CODE`/`OVMF_VARS` env vars and the script's `:-` default not overriding them. Fixed by explicitly checking for `/ovmf/OVMF_CODE.fd` first.
+- First attempt at `ci-harness-persistence.sh` reused a single `swtpm` instance and boot 2 failed because the control socket disappeared after `timeout` killed QEMU. Cause: harness layer 3 (execution environment) — swtpm lifecycle assumptions. Fix: start/stop swtpm per boot while preserving the `tpmstate` directory.
 
 **Test results**
-- Build: `firmware/PblPkg/build-pbl.sh` → `PblApp.efi` built successfully (SHA-256 `cc225def...`).
-- Smoke test: `docker run --rm -v .../firmware:/firmware:ro -v .../Build/OvmfX64/RELEASE_GCC/FV:/ovmf:ro pbl-qemu /firmware/PblPkg/ci-harness-docker.sh 60` → **12 PASS / 0 FAIL**.
-- `bash -n` passed for `firmware/PblPkg/build-pbl.sh`, `firmware/PblPkg/ci-harness.sh`, `firmware/PblPkg/ci-harness-docker.sh`.
-- `make graph-check` passed (all invariants I1–I7).
+- Build: `firmware/PblPkg/build-pbl.sh` → `PblApp.efi` SHA-256 `7509bed...`.
+- `ci-harness-docker.sh` → 12 PASS / 0 FAIL (regression check).
+- `ci-harness-persistence.sh` (Docker, two boots) → **16 PASS / 0 FAIL**.
+- `bash -n` passed for `ci-harness-persistence.sh` and `ci-harness-docker.sh`.
 
 **Next session opening**
-- Implement and test `PblTpmWriteLockState` so the lock verdict is persisted across reboots, then verify a second boot reads the cached value and blocks offline without network fetch.
+- Harden the cache write to use a C2-bound HMAC session and test with a real salt/bind, or pick up D-215/D-213.
 
 ---
 

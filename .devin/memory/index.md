@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-09-16 08:50:01
-Active memories: 403 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-09-16 11:31:55
+Active memories: 415 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -33,6 +33,18 @@ Active memories: 403 | Superseded: 0 | Decayed: 20
 | m-016 | MISTAKE: Used wrong MSS1 signature byte order (0x4 |  | 0.60 | 2026-08-18 | 0.435 | 0 |  |
 | m-001 | EDK2 GenerateCapsule --signer-private-cert needs a |  | 0.60 | 2026-08-18 | 0.435 | 0 |  |
 | m-105 | MISTAKE: None — this was a verification session wi |  | 0.55 | 2026-09-15 | 0.272 | 0 |  |
+| m-432 | Binarly UEFI 2025: BYOVD taxonomy (5 classes, 7,15 |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-435 | MISTAKE: Initial ci-harness-docker.sh used stock O |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
+| m-429 | Haruyama REcon 2022: SMM rootkits can MitM firmwar |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-431 | UEFI Forum plugfests: threat classes (buffer overf |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-428 | Korchok Wakulich REcon 2024 GOP Complex: LogoFAIL  |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-427 | Bulygin Black Hat 2013/2017: bypassing Windows 8 S |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-425 | ThunderStrike 2: first Mac firmware worm; Speed Ra |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-426 | Haukli Black Hat 2014: BIOS emulation, function po |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-430 | CanSecWest 2014/2017: history of UEFI bootkits, CH |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-433 | PBL relevance: SpiProtections/S3/MOR/DMA checks, b |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
+| m-434 | Custom OVMF with PeiDxeTpmPlatformHierarchyLibNull |  | 0.50 | 2026-09-16 | 0.250 | 0 |  |
+| m-424 | Matrosov Black Hat Asia 2017 / OffensiveCon 2018:  |  | 0.50 | 2026-09-16 | 0.250 | 0 | PBL platform-state checks, pol |
 | m-394 | There is no standalone TPM2_Seal; sealing is Creat |  | 0.50 | 2026-09-15 | 0.247 | 0 | PBL TPM behavior, PCR 12/13, N |
 | m-409 | MosaicRegressor (2020): reused Hacking Team Vector |  | 0.50 | 2026-09-15 | 0.247 | 0 | PBL threat model for chain-loa |
 | m-419 | vTPM (USENIX Security 06) virtualizes TPM for VMs; |  | 0.50 | 2026-09-15 | 0.247 | 0 | PBL policy, attestation, and d |
