@@ -86,10 +86,17 @@ This document is the checklist that makes the prevention layer real.
 
 ### 2.6 What remains unverified
 
-- All of §2 tested only in QEMU+swtpm. Real-hardware checks needed:
-  platform-auth `NV_DefineSpace` with OEM platform auth, physical-presence
-  semantics of `TPM2_Clear(RH_PLATFORM)`, Boot Guard fuse state, SPI
-  protection bits, actual Secure Boot rejection of a tampered PblApp.efi.
+- Secure Boot rejection of a tampered PblApp.efi is now proven in
+  emulation: `test-sb-harness.sh` boots a SECURE_BOOT_ENABLE OVMF with a
+  vars store (`virt-fw-vars`: generated PK + PblApp authenticode hash in
+  db). Enrolled binary boots; 1-byte-tampered binary is rejected with
+  `Access Denied -- rejected probably by Secure Boot`; the same tampered
+  binary boots under plain vars (control). 8 PASS / 0 FAIL.
+- Still QEMU-only. Real-hardware checks needed: OEM platform auth for
+  `NV_DefineSpace`, physical-presence semantics of
+  `TPM2_Clear(RH_PLATFORM)`, Boot Guard fuse state, SPI protection bits,
+  and rejection on a real secure-boot chain (with a signed binary, not
+  just a db hash entry).
 
 ## 3. Self-measurement detail (D-217 implementation)
 
