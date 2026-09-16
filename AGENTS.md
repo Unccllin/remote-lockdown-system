@@ -14,6 +14,7 @@ Project-specific guidance for AI agents working in this repo.
 - `.devin/memory/` — **memory storage** (raw/, consolidated/, decayed/, index.md)
 - `.devin/graph/` — **the node graph** (center and heart of the project)
 - `docs/adr/` — architecture decision records + debt ledger
+- `docs/research/STUDY-INDEX.md` — master cross-reference for the nine PBL technical-study notes (UEFI, EDK II, TPM, Intel, Windows, bootkits, academic, talks, blogs/EDK II pitfalls)
 
 ## The Node Graph (mandatory read at session start)
 

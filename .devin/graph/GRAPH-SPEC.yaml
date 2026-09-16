@@ -673,8 +673,10 @@ debt_items:
   - id: D-102
     description: "TpmClient.c uses TPM_ST_NO_SESSIONS (no auth) — C2 requires HMAC sessions"
     close_criteria: "TPM2_StartAuthSession (HMAC + AES-256-CFB) implemented for all NV operations"
-    status: OPEN
+    status: CLOSED
     category: SECURITY
+    commit_ref: "83bd5d299708b9b8307e2b6efabfab843d1d4c37"
+    artifact_ref: "Docker QEMU+swtpm smoke test: 12 PASS / 0 FAIL; /tmp/pbl-ci-artifact.txt"
 
   - id: D-103
     description: "PlatformState.c SMBIOS string extraction is stubbed"

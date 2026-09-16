@@ -80,7 +80,8 @@
   PBL steps complete, lock screen displayed, TPM commands exchanged.
 
 ### D-102 — TPM commands use no-session (TPM_ST_NO_SESSIONS)
-- **Status**: CLOSED (commit bef484a — HMAC session startup verified in QEMU+swtpm)
+- **Status**: CLOSED (commit 83bd5d2 — platform-hierarchy NV provisioning
+  verified in Docker QEMU+swtpm)
 - **Category**: SECURITY
 - **Progress**: TpmSession.c implements the full HMAC session infrastructure
   per C2 §3. All wire-format bugs fixed and runtime-verified:
@@ -95,12 +96,17 @@
   - NV command callers pass required handles.
   - PCR Extend puts pcrHandle before auth area.
   - HMAC offset/pHash calculations include command handles.
-- **Close criteria**: Runtime test with QEMU+swtpm. **MET**: QEMU+swtpm
-  harness shows `[OK] HMAC session established (AES-256-CFB)` and
-  `[OK] PCR HMAC session established`. NV reads fail (0x18B) because NV
-  indexes are not provisioned in the test TPM — expected, fail-soft.
-  Artifact: PblApp.efi SHA-256
-  c75785dc27704c67e475069cfe555f1e0129553de258280acc458e055617f574.
+  - **Session 105 reinforcement**: NV indices are now provisioned under
+    `TPM_RH_PLATFORM` (not owner). `TPMA_NV_PLATFORMCREATE` is set so the
+    TPM accepts platform-created indices. Custom OVMF with
+    `PeiDxeTpmPlatformHierarchyLibNull` keeps `platformAuth` empty under
+    swtpm, allowing the platform-hierarchy path to be exercised end-to-end.
+- **Close criteria**: Runtime test with QEMU+swtpm. **MET**: Docker
+  `ci-harness-docker.sh` now shows `[OK] NV indices provisioned`,
+  `[OK] HMAC session established (AES-256-CFB)`, and `[OK] PCR HMAC session
+  established`. Final smoke-test result: **12 PASS / 0 FAIL**.
+  Artifact: `/tmp/pbl-ci-artifact.txt`; PblApp.efi SHA-256
+  cc225def5d9a2ed84d2ad432f2dad088005875fd10521648f8f238f658c791e1.
 
 ### D-103 — PlatformState.c SMBIOS string extraction is stubbed
 - **Status**: CLOSED
