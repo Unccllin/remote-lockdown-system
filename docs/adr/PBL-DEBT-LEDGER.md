@@ -1339,7 +1339,7 @@
 | D-212 | Self-image hash into PCR 12 (RE-hardening #4) — REVERTED | CLOSED (reverted: PBL PE has ImageBase=0, so DIR64 relocations make in-memory hash non-deterministic across boots. Secure Boot already provides PE integrity. Commit 6c4b294 + this commit) | SECURITY |
 | D-213 | Loaded EFI image enumeration (RE-hardening #3) — weak signal | OPEN (count alone doesn't identify which images are loaded; baseline varies by firmware updates. Future: hash each image's device path or record image names) | SECURITY |
 || D-214 | Chain-load hash verification (RE-hardening #2) — tested | CLOSED (test-chainload-harness.sh runs QEMU+swtpm PASS and mismatch scenarios against real Windows 11 23H2 bootx64.efi; 7/7 PASS checks, 3/3 mismatch checks. Commit 5123efc; artifact /tmp/pbl-chainload-ci/pbl-serial-{pass,mismatch}.log) | TEST |
-| D-215 | Policy signature BLOCK path (RE-hardening #1) — untested | OPEN (CI uses dev mode with EFI_UNSUPPORTED → continue. The fail-closed path (signature invalid → EFI_SECURITY_VIOLATION) is never exercised. Need a provisioned-root-of-trust CI scenario) | TEST |
+| D-215 | Policy signature BLOCK path (RE-hardening #1) — untested | CLOSED (gen-policy-rot.py provisions SPKI+kid+X.509 cert into PolicyRootOfTrust.generated.h via __has_include; test-d215-harness.sh boots QEMU+swtpm with valid/wrong-key/tampered/wrong-kid policy.cose — all three invalid variants fail-closed with [BLOCK] before step [3/8], no lock screen. 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 | D-216 | Verdict cache anti-replay (RE-hardening #5) — REVERTED | CLOSED (reverted: NV index lacks TPMA_NV_WRITE_STCLEAR so NV_WriteLock fails; even with the attribute, TPM2_Startup(CLEAR) clears it every boot. Need a monotonic counter or PCR-based approach. Commit 6c4b294) | SECURITY |
 
 **RE stress-test session (2026-09-15, QEMU, PblApp.efi patched in-place):**
@@ -1348,7 +1348,7 @@
 |---|-------------|--------|----------|
 | D-217 | All in-binary hardening bypassable if PblApp.efi is modified | OPEN (verified empirically: 9-byte patch to PblEvaluateDecision at 0x7c03 made it always return PASS, bypassing the lock screen. PBL code is not self-protecting — Secure Boot is the only defense against binary modification. Need runtime self-integrity that hashes the PE file from disk, or a Secure Boot deployment checklist) | SECURITY |
 || D-218 | Chain-load hash check with policy-provided hash | CLOSED (test-chainload-harness.sh generates policy with C4 key 58 set to real bootx64.efi SHA-256 and a mismatched variant; mismatch log shows [ChainLoad] BLOCK — bootmgfw.efi hash mismatch. Commit 5123efc; artifact /tmp/pbl-chainload-ci/pbl-serial-{pass,mismatch}.log) | TEST |
-| D-219 | Policy signature BLOCK path untested | OPEN (dev build returns EFI_UNSUPPORTED before COSE verification. Need a provisioned-root-of-trust CI scenario with an invalid policy.cose) | TEST |
+| D-219 | Policy signature BLOCK path untested | CLOSED (same scenario as D-215 — test-d215-harness.sh + gen-policy-rot.py; 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 
-**Totals**: 52 items — 44 CLOSED, 8 OPEN
+**Totals**: 52 items — 46 CLOSED, 6 OPEN
 

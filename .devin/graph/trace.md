@@ -1077,3 +1077,54 @@ Resolve the four EDK II/PBL source gaps (package-resolution order, Tcg2 protocol
 - D-215 policy-signature fail-closed tests, D-213 LoadedImageCount enrichment, or AES-256-CFB parameter encryption (sessionValue KDFa-CFB derivation) to complete C2 REQ-05.
 
 ---
+
+---
+
+## Session 108 — 2026-09-16 — D-215/D-219 policy-signature fail-closed via provisioned root of trust
+
+**RULE-ZERO — Understanding logged before code changes**
+
+**Read:** `PblApp/PolicyRootOfTrust.c`, `Policy.c` (`PblVerifyPolicySignature`/`PblVerifyCoseSign1`), `PblPkg.dec` (RoT PCDs), `test-d205.py` (COSE_Sign1/ES256 helpers, `policy.cose` generation), `test-d205-harness.sh` + `ci-harness-persistence.sh` (QEMU+swtpm patterns), `PBL-C4-Policy-Blob.md` (sig/key 58/verdict schema).
+
+**Finding:** `PolicyRootOfTrust.generated.h` existed (SPKI + kid only) but was dead code — the include was guarded by `#ifdef PBL_POLICY_ROOT_OF_TRUST_GENERATED_H_`, a macro defined only *inside* that header. Additionally the old JS generator never emitted the X.509 cert that `EcGetPublicKeyFromX509` needs. In dev mode `PblVerifyPolicySignature` returns `EFI_UNSUPPORTED` and `Policy.c` continues past it, so the fail-closed path (invalid signature → `EFI_SECURITY_VIOLATION` → [BLOCK]) had never been exercised — exactly what D-215/D-219 track.
+
+**What changed**
+
+- `firmware/PblPkg/gen-policy-rot.py` (new): provisions the ES256 policy signing key (reuses gitignored `.pbl_policy_signing_key` when present), emits a self-signed X.509 cert, and writes `PolicyRootOfTrust.generated.h` with SPKI + kid + cert DER + sizes. Emits four `policy.cose` variants: valid, wrong-key, tampered (flips a byte inside a large CBOR bstr while preserving the original signature — fails on ECDSA, not CBOR parse), wrong-kid.
+- `firmware/PblPkg/PblApp/PolicyRootOfTrust.c`: `__has_include("PolicyRootOfTrust.generated.h")` → `PBL_POLICY_ROT_PROVISIONED`; zero-filled dev fallbacks retained when absent.
+- `firmware/PblPkg/test-d215-harness.sh` (new): builds RoT-provisioned firmware, mounts each policy variant into the ESP, boots QEMU+swtpm per scenario (swtpm restarted per boot, TPM state reused), greps serial logs for pass/block paths.
+- `firmware/PblPkg/test-d205.py`: `generate_policy` signs with the policy key when `.pbl_policy_signing_key` exists (dummy sig only in true dev mode) — keeps the D-205 harness compatible with RoT-provisioned builds.
+
+**Test results**
+
+- RoT-provisioned build: `PblApp.efi` SHA-256 `c176ac28...` (intermediate) — 12 PASS / 0 FAIL:
+  - valid: policy read → `[OK] Policy signature verified` → reached step [3/8] TPM NV
+  - wrong-key / tampered / wrong-kid: `[BLOCK] Policy signature verification FAILED`, `EFI_SECURITY_VIOLATION`, never reached step [3/8], no lock screen
+- Dev state restored; rebuilt `PblApp.efi` SHA-256 `852a7333...` (byte-identical to pre-D-215 — reproducible).
+- `ci-harness-docker.sh` post-restore: **12 PASS / 0 FAIL**.
+- Artifact: `/tmp/pbl-d215-ci/pbl-d215-result.txt`; serial logs `/tmp/pbl-d215/pbl-serial-{valid,wrongkey,tampered,wrongkid}.log`.
+
+**Debt items closed:**
+- **D-215** — policy signature BLOCK path now exercised (commit `fb10e29`, artifact `/tmp/pbl-d215-ci/pbl-d215-result.txt`).
+- **D-219** — same scenario, closed together (commit `fb10e29`).
+
+**Debt items still open:**
+- D-213 (LoadedImageCount enrichment), D-217 (in-binary hardening bypassable without Secure Boot — the real residual risk; a modified PblApp.efi skips policy verification entirely), D-100..D-130, D-200..D-211 per `current-state.md`.
+
+**Fog remaining:**
+- RoT is provisioned from a self-signed dev cert; production provisioning (OEM key ceremony, cert chain, `db` enrollment) is deployment work, not yet designed.
+- Harness uses `__has_include` — supported by GCC/Clang; if another toolchain is used the guard falls back to dev mode silently.
+- QEMU/swtpm only — policy sig verification on real hardware unverified; Secure Boot enforcement of the RoT-provisioned binary itself is untested (D-217).
+
+**Blockers**
+- None.
+
+**Failure attribution**
+- None this session — the earlier swtpm-per-boot lifecycle fix (session 106) was reused directly; first harness run's swtpm-death failure was a layer-3 (execution environment) reuse of the same pattern, fixed in-harness.
+
+**Next session opening**
+- D-217 (document Secure Boot deployment checklist or runtime self-integrity hashing the PE from disk), D-213 (LoadedImageCount), or AES-256-CFB parameter encryption (sessionValue KDFa-CFB) for C2 REQ-05.
+
+---
+
+---

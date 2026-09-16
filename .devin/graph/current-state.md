@@ -51,61 +51,50 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 107 — C2 bound HMAC session: includeAuth semantics + WRITTEN-aware NV names
+## Latest session: 108 — 2026-09-16 — D-215/D-219 policy-signature fail-closed via provisioned root of trust
 
-**Rule Zero:**
-- **Read:** `firmware/PblPkg/PblApp/TpmSession.c`, `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/PblApp/PblApp.h`, `firmware/PblPkg/PblApp/PblApp.c`, `firmware/PblPkg/ci-harness-persistence.sh`, `firmware/PblPkg/ci-harness-docker.sh`, `docs/adr/PBL-C2-TPM-Contract.md`, libtpms 0.9.3 source (`SessionProcess.c`, `Session.c`, `NV_spt.c`, `NV_DefineSpace.c`, `TpmTypes.h`, `TpmError.h`), plus standalone swtpm repro scripts `scripts/tpm-authhandle-debug.py` and `scripts/tpm-bound-hmac-minimal.py`.
-- **Finding:** Session 106 left the NV cache write on an unbound session. Binding the session to `PBL_NV_LOCK_STATE` with a real auth value surfaced `0x09A2` (session-1 BAD_AUTH). Root-caused against libtpms source + minimal swtpm repro.
+**RULE-ZERO — Understanding logged before code changes**
 
-**Fog cleared this session:**
-- `includeAuth` semantics (libtpms `ComputeCommandHmac`/`IsSessionBindEntity`): a bound session uses `sessionKey` alone while it authorizes its bound entity; `sessionKey || authValue` is only correct for other entities. Appending `bindAuth` unconditionally caused `0x9A2`.
-- Return-code corrections: `0x014A` is `TPM_RC_NV_UNINITIALIZED` (empty index), not `NV_AUTHORIZATION` (`0x0149`). Earlier sessions misread it.
-- TPMA_NV layout in libtpms is the standard layout (read bits 16-19, PLATFORMCREATE bit 30): `0x420D000D` was always correct.
-- NV index Name mutates when `TPMA_NV_WRITTEN` flips on first write — the bound-entity match then breaks, and both the HMAC key (`sessionKey || authValue`) and the cpHash Name must follow the new Name.
-- `rpHash` for response HMAC excludes the `parameterSize` transport field: `responseCode || commandCode || responseParameters` only. The old code hashed parameterSize too, which broke post-write `NV_Read` verification (boot-2 "Device Error").
-- `PblTpmSubmitCommand` masked the TPM return code by not reporting `ActualResponseSize` on the error path — the RC warn print read an uninitialized variable.
+**Read:** `PblApp/PolicyRootOfTrust.c`, `Policy.c` (`PblVerifyPolicySignature`/`PblVerifyCoseSign1`), `PblPkg.dec` (RoT PCDs), `test-d205.py` (COSE_Sign1/ES256 helpers, `policy.cose` generation), `test-d205-harness.sh` + `ci-harness-persistence.sh` (QEMU+swtpm patterns), `PBL-C4-Policy-Blob.md` (sig/key 58/verdict schema).
 
-**Implementation (commit `e2b107c`):**
-- `PBL_TPM_SESSION` gains `BoundEntityName`, `IncludeAuth`, `CmdAuthValue` — `PblTpmStartHmacSession` captures the bound entity Name at session start.
-- `PblTpmSetupSessionAuth` (TpmClient.c) computes per-command `includeAuth` by comparing the associated handle's current Name to the captured bound Name, and loads the authorized entity's authValue from `PcdPblTpmNvAuthValue` for NV handles.
-- All four HMAC-key constructions now use `sessionKey || (includeAuth ? cmdAuthValue : "")`.
-- NV name cache stores authoritative attributes: `PblTpmNvRefreshName` (TPM2_NV_ReadPublic) after provisioning; `PblTpmNvMarkWritten` after successful `NV_Write`/`NV_Increment`; `PblTpmGetHandleName` recomputes Names on demand.
-- `PblTpmNvRefreshName` also fixes the WRITTEN=1 case on second boot (index persisted from prior boot).
-- Harness greps updated for the `(bound to lock-state NV)` banner (all three harnesses).
+**Finding:** `PolicyRootOfTrust.generated.h` existed (SPKI + kid only) but was dead code — the include was guarded by `#ifdef PBL_POLICY_ROOT_OF_TRUST_GENERATED_H_`, a macro defined only *inside* that header. Additionally the old JS generator never emitted the X.509 cert that `EcGetPublicKeyFromX509` needs. In dev mode `PblVerifyPolicySignature` returns `EFI_UNSUPPORTED` and `Policy.c` continues past it, so the fail-closed path (invalid signature → `EFI_SECURITY_VIOLATION` → [BLOCK]) had never been exercised — exactly what D-215/D-219 track.
 
-**ARTIFACT — Run references**
-- `PblApp.efi` SHA-256 `852a73334fb9a19952a02bd47971de4b01d6ef4d3d689b6ebef90dcca1bd56ee` (built via `firmware/PblPkg/build-pbl.sh`).
-- `pbl-persistence-artifacts/pbl-persistence-result.txt` — **16 PASS / 0 FAIL** two-boot.
-- `pbl-persistence-artifacts/pbl-persistence-serial.log` — combined serial output; boot 2 shows `Using cached verdict` via the bound session.
-- `ci-harness-docker.sh` single-boot regression: **12 PASS / 0 FAIL**.
+**What changed**
+
+- `firmware/PblPkg/gen-policy-rot.py` (new): provisions the ES256 policy signing key (reuses gitignored `.pbl_policy_signing_key` when present), emits a self-signed X.509 cert, and writes `PolicyRootOfTrust.generated.h` with SPKI + kid + cert DER + sizes. Emits four `policy.cose` variants: valid, wrong-key, tampered (flips a byte inside a large CBOR bstr while preserving the original signature — fails on ECDSA, not CBOR parse), wrong-kid.
+- `firmware/PblPkg/PblApp/PolicyRootOfTrust.c`: `__has_include("PolicyRootOfTrust.generated.h")` → `PBL_POLICY_ROT_PROVISIONED`; zero-filled dev fallbacks retained when absent.
+- `firmware/PblPkg/test-d215-harness.sh` (new): builds RoT-provisioned firmware, mounts each policy variant into the ESP, boots QEMU+swtpm per scenario (swtpm restarted per boot, TPM state reused), greps serial logs for pass/block paths.
+- `firmware/PblPkg/test-d205.py`: `generate_policy` signs with the policy key when `.pbl_policy_signing_key` exists (dummy sig only in true dev mode) — keeps the D-205 harness compatible with RoT-provisioned builds.
+
+**Test results**
+
+- RoT-provisioned build: `PblApp.efi` SHA-256 `c176ac28...` (intermediate) — 12 PASS / 0 FAIL:
+  - valid: policy read → `[OK] Policy signature verified` → reached step [3/8] TPM NV
+  - wrong-key / tampered / wrong-kid: `[BLOCK] Policy signature verification FAILED`, `EFI_SECURITY_VIOLATION`, never reached step [3/8], no lock screen
+- Dev state restored; rebuilt `PblApp.efi` SHA-256 `852a7333...` (byte-identical to pre-D-215 — reproducible).
+- `ci-harness-docker.sh` post-restore: **12 PASS / 0 FAIL**.
+- Artifact: `/tmp/pbl-d215-ci/pbl-d215-result.txt`; serial logs `/tmp/pbl-d215/pbl-serial-{valid,wrongkey,tampered,wrongkid}.log`.
 
 **Debt items closed:**
-- None newly closed — this is correctness hardening of already-closed D-102 (bound session was specified but the includeAuth/WRITTEN semantics were wrong).
+- **D-215** — policy signature BLOCK path now exercised (commit `fb10e29`, artifact `/tmp/pbl-d215-ci/pbl-d215-result.txt`).
+- **D-219** — same scenario, closed together (commit `fb10e29`).
 
 **Debt items still open:**
-- D-215 (policy-signature fail-closed tests; also tracks AES-CFB parameter encryption — still disabled via `PcdPblTpmUseParameterEncryption=FALSE`), D-213 (LoadedImageCount), D-100..D-130, D-200..D-211 per `current-state.md`.
+- D-213 (LoadedImageCount enrichment), D-217 (in-binary hardening bypassable without Secure Boot — the real residual risk; a modified PblApp.efi skips policy verification entirely), D-100..D-130, D-200..D-211 per `current-state.md`.
 
 **Fog remaining:**
-- `NV_Read(POLICY_VERSION)` still returns `0x14A` on both boots — the counter is never incremented in this flow; acceptable (not yet exercised).
-- Response HMAC is verified only on the `NV_Read` parse path; `NV_Write`/`NV_Increment` responses skip verification (RC-only) and do not roll `nonceTPM` — harmless today since no session command follows a write in one boot, but a future command-after-write sequence would need the update.
-- Parameter encryption (AES-256-CFB `sessionValue` KDFa derivation) remains disabled by design.
-- QEMU/swtpm only — real platform-hierarchy auth, physical presence, Boot Guard remain unverified on hardware.
+- RoT is provisioned from a self-signed dev cert; production provisioning (OEM key ceremony, cert chain, `db` enrollment) is deployment work, not yet designed.
+- Harness uses `__has_include` — supported by GCC/Clang; if another toolchain is used the guard falls back to dev mode silently.
+- QEMU/swtpm only — policy sig verification on real hardware unverified; Secure Boot enforcement of the RoT-provisioned binary itself is untested (D-217).
 
 **Blockers**
 - None.
 
 **Failure attribution**
-- The `0x9A2`/`0x14A` debugging loop was prolonged by layer 2 (context provision): libtpms includeAuth semantics and the TPMA_NV bit layout were not documented in-repo; resolved by reading libtpms source and writing standalone swtpm repro scripts.
-- Masked RC (layer 4 verification feedback): `PblTpmSubmitCommand` hid the real return code; now fixed.
-
-**Test results**
-- Build: `PblApp.efi` SHA-256 `852a7333...`.
-- `ci-harness-persistence.sh` (Docker, two boots): **16 PASS / 0 FAIL**.
-- `ci-harness-docker.sh`: **12 PASS / 0 FAIL**.
-- `make graph-check`: all invariants pass.
+- None this session — the earlier swtpm-per-boot lifecycle fix (session 106) was reused directly; first harness run's swtpm-death failure was a layer-3 (execution environment) reuse of the same pattern, fixed in-harness.
 
 **Next session opening**
-- D-215 policy-signature fail-closed tests, D-213 LoadedImageCount enrichment, or AES-256-CFB parameter encryption (sessionValue KDFa-CFB derivation) to complete C2 REQ-05.
+- D-217 (document Secure Boot deployment checklist or runtime self-integrity hashing the PE from disk), D-213 (LoadedImageCount), or AES-256-CFB parameter encryption (sessionValue KDFa-CFB) for C2 REQ-05.
 
 ---
 
