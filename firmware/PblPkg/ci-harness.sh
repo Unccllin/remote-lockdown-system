@@ -140,7 +140,7 @@ check "Decision step" "\[6/8\] Evaluating decision"
 check "PCR extend step" "\[7/8\] Extending PCR 12/13"
 check "Decision action step" "\[8/8\] Decision:"
 check "NV indices provisioned" "\[OK\] NV indices provisioned"
-check "HMAC session established" "\[OK\] HMAC session established \(AES-256-CFB\)"
+check "HMAC session established" "\[OK\] HMAC session established \(bound to lock-state NV\)"
 check "Scaffold completion" "PBL scaffold complete"
 
 echo ""

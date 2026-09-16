@@ -107,6 +107,8 @@ PblTpmSubmitCommand (
     return EFI_BUFFER_TOO_SMALL;
   }
 
+  // Always report the response size — callers need it to decode the TPM
+  // return code on the error path.
   *ActualResponseSize = RespSz;
 
   // Check response code (0 = TPM_RC_SUCCESS)
@@ -180,7 +182,10 @@ PblTpmSessionAttrsForCommand (
   // decrypt/encrypt attributes and returns plaintext. PBL's encrypt/decrypt
   // functions would corrupt data if applied to plaintext, so skip these
   // attributes entirely when SessionKeySize == 0.
-  if (PblTpmGetSessionKeySize () == 0) {
+  //
+  // D-215: AES-256-CFB parameter encryption from sessionValue is not yet
+  // fully implemented. When disabled, keep HMAC-only sessions (continue only).
+  if (PblTpmGetSessionKeySize () == 0 || !PblTpmParameterEncryptionEnabled ()) {
     return Attrs;
   }
 
@@ -235,6 +240,10 @@ PblTpmCommandSupportsDecrypt (
   IN  TPM_CC  CommandCode
   )
 {
+  // D-215: Skip parameter encryption until CFB key/IV derivation is implemented.
+  if (!PblTpmParameterEncryptionEnabled ()) {
+    return FALSE;
+  }
   switch ((UINT32)CommandCode) {
     case TPM_CC_NV_DefineSpace:
     case TPM_CC_NV_Write:
@@ -264,6 +273,10 @@ PblTpmCommandSupportsEncrypt (
   IN  TPM_CC  CommandCode
   )
 {
+  // D-215: Skip parameter encryption until CFB key/IV derivation is implemented.
+  if (!PblTpmParameterEncryptionEnabled ()) {
+    return FALSE;
+  }
   switch ((UINT32)CommandCode) {
     case TPM_CC_NV_Read:
       return TRUE;
@@ -402,11 +415,15 @@ PblTpmFinalizeCommand (
 
 #define PBL_NV_NAME_MAX  34  // 2 (nameAlg) + 32 (SHA-256 digest)
 
+// TPMA_NV_WRITTEN (bit 29) — SET by the TPM after the first successful write.
+// It is part of the NV index's public area, so it changes the entity Name.
+#define PBL_TPMA_NV_WRITTEN  0x20000000
+
 typedef struct {
-  UINT32  NvIndex;
-  UINT8   Name[PBL_NV_NAME_MAX];
-  UINT8   NameSize;
-  BOOLEAN Valid;
+  UINT32   NvIndex;
+  UINT32   Attributes;   // current TPMA_NV (WRITTEN updated after writes)
+  UINT16   DataSize;
+  BOOLEAN  Valid;
 } PBL_NV_NAME_ENTRY;
 
 STATIC PBL_NV_NAME_ENTRY mNvNameCache[3] = { 0 };
@@ -476,12 +493,42 @@ PblTpmCacheNvName (
   )
 {
   UINTN i;
+  // Update an existing entry or claim a free slot.
+  for (i = 0; i < ARRAY_SIZE (mNvNameCache); i++) {
+    if (mNvNameCache[i].Valid && mNvNameCache[i].NvIndex == NvIndex) {
+      mNvNameCache[i].Attributes = Attributes;
+      mNvNameCache[i].DataSize   = DataSize;
+      return;
+    }
+  }
   for (i = 0; i < ARRAY_SIZE (mNvNameCache); i++) {
     if (!mNvNameCache[i].Valid) {
-      mNvNameCache[i].NvIndex = NvIndex;
-      mNvNameCache[i].Valid = TRUE;
-      PblTpmComputeNvName (NvIndex, Attributes, DataSize,
-                           mNvNameCache[i].Name, &mNvNameCache[i].NameSize);
+      mNvNameCache[i].NvIndex    = NvIndex;
+      mNvNameCache[i].Attributes = Attributes;
+      mNvNameCache[i].DataSize   = DataSize;
+      mNvNameCache[i].Valid      = TRUE;
+      return;
+    }
+  }
+}
+
+/** D-206: Mark an NV index written (sets TPMA_NV_WRITTEN in cached attributes).
+
+  Must be called after a successful TPM2_NV_Write / TPM2_NV_Increment so the
+  entity Name used in cpHash and the bound-session includeAuth decision
+  reflects the post-write public area.
+
+  @param  NvIndex  The NV index that was written.
+**/
+VOID
+PblTpmNvMarkWritten (
+  IN UINT32  NvIndex
+  )
+{
+  UINTN i;
+  for (i = 0; i < ARRAY_SIZE (mNvNameCache); i++) {
+    if (mNvNameCache[i].Valid && mNvNameCache[i].NvIndex == NvIndex) {
+      mNvNameCache[i].Attributes |= PBL_TPMA_NV_WRITTEN;
       return;
     }
   }
@@ -498,7 +545,6 @@ PblTpmCacheNvName (
 
   @retval EFI_SUCCESS  Name retrieved.
 **/
-STATIC
 EFI_STATUS
 PblTpmGetHandleName (
   IN  UINT32  Handle,
@@ -508,12 +554,12 @@ PblTpmGetHandleName (
 {
   UINTN i;
 
-  // Check NV index name cache
+  // Check NV index name cache — recompute from the current attributes so the
+  // name reflects TPMA_NV_WRITTEN / lock bits as they change.
   for (i = 0; i < ARRAY_SIZE (mNvNameCache); i++) {
     if (mNvNameCache[i].Valid && mNvNameCache[i].NvIndex == Handle) {
-      CopyMem (Name, mNvNameCache[i].Name, mNvNameCache[i].NameSize);
-      *NameSize = mNvNameCache[i].NameSize;
-      return EFI_SUCCESS;
+      return PblTpmComputeNvName (Handle, mNvNameCache[i].Attributes,
+                                  mNvNameCache[i].DataSize, Name, NameSize);
     }
   }
 
@@ -521,6 +567,58 @@ PblTpmGetHandleName (
   *(UINT32 *)Name = SwapBytes32 (Handle);
   *NameSize = 4;
   return EFI_SUCCESS;
+}
+
+/** D-206: Determine includeAuth and the authorized entity's authValue for a
+  command's session-0 authorization.
+
+  Per TPM 2.0 Part 1 and libtpms SessionProcess.c:
+    includeAuth = !IsSessionBindEntity(associatedHandle, session)
+  When an HMAC session is bound to the entity it authorizes, the entity's
+  authValue is already folded into sessionKey by KDFa, so it is NOT appended
+  to the HMAC key. For every other entity the authValue is appended.
+
+  The bound entity is Name || authValue captured at StartAuthSession. Since
+  an NV index's Name contains TPMA_NV_WRITTEN, the bound match holds only
+  while the Name is unchanged — the first write breaks it.
+
+  @param  Session      The session being used for authorization.
+  @param  AssocHandle  The handle authorized by session 0 (first handle).
+**/
+STATIC
+VOID
+PblTpmSetupSessionAuth (
+  IN OUT PBL_TPM_SESSION  *Session,
+  IN     UINT32            AssocHandle
+  )
+{
+  UINT8  CurName[PBL_NV_NAME_MAX];
+  UINT8  CurNameSize = 0;
+
+  Session->IncludeAuth = TRUE;
+  if (Session->BoundEntityNameSize > 0
+      && AssocHandle == Session->BindHandle
+      && !EFI_ERROR (PblTpmGetHandleName (AssocHandle, CurName, &CurNameSize))
+      && CurNameSize == Session->BoundEntityNameSize
+      && CompareMem (CurName, Session->BoundEntityName, CurNameSize) == 0) {
+    Session->IncludeAuth = FALSE;
+  }
+
+  // authValue of the authorized entity. All PBL NV indices share the
+  // configured NV auth value; hierarchy and PCR handles use an empty
+  // authValue in the dev/swtpm profile.
+  Session->CmdAuthValueSize = 0;
+  if ((AssocHandle >> 24) == 0x01) {  // TPM_HT_NV_INDEX
+    CONST UINT8 *NvAuth = (CONST UINT8 *)FixedPcdGetPtr (PcdPblTpmNvAuthValue);
+    UINTN        NvAuthSize = FixedPcdGetSize (PcdPblTpmNvAuthValue);
+    if (NvAuthSize > sizeof (Session->CmdAuthValue)) {
+      NvAuthSize = sizeof (Session->CmdAuthValue);
+    }
+    if (NvAuth != NULL && NvAuthSize > 0) {
+      CopyMem (Session->CmdAuthValue, NvAuth, NvAuthSize);
+      Session->CmdAuthValueSize = (UINT8)NvAuthSize;
+    }
+  }
 }
 
 /** D-102: Fill the HMAC into the auth area of a TPM2 command.
@@ -596,8 +694,10 @@ PblTpmFillCommandHmac (
     return EFI_SUCCESS;
   }
 
-  // Parameters start after: header(10) + handles(4*N) + authAreaSize(4) + authArea(45+HmacSize)
-  UINT32 ParamsOffset = AuthOffset + 4 + 45 + HmacSize;
+  // Parameters start after: header(10) + handles(4*N) + authAreaSize(4) + authArea(41+HmacSize)
+  // The auth area content occupies 45 + HmacSize bytes from the authAreaSize field,
+  // so parameters start at AuthOffset + 4 + (41 + HmacSize) = AuthOffset + 45 + HmacSize.
+  UINT32 ParamsOffset = AuthOffset + 45 + HmacSize;
   ParamsStart = CommandBuffer + ParamsOffset;
   ParamsSize = TotalSize - ParamsOffset;
 
@@ -633,6 +733,17 @@ PblTpmFillCommandHmac (
     HPtr += HandleNameSize;
   }
   CopyMem (HPtr, ParamsStart, ParamsSize);  // params
+
+  // D-206: Set includeAuth + the authorized entity's authValue on the session.
+  // Session 0 authorizes the first handle (the authHandle). For a session bound
+  // to that entity whose Name is unchanged, the HMAC key is sessionKey alone.
+  if (mCurrentCmdHandleCount > 0) {
+    PBL_TPM_SESSION *Session = PblTpmGetSession ();
+    if (Session != NULL) {
+      UINT32 AssocHandle = SwapBytes32 (*(UINT32 *)(CommandBuffer + 10));
+      PblTpmSetupSessionAuth (Session, AssocHandle);
+    }
+  }
 
   // Compute pHash-based HMAC
   Status = PblTpmComputeCommandHmacEx (CommandCode, HashInput, HashInputSize, Hmac);
@@ -714,19 +825,32 @@ PblTpmParseSessionResponse (
       // Update nonceTPM from response for next command's HMAC
       PblTpmUpdateNonceTpm (NonceTpmPtr, NonceTpmSize);
     } else if (RespHmacSize == 32 && (AuthPtr + 32) <= (RespBuf + RespSize)) {
-      // D-102: Fail-closed — return NULL on HMAC mismatch
-      // Use proper pHash-based verification (SHA256 of responseCode || commandCode || responseParams)
+      // D-206: The response HMAC is computed with the new nonceTPM from this
+      // response. Update it before verification so the check uses the correct
+      // nonce. If verification fails, the session is still fail-closed.
+      PblTpmUpdateNonceTpm (NonceTpmPtr, NonceTpmSize);
+
+      // D-102: Fail-closed — return NULL on HMAC mismatch.
+      // rpHash = SHA256(responseCode(4) || commandCode(4) || responseParameters)
+      // The parameterSize field is NOT part of rpHash (TPM 2.0 Part 1 §18.1) —
+      // it is a transport field. responseCode is at RespBuf+6 and the
+      // parameters are at RespBuf+14, so stage them into a contiguous buffer
+      // (responseCode || params) for PblTpmVerifyResponseHmacEx.
+      UINT8  *RpInput = AllocatePool (4 + Param);
+      if (RpInput == NULL) {
+        return NULL;
+      }
+      CopyMem (RpInput, RespBuf + 6, 4);               // responseCode
+      CopyMem (RpInput + 4, RespBuf + 14, Param);      // responseParameters
       EFI_STATUS HmacStatus = PblTpmVerifyResponseHmacEx (
                                 CommandCode,
-                                RespBuf + 10,           // starts at responseCode
-                                (UINTN)(4 + Param),     // responseCode(4) + responseParams(Param)
+                                RpInput,
+                                (UINTN)(4 + Param),
                                 AuthPtr);
+      FreePool (RpInput);
       if (EFI_ERROR (HmacStatus)) {
         return NULL;
       }
-
-      // D-102: Update nonceTPM from response for next command's HMAC
-      PblTpmUpdateNonceTpm (NonceTpmPtr, NonceTpmSize);
     }
   }
 
@@ -791,14 +915,21 @@ PblTpmFillPcrCommandHmac (
   if (PcrSession == NULL) {
     return EFI_NOT_STARTED;
   }
+  // D-206: PCR session is unbound (bind=TPM_RH_NULL), so includeAuth is always
+  // SET and the PCR handle's authValue is empty — the HMAC key is the session
+  // key alone.
+  PcrSession->IncludeAuth      = TRUE;
+  PcrSession->CmdAuthValueSize = 0;
+
   if (PcrSession->SessionKeySize == 0) {
     // HMAC size field is at PcrAuthOffset + 4 + 4 + 2 + 32 + 1 = PcrAuthOffset + 43
     *(UINT16 *)(CommandBuffer + PcrAuthOffset + 43) = SwapBytes16 (0);
     return EFI_SUCCESS;
   }
 
-  // Parameters start after: header(10) + handles(4*N) + authAreaSize(4) + authArea(45+HmacSize)
-  UINT32 PcrParamsOffset = PcrAuthOffset + 4 + 45 + PcrSession->SessionKeySize;
+  // Parameters start after: header(10) + handles(4*N) + authAreaSize(4) + authArea(41+HmacSize)
+  // The auth area content occupies 45 + HmacSize bytes from the authAreaSize field.
+  UINT32 PcrParamsOffset = PcrAuthOffset + 45 + PcrSession->SessionKeySize;
   ParamsStart = CommandBuffer + PcrParamsOffset;
   ParamsSize = TotalSize - PcrParamsOffset;
 
@@ -883,18 +1014,19 @@ PblTpmParsePcrSessionResponse (
       if (PcrSession == NULL) {
         return NULL;
       }
+      // D-206: Update nonceTPM before verification.
+      PblTpmUpdatePcrNonceTpm (NonceTpmPtr, NonceTpmSize);
+
+      // rpHash = SHA256(responseCode(4) || commandCode(4) || parameterSize(4) || params(Param))
       EFI_STATUS HmacStatus = PblTpmVerifyResponseHmacSession (
                                 PcrSession,
                                 CommandCode,
-                                RespBuf + 10,
-                                (UINTN)(4 + Param),
+                                RespBuf + 6,
+                                (UINTN)(8 + Param),
                                 AuthPtr);
       if (EFI_ERROR (HmacStatus)) {
         return NULL;
       }
-
-      // D-102: Update nonceTPM from response for next command's HMAC
-      PblTpmUpdatePcrNonceTpm (NonceTpmPtr, NonceTpmSize);
     }
   }
 
@@ -1039,9 +1171,20 @@ PblTpmNvDefineSpace (
   // consume 14 bytes of "auth", and then read the actual auth (0x0000) as the
   // publicInfo size — triggering TPM_RC_SIZE on publicInfo (0x2D5).
 
-  // TPM2B_AUTH: empty (no auth value on the NV index)
-  *(UINT16 *)Ptr = SwapBytes16 (0);
+  // TPM2B_AUTH: index auth value (PBL NV auth, provisioned at enrolment).
+  // In development this comes from PcdPblTpmNvAuthValue. The HMAC session
+  // started later is bound to the lock-state index using the same auth.
+  CONST UINT8 *NvAuthValue = (CONST UINT8 *)FixedPcdGetPtr (PcdPblTpmNvAuthValue);
+  UINTN      NvAuthValueSize = FixedPcdGetSize (PcdPblTpmNvAuthValue);
+  if (NvAuthValueSize > 64) {
+    NvAuthValueSize = 64;
+  }
+  *(UINT16 *)Ptr = SwapBytes16 ((UINT16)NvAuthValueSize);
   Ptr += 2;
+  if (NvAuthValueSize > 0 && NvAuthValue != NULL) {
+    CopyMem (Ptr, NvAuthValue, NvAuthValueSize);
+    Ptr += NvAuthValueSize;
+  }
 
   // TPM2B_NV_PUBLIC: UINT16 size + TPMS_NV_PUBLIC
   // TPMS_NV_PUBLIC:
@@ -1166,6 +1309,76 @@ PblTpmProvisionNvIndices (
   }
   PblTpmCacheNvName (PBL_NV_AK_NAME, NvAttr, 34);
 
+  // D-206: Refresh the cached names from NV_ReadPublic so the attributes
+  // reflect the actual index state — in particular TPMA_NV_WRITTEN on an
+  // index that persisted from a previous boot. The Name feeds both cpHash
+  // and the bound-session includeAuth decision.
+  PblTpmNvRefreshName (PBL_NV_LOCK_STATE);
+  PblTpmNvRefreshName (PBL_NV_POLICY_VERSION);
+  PblTpmNvRefreshName (PBL_NV_AK_NAME);
+
+  return EFI_SUCCESS;
+}
+
+/** D-206: Refresh a cached NV index name from TPM2_NV_ReadPublic.
+
+  NV_ReadPublic requires no authorization and returns the authoritative
+  TPMS_NV_PUBLIC (including TPMA_NV_WRITTEN). The cached attributes are
+  updated so PblTpmGetHandleName computes the current entity Name.
+
+  @param  NvIndex  The NV index handle.
+
+  @retval EFI_SUCCESS       Name refreshed from the TPM.
+  @retval EFI_NOT_FOUND     No TPM present.
+  @retval EFI_DEVICE_ERROR  TPM command failed or malformed response.
+**/
+EFI_STATUS
+PblTpmNvRefreshName (
+  IN UINT32  NvIndex
+  )
+{
+  EFI_TCG2_PROTOCOL *Tcg2;
+  EFI_STATUS         Status;
+  UINT8              CmdBuf[64];
+  UINT8              RespBuf[256];
+  UINT32             RespSize;
+
+  Tcg2 = PblTcg2Locate ();
+  if (Tcg2 == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  // TPM2_NV_ReadPublic: TPM_ST_NO_SESSIONS, one handle (nvIndex), no params.
+  UINT8 *Ptr = PblTpmBeginCommand (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_ReadPublic);
+  *(UINT32 *)Ptr = SwapBytes32 (NvIndex);
+  Ptr += 4;
+  PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
+
+  Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
+                                RespBuf, sizeof (RespBuf), &RespSize);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  // Response: header(10) | TPM2B_NV_PUBLIC | TPM2B_NAME
+  // TPMS_NV_PUBLIC inside the TPM2B: nvIndex(4) nameAlg(2) attributes(4)
+  // authPolicy(TPM2B: 2+N) dataSize(2). attributes at offset 10+2+4+2 = 18.
+  if (RespSize < 10 + 2 + 14) {
+    return EFI_DEVICE_ERROR;
+  }
+  UINT16 NvPublicSize = SwapBytes16 (*(UINT16 *)(RespBuf + 10));
+  if (NvPublicSize < 14 || ((UINT32)NvPublicSize + 12) > RespSize) {
+    return EFI_DEVICE_ERROR;
+  }
+  UINT8  *NvPublic = RespBuf + 12;
+  UINT32  Attrs    = SwapBytes32 (*(UINT32 *)(NvPublic + 6));
+  UINT16  PolSize  = SwapBytes16 (*(UINT16 *)(NvPublic + 10));
+  if (NvPublicSize < (UINT16)(12 + PolSize + 2)) {
+    return EFI_DEVICE_ERROR;
+  }
+  UINT16  DataSize = SwapBytes16 (*(UINT16 *)(NvPublic + 12 + PolSize));
+
+  PblTpmCacheNvName (NvIndex, Attrs, DataSize);
   return EFI_SUCCESS;
 }
 
@@ -1391,6 +1604,10 @@ PblTpmIncrementPolicyVersion (
     UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
     Print (L"  [WARN] NV_Increment(POLICY_VERSION) RC=0x%x\n", Rc);
   }
+  if (!EFI_ERROR (Status)) {
+    // D-206: First increment sets TPMA_NV_WRITTEN — keep the Name cache current.
+    PblTpmNvMarkWritten (PBL_NV_POLICY_VERSION);
+  }
   return Status;
 }
 
@@ -1449,6 +1666,12 @@ PblTpmWriteLockState (
   if (EFI_ERROR (Status) && RespSize >= 10) {
     UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
     Print (L"  [WARN] NV_Write(LOCK_STATE) RC=0x%x\n", Rc);
+  }
+  if (!EFI_ERROR (Status)) {
+    // D-206: The write set TPMA_NV_WRITTEN, mutating the entity Name. Update
+    // the cached attributes so cpHash and the bound-session includeAuth
+    // decision use the post-write Name.
+    PblTpmNvMarkWritten (PBL_NV_LOCK_STATE);
   }
   return Status;
 }

@@ -132,6 +132,8 @@
   gPblPkgTokenSpaceGuid.PcdMaxPolicySize
   gPblPkgTokenSpaceGuid.PcdDegradedNoticeSeconds
   gPblPkgTokenSpaceGuid.PcdPblTpmUsePlatformHierarchy
+  gPblPkgTokenSpaceGuid.PcdPblTpmUseParameterEncryption
+  gPblPkgTokenSpaceGuid.PcdPblTpmNvAuthValue
 
 [BuildOptions]
   # Strict warnings for PBL code only (not EDK2 libraries)

@@ -269,19 +269,25 @@ PblAppEntryPoint (
     Print (L"  [OK] NV indices provisioned\n");
   }
 
-  // D-102: Start HMAC session bound to TPM_RH_NULL (C2 §3.1, §3.3).
-  // The session provides AES-256-CFB parameter encryption for all NV reads/writes.
-  // Binding to TPM_RH_NULL creates an unbound session that still provides
-  // parameter encryption. Binding to the NV index would require it to be
-  // defined first (NV_DefineSpace), which hasn't been called yet.
-  // In development mode (no auth value provisioned), bindAuth is empty.
-  // If session start fails, commands fall back to TPM_RS_PW (C2 §3.2 minimum).
-  Status = PblTpmStartHmacSession ((UINT32)TPM_RH_NULL, NULL, 0);
+  // D-215: Start HMAC session bound to the lock-state NV index.
+  // The session key is derived from the index auth value via KDFa so the
+  // session is bound to that index (per C2 §3.1). All later NV commands
+  // (read, write, increment) re-use the same auth value and session key.
+  // Parameter encryption is controlled by PcdPblTpmUseParameterEncryption;
+  // the default is HMAC-only (no AES-256-CFB) until CFB key/IV derivation
+  // from sessionValue is implemented.
+  CONST UINT8 *NvAuthValue = (CONST UINT8 *)FixedPcdGetPtr (PcdPblTpmNvAuthValue);
+  UINTN      NvAuthValueSize = FixedPcdGetSize (PcdPblTpmNvAuthValue);
+  if (NvAuthValueSize > 64) {
+    NvAuthValueSize = 64;
+  }
+
+  Status = PblTpmStartHmacSession (PBL_NV_LOCK_STATE, NvAuthValue, NvAuthValueSize);
   if (EFI_ERROR (Status)) {
     Print (L"  [INFO] HMAC session start failed: %r — using password auth\n", Status);
     // Continue — PblTpmBeginCommandWithSessionAuth falls back to TPM_RS_PW
   } else {
-    Print (L"  [OK] HMAC session established (AES-256-CFB)\n");
+    Print (L"  [OK] HMAC session established (bound to lock-state NV)\n");
   }
 
   Status = PblTpmReadLockState (&LockCache);

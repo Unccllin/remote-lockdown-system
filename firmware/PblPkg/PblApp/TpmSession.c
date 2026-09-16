@@ -316,6 +316,12 @@ PblTpmStartHmacSession (
   }
 
   mSession.BindHandle = BindHandle;
+  if (BindAuth != NULL && BindAuthSize > 0 && BindAuthSize <= sizeof (mSession.BindAuth)) {
+    CopyMem (mSession.BindAuth, BindAuth, BindAuthSize);
+    mSession.BindAuthSize = (UINT8)BindAuthSize;
+  } else {
+    mSession.BindAuthSize = 0;
+  }
 
   // Build TPM2_StartAuthSession command
   // Format: TPM_ST_NO_SESSIONS + size + CC + tpmKey + bind + nonceCaller(TPM2B)
@@ -423,8 +429,39 @@ PblTpmStartHmacSession (
     mSession.SessionKeySize = 32;
   }
 
+  // D-206: Capture the bound entity's Name for the includeAuth decision.
+  // Per libtpms SessionProcess.c (IsSessionBindEntity / ComputeCommandHmac),
+  // the TPM appends the authorized entity's authValue to the HMAC key ONLY
+  // when the authorized entity is NOT the bound entity. The bound entity is
+  // Name || authValue captured at StartAuthSession. For an NV index the Name
+  // contains the TPMA_NV_WRITTEN attribute, so the bound-entity match breaks
+  // after the first write — the authValue must then be appended again.
+  // Comparing the entity's current Name to this captured Name reproduces
+  // IsSessionBindEntity without duplicating the TPM's XOR packing.
+  mSession.BoundEntityNameSize = 0;
+  if (BindHandle != (UINT32)TPM_RH_NULL) {
+    PblTpmGetHandleName (BindHandle, mSession.BoundEntityName,
+                         &mSession.BoundEntityNameSize);
+  }
+
+  // Default for the first command; PblTpmFillCommandHmac sets these per command.
+  mSession.IncludeAuth     = TRUE;
+  mSession.CmdAuthValueSize = 0;
+
   mSession.Active = TRUE;
   return EFI_SUCCESS;
+}
+
+/** D-206: Get the NV HMAC session state (parallel to PblTpmGetPcrSession).
+
+  @return Pointer to mSession, or NULL if no session is active.
+**/
+PBL_TPM_SESSION *
+PblTpmGetSession (
+  VOID
+  )
+{
+  return mSession.Active ? &mSession : NULL;
 }
 
 /** Get the active session handle. Returns 0 if no session is active. **/
@@ -443,6 +480,25 @@ PblTpmGetSessionKeySize (
   )
 {
   return mSession.Active ? mSession.SessionKeySize : 0;
+}
+
+/** D-215: Return TRUE when AES-256-CFB parameter encryption is enabled.
+
+  C2 §3 requires parameter encryption, but the CFB key/IV derivation from
+  sessionValue (sessionKey || authValue) is not yet fully implemented.
+  When this PCD is FALSE, PBL uses HMAC-only sessions with plaintext
+  parameters. The session is still bound to the NV index and the HMAC key
+  is KDFa-derived.
+
+  @retval TRUE   Parameter encryption enabled.
+  @retval FALSE  HMAC-only sessions (development default).
+**/
+BOOLEAN
+PblTpmParameterEncryptionEnabled (
+  VOID
+  )
+{
+  return FixedPcdGetBool (PcdPblTpmUseParameterEncryption);
 }
 
 /** Check if an HMAC session is active. **/
@@ -761,6 +817,22 @@ PblTpmComputeCommandHmacSession (
   //   pHash || nonceCaller || nonceTPM || sessionAttributes
   // D-206: CryptDigestUpdate2B in libtpms only includes the data (not the
   // 2-byte TPM2B size prefix), so nonces are raw 32 bytes.
+  // Per TPM 2.0 Part 1 §19.6.12 and libtpms ComputeCommandHmac, the HMAC key is
+  //   hmacKey = sessionKey || authValue(authorized entity)
+  // where the authValue is appended ONLY when includeAuth is SET — i.e. when
+  // the authorized entity is NOT the entity the session is bound to. When the
+  // session authorizes its bound entity, the authValue is already folded into
+  // sessionKey by KDFa, so the key is sessionKey alone.
+  // For an unbound session (bind=RH_NULL) with no auth, hmacKey is empty.
+  UINTN AuthSize = Session->IncludeAuth ? Session->CmdAuthValueSize : 0;
+  UINTN HmacKeySize = Session->SessionKeySize + AuthSize;
+  UINT8 HmacKey[96];
+  if (HmacKeySize > sizeof (HmacKey)) {
+    return EFI_DEVICE_ERROR;
+  }
+  CopyMem (HmacKey, Session->SessionKey, Session->SessionKeySize);
+  CopyMem (HmacKey + Session->SessionKeySize, Session->CmdAuthValue, AuthSize);
+
   UINTN HmacInputSize = 32 + 32 + 32 + 1;
   UINT8 *HmacBuf = AllocatePool (HmacInputSize);
   if (HmacBuf == NULL) {
@@ -777,7 +849,7 @@ PblTpmComputeCommandHmacSession (
   *HPtr = PblTpmSessionAttrsForCommand ((TPM_CC)CommandCode);
   HPtr += 1;
 
-  if (!HmacSha256All (HmacBuf, HmacInputSize, Session->SessionKey, 32, Hmac)) {
+  if (!HmacSha256All (HmacBuf, HmacInputSize, HmacKey, HmacKeySize, Hmac)) {
     FreePool (HmacBuf);
     return EFI_DEVICE_ERROR;
   }
@@ -813,11 +885,17 @@ PblTpmComputeCommandHmac (
     return EFI_INVALID_PARAMETER;
   }
 
-  // Simplified HMAC: HMAC-SHA256(sessionKey, commandBuffer)
-  if (!HmacSha256All (
-        CommandBuffer, CommandSize,
-        mSession.SessionKey, 32,
-        Hmac)) {
+  // Simplified HMAC: HMAC-SHA256(sessionKey || authValue, commandBuffer)
+  UINTN AuthSize = mSession.IncludeAuth ? mSession.CmdAuthValueSize : 0;
+  UINTN HmacKeySize = mSession.SessionKeySize + AuthSize;
+  UINT8 HmacKey[96];
+  if (HmacKeySize > sizeof (HmacKey)) {
+    return EFI_DEVICE_ERROR;
+  }
+  CopyMem (HmacKey, mSession.SessionKey, mSession.SessionKeySize);
+  CopyMem (HmacKey + mSession.SessionKeySize, mSession.CmdAuthValue, AuthSize);
+
+  if (!HmacSha256All (CommandBuffer, CommandSize, HmacKey, HmacKeySize, Hmac)) {
     return EFI_DEVICE_ERROR;
   }
 
@@ -854,11 +932,17 @@ PblTpmVerifyResponseHmac (
     return EFI_INVALID_PARAMETER;
   }
 
-  // Compute expected HMAC
-  if (!HmacSha256All (
-        ResponseBuffer, ResponseSize,
-        mSession.SessionKey, 32,
-        ComputedHmac)) {
+  // Compute expected HMAC using sessionKey || authValue (when includeAuth)
+  UINTN AuthSize = mSession.IncludeAuth ? mSession.CmdAuthValueSize : 0;
+  UINTN HmacKeySize = mSession.SessionKeySize + AuthSize;
+  UINT8 HmacKey[96];
+  if (HmacKeySize > sizeof (HmacKey)) {
+    return EFI_DEVICE_ERROR;
+  }
+  CopyMem (HmacKey, mSession.SessionKey, mSession.SessionKeySize);
+  CopyMem (HmacKey + mSession.SessionKeySize, mSession.CmdAuthValue, AuthSize);
+
+  if (!HmacSha256All (ResponseBuffer, ResponseSize, HmacKey, HmacKeySize, ComputedHmac)) {
     return EFI_DEVICE_ERROR;
   }
 
@@ -983,7 +1067,20 @@ PblTpmVerifyResponseHmacSession (
   *HPtr = PblTpmSessionAttrsForCommand ((TPM_CC)CommandCode);
   HPtr += 1;
 
-  if (!HmacSha256All (HmacInput, sizeof (HmacInput), Session->SessionKey, 32, ComputedHmac)) {
+  // HMAC key = sessionKey || authValue (entity auth, when includeAuth is SET).
+  // The TPM stores includeAuth on the session during command authorization and
+  // reuses it for the response HMAC, so the stored value is correct here even
+  // when the command (e.g. NV_Write) mutates the bound entity's Name.
+  UINTN AuthSize = Session->IncludeAuth ? Session->CmdAuthValueSize : 0;
+  UINTN HmacKeySize = Session->SessionKeySize + AuthSize;
+  UINT8 HmacKey[96];
+  if (HmacKeySize > sizeof (HmacKey)) {
+    return EFI_DEVICE_ERROR;
+  }
+  CopyMem (HmacKey, Session->SessionKey, Session->SessionKeySize);
+  CopyMem (HmacKey + Session->SessionKeySize, Session->CmdAuthValue, AuthSize);
+
+  if (!HmacSha256All (HmacInput, sizeof (HmacInput), HmacKey, HmacKeySize, ComputedHmac)) {
     return EFI_DEVICE_ERROR;
   }
 
@@ -1137,7 +1234,10 @@ PblTpmStartPcrSession (
   // D-206: PCR session is unbound (bind=TPM_RH_NULL, no salt), so session key
   // stays empty (0 bytes). Don't compute KDFa — matches libtpms Session.c which
   // only computes session key when bind != TPM_RH_NULL or seed is non-empty.
-  mPcrSession.SessionKeySize = 0;
+  mPcrSession.SessionKeySize     = 0;
+  mPcrSession.BoundEntityNameSize = 0;
+  mPcrSession.IncludeAuth        = TRUE;
+  mPcrSession.CmdAuthValueSize   = 0;
 
   mPcrSession.Active = TRUE;
   return EFI_SUCCESS;

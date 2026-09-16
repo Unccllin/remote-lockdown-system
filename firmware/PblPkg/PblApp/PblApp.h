@@ -518,11 +518,18 @@ PblTpmComputeCommandHmac (
 /** PBL HMAC session state. */
 typedef struct {
   UINT32   SessionHandle;     // TPM handle returned by StartAuthSession
-  UINT8    SessionKey[32];    // AES-256-CFB + HMAC key (empty when unbound)
+  UINT8    SessionKey[32];    // KDFa session key (empty when unbound)
   UINT8    SessionKeySize;    // Size of session key (0 when bind=NULL + no salt)
   UINT8    NonceCaller[32];   // Our nonce (from EFI_RNG)
   UINT8    NonceTpm[32];      // TPM's nonce (from StartAuthSession response)
   UINT32   BindHandle;        // The NV index this session is bound to
+  UINT8    BindAuth[64];      // Auth value of the bound entity (NV index)
+  UINT8    BindAuthSize;      // Size of BindAuth (0 when bind=RH_NULL)
+  UINT8    BoundEntityName[34]; // Name of bind entity captured at StartAuthSession
+  UINT8    BoundEntityNameSize; // 0 when session is unbound (bind=TPM_RH_NULL)
+  BOOLEAN  IncludeAuth;         // TPM includeAuth for the in-flight command/response
+  UINT8    CmdAuthValue[64];    // authValue of the entity authorized by session 0
+  UINT8    CmdAuthValueSize;    // Size of CmdAuthValue
   BOOLEAN  Active;            // TRUE if session is established
 } PBL_TPM_SESSION;
 
@@ -540,9 +547,46 @@ PblTpmCacheNvName (
   IN UINT16  DataSize
   );
 
+// D-206: Refresh a cached NV index name/attributes via TPM2_NV_ReadPublic.
+//        Required because TPMA_NV_WRITTEN changes the entity Name, which
+//        affects both cpHash and the bound-session includeAuth decision.
+EFI_STATUS
+PblTpmNvRefreshName (
+  IN UINT32  NvIndex
+  );
+
+// D-206: Mark an NV index written after a successful NV_Write/NV_Increment
+//        so the cached attributes include TPMA_NV_WRITTEN.
+VOID
+PblTpmNvMarkWritten (
+  IN UINT32  NvIndex
+  );
+
+// D-206: Get the TPM NAME for a handle (NV indices from the name cache with
+//        current attributes; hierarchy handles are the handle itself).
+EFI_STATUS
+PblTpmGetHandleName (
+  IN  UINT32  Handle,
+  OUT UINT8  *Name,
+  OUT UINT8  *NameSize
+  );
+
+// D-206: Get the NV HMAC session state (parallel to PblTpmGetPcrSession).
+PBL_TPM_SESSION *
+PblTpmGetSession (
+  VOID
+  );
+
 // D-206: Get session key size (0 for unbound sessions — no KDFa)
 UINT8
 PblTpmGetSessionKeySize (
+  VOID
+  );
+
+// D-215: Return TRUE when AES-256-CFB parameter encryption is implemented.
+//        FALSE uses HMAC-only sessions (bound session still KDFa-derived).
+BOOLEAN
+PblTpmParameterEncryptionEnabled (
   VOID
   );
 

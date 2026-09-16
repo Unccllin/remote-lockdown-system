@@ -70,3 +70,14 @@
   # hardware-rooted lock state. Custom OVMF with the null platform-hierarchy
   # library leaves platform auth empty, so this works under swtpm.
   gPblPkgTokenSpaceGuid.PcdPblTpmUsePlatformHierarchy|TRUE|BOOLEAN|0x00000009
+
+  ## D-215: AES-256-CFB parameter encryption is not yet fully implemented
+  ## (CFB key/IV derivation from sessionValue requires KDFa CFB mode).
+  ## When FALSE, PBL uses HMAC-only sessions: the session is still bound
+  ## to the NV index with KDFa, but parameters are sent/received plaintext.
+  gPblPkgTokenSpaceGuid.PcdPblTpmUseParameterEncryption|FALSE|BOOLEAN|0x0000000A
+
+  ## D-215: NV index auth value (PBL auth value for the lock-state index).
+  ## This value is provisioned at enrolment; the development default is a
+  ## 32-character string. It is used to bind the HMAC session to the index.
+  gPblPkgTokenSpaceGuid.PcdPblTpmNvAuthValue|"PBL_DEV_NV_AUTH_KEY_32B_LONG!!"|VOID*|0x0000000B
