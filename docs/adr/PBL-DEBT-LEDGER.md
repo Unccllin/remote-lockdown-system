@@ -1346,9 +1346,9 @@
 
 | # | Description | Status | Category |
 |---|-------------|--------|----------|
-| D-217 | All in-binary hardening bypassable if PblApp.efi is modified | OPEN (verified empirically: 9-byte patch to PblEvaluateDecision at 0x7c03 made it always return PASS, bypassing the lock screen. PBL code is not self-protecting — Secure Boot is the only defense against binary modification. Need runtime self-integrity that hashes the PE file from disk, or a Secure Boot deployment checklist) | SECURITY |
+| D-217 | All in-binary hardening bypassable if PblApp.efi is modified | CLOSED (both criteria met: (a) PblHashSelfImage hashes the on-disk PE via LoadedImage->FilePath — deterministic vs reverted D-212 — and extends it into PCR 13 before the inputs extend, so tamper OR removal changes PCR 13 (attestation/sealing detection); harness verifies logged hash == sha256sum(PblApp.efi), 14 PASS / 0 FAIL. (b) PBL-SECURE-BOOT-DEPLOYMENT.md documents the preventive layer. Commit 5a59aa2; artifact /tmp/pbl-ci/pbl-serial.log) | SECURITY |
 || D-218 | Chain-load hash check with policy-provided hash | CLOSED (test-chainload-harness.sh generates policy with C4 key 58 set to real bootx64.efi SHA-256 and a mismatched variant; mismatch log shows [ChainLoad] BLOCK — bootmgfw.efi hash mismatch. Commit 5123efc; artifact /tmp/pbl-chainload-ci/pbl-serial-{pass,mismatch}.log) | TEST |
 | D-219 | Policy signature BLOCK path untested | CLOSED (same scenario as D-215 — test-d215-harness.sh + gen-policy-rot.py; 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 
-**Totals**: 52 items — 46 CLOSED, 6 OPEN
+**Totals**: 52 items — 47 CLOSED, 5 OPEN
 

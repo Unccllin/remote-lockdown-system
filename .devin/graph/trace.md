@@ -1134,3 +1134,57 @@ Resolve the four EDK II/PBL source gaps (package-resolution order, Tcg2 protocol
 ---
 
 ---
+
+---
+
+## Session 109 — 2026-09-16 — D-217 runtime self-integrity: PCR 13 self-image measurement + Secure Boot checklist
+
+**RULE-ZERO — Understanding logged before code changes**
+
+**Read:** `PblApp.c` PCR-extend block (step [7/8]) incl. D-212 revert note, `TpmClient.c` `PblTpmExtendPcr`/`PblTpmReadPcr`, `PBL-C2-TPM-Contract.md` §4 (PCR 12 decision / PCR 13 inputs, high-assurance sealing tier), `Decision.c` REQ-01 (SecureBoot/SetupMode → BLOCK), `PblReadFileFromFs` SimpleFS pattern, `PlatformState.c` LoadedImage enumeration.
+
+**Finding:** D-212 was reverted because hashing the **in-memory** image is non-deterministic (PE ImageBase=0 → DIR64 relocations at a random load address each boot). The on-disk PE file bytes ARE deterministic — hashable via `LoadedImage->DeviceHandle` + `FilePath` media node + SimpleFS. D-217's ledger close criteria allowed "runtime self-integrity that hashes the PE file from disk, or a Secure Boot deployment checklist" — both were delivered since self-measurement alone is detection, not prevention.
+
+**What changed**
+
+- `PblApp.c` — new `PblHashSelfImage`: resolves `EFI_LOADED_IMAGE_PROTOCOL` on the image handle, walks `FilePath` device-path nodes for `MEDIA_FILEPATH_DP`, opens the PE via SimpleFS on `DeviceHandle`, SHA-256s the file. Result extended into PCR 13 BEFORE the inputs extend; serial prints `Self-image SHA-256: <hex>`.
+- `ci-harness-docker.sh` / `ci-harness.sh` — new checks: `PCR 13 (self-image) extended` present, and logged hash == `sha256sum(PblApp.efi)` (EDK II `Print %02x` emits uppercase; compare case-folded).
+- `PBL-C2-TPM-Contract.md` §4.1 — three-extend ordering documented (PCR13 self-image, PCR13 inputs, PCR12 decision).
+- `docs/adr/PBL-SECURE-BOOT-DEPLOYMENT.md` (new) — prevention-layer checklist: owner PK/KEK/db enrollment, sbsign, dbx/SBAT/min_svn, platform-hierarchy TPM NV, Boot Guard + SPI protection + firmware-volume placement, hardware-verification gaps.
+
+**Test results**
+
+- Build: `PblApp.efi` SHA-256 `b9fc20e9...`.
+- `ci-harness-docker.sh`: **14 PASS / 0 FAIL** — logged self-image hash matches `sha256sum` of the booted binary exactly.
+- `ci-harness-persistence.sh` (two boots): **16 PASS / 0 FAIL** — no regression.
+- `make graph-check`: all invariants pass (after adding missing Fog cleared section).
+
+**Debt items closed:**
+- **D-217** — both close criteria met (commit `5a59aa2`, artifact `/tmp/pbl-ci/pbl-serial.log`).
+
+**Debt items still open:**
+- D-213 (LoadedImageCount enrichment), D-100..D-130, D-200..D-211 per `current-state.md`; AES-256-CFB parameter encryption for C2 REQ-05.
+
+**Fog cleared this session:**
+- Why D-212 failed: in-memory PE image has relocations applied at a random base; on-disk file bytes are stable — hashable deterministically.
+- EDK II `Print` with `%02x` emits UPPERCASE hex — harness comparisons must case-fold.
+- Self-measurement is complete for detection: tampered binary → different hash extended; patched binary that skips the code → missing extend. Both change PCR 13.
+- `ci-harness-docker.sh` `set -eo pipefail` kills the script silently on any failing command substitution — needs `|| true` guards on grep pipelines.
+
+**Fog remaining:**
+- Self-image measurement runs AFTER decision evaluation (step [7/8]) — a tampered binary's damage (e.g. forced PASS) happens before detection. Ordering acceptable since detection is via attestation post-boot, but noted.
+- `LoadedImage->FilePath` may be absent for firmware-volume-loaded images — `PblHashSelfImage` returns NOT_FOUND → WARN; FV deployment will need a ROM-volume read path instead.
+- QEMU/swtpm only; real Secure Boot rejection of tampered binary untested (needs signed binary + enrolled keys on hardware or OVMF secure-boot vars).
+
+**Blockers**
+- None.
+
+**Failure attribution**
+- Layer 4 (verification feedback): first harness run failed silently — `set -eo pipefail` + failing `grep` in command substitution exited before printing FAIL. Guarded with `|| true`.
+
+**Next session opening**
+- D-213 LoadedImageCount enrichment (hash each image's device path or record names), AES-256-CFB parameter encryption for C2 REQ-05, or OVMF Secure Boot vars test to prove tampered-binary rejection in emulation.
+
+---
+
+---
