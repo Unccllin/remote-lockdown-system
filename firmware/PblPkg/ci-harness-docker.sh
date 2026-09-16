@@ -4,8 +4,16 @@
 # Boots PblApp.efi in OVMF (QEMU) with a swtpm TPM 2.0 simulator.
 # Designed to run inside the pbl-qemu Docker image.
 #
-# Usage (from host):
-#   docker run --rm -v $(pwd)/firmware:/firmware pbl-qemu \
+# Usage (from host) — custom OVMF (null platform-hierarchy lib, required for
+# PcdPblTpmUsePlatformHierarchy=TRUE):
+#   docker run --rm \
+#     -v $(pwd)/firmware:/firmware:ro \
+#     -v /home/cllin/.local/src/edk2/Build/OvmfX64/RELEASE_GCC/FV:/ovmf:ro \
+#     pbl-qemu /firmware/PblPkg/ci-harness-docker.sh
+#
+# Usage (from host) — stock Ubuntu OVMF (dev fallback, may fail with platform
+# hierarchy unless PcdPblTpmUsePlatformHierarchy=FALSE):
+#   docker run --rm -v $(pwd)/firmware:/firmware:ro pbl-qemu \
 #     /firmware/PblPkg/ci-harness-docker.sh
 #
 # Usage (inside container):
@@ -19,9 +27,19 @@ TIMEOUT="${1:-30}"
 FIRMWARE_DIR="${FIRMWARE_DIR:-/firmware}"
 BUILD_DIR="/tmp/pbl-ci"
 
-# OVMF paths (Ubuntu 24.04 package — use 4M split firmware)
-OVMF_CODE="${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}"
-OVMF_VARS_SRC="${OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}"
+# OVMF paths: prefer the PBL custom build (which uses PeiDxeTpmPlatformHierarchyLibNull
+# and leaves platformAuth empty, so PBL can use TPM_RH_PLATFORM). Fall back to the
+# Ubuntu 4M split OVMF for environments that do not mount /ovmf.
+#
+# The pbl-qemu Docker image sets OVMF_CODE/OVMF_VARS to the Ubuntu package
+# paths, so the script must override them when /ovmf is mounted.
+if [ -f "/ovmf/OVMF_CODE.fd" ] && [ -f "/ovmf/OVMF_VARS.fd" ]; then
+  OVMF_CODE="/ovmf/OVMF_CODE.fd"
+  OVMF_VARS_SRC="/ovmf/OVMF_VARS.fd"
+else
+  OVMF_CODE="${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}"
+  OVMF_VARS_SRC="${OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}"
+fi
 
 mkdir -p "${BUILD_DIR}"
 
@@ -221,6 +239,8 @@ check "Verdict verify step" "\[5/8\] Verifying verdict"
 check "Decision step" "\[6/8\] Evaluating decision"
 check "PCR extend step" "\[7/8\] Extending PCR 12/13"
 check "Decision action step" "\[8/8\] Decision:"
+check "NV indices provisioned" "\[OK\] NV indices provisioned"
+check "HMAC session established" "\[OK\] HMAC session established \(AES-256-CFB\)"
 check "Lock screen displayed" "THIS DEVICE IS LOCKED"
 
 echo ""

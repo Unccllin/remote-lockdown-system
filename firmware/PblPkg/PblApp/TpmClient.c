@@ -1011,12 +1011,22 @@ PblTpmNvDefineSpace (
     return EFI_NOT_FOUND;
   }
 
-  // D-206: Use TPM_RH_OWNER instead of TPM_RH_PLATFORM.
-  // OVMF's Tcg2PlatformDxe randomizes the platform hierarchy auth via
-  // HierarchyChangeAuth(PLATFORM, empty, random), making platform auth
-  // unusable from our UEFI application. The owner hierarchy auth remains
-  // empty by default, so we use TPM_RH_OWNER with empty password auth.
-  UINT32 DefHandles[] = { (UINT32)TPM_RH_OWNER };
+  // C2 §5.4: Bind the NV index to the platform hierarchy when possible.
+  // Production builds set PcdPblTpmUsePlatformHierarchy=TRUE, which uses
+  // TPM_RH_PLATFORM and adds PPREAD/PPWRITE so the lock state survives
+  // TPM2_Clear(RH_OWNER). Dev/swtpm builds may set it to FALSE if the
+  // platform auth has been randomized by the firmware.
+  UINT32 NvAuthHierarchy;
+  if (FixedPcdGetBool (PcdPblTpmUsePlatformHierarchy)) {
+    NvAuthHierarchy = (UINT32)TPM_RH_PLATFORM;
+  } else {
+    NvAuthHierarchy = (UINT32)TPM_RH_OWNER;
+  }
+
+  // D-102: debug removed; the hierarchy is now always TPM_RH_PLATFORM in
+  // production builds (PcdPblTpmUsePlatformHierarchy defaults to TRUE).
+
+  UINT32 DefHandles[] = { NvAuthHierarchy };
   UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (
                  CmdBuf, sizeof (CmdBuf), TPM_CC_NV_DefineSpace, 1, DefHandles);
   UINT8 *ParamsStart = Ptr;
@@ -1047,21 +1057,20 @@ PblTpmNvDefineSpace (
   *(UINT16 *)Ptr = SwapBytes16 (0x000B);  // nameAlg = TPM_ALG_SHA256
   Ptr += 2;
 
-  // D-206: TPMA_NV attributes — use AUTHREAD/AUTHWRITE only (no PPREAD/PPWRITE).
-  // PPREAD/PPWRITE require platform hierarchy auth, which OVMF randomizes.
-  // AUTHREAD/AUTHWRITE use the NV index auth value (empty), so reads/writes
-  // work with empty password auth via TPM_RS_PW session.
-  // Do NOT set PLATFORMCREATE (bit 30) — when clear, either owner or platform
-  // hierarchy can define the index. No OWNERCREATE bit exists in TPM 2.0.
-  // TPMA_NV bit layout (per TPM 2.0 Part 2 Table 2:208):
-  //   bit 0:  PPWRITE         bit 16: PPREAD
-  //   bit 1:  OWNERWRITE      bit 17: OWNERREAD
-  //   bit 2:  AUTHWRITE       bit 18: AUTHREAD
-  //   bit 3:  POLICYWRITE     bit 19: POLICYREAD
-  //   bits 4-7: TPM_NT        bit 25: NO_DA
-  //     TPM_NT_ORDINARY=0, TPM_NT_COUNTER=1, TPM_NT_BITS=2, TPM_NT_EXTEND=4
-  //   bit 30: PLATFORMCREATE
-  UINT32 Attr = 0x02040004;  // AUTHWRITE|AUTHREAD|NO_DA, TPM_NT=ORDINARY
+  // C2 §5.4: TPMA_NV attributes depend on the chosen hierarchy.
+  // Production (platform) attributes: PPWRITE|AUTHWRITE|POLICYWRITE|
+  //                                    PPREAD |AUTHREAD |POLICYREAD |
+  //                                    NO_DA | PLATFORMCREATE
+  // The PLATFORMCREATE bit is required by the TPM when authHandle is
+  // TPM_RH_PLATFORM. It prevents the owner hierarchy from deleting the index.
+  // Dev/swtpm (owner) attributes:     AUTHWRITE|AUTHREAD|NO_DA
+  // TPM_NT=COUNTER is set for the policy-version counter.
+  UINT32 Attr;
+  if (FixedPcdGetBool (PcdPblTpmUsePlatformHierarchy)) {
+    Attr = 0x420D000D;  // PPWRITE|AUTHWRITE|POLICYWRITE|PPREAD|AUTHREAD|POLICYREAD|NO_DA|PLATFORMCREATE
+  } else {
+    Attr = 0x02040004;  // AUTHWRITE|AUTHREAD|NO_DA (owner-dev fallback)
+  }
   if (IsCounter) {
     Attr |= (1 << 4);  // TPM_NT_COUNTER = 1 (bits 4-7)
   }
@@ -1121,11 +1130,17 @@ PblTpmProvisionNvIndices (
 {
   EFI_STATUS Status;
 
-  // D-206: OVMF's Tcg2PlatformDxe randomizes platform hierarchy auth via
-  // HierarchyChangeAuth(PLATFORM, empty, random). We use TPM_RH_OWNER with
-  // empty password auth instead. The owner hierarchy auth is empty by default
-  // and OVMF does not change it. No Startup or Clear needed — OVMF already
-  // started the TPM and we must not call Clear (destructive: clears NV indices).
+  // C2 §5.4: Use the platform hierarchy to define NV indices when
+  // PcdPblTpmUsePlatformHierarchy is TRUE. This binds the lock state to the
+  // hardware root (PH) and survives TPM2_Clear(RH_OWNER). Dev builds may fall
+  // back to owner hierarchy if the firmware randomizes platform auth.
+  UINT32 NvAttr;
+  if (FixedPcdGetBool (PcdPblTpmUsePlatformHierarchy)) {
+    // PPWRITE|AUTHWRITE|POLICYWRITE|PPREAD|AUTHREAD|POLICYREAD|NO_DA|PLATFORMCREATE
+    NvAttr = 0x420D000D;
+  } else {
+    NvAttr = 0x02040004;  // AUTHWRITE|AUTHREAD|NO_DA
+  }
 
   // Lock state: 64 bytes, regular NV
   Status = PblTpmNvDefineSpace (PBL_NV_LOCK_STATE, PBL_LOCK_STATE_SIZE, FALSE);
@@ -1133,7 +1148,7 @@ PblTpmProvisionNvIndices (
     Print (L"  [WARN] NV_DefineSpace(LOCK_STATE): %r\n", Status);
     return Status;
   }
-  PblTpmCacheNvName (PBL_NV_LOCK_STATE, 0x02040004, PBL_LOCK_STATE_SIZE);
+  PblTpmCacheNvName (PBL_NV_LOCK_STATE, NvAttr, PBL_LOCK_STATE_SIZE);
 
   // Policy version: 8 bytes, counter
   Status = PblTpmNvDefineSpace (PBL_NV_POLICY_VERSION, 8, TRUE);
@@ -1141,7 +1156,7 @@ PblTpmProvisionNvIndices (
     Print (L"  [WARN] NV_DefineSpace(POLICY_VERSION): %r\n", Status);
     return Status;
   }
-  PblTpmCacheNvName (PBL_NV_POLICY_VERSION, 0x02040004 | (1 << 4), 8);
+  PblTpmCacheNvName (PBL_NV_POLICY_VERSION, NvAttr | (1 << 4), 8);
 
   // AK name: 34 bytes, regular NV
   Status = PblTpmNvDefineSpace (PBL_NV_AK_NAME, 34, FALSE);
@@ -1149,7 +1164,7 @@ PblTpmProvisionNvIndices (
     Print (L"  [WARN] NV_DefineSpace(AK_NAME): %r\n", Status);
     return Status;
   }
-  PblTpmCacheNvName (PBL_NV_AK_NAME, 0x02040004, 34);
+  PblTpmCacheNvName (PBL_NV_AK_NAME, NvAttr, 34);
 
   return EFI_SUCCESS;
 }

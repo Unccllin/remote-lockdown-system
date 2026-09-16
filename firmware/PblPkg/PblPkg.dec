@@ -58,3 +58,15 @@
 
   ## Lock screen display timeout in seconds (for DEGRADED notice)
   gPblPkgTokenSpaceGuid.PcdDegradedNoticeSeconds|10|UINT8|0x00000008
+
+  ## C2 §5.4: Bind PBL NV indices to the platform hierarchy.
+  # When TRUE, PblTpmNvDefineSpace uses TPM_RH_PLATFORM and sets
+  # TPMA_NV_PPWRITE/PPREAD/POLICYWRITE/POLICYREAD/AUTHWRITE/AUTHREAD/
+  # PLATFORMCREATE/NO_DA. PLATFORMCREATE is required by the TPM for a
+  # platform-created index and prevents deletion by the owner hierarchy.
+  # When FALSE, it falls back to TPM_RH_OWNER with AUTHREAD/AUTHWRITE/NO_DA.
+  # FALSE is for dev/swtpm environments where OVMF randomizes platform auth.
+  # TRUE is the default for PBL: platform hierarchy is required for a
+  # hardware-rooted lock state. Custom OVMF with the null platform-hierarchy
+  # library leaves platform auth empty, so this works under swtpm.
+  gPblPkgTokenSpaceGuid.PcdPblTpmUsePlatformHierarchy|TRUE|BOOLEAN|0x00000009

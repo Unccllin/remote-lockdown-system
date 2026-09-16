@@ -51,13 +51,17 @@ rm -rf "${SWTPM_DIR}"
 mkdir -p "${SWTPM_DIR}"
 
 if command -v swtpm >/dev/null 2>&1; then
+  # D-101: use only the --ctrl socket; QEMU's TPM backend passes the data
+  # channel fd via CMD_SET_DATAFD. Pre-opening --server makes that fail.
+  rm -f "${BUILD_DIR}/swtpm-ctrl.sock"
   swtpm socket --tpmstate dir="${SWTPM_DIR}" \
-    --ctrl type=tcp,port=2322 \
-    --server type=tcp,port=2321 \
+    --ctrl type=unixio,path="${BUILD_DIR}/swtpm-ctrl.sock" \
     --tpm2 \
     --daemon \
+    --flags not-need-init \
     --pid file="${BUILD_DIR}/swtpm.pid"
-  SWTPM_ARGS="-chardev socket,id=chrtpm,path=${BUILD_DIR}/swtpm.sock -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0"
+  swtpm_ioctl --unix "${BUILD_DIR}/swtpm-ctrl.sock" -i 2>/dev/null || true
+  SWTPM_ARGS="-chardev socket,id=chrtpm,path=${BUILD_DIR}/swtpm-ctrl.sock -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0"
   echo "  swtpm started (PID $(cat "${BUILD_DIR}/swtpm.pid" 2>/dev/null || echo '?'))"
 else
   echo "  [WARN] swtpm not installed — running without TPM"
@@ -135,6 +139,8 @@ check "Verdict verify step" "\[5/8\] Verifying verdict"
 check "Decision step" "\[6/8\] Evaluating decision"
 check "PCR extend step" "\[7/8\] Extending PCR 12/13"
 check "Decision action step" "\[8/8\] Decision:"
+check "NV indices provisioned" "\[OK\] NV indices provisioned"
+check "HMAC session established" "\[OK\] HMAC session established \(AES-256-CFB\)"
 check "Scaffold completion" "PBL scaffold complete"
 
 echo ""

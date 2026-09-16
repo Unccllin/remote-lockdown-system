@@ -131,6 +131,7 @@
   gPblPkgTokenSpaceGuid.PcdMaxResponseSize
   gPblPkgTokenSpaceGuid.PcdMaxPolicySize
   gPblPkgTokenSpaceGuid.PcdDegradedNoticeSeconds
+  gPblPkgTokenSpaceGuid.PcdPblTpmUsePlatformHierarchy
 
 [BuildOptions]
   # Strict warnings for PBL code only (not EDK2 libraries)
