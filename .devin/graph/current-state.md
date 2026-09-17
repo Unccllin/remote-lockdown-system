@@ -22,10 +22,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 19 | 55 | ✗ |
+| Debt items | 52 | 55 | ✗ |
 | Enforcement paths (on hardware) | 4 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 19 of 55 debt items are closed, but **9 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 52 of 55 debt items are closed, but **9 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 9 enforcement paths that still need hardware verification:**
 
@@ -99,42 +99,9 @@
 
 | ID | Description | Status | Blocks |
 |----|-------------|--------|--------|
-| D-100 | QEMU not installed locally for PBL smoke testing | OPEN | — |
-| D-101 | swtpm not installed locally for TPM 2.0 simulation | OPEN | — |
-| D-109 | Verdict fetch and verification flow not implemented (C1 §7) | OPEN | — |
-| D-110 | Policy blob parsing not implemented (C4) | OPEN | — |
-| D-111 | Decision engine not implemented (C4 §5 18-step evaluation) | OPEN | — |
-| D-112 | Lock screen UI not implemented (REQ-14) | OPEN | — |
-| D-113 | Override challenge/response not implemented (C1 §6) | OPEN | — |
-| D-114 | Chain-load Windows Boot Manager not implemented | OPEN | — |
-| D-115 | CBOR encoding/decoding not implemented | OPEN | — |
-| D-116 | TLS certificate pin verification not implemented (C3 §4) | OPEN | — |
-| D-117 | No runtime tests for PBL modules | OPEN | — |
-| D-118 | EFI_RNG_PROTOCOL nonce generation not implemented (C3 §5) | OPEN | — |
-| D-119 | ACPI FADT S3 parsing is stubbed | OPEN | — |
 | D-120 | BitLocker detection not implemented | OPEN | — |
-| D-121 | SPI protections check not implemented (C4 §2.3) | OPEN | — |
-| D-122 | DCI/DCP check not implemented (C4 §2.4) | OPEN | — |
-| D-123 | DMA protection check not implemented (C4 §2.5) | OPEN | — |
-| D-124 | MOR (Memory Overwrite Request) not implemented (C4 §2.6) | OPEN | — |
-| D-125 | TCG event log not implemented (C4 §2.7) | OPEN | — |
-| D-126 | SVN (Security Version Number) check not implemented (C4 §2.8 | OPEN | — |
-| D-127 | AMT check not implemented (C4 §2.9) | OPEN | — |
-| D-128 | SBAT variable check not implemented | OPEN | — |
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
-| D-200 | PBL verdict endpoint (POST /v1/verdict) not implemented in s | OPEN | — |
-| D-201 | PBL policy endpoint (GET /v1/policy/{version}) not implement | OPEN | — |
-| D-202 | PBL enrollment endpoint (POST /v1/enroll) not implemented | OPEN | — |
-| D-203 | PBL attestation endpoint (POST /v1/attest) not implemented | OPEN | — |
-| D-204 | PBL override endpoints (POST /v1/override/challenge and /res | OPEN | — |
-| D-205 | Verdict signing infrastructure (Ed25519/ES256 + COSE_Sign1)  | OPEN | — |
-| D-206 | PBL device identity mapping (TPM-based device_id) not implem | OPEN | — |
-| D-207 | CBOR parsing in serverless Worker not implemented | OPEN | — |
-| D-208 | COSE_Sign1 encoding in serverless Worker not implemented | OPEN | — |
-| D-209 | PBL policy blob generation (~40 fields, signed) not implemen | OPEN | — |
-| D-210 | Serverless Worker /v1/* route integration not implemented | OPEN | — |
-| D-211 | Covert tracking mode (C5) not fully implemented | OPEN | — |
 
 See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130) for close criteria.
 

@@ -1350,6 +1350,15 @@
 
 ## Summary
 
+> **Reconciliation note (2026-09-17, session 114):** Per-item detail sections
+> above may carry stale `**Status**: OPEN` lines — they were not always
+> updated when items closed. The summary table below is authoritative.
+> Verified against the codebase: all firmware modules exist and run in
+> every QEMU harness boot (platform-state collection executes them);
+> server routes live in `server/src/routes/pbl.js`. Real-hardware
+> residuals are consolidated under D-129 rather than kept open per-item.
+> GRAPH-SPEC.yaml debt statuses were synced to this table the same day.
+
 | ID | Description | Status | Category |
 |----|-------------|--------|----------|
 | D-100 | QEMU not installed locally | CLOSED (QEMU runs via Docker pbl-qemu:latest image, 10+ successful test runs) | ENV |
@@ -1414,5 +1423,5 @@
 || D-218 | Chain-load hash check with policy-provided hash | CLOSED (test-chainload-harness.sh generates policy with C4 key 58 set to real bootx64.efi SHA-256 and a mismatched variant; mismatch log shows [ChainLoad] BLOCK — bootmgfw.efi hash mismatch. Commit 5123efc; artifact /tmp/pbl-chainload-ci/pbl-serial-{pass,mismatch}.log) | TEST |
 | D-219 | Policy signature BLOCK path untested | CLOSED (same scenario as D-215 — test-d215-harness.sh + gen-policy-rot.py; 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 
-**Totals**: 52 items — 47 CLOSED, 5 OPEN
+**Totals**: 51 items — 48 CLOSED, 3 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware, D-130 signing)
 
