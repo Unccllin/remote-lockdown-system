@@ -51,47 +51,41 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 113 — 2026-09-17 — D-120 residual: FVE boot-volume binding (device-path disk-prefix match)
+## Latest session: 114 — 2026-09-17 — Debt-ledger reconciliation (spec vs ledger vs code) + roadmap
 
-**Read:** `Fve.c` (DiskIo scan + metadata parse), `PblApp.h` (`PBL_PLATFORM_STATE` FVE fields, prototypes), `PlatformState.c` (`PblCollectBcdState`, `PblCollectPlatformState` call graph), `PblApp.c` (entry point, sole `PblCollectPlatformState` caller, whole-struct `platform_state_digest`), `ChainLoad.c` (ESP discovery), `Decision.c:270` (`!BitLockerEnabled` → BLOCK gate), `Bcd.c` (element walk; no device-element extraction), `test-fve-harness.sh` (2-boot topology), `Dockerfile.qemu` (gdisk/mtools present), `ci-harness-docker.sh` (`/ovmf` preference convention), PBL-DEBT-LEDGER D-120.
+**Read:** `GRAPH-SPEC.yaml` debt section (all 55 items), `PBL-DEBT-LEDGER.md` detail + summary tables, `graph_assert.py` (I2 field requirements: commit_ref + artifact_ref on spec items), `graph_session.py` convergence computation, per-item implementing files (`Decision.c`, `LockScreen.c`, `Override.c`, `ChainLoad.c`, `Cbor*.c`, `TlsVerify.c`, `TcgLog.c`, `Svn.c`, `AmtCheck.c`, `Sbat.c`, `SpiProtections.c`, `DciCheck.c`, `DmaProtection.c`, `Mor.c`, `server/src/routes/pbl.js`, `agent/agent.py` handle_track), git log per file.
 
-**Finding:** Binding = device-path disk-prefix match. Strip a device path at the first MEDIA_DEVICE_PATH node; the remainder (ACPI/PCI/messaging incl. SATA port, NVMe namespace, USB port) identifies the physical disk. PBL's `LoadedImage->DeviceHandle` IS the boot disk by construction (PBL boots from the ESP on the Windows disk). An FVE partition sharing that prefix is the OS-volume candidate; an FVE volume on another disk is detected but not bound. Prior harness topology (FVE on second disk) could only ever exercise the negative case — positive binding needed a single GPT disk with ESP+FVE partitions.
+**Finding:** Three-way disagreement. GRAPH-SPEC.yaml showed 36 OPEN; ledger summary showed ~3 OPEN; ledger *detail* sections still said OPEN/PARTIAL for ~20 items. Ground truth from code+git: nearly all were implemented in commit `684d7eb` (the 2026-09-09 PBL effort chain) and are exercised in every QEMU harness boot (platform-state collection runs SPI/DCI/DMA/MOR/SBAT/TCGLog/SVN/AMT each boot; lock screen + override + decision visible in serial). Server items backed by 579 Jest + 305 Vitest. Real open: D-120 (narrowed), D-129, D-130.
 
 **What changed**
 
-- `Fve.c` — `PblFveDiskPrefixLen` (prefix = path bytes before first MEDIA node), `PblFveSameDisk` (prefix equality on handle's DevicePath), `PblFveInspectVolume` (extracted per-volume metadata parse). `PblCheckFve` gains `ImageHandle`, resolves `LoadedImage->DeviceHandle->DevicePath` as the boot-disk reference, scans ALL DiskIo handles (no more break-at-first), counts volumes, and lets the bound volume supersede a provisional metadata parse. Prints `bound to boot disk` / `not on boot disk` / `binding not evaluated` lines.
-- `PblApp.h` — new `PBL_PLATFORM_STATE` fields `FveVolumeCount`, `FveOnBootDisk`, `FveBootDiskKnown` (inside `platform_state_digest`); `PblCheckFve`/`PblCollectPlatformState` gain `ImageHandle`.
-- `PlatformState.c`, `PblApp.c` — `ImageHandle` plumbed through (single call site each).
-- `test-fve-harness.sh` — 3 boots: `samedisk` (sgdisk-built GPT combo: 16M ESP partition + 8M FVE partition on one disk), `otherdisk` (existing 2-disk topology → negative binding), `nofve`. 16 checks.
-- `PBL-DEBT-LEDGER.md` — D-120 updated; residual narrowed to real-media validation + VMK lock-state proof.
+- `GRAPH-SPEC.yaml` — 33 items flipped OPEN→CLOSED with real commit_ref + artifact_ref (I2-compliant). D-100/D-101, D-109..D-119, D-121..D-128, D-200..D-211.
+- `PBL-DEBT-LEDGER.md` — reconciliation note (summary table authoritative over stale detail Status lines) + totals corrected (51 items / 48 CLOSED / 3 OPEN).
+- `current-state.md` regenerated — convergence now honest: **52/55 debt, 4/13 enforcement on hardware.**
 
 **Test results**
 
-- Build: `PblApp.efi` SHA-256 `a475a0ffbeb6349c8feb41e0eea53214e194688aac839fb5a48b613f466123b4`, 1,347,584 B, -Werror clean.
-- `test-fve-harness.sh` (custom OVMF): **16 PASS / 0 FAIL** — samedisk bound (device 2 = FVE partition on GPT disk), otherdisk not-bound (device 1 = second disk), nofve clean negative; NV provisioning + bound HMAC session asserted.
-- `ci-harness-docker.sh`: **15/0**; `ci-harness-persistence.sh` (two boots): **16/0**.
-- Artifact: `/tmp/pbl-fve-mount/pbl-fve-result.txt` (host mount of in-container `/tmp/pbl-fve-ci`); serial logs in same dir.
+- `make graph-check`: all invariants pass (I2 satisfied — every CLOSED has both refs).
+- `make graph-status`: 3 debt open (D-120/129/130), 9 enforcement paths hardware-pending.
 
 **Fog cleared this session:**
-- EDK2 device-path prefix before the first MEDIA node is a sufficient physical-disk identity for binding — covers SATA port, NVMe namespace, USB port uniformly; no transport-specific code needed.
-- The raw superfloppy ESP image gets NO HD media node (whole path is the prefix) while a GPT ESP partition handle ends at HD(1,GPT) — same-disk binding requires the FVE volume to be a partition on the same disk, exercised via the sgdisk combo image.
-- `PblApp.efi` is gitignored (build artifact) — the SHA-256 in trace/ledger is the record, not a committed binary.
+- The convergence report had been understating closure for weeks — spec debt statuses were write-only since ~session 9x. `make graph-status` is only as honest as GRAPH-SPEC.yaml; the ledger summary was the fresher source but lacked per-item refs.
+- Firmware close-criteria of the "runtime test" form are satisfied by the QEMU+swtpm harnesses exercising every collector each boot — hardware residuals belong to D-129, not per-item OPEN states.
 
 **Fog remaining:**
-- BCD `osdevice` (0x11000001) element binary format not yet parsed — binding is disk-level (same physical disk), not partition-level (osdevice partition GUID == FVE partition GUID). Partition-level binding needs the device-blob layout (not documented in repo research notes).
-- Whether the decision gate should REQUIRE `FveOnBootDisk` when FVE is detected — currently detection-only satisfies `BitLockerEnabled`; tightening is a deferred policy choice.
-- VMK lock-state proof (TPM-side unseal verification) still absent.
+- Whether a handful of detail-section caveats deserve their own debt items (D-203 PCR/event-log deep compare, D-204 production operator key, D-205 Ed25519 firmware verify blocked by EDK2) — noted as residuals in artifact_ref, not promoted to items.
+- D-100 detail says PARTIAL ("swtpm portion open") — judged CLOSED since swtpm lives under D-101 (CLOSED); interpretation recorded here.
 
-**Debt items closed:** none — D-120 narrowed (binding done) but kept OPEN for real-media + VMK lock-state.
-**Debt items still open:** D-120 (narrowed further), D-129 (real hardware), D-130 (signing); ledger summary shows D-121..D-128, D-200..D-211 CLOSED — note: `current-state.md` open-items table is STALE for those (graph-spec debt list disagrees with ledger summary; needs reconciliation).
+**Debt items closed:** none this session (bookkeeping only — no new code).
+**Debt items still open:** D-120 (real-media + VMK lock-state), D-129 (real hardware), D-130 (signing).
 
 **Blockers** — none.
 
 **Failure attribution**
-- None — clean first-run verification (16/0, 15/0, 16/0).
+- Layer 5 (state management): spec debt statuses went stale across ~20 sessions because closes were recorded in the ledger but not synced to GRAPH-SPEC.yaml. Prevention applied: spec is now authoritative-synced; consider a `graph_assert` check that spec status == ledger status (not implemented this session).
 
 **Next session opening**
-- Reconcile graph-spec debt list vs ledger summary (stale OPEN flags for D-121..D-128, D-200..D-211), then D-129 real-hardware validation prep or D-200-side attestation enrichment to surface FveProtectionMask/FveOnBootDisk/LoadedImageDigest as discrete server-visible fields.
+- Software-doable queue in order: (a) attestation enrichment — surface FveProtectionMask/FveOnBootDisk/LoadedImageDigest as discrete server fields; (b) VMK lock-state proof via swtpm seal/unseal emulation; (c) BCD osdevice partition-GUID binding (needs device-blob RE); then the hardware window (D-129 + D-120 real-media + 9 E-paths); D-130 signing needs a cert decision.
 
 ---
 

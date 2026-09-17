@@ -1442,3 +1442,43 @@ Resolve the four EDK II/PBL source gaps (package-resolution order, Tcg2 protocol
 - Reconcile graph-spec debt list vs ledger summary (stale OPEN flags for D-121..D-128, D-200..D-211), then D-129 real-hardware validation prep or D-200-side attestation enrichment to surface FveProtectionMask/FveOnBootDisk/LoadedImageDigest as discrete server-visible fields.
 
 ---
+
+---
+
+## Session 114 — 2026-09-17 — Debt-ledger reconciliation (spec vs ledger vs code) + roadmap
+
+**Read:** `GRAPH-SPEC.yaml` debt section (all 55 items), `PBL-DEBT-LEDGER.md` detail + summary tables, `graph_assert.py` (I2 field requirements: commit_ref + artifact_ref on spec items), `graph_session.py` convergence computation, per-item implementing files (`Decision.c`, `LockScreen.c`, `Override.c`, `ChainLoad.c`, `Cbor*.c`, `TlsVerify.c`, `TcgLog.c`, `Svn.c`, `AmtCheck.c`, `Sbat.c`, `SpiProtections.c`, `DciCheck.c`, `DmaProtection.c`, `Mor.c`, `server/src/routes/pbl.js`, `agent/agent.py` handle_track), git log per file.
+
+**Finding:** Three-way disagreement. GRAPH-SPEC.yaml showed 36 OPEN; ledger summary showed ~3 OPEN; ledger *detail* sections still said OPEN/PARTIAL for ~20 items. Ground truth from code+git: nearly all were implemented in commit `684d7eb` (the 2026-09-09 PBL effort chain) and are exercised in every QEMU harness boot (platform-state collection runs SPI/DCI/DMA/MOR/SBAT/TCGLog/SVN/AMT each boot; lock screen + override + decision visible in serial). Server items backed by 579 Jest + 305 Vitest. Real open: D-120 (narrowed), D-129, D-130.
+
+**What changed**
+
+- `GRAPH-SPEC.yaml` — 33 items flipped OPEN→CLOSED with real commit_ref + artifact_ref (I2-compliant). D-100/D-101, D-109..D-119, D-121..D-128, D-200..D-211.
+- `PBL-DEBT-LEDGER.md` — reconciliation note (summary table authoritative over stale detail Status lines) + totals corrected (51 items / 48 CLOSED / 3 OPEN).
+- `current-state.md` regenerated — convergence now honest: **52/55 debt, 4/13 enforcement on hardware.**
+
+**Test results**
+
+- `make graph-check`: all invariants pass (I2 satisfied — every CLOSED has both refs).
+- `make graph-status`: 3 debt open (D-120/129/130), 9 enforcement paths hardware-pending.
+
+**Fog cleared this session:**
+- The convergence report had been understating closure for weeks — spec debt statuses were write-only since ~session 9x. `make graph-status` is only as honest as GRAPH-SPEC.yaml; the ledger summary was the fresher source but lacked per-item refs.
+- Firmware close-criteria of the "runtime test" form are satisfied by the QEMU+swtpm harnesses exercising every collector each boot — hardware residuals belong to D-129, not per-item OPEN states.
+
+**Fog remaining:**
+- Whether a handful of detail-section caveats deserve their own debt items (D-203 PCR/event-log deep compare, D-204 production operator key, D-205 Ed25519 firmware verify blocked by EDK2) — noted as residuals in artifact_ref, not promoted to items.
+- D-100 detail says PARTIAL ("swtpm portion open") — judged CLOSED since swtpm lives under D-101 (CLOSED); interpretation recorded here.
+
+**Debt items closed:** none this session (bookkeeping only — no new code).
+**Debt items still open:** D-120 (real-media + VMK lock-state), D-129 (real hardware), D-130 (signing).
+
+**Blockers** — none.
+
+**Failure attribution**
+- Layer 5 (state management): spec debt statuses went stale across ~20 sessions because closes were recorded in the ledger but not synced to GRAPH-SPEC.yaml. Prevention applied: spec is now authoritative-synced; consider a `graph_assert` check that spec status == ledger status (not implemented this session).
+
+**Next session opening**
+- Software-doable queue in order: (a) attestation enrichment — surface FveProtectionMask/FveOnBootDisk/LoadedImageDigest as discrete server fields; (b) VMK lock-state proof via swtpm seal/unseal emulation; (c) BCD osdevice partition-GUID binding (needs device-blob RE); then the hardware window (D-129 + D-120 real-media + 9 E-paths); D-130 signing needs a cert decision.
+
+---
