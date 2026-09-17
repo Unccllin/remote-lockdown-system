@@ -1,0 +1,169 @@
+#!/bin/bash
+# test-fve-harness.sh — D-120 FVE-FS metadata detection test.
+#
+# Boots PblApp.efi in QEMU+swtpm twice:
+#   1. fve   — a second raw disk carries a synthetic FVE-FS volume header
+#              + metadata block with a TPM-protected VMK entry.
+#              Expect: "[OK] FVE-FS volume detected" + "protectors 0x0002".
+#   2. nofve — no FVE disk. Expect: no FVE lines (BitLockerEnabled stays
+#              FALSE — the decision BLOCK path is exercised as before).
+#
+# Runs inside the pbl-qemu container:
+#   docker run --rm \
+#     -v $(pwd)/firmware:/firmware:ro \
+#     -v <OVMF FV dir>:/ovmf:ro \
+#     pbl-qemu /firmware/PblPkg/test-fve-harness.sh
+#
+# Copyright (c) 2026 Remote Lockdown System. All rights reserved.
+
+set -eo pipefail
+
+TIMEOUT="${1:-35}"
+FIRMWARE_DIR="${FIRMWARE_DIR:-/firmware}"
+BUILD_DIR="${BUILD_DIR:-/tmp/pbl-fve-ci}"
+PBL_APP="${FIRMWARE_DIR}/PblPkg/PblApp.efi"
+RESULT="${BUILD_DIR}/pbl-fve-result.txt"
+
+# OVMF paths: prefer the PBL custom build (PeiDxeTpmPlatformHierarchyLibNull)
+# when /ovmf is mounted — the distro OVMF randomizes platformAuth at EndOfDxe
+# (HierarchyChangeAuth), which breaks empty-password RS_PW provisioning.
+if [ -f "/ovmf/OVMF_CODE.fd" ] && [ -f "/ovmf/OVMF_VARS.fd" ]; then
+  OVMF_CODE="/ovmf/OVMF_CODE.fd"
+  OVMF_VARS_SRC="/ovmf/OVMF_VARS.fd"
+else
+  OVMF_CODE="${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}"
+  OVMF_VARS_SRC="${OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}"
+fi
+
+mkdir -p "${BUILD_DIR}"
+
+if [ ! -f "${PBL_APP}" ]; then
+  echo "ERROR: PblApp.efi not found at ${PBL_APP}"; exit 1
+fi
+
+# === ESP image ===
+ESP_IMG="${BUILD_DIR}/esp.img"
+dd if=/dev/zero of="${ESP_IMG}" bs=1M count=8 2>/dev/null
+mkfs.vfat "${ESP_IMG}" >/dev/null 2>&1
+mmd -i "${ESP_IMG}" ::/EFI ::/EFI/BOOT 2>/dev/null || true
+mcopy -i "${ESP_IMG}" "${PBL_APP}" ::/EFI/BOOT/BOOTX64.EFI
+
+# === Synthetic FVE-FS disk (8 MB raw) ===
+# Volume header: EB 58 90 + "-FVE-FS-" @3, GUID @160, metadata offsets
+# @176/184/192. Metadata block @0x10000: block header(64) + metadata
+# header(48) + VMK entry (TPM protection type 0x0100).
+FVE_IMG="${BUILD_DIR}/fve.img"
+python3 - "${FVE_IMG}" <<'PYEOF'
+import struct, sys
+img = bytearray(8 * 1024 * 1024)
+img[0:3] = b'\xeb\x58\x90'
+img[3:11] = b'-FVE-FS-'
+img[160:176] = bytes(range(16))                       # volume GUID (dummy)
+md = 0x10000
+for i in range(3):
+    img[176 + 8*i : 184 + 8*i] = struct.pack('<Q', md if i == 0 else 0)
+# FVE metadata block
+img[md : md+8] = b'-FVE-FS-'
+struct.pack_into('<I', img, md + 8, 2)                # block header version v2
+struct.pack_into('<Q', img, md + 16, 8*1024*1024)     # encrypted_volume_size
+struct.pack_into('<Q', img, md + 32, md)              # block offset 1
+struct.pack_into('<Q', img, md + 40, md + 0x10000)
+struct.pack_into('<Q', img, md + 48, md + 0x20000)
+struct.pack_into('<Q', img, md + 56, 8192)            # volume_header_offset
+# metadata header @ md+64: metadata_size @0, volume GUID @16, method @36
+vmk_size = 8 + 28                                     # hdr + GUID/FT/unk/prot
+meta_size = 48 + vmk_size
+struct.pack_into('<I', img, md + 64, meta_size)
+img[md + 80 : md + 96] = bytes(range(16))
+struct.pack_into('<H', img, md + 100, 0x8004)         # AES-XTS-128
+# VMK entry @ md+112: size, type=2, vtype=8, ver=1 | GUID|FTIME|unk|prot
+e = md + 112
+struct.pack_into('<HHHH', img, e, vmk_size, 0x0002, 0x0008, 1)
+img[e+8 : e+24] = bytes(range(16, 32))                # key identifier GUID
+struct.pack_into('<Q', img, e + 24, 0x01DA000000000000)  # FILETIME-ish
+struct.pack_into('<H', img, e + 32, 0)
+struct.pack_into('<H', img, e + 34, 0x0100)           # protection = TPM
+open(sys.argv[1], 'wb').write(img)
+PYEOF
+
+cp "${OVMF_VARS_SRC}" "${BUILD_DIR}/OVMF_VARS.fd"
+
+SWTPM_DIR="${BUILD_DIR}/swtpm-state"
+mkdir -p "${SWTPM_DIR}"
+
+boot() {
+  local name="$1"
+  local extra_drive="$2"
+  local log="${BUILD_DIR}/serial-${name}.log"
+  local sock="${BUILD_DIR}/swtpm-${name}.sock"
+  swtpm socket --tpmstate dir="${SWTPM_DIR}" --tpm2 \
+    --ctrl type=unixio,path="${sock}" --flags not-need-init \
+    --log "file=${BUILD_DIR}/swtpm-${name}.log,level=20" &
+  local spid=$!
+  sleep 1
+  timeout "${TIMEOUT}" qemu-system-x86_64 \
+    -machine q35 -m 256M -nodefaults -nographic -no-reboot \
+    -drive if=pflash,format=raw,readonly=on,file="${OVMF_CODE}" \
+    -drive if=pflash,format=raw,file="${BUILD_DIR}/OVMF_VARS.fd" \
+    -drive format=raw,file="${ESP_IMG}" \
+    ${extra_drive} \
+    -chardev socket,id=tpm0,path="${sock}" \
+    -tpmdev emulator,id=tpm0,chardev=tpm0 -device tpm-tis,tpmdev=tpm0 \
+    -serial file:"${log}" -monitor none -display none \
+    2>/dev/null || true
+  kill "${spid}" 2>/dev/null || true
+  sleep 1
+}
+
+PASS=0; FAIL=0
+check() {
+  local label="$1" pattern="$2" file="$3"
+  if grep -qE "${pattern}" "${file}"; then
+    echo "  [PASS] ${label}"; PASS=$((PASS+1))
+  else
+    echo "  [FAIL] ${label}"; FAIL=$((FAIL+1))
+  fi
+}
+check_absent() {
+  local label="$1" pattern="$2" file="$3"
+  if grep -qE "${pattern}" "${file}"; then
+    echo "  [FAIL] ${label} (unexpected match)"; FAIL=$((FAIL+1))
+  else
+    echo "  [PASS] ${label}"; PASS=$((PASS+1))
+  fi
+}
+
+echo "=== Boot 1: FVE disk attached ==="
+boot fve "-drive format=raw,file=${FVE_IMG}"
+echo "=== Boot 2: no FVE disk ==="
+boot nofve ""
+
+S1="${BUILD_DIR}/serial-fve.log"
+S2="${BUILD_DIR}/serial-nofve.log"
+
+echo ""
+echo "=== Checking serial output ==="
+check "PBL banner (fve)"        "PBL — Pre-Boot Lock" "${S1}"
+check "FVE volume detected"     "FVE-FS volume detected" "${S1}"
+check "FVE metadata parsed"     "FVE metadata v2" "${S1}"
+check "Encryption method AES-XTS" "method 0x8004" "${S1}"
+check "TPM protector bitmask"   "protectors 0x0002" "${S1}"
+check "NV indices provisioned"  "NV indices provisioned" "${S1}"
+check "HMAC session established" "HMAC session established" "${S1}"
+check "Lock screen (fve)"       "THIS DEVICE IS LOCKED" "${S1}"
+check "PBL banner (nofve)"      "PBL — Pre-Boot Lock" "${S2}"
+check_absent "No FVE detection without disk" "FVE-FS volume detected" "${S2}"
+check "Lock screen (nofve)"     "THIS DEVICE IS LOCKED" "${S2}"
+
+echo ""
+echo "=== Results: ${PASS} PASS / ${FAIL} FAIL ==="
+{
+  echo "PBL D-120 FVE detection harness — $(date -u +%FT%TZ)"
+  echo "Results: ${PASS} PASS / ${FAIL} FAIL"
+  echo ""
+  echo "--- serial-fve.log ---"; cat "${S1}"
+  echo "--- serial-nofve.log ---"; cat "${S2}"
+} > "${RESULT}"
+echo "Artifact written: ${RESULT}"
+
+[ "${FAIL}" -eq 0 ]

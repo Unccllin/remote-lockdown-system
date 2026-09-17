@@ -247,7 +247,13 @@ typedef struct {
   // REQ-09: BCD / winre.wim
   UINT8     BcdHash[32];
   UINT8     WinreWimHash[32];
-  BOOLEAN   BitLockerEnabled;
+  BOOLEAN   BitLockerEnabled;   // FVE-FS volume detected (D-120)
+  // D-120: FVE metadata inspection — the authoritative BitLocker signal
+  // (BCD only carries boot config; lock state lives in FVE metadata).
+  UINT16    FveEncryptionMethod;  // metadata header @36 (0x8000..0x8005), 0 if absent
+  UINT16    FveProtectionMask;    // bitmask of VMK protection types present
+  UINT8     FveMetadataVersion;   // block header version (1=Vista, 2=Win7+)
+  BOOLEAN   FveClearKeyOnly;      // every VMK entry is clear-key (auto-unlock)
 
   // REQ-09: BCD element parsing (D-120)
   // These are deterministic summaries of the BCD store that feed the
@@ -374,6 +380,12 @@ PblCheckDmaProtection (
 EFI_STATUS
 PblRequestMor (
   VOID
+  );
+
+// Fve.c — D-120: FVE volume metadata inspection (BitLocker lock state)
+VOID
+PblCheckFve (
+  IN OUT PBL_PLATFORM_STATE *State
   );
 
 // TpmClient.c — C2 (REQ-05,06,11,12,13)

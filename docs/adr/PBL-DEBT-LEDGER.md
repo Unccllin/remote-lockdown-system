@@ -508,9 +508,36 @@
   also appended the BitLocker GUID and the parser completed without error.
   See `docs/research/windows-11-23h2-iso-RE-findings.md` and the
   `pbl-serial-pass.log` artifact.
+- **Update (2026-09-17)**: FVE volume metadata inspection implemented in
+  `firmware/PblPkg/PblApp/Fve.c` (`PblCheckFve`, called from
+  `PblCollectBcdState` in PlatformState.c).  Per libyal/libbde BDE spec:
+  scans all DiskIo devices for `-FVE-FS-` at volume-header offset 3, reads
+  the three Win7/10 metadata block offsets (u64 @176/184/192), validates the
+  block signature, parses metadata header (version, encryption method
+  @+36) and walks metadata entries for VMK records (entry 0x0002 / value
+  0x0008), extracting protection types @entry+34 into
+  `FveProtectionMask`; sets `BitLockerEnabled` on positive detection and
+  `FveClearKeyOnly` when every VMK is clear-key.  BCD GUID scan remains as
+  weak fallback when no FVE disk is attached.  QEMU+swtpm test:
+  `test-fve-harness.sh` boots PblApp with a synthetic FVE-FS image —
+  11 PASS / 0 FAIL (detection, method 0x8004 AES-XTS, protector mask
+  0x0002, absent-disk negative, NV provisioning + bound HMAC session,
+  lock screen both scenarios).  Artifact: `pbl-fve-result.txt` in the
+  harness build dir.  Harness bug fixed this session: it previously took
+  the container's distro OVMF (`/usr/share/OVMF/OVMF_CODE_4M.fd`) whose
+  real platform-hierarchy lib randomizes platformAuth at EndOfDxe,
+  silently breaking RS_PW provisioning (RC=0x9A2) — now prefers the
+  mounted custom OVMF like the other harnesses.
+- **Blocker (residual)**: FVE-FS detection proves a BitLocker-managed
+  volume is attached and how its VMKs are protected; it does NOT prove the
+  volume is currently locked/unlocked (that needs TPM-side VMK unseal
+  verification, not metadata), that the detected volume is the Windows
+  boot volume, or interop against a real Windows-encrypted disk (the test
+  image is synthetic).  Keep open until real-media validation and
+  boot-volume binding exist.
 - **Close criteria**: Real BitLocker locked/unlocked state requires FVE
-  volume metadata + TPM inspection.  Keep open until true FVE lock-state
-  detection is implemented and tested.
+  volume metadata + TPM inspection.  Metadata parsing is implemented and
+  emulated-tested; residual is real-media + boot-volume binding.
 
 ### D-121 — SPI protections check not implemented
 - **Status**: OPEN
@@ -1329,7 +1356,7 @@
 | D-117 | No runtime tests for PBL modules | CLOSED (QEMU+swtpm: 8 test-output logs) | TEST |
 | D-118 | EFI_RNG_PROTOCOL nonce generation not implemented | CLOSED | SECURITY |
 | D-119 | ACPI FADT S3 parsing stubbed | CLOSED | STUB |
-| D-120 | BitLocker detection not implemented | OPEN (PlatformState.c has raw GUID search; real BCD/FVE analysis in `docs/research/windows-11-23h2-iso-RE-findings.md` shows BCD only gives boot config, not BitLocker lock state) | TODO |
+| D-120 | BitLocker detection not implemented | OPEN (FVE-FS metadata inspection implemented in `Fve.c` + QEMU synthetic-image test 11/0; residual: real-media validation, boot-volume binding, VMK lock-state proof) | TODO |
 | D-121 | SPI protections check not implemented | CLOSED | TODO |
 | D-122 | DCI/DCP check not implemented | CLOSED | TODO |
 | D-123 | DMA protection check not implemented | CLOSED | TODO |

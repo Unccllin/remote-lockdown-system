@@ -29,6 +29,7 @@
   DciCheck.c
   DmaProtection.c
   Mor.c
+  Fve.c
   TpmClient.c
   TpmSession.c
   TcgLog.c
@@ -110,6 +111,10 @@
 
   ## EFI_LOADED_IMAGE_PROTOCOL — for enumerating loaded EFI images (RE-hardening #3)
   gEfiLoadedImageProtocolGuid
+
+  ## EFI_DISK_IO_PROTOCOL / EFI_BLOCK_IO_PROTOCOL — FVE volume scan (D-120)
+  gEfiDiskIoProtocolGuid
+  gEfiBlockIoProtocolGuid
 
 [Guids]
   gPblNvGuid

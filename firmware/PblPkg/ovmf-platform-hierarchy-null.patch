@@ -1,0 +1,32 @@
+From: PBL <pbl@example.com>
+Date: Mon, 15 Sep 2026 00:00:00 +0000
+Subject: [PATCH] PBL: use Null TpmPlatformHierarchyLib for swtpm/OVMF testing
+
+This is a PBL-local patch. It configures OVMF to use the Null platform
+hierarchy library, which leaves the platform authorization value empty
+instead of randomizing or disabling it. PBL then uses TPM_RH_PLATFORM
+to define platform-hierarchy NV indices in the test environment.
+
+Do NOT upstream this; production OVMF/firmware must manage platform
+auth through the correct OEM/physical-presence flow.
+
+--- a/OvmfPkg/Include/Dsc/OvmfTpmComponentsDxe.dsc.inc
++++ b/OvmfPkg/Include/Dsc/OvmfTpmComponentsDxe.dsc.inc
+@@ -21,5 +21,5 @@
+ !endif
+   SecurityPkg/Tcg/Tcg2PlatformDxe/Tcg2PlatformDxe.inf {
+     <LibraryClasses>
+-      TpmPlatformHierarchyLib|SecurityPkg/Library/PeiDxeTpmPlatformHierarchyLib/PeiDxeTpmPlatformHierarchyLib.inf
++      TpmPlatformHierarchyLib|SecurityPkg/Library/PeiDxeTpmPlatformHierarchyLibNull/PeiDxeTpmPlatformHierarchyLib.inf
+   }
+ !endif
+--- a/OvmfPkg/Include/Dsc/OvmfTpmComponentsPei.dsc.inc
++++ b/OvmfPkg/Include/Dsc/OvmfTpmComponentsPei.dsc.inc
+@@ -20,5 +20,5 @@
+ !endif
+   SecurityPkg/Tcg/Tcg2PlatformPei/Tcg2PlatformPei.inf {
+     <LibraryClasses>
+-      TpmPlatformHierarchyLib|SecurityPkg/Library/PeiDxeTpmPlatformHierarchyLib/PeiDxeTpmPlatformHierarchyLib.inf
++      TpmPlatformHierarchyLib|SecurityPkg/Library/PeiDxeTpmPlatformHierarchyLibNull/PeiDxeTpmPlatformHierarchyLib.inf
+   }
+ !endif

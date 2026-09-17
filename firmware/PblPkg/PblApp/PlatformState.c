@@ -885,6 +885,12 @@ PblCollectPlatformState (
   // REQ-09: BCD + BitLocker state
   PblCollectBcdState (State);
 
+  // D-120: FVE volume metadata — the authoritative BitLocker signal.
+  // Scans DiskIo devices for the -FVE-FS- volume header and parses the
+  // metadata block for VMK protection types. Runs after BCD so the
+  // authoritative result ORs over the BCD GUID heuristic.
+  PblCheckFve (State);
+
   // REQ-12: PCR readings (4, 5, 7, 11)
   PblCollectPcrReadings (State);
 
