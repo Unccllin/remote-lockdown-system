@@ -1375,3 +1375,70 @@ Resolve the four EDK II/PBL source gaps (package-resolution order, Tcg2 protocol
 ---
 
 ---
+
+---
+
+## Session 113 — 2026-09-17 — RULE-ZERO (pre-code): D-120 residual — FVE boot-volume binding
+
+**Read:** `Fve.c` (DiskIo scan + metadata parse), `PblApp.h` (`PBL_PLATFORM_STATE` FVE fields, prototypes), `PlatformState.c` (`PblCollectBcdState`, `PblCollectPlatformState` call graph), `PblApp.c` (entry point, sole `PblCollectPlatformState` caller, whole-struct `platform_state_digest`), `ChainLoad.c` (ESP discovery pattern), `Decision.c:270` (`!BitLockerEnabled` → BLOCK gate), `Bcd.c` (element walk; no device-element extraction), `test-fve-harness.sh` (2-boot topology: raw ESP + second raw FVE disk), `Dockerfile.qemu` (gdisk/mtools/dosfstools/python3 available), `ci-harness-docker.sh` (`/ovmf` preference convention), PBL-DEBT-LEDGER D-120.
+
+**Finding:**
+- "Boot-volume binding" = device-path disk-prefix match: strip each device path at the first MEDIA_DEVICE_PATH node; the remainder (ACPI/PCI/messaging incl. SATA port / NVMe namespace / USB) identifies the physical disk. PBL's `LoadedImage->DeviceHandle` path identifies the boot disk by construction (PBL boots from the ESP on the Windows disk).
+- Signature changes are single-caller-safe: `PblCollectPlatformState` (1 caller, PblApp.c:322) gains `ImageHandle`; `PblCheckFve` gains `ImageHandle` and resolves LoadedImage→DeviceHandle→DevicePath internally.
+- Harness topology must change for a positive case: current FVE-on-second-disk can only ever test the negative (different Sata port). Positive binding needs a single GPT disk with ESP + FVE partitions — sgdisk present in pbl-qemu image.
+- Decision gate kept on `BitLockerEnabled` (any-FVE or BCD-GUID); binding recorded as `FveOnBootDisk` evidence + WARN. Gate-tightening deferred as a policy choice.
+- Ledger staleness noted: current-state.md open-items table lists D-121..D-128/D-200..D-211 OPEN but ledger summary shows CLOSED — graph-spec debt list needs reconciliation (separate cleanup, not this session's scope).
+
+**Plan:**
+1. `PblApp.h`: +`FveVolumeCount`(UINT8), `FveOnBootDisk`, `FveBootDiskKnown`; `PblCheckFve` + `PblCollectPlatformState` gain `ImageHandle`.
+2. `PlatformState.c`/`PblApp.c`: plumb `ImageHandle` through.
+3. `Fve.c`: boot-disk prefix resolve + per-handle prefix match; scan all DiskIo handles; bound volume wins metadata parse; count volumes; print bound/not-bound/unknown lines.
+4. `test-fve-harness.sh`: 3 boots — `samedisk` (GPT ESP+FVE, expect bound), `otherdisk` (existing topology, expect not-bound), `nofve`; ~14 checks.
+5. Verify: edk2 build → test-fve-harness → ci-harness-docker → persistence; `make graph-check`; ledger update.
+
+
+---
+
+## Session 113 — 2026-09-17 — D-120 residual: FVE boot-volume binding (device-path disk-prefix match)
+
+**Read:** `Fve.c` (DiskIo scan + metadata parse), `PblApp.h` (`PBL_PLATFORM_STATE` FVE fields, prototypes), `PlatformState.c` (`PblCollectBcdState`, `PblCollectPlatformState` call graph), `PblApp.c` (entry point, sole `PblCollectPlatformState` caller, whole-struct `platform_state_digest`), `ChainLoad.c` (ESP discovery), `Decision.c:270` (`!BitLockerEnabled` → BLOCK gate), `Bcd.c` (element walk; no device-element extraction), `test-fve-harness.sh` (2-boot topology), `Dockerfile.qemu` (gdisk/mtools present), `ci-harness-docker.sh` (`/ovmf` preference convention), PBL-DEBT-LEDGER D-120.
+
+**Finding:** Binding = device-path disk-prefix match. Strip a device path at the first MEDIA_DEVICE_PATH node; the remainder (ACPI/PCI/messaging incl. SATA port, NVMe namespace, USB port) identifies the physical disk. PBL's `LoadedImage->DeviceHandle` IS the boot disk by construction (PBL boots from the ESP on the Windows disk). An FVE partition sharing that prefix is the OS-volume candidate; an FVE volume on another disk is detected but not bound. Prior harness topology (FVE on second disk) could only ever exercise the negative case — positive binding needed a single GPT disk with ESP+FVE partitions.
+
+**What changed**
+
+- `Fve.c` — `PblFveDiskPrefixLen` (prefix = path bytes before first MEDIA node), `PblFveSameDisk` (prefix equality on handle's DevicePath), `PblFveInspectVolume` (extracted per-volume metadata parse). `PblCheckFve` gains `ImageHandle`, resolves `LoadedImage->DeviceHandle->DevicePath` as the boot-disk reference, scans ALL DiskIo handles (no more break-at-first), counts volumes, and lets the bound volume supersede a provisional metadata parse. Prints `bound to boot disk` / `not on boot disk` / `binding not evaluated` lines.
+- `PblApp.h` — new `PBL_PLATFORM_STATE` fields `FveVolumeCount`, `FveOnBootDisk`, `FveBootDiskKnown` (inside `platform_state_digest`); `PblCheckFve`/`PblCollectPlatformState` gain `ImageHandle`.
+- `PlatformState.c`, `PblApp.c` — `ImageHandle` plumbed through (single call site each).
+- `test-fve-harness.sh` — 3 boots: `samedisk` (sgdisk-built GPT combo: 16M ESP partition + 8M FVE partition on one disk), `otherdisk` (existing 2-disk topology → negative binding), `nofve`. 16 checks.
+- `PBL-DEBT-LEDGER.md` — D-120 updated; residual narrowed to real-media validation + VMK lock-state proof.
+
+**Test results**
+
+- Build: `PblApp.efi` SHA-256 `a475a0ffbeb6349c8feb41e0eea53214e194688aac839fb5a48b613f466123b4`, 1,347,584 B, -Werror clean.
+- `test-fve-harness.sh` (custom OVMF): **16 PASS / 0 FAIL** — samedisk bound (device 2 = FVE partition on GPT disk), otherdisk not-bound (device 1 = second disk), nofve clean negative; NV provisioning + bound HMAC session asserted.
+- `ci-harness-docker.sh`: **15/0**; `ci-harness-persistence.sh` (two boots): **16/0**.
+- Artifact: `/tmp/pbl-fve-mount/pbl-fve-result.txt` (host mount of in-container `/tmp/pbl-fve-ci`); serial logs in same dir.
+
+**Fog cleared this session:**
+- EDK2 device-path prefix before the first MEDIA node is a sufficient physical-disk identity for binding — covers SATA port, NVMe namespace, USB port uniformly; no transport-specific code needed.
+- The raw superfloppy ESP image gets NO HD media node (whole path is the prefix) while a GPT ESP partition handle ends at HD(1,GPT) — same-disk binding requires the FVE volume to be a partition on the same disk, exercised via the sgdisk combo image.
+- `PblApp.efi` is gitignored (build artifact) — the SHA-256 in trace/ledger is the record, not a committed binary.
+
+**Fog remaining:**
+- BCD `osdevice` (0x11000001) element binary format not yet parsed — binding is disk-level (same physical disk), not partition-level (osdevice partition GUID == FVE partition GUID). Partition-level binding needs the device-blob layout (not documented in repo research notes).
+- Whether the decision gate should REQUIRE `FveOnBootDisk` when FVE is detected — currently detection-only satisfies `BitLockerEnabled`; tightening is a deferred policy choice.
+- VMK lock-state proof (TPM-side unseal verification) still absent.
+
+**Debt items closed:** none — D-120 narrowed (binding done) but kept OPEN for real-media + VMK lock-state.
+**Debt items still open:** D-120 (narrowed further), D-129 (real hardware), D-130 (signing); ledger summary shows D-121..D-128, D-200..D-211 CLOSED — note: `current-state.md` open-items table is STALE for those (graph-spec debt list disagrees with ledger summary; needs reconciliation).
+
+**Blockers** — none.
+
+**Failure attribution**
+- None — clean first-run verification (16/0, 15/0, 16/0).
+
+**Next session opening**
+- Reconcile graph-spec debt list vs ledger summary (stale OPEN flags for D-121..D-128, D-200..D-211), then D-129 real-hardware validation prep or D-200-side attestation enrichment to surface FveProtectionMask/FveOnBootDisk/LoadedImageDigest as discrete server-visible fields.
+
+---
