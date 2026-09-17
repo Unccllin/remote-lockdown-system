@@ -51,47 +51,45 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 111 — 2026-09-16 — D-213 loaded-image enumeration enrichment (per-image identity digest)
+## Latest session: 112 — 2026-09-17 — D-120 FVE-FS metadata inspection (BitLocker detection) + distro-OVMF harness bug found
 
-**RULE-ZERO — Understanding logged before code changes**
+**Read:** `docs/research/windows-11-23h2-iso-RE-findings.md` (FVE layout), libbde BDE format spec, `PlatformState.c` (BCD collection + `BitLockerEnabled` consumer), `Decision.c` (blocks when `!BitLockerEnabled`), `PblApp.h`/`PblApp.inf`, `ci-harness-persistence.sh` (swtpm lifecycle + OVMF convention), `firmware/Dockerfile.qemu` (distro-OVMF env), edk2 `PeiDxeTpmPlatformHierarchyLib`, `Tcg2PlatformDxe`, `PlatformBootManagerLib`.
 
-**Read:** `PlatformState.c` (loaded-image enumeration block, ~line 910), `PblApp.h` (`PBL_PLATFORM_STATE`), `PblApp.c` (platform_state_digest computation + logging site), `PBL-DEBT-LEDGER.md` D-213 row.
-
-**Finding:** `platform_state_digest = SHA-256(PBL_PLATFORM_STATE)` — adding a `LoadedImageDigest[32]` field to the struct automatically enriches the digest sent to the server; no CBOR schema change needed (struct is hashed, never marshalled field-by-field). Ledger wanted "hash each image's device path" — implemented as per-image `SHA-256(DevicePath(DeviceHandle) || FilePath)` sorted then aggregated, making the result independent of LocateHandleBuffer order.
+**Finding:** BCD only carries boot config — the authoritative BitLocker signal is the FVE volume metadata (per libbde spec: `-FVE-FS-` @3, Win7/10 metadata offsets u64 @176/184/192, block header 64B + metadata header 48B, VMK entry type 0x0002/value 0x0008, protection type @entry+34). Implemented `Fve.c` accordingly. While validating, found the new harness silently booted the container's **distro OVMF** (`/usr/share/OVMF/OVMF_CODE_4M.fd` via `OVMF_CODE` env from `Dockerfile.qemu`) instead of the custom Null-hierarchy-lib build — distro OVMF sends `TPM2_HierarchyChangeAuth` at EndOfDxe randomizing platformAuth (with uninitialized-buffer bytes since qemu64 lacks RDRAND), so every DefineSpace failed `RC=0x9A2` and all NV ops cascaded `0x18B`. Harness passed 9/0 anyway because it never checked TPM steps. Root-caused via swtpm level-20 wire logs + `Loaded images: 104 vs 92` divergence.
 
 **What changed**
 
-- `PblApp.h` — `PBL_PLATFORM_STATE.LoadedImageDigest[32]` after `LoadedImageCount`.
-- `PlatformState.c` — enumeration now per-image: HandleProtocol → LoadedImage + DevicePath on `Loaded->DeviceHandle`, hash `DevPathSize||DevPath||FilePathSize||FilePath` per image, insertion-sort the 32B hashes, aggregate SHA-256 → `LoadedImageDigest`. Count retained.
-- `PblApp.c` — serial line `Loaded images: N (digest %08x…)` after collection.
-- `ci-harness-docker.sh` — new D-213 check.
+- `Fve.c` (new) — DiskIo/BlockIo scan, `-FVE-FS-` detect, metadata block validation, metadata-header parse (version, method), VMK entry walk → `FveProtectionMask`, `FveEncryptionMethod`, `FveMetadataVersion`, `FveClearKeyOnly`; sets `BitLockerEnabled` on positive detection. All packed reads use `ReadUnaligned*`.
+- `PblApp.h` — new `PBL_PLATFORM_STATE` FVE fields + `PblCheckFve` decl; `PlatformState.c` — call after `PblCollectBcdState` (FVE authoritative-positive, BCD GUID fallback); `PblApp.inf` — Fve.c + DiskIo/BlockIo GUIDs.
+- `test-fve-harness.sh` (new) — synthetic FVE-FS image (python), two boots (fve/nofve), 11 checks including NV-provisioning + bound-HMAC-session so the TPM path can't silently break again.
+- `ovmf-platform-hierarchy-null.patch` — committed; documents the required edk2 Null-lib patch for the test OVMF.
 
 **Test results**
 
-- Build: `PblApp.efi` SHA-256 `e6be03fba1f1df1a88cdb416bba12b3aa117a91a2dc5ed35204fef9536e51bdc`.
-- `ci-harness-docker.sh`: **15 PASS / 0 FAIL** (new check included).
-- `ci-harness-persistence.sh`: **16 PASS / 0 FAIL**; digest `32FB22F41C5469B9` identical across both boots (deterministic); differs from the single-boot digest `650224876D9C939F` because the persistence ESP lives on a GPT disk — different device paths → different image-set identity. This is the intended sensitivity.
-- Artifact: `/tmp/pbl-ci-persist-host/pbl-persistence-result.txt`, serial logs in `/tmp/pbl-persist-mount/`.
+- Build: `PblApp.efi` SHA-256 `f52824490f121f3e4ad8eaf710def6cc90c82c8ed42c97fd43665e24760ad160`, 1,347,584 B.
+- `test-fve-harness.sh` (custom OVMF): **11 PASS / 0 FAIL** — FVE detected, metadata v2 parsed, method 0x8004 AES-XTS, protectors 0x0002 (TPM), negative absent-disk, provisioned + bound session, lock screen both.
+- `ci-harness-docker.sh`: **15/0**; `ci-harness-persistence.sh` (two boots): **16/0**.
+- Artifact: `/tmp/pbl-fve-ci/pbl-fve-result.txt` (in-container `/tmp/pbl-fve-ci`, host `/tmp/pbl-fve-mount`).
 
 **Fog cleared this session:**
-- `platform_state_digest` covers the whole `PBL_PLATFORM_STATE` struct — enrichment fields ride along without wire-format changes.
-- Device-path identity is layout-sensitive by design: the same image set on a different disk topology produces a different digest (GPT-disk ESP vs raw-ESP harness runs differ). Server baselines must be per deployment layout.
+- Distro OVMF (Ubuntu 4M) randomizes platformAuth via `Tcg2PlatformDxe`+`PeiDxeTpmPlatformHierarchyLib` when `DxeSmmReadyToLock` is produced — this OVMF variant produces it; our custom build links the Null lib (`ovmf-platform-hierarchy-null.patch`) so platformAuth stays empty for RS_PW dev provisioning. Wire-level proof: `0x129` command present in distro-boot swtpm log, absent in custom-OVMF log.
+- `0x9A2` = session-1 `BAD_AUTH` (platformAuth mismatch); `0x18B` = NV index undefined after failed DefineSpace.
+- A harness that only checks the decision UI can pass while the entire TPM path is dead — every boot harness must assert NV provisioning + session establishment.
 
 **Fog remaining:**
-- Server-side baseline tracking for `LoadedImageDigest` not implemented — the server only sees the opaque `platform_state_digest` change today; a dedicated field in the attestation payload would let the server report WHICH aspect changed.
-- Digest is detection-only; no local decision logic consumes it.
-- QEMU device-path determinism may not match real hardware (USB/NVMe path nodes vary more).
+- Whether distro OVMF's `DxeSmmReadyToLock` producer is its SMM stack or `SecurityStubDxe` deferral path — not fully traced (irrelevant once custom OVMF is used).
+- `FveClearKeyOnly`/`FveProtectionMask` not yet surfaced in the attestation payload (opaque inside `platform_state_digest`).
 
-**Debt items closed:** D-213 (commit 56c4728; artifacts above).
-**Debt items still open:** D-100..D-130 hardware items (D-121 SPI, D-122 DCI, D-123 DMA, D-124 MOR, D-126 SVN, D-127 AMT, D-128 SBAT, D-129 real-hardware validation, D-130 signing), D-200..D-211 server-side items.
+**Debt items closed:** none — D-120 updated with implementation+evidence but kept OPEN (residual: real-media validation, boot-volume binding, VMK lock-state proof).
+**Debt items still open:** D-120 (narrowed), D-121..D-128 (hardware checks), D-129 (real hardware), D-130 (signing), D-200..D-211 server-side.
 
 **Blockers** — none.
 
 **Failure attribution**
-- None — clean first-run verification.
+- Layer 3 (execution environment): the new harness inherited `OVMF_CODE` env → distro OVMF with different TPM-hierarchy behavior; undetected because layer 4 (verification feedback) — the harness asserted only UI/decision lines, not TPM steps. Prevention: prefer-`/ovmf` convention (now matching other harnesses) + provisioning/session checks added.
 
 **Next session opening**
-- Remaining D-1xx hardware-debt items (SPI/DCI/DMA/MOR/SVN/AMT/SBAT) — most are emulated/stubbed checks needing real-hardware or deeper emulation evidence; or D-200..D-211 server-side attestation/policy work.
+- D-120 residual (bind FVE volume to boot device path / real-media test) or remaining D-1xx hardware items; alternatively D-200-side attestation enrichment to surface FveProtectionMask/LoadedImageDigest.
 
 ---
 

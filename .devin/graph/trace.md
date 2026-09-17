@@ -1329,3 +1329,49 @@ Resolve the four EDK II/PBL source gaps (package-resolution order, Tcg2 protocol
 - Remaining D-1xx hardware-debt items (SPI/DCI/DMA/MOR/SVN/AMT/SBAT) — most are emulated/stubbed checks needing real-hardware or deeper emulation evidence; or D-200..D-211 server-side attestation/policy work.
 
 ---
+
+---
+
+## Session 112 — 2026-09-17 — D-120 FVE-FS metadata inspection (BitLocker detection) + distro-OVMF harness bug found
+
+**Read:** `docs/research/windows-11-23h2-iso-RE-findings.md` (FVE layout), libbde BDE format spec, `PlatformState.c` (BCD collection + `BitLockerEnabled` consumer), `Decision.c` (blocks when `!BitLockerEnabled`), `PblApp.h`/`PblApp.inf`, `ci-harness-persistence.sh` (swtpm lifecycle + OVMF convention), `firmware/Dockerfile.qemu` (distro-OVMF env), edk2 `PeiDxeTpmPlatformHierarchyLib`, `Tcg2PlatformDxe`, `PlatformBootManagerLib`.
+
+**Finding:** BCD only carries boot config — the authoritative BitLocker signal is the FVE volume metadata (per libbde spec: `-FVE-FS-` @3, Win7/10 metadata offsets u64 @176/184/192, block header 64B + metadata header 48B, VMK entry type 0x0002/value 0x0008, protection type @entry+34). Implemented `Fve.c` accordingly. While validating, found the new harness silently booted the container's **distro OVMF** (`/usr/share/OVMF/OVMF_CODE_4M.fd` via `OVMF_CODE` env from `Dockerfile.qemu`) instead of the custom Null-hierarchy-lib build — distro OVMF sends `TPM2_HierarchyChangeAuth` at EndOfDxe randomizing platformAuth (with uninitialized-buffer bytes since qemu64 lacks RDRAND), so every DefineSpace failed `RC=0x9A2` and all NV ops cascaded `0x18B`. Harness passed 9/0 anyway because it never checked TPM steps. Root-caused via swtpm level-20 wire logs + `Loaded images: 104 vs 92` divergence.
+
+**What changed**
+
+- `Fve.c` (new) — DiskIo/BlockIo scan, `-FVE-FS-` detect, metadata block validation, metadata-header parse (version, method), VMK entry walk → `FveProtectionMask`, `FveEncryptionMethod`, `FveMetadataVersion`, `FveClearKeyOnly`; sets `BitLockerEnabled` on positive detection. All packed reads use `ReadUnaligned*`.
+- `PblApp.h` — new `PBL_PLATFORM_STATE` FVE fields + `PblCheckFve` decl; `PlatformState.c` — call after `PblCollectBcdState` (FVE authoritative-positive, BCD GUID fallback); `PblApp.inf` — Fve.c + DiskIo/BlockIo GUIDs.
+- `test-fve-harness.sh` (new) — synthetic FVE-FS image (python), two boots (fve/nofve), 11 checks including NV-provisioning + bound-HMAC-session so the TPM path can't silently break again.
+- `ovmf-platform-hierarchy-null.patch` — committed; documents the required edk2 Null-lib patch for the test OVMF.
+
+**Test results**
+
+- Build: `PblApp.efi` SHA-256 `f52824490f121f3e4ad8eaf710def6cc90c82c8ed42c97fd43665e24760ad160`, 1,347,584 B.
+- `test-fve-harness.sh` (custom OVMF): **11 PASS / 0 FAIL** — FVE detected, metadata v2 parsed, method 0x8004 AES-XTS, protectors 0x0002 (TPM), negative absent-disk, provisioned + bound session, lock screen both.
+- `ci-harness-docker.sh`: **15/0**; `ci-harness-persistence.sh` (two boots): **16/0**.
+- Artifact: `/tmp/pbl-fve-ci/pbl-fve-result.txt` (in-container `/tmp/pbl-fve-ci`, host `/tmp/pbl-fve-mount`).
+
+**Fog cleared this session:**
+- Distro OVMF (Ubuntu 4M) randomizes platformAuth via `Tcg2PlatformDxe`+`PeiDxeTpmPlatformHierarchyLib` when `DxeSmmReadyToLock` is produced — this OVMF variant produces it; our custom build links the Null lib (`ovmf-platform-hierarchy-null.patch`) so platformAuth stays empty for RS_PW dev provisioning. Wire-level proof: `0x129` command present in distro-boot swtpm log, absent in custom-OVMF log.
+- `0x9A2` = session-1 `BAD_AUTH` (platformAuth mismatch); `0x18B` = NV index undefined after failed DefineSpace.
+- A harness that only checks the decision UI can pass while the entire TPM path is dead — every boot harness must assert NV provisioning + session establishment.
+
+**Fog remaining:**
+- Whether distro OVMF's `DxeSmmReadyToLock` producer is its SMM stack or `SecurityStubDxe` deferral path — not fully traced (irrelevant once custom OVMF is used).
+- `FveClearKeyOnly`/`FveProtectionMask` not yet surfaced in the attestation payload (opaque inside `platform_state_digest`).
+
+**Debt items closed:** none — D-120 updated with implementation+evidence but kept OPEN (residual: real-media validation, boot-volume binding, VMK lock-state proof).
+**Debt items still open:** D-120 (narrowed), D-121..D-128 (hardware checks), D-129 (real hardware), D-130 (signing), D-200..D-211 server-side.
+
+**Blockers** — none.
+
+**Failure attribution**
+- Layer 3 (execution environment): the new harness inherited `OVMF_CODE` env → distro OVMF with different TPM-hierarchy behavior; undetected because layer 4 (verification feedback) — the harness asserted only UI/decision lines, not TPM steps. Prevention: prefer-`/ovmf` convention (now matching other harnesses) + provisioning/session checks added.
+
+**Next session opening**
+- D-120 residual (bind FVE volume to boot device path / real-media test) or remaining D-1xx hardware items; alternatively D-200-side attestation enrichment to surface FveProtectionMask/LoadedImageDigest.
+
+---
+
+---
