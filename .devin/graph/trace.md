@@ -1482,3 +1482,40 @@ Resolve the four EDK II/PBL source gaps (package-resolution order, Tcg2 protocol
 - Software-doable queue in order: (a) attestation enrichment — surface FveProtectionMask/FveOnBootDisk/LoadedImageDigest as discrete server fields; (b) VMK lock-state proof via swtpm seal/unseal emulation; (c) BCD osdevice partition-GUID binding (needs device-blob RE); then the hardware window (D-129 + D-120 real-media + 9 E-paths); D-130 signing needs a cert decision.
 
 ---
+
+---
+
+## Session 115 — 2026-09-18 — Book corpus research + next-gen synthesis
+
+**Read:** `docs/reference/books/` inventory (6 PDFs on disk), `docs/research/STUDY-INDEX.md`, `GRAPH-SPEC.yaml` enforcement paths, `agent/agent.py` handler inventory, `server/src/routes/` inventory. RULE-ZERO satisfied for doc-only session — no source code touched.
+
+**Finding:** Three books existed only as topics (`Modern OS`, `Harnessing the UEFI Shell`, `Platform Embedded Security Technology Revealed` — no PDFs); three PDFs on disk had never been mined against the codebase (`rootkits-and-bootkits`, `beyond-bios`, `practical-reverse-engineering`); a fourth PDF (`mdm-fundamentals`, Moskowitz/Wiley — Intune/MDM) existed but wasn't on the study list.
+
+**What changed**
+
+- Seven parallel research agents produced six new study notes + updated index:
+  - `STUDY-BEYOND-BIOS-DELTA.md` — full PDF mine (325pp): Boot#### return-semantics inversion, 5-min BDS watchdog, fast-boot no-BdsConnectAll, S3-resume bypass, monotonic counter, ESRT/FMP, HII keywords, UEFI error records.
+  - `STUDY-ROOTKITS-BOOTKITS-DELTA.md` — full PDF mine (450pp): Computrace as architectural precedent, MBR/VBR/IPL bootkit lineage, hidden filesystems, S3 boot-script attacks, FSMIE forgery, PRx-coverage gaps, 14 new capabilities.
+  - `STUDY-PRACTICAL-RE-DELTA.md` — full PDF mine (384pp): kernel introspection (KPCR/DPC/APC/timer queues, SSDT, DKOM, MDL writes), debugger mechanics, obfuscation taxonomy; ch3_* pre-exercises confirmed as detection-driver blueprints.
+  - `STUDY-MDM-FUNDAMENTALS-DELTA.md` — full PDF mine (528pp): Autopilot TPM-attested enrollment, OMA-DM/CSP model, device-action ladder, escrow-before-encrypt, update rings; 15 capabilities.
+  - `STUDY-PLATFORM-EMBEDDED-SECURITY.md` — open-access book read in full (SpringerLink CC): ME/HECI wire details, FPF enrollment fuse, EPID/SIGMA, Intel AT prior art mapped to E-DEADMAN/verdict/override.
+  - `STUDY-UEFI-SHELL.md` — book reconstructed via TOC + Shell Spec 2.2 + local ShellPkg + BombShell/VU#718077: shell as dual-use signed bypass; PBL's unauthenticated variables are shell-writable.
+  - `STUDY-OS-INTERNALS-AGENT-HARDENING.md` — MOS-guided agent-hardening research: ring-3 ceiling, wall-clock deadman flaw, unsigned-update flaw, VM detection.
+- `SYNTHESIS-NEXT-GEN-DESIGN.md` — corpus synthesis: 5 design laws, 7 fix-first correctness findings, ~40 capabilities by layer, 5-tier roadmap.
+- `STUDY-INDEX.md` — 16 notes, crosswalk + glossary extended.
+- Commit `6e6b37a` — entire docs/research corpus committed (previously all untracked; *.pdf still gitignored by design).
+
+**Fog cleared:** The "weakest books" gap is closed — all 6 listed books + the surprise 7th (MDM) now have study notes. Disk-structure baseline, shell-threat model, Boot#### semantics, and Intel AT prior art were all genuinely absent from the codebase's knowledge.
+
+**Fog remaining:** PRE/RB deltas rely on PDF-extraction page mapping (book≈PDF−36/−27 offsets); UEFI Shell book itself wasn't readable (TOC + spec + ShellPkg reconstruction, flagged in-note); uefi.org/intel.com were Cloudflare-blocked to the host.
+
+**Debt items closed:** none — documentation session.
+**Debt items still open:** D-120 (real-media + VMK), D-129 (hardware), D-130 (signing) — plus the synthesis' Tier-0 correctness findings are candidate new debt items pending user triage.
+
+**Blockers:** none.
+
+**Failure attribution:** None — pure research session, all deliverables produced.
+
+**Next session opening:** Triage synthesis findings — decide whether Tier-0 items (F1 BLOCK-path return semantics, F2 variable authentication, F3 deadman clock-rollback, F5 NIC connect, F7 shell detection) become new debt items, then implement Tier-1 emulation-doable work starting with F1 verification.
+
+---

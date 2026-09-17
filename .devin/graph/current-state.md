@@ -51,41 +51,38 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 114 — 2026-09-17 — Debt-ledger reconciliation (spec vs ledger vs code) + roadmap
+## Latest session: 115 — 2026-09-18 — Book corpus research + next-gen synthesis
 
-**Read:** `GRAPH-SPEC.yaml` debt section (all 55 items), `PBL-DEBT-LEDGER.md` detail + summary tables, `graph_assert.py` (I2 field requirements: commit_ref + artifact_ref on spec items), `graph_session.py` convergence computation, per-item implementing files (`Decision.c`, `LockScreen.c`, `Override.c`, `ChainLoad.c`, `Cbor*.c`, `TlsVerify.c`, `TcgLog.c`, `Svn.c`, `AmtCheck.c`, `Sbat.c`, `SpiProtections.c`, `DciCheck.c`, `DmaProtection.c`, `Mor.c`, `server/src/routes/pbl.js`, `agent/agent.py` handle_track), git log per file.
+**Read:** `docs/reference/books/` inventory (6 PDFs on disk), `docs/research/STUDY-INDEX.md`, `GRAPH-SPEC.yaml` enforcement paths, `agent/agent.py` handler inventory, `server/src/routes/` inventory. RULE-ZERO satisfied for doc-only session — no source code touched.
 
-**Finding:** Three-way disagreement. GRAPH-SPEC.yaml showed 36 OPEN; ledger summary showed ~3 OPEN; ledger *detail* sections still said OPEN/PARTIAL for ~20 items. Ground truth from code+git: nearly all were implemented in commit `684d7eb` (the 2026-09-09 PBL effort chain) and are exercised in every QEMU harness boot (platform-state collection runs SPI/DCI/DMA/MOR/SBAT/TCGLog/SVN/AMT each boot; lock screen + override + decision visible in serial). Server items backed by 579 Jest + 305 Vitest. Real open: D-120 (narrowed), D-129, D-130.
+**Finding:** Three books existed only as topics (`Modern OS`, `Harnessing the UEFI Shell`, `Platform Embedded Security Technology Revealed` — no PDFs); three PDFs on disk had never been mined against the codebase (`rootkits-and-bootkits`, `beyond-bios`, `practical-reverse-engineering`); a fourth PDF (`mdm-fundamentals`, Moskowitz/Wiley — Intune/MDM) existed but wasn't on the study list.
 
 **What changed**
 
-- `GRAPH-SPEC.yaml` — 33 items flipped OPEN→CLOSED with real commit_ref + artifact_ref (I2-compliant). D-100/D-101, D-109..D-119, D-121..D-128, D-200..D-211.
-- `PBL-DEBT-LEDGER.md` — reconciliation note (summary table authoritative over stale detail Status lines) + totals corrected (51 items / 48 CLOSED / 3 OPEN).
-- `current-state.md` regenerated — convergence now honest: **52/55 debt, 4/13 enforcement on hardware.**
+- Seven parallel research agents produced six new study notes + updated index:
+  - `STUDY-BEYOND-BIOS-DELTA.md` — full PDF mine (325pp): Boot#### return-semantics inversion, 5-min BDS watchdog, fast-boot no-BdsConnectAll, S3-resume bypass, monotonic counter, ESRT/FMP, HII keywords, UEFI error records.
+  - `STUDY-ROOTKITS-BOOTKITS-DELTA.md` — full PDF mine (450pp): Computrace as architectural precedent, MBR/VBR/IPL bootkit lineage, hidden filesystems, S3 boot-script attacks, FSMIE forgery, PRx-coverage gaps, 14 new capabilities.
+  - `STUDY-PRACTICAL-RE-DELTA.md` — full PDF mine (384pp): kernel introspection (KPCR/DPC/APC/timer queues, SSDT, DKOM, MDL writes), debugger mechanics, obfuscation taxonomy; ch3_* pre-exercises confirmed as detection-driver blueprints.
+  - `STUDY-MDM-FUNDAMENTALS-DELTA.md` — full PDF mine (528pp): Autopilot TPM-attested enrollment, OMA-DM/CSP model, device-action ladder, escrow-before-encrypt, update rings; 15 capabilities.
+  - `STUDY-PLATFORM-EMBEDDED-SECURITY.md` — open-access book read in full (SpringerLink CC): ME/HECI wire details, FPF enrollment fuse, EPID/SIGMA, Intel AT prior art mapped to E-DEADMAN/verdict/override.
+  - `STUDY-UEFI-SHELL.md` — book reconstructed via TOC + Shell Spec 2.2 + local ShellPkg + BombShell/VU#718077: shell as dual-use signed bypass; PBL's unauthenticated variables are shell-writable.
+  - `STUDY-OS-INTERNALS-AGENT-HARDENING.md` — MOS-guided agent-hardening research: ring-3 ceiling, wall-clock deadman flaw, unsigned-update flaw, VM detection.
+- `SYNTHESIS-NEXT-GEN-DESIGN.md` — corpus synthesis: 5 design laws, 7 fix-first correctness findings, ~40 capabilities by layer, 5-tier roadmap.
+- `STUDY-INDEX.md` — 16 notes, crosswalk + glossary extended.
+- Commit `6e6b37a` — entire docs/research corpus committed (previously all untracked; *.pdf still gitignored by design).
 
-**Test results**
+**Fog cleared:** The "weakest books" gap is closed — all 6 listed books + the surprise 7th (MDM) now have study notes. Disk-structure baseline, shell-threat model, Boot#### semantics, and Intel AT prior art were all genuinely absent from the codebase's knowledge.
 
-- `make graph-check`: all invariants pass (I2 satisfied — every CLOSED has both refs).
-- `make graph-status`: 3 debt open (D-120/129/130), 9 enforcement paths hardware-pending.
+**Fog remaining:** PRE/RB deltas rely on PDF-extraction page mapping (book≈PDF−36/−27 offsets); UEFI Shell book itself wasn't readable (TOC + spec + ShellPkg reconstruction, flagged in-note); uefi.org/intel.com were Cloudflare-blocked to the host.
 
-**Fog cleared this session:**
-- The convergence report had been understating closure for weeks — spec debt statuses were write-only since ~session 9x. `make graph-status` is only as honest as GRAPH-SPEC.yaml; the ledger summary was the fresher source but lacked per-item refs.
-- Firmware close-criteria of the "runtime test" form are satisfied by the QEMU+swtpm harnesses exercising every collector each boot — hardware residuals belong to D-129, not per-item OPEN states.
+**Debt items closed:** none — documentation session.
+**Debt items still open:** D-120 (real-media + VMK), D-129 (hardware), D-130 (signing) — plus the synthesis' Tier-0 correctness findings are candidate new debt items pending user triage.
 
-**Fog remaining:**
-- Whether a handful of detail-section caveats deserve their own debt items (D-203 PCR/event-log deep compare, D-204 production operator key, D-205 Ed25519 firmware verify blocked by EDK2) — noted as residuals in artifact_ref, not promoted to items.
-- D-100 detail says PARTIAL ("swtpm portion open") — judged CLOSED since swtpm lives under D-101 (CLOSED); interpretation recorded here.
+**Blockers:** none.
 
-**Debt items closed:** none this session (bookkeeping only — no new code).
-**Debt items still open:** D-120 (real-media + VMK lock-state), D-129 (real hardware), D-130 (signing).
+**Failure attribution:** None — pure research session, all deliverables produced.
 
-**Blockers** — none.
-
-**Failure attribution**
-- Layer 5 (state management): spec debt statuses went stale across ~20 sessions because closes were recorded in the ledger but not synced to GRAPH-SPEC.yaml. Prevention applied: spec is now authoritative-synced; consider a `graph_assert` check that spec status == ledger status (not implemented this session).
-
-**Next session opening**
-- Software-doable queue in order: (a) attestation enrichment — surface FveProtectionMask/FveOnBootDisk/LoadedImageDigest as discrete server fields; (b) VMK lock-state proof via swtpm seal/unseal emulation; (c) BCD osdevice partition-GUID binding (needs device-blob RE); then the hardware window (D-129 + D-120 real-media + 9 E-paths); D-130 signing needs a cert decision.
+**Next session opening:** Triage synthesis findings — decide whether Tier-0 items (F1 BLOCK-path return semantics, F2 variable authentication, F3 deadman clock-rollback, F5 NIC connect, F7 shell detection) become new debt items, then implement Tier-1 emulation-doable work starting with F1 verification.
 
 ---
 
