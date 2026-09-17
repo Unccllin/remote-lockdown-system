@@ -254,6 +254,13 @@ typedef struct {
   UINT16    FveProtectionMask;    // bitmask of VMK protection types present
   UINT8     FveMetadataVersion;   // block header version (1=Vista, 2=Win7+)
   BOOLEAN   FveClearKeyOnly;      // every VMK entry is clear-key (auto-unlock)
+  // D-120 residual: boot-volume binding. An FVE-FS volume only proves the
+  // OS volume is encrypted when it lives on the same physical disk PBL
+  // booted from (device-path prefix match up to the first MEDIA node —
+  // the transport/messaging nodes identify the disk).
+  UINT8     FveVolumeCount;       // FVE-FS volumes found on any disk
+  BOOLEAN   FveOnBootDisk;        // an FVE volume shares PBL's boot disk
+  BOOLEAN   FveBootDiskKnown;     // boot-disk prefix resolved (binding evaluated)
 
   // REQ-09: BCD element parsing (D-120)
   // These are deterministic summaries of the BCD store that feed the
@@ -320,7 +327,8 @@ PblAppEntryPoint (
 // PlatformState.c — REQ-01,02,04,07,08,09,10 collection
 EFI_STATUS
 PblCollectPlatformState (
-  OUT PBL_PLATFORM_STATE  *State
+  OUT PBL_PLATFORM_STATE  *State,
+  IN  EFI_HANDLE          ImageHandle
   );
 
 // Bcd.c — REQ-09 BCD registry hive parser
@@ -383,9 +391,11 @@ PblRequestMor (
   );
 
 // Fve.c — D-120: FVE volume metadata inspection (BitLocker lock state)
+//        + boot-volume binding via device-path disk-prefix match
 VOID
 PblCheckFve (
-  IN OUT PBL_PLATFORM_STATE *State
+  IN OUT PBL_PLATFORM_STATE *State,
+  IN     EFI_HANDLE         ImageHandle
   );
 
 // TpmClient.c — C2 (REQ-05,06,11,12,13)

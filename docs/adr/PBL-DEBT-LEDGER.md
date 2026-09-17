@@ -528,16 +528,32 @@
   real platform-hierarchy lib randomizes platformAuth at EndOfDxe,
   silently breaking RS_PW provisioning (RC=0x9A2) — now prefers the
   mounted custom OVMF like the other harnesses.
-- **Blocker (residual)**: FVE-FS detection proves a BitLocker-managed
-  volume is attached and how its VMKs are protected; it does NOT prove the
-  volume is currently locked/unlocked (that needs TPM-side VMK unseal
-  verification, not metadata), that the detected volume is the Windows
-  boot volume, or interop against a real Windows-encrypted disk (the test
-  image is synthetic).  Keep open until real-media validation and
-  boot-volume binding exist.
+- **Update (2026-09-17, session 113)**: Boot-volume binding implemented.
+  `PblCheckFve` now takes `ImageHandle`, resolves `LoadedImage->DeviceHandle`
+  → device path, and compares each FVE handle's *disk prefix* (all device-
+  path nodes before the first MEDIA node — ACPI/PCI/messaging incl. SATA
+  port / NVMe namespace identify the physical disk) against the boot
+  disk's prefix.  New state fields: `FveVolumeCount`, `FveOnBootDisk`,
+  `FveBootDiskKnown` (all inside `platform_state_digest`).  When multiple
+  FVE volumes exist, the bound volume's metadata is authoritative.
+  `test-fve-harness.sh` now runs three boots: `samedisk` (single GPT disk
+  with ESP+FVE partitions → bound), `otherdisk` (FVE on second disk →
+  correctly NOT bound), `nofve` — 16 PASS / 0 FAIL.  Decision gate
+  unchanged (`!BitLockerEnabled` → BLOCK on any-FVE or BCD-GUID); whether
+  the gate should require `FveOnBootDisk` when FVE is detected is a
+  deferred policy choice.
+- **Blocker (residual)**: FVE-FS detection + binding proves a
+  BitLocker-managed volume on the boot disk and how its VMKs are
+  protected; it does NOT prove the volume is currently locked/unlocked
+  (that needs TPM-side VMK unseal verification, not metadata) or interop
+  against a real Windows-encrypted disk (the test image is synthetic;
+  same-disk binding is device-path-level, not BCD osdevice partition-GUID
+  level).  Keep open until real-media validation and VMK lock-state
+  proof exist.
 - **Close criteria**: Real BitLocker locked/unlocked state requires FVE
-  volume metadata + TPM inspection.  Metadata parsing is implemented and
-  emulated-tested; residual is real-media + boot-volume binding.
+  volume metadata + TPM inspection.  Metadata parsing and boot-disk
+  binding are implemented and emulated-tested; residual is real-media
+  validation + VMK lock-state proof.
 
 ### D-121 — SPI protections check not implemented
 - **Status**: OPEN
@@ -1356,7 +1372,7 @@
 | D-117 | No runtime tests for PBL modules | CLOSED (QEMU+swtpm: 8 test-output logs) | TEST |
 | D-118 | EFI_RNG_PROTOCOL nonce generation not implemented | CLOSED | SECURITY |
 | D-119 | ACPI FADT S3 parsing stubbed | CLOSED | STUB |
-| D-120 | BitLocker detection not implemented | OPEN (FVE-FS metadata inspection implemented in `Fve.c` + QEMU synthetic-image test 11/0; residual: real-media validation, boot-volume binding, VMK lock-state proof) | TODO |
+| D-120 | BitLocker detection not implemented | OPEN (FVE-FS metadata inspection + boot-disk binding implemented in `Fve.c` + QEMU 3-boot test 16/0; residual: real-media validation, VMK lock-state proof) | TODO |
 | D-121 | SPI protections check not implemented | CLOSED | TODO |
 | D-122 | DCI/DCP check not implemented | CLOSED | TODO |
 | D-123 | DMA protection check not implemented | CLOSED | TODO |

@@ -319,7 +319,7 @@ PblAppEntryPoint (
   // Step 1: Collect platform state (REQ-01..10, C2 §5.1 step 2)
   //
   Print (L"[1/8] Collecting platform state...\n");
-  Status = PblCollectPlatformState (&PlatformState);
+  Status = PblCollectPlatformState (&PlatformState, ImageHandle);
   if (EFI_ERROR (Status)) {
     Print (L"  [WARN] Platform state collection: %r\n", Status);
     // Continue — missing state is DEGRADED, not fatal

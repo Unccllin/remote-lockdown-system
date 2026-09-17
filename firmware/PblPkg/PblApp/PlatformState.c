@@ -852,10 +852,17 @@ PblCollectWinreState (
 // Public API
 // ============================================================================
 
-/** C2 §5.1 step 2: Collect all platform state. **/
+/** C2 §5.1 step 2: Collect all platform state.
+
+  @param  State        Platform state to fill.
+  @param  ImageHandle  PBL's own image handle — resolves the boot disk
+                       (LoadedImage->DeviceHandle) for FVE boot-volume
+                       binding (D-120).
+**/
 EFI_STATUS
 PblCollectPlatformState (
-  OUT PBL_PLATFORM_STATE  *State
+  OUT PBL_PLATFORM_STATE  *State,
+  IN  EFI_HANDLE          ImageHandle
   )
 {
   EFI_STATUS  Status;
@@ -888,8 +895,9 @@ PblCollectPlatformState (
   // D-120: FVE volume metadata — the authoritative BitLocker signal.
   // Scans DiskIo devices for the -FVE-FS- volume header and parses the
   // metadata block for VMK protection types. Runs after BCD so the
-  // authoritative result ORs over the BCD GUID heuristic.
-  PblCheckFve (State);
+  // authoritative result ORs over the BCD GUID heuristic. ImageHandle
+  // supplies the boot-disk device path for boot-volume binding.
+  PblCheckFve (State, ImageHandle);
 
   // REQ-12: PCR readings (4, 5, 7, 11)
   PblCollectPcrReadings (State);
