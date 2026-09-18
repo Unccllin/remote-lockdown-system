@@ -1813,3 +1813,51 @@ S0.5 — shell/BootNext classification into the boot-path digest (B-010/B-017): 
 ---
 
 ---
+
+---
+
+## Session 123 — 2026-09-18 (continuation)
+
+### RULE-ZERO
+**Read**: B-010/B-017 (boot-flow beliefs), PlatformState.c BootOrder walker, PblApp.h PBL_PLATFORM_STATE, PblApp.c digest path, EDK2 BdsEntry.c BootNext dispatch, QemuBootOrderLib pruning/survival.
+**Finding**: BootOrder walker checked only network subtypes; BootNext never read. EDK2 BDS deletes BootNext before dispatch (BdsEntry.c:1075) — a live BootNext is unobservable to any booted app by design.
+
+### IMPLEMENT
+- PblApp.h: PBL_PLATFORM_STATE += BootNextOption (u16, 0xFFFF unset), ShellEntryMask (u16, first-16 BootOrder positions), BootPathFlags (PBL_BPF_*: SHELL_IN_BOOT_ENTRY/BOOTNEXT_SET/SHELL_AS_BOOTNEXT/SHELL_ON_ESP).
+- PlatformState.c: PblPathContainsShell (bounded, NUL-safe), PblClassifyLoadOption (network + FILEPATH shell, malformed-node-safe walk), PblClassifyBootEntry, PblScanEspForShell (all SFS volumes, depth≤4, ≤512 entries), BootNext read + target classify. Missing BootOrder no longer skips BootNext/ESP scan.
+- PblApp.c: always-on summary line "Boot path: flags=.. shell-mask=.. bootnext=.." for harness observability.
+- test-s05-bootpath-harness.sh: NEW — 5 scenarios via vars.fd VARIABLE_HEADER injection + ESP file planting; swtpm per-boot restart (wedged-listener fix); PBL_NO_SWTPM escape hatch.
+
+### VERIFY
+- Release build clean; efi 3a7a0500b5c4b7d4.
+- s05 harness 14/0: baseline flags=0x00; ESP SHELL.EFI → warn + flags=0x08; injected Boot0007 FILEPATH shell → warn + flags=0x01 mask=0x0001; injected BootNext=0x9999 → consumed, PBL sees 0xFFFF; unordered Boot0009 → OVMF silent wedge (documented anomaly).
+- ci-harness-docker 15/0 (custom OVMF mounted).
+
+### Fog cleared this session
+- EDK2 BDS consumes BootNext before any app dispatch — BootNext detection is best-effort only (non-spec firmware, DXE-injected vars).
+- OVMF anomaly: unordered Boot#### or BootNext→existent entry wedges this build pre-console (0 serial bytes) — emulated, recorded as B-035.
+- swtpm unixio ctrl channel does not reliably accept a second QEMU connection — restart daemon per boot.
+
+### Fog remaining
+- Whether the OVMF wedge reproduces on real firmware (unordered Boot#### handling differs per vendor).
+- Whether any firmware leaves BootNext observable to a DXE-phase or non-BDS-launched PBL.
+
+### Debt items closed
+- S0.5 implemented + verified: B-010 refuted→B-033, B-017 refuted→B-034, B-035 confirmed (all emulated). Commit e001f00.
+
+### Debt items still open
+- S0.6 (detached-signature updates + key separation, B-006); S0.7 (DHCP/policy IP, B-015); S1–S5; D-120, D-129, D-130.
+
+### Blockers
+- None.
+
+### Session artifacts
+- Commit e001f00; efi 3a7a0500b5c4b7d4; test-s05-bootpath-harness.sh 14/0; beliefs 32→35.
+
+### Failure attribution
+- Layer 3 (execution environment): harness boot() clobbered injected vars with fresh template (own bug — layer 1/3 hybrid); swtpm socket lifecycle broke multi-boot runs. Both fixed in harness.
+
+### Next session opening
+S0.6 — detached-signature updates + pinned key + key-domain separation (B-006): agent update path verifies channel SHA-256 not a real signature.
+
+---

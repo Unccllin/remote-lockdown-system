@@ -155,7 +155,7 @@ beliefs:
   statement: BootOrder is checked only for network-boot device-path subtypes — shell images in Boot####,
     BootNext overrides, and ESP shell binaries are not classified.
   domain: firmware/boot-flow
-  status: confirmed
+  status: refuted
   evidence_level: code-read
   provenance: PlatformState.c:233-346 — flags MSG_MAC/IP/URI subtypes only; no filename inspection, no
     BootNext read
@@ -164,9 +164,12 @@ beliefs:
   last_verified: '2026-09-18'
   commit_ref: 6cd33f4
   supersedes: null
-  superseded_by: null
+  superseded_by: B-033
   dependents: []
   notes: Signed shell = signed bypass (BombShell/VU#718077 precedent).
+  refuted_on: '2026-09-18'
+  refute_evidence: PlatformState.c PblClassifyLoadOption/PblScanEspForShell; test-s05-bootpath-harness.sh
+    14/0 (injected Boot0007 FILEPATH shell → flags=0x01 mask=0x0001; planted ESP SHELL.EFI → flags=0x08)
 - id: B-011
   statement: MemoryOverwriteRequestControl lives under EFI_GLOBAL_VARIABLE.
   domain: firmware/mor
@@ -269,7 +272,7 @@ beliefs:
 - id: B-017
   statement: BootNext is never inspected — a one-shot shell or boot-manager override is invisible to PBL.
   domain: firmware/boot-flow
-  status: confirmed
+  status: refuted
   evidence_level: code-read
   provenance: PlatformState.c — BootNext absent from all variable reads
   source: CONFIRMATION-FINDINGS.md B4
@@ -277,9 +280,12 @@ beliefs:
   last_verified: '2026-09-18'
   commit_ref: 6cd33f4
   supersedes: null
-  superseded_by: null
+  superseded_by: B-034
   dependents: []
   notes: F7-adjacent.
+  refuted_on: '2026-09-18'
+  refute_evidence: 'PlatformState.c BootNext read; test-s05-bootpath-harness.sh scenario 4: injected BootNext
+    → PBL sees 0xFFFF (consumed); BdsEntry.c:1075 spec-checked'
 - id: B-018
   statement: Harnesses that check log output rather than security outcomes pass vulnerable code — the
     D-220 bypass and the MOR no-op both survived green harnesses.
@@ -534,6 +540,57 @@ beliefs:
   last_verified: '2026-09-18'
   commit_ref: 0391bde
   supersedes: B-004
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-033
+  statement: 'Boot#### loader paths are classified: MEDIA_FILEPATH_DP nodes are walked and basename-matched
+    against ''shell'' — hits set ShellEntryMask (BootOrder position bits) + PBL_BPF_SHELL_IN_BOOT_ENTRY;
+    ESP volumes are scanned for *shell* files → PBL_BPF_SHELL_ON_ESP; both feed the platform-state digest'
+  domain: firmware/boot-flow
+  status: confirmed
+  evidence_level: emulated
+  provenance: test-s05-bootpath-harness.sh 14/0 QEMU+swtpm, artifact 3a7a0500b5c4b7d4; 'Boot0007 loader
+    path contains a shell binary' flags=0x01 mask=0x0001; 'shell binary on ESP' flags=0x08
+  source: refutes B-010
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: e001f00
+  supersedes: B-010
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-034
+  statement: BootNext is read and its target classified (BootNextOption field + PBL_BPF_BOOTNEXT_SET/SHELL_AS_BOOTNEXT);
+    BUT EDK2 BDS deletes BootNext at BdsEntry.c:1075 before dispatch, so a live BootNext is unobservable
+    to any booted app — detection is best-effort for non-spec firmware
+  domain: firmware/boot-flow
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'harness scenario 4: injected BootNext=0x9999 → consumed, PBL prints bootnext=0xFFFF; BdsEntry.c:1075
+    read; read+classify path code-reviewed'
+  source: refutes B-017
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: e001f00
+  supersedes: B-017
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-035
+  statement: On this OVMF build, an unordered Boot#### (exists but not in BootOrder) — or BootNext targeting
+    an existent Boot#### — wedges the VM silently before console init (zero serial output) — emulated
+    anomaly, likely OVMF/QEMU fw_cfg interaction, not confirmed on other firmware
+  domain: firmware/boot-flow
+  status: confirmed
+  evidence_level: emulated
+  provenance: '5+ QEMU boots: unordered Boot0007/Boot0009 → 0 serial bytes timeout; BootOrder=[0] alone
+    → boots; BootNext=0x9999 alone → boots; BootNext→Boot0007 (FILEPATH or full HD path) → hangs'
+  source: test-s05-bootpath-harness.sh scenarios 4-5 bisection
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: e001f00
+  supersedes: null
   superseded_by: null
   dependents: []
   notes: ''

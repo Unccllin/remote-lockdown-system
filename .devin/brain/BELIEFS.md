@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-09-18 13:19:43 — 32 beliefs
+Generated: 2026-09-18 14:49:02 — 35 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -30,9 +30,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-001 | confirmed | emulated | A non-success return from a BLOCK-intent Boot#### entry advances BDS to the next BootOrder entry — an error return is a bypass vector, not a halt. |
 | B-002 | confirmed | emulated | PBL BLOCK-intent paths never return to BDS — PblBlockHalt() shows lock screen, requests MOR, resets via EfiResetShutdown, CpuDeadLoop fallback. |
-| B-010 | confirmed | code-read | BootOrder is checked only for network-boot device-path subtypes — shell images in Boot####, BootNext overrides, and ESP shell binaries are not classified. |
-| B-017 | confirmed | code-read | BootNext is never inspected — a one-shot shell or boot-manager override is invisible to PBL. |
+| B-010 | refuted | code-read | BootOrder is checked only for network-boot device-path subtypes — shell images in Boot####, BootNext overrides, and ESP shell binaries are not classified. → see B-033 |
+| B-017 | refuted | code-read | BootNext is never inspected — a one-shot shell or boot-manager override is invisible to PBL. → see B-034 |
 | B-022 | confirmed | emulated | PBL chain-loads bootmgfw.efi only after SHA-256 hash match against policy BootMgrHash, and passes the hashed buffer to LoadImage — the loaded bytes are the hashed bytes (TOCTOU-safe). |
+| B-033 | confirmed | emulated | Boot#### loader paths are classified: MEDIA_FILEPATH_DP nodes are walked and basename-matched against 'shell' — hits set ShellEntryMask (BootOrder position bits) + PBL_BPF_SHELL_IN_BOOT_ENTRY; ESP volumes are scanned for *shell* files → PBL_BPF_SHELL_ON_ESP; both feed the platform-state digest |
+| B-034 | confirmed | emulated | BootNext is read and its target classified (BootNextOption field + PBL_BPF_BOOTNEXT_SET/SHELL_AS_BOOTNEXT); BUT EDK2 BDS deletes BootNext at BdsEntry.c:1075 before dispatch, so a live BootNext is unobservable to any booted app — detection is best-effort for non-spec firmware |
+| B-035 | confirmed | emulated | On this OVMF build, an unordered Boot#### (exists but not in BootOrder) — or BootNext targeting an existent Boot#### — wedges the VM silently before console init (zero serial output) — emulated anomaly, likely OVMF/QEMU fw_cfg interaction, not confirmed on other firmware |
 
 ## firmware/mor
 

@@ -51,50 +51,49 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 122 — 2026-09-18 (continuation)
+## Latest session: 123 — 2026-09-18 (continuation)
 
 ### RULE-ZERO
-**Read**: B-003/B-004/B-027 statements; every gRT->GetVariable consumer in PblApp (Svn, Mor, Sbat, DmaProtection, PlatformState SecureBoot/PK/db/dbx/BootOrder); Decision.c gate usage; MarkerTest.c role.
-**Finding**: B-004-class audit — PblBootmgrSvn already advisory post-NG-T4 (no decision consumer; Trusted flag hashed into platform_state_digest). One LIVE spoof-to-pass remained: Decision.c:252 BLOCKs on KernelDmaProtection, read from the unauthenticated variable BEFORE the firmware DMAR table — an OS/shell writer plants var=1 and passes the DMA gate.
+**Read**: B-010/B-017 (boot-flow beliefs), PlatformState.c BootOrder walker, PblApp.h PBL_PLATFORM_STATE, PblApp.c digest path, EDK2 BdsEntry.c BootNext dispatch, QemuBootOrderLib pruning/survival.
+**Finding**: BootOrder walker checked only network subtypes; BootNext never read. EDK2 BDS deletes BootNext before dispatch (BdsEntry.c:1075) — a live BootNext is unobservable to any booted app by design.
 
-### IMPLEMENT (S0.4 / B-003+B-004)
-- DmaProtection.c: inverted trust order — DMAR (Intel VT-d) / IVRS (AMD-Vi) ACPI tables (firmware-authored) are authoritative; KernelDmaProtection variable demoted to advisory telemetry with an explicit log line; never elevates.
-- Sbat.c: doc-marked advisory-only (unauthenticated read, zero callers — prevents future trust).
-- ci-harness-docker.sh: swtpm ctrl-socket wait before ioctl init (startup-race hardening).
-- Audit result: SecureBoot/SetupMode/DeployedMode/PK/db/dbx = platform-protected (read-only/auth-write); BootOrder/Boot#### = digest telemetry (S0.5 covers classification); MOR var = spec-inherent unauthenticated, planted bit self-fulfills; MarkerTest = diagnostic app, no consumer.
+### IMPLEMENT
+- PblApp.h: PBL_PLATFORM_STATE += BootNextOption (u16, 0xFFFF unset), ShellEntryMask (u16, first-16 BootOrder positions), BootPathFlags (PBL_BPF_*: SHELL_IN_BOOT_ENTRY/BOOTNEXT_SET/SHELL_AS_BOOTNEXT/SHELL_ON_ESP).
+- PlatformState.c: PblPathContainsShell (bounded, NUL-safe), PblClassifyLoadOption (network + FILEPATH shell, malformed-node-safe walk), PblClassifyBootEntry, PblScanEspForShell (all SFS volumes, depth≤4, ≤512 entries), BootNext read + target classify. Missing BootOrder no longer skips BootNext/ESP scan.
+- PblApp.c: always-on summary line "Boot path: flags=.. shell-mask=.. bootnext=.." for harness observability.
+- test-s05-bootpath-harness.sh: NEW — 5 scenarios via vars.fd VARIABLE_HEADER injection + ESP file planting; swtpm per-boot restart (wedged-listener fix); PBL_NO_SWTPM escape hatch.
 
 ### VERIFY
-- Release build clean; efi eb684120.
-- SPOOF TEST (new technique): injected KernelDmaProtection=1 into OVMF_VARS.fd NVRAM via direct VARIABLE_HEADER write at 0x64 (auth-store layout, 60B header) — QEMU boot logged "KernelDmaProtection variable claims 1 (advisory, unauthenticated)" and still reached BLOCK. Under old code the planted var would have satisfied the gate.
-- ci-harness-docker 15/0 (with /ovmf mount — custom OVMF).
-- NOTE: without the /ovmf mount the harness falls back to Ubuntu OVMF_*_4M SECBOOT — NV provisioning fails there (TPM config difference); environment issue, not a code regression.
+- Release build clean; efi 3a7a0500b5c4b7d4.
+- s05 harness 14/0: baseline flags=0x00; ESP SHELL.EFI → warn + flags=0x08; injected Boot0007 FILEPATH shell → warn + flags=0x01 mask=0x0001; injected BootNext=0x9999 → consumed, PBL sees 0xFFFF; unordered Boot0009 → OVMF silent wedge (documented anomaly).
+- ci-harness-docker 15/0 (custom OVMF mounted).
 
 ### Fog cleared this session
-- vars.fd variable injection is a proven adversarial-testing primitive — arbitrary unauthenticated variables can be planted into NVRAM to exercise advisory-treatment boundaries.
-- setvar via UEFI Shell is BLOCKED by this OVMF's VariablePolicy (both attempts denied) — injection bypasses the policy, which is itself evidence the policy gates writes.
-- Ubuntu OVMF SECBOOT build ≠ custom OVMF for TPM NV — harnesses must mount /ovmf.
+- EDK2 BDS consumes BootNext before any app dispatch — BootNext detection is best-effort only (non-spec firmware, DXE-injected vars).
+- OVMF anomaly: unordered Boot#### or BootNext→existent entry wedges this build pre-console (0 serial bytes) — emulated, recorded as B-035.
+- swtpm unixio ctrl channel does not reliably accept a second QEMU connection — restart daemon per boot.
 
 ### Fog remaining
-- Whether SbatVersion should get a Trusted/digest treatment like SVN if it ever gains a consumer — currently dead code.
-- MorRequested advisory semantics on non-MOR platforms (planted bit arms clearing where MOR works; on non-functional platforms the S3 gate softens — B-026 hardware question).
+- Whether the OVMF wedge reproduces on real firmware (unordered Boot#### handling differs per vendor).
+- Whether any firmware leaves BootNext observable to a DXE-phase or non-BDS-launched PBL.
 
 ### Debt items closed
-- S0.4 implemented + verified: B-031 confirmed (emulated), B-004 refuted→B-032 (code-read). Commit 0391bde.
+- S0.5 implemented + verified: B-010 refuted→B-033, B-017 refuted→B-034, B-035 confirmed (all emulated). Commit e001f00.
 
 ### Debt items still open
-- S0.5–S0.7; S1–S5 per approved plan; D-120, D-129, D-130.
+- S0.6 (detached-signature updates + key separation, B-006); S0.7 (DHCP/policy IP, B-015); S1–S5; D-120, D-129, D-130.
 
 ### Blockers
 - None.
 
 ### Session artifacts
-- Commit 0391bde; efi eb684120; spoof vars.fd technique (/tmp/vars-spoofed.fd); beliefs 30→32.
+- Commit e001f00; efi 3a7a0500b5c4b7d4; test-s05-bootpath-harness.sh 14/0; beliefs 32→35.
 
 ### Failure attribution
-- Layer 3 (execution environment): ci-harness fell back to Ubuntu OVMF without /ovmf mount — NV failures looked like a regression; harness should hard-require /ovmf or label the fallback clearly.
+- Layer 3 (execution environment): harness boot() clobbered injected vars with fresh template (own bug — layer 1/3 hybrid); swtpm socket lifecycle broke multi-boot runs. Both fixed in harness.
 
 ### Next session opening
-S0.5 — shell/BootNext classification into the boot-path digest (B-010/B-017): extend the BootOrder walker with filename classification + BootNext read.
+S0.6 — detached-signature updates + pinned key + key-domain separation (B-006): agent update path verifies channel SHA-256 not a real signature.
 
 ---
 

@@ -65,7 +65,10 @@ Recorded in `.devin/PENDING-RULING.md`.
   - S0.4 variable advisory treatment (B-003/B-004) — **DONE**
     (B-004→B-032, DMA var spoof closed B-031, `0391bde`; audit: no
     unauthenticated var feeds a decision)
-  - S0.5 shell/BootNext classification → digest (B-010/B-017)
+  - S0.5 shell/BootNext classification → digest (B-010/B-017) — **DONE**
+    (B-010→B-033, B-017→B-034; shell paths + ESP scan feed digest;
+    BootNext read but BDS-consumed before app dispatch — best-effort;
+    OVMF unordered-Boot#### wedge anomaly B-035; harness 14/0, regress 15/0)
   - S0.6 detached-signature updates + pinned key + key separation (B-006)
   - S0.7 DHCP/policy IP config (B-015; hardware-window prep)
 - **S1 — loop-closers** (the architecture completing itself)
