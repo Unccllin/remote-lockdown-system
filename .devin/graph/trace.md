@@ -1657,3 +1657,55 @@ Present NG-Q1 for the architecture ruling — five laws + capability cut — usi
 S0.2 — remove http:// fallback from HttpsClient release path (XS, confirmed B-016); then S0.3 deadman clock-rollback (agent.py:2906).
 
 ---
+
+---
+
+## Session 120 — 2026-09-18 (continuation)
+
+### RULE-ZERO
+**Read**: `HttpsClient.c` (URI acceptance + contract comments), `PblApp.c` verdict-fetch call site, `test-d215-harness.sh` + `gen-policy-rot.py` (policy provisioning path), `build-pbl.sh` BUILD_TYPE → -DPBL_DEBUG wiring.
+**Finding**: `http://` was accepted in ALL builds despite contract "Plaintext fallback: never". Verdict URI comes from signed policy CBOR key 70 — the D-215 valid policy carries http://10.0.2.2:8080, making it the outcome-evidence vehicle for release rejection.
+
+### IMPLEMENT (S0.2 / B-016)
+- HttpsClient.c:132-145 — `#ifdef PBL_DEBUG`: accept http://+https:// (QEMU dev path, no TLS CA); `#else` (release): https:// only, all other schemes → EFI_INVALID_PARAMETER. Comment documents the fail-closed rationale.
+- test-d215-harness.sh — two fixes:
+  1. `touch PolicyRootOfTrust.c` before RoT build — the generated header is __has_include-gated, so an incremental build after a dev compile skipped the object and silently tested the UNPROVISIONED binary (RoT efi hash == dev efi hash on run 1). B-029.
+  2. `check_absent "no lock screen"` → `check "lock screen shown"` — PblBlockHalt displays the lock screen by design (D-220 semantics); the stale assertion predated that fix.
+
+### VERIFY
+- Release build clean (-Werror -Wall -Wextra); artifact 074f1617….
+- Release efi + signed http:// policy: "Online fetch failed: Invalid Parameter — falling back to cache" — param-check rejection, fail-closed (reproduced across 2 harness runs).
+- DEBUG RoT build (7d9feb7a…) + same policy: "Online fetch failed: Not Found" — passes param check, fails at network layer. Both branches proven end-to-end.
+- test-d215-harness.sh: 12 PASS / 0 FAIL (valid flows through; wrongkey/tampered/wrongkid all blocked with lock screen; QEMU exits 0 via PblBlockHalt reset — F1 semantics working).
+- ci-harness-docker.sh regression on release build: 15/0 (prior run).
+- Cleanup verified: generated.h removed, dev RELEASE efi restored to tree.
+
+### Fog cleared this session
+- The release/debug split is provable by error-code at the serial line: Invalid Parameter = param-check rejection; Not Found = network-layer failure past the check.
+- __has_include + incremental builds = silent wrong-artifact testing — the same failure class that let B-016 itself survive (green harness, wrong binary). Fixed generically in the harness.
+
+### Fog remaining
+- Whether production policy generators should emit https:// URIs by default (test fixtures still carry http:// — acceptable for DEBUG/QEMU, flagged for S0.6 key-separation work).
+- TLS CA pin provisioning path for real https:// verdict fetch (needs the deployment-side PKI decision, D-130-adjacent).
+
+### Debt items closed
+- S0.2 implemented + verified: B-016 refuted→B-028 (emulated); B-029 confirmed (harness trap). Commit f229cc9.
+
+### Debt items still open
+- S0.3–S0.7; S1–S5 per approved plan (next-gen-lockdown-map.md); D-120, D-129, D-130.
+
+### Blockers
+- None.
+
+### Session artifacts
+- Commit f229cc9 (S0.2 + harness fixes); release efi 074f1617, debug RoT efi 7d9feb7a; /tmp/pbl-d215-ci/pbl-serial-valid.log + pbl-d215-result.txt (12/0); beliefs 27→29; next-gen-lockdown-map.md approved-sequence section.
+
+### Failure attribution
+- Layer 4 (verification feedback): the D-215 harness's first S0.2 run tested the wrong binary — no artifact-identity check. Fixed by forcing recompilation; future harnesses should hash-check provisioned vs dev binaries as an assertion.
+
+### Next session opening
+S0.3 — deadman clock-rollback: `now < last_seen` tamper detection + server-timestamp anchor (agent.py:2906, B-005).
+
+---
+
+---

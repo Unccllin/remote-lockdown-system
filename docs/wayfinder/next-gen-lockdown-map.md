@@ -49,11 +49,46 @@ findings, ~40 capabilities across 5 feasibility tiers.
 - [NG-T1: Verify F1](tickets/NG-T1-verify-f1-block-return.md) — **REAL BUG**: `PblApp.c:379` (policy sig fail, RoT-provisioned) and `:444` (anti-rollback) return `EFI_SECURITY_VIOLATION` → BDS advances BootOrder → Windows boots. BLOCK switch path is safe (ResetSystem). Invisible to harnesses (RoT-unprovisioned dev mode skips sig verify). Graduated NG-T6 fix ticket — security-critical, needs human review.
 - [NG-T6: Fix F1](tickets/NG-T6-block-return-fix.md) — **implemented + verified**: `PblBlockHalt()` (lock screen → MOR → ResetSystem → CpuDeadLoop) replaced both propagating returns; chain-load return checked at all 3 sites; harnesses 16/0, 15/0, 16/0. Recorded as D-220 (CLOSED, SECURITY). Human review flagged.
 
+## Approved implementation sequence (NG-Q1 ruling, 2026-09-18)
+
+Ruling: **fix-first ordering**; segmented plan S0–S5 approved; TPM restart
+counter adopted as the boot-ID anchor; resume verdict = DEGRADED alarm.
+Recorded in `.devin/PENDING-RULING.md`.
+
+- **S0 — pure repairs** (in under any ruling)
+  - S0.1 MOR GUID + lock + advisory SVN — **DONE** (NG-T4, `97f4a6e`; MOR
+    functional behavior platform-gated, B-025/B-026)
+  - S0.2 remove `http://` from release path — **DONE** (B-016→B-028,
+    `f229cc9`; DEBUG-only http retained for QEMU)
+  - S0.3 deadman `now < last_seen` tamper + server-timestamp anchor (B-005)
+  - S0.4 variable advisory treatment (B-003/B-004)
+  - S0.5 shell/BootNext classification → digest (B-010/B-017)
+  - S0.6 detached-signature updates + pinned key + key separation (B-006)
+  - S0.7 DHCP/policy IP config (B-015; hardware-window prep)
+- **S1 — loop-closers** (the architecture completing itself)
+  - S1.1 TPM restart-counter boot-ID (PBL digest + agent report + server correlate)
+  - S1.2 cross-layer absence alarm (check-in with no PBL digest = bypass)
+  - S1.3 attestation enrichment (FveProtectionMask, LoadedImageDigest, boot-path class)
+  - S1.4 resume detection (wake + no digest + no counter-bump = S3)
+- **S2 — firmware**: NG-T5 partition FVE binding; VMK lock-state proof;
+  monotonic-counter freshness; disk boot-structure baseline
+- **S3 — agent**: self-integrity hash; VM/snapshot detection; watchdog;
+  raw-disk tripwire
+- **S4 — server**: escrow-before-arm; command lifecycle; role-scoped key
+  reads + audit; lock-screen provenance
+- **S5 — minimal moat**: digest storage + per-device baseline + raw-diff
+  alarm (taxonomy engine = later ticket)
+- **Deferred, recorded**: HECI/MEI; HII probing; Option-ROM buckets; S3
+  firmware provenance; error-record logging; UID override; kernel-telemetry
+  driver; vuln-driver inventory; packed-binary sweep; attested enrollment;
+  compliance-as-code; update rings (blocked on S0.6); device GC; forensic
+  runbook; full drift taxonomy; Computrace coexistence; **DXE-implant tier —
+  needs explicit product decision**
+
 ## Not yet specified
 
-- **Implementation tickets for the chosen capabilities** — graduates when
-  NG-Q1 (the capability cut) resolves; each chosen capability gets its own
-  T-ticket.
+- **Per-item tickets** — each S0.x–S5.x item gets a T-ticket as it is
+  picked up (S0.1 graduated as NG-T4; remaining tickets graduate on pickup).
 - **Tier-0 fix tickets** — graduate when NG-T1 (F1 verification) and the
   other finding-verification tickets resolve; real bugs become debt items
   + fix tickets, by-design items become documentation.

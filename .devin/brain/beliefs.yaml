@@ -244,7 +244,7 @@ beliefs:
   statement: PblHttpsPost accepts http:// URIs (marked temporary for QEMU, D-109) — plaintext fallback
     is live in the release build.
   domain: firmware/network
-  status: confirmed
+  status: refuted
   evidence_level: code-read
   provenance: HttpsClient.c:132-136
   source: CONFIRMATION-FINDINGS.md B3
@@ -252,9 +252,13 @@ beliefs:
   last_verified: '2026-09-18'
   commit_ref: 6cd33f4
   supersedes: null
-  superseded_by: null
+  superseded_by: B-028
   dependents: []
   notes: C3 says plaintext fallback is never allowed — code contradicts the contract.
+  refuted_on: '2026-09-18'
+  refute_evidence: 'firmware/PblPkg/PblApp/HttpsClient.c:132-145 PBL_DEBUG gate; release efi 074f1617
+    boots signed http:// policy and logs ''Online fetch failed: Invalid Parameter''; debug RoT efi 7d9feb7a
+    passes the param check and fails at network layer (''Not Found''); D-215 12/0; commit f229cc9'
 - id: B-017
   statement: BootNext is never inspected — a one-shot shell or boot-manager override is invisible to PBL.
   domain: firmware/boot-flow
@@ -440,3 +444,36 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-028
+  statement: Release PblHttpsPost requires https:// and rejects http:// with EFI_INVALID_PARAMETER; http://
+    survives only in PBL_DEBUG builds for the QEMU dev path — the shipping artifact is fail-closed.
+  domain: firmware/network
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'QEMU release boot: ''Online fetch failed: Invalid Parameter'' on signed http:// policy
+    (/tmp/pbl-d215-ci/pbl-serial-valid.log); QEMU debug boot: ''Not Found'' past param check; HttpsClient.c:132-145'
+  source: refutes B-016
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: f229cc9
+  supersedes: B-016
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-029
+  statement: 'test-d215-harness incremental-build trap: PolicyRootOfTrust.generated.h is __has_include-gated,
+    so it enters make deps only when present at the last compile — a dev→RoT incremental build silently
+    produces the unprovisioned binary; touching the .c file forces correct recompilation.'
+  domain: meta/testing
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'Run 1: RoT efi SHA == dev efi SHA (074f1617) = stale object tested; after touch fix: RoT
+    efi 964a199f != dev efi, invalid policies correctly blocked; D-215 12/0'
+  source: S0.2 session
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: f229cc9
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Same class of bug as B-016''s survival: a green harness testing the wrong artifact.'

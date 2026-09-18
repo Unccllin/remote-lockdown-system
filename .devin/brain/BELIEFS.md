@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-09-18 12:02:09 — 27 beliefs
+Generated: 2026-09-18 12:37:09 — 29 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -52,7 +52,8 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-007 | refuted | code-read | Fast-boot firmware may never connect the NIC before PBL's HTTPS use. → see B-008 |
 | B-008 | confirmed | code-read | PblHttpsPost sweeps ConnectController on all handles before HTTP use — the fast-boot NIC-connection gap is mitigated for already-dispatched drivers. |
 | B-015 | confirmed | code-read | PblHttpsPost hardcodes QEMU static IP 10.0.2.15 with UseDefaultAddress=FALSE — no DHCP; the HTTPS path cannot work on real hardware as written. |
-| B-016 | confirmed | code-read | PblHttpsPost accepts http:// URIs (marked temporary for QEMU, D-109) — plaintext fallback is live in the release build. |
+| B-016 | refuted | code-read | PblHttpsPost accepts http:// URIs (marked temporary for QEMU, D-109) — plaintext fallback is live in the release build. → see B-028 |
+| B-028 | confirmed | emulated | Release PblHttpsPost requires https:// and rejects http:// with EFI_INVALID_PARAMETER; http:// survives only in PBL_DEBUG builds for the QEMU dev path — the shipping artifact is fail-closed. |
 
 ## firmware/s3
 
@@ -73,6 +74,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-024 | confirmed | code-read | Ambiguous imperatives ('proceed','go','continue') during an open ruling mean continue the discussion — never start implementing; .devin/PENDING-RULING.md gates code edits |
+
+## meta/testing
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-029 | confirmed | emulated | test-d215-harness incremental-build trap: PolicyRootOfTrust.generated.h is __has_include-gated, so it enters make deps only when present at the last compile — a dev→RoT incremental build silently produces the unprovisioned binary; touching the .c file forces correct recompilation. |
 
 ## meta/verification
 
