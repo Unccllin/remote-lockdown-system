@@ -1381,7 +1381,7 @@
 | D-117 | No runtime tests for PBL modules | CLOSED (QEMU+swtpm: 8 test-output logs) | TEST |
 | D-118 | EFI_RNG_PROTOCOL nonce generation not implemented | CLOSED | SECURITY |
 | D-119 | ACPI FADT S3 parsing stubbed | CLOSED | STUB |
-| D-120 | BitLocker detection not implemented | OPEN (FVE-FS metadata inspection + boot-disk binding implemented in `Fve.c` + QEMU 3-boot test 16/0; residual: real-media validation, VMK lock-state proof) | TODO |
+| D-120 | BitLocker detection not implemented | OPEN (FVE-FS metadata inspection + boot-disk binding implemented in `Fve.c` + QEMU 3-boot test 16/0; `osdevice` device-blob format decoded in `NOTE-BCD-DEVICE-BLOB.md` — partition-level binding implementable via NG-T5; residual: partition binding, real-media validation, VMK lock-state proof) | TODO |
 | D-121 | SPI protections check not implemented | CLOSED | TODO |
 | D-122 | DCI/DCP check not implemented | CLOSED | TODO |
 | D-123 | DMA protection check not implemented | CLOSED | TODO |

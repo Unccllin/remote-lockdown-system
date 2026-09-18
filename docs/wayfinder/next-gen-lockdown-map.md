@@ -45,6 +45,7 @@ findings, ~40 capabilities across 5 feasibility tiers.
 <!-- one line per closed ticket — gist + link -->
 
 - [NG-R2: Authenticated-variable options](tickets/NG-R2-variable-authentication.md) — per-var table in `NOTE-PBL-VAR-AUTH.md`: TBA-viable but mostly unneeded; MOR can't be authenticated (use `MemoryOverwriteRequestControlLock`); **found latent bug — PBL writes MOR under wrong GUID (no-op decoy)**; graduated NG-T4 fix ticket.
+- [NG-R1: BCD `osdevice` device-blob format](tickets/NG-R1-bcd-osdevice-blob.md) — **implementable-now**; full byte layout in `NOTE-BCD-DEVICE-BLOB.md` (PartitionID @0x20, TableType @0x34, DiskID @0x38 — GPT-vs-MBR inverted vs. WMI enum); graduated NG-T5 partition-binding ticket. Real hives (NG-T3) = validation, not blocker.
 
 ## Not yet specified
 
@@ -54,8 +55,9 @@ findings, ~40 capabilities across 5 feasibility tiers.
 - **Tier-0 fix tickets** — graduate when NG-T1 (F1 verification) and the
   other finding-verification tickets resolve; real bugs become debt items
   + fix tickets, by-design items become documentation.
-- **FVE partition-level binding** — needs NG-R1 (blob format) AND NG-T3
-  (real BitLocker artifacts); shapes D-120's close criteria.
+- **FVE partition-level binding** — GRADUATED to NG-T5 (NG-R1 resolved:
+  format fully decoded). Multi-boot bind-policy (`{bootmgr}.default` vs.
+  first displayorder vs. any-match) folded into the ticket.
 - **HeciClient design** — needs Intel AMT Implementation & Reference Guide
   (NG-T2); D-127's real close path.
 - **Digest-drift baseline engine** — server-side per-device golden state;
