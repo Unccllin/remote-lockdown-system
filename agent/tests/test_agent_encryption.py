@@ -719,6 +719,93 @@ class TestDeadmanKey:
                 if f.exists():
                     f.unlink()
 
+    def test_deadman_triggers_on_clock_rollback(self, cfg, tmp_sentinel):
+        """B-005: last_seen in the future beyond tolerance = clock rollback tamper → lockdown."""
+        agent.DEADMAN_FILE.write_text(
+            json.dumps(
+                {
+                    "last_seen": time.time() + 3600,  # 1h in the future
+                    "last_seen_source": "server",
+                    "status": "stolen",
+                }
+            )
+        )
+
+        try:
+            with (
+                patch.object(agent, "apply_lock_screen"),
+                patch.object(agent, "start_lock_guardian"),
+                patch.object(agent, "write_pending_ack"),
+                patch.object(agent, "write_recovery_key"),
+            ):
+                agent.check_deadman(cfg)
+
+                assert tmp_sentinel.exists()
+                state = json.loads(tmp_sentinel.read_text())
+                assert state["locked"] is True
+                assert state["deadman"] is True
+                assert state["clock_rollback"] is True
+        finally:
+            for f in [agent.DEADMAN_FILE, agent.DEADMAN_KEY_FILE, tmp_sentinel]:
+                if f.exists():
+                    f.unlink()
+
+    def test_deadman_tolerates_small_backward_skew(self, cfg, tmp_sentinel):
+        """B-005: last_seen slightly in the future (within tolerance) is benign skew."""
+        agent.DEADMAN_FILE.write_text(
+            json.dumps(
+                {
+                    "last_seen": time.time() + 60,  # 1 min ahead — NTP jitter range
+                    "status": "stolen",
+                }
+            )
+        )
+
+        try:
+            with patch.object(agent, "encrypt_folder") as mock_encrypt:
+                agent.check_deadman(cfg)
+                mock_encrypt.assert_not_called()
+                assert not tmp_sentinel.exists()
+        finally:
+            if agent.DEADMAN_FILE.exists():
+                agent.DEADMAN_FILE.unlink()
+
+    def test_update_deadman_timer_anchors_server_time(self):
+        """B-005: server_time from checkin anchors last_seen over the local clock."""
+        if agent.DEADMAN_FILE.exists():
+            agent.DEADMAN_FILE.unlink()
+        try:
+            with (
+                patch.object(agent, "_TPM_SEAL_AVAILABLE", False),
+                patch.object(agent, "_STATE_CRYPTO_AVAILABLE", False),
+            ):
+                agent.update_deadman_timer("stolen", server_time=1700000000.0)
+                data = json.loads(agent.DEADMAN_FILE.read_text())
+                assert data["last_seen"] == 1700000000.0
+                assert data["last_seen_source"] == "server"
+                assert data["status"] == "stolen"
+        finally:
+            if agent.DEADMAN_FILE.exists():
+                agent.DEADMAN_FILE.unlink()
+
+    def test_update_deadman_timer_falls_back_to_local_time(self):
+        """B-005: no server_time (older server) falls back to the local clock."""
+        if agent.DEADMAN_FILE.exists():
+            agent.DEADMAN_FILE.unlink()
+        try:
+            with (
+                patch.object(agent, "_TPM_SEAL_AVAILABLE", False),
+                patch.object(agent, "_STATE_CRYPTO_AVAILABLE", False),
+            ):
+                before = time.time()
+                agent.update_deadman_timer("active")
+                data = json.loads(agent.DEADMAN_FILE.read_text())
+                assert data["last_seen_source"] == "local"
+                assert before <= data["last_seen"] <= time.time()
+        finally:
+            if agent.DEADMAN_FILE.exists():
+                agent.DEADMAN_FILE.unlink()
+
     def test_report_deadman_key_uploads_and_wipes(self, cfg):
         """report_deadman_key should upload key to server and delete local copy."""
         agent.DEADMAN_KEY_FILE.write_text("test-fernet-key==")

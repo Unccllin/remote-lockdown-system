@@ -2845,6 +2845,11 @@ def migrate_deadman_to_encrypted() -> None:
 # during development and testing.
 #
 DEADMAN_TIMEOUT_HOURS = 24  # Lock if flagged-stolen and offline for this long
+# B-005: backward wall-clock movement beyond this many seconds counts as
+# rollback tampering, not benign skew (NTP slew/step stays well under it;
+# an attacker stalling the deadman by rewinding must exceed it — and each
+# attempt buys them at most this much before the wire trips).
+DEADMAN_CLOCK_ROLLBACK_TOLERANCE_SEC = 300
 
 # --- A1/A4: Pending ACK file (transient, plaintext, deleted on ACK success) ---
 # Written BEFORE encrypt_folder() so a crash between encryption and ACK
@@ -2857,15 +2862,22 @@ DEADMAN_TIMEOUT_HOURS = 24  # Lock if flagged-stolen and offline for this long
 # (Path defined at top of module via _STATE_DIR.)
 
 
-def update_deadman_timer(status: str) -> None:
+def update_deadman_timer(status: str, server_time: float | None = None) -> None:
     """Write current time + device status to the dead man's file.
+
+    B-005: when the checkin response carries a server timestamp, last_seen
+    is anchored to it rather than the local clock — a local clock rollback
+    then shows up as a negative gap instead of silently extending the
+    deadman window. Falls back to local time for older servers.
 
     Uses TPM sealing (Layer 2) if TPM is available, falls back to DPAPI
     encrypted format (Layer 3) if state_crypto is available, and finally
     falls back to plaintext for backward compatibility.
     """
+    anchored = isinstance(server_time, (int, float)) and server_time > 0
     data = {
-        "last_seen": time.time(),
+        "last_seen": server_time if anchored else time.time(),
+        "last_seen_source": "server" if anchored else "local",
         "status": status,
     }
     plaintext = json.dumps(data, default=str).encode("utf-8")
@@ -2899,11 +2911,24 @@ def check_deadman(cfg: dict) -> None:
             return
         # Handle corrupt deadman file (fail-secure: treat as stolen + expired)
         last_seen = state.get("last_seen", 0)
+        clock_rollback = False
         if last_seen == "corrupt" or not isinstance(last_seen, (int, float)):
             log.warning("DEAD MAN SWITCH: corrupt deadman file — treating as stolen + expired")
             elapsed_hours = DEADMAN_TIMEOUT_HOURS
         else:
-            elapsed_hours = (time.time() - last_seen) / 3600
+            now = time.time()
+            # B-005: wall clock moved backward past the last-seen anchor —
+            # tamper, not skew. Treat as expired (fail-secure).
+            if now < last_seen - DEADMAN_CLOCK_ROLLBACK_TOLERANCE_SEC:
+                log.warning(
+                    "DEAD MAN SWITCH: clock rollback detected "
+                    "(now %.0fs behind last_seen) — treating as stolen + expired",
+                    last_seen - now,
+                )
+                elapsed_hours = DEADMAN_TIMEOUT_HOURS
+                clock_rollback = True
+            else:
+                elapsed_hours = (now - last_seen) / 3600
         if elapsed_hours >= DEADMAN_TIMEOUT_HOURS:
             log.warning(
                 "DEAD MAN SWITCH: device was stolen and offline for %.1fh — triggering lockdown",
@@ -2928,7 +2953,10 @@ def check_deadman(cfg: dict) -> None:
                     )
                 apply_lock_screen()
                 start_lock_guardian()
-                _atomic_write_text(sentinel, json.dumps({"locked": True, "deadman": True}))
+                sentinel_state = {"locked": True, "deadman": True}
+                if clock_rollback:
+                    sentinel_state["clock_rollback"] = True
+                _atomic_write_text(sentinel, json.dumps(sentinel_state))
                 # Store key locally so it can be uploaded to the server once
                 # network connectivity is restored — without this the device
                 # would be permanently unrecoverable.
@@ -3478,9 +3506,10 @@ def main() -> None:
             # Phase 5: Drain offline queue (location reports, etc.)
             drain_offline_queue(cfg)
 
-            # Update dead man's timer with current server-reported status
+            # Update dead man's timer with current server-reported status;
+            # anchor last_seen to the server's clock when provided (B-005)
             current_status = data.get("status", "active")
-            update_deadman_timer(current_status)
+            update_deadman_timer(current_status, server_time=data.get("server_time"))
 
             # Phase 5: Adaptive polling — use server-sent poll_interval if present.
             # The server tells us how often to check in based on device status:

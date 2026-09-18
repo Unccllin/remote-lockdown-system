@@ -226,6 +226,9 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
     device_id: device.id,
     status: device.status,
     poll_interval: serverPollInterval,
+    // B-005: server-authoritative timestamp — the agent anchors its deadman
+    // last_seen to this, so a local clock rollback becomes detectable.
+    server_time: Math.floor(Date.now() / 1000),
     command: command
       ? {
           id: command.id,

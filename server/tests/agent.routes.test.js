@@ -116,6 +116,20 @@ describe('POST /api/agent/checkin', () => {
     expect(res.body.command).toBeNull();
   });
 
+  test('returns server_time for deadman anchoring (B-005)', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.server_time).toBe('number');
+    expect(Math.abs(Date.now() / 1000 - res.body.server_time)).toBeLessThan(10);
+  });
+
   test('returns pending command for device', async () => {
     const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
     const command = { id: 'cmd-1', command_type: 'lockdown', status: 'pending' };
