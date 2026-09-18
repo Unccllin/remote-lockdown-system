@@ -227,7 +227,201 @@ PblCollectDbDbxState (
   }
 }
 
-/** REQ-08: Check BootOrder for network boot entries (PXE, HTTP boot). **/
+/** Case-insensitive check: does the basename of a CHAR16 path contain
+  "shell"? Used to classify Boot#### loader paths and ESP filenames —
+  a planted UEFI shell (signed or not) is a signed-bypass vector
+  (BombShell / VU#718077 precedent).
+**/
+STATIC
+BOOLEAN
+PblPathContainsShell (
+  IN CONST CHAR16  *Path,
+  IN UINTN         MaxChars
+  )
+{
+  CONST CHAR16  *Base;
+  CONST CHAR16  *P;
+  UINTN         BaseOffset;
+  UINTN         NameLen;
+  UINTN         I;
+
+  if (Path == NULL || MaxChars == 0) {
+    return FALSE;
+  }
+  // Basename = after last '\\' or '/' — scan bounded to MaxChars because
+  // FILEPATH device-path nodes are not guaranteed NUL-terminated.
+  Base = Path;
+  BaseOffset = 0;
+  for (P = Path; P < Path + MaxChars && *P != L'\0'; P++) {
+    if (*P == L'\\' || *P == L'/') {
+      Base = P + 1;
+      BaseOffset = (UINTN)(Base - Path);
+    }
+  }
+  NameLen = 0;
+  while (BaseOffset + NameLen < MaxChars && Base[NameLen] != L'\0') {
+    NameLen++;
+  }
+  if (NameLen < 5) {
+    return FALSE;
+  }
+  for (I = 0; I + 5 <= NameLen; I++) {
+    UINTN J;
+    for (J = 0; J < 5; J++) {
+      CHAR16 C = Base[I + J];
+      if (C >= L'a' && C <= L'z') {
+        C -= 0x20;
+      }
+      if (C != L"SHELL"[J]) {
+        break;
+      }
+    }
+    if (J == 5) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+/** Classify one EFI_LOAD_OPTION: walks the FilePathList device path and
+  reports whether it contains a network-boot node and/or a *shell* file
+  path. Shared by the BootOrder walk and the BootNext target check.
+
+  @param[in]  EntryBuf       Raw Boot#### variable data.
+  @param[in]  EntrySize      Size of EntryBuf in bytes.
+  @param[out] HasNetworkDp   TRUE if a network device-path node is present.
+  @param[out] HasShellPath   TRUE if a file path containing "shell" is present.
+**/
+STATIC
+VOID
+PblClassifyLoadOption (
+  IN  UINT8    *EntryBuf,
+  IN  UINTN    EntrySize,
+  OUT BOOLEAN  *HasNetworkDp,
+  OUT BOOLEAN  *HasShellPath
+  )
+{
+  UINT16  FilePathListLength;
+  UINT8   *DescStart;
+  UINTN   DescOffset;
+  UINT8   *FilePathList;
+  UINTN   FilePathListRemaining;
+
+  *HasNetworkDp = FALSE;
+  *HasShellPath = FALSE;
+
+  // EFI_LOAD_OPTION structure:
+  //   UINT32 Attributes
+  //   UINT16 FilePathListLength
+  //   CHAR16 Description[]  (null-terminated)
+  //   UINT8 FilePathList[FilePathListLength]
+  if (EntrySize < sizeof (UINT32) + sizeof (UINT16)) {
+    return;
+  }
+  FilePathListLength = *(UINT16 *)(EntryBuf + sizeof (UINT32));
+
+  // Skip past Attributes(4) + FilePathListLength(2) + Description (NUL-terminated CHAR16)
+  DescStart = EntryBuf + sizeof (UINT32) + sizeof (UINT16);
+  DescOffset = 0;
+  while (DescOffset + sizeof (CHAR16) <= EntrySize - (DescStart - EntryBuf)) {
+    CHAR16 *Ch = (CHAR16 *)(DescStart + DescOffset);
+    if (*Ch == L'\0') {
+      DescOffset += sizeof (CHAR16);
+      break;
+    }
+    DescOffset += sizeof (CHAR16);
+  }
+
+  FilePathList = DescStart + DescOffset;
+  FilePathListRemaining = EntrySize - (FilePathList - EntryBuf);
+  if (FilePathListLength > FilePathListRemaining) {
+    FilePathListLength = (UINT16)FilePathListRemaining;
+  }
+
+  // Walk device-path nodes.
+  // Network boot subtypes (MESSAGING_DEVICE_PATH = 0x03):
+  //   MSG_MAC_ADDR_DP (0x0b), MSG_IPv4_DP (0x0c), MSG_IPv6_DP (0x0d),
+  //   MSG_URI_DP (0x18 — HTTP Boot URI)
+  // Shell check: MEDIA_FILEPATH_DP (0x04/0x04) payload is a CHAR16 path.
+  EFI_DEVICE_PATH_PROTOCOL *Dp = (EFI_DEVICE_PATH_PROTOCOL *)FilePathList;
+  UINT8 *DpEnd = FilePathList + FilePathListLength;
+  while ((UINT8 *)Dp + sizeof (EFI_DEVICE_PATH_PROTOCOL) <= DpEnd &&
+         !IsDevicePathEnd (Dp)) {
+    UINT8 DpType = DevicePathType (Dp);
+    UINT8 DpSubType = DevicePathSubType (Dp);
+    UINTN NodeLen = DevicePathNodeLength (Dp);
+
+    // Malformed node (length underflows the header or runs past the buffer):
+    // stop instead of trusting Length — prevents OOB reads and infinite loops.
+    if (NodeLen < sizeof (EFI_DEVICE_PATH_PROTOCOL) ||
+        (UINT8 *)Dp + NodeLen > DpEnd) {
+      break;
+    }
+
+    if (DpType == MESSAGING_DEVICE_PATH) {
+      if (DpSubType == MSG_MAC_ADDR_DP ||
+          DpSubType == MSG_IPv4_DP ||
+          DpSubType == MSG_IPv6_DP ||
+          DpSubType == MSG_URI_DP) {
+        *HasNetworkDp = TRUE;
+      }
+    } else if (DpType == MEDIA_DEVICE_PATH && DpSubType == MEDIA_FILEPATH_DP) {
+      // PathName fills the node payload and is not guaranteed NUL-terminated
+      // inside it — bound the scan to the node length.
+      UINTN PathChars = (NodeLen - sizeof (EFI_DEVICE_PATH_PROTOCOL)) / sizeof (CHAR16);
+      if (PblPathContainsShell (((FILEPATH_DEVICE_PATH *)Dp)->PathName, PathChars)) {
+        *HasShellPath = TRUE;
+      }
+    }
+
+    Dp = (EFI_DEVICE_PATH_PROTOCOL *)((UINT8 *)Dp + NodeLen);
+  }
+}
+
+/** Read + classify one Boot#### variable by number. Returns TRUE if the
+  entry exists; shell classification reported via HasShellPath. **/
+STATIC
+BOOLEAN
+PblClassifyBootEntry (
+  IN  UINT16   BootNum,
+  OUT BOOLEAN  *HasShellPath
+  )
+{
+  CHAR16      BootVarName[12];
+  UINTN       EntrySize;
+  EFI_STATUS  Status;
+  UINT8       *EntryBuf;
+  BOOLEAN     HasNetworkDp;
+
+  *HasShellPath = FALSE;
+  UnicodeSPrint (BootVarName, sizeof (BootVarName), L"Boot%04x", BootNum);
+
+  EntrySize = 0;
+  Status = PblGetVariable (BootVarName, &mGlobalVariableGuid, NULL, 0, &EntrySize);
+  if (EFI_ERROR (Status) || EntrySize == 0) {
+    return FALSE;
+  }
+  EntryBuf = AllocatePool (EntrySize);
+  if (EntryBuf == NULL) {
+    return FALSE;
+  }
+  Status = PblGetVariable (BootVarName, &mGlobalVariableGuid, EntryBuf, EntrySize, NULL);
+  if (!EFI_ERROR (Status)) {
+    PblClassifyLoadOption (EntryBuf, EntrySize, &HasNetworkDp, HasShellPath);
+  }
+  FreePool (EntryBuf);
+  return TRUE;
+}
+
+STATIC
+VOID
+PblScanEspForShell (
+  OUT PBL_PLATFORM_STATE  *State
+  );
+
+/** REQ-08/REQ-08b: Check BootOrder for network boot + shell loaders,
+  BootNext one-shot overrides, and shell binaries on ESP volumes
+  (S0.5, B-010/B-017). **/
 STATIC
 VOID
 PblCollectBootOrderState (
@@ -235,29 +429,30 @@ PblCollectBootOrderState (
   )
 {
   State->NetworkBootEntriesPresent = FALSE;
+  State->BootPathFlags             = 0;
+  State->ShellEntryMask            = 0;
+  State->BootNextOption            = 0xFFFF;
 
-  // Read BootOrder variable
+  // Read BootOrder variable — a missing/empty BootOrder skips the
+  // per-entry walk only; BootNext + ESP scan still run below.
   UINTN OrderSize = 0;
   EFI_STATUS Status = PblGetVariable (L"BootOrder", &mGlobalVariableGuid, NULL, 0, &OrderSize);
-  if (EFI_ERROR (Status) || OrderSize == 0) {
-    return;
+  UINT8 *OrderBuf = NULL;
+  if (!EFI_ERROR (Status) && OrderSize > 0) {
+    OrderBuf = AllocatePool (OrderSize);
+    if (OrderBuf != NULL) {
+      Status = PblGetVariable (L"BootOrder", &mGlobalVariableGuid, OrderBuf, OrderSize, NULL);
+      if (EFI_ERROR (Status)) {
+        FreePool (OrderBuf);
+        OrderBuf = NULL;
+      }
+    }
   }
 
-  UINT8 *OrderBuf = AllocatePool (OrderSize);
-  if (OrderBuf == NULL) {
-    return;
-  }
-
-  Status = PblGetVariable (L"BootOrder", &mGlobalVariableGuid, OrderBuf, OrderSize, NULL);
-  if (EFI_ERROR (Status)) {
-    FreePool (OrderBuf);
-    return;
-  }
-
-  UINTN NumEntries = OrderSize / sizeof (UINT16);
+  UINTN NumEntries = (OrderBuf != NULL) ? OrderSize / sizeof (UINT16) : 0;
   UINT16 *BootOrder = (UINT16 *)OrderBuf;
 
-  // Check each Boot#### entry for network boot
+  // Check each Boot#### entry for network boot + shell loaders
   for (UINTN i = 0; i < NumEntries; i++) {
     CHAR16 BootVarName[12];
     UnicodeSPrint (BootVarName, sizeof (BootVarName), L"Boot%04x", BootOrder[i]);
@@ -279,70 +474,161 @@ PblCollectBootOrderState (
       continue;
     }
 
-    // EFI_LOAD_OPTION structure:
-    //   UINT32 Attributes
-    //   UINT16 FilePathListLength
-    //   CHAR16 Description[]  (null-terminated)
-    //   UINT8 FilePathList[FilePathListLength]
-    if (EntrySize >= sizeof (UINT32) + sizeof (UINT16)) {
-      UINT32 Attributes = *(UINT32 *)EntryBuf;
-      UINT16 FilePathListLength = *(UINT16 *)(EntryBuf + sizeof (UINT32));
-      (VOID)Attributes;
-
-      // Skip past Attributes(4) + FilePathListLength(2) + Description (NUL-terminated CHAR16)
-      UINT8 *DescStart = EntryBuf + sizeof (UINT32) + sizeof (UINT16);
-      UINTN DescOffset = 0;
-      while (DescOffset + sizeof (CHAR16) <= EntrySize - (DescStart - EntryBuf)) {
-        CHAR16 *Ch = (CHAR16 *)(DescStart + DescOffset);
-        if (*Ch == L'\0') {
-          DescOffset += sizeof (CHAR16);
-          break;
-        }
-        DescOffset += sizeof (CHAR16);
+    BOOLEAN HasNetworkDp;
+    BOOLEAN HasShellPath;
+    PblClassifyLoadOption (EntryBuf, EntrySize, &HasNetworkDp, &HasShellPath);
+    if (HasNetworkDp) {
+      State->NetworkBootEntriesPresent = TRUE;
+    }
+    if (HasShellPath) {
+      State->BootPathFlags |= PBL_BPF_SHELL_IN_BOOT_ENTRY;
+      if (i < 16) {
+        State->ShellEntryMask |= (UINT16)(1u << i);
       }
-
-      UINT8 *FilePathList = DescStart + DescOffset;
-      UINTN FilePathListRemaining = EntrySize - (FilePathList - EntryBuf);
-      if (FilePathListLength > FilePathListRemaining) {
-        FilePathListLength = (UINT16)FilePathListRemaining;
-      }
-
-      // D-106: Walk the device path nodes to detect network boot entries
-      // Network boot device path subtypes (MESSAGING_DEVICE_PATH = 0x03):
-      //   MSG_MAC_ADDR_DP (0x0b) — PXE MAC address
-      //   MSG_IPv4_DP (0x0c) — PXE IPv4
-      //   MSG_IPv6_DP (0x0d) — PXE IPv6
-      //   MSG_URI_DP (0x18) — HTTP Boot URI
-      // BBS_DEVICE_PATH (0x05) with subtype 0x05 — legacy BBS network boot
-      EFI_DEVICE_PATH_PROTOCOL *Dp = (EFI_DEVICE_PATH_PROTOCOL *)FilePathList;
-      UINT8 *DpEnd = FilePathList + FilePathListLength;
-      while ((UINT8 *)Dp + sizeof (EFI_DEVICE_PATH_PROTOCOL) <= DpEnd &&
-             !IsDevicePathEnd (Dp)) {
-        UINT8 DpType = DevicePathType (Dp);
-        UINT8 DpSubType = DevicePathSubType (Dp);
-
-        if (DpType == MESSAGING_DEVICE_PATH) {
-          if (DpSubType == MSG_MAC_ADDR_DP ||
-              DpSubType == MSG_IPv4_DP ||
-              DpSubType == MSG_IPv6_DP ||
-              DpSubType == MSG_URI_DP) {
-            State->NetworkBootEntriesPresent = TRUE;
-          }
-        } else if (DpType == BBS_DEVICE_PATH && DpSubType == BBS_BBS_DP) {
-          // BBS legacy boot — could be network (PXE) or other device.
-          // The BBS device path doesn't have a specific network subtype,
-          // but BBS network boot entries are rare in modern UEFI systems.
-          // We don't flag BBS as network boot to avoid false positives.
-        }
-
-        Dp = NextDevicePathNode (Dp);
-      }
+      Print (L"  [WARN] Boot%04x loader path contains a shell binary\n", BootOrder[i]);
     }
 
     FreePool (EntryBuf);
   }
 
-  FreePool (OrderBuf);
+  if (OrderBuf != NULL) {
+    FreePool (OrderBuf);
+  }
+
+  // BootNext: a one-shot override is invisible to BootOrder — read and
+  // classify its target (B-017).
+  {
+    UINT16    BootNext = 0;
+    UINTN     BnSize = sizeof (BootNext);
+    EFI_STATUS BnStatus = gRT->GetVariable (
+      L"BootNext",
+      &mGlobalVariableGuid,
+      NULL,
+      &BnSize,
+      &BootNext
+      );
+    if (!EFI_ERROR (BnStatus) && BnSize == sizeof (BootNext)) {
+      BOOLEAN NextIsShell = FALSE;
+      State->BootNextOption = BootNext;
+      State->BootPathFlags |= PBL_BPF_BOOTNEXT_SET;
+      if (PblClassifyBootEntry (BootNext, &NextIsShell) && NextIsShell) {
+        State->BootPathFlags |= PBL_BPF_SHELL_AS_BOOTNEXT;
+      }
+      Print (L"  [WARN] BootNext override present -> Boot%04x%s\n",
+             BootNext, NextIsShell ? L" (shell loader)" : L"");
+    }
+  }
+
+  // ESP scan — a planted shell is usable even when no boot entry names it
+  PblScanEspForShell (State);
+}
+
+// ESP shell-scan bounds: recursion depth and total entries examined.
+// Generous enough to cover a real ESP, bounded so a hostile filesystem
+// can't stall collection.
+#define PBL_ESP_SCAN_MAX_DEPTH    4
+#define PBL_ESP_SCAN_MAX_ENTRIES  512
+
+/** Recursive helper for PblScanEspForShell — walks one directory. **/
+STATIC
+VOID
+PblScanDirForShell (
+  IN  EFI_FILE_PROTOCOL  *Dir,
+  IN  UINTN              Depth,
+  IN  OUT UINTN          *EntriesScanned,
+  OUT BOOLEAN            *Found
+  )
+{
+  UINT8          InfoBuf[512];
+  UINTN          InfoSize;
+  EFI_FILE_INFO  *Info;
+  EFI_FILE_PROTOCOL *SubDir;
+  EFI_STATUS     Status;
+
+  if (*Found || Depth > PBL_ESP_SCAN_MAX_DEPTH) {
+    return;
+  }
+
+  Dir->SetPosition (Dir, 0);
+  for (;;) {
+    if (*EntriesScanned >= PBL_ESP_SCAN_MAX_ENTRIES) {
+      return;
+    }
+    InfoSize = sizeof (InfoBuf);
+    Status = Dir->Read (Dir, &InfoSize, InfoBuf);
+    if (EFI_ERROR (Status) || InfoSize == 0) {
+      return;  // end of directory or error
+    }
+    (*EntriesScanned)++;
+    Info = (EFI_FILE_INFO *)InfoBuf;
+
+    if (Info->Attribute & EFI_FILE_DIRECTORY) {
+      // Skip "." and ".." — FAT reports them as directory entries
+      if (StrCmp (Info->FileName, L".") != 0 && StrCmp (Info->FileName, L"..") != 0) {
+        Status = Dir->Open (Dir, &SubDir, Info->FileName, EFI_FILE_MODE_READ, EFI_FILE_DIRECTORY);
+        if (!EFI_ERROR (Status)) {
+          PblScanDirForShell (SubDir, Depth + 1, EntriesScanned, Found);
+          SubDir->Close (SubDir);
+          if (*Found) {
+            return;
+          }
+        }
+      }
+    } else {
+      UINTN NameChars =
+        (InfoSize - OFFSET_OF (EFI_FILE_INFO, FileName)) / sizeof (CHAR16);
+      if (PblPathContainsShell (Info->FileName, NameChars)) {
+        *Found = TRUE;
+        Print (L"  [WARN] shell binary on ESP: %s\n", Info->FileName);
+        return;
+      }
+    }
+  }
+}
+
+/** REQ-08b: scan all SimpleFileSystem volumes for *shell* files —
+  a planted shell on the ESP is usable by Boot####/BootNext/chain paths
+  even when no boot entry names it (B-010). **/
+STATIC
+VOID
+PblScanEspForShell (
+  OUT PBL_PLATFORM_STATE  *State
+  )
+{
+  EFI_HANDLE  *Handles = NULL;
+  UINTN       HandleCount = 0;
+  EFI_STATUS  Status;
+  UINTN       EntriesScanned = 0;
+
+  Status = gBS->LocateHandleBuffer (
+    ByProtocol, &gEfiSimpleFileSystemProtocolGuid, NULL, &HandleCount, &Handles
+    );
+  if (EFI_ERROR (Status) || HandleCount == 0) {
+    return;
+  }
+
+  for (UINTN i = 0; i < HandleCount; i++) {
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *Sfs = NULL;
+    EFI_FILE_PROTOCOL                *Root = NULL;
+    BOOLEAN                          Found = FALSE;
+
+    if (State->BootPathFlags & PBL_BPF_SHELL_ON_ESP) {
+      break;  // already found — no need to scan further volumes
+    }
+    if (EFI_ERROR (gBS->HandleProtocol (Handles[i], &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Sfs)) ||
+        Sfs == NULL) {
+      continue;
+    }
+    if (EFI_ERROR (Sfs->OpenVolume (Sfs, &Root)) || Root == NULL) {
+      continue;
+    }
+    PblScanDirForShell (Root, 0, &EntriesScanned, &Found);
+    Root->Close (Root);
+    if (Found) {
+      State->BootPathFlags |= PBL_BPF_SHELL_ON_ESP;
+    }
+  }
+  gBS->FreePool (Handles);
 }
 
 // ============================================================================

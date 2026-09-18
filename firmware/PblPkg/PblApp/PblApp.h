@@ -247,6 +247,15 @@ typedef struct {
   // REQ-08: Network boot
   BOOLEAN   NetworkBootEntriesPresent;
 
+  // REQ-08b: boot-path classification (S0.5, B-010/B-017).
+  // Boot#### loaders are classified by file path; BootNext is read and
+  // its target classified; ESP volumes are scanned for *shell*.efi.
+  // All presence data feeds the platform-state digest — a planted shell
+  // or one-shot BootNext override changes the measurement.
+  UINT16    BootNextOption;    // Boot#### number BootNext targets; 0xFFFF if unset
+  UINT16    ShellEntryMask;    // bitmask of first-16 BootOrder positions with *shell* loaders
+  UINT8     BootPathFlags;     // PBL_BPF_* bitmask
+
   // REQ-09: BCD / winre.wim
   UINT8     BcdHash[32];
   UINT8     WinreWimHash[32];
@@ -314,6 +323,12 @@ typedef struct {
   // C2 §1.3: device_id
   UINT8     DeviceId[32];     // SHA-256(AK public Area)
 } PBL_PLATFORM_STATE;
+
+// BootPathFlags bitmask (PBL_PLATFORM_STATE.BootPathFlags)
+#define PBL_BPF_SHELL_IN_BOOT_ENTRY  0x01  // a Boot#### loader path is *shell*.efi
+#define PBL_BPF_BOOTNEXT_SET         0x02  // BootNext variable present (one-shot override)
+#define PBL_BPF_SHELL_AS_BOOTNEXT    0x04  // BootNext target's loader is a shell
+#define PBL_BPF_SHELL_ON_ESP         0x08  // *shell*.efi file found on an ESP volume
 
 // ============================================================================
 // Function prototypes (one per source file)

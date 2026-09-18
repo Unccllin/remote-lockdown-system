@@ -370,6 +370,11 @@ PblAppEntryPoint (
          PlatformState.LoadedImageDigest[2], PlatformState.LoadedImageDigest[3],
          PlatformState.LoadedImageDigest[4], PlatformState.LoadedImageDigest[5],
          PlatformState.LoadedImageDigest[6], PlatformState.LoadedImageDigest[7]);
+  // S0.5: boot-path classification summary (B-010/B-017) — always printed so
+  // absence (flags=0x00, bootnext=0xffff) is as observable as presence.
+  Print (L"  [INFO] Boot path: flags=0x%02x shell-mask=0x%04x bootnext=0x%04x\n",
+         PlatformState.BootPathFlags, PlatformState.ShellEntryMask,
+         PlatformState.BootNextOption);
 
   //
   // Step 2: Parse + verify policy blob (C4, REQ-11)
