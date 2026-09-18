@@ -51,42 +51,58 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 118 — 2026-09-18
+## Latest session: 119 — 2026-09-18 (continuation)
 
 ### RULE-ZERO
-**Read**: scripts/memory.py conventions, .devin/graph/graph_loader.py (PyYAML), graph_assert.py invariant structure, CONFIRMATION-FINDINGS.md, synthesis §2 F-findings.
-**Finding**: All 7 synthesis findings verified against code — 6 confirmed, F5 killed (ConnectController sweep already exists at HttpsClient.c:171-184). MOR GUID bug confirmed via spec header. Verification-blind-spot pattern: harnesses checked log output not security outcomes.
+**Read**: NG-T4 ticket, EDK2 spec headers (MemoryOverwriteControl.h, MemoryOverwriteRequestControlLock.h), TcgMor.c, TcgMorLockDxe.c, TcgMorLockSmm.c, Variable.c MOR paths, Mor.c/PlatformState.c/Svn.c/PblApp.inf, ci-harness-docker.sh.
+**Finding**: MOR fix is not just a GUID correction — EDK2's non-SMM variable driver unconditionally LOCK_NOWs both MOR vars at EndOfDxe; post-EndOfDxe MOR writes are architecturally denied on such platforms (B-026). PBL runs at BDS — always after EndOfDxe.
+
+### Mode Discipline
+- User challenge on premature "proceed" → built the guardrail this session demanded: `.devin/PENDING-RULING.md` + `scripts/check-ruling.sh` + AGENTS.md Mode Discipline + B-024 (commit 6669a0, verified both directions).
+- User then ruled: fix-first; S0–S5 segmented plan approved; TPM restart-counter anchor; resume = DEGRADED alarm. Ruling closed → task mode.
+
+### IMPLEMENT (S0.1 / NG-T4)
+- Mor.c: spec GUID (e20939be-…) for read-modify-write; correct bit semantics (bit0 clear, bit4 no-autodetect, NO lock bit); new PblLockMor() → 0x01 on MemoryOverwriteRequestControlLock (BB983CCF-…).
+- PlatformState.c: MOR read under spec GUID; SVN call passes Trusted out-param.
+- Svn.c + PblApp.h: BootmgrSvnTrusted from TBA attribute — variable demoted to advisory-only (B-027).
+- PblApp.c: PblBlockHalt() + PblResultBlock path both do request+lock.
+- PblApp.inf: gEfiMemoryOverwriteControlDataGuid + gEfiMemoryOverwriteRequestControlLockGuid.
+- test-mor-harness.sh: NEW outcome harness — parses post-run OVMF NVRAM varstore (UTF-16 name scan → VendorGuid/NameSize/DataSize/Data extraction), asserts spec-GUID placement, decoy absence, lock var; SMM=1 mode for SMM-capable OVMF.
+
+### VERIFY
+- Build: RELEASE_GCC clean under -Werror -Wall -Wextra. Artifact 807a9c80e7a469e6…caeac35.
+- ci-harness-docker.sh regression: 15/0.
+- test-mor-harness non-SMM: PASS — WRITE_PROTECTED denial proves request hit the real policy-guarded variable (decoy GUID would succeed silently); no decoy under EFI_GLOBAL_VARIABLE; spec-GUID var live (TcgMor's 00); lock write denied as expected.
+- test-mor-harness SMM=1 (Ubuntu secboot OVMF): platform ALSO denies — Ubuntu OVMF ships no functional MOR; SB denied unsigned app under ms vars (Setup-Mode pairing workaround used).
+- Functional MOR (bit lands, memory cleared): NOT verifiable in emulation — hardware-gated (B-025/B-026).
 
 ### Fog cleared this session
-- F2/F3/F4/F6/F7 confirmed with file:line evidence (MarkerTest.c:31, agent.py:2906, agent.py:3028, Decision.c:248, PlatformState.c:233-346)
-- F5 refuted — mitigation already present
-- MOR GUID + bit-semantics double bug confirmed against MemoryOverwriteControl.h:19,35-41
-- Bonus defects B1-B5 (QEMU static IP, http:// in release, no BootNext check, writable PblBootmgrSvn)
+- Exact platform MOR-denial mechanism resolved end-to-end: VariableRuntimeDxe MorLockInit deletes both vars at init, MorLockInitAtEndOfDxe registers unconditional LOCK_NOW policies; TcgMor recreates control var (data=00) — explains every NVRAM observation.
+- Ubuntu OVMF builds ship no MOR implementation; secboot+ms-vars enforces Secure Boot (Setup-Mode VARS needed for unsigned apps).
+- WRITE_PROTECTED as positive evidence: policy-engine denial proves correct target (decoy writes succeed silently).
 
 ### Fog remaining
-- Whether undispatched NIC drivers (fast-boot) can be connected — hardware window
-- Resume-vs-cold-boot provenance mechanism — Tier-3
-- SVN from Authenticode (NG-R2 recommendation) — not yet implemented
+- Whether real SMM firmware's legitimacy path (VariableIsMorVariableLegitimate via gBS->LocateProtocol in SMM context) accepts TcgMor's var — hardware question.
+- Whether a DXE-phase PBL component could set MOR before the EndOfDxe lock (feeds Q8/DXE-tier ruling — recorded, not implemented).
 
 ### Debt items closed
-- None this session (confirmation + brain build only)
+- NG-T4 implemented + verified (ticket updated with outcome table). Beliefs: B-023 refuted→B-025; B-026, B-027 confirmed.
 
 ### Debt items still open
-- D-120 (real-media BitLocker/VMK residual), D-129 (real hardware), D-130 (signing)
-- Newly surfaced, not yet ledgered: MOR GUID fix (NG-T4), static-IP/DHCP (B-015), http:// release fallback (B-016), BootNext inspection (B-017), shell classification (B-010), deadman clock-rollback (B-005), detached-signature updates (B-006)
+- D-120, D-129, D-130; S0.2–S0.7 (http:// fallback, deadman clock, shell/BootNext, detached-sig updates, DHCP); S1–S5 per approved plan.
 
 ### Blockers
-- NG-Q1 architecture ruling still needs user decision (capability cut)
-- NG-T2/T3 need user-side artifacts (downloads, Windows media)
+- Functional MOR verification requires SMM-capable firmware/hardware — flagged.
 
 ### Session artifacts
-- scripts/brain.py + .devin/brain/beliefs.yaml (23 beliefs) + BELIEFS.md
-- .devin/skills/brain/SKILL.md; AGENTS.md brain section
-- docs/research/CONFIRMATION-FINDINGS.md
-- Commit: brain layer + findings committed this session
+- Commits: 6669a0 (guardrail, prior block), 97f4a6e (NG-T4), 792d369 (brain refs)
+- firmware/PblPkg/test-mor-harness.sh; NG-T4 ticket verification section; beliefs 24→27.
+
+### Failure attribution
+- None this session — the new outcome harness caught a platform constraint (not a code defect), which is its designed purpose.
 
 ### Next session opening
-Present NG-Q1 for the architecture ruling — five laws + capability cut — using the now-verified belief store as ground truth; or take NG-T4 (MOR GUID fix) if user directs implementation first.
+S0.2 — remove http:// fallback from HttpsClient release path (XS, confirmed B-016); then S0.3 deadman clock-rollback (agent.py:2906).
 
 ---
 
