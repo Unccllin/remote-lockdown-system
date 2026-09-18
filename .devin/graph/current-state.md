@@ -51,38 +51,43 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 115 — 2026-09-18 — Book corpus research + next-gen synthesis
+## Latest session: 116 — 2026-09-18 — Wayfinder map + F1 real bug found and fixed (D-220)
 
-**Read:** `docs/reference/books/` inventory (6 PDFs on disk), `docs/research/STUDY-INDEX.md`, `GRAPH-SPEC.yaml` enforcement paths, `agent/agent.py` handler inventory, `server/src/routes/` inventory. RULE-ZERO satisfied for doc-only session — no source code touched.
+**Read:** `docs/wayfinder/` conventions (harness-engineering map precedent), `firmware/PblPkg/PblApp/PblApp.c` return paths (entry function, all early exits, decision switch), `LockScreen.c` (NULL-verdict tolerance), `ChainLoad.c` return semantics, `PblApp.inf`/`PblPkg.dsc` (BaseLib/CpuDeadLoop), edk2 `AuthService.c`/`TcgMor*`/`MdePkg.dec` (NG-R2 via agent), pybcd + BCD RE sources (NG-R1 via agent).
 
-**Finding:** Three books existed only as topics (`Modern OS`, `Harnessing the UEFI Shell`, `Platform Embedded Security Technology Revealed` — no PDFs); three PDFs on disk had never been mined against the codebase (`rootkits-and-bootkits`, `beyond-bios`, `practical-reverse-engineering`); a fourth PDF (`mdm-fundamentals`, Moskowitz/Wiley — Intune/MDM) existed but wasn't on the study list.
+**Finding:** F1 is a REAL BUG. Two BLOCK-intent paths returned `EFI_SECURITY_VIOLATION` to BDS (`PblApp.c` policy-sig-fail @RoT-provisioned, anti-rollback). Per Boot#### semantics (Beyond BIOS p.186) a non-success return advances BDS to the next BootOrder entry — the "refusing to boot" paths actually booted Windows. Chain-load returns were also ignored (fail-open to boot menu). Bug invisible to harnesses: dev mode skips sig verify, and D-219's test checked serial lines not post-BLOCK behavior — the same blind-spot class as the dead-TPM bug.
 
 **What changed**
 
-- Seven parallel research agents produced six new study notes + updated index:
-  - `STUDY-BEYOND-BIOS-DELTA.md` — full PDF mine (325pp): Boot#### return-semantics inversion, 5-min BDS watchdog, fast-boot no-BdsConnectAll, S3-resume bypass, monotonic counter, ESRT/FMP, HII keywords, UEFI error records.
-  - `STUDY-ROOTKITS-BOOTKITS-DELTA.md` — full PDF mine (450pp): Computrace as architectural precedent, MBR/VBR/IPL bootkit lineage, hidden filesystems, S3 boot-script attacks, FSMIE forgery, PRx-coverage gaps, 14 new capabilities.
-  - `STUDY-PRACTICAL-RE-DELTA.md` — full PDF mine (384pp): kernel introspection (KPCR/DPC/APC/timer queues, SSDT, DKOM, MDL writes), debugger mechanics, obfuscation taxonomy; ch3_* pre-exercises confirmed as detection-driver blueprints.
-  - `STUDY-MDM-FUNDAMENTALS-DELTA.md` — full PDF mine (528pp): Autopilot TPM-attested enrollment, OMA-DM/CSP model, device-action ladder, escrow-before-encrypt, update rings; 15 capabilities.
-  - `STUDY-PLATFORM-EMBEDDED-SECURITY.md` — open-access book read in full (SpringerLink CC): ME/HECI wire details, FPF enrollment fuse, EPID/SIGMA, Intel AT prior art mapped to E-DEADMAN/verdict/override.
-  - `STUDY-UEFI-SHELL.md` — book reconstructed via TOC + Shell Spec 2.2 + local ShellPkg + BombShell/VU#718077: shell as dual-use signed bypass; PBL's unauthenticated variables are shell-writable.
-  - `STUDY-OS-INTERNALS-AGENT-HARDENING.md` — MOS-guided agent-hardening research: ring-3 ceiling, wall-clock deadman flaw, unsigned-update flaw, VM detection.
-- `SYNTHESIS-NEXT-GEN-DESIGN.md` — corpus synthesis: 5 design laws, 7 fix-first correctness findings, ~40 capabilities by layer, 5-tier roadmap.
-- `STUDY-INDEX.md` — 16 notes, crosswalk + glossary extended.
-- Commit `6e6b37a` — entire docs/research corpus committed (previously all untracked; *.pdf still gitignored by design).
+- Wayfinder map `next-gen-lockdown` charted (docs/wayfinder/): destination, notes (execution override), fog, 7 tickets.
+- NG-R1 (BCD osdevice blob) + NG-R2 (variable auth) resolved via research agents → `NOTE-BCD-DEVICE-BLOB.md`, `NOTE-PBL-VAR-AUTH.md`. NG-R2 side-finding: **MOR GUID bug** — PBL writes MOR under EFI_GLOBAL_VARIABLE but spec GUID is gEfiMemoryOverwriteControlDataGuid (no-op decoy); also found spec's `MemoryOverwriteRequestControlLock` as the correct hardening.
+- Graduated: NG-T4 (variable hardening/MOR fix — OPEN), NG-T5 (partition-level FVE binding — OPEN, format spec'd).
+- NG-T1 verified F1 → NG-T6 implemented: `PblBlockHalt()` helper (lock screen → MOR → ResetSystem → CpuDeadLoop, never returns) replaced both propagating returns; chain-load return checked at 3 sites; CpuDeadLoop after both ResetSystem calls.
+- D-220 added to PBL-DEBT-LEDGER (CLOSED, SECURITY).
+- `docs/reference/FETCH-LIST.md` created (Tier 1-3 source/artifact list for human fetch).
+- Commits: 6e6b37a (research corpus), bd06f72 (fetch list), 43209d (wayfinder map), 94877f (NG-R2), 9b7d3c (NG-R1+NG-T5), 6cd33f4 (F1 fix).
 
-**Fog cleared:** The "weakest books" gap is closed — all 6 listed books + the surprise 7th (MDM) now have study notes. Disk-structure baseline, shell-threat model, Boot#### semantics, and Intel AT prior art were all genuinely absent from the codebase's knowledge.
+**Test results**
 
-**Fog remaining:** PRE/RB deltas rely on PDF-extraction page mapping (book≈PDF−36/−27 offsets); UEFI Shell book itself wasn't readable (TOC + spec + ShellPkg reconstruction, flagged in-note); uefi.org/intel.com were Cloudflare-blocked to the host.
+- `PblApp.efi` `44c44e6485235cb1…` — build clean (-Werror).
+- test-fve-harness: 16/0 (3 topologies). ci-harness-docker: 15/0. ci-harness-persistence: 16/0.
+- QEMU timeout-at-lock-screen observed — confirms PBL holds control instead of returning to BDS.
+- `make graph-check`: all invariants pass.
 
-**Debt items closed:** none — documentation session.
-**Debt items still open:** D-120 (real-media + VMK), D-129 (hardware), D-130 (signing) — plus the synthesis' Tier-0 correctness findings are candidate new debt items pending user triage.
+**Fog cleared:** Boot#### return semantics verified against actual code (book claim confirmed); MOR writes proven no-op (GUID bug); BCD osdevice format fully decoded (was "fog" since session 113).
+
+**Fog remaining:** Whether real firmware BDS behaves identically (vendor boot-menu behavior after error/menu — D-129); the two fixed sites can't be exercised end-to-end in emulation without a RoT-provisioned harness scenario (future test ticket); `PblBlockHalt` skips PCR-12/13 extends on early paths (documented — pre-verdict paths have no decision payload to extend).
+
+**Debt items closed:** D-220 (new — found + fixed this session).
+**Debt items still open:** D-120 (partition binding ticketed NG-T5; real-media + VMK remain), D-129 (hardware), D-130 (signing). Ledger: 52 items / 49 CLOSED / 3 OPEN.
 
 **Blockers:** none.
 
-**Failure attribution:** None — pure research session, all deliverables produced.
+**Failure attribution**
+- Layer 4 (verification feedback): D-219's harness passed the buggy BLOCK-return code — it asserted serial lines, not post-BLOCK behavior. Prevention: NG-T6 ticket notes RoT-provisioned harness scenario as future work; finding recorded in ledger.
 
-**Next session opening:** Triage synthesis findings — decide whether Tier-0 items (F1 BLOCK-path return semantics, F2 variable authentication, F3 deadman clock-rollback, F5 NIC connect, F7 shell detection) become new debt items, then implement Tier-1 emulation-doable work starting with F1 verification.
+**Next session opening**
+- NG-T4 (MOR GUID fix + MOR-lock + advisory vars) or NG-T5 (partition-level binding, ~60-line parser, spec'd) — both agent-doable; NG-Q1 capability cut and NG-T2/T3 fetch need the human.
 
 ---
 
