@@ -1,0 +1,366 @@
+# beliefs.yaml — evidence-tagged belief store
+# Managed by scripts/brain.py. Edit via CLI commands, not by hand.
+# statuses: proposed | confirmed | refuted | decayed
+# evidence: assumed < code-read < spec-checked < emulated < real-media < hardware
+
+beliefs:
+- id: B-001
+  statement: A non-success return from a BLOCK-intent Boot#### entry advances BDS to the next BootOrder
+    entry — an error return is a bypass vector, not a halt.
+  domain: firmware/boot-flow
+  status: confirmed
+  evidence_level: emulated
+  provenance: PblApp.c:417,483 — former EFI_SECURITY_VIOLATION returns; Beyond BIOS p.186; fixed by PblBlockHalt()
+  source: SYNTHESIS F1; CONFIRMATION-FINDINGS.md
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents:
+  - B-002
+  notes: D-220. D-219 harness passed the buggy code — it grepped serial lines, not post-BLOCK behavior.
+- id: B-002
+  statement: PBL BLOCK-intent paths never return to BDS — PblBlockHalt() shows lock screen, requests MOR,
+    resets via EfiResetShutdown, CpuDeadLoop fallback.
+  domain: firmware/boot-flow
+  status: confirmed
+  evidence_level: emulated
+  provenance: PblApp.c:297 (helper), :417 :483 :850 :861 :878 (call sites); QEMU harnesses 16/0 15/0 16/0
+  source: D-220 fix
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-003
+  statement: PBL variables PblMarkerTest and MemoryOverwriteRequestControl are written without authentication
+    — any boot-time writer can spoof or erase them.
+  domain: firmware/variables
+  status: confirmed
+  evidence_level: code-read
+  provenance: MarkerTest.c:31, Mor.c:66 — plain gRT->SetVariable, no TIME_BASED_AUTHENTICATED_WRITE_ACCESS
+  source: SYNTHESIS F2; CONFIRMATION-FINDINGS.md
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: MOR additionally uses the wrong GUID (B-012).
+- id: B-004
+  statement: PblBootmgrSvn is attacker-writable — the SVN anti-rollback decision reads an unauthenticated
+    variable any OS process or UEFI shell can plant.
+  domain: firmware/variables
+  status: confirmed
+  evidence_level: code-read
+  provenance: Svn.c:43-49 — gRT->GetVariable of unsigned custom var feeds security decision
+  source: CONFIRMATION-FINDINGS.md B5
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: NG-R2 recommends parsing SVN from bootmgfw.efi Authenticode instead.
+- id: B-005
+  statement: The deadman switch computes elapsed time from the wall clock — a clock rollback yields negative
+    elapsed hours and the switch never triggers.
+  domain: agent/deadman
+  status: confirmed
+  evidence_level: code-read
+  provenance: agent.py:2868 (time.time() written), :2906 (elapsed=(time.time()-last_seen)/3600); no now<last_seen
+    tamper check
+  source: SYNTHESIS F3; CONFIRMATION-FINDINGS.md
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: TPM seal protects the file contents, not the clock. Needs non-RTC anchor.
+- id: B-006
+  statement: Agent update verification trusts a channel-delivered SHA-256, not a detached signature —
+    the server channel is the sole trust root; a compromised server serves both binary and matching hash.
+  domain: agent/update
+  status: confirmed
+  evidence_level: code-read
+  provenance: agent.py:3028 (sha256+URL from same response), :3077 (compare to channel hash)
+  source: SYNTHESIS F4; CONFIRMATION-FINDINGS.md
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Fix = detached signature + pinned public key (update rings per MDM study).
+- id: B-007
+  statement: Fast-boot firmware may never connect the NIC before PBL's HTTPS use.
+  domain: firmware/network
+  status: refuted
+  evidence_level: code-read
+  provenance: HttpsClient.c:171-184 disproves — ConnectController sweep exists
+  source: SYNTHESIS F5
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: B-008
+  dependents: []
+  refuted_on: '2026-09-18'
+  refute_evidence: HttpsClient.c:171-184 — gBS->ConnectController on all handles before HTTP
+  notes: ''
+- id: B-008
+  statement: PblHttpsPost sweeps ConnectController on all handles before HTTP use — the fast-boot NIC-connection
+    gap is mitigated for already-dispatched drivers.
+  domain: firmware/network
+  status: confirmed
+  evidence_level: code-read
+  provenance: HttpsClient.c:171-184
+  source: refutes B-007
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: B-007
+  superseded_by: null
+  dependents: []
+  notes: 'Residual: undispatched NIC drivers (driver never loaded on fast boot) cannot be connected —
+    hardware-window question for D-129.'
+- id: B-009
+  statement: On S3 resume PBL never runs — the platform-state digest has no resume-vs-cold-boot provenance;
+    Decision.c checks S3 capability only.
+  domain: firmware/s3
+  status: confirmed
+  evidence_level: code-read
+  provenance: Decision.c:248 (S3Enabled capability check); no resume detection exists anywhere in PblApp
+  source: SYNTHESIS F6; CONFIRMATION-FINDINGS.md
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Mitigation rests on PCR-sealed BitLocker + MOR/FLOCKDN; resume attestation is a Tier-3/hardware
+    item.
+- id: B-010
+  statement: BootOrder is checked only for network-boot device-path subtypes — shell images in Boot####,
+    BootNext overrides, and ESP shell binaries are not classified.
+  domain: firmware/boot-flow
+  status: confirmed
+  evidence_level: code-read
+  provenance: PlatformState.c:233-346 — flags MSG_MAC/IP/URI subtypes only; no filename inspection, no
+    BootNext read
+  source: SYNTHESIS F7; CONFIRMATION-FINDINGS.md
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Signed shell = signed bypass (BombShell/VU#718077 precedent).
+- id: B-011
+  statement: MemoryOverwriteRequestControl lives under EFI_GLOBAL_VARIABLE.
+  domain: firmware/mor
+  status: refuted
+  evidence_level: spec-checked
+  provenance: Mor.c:18 asserts it; spec header disproves it
+  source: code comment
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: B-012
+  dependents:
+  - B-023
+  refuted_on: '2026-09-18'
+  refute_evidence: MdePkg/Include/Guid/MemoryOverwriteControl.h:19 — GUID is e20939be-32d4-41be-a150-897f85d49829
+  notes: ''
+- id: B-012
+  statement: MemoryOverwriteRequestControl lives under e20939be-32d4-41be-a150-897f85d49829 — Mor.c writes
+    under EFI_GLOBAL_VARIABLE, so PBL's MOR write is a no-op decoy the real TcgMor handler never sees.
+  domain: firmware/mor
+  status: confirmed
+  evidence_level: spec-checked
+  provenance: MemoryOverwriteControl.h:17-29 vs Mor.c:18-21
+  source: refutes B-011
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: B-011
+  superseded_by: null
+  dependents: []
+  notes: Fix ticket NG-T4.
+- id: B-013
+  statement: Bit 1 of MemoryOverwriteRequestControl locks the MOR bit.
+  domain: firmware/mor
+  status: refuted
+  evidence_level: spec-checked
+  provenance: Mor.c:10 comment asserts it; spec header disproves it
+  source: code comment
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: B-014
+  dependents: []
+  refuted_on: '2026-09-18'
+  refute_evidence: MemoryOverwriteControl.h:35-41 — byte has bit0 (clear) and bit4 (disable-autodetect)
+    only
+  notes: ''
+- id: B-014
+  statement: The MOR byte has only bit 0 (clear-memory) and bit 4 (disable-autodetect); locking is a separate
+    variable, MemoryOverwriteRequestControlLock.
+  domain: firmware/mor
+  status: confirmed
+  evidence_level: spec-checked
+  provenance: MemoryOverwriteControl.h:35-47; MdePkg/Include/IndustryStandard/MemoryOverwriteRequestControlLock.h;
+    TcgMorLock.c
+  source: refutes B-013
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: B-013
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-015
+  statement: PblHttpsPost hardcodes QEMU static IP 10.0.2.15 with UseDefaultAddress=FALSE — no DHCP; the
+    HTTPS path cannot work on real hardware as written.
+  domain: firmware/network
+  status: confirmed
+  evidence_level: code-read
+  provenance: HttpsClient.c:213-219
+  source: CONFIRMATION-FINDINGS.md B2
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: D-129 blocker — must become DHCP or policy-provided config before hardware window.
+- id: B-016
+  statement: PblHttpsPost accepts http:// URIs (marked temporary for QEMU, D-109) — plaintext fallback
+    is live in the release build.
+  domain: firmware/network
+  status: confirmed
+  evidence_level: code-read
+  provenance: HttpsClient.c:132-136
+  source: CONFIRMATION-FINDINGS.md B3
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: C3 says plaintext fallback is never allowed — code contradicts the contract.
+- id: B-017
+  statement: BootNext is never inspected — a one-shot shell or boot-manager override is invisible to PBL.
+  domain: firmware/boot-flow
+  status: confirmed
+  evidence_level: code-read
+  provenance: PlatformState.c — BootNext absent from all variable reads
+  source: CONFIRMATION-FINDINGS.md B4
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: F7-adjacent.
+- id: B-018
+  statement: Harnesses that check log output rather than security outcomes pass vulnerable code — the
+    D-220 bypass and the MOR no-op both survived green harnesses.
+  domain: meta/verification
+  status: confirmed
+  evidence_level: code-read
+  provenance: D-219 harness grepped serial lines (bug passed); MOR write under wrong GUID never checked
+    against TcgMor read
+  source: CONFIRMATION-FINDINGS.md meta-finding
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Rule: assert the security outcome, not the log line.'
+- id: B-019
+  statement: In-the-wild UEFI bootkits persist at three layers — SPI flash implants (LoJax, MosaicRegressor,
+    MoonBounce, CosmicStrand), ESP-resident boot managers (BlackLotus, Bootkitty), and image-parser exploits
+    (LogoFAIL).
+  domain: threat-model
+  status: confirmed
+  evidence_level: code-read
+  provenance: docs/research/STUDY-UEFI-BOOTKITS.md facts 1-18 (ESET/Kaspersky/Binarly reports)
+  source: STUDY-UEFI-BOOTKITS.md
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6e6b37a
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: PBL detects effects, not SPI/ME contents directly.
+- id: B-020
+  statement: Everything a UEFI application reads can be forged by earlier DXE/SMM code — the only trust
+    anchors are TPM-sealed/measured state, server-side verdicts, and cross-layer disagreement.
+  domain: architecture
+  status: confirmed
+  evidence_level: code-read
+  provenance: SYNTHESIS §1 law 1; Platform-Embedded-Security (BIOS outside trust boundary); R&B (SMM falsifies
+    SPI reads via FSMIE)
+  source: SYNTHESIS-NEXT-GEN-DESIGN.md
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6e6b37a
+  supersedes: null
+  superseded_by: null
+  dependents:
+  - B-004
+  notes: B-004 (Svn.c) is the standing violation of this law.
+- id: B-021
+  statement: A user-mode agent cannot defeat a kernel/admin adversary — it can only detect, delay, and
+    re-assert; real anchors are TPM, PBL, and the server.
+  domain: architecture
+  status: confirmed
+  evidence_level: code-read
+  provenance: SYNTHESIS §1 law 3; STUDY-OS-INTERNALS-AGENT-HARDENING.md; STUDY-PRACTICAL-RE-DELTA.md
+  source: SYNTHESIS-NEXT-GEN-DESIGN.md
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6e6b37a
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-022
+  statement: PBL chain-loads bootmgfw.efi only after SHA-256 hash match against policy BootMgrHash, and
+    passes the hashed buffer to LoadImage — the loaded bytes are the hashed bytes (TOCTOU-safe).
+  domain: firmware/boot-flow
+  status: confirmed
+  evidence_level: emulated
+  provenance: ChainLoad.c:217-290; QEMU harness green
+  source: STUDY-UEFI-BOOTKITS.md mapping; harness artifacts
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 6cd33f4
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: BlackLotus/CosmicStrand countermeasure.
+- id: B-023
+  statement: PBL's MOR request actually reaches the platform TcgMor handler and causes a memory clear
+    on BLOCK.
+  domain: firmware/mor
+  status: proposed
+  evidence_level: assumed
+  provenance: ''
+  source: depends on B-011 (refuted) / B-012
+  asserted: '2026-09-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: '[STALE: depended on refuted B-011] Currently a no-op via wrong GUID — re-verify after NG-T4
+    fix lands.'

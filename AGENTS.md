@@ -163,6 +163,33 @@ python3 scripts/memory.py reconcile --id m-001 --status wrong --replacement "cor
 
 See `.devin/skills/memory/SKILL.md` for full documentation.
 
+## Brain — Belief Layer (mandatory at session start)
+
+`.devin/brain/` is the project's semantic memory: atomic beliefs with evidence
+levels and supersession history. Where memory records what *happened*, the
+brain records what is *believed true* and why.
+
+**Mandatory at session start — before asserting or building on any non-trivial
+claim:**
+```bash
+python3 scripts/brain.py retrieve --query "<keywords from the task>"
+```
+Check for `KILLED` tags — refuted beliefs return with their corrections. A
+claim not in the store is `assumed` until verified.
+
+**During session:**
+- New finding → `brain.py assert`
+- Verified → `brain.py confirm` (requires evidence level + provenance)
+- Found wrong → `brain.py refute` (requires a replacement; dependents auto-demote)
+
+**At session end** — `brain.py gen-view` if beliefs changed; `brain.py check`.
+
+Evidence ladder: `assumed < code-read < spec-checked < emulated < real-media <
+hardware`. Never cite a belief above its evidence level — emulated is not
+hardware-verified. `.devin/brain/BELIEFS.md` is GENERATED — do not edit by hand.
+
+See `.devin/skills/brain/SKILL.md` for full documentation.
+
 ## Environment
 
 - Node.js lives at `~/.local/node/bin` (NOT on default PATH). Prefix commands with
