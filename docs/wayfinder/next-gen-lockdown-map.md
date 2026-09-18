@@ -62,7 +62,9 @@ Recorded in `.devin/PENDING-RULING.md`.
     `f229cc9`; DEBUG-only http retained for QEMU)
   - S0.3 deadman `now < last_seen` tamper + server-timestamp anchor —
     **DONE** (B-005→B-030, `c8b9f96`; 300s rollback tolerance, fail-secure)
-  - S0.4 variable advisory treatment (B-003/B-004)
+  - S0.4 variable advisory treatment (B-003/B-004) — **DONE**
+    (B-004→B-032, DMA var spoof closed B-031, `0391bde`; audit: no
+    unauthenticated var feeds a decision)
   - S0.5 shell/BootNext classification → digest (B-010/B-017)
   - S0.6 detached-signature updates + pinned key + key separation (B-006)
   - S0.7 DHCP/policy IP config (B-015; hardware-window prep)

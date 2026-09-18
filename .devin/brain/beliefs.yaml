@@ -54,7 +54,7 @@ beliefs:
   statement: PblBootmgrSvn is attacker-writable — the SVN anti-rollback decision reads an unauthenticated
     variable any OS process or UEFI shell can plant.
   domain: firmware/variables
-  status: confirmed
+  status: refuted
   evidence_level: code-read
   provenance: Svn.c:43-49 — gRT->GetVariable of unsigned custom var feeds security decision
   source: CONFIRMATION-FINDINGS.md B5
@@ -62,9 +62,12 @@ beliefs:
   last_verified: '2026-09-18'
   commit_ref: 6cd33f4
   supersedes: null
-  superseded_by: null
+  superseded_by: B-032
   dependents: []
   notes: NG-R2 recommends parsing SVN from bootmgfw.efi Authenticode instead.
+  refuted_on: '2026-09-18'
+  refute_evidence: 'Svn.c TBA check + PlatformState.c:909 (NG-T4); grep audit S0.4: no BootmgrSvn consumer
+    outside collection; struct hashed at PblApp.c:536; B-027; commits 97f4a6e'
 - id: B-005
   statement: The deadman switch computes elapsed time from the wall clock — a clock rollback yields negative
     elapsed hours and the switch never triggers.
@@ -495,6 +498,42 @@ beliefs:
   last_verified: '2026-09-18'
   commit_ref: c8b9f96
   supersedes: B-005
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-031
+  statement: KernelDmaProtection UEFI variable is unauthenticated — plantable by any OS/shell writer for
+    spoof-to-pass on the Decision.c BLOCK gate; PBL now treats it as advisory telemetry only, with DMAR
+    (Intel VT-d) / IVRS (AMD-Vi) ACPI tables as the authoritative firmware-authored signal.
+  domain: firmware/variables
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'NVRAM injection spoof test: KernelDmaProtection=1 written to OVMF_VARS.fd at 0x64 (auth-store
+    VARIABLE_HEADER); QEMU serial: ''claims 1 (advisory, unauthenticated)'' + Decision BLOCK; ci-harness
+    15/0 efi eb684120'
+  source: S0.4 audit
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 0391bde
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Same B-004 class as PblBootmgrSvn. vars.fd variable-injection technique proven for adversarial-var
+    testing.
+- id: B-032
+  statement: 'PblBootmgrSvn remains attacker-writable (unauthenticated by design) but is now advisory-only:
+    Trusted flag from TBA attribute travels with the value in PBL_PLATFORM_STATE (hashed into attestation
+    digest); no decision path consumes it.'
+  domain: firmware/variables
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'Svn.c:47-85 TBA check, PlatformState.c:909 call, PblApp.c:536 struct digest; grep: no BootmgrSvn
+    decision consumer; NG-T4 commit 97f4a6e'
+  source: refutes B-004
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 0391bde
+  supersedes: B-004
   superseded_by: null
   dependents: []
   notes: ''

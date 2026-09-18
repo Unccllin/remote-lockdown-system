@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-09-18 12:52:06 — 30 beliefs
+Generated: 2026-09-18 13:19:43 — 32 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -67,8 +67,10 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-003 | confirmed | code-read | PBL variables PblMarkerTest and MemoryOverwriteRequestControl are written without authentication — any boot-time writer can spoof or erase them. |
-| B-004 | confirmed | code-read | PblBootmgrSvn is attacker-writable — the SVN anti-rollback decision reads an unauthenticated variable any OS process or UEFI shell can plant. |
+| B-004 | refuted | code-read | PblBootmgrSvn is attacker-writable — the SVN anti-rollback decision reads an unauthenticated variable any OS process or UEFI shell can plant. → see B-032 |
 | B-027 | confirmed | code-read | PblBootmgrSvn is demoted to advisory-only telemetry: PblReadBootmgrSvn now reports a Trusted flag from the variable's TIME_BASED_AUTHENTICATED attribute (BootmgrSvnTrusted in PBL_PLATFORM_STATE); the value must not drive decisions. |
+| B-031 | confirmed | emulated | KernelDmaProtection UEFI variable is unauthenticated — plantable by any OS/shell writer for spoof-to-pass on the Decision.c BLOCK gate; PBL now treats it as advisory telemetry only, with DMAR (Intel VT-d) / IVRS (AMD-Vi) ACPI tables as the authoritative firmware-authored signal. |
+| B-032 | confirmed | code-read | PblBootmgrSvn remains attacker-writable (unauthenticated by design) but is now advisory-only: Trusted flag from TBA attribute travels with the value in PBL_PLATFORM_STATE (hashed into attestation digest); no decision path consumes it. |
 
 ## meta/process
 

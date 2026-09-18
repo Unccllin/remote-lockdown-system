@@ -51,52 +51,50 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 121 — 2026-09-18 (continuation)
+## Latest session: 122 — 2026-09-18 (continuation)
 
 ### RULE-ZERO
-**Read**: `agent.py` deadman block (`update_deadman_timer`, `check_deadman`, `_read_deadman_state`), main-loop checkin flow (:3466-3511), `server/src/routes/agent.js` checkin handler, `test_agent_encryption.py` TestDeadmanKey conventions, `agent.routes.test.js` checkin tests.
-**Finding**: B-005 confirmed — `elapsed = time.time() - last_seen` trusts the local wall clock; rollback → negative elapsed → deadman never fires. Checkin response carried no server timestamp to anchor against. Rollback check only matters when status=stolen (early return otherwise), so false-positive blast radius is confined to flagged devices — fail-secure is the right posture there.
+**Read**: B-003/B-004/B-027 statements; every gRT->GetVariable consumer in PblApp (Svn, Mor, Sbat, DmaProtection, PlatformState SecureBoot/PK/db/dbx/BootOrder); Decision.c gate usage; MarkerTest.c role.
+**Finding**: B-004-class audit — PblBootmgrSvn already advisory post-NG-T4 (no decision consumer; Trusted flag hashed into platform_state_digest). One LIVE spoof-to-pass remained: Decision.c:252 BLOCKs on KernelDmaProtection, read from the unauthenticated variable BEFORE the firmware DMAR table — an OS/shell writer plants var=1 and passes the DMA gate.
 
-### IMPLEMENT (S0.3 / B-005)
-- `server/src/routes/agent.js`: checkin response gains `server_time` (epoch seconds) — the anchor.
-- `agent/agent.py`:
-  - `DEADMAN_CLOCK_ROLLBACK_TOLERANCE_SEC = 300` (NTP slew/step stays under; attacker rewind must exceed it)
-  - `check_deadman`: `now < last_seen - tolerance` → "clock rollback detected", treated as stolen + expired (fail-secure); sentinel gains `clock_rollback: true` forensic marker
-  - `update_deadman_timer(status, server_time=None)`: anchors `last_seen` to server time when provided, records `last_seen_source`; local fallback for older servers
-  - main loop passes `data.get("server_time")`
-- Tests: 4 agent tests (rollback→lockdown+marker, 60s skew tolerated, server anchor, local fallback) + 1 server test (server_time present and sane).
+### IMPLEMENT (S0.4 / B-003+B-004)
+- DmaProtection.c: inverted trust order — DMAR (Intel VT-d) / IVRS (AMD-Vi) ACPI tables (firmware-authored) are authoritative; KernelDmaProtection variable demoted to advisory telemetry with an explicit log line; never elevates.
+- Sbat.c: doc-marked advisory-only (unauthenticated read, zero callers — prevents future trust).
+- ci-harness-docker.sh: swtpm ctrl-socket wait before ioctl init (startup-race hardening).
+- Audit result: SecureBoot/SetupMode/DeployedMode/PK/db/dbx = platform-protected (read-only/auth-write); BootOrder/Boot#### = digest telemetry (S0.5 covers classification); MOR var = spec-inherent unauthenticated, planted bit self-fulfills; MarkerTest = diagnostic app, no consumer.
 
 ### VERIFY
-- `.venv/bin/pytest tests/test_agent_encryption.py`: 49 tests pass (4 new); full agent suite 100%.
-- `npx jest tests/agent.routes.test.js`: 45/45 (1 new server_time test).
-- `ruff check` + `ruff format --check`: clean.
-- Security property: attacker window bounded — rewind >5min trips wire; forward-set fires deadman early; either direction hostile.
+- Release build clean; efi eb684120.
+- SPOOF TEST (new technique): injected KernelDmaProtection=1 into OVMF_VARS.fd NVRAM via direct VARIABLE_HEADER write at 0x64 (auth-store layout, 60B header) — QEMU boot logged "KernelDmaProtection variable claims 1 (advisory, unauthenticated)" and still reached BLOCK. Under old code the planted var would have satisfied the gate.
+- ci-harness-docker 15/0 (with /ovmf mount — custom OVMF).
+- NOTE: without the /ovmf mount the harness falls back to Ubuntu OVMF_*_4M SECBOOT — NV provisioning fails there (TPM config difference); environment issue, not a code regression.
 
 ### Fog cleared this session
-- The deadman's trust boundary is now the server clock, not the device clock — the remaining local-clock dependence is the *gap between checkins*, which is what the rollback wire covers.
-- Tolerance sizing: 300s bounds attacker gain to 5min per rewound boot while absorbing legitimate NTP corrections; only evaluated on stolen-flagged devices.
+- vars.fd variable injection is a proven adversarial-testing primitive — arbitrary unauthenticated variables can be planted into NVRAM to exercise advisory-treatment boundaries.
+- setvar via UEFI Shell is BLOCKED by this OVMF's VariablePolicy (both attempts denied) — injection bypasses the policy, which is itself evidence the policy gates writes.
+- Ubuntu OVMF SECBOOT build ≠ custom OVMF for TPM NV — harnesses must mount /ovmf.
 
 ### Fog remaining
-- Whether `server_time` should also feed other agent clock uses (pending-ack timestamps, location report times) — out of S0.3 scope, flagged.
-- NTP/hostile-time-server manipulation (server_time is ours, but local `time.time()` between checkins can still be NTP-shifted forward — early fire = fail-secure direction, acceptable).
+- Whether SbatVersion should get a Trusted/digest treatment like SVN if it ever gains a consumer — currently dead code.
+- MorRequested advisory semantics on non-MOR platforms (planted bit arms clearing where MOR works; on non-functional platforms the S3 gate softens — B-026 hardware question).
 
 ### Debt items closed
-- S0.3 implemented + verified: B-005 refuted→B-030 (emulated). Commit c8b9f96.
+- S0.4 implemented + verified: B-031 confirmed (emulated), B-004 refuted→B-032 (code-read). Commit 0391bde.
 
 ### Debt items still open
-- S0.4–S0.7; S1–S5 per approved plan; D-120, D-129, D-130.
+- S0.5–S0.7; S1–S5 per approved plan; D-120, D-129, D-130.
 
 ### Blockers
 - None.
 
 ### Session artifacts
-- Commit c8b9f96; beliefs 29→30; map S0.3 marked done.
+- Commit 0391bde; efi eb684120; spoof vars.fd technique (/tmp/vars-spoofed.fd); beliefs 30→32.
 
 ### Failure attribution
-- None.
+- Layer 3 (execution environment): ci-harness fell back to Ubuntu OVMF without /ovmf mount — NV failures looked like a regression; harness should hard-require /ovmf or label the fallback clearly.
 
 ### Next session opening
-S0.4 — variable advisory treatment: audit remaining plain-variable consumers of PblBootmgrSvn/MarkerTest semantics (B-003/B-004 partially done via NG-T4; verify what remains).
+S0.5 — shell/BootNext classification into the boot-path digest (B-010/B-017): extend the BootOrder walker with filename classification + BootNext read.
 
 ---
 
