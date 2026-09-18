@@ -364,3 +364,18 @@ beliefs:
   dependents: []
   notes: '[STALE: depended on refuted B-011] Currently a no-op via wrong GUID — re-verify after NG-T4
     fix lands.'
+- id: B-024
+  statement: Ambiguous imperatives ('proceed','go','continue') during an open ruling mean continue the
+    discussion — never start implementing; .devin/PENDING-RULING.md gates code edits
+  domain: meta/process
+  status: confirmed
+  evidence_level: code-read
+  provenance: AGENTS.md Mode Discipline; scripts/check-ruling.sh
+  source: user correction x2, session 118
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: pending
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

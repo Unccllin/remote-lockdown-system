@@ -190,6 +190,32 @@ hardware-verified. `.devin/brain/BELIEFS.md` is GENERATED — do not edit by han
 
 See `.devin/skills/brain/SKILL.md` for full documentation.
 
+## Mode Discipline (guardrail — mandatory)
+
+Two failure modes have been observed repeatedly: (a) implementing code while a
+design ruling/grilling is still open, (b) interpreting "proceed"/"go"/"continue"
+as an execution license during a discussion.
+
+**The gate:** `.devin/PENDING-RULING.md` holds the user's open questions as
+`- [ ]` checkboxes. While any `- [ ]` item exists, the session is in
+**DISCUSSION MODE**:
+
+- **No code edits.** Read, research, plan — do not modify source files.
+- Ambiguous imperatives mean **continue the ruling** — present the next
+  question or the recommended answer, never start implementing.
+- Code resumes only when no `- [ ]` items remain **or** the user names a
+  concrete task explicitly (e.g., "fix Mor.c", "take NG-T4").
+
+**Run the check before any code edit:**
+```bash
+scripts/check-ruling.sh   # exits 1 while ruling items are open
+```
+
+**Maintaining the file:** when you open questions for the user (grillings,
+rulings, multi-option decisions), add them as `- [ ]` items. When the user
+answers, mark `[x]` with a one-word outcome note. Delete answered sections as
+they close — the file is live state, not a log.
+
 ## Environment
 
 - Node.js lives at `~/.local/node/bin` (NOT on default PATH). Prefix commands with
