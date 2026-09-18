@@ -244,7 +244,7 @@ beliefs:
   statement: PblHttpsPost hardcodes QEMU static IP 10.0.2.15 with UseDefaultAddress=FALSE — no DHCP; the
     HTTPS path cannot work on real hardware as written.
   domain: firmware/network
-  status: confirmed
+  status: refuted
   evidence_level: code-read
   provenance: HttpsClient.c:213-219
   source: CONFIRMATION-FINDINGS.md B2
@@ -252,7 +252,7 @@ beliefs:
   last_verified: '2026-09-18'
   commit_ref: 6cd33f4
   supersedes: null
-  superseded_by: null
+  superseded_by: B-037
   dependents: []
   notes: D-129 blocker — must become DHCP or policy-provided config before hardware window.
 - id: B-016
@@ -622,3 +622,28 @@ beliefs:
   notes: 'Degraded mode retained: no pinned key → SHA-256-only with explicit unauthenticated
     warning. Pending-update signal records signature_verified provenance. 14 agent + 5 server
     tests cover wrong-key/missing-sig/broken-key refusal and payload binding.'
+- id: B-037
+  statement: PblHttpsPost configures IPv4 via Ip4Config2PolicyDhcp — real DHCP DORA on every
+    Ip4Config2 instance with an event-pumped InterfaceInfo poll; the HTTP instance uses
+    UseDefaultAddress=TRUE so the verdict fetch works on any DHCP-served network; the QEMU
+    static fallback exists only under PBL_DEBUG and release builds fail closed on DHCP timeout
+  domain: firmware/network
+  status: confirmed
+  evidence_level: emulated
+  provenance: HttpsClient.c:41-308 PblConfigureDhcpV4 (SetData Dhcp + two-call variable-length
+    GetData); QEMU/slirp pcap shows DISCOVER->OFFER->REQUEST->ACK then ARP+TCP+HTTP POST over
+    leased 10.0.2.15; serial shows 'lease on ifinfo[0] station=10.0.2.15' + verdict=0 ES256-verified;
+    release binary e7283452 has no fallback string
+  source: S0.7 implementation; test-s07-dhcp-harness.sh 7/7; ci-harness-docker 15/0
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: 75666ef
+  supersedes: B-015
+  superseded_by: null
+  dependents: []
+  notes: 'Root cause of the long lease-propagation failure: EFI_IP4_CONFIG2_INTERFACE_INFO is
+    variable-length (RouteTable tail) — once the lease binds, the default route grows the data
+    item past sizeof() and fixed-buffer GetData returns EFI_BUFFER_TOO_SMALL, hiding success.
+    QEMU docker caveat: slirp 10.0.2.2 maps to the container loopback — mock server must run
+    inside the container or use --network host. PcdDhcpTimeoutMs=30s covers Dhcp4 {4,8,16,32}s
+    early retries.'

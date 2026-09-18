@@ -74,7 +74,12 @@ Recorded in `.devin/PENDING-RULING.md`.
     v1:{version}:{sha256} via UPDATE_SIGNING_KEY, agent verifies pinned
     update_public_key, fail-closed when configured; degraded SHA-256-only
     mode warns; key domains compared by material; 14+5 tests)
-  - S0.7 DHCP/policy IP config (B-015; hardware-window prep)
+  - S0.7 DHCP/policy IP config (B-015; hardware-window prep) — **DONE**
+    (B-015→B-037, `75666ef`; Ip4Config2PolicyDhcp + event-pumped poll;
+    root cause was variable-length InterfaceInfo RouteTable tail —
+    fixed-buffer GetData hid the lease; wire pcap DORA+ARP+TCP+POST;
+    DEBUG-only QEMU fallback, release fails closed; harness 7/0,
+    regress 15/0)
 - **S1 — loop-closers** (the architecture completing itself)
   - S1.1 TPM restart-counter boot-ID (PBL digest + agent report + server correlate)
   - S1.2 cross-layer absence alarm (check-in with no PBL digest = bypass)

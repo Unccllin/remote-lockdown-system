@@ -1906,3 +1906,50 @@ S0.6 — detached-signature updates + pinned key + key-domain separation (B-006)
 S0.7 — DHCP/policy IP configuration (B-015): last S0 repair; then S1 loop-closers begin with TPM restart-counter boot-ID.
 
 ---
+## Session 125 — 2026-09-18 (continuation)
+
+### RULE-ZERO
+**Read**: HttpsClient.c static-IP path (B-015), EDK2 NetworkPkg (Dhcp4Dxe Dhcp4Io/Impl, Ip4Dxe Ip4Config2Impl/Driver, HttpDxe HttpImpl/HttpProto, IScsiDxe IScsiDhcp), QEMU/slirp + filter-dump, ci-harness-docker.sh, test-s05-bootpath-harness.sh.
+**Finding**: Ip4Config2 InterfaceInfo is variable-length (RouteTable tail); Dhcp4 children share one per-controller state machine; Dhcp4 retransmits on {4,8,16,32}s.
+
+### IMPLEMENT
+- firmware/PblPkg/PblApp/HttpsClient.c: PblConfigureDhcpV4 — LocateHandleBuffer(Ip4Config2), SetData(Ip4Config2PolicyDhcp) per instance, WaitForEvent-pumped 50ms poll (TimeoutEvent + PollEvent), two-call variable-length GetData(InterfaceInfo), nonzero station = lease; DEBUG diagnostics (SNP/DHCP4-SB/child state dumps); PblHttpsPost uses UseDefaultAddress=TRUE on lease, DEBUG-only QEMU static fallback under PBL_DEBUG, release fails closed.
+- PblApp.h: Ip4Config2.h + Dhcp4.h includes. PblApp.inf: gEfiIp4Config2ProtocolGuid + DHCP4 guids + PcdDhcpTimeoutMs. PblPkg.dec: PcdDhcpTimeoutMs=30000 (covers Dhcp4 {4,8,16,32}s early retries).
+- firmware/PblPkg/test-s07-dhcp-harness.sh NEW — 7 assertions on lease/fetch/no-fallback.
+- Root cause of the long debugging arc: fixed-buffer GetData(InterfaceInfo) returned EFI_BUFFER_TOO_SMALL once the bound lease added a default route — the lease had succeeded on the wire (pcap DORA+ACK) all along; the poll literally couldn't see it.
+
+### VERIFY
+- QEMU+OVMF+swtpm docker run (DEBUG efi 3b307162): 'lease on ifinfo[0] station=10.0.2.15' + 'DHCP lease obtained' + 'Verdict response: 205 bytes' + 'Verdict signature verified (ES256)' + 'verdict=0'.
+- pcap wire evidence: DISCOVER->OFFER->REQUEST->ACK (yiaddr=10.0.2.15), ARP, TCP handshake, POST 209B, response 350B — all on the DHCP address.
+- Release build e7283452: no 'static fallback' string; fail-closed error path present.
+- test-s07-dhcp-harness.sh: 7/7. ci-harness-docker.sh regression: 15/0.
+
+### Fog cleared this session
+- GetData(InterfaceInfo) MUST use the two-call protocol — buffer size grows with routes.
+- Dhcp4 children share one DhcpSb state machine; a second Start hits ALREADY_STARTED — but the REAL bug was buffer size, not session theft (re-kick hypothesis disproven and removed).
+- QEMU-in-docker: slirp 10.0.2.2 → container loopback, NOT docker host — mock server must run in-container (needs cryptography pip) or use --network host.
+- Custom OVMF DOES contain the full network stack (earlier compressed-FV strings scan was misleading).
+
+### Fog remaining
+- Multi-NIC lease affinity: poll succeeds on first nonzero station; no binding between HTTP child and the leased interface (works on single-NIC QEMU; real multi-NIC hardware TBD).
+- Whether unordered Boot#### wedge (B-035) reproduces on real firmware.
+
+### Debt items closed
+- S0.7 implemented + verified: B-015 refuted→B-037 (emulated). Commit 75666ef. S0 complete (7/7).
+
+### Debt items still open
+- S1.1–S1.4 loop-closers; S2–S5; D-120, D-129 (partially unblocked by S0.7), D-130.
+
+### Blockers
+- None.
+
+### Session artifacts
+- Commit 75666ef; test-s07-dhcp-harness.sh 7/7; ci-harness-docker 15/0; pcap DORA+ARP+TCP+POST; release e7283452 no-fallback; beliefs 36→37.
+
+### Failure attribution
+- Long debugging arc from two blind spots: (layer 4, verification feedback) fixed-size GetData hid lease success — needed per-instance GetData status + pcap to see it; (layer 3, execution environment) docker slirp loopback mapping produced a misleading TCP RST that looked like a code bug.
+
+### Next session opening
+S1.1 — TPM restart-counter boot-ID: PBL digest + agent report + server correlation; first loop-closer.
+
+---

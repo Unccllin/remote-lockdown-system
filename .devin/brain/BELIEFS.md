@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-09-18 15:27:29 — 36 beliefs
+Generated: 2026-09-18 17:21:55 — 37 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -56,9 +56,10 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-007 | refuted | code-read | Fast-boot firmware may never connect the NIC before PBL's HTTPS use. → see B-008 |
 | B-008 | confirmed | code-read | PblHttpsPost sweeps ConnectController on all handles before HTTP use — the fast-boot NIC-connection gap is mitigated for already-dispatched drivers. |
-| B-015 | confirmed | code-read | PblHttpsPost hardcodes QEMU static IP 10.0.2.15 with UseDefaultAddress=FALSE — no DHCP; the HTTPS path cannot work on real hardware as written. |
+| B-015 | refuted | code-read | PblHttpsPost hardcodes QEMU static IP 10.0.2.15 with UseDefaultAddress=FALSE — no DHCP; the HTTPS path cannot work on real hardware as written. → see B-037 |
 | B-016 | refuted | code-read | PblHttpsPost accepts http:// URIs (marked temporary for QEMU, D-109) — plaintext fallback is live in the release build. → see B-028 |
 | B-028 | confirmed | emulated | Release PblHttpsPost requires https:// and rejects http:// with EFI_INVALID_PARAMETER; http:// survives only in PBL_DEBUG builds for the QEMU dev path — the shipping artifact is fail-closed. |
+| B-037 | confirmed | emulated | PblHttpsPost configures IPv4 via Ip4Config2PolicyDhcp — real DHCP DORA on every Ip4Config2 instance with an event-pumped InterfaceInfo poll; the HTTP instance uses UseDefaultAddress=TRUE so the verdict fetch works on any DHCP-served network; the QEMU static fallback exists only under PBL_DEBUG and release builds fail closed on DHCP timeout |
 
 ## firmware/s3
 

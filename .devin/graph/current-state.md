@@ -51,49 +51,51 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 124 — 2026-09-18 (continuation)
+## Latest session: 125 — 2026-09-18 (continuation)
 
 ### RULE-ZERO
-**Read**: B-006 (update channel belief), agent.py check_for_update/download_update flow, routes/agent.js /update + /download, config/paths.js binary resolution, agent config plumbing (INI/JSON/env), existing test conventions (agent/tests/, server/tests/agent.routes.test.js).
-**Finding**: Server returned sha256 + download_url from one channel; agent compared downloaded binary to that same-channel hash — self-certifying under server compromise. No detached signature anywhere in the path.
+**Read**: HttpsClient.c static-IP path (B-015), EDK2 NetworkPkg (Dhcp4Dxe Dhcp4Io/Impl, Ip4Dxe Ip4Config2Impl/Driver, HttpDxe HttpImpl/HttpProto, IScsiDxe IScsiDhcp), QEMU/slirp + filter-dump, ci-harness-docker.sh, test-s05-bootpath-harness.sh.
+**Finding**: Ip4Config2 InterfaceInfo is variable-length (RouteTable tail); Dhcp4 children share one per-controller state machine; Dhcp4 retransmits on {4,8,16,32}s.
 
 ### IMPLEMENT
-- server/src/routes/agent.js: /update signs "v1:{version}:{sha256}" with UPDATE_SIGNING_KEY (Ed25519; file path or inline PEM); returns signature + signature_alg; configured-but-broken key → HTTP 500 (fail closed, no unsigned update served).
-- agent/agent.py: update_public_key config (env UPDATE_PUBLIC_KEY / INI / JSON); _load_pem_public_key, _get_update_public_key (Ed25519-only), verify_update_signature (strict b64 + InvalidSignature), _check_key_domain_separation (compares key MATERIAL not paths); download_update signature param — pinned key configured ⇒ signature mandatory, missing/invalid → refuse + cleanup; unpinned ⇒ SHA-256-only degraded with explicit unauthenticated warning; non-ed25519 signature_alg treated as absent; pending signal records signature_verified provenance.
-- agent/config.ini.example + server/.env.example: UPDATE_PUBLIC_KEY / UPDATE_SIGNING_KEY documented, keygen (openssl genpkey ed25519), key-domain separation required.
-- Tests: agent/tests/test_agent_update_signature.py NEW (14 tests — valid/ wrong-version/wrong-hash/wrong-domain/missing/garbage/no-key/missing-file verify; end-to-end signed-accept, missing-sig refuse, wrong-domain refuse, replay refuse, degraded mode, domain-collision warn). server/tests/agent.routes.test.js S0.6 block (5 tests — inline-PEM sign+verify, file-path key, sha256 binds binary, broken key → 500 no sha256 leaked, no key → null degraded).
+- firmware/PblPkg/PblApp/HttpsClient.c: PblConfigureDhcpV4 — LocateHandleBuffer(Ip4Config2), SetData(Ip4Config2PolicyDhcp) per instance, WaitForEvent-pumped 50ms poll (TimeoutEvent + PollEvent), two-call variable-length GetData(InterfaceInfo), nonzero station = lease; DEBUG diagnostics (SNP/DHCP4-SB/child state dumps); PblHttpsPost uses UseDefaultAddress=TRUE on lease, DEBUG-only QEMU static fallback under PBL_DEBUG, release fails closed.
+- PblApp.h: Ip4Config2.h + Dhcp4.h includes. PblApp.inf: gEfiIp4Config2ProtocolGuid + DHCP4 guids + PcdDhcpTimeoutMs. PblPkg.dec: PcdDhcpTimeoutMs=30000 (covers Dhcp4 {4,8,16,32}s early retries).
+- firmware/PblPkg/test-s07-dhcp-harness.sh NEW — 7 assertions on lease/fetch/no-fallback.
+- Root cause of the long debugging arc: fixed-buffer GetData(InterfaceInfo) returned EFI_BUFFER_TOO_SMALL once the bound lease added a default route — the lease had succeeded on the wire (pcap DORA+ACK) all along; the poll literally couldn't see it.
 
 ### VERIFY
-- Agent: 14/14 new tests; full suite green (exit 0, ~617); ruff check + format clean.
-- Server: 5/5 new S0.6 tests; npm test 604/604; eslint clean on touched files.
-- Brain: B-006 refuted→B-036 (code-read); 36 beliefs integrity clean; BELIEFS.md regenerated.
+- QEMU+OVMF+swtpm docker run (DEBUG efi 3b307162): 'lease on ifinfo[0] station=10.0.2.15' + 'DHCP lease obtained' + 'Verdict response: 205 bytes' + 'Verdict signature verified (ES256)' + 'verdict=0'.
+- pcap wire evidence: DISCOVER->OFFER->REQUEST->ACK (yiaddr=10.0.2.15), ARP, TCP handshake, POST 209B, response 350B — all on the DHCP address.
+- Release build e7283452: no 'static fallback' string; fail-closed error path present.
+- test-s07-dhcp-harness.sh: 7/7. ci-harness-docker.sh regression: 15/0.
 
 ### Fog cleared this session
-- crypto.sign(null, payload, ed25519pem) works in Node for Ed25519 detached signatures; agent cryptography lib verifies same payload.
-- agent/dist exists gitignored — /update resolves a real binary in tests without mocking.
-- Bare `npx jest` fails on pglite dynamic-import flag — npm test wraps --experimental-vm-modules; environment quirk, not a regression.
+- GetData(InterfaceInfo) MUST use the two-call protocol — buffer size grows with routes.
+- Dhcp4 children share one DhcpSb state machine; a second Start hits ALREADY_STARTED — but the REAL bug was buffer size, not session theft (re-kick hypothesis disproven and removed).
+- QEMU-in-docker: slirp 10.0.2.2 → container loopback, NOT docker host — mock server must run in-container (needs cryptography pip) or use --network host.
+- Custom OVMF DOES contain the full network stack (earlier compressed-FV strings scan was misleading).
 
 ### Fog remaining
-- Whether watchdog should independently refuse signature_verified:false pending updates (currently provenance-only).
-- Serverless worker has no /update equivalent to sign (noted; Express route is the served path).
+- Multi-NIC lease affinity: poll succeeds on first nonzero station; no binding between HTTP child and the leased interface (works on single-NIC QEMU; real multi-NIC hardware TBD).
+- Whether unordered Boot#### wedge (B-035) reproduces on real firmware.
 
 ### Debt items closed
-- S0.6 implemented + verified: B-006 refuted→B-036 (code-read). Commit 131732f.
+- S0.7 implemented + verified: B-015 refuted→B-037 (emulated). Commit 75666ef. S0 complete (7/7).
 
 ### Debt items still open
-- S0.7 (DHCP/policy IP config, B-015); S1–S5; D-120, D-129, D-130.
+- S1.1–S1.4 loop-closers; S2–S5; D-120, D-129 (partially unblocked by S0.7), D-130.
 
 ### Blockers
 - None.
 
 ### Session artifacts
-- Commit 131732f; 14 agent crypto tests + 5 server route tests; server suite 604/604; beliefs 35→36.
+- Commit 75666ef; test-s07-dhcp-harness.sh 7/7; ci-harness-docker 15/0; pcap DORA+ARP+TCP+POST; release e7283452 no-fallback; beliefs 36→37.
 
 ### Failure attribution
-- None — tests passed first-run after path-insert fix in new test file (layer 2, context: tests insert sys.path per-file, conftest lacks it).
+- Long debugging arc from two blind spots: (layer 4, verification feedback) fixed-size GetData hid lease success — needed per-instance GetData status + pcap to see it; (layer 3, execution environment) docker slirp loopback mapping produced a misleading TCP RST that looked like a code bug.
 
 ### Next session opening
-S0.7 — DHCP/policy IP configuration (B-015): last S0 repair; then S1 loop-closers begin with TPM restart-counter boot-ID.
+S1.1 — TPM restart-counter boot-ID: PBL digest + agent report + server correlation; first loop-closer.
 
 ---
 
