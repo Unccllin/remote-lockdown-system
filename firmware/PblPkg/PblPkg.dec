@@ -82,3 +82,8 @@
   ## This value is provisioned at enrolment; the development default is a
   ## 32-character string. It is used to bind the HMAC session to the index.
   gPblPkgTokenSpaceGuid.PcdPblTpmNvAuthValue|"PBL_DEV_NV_AUTH_KEY_32B_LONG!!"|VOID*|0x0000000B
+
+  ## S0.7 (B-015): DHCP DORA timeout (ms) for IPv4 interface configuration.
+  ## Dhcp4's default retransmit schedule is {4,8,16,32}s — the budget must
+  ## cover early retries on slow or not-yet-settled links.
+  gPblPkgTokenSpaceGuid.PcdDhcpTimeoutMs|30000|UINT32|0x0000000C

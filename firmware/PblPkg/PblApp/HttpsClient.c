@@ -23,6 +23,290 @@
 STATIC EFI_GUID mHttpServiceBindingGuid = EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID;
 STATIC EFI_GUID mHttpProtocolGuid = EFI_HTTP_PROTOCOL_GUID;
 
+/** S0.7 (B-015): Request DHCP on every IPv4 interface and wait for a lease.
+
+  Sets Ip4Config2PolicyDhcp on each EFI_IP4_CONFIG2_PROTOCOL instance —
+  DORA runs concurrently per NIC — then polls InterfaceInfo until at
+  least one interface reports a non-zero station address or TimeoutMs
+  elapses. The HTTP instance then uses UseDefaultAddress=TRUE, so the
+  POST works on any DHCP-served network instead of the QEMU-only
+  hardcoded 10.0.2.15.
+
+  @param  TimeoutMs  Total wait budget across all interfaces (ms).
+
+  @retval EFI_SUCCESS   At least one interface obtained a lease.
+  @retval EFI_NOT_FOUND No Ip4Config2 instances exist.
+  @retval EFI_TIMEOUT   No lease within TimeoutMs.
+**/
+STATIC
+EFI_STATUS
+PblConfigureDhcpV4 (
+  IN  UINTN  TimeoutMs
+  )
+{
+  EFI_STATUS                       Status;
+  EFI_HANDLE                       *HandleBuf = NULL;
+  UINTN                            HandleCount = 0;
+  EFI_IP4_CONFIG2_PROTOCOL         *Ip4Config2;
+  EFI_IP4_CONFIG2_PROTOCOL         **Config2 = NULL;
+  EFI_IP4_CONFIG2_POLICY           Policy;
+  UINTN                            DataSize;
+  EFI_EVENT                        TimeoutEvent = NULL;
+  EFI_EVENT                        PollEvent = NULL;
+  EFI_EVENT                        WaitEvents[2];
+  UINTN                            WaitIndex;
+  UINTN                            Started = 0;
+#ifdef PBL_DEBUG
+  UINTN                            DbgTicks = 0;
+#endif
+
+  Status = gBS->LocateHandleBuffer (
+                  ByProtocol,
+                  &gEfiIp4Config2ProtocolGuid,
+                  NULL,
+                  &HandleCount,
+                  &HandleBuf
+                  );
+  if (EFI_ERROR (Status) || HandleCount == 0) {
+    return EFI_NOT_FOUND;
+  }
+
+  Status = gBS->CreateEvent (EVT_TIMER, TPL_CALLBACK, NULL, NULL, &TimeoutEvent);
+  if (EFI_ERROR (Status)) {
+    FreePool (HandleBuf);
+    return Status;
+  }
+  gBS->SetTimer (TimeoutEvent, TimerRelative, (UINT64)TimeoutMs * 10000);
+
+  // Kick DORA on every interface — they run concurrently.
+  Config2 = AllocateZeroPool (HandleCount * sizeof (EFI_IP4_CONFIG2_PROTOCOL *));
+  if (Config2 == NULL) {
+    Status = EFI_OUT_OF_RESOURCES;
+    goto Exit;
+  }
+
+  for (UINTN i = 0; i < HandleCount; i++) {
+    Status = gBS->HandleProtocol (
+                    HandleBuf[i],
+                    &gEfiIp4Config2ProtocolGuid,
+                    (VOID **)&Ip4Config2
+                    );
+    if (EFI_ERROR (Status)) {
+      continue;
+    }
+    Config2[i] = Ip4Config2;
+    Policy = Ip4Config2PolicyDhcp;
+    Status = Ip4Config2->SetData (
+                          Ip4Config2,
+                          Ip4Config2DataTypePolicy,
+                          sizeof (Policy),
+                          &Policy
+                          );
+    // EFI_NOT_READY = async configuration in progress (expected for DHCP).
+    // EFI_ABORTED = already DHCP with a lease (DhcpSuccess) — treat as done.
+    if (!EFI_ERROR (Status) || Status == EFI_NOT_READY) {
+      Started++;
+    } else if (Status == EFI_ABORTED) {
+      Started++;
+    }
+  }
+
+  Print (L"[INFO] IPv4: %d Ip4Config2 instance(s), DHCP started on %d\n", HandleCount, Started);
+#ifdef PBL_DEBUG
+  {
+    EFI_HANDLE  *DbgBuf = NULL;
+    UINTN       DbgCount = 0;
+    if (!EFI_ERROR (gBS->LocateHandleBuffer (
+                      ByProtocol, &gEfiSimpleNetworkProtocolGuid, NULL, &DbgCount, &DbgBuf
+                      ))) {
+      Print (L"[INFO] IPv4: %d SNP handle(s)\n", DbgCount);
+      for (UINTN s = 0; s < DbgCount; s++) {
+        EFI_SIMPLE_NETWORK_PROTOCOL  *Snp = NULL;
+        if (!EFI_ERROR (gBS->HandleProtocol (
+                          DbgBuf[s], &gEfiSimpleNetworkProtocolGuid, (VOID **)&Snp
+                          )) && Snp->Mode != NULL) {
+          Print (
+            L"[INFO] IPv4:   snp[%d] mac=%02x:%02x:%02x:%02x:%02x:%02x state=%d\n",
+            s,
+            Snp->Mode->CurrentAddress.Addr[0], Snp->Mode->CurrentAddress.Addr[1],
+            Snp->Mode->CurrentAddress.Addr[2], Snp->Mode->CurrentAddress.Addr[3],
+            Snp->Mode->CurrentAddress.Addr[4], Snp->Mode->CurrentAddress.Addr[5],
+            Snp->Mode->State
+            );
+        }
+      }
+      FreePool (DbgBuf);
+    }
+    DbgCount = 0;
+    if (!EFI_ERROR (gBS->LocateHandleBuffer (
+                      ByProtocol, &gEfiDhcp4ServiceBindingProtocolGuid, NULL, &DbgCount, &DbgBuf
+                      ))) {
+      Print (L"[INFO] IPv4: %d DHCP4-SB handle(s)\n", DbgCount);
+      FreePool (DbgBuf);
+    }
+    DbgCount = 0;
+    if (!EFI_ERROR (gBS->LocateHandleBuffer (
+                      ByProtocol, &gEfiDhcp4ProtocolGuid, NULL, &DbgCount, &DbgBuf
+                      ))) {
+      Print (L"[INFO] IPv4: %d DHCP4 child handle(s)\n", DbgCount);
+      for (UINTN d = 0; d < DbgCount; d++) {
+        EFI_DHCP4_PROTOCOL   *Dhcp4 = NULL;
+        EFI_DHCP4_MODE_DATA  Dhcp4Mode;
+        if (!EFI_ERROR (gBS->HandleProtocol (
+                          DbgBuf[d], &gEfiDhcp4ProtocolGuid, (VOID **)&Dhcp4
+                          )) &&
+            !EFI_ERROR (Dhcp4->GetModeData (Dhcp4, &Dhcp4Mode))) {
+          Print (L"[INFO] IPv4:   dhcp4[%d] state=%d\n", d, Dhcp4Mode.State);
+        }
+      }
+      FreePool (DbgBuf);
+    }
+  }
+#endif
+
+  if (Started == 0) {
+    Status = EFI_NOT_FOUND;
+    goto Exit;
+  }
+
+  // Wait for a lease. WaitForEvent on a short poll timer pumps queued
+  // notifies (Dhcp4/MNP completion callbacks) while the loop checks
+  // InterfaceInfo. Dhcp4's own retransmit schedule ({4,8,16,32}s) drives
+  // DORA retries — TimeoutMs must exceed at least the first retries.
+  //
+  // NOTE: EFI_IP4_CONFIG2_INTERFACE_INFO is variable-length (RouteTable
+  // tail). Once the lease binds, the default route makes the data item
+  // exceed sizeof() — a fixed-size GetData returns EFI_BUFFER_TOO_SMALL
+  // and would hide a successful lease forever. The two-call protocol
+  // (query size → allocate → fetch) is mandatory.
+  Status = gBS->CreateEvent (EVT_TIMER, 0, NULL, NULL, &PollEvent);
+  if (EFI_ERROR (Status)) {
+    goto Exit;
+  }
+  Status = EFI_TIMEOUT;
+  WaitEvents[0] = TimeoutEvent;
+  WaitEvents[1] = PollEvent;
+  while (TRUE) {
+    for (UINTN i = 0; i < HandleCount; i++) {
+      EFI_IP4_CONFIG2_INTERFACE_INFO  *IfInfo = NULL;
+
+      if (Config2[i] == NULL) {
+        continue;
+      }
+      // InterfaceInfo is variable-length (RouteTable tail): a configured
+      // default route makes it exceed sizeof(EFI_IP4_CONFIG2_INTERFACE_INFO).
+      // Two-call protocol — query size, allocate, fetch.
+      DataSize = 0;
+      Status = Config2[i]->GetData (
+                            Config2[i],
+                            Ip4Config2DataTypeInterfaceInfo,
+                            &DataSize,
+                            NULL
+                            );
+      if (Status != EFI_BUFFER_TOO_SMALL) {
+        Status = EFI_TIMEOUT;
+        continue;  // DORA still in flight (or hard error)
+      }
+      IfInfo = AllocatePool (DataSize);
+      if (IfInfo == NULL) {
+        Status = EFI_TIMEOUT;
+        continue;
+      }
+      Status = Config2[i]->GetData (
+                            Config2[i],
+                            Ip4Config2DataTypeInterfaceInfo,
+                            &DataSize,
+                            IfInfo
+                            );
+      if (!EFI_ERROR (Status) &&
+          ((IfInfo->StationAddress.Addr[0] | IfInfo->StationAddress.Addr[1] |
+            IfInfo->StationAddress.Addr[2] | IfInfo->StationAddress.Addr[3]) != 0)) {
+#ifdef PBL_DEBUG
+        Print (
+          L"[INFO] IPv4:   lease on ifinfo[%d] station=%d.%d.%d.%d\n",
+          i,
+          IfInfo->StationAddress.Addr[0], IfInfo->StationAddress.Addr[1],
+          IfInfo->StationAddress.Addr[2], IfInfo->StationAddress.Addr[3]
+          );
+#endif
+        FreePool (IfInfo);
+        Status = EFI_SUCCESS;
+        goto Exit;
+      }
+      FreePool (IfInfo);
+      Status = EFI_TIMEOUT;
+    }
+    gBS->SetTimer (PollEvent, TimerRelative, 500000);  // 50 ms
+    if (EFI_ERROR (gBS->WaitForEvent (2, WaitEvents, &WaitIndex)) ||
+        (WaitIndex == 0)) {
+      break;  // overall timeout
+    }
+#ifdef PBL_DEBUG
+    // Periodic Dhcp4 state dump — shows Selecting→Stopped transitions live.
+    if (++DbgTicks % 40 == 0) {
+      EFI_HANDLE  *DbgBuf = NULL;
+      UINTN       DbgCount = 0;
+      if (!EFI_ERROR (gBS->LocateHandleBuffer (
+                        ByProtocol, &gEfiDhcp4ProtocolGuid, NULL, &DbgCount, &DbgBuf
+                        ))) {
+        for (UINTN d = 0; d < DbgCount; d++) {
+          EFI_DHCP4_PROTOCOL   *Dhcp4 = NULL;
+          EFI_DHCP4_MODE_DATA  Dhcp4Mode;
+          if (!EFI_ERROR (gBS->HandleProtocol (
+                            DbgBuf[d], &gEfiDhcp4ProtocolGuid, (VOID **)&Dhcp4
+                            )) &&
+              !EFI_ERROR (Dhcp4->GetModeData (Dhcp4, &Dhcp4Mode))) {
+            Print (
+              L"[INFO] IPv4:   t=%ds dhcp4[%d] state=%d addr=%d.%d.%d.%d replypkt=%s try=%d\n",
+              DbgTicks / 20, d, Dhcp4Mode.State,
+              Dhcp4Mode.ClientAddress.Addr[0], Dhcp4Mode.ClientAddress.Addr[1],
+              Dhcp4Mode.ClientAddress.Addr[2], Dhcp4Mode.ClientAddress.Addr[3],
+              Dhcp4Mode.ReplyPacket != NULL ? L"yes" : L"no",
+              Dhcp4Mode.ConfigData.DiscoverTryCount
+              );
+          }
+        }
+        FreePool (DbgBuf);
+      }
+    }
+#endif
+  }
+
+#ifdef PBL_DEBUG
+  // Timed out — dump per-DHCP4-child states for diagnosis.
+  {
+    EFI_HANDLE  *DbgBuf = NULL;
+    UINTN       DbgCount = 0;
+    if (!EFI_ERROR (gBS->LocateHandleBuffer (
+                      ByProtocol, &gEfiDhcp4ProtocolGuid, NULL, &DbgCount, &DbgBuf
+                      ))) {
+      for (UINTN d = 0; d < DbgCount; d++) {
+        EFI_DHCP4_PROTOCOL   *Dhcp4 = NULL;
+        EFI_DHCP4_MODE_DATA  Dhcp4Mode;
+        if (!EFI_ERROR (gBS->HandleProtocol (
+                          DbgBuf[d], &gEfiDhcp4ProtocolGuid, (VOID **)&Dhcp4
+                          )) &&
+            !EFI_ERROR (Dhcp4->GetModeData (Dhcp4, &Dhcp4Mode))) {
+          Print (L"[INFO] IPv4:   dhcp4[%d] state=%d (after timeout)\n", d, Dhcp4Mode.State);
+        }
+      }
+      FreePool (DbgBuf);
+    }
+  }
+#endif
+
+Exit:
+  if (PollEvent != NULL) {
+    gBS->CloseEvent (PollEvent);
+  }
+  gBS->CloseEvent (TimeoutEvent);
+  if (Config2 != NULL) {
+    FreePool (Config2);
+  }
+  FreePool (HandleBuf);
+  return Status;
+}
+
 /** Parse a URI string to extract the hostname (for TLS verification).
 
   @param  Uri       Null-terminated ASCII URI (e.g., "https://host/path").
@@ -217,13 +501,38 @@ PblHttpsPost (
   ConfigData.HttpVersion = HttpVersion11;
   ConfigData.TimeOutMillisec = (UINT32)ConnectTimeoutMs;
   ConfigData.LocalAddressIsIPv6 = FALSE;
-  V4Access.UseDefaultAddress = FALSE;  // Use static IP for QEMU testing
-  V4Access.LocalPort = 0;
-  // QEMU user networking: 10.0.2.x, gateway 10.0.2.2, netmask 255.255.255.0
-  V4Access.LocalAddress.Addr[0] = 10; V4Access.LocalAddress.Addr[1] = 0;
-  V4Access.LocalAddress.Addr[2] = 2; V4Access.LocalAddress.Addr[3] = 15;
-  V4Access.LocalSubnet.Addr[0] = 255; V4Access.LocalSubnet.Addr[1] = 255;
-  V4Access.LocalSubnet.Addr[2] = 255; V4Access.LocalSubnet.Addr[3] = 0;
+
+  // S0.7 (B-015): DHCP first — the hardcoded QEMU static IP could never
+  // work on real hardware. UseDefaultAddress makes the HTTP/TCP4 layers
+  // consume the lease obtained by PblConfigureDhcpV4.
+  Status = PblConfigureDhcpV4 (PcdGet32 (PcdDhcpTimeoutMs));
+  if (!EFI_ERROR (Status)) {
+    V4Access.UseDefaultAddress = TRUE;
+    V4Access.LocalPort = 0;
+    Print (L"[INFO] IPv4: DHCP lease obtained\n");
+#ifdef PBL_DEBUG
+  } else {
+    // DEBUG-only fallback: QEMU user networking (slirp) static address.
+    // Release builds have no static fallback — DHCP failure fails closed.
+    V4Access.UseDefaultAddress = FALSE;
+    V4Access.LocalPort = 0;
+    V4Access.LocalAddress.Addr[0] = 10; V4Access.LocalAddress.Addr[1] = 0;
+    V4Access.LocalAddress.Addr[2] = 2; V4Access.LocalAddress.Addr[3] = 15;
+    V4Access.LocalSubnet.Addr[0] = 255; V4Access.LocalSubnet.Addr[1] = 255;
+    V4Access.LocalSubnet.Addr[2] = 255; V4Access.LocalSubnet.Addr[3] = 0;
+    Print (
+      L"[INFO] IPv4: DHCP failed (%r) — using QEMU static fallback (DEBUG only)\n",
+      Status
+      );
+    Status = EFI_SUCCESS;  // static fallback provides a complete config
+#endif
+  }
+  if (EFI_ERROR (Status)) {
+    // No DHCP lease and (release) no fallback — cannot reach the network.
+    Print (L"[ERROR] IPv4: DHCP failed (%r), no fallback — network unavailable\n", Status);
+    Sb->DestroyChild (Sb, HttpChildHandle);
+    return EFI_DEVICE_ERROR;
+  }
   ConfigData.AccessPoint.IPv4Node = &V4Access;
 
   Status = Http->Configure (Http, &ConfigData);

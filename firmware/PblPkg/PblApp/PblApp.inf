@@ -80,6 +80,10 @@
   gEfiSimpleNetworkProtocolGuid
   gEfiTcp4ServiceBindingProtocolGuid
   gEfiIp4ServiceBindingProtocolGuid
+  ## EFI_IP4_CONFIG2_PROTOCOL — for DHCP policy (S0.7, B-015)
+  gEfiIp4Config2ProtocolGuid
+  gEfiDhcp4ServiceBindingProtocolGuid
+  gEfiDhcp4ProtocolGuid
   gEfiManagedNetworkServiceBindingProtocolGuid
 
   ## EFI_TLS_PROTOCOL — for TLS handshake (C3)
@@ -143,6 +147,7 @@
   gPblPkgTokenSpaceGuid.PcdPblTpmUsePlatformHierarchy
   gPblPkgTokenSpaceGuid.PcdPblTpmUseParameterEncryption
   gPblPkgTokenSpaceGuid.PcdPblTpmNvAuthValue
+  gPblPkgTokenSpaceGuid.PcdDhcpTimeoutMs
 
 [BuildOptions]
   # Strict warnings for PBL code only (not EDK2 libraries)

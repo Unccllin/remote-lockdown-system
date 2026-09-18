@@ -43,6 +43,8 @@
 #include <Protocol/SimpleNetwork.h>
 #include <Protocol/Tcp4.h>
 #include <Protocol/Ip4.h>
+#include <Protocol/Ip4Config2.h>
+#include <Protocol/Dhcp4.h>
 #include <Protocol/ManagedNetwork.h>
 #include <Protocol/Tls.h>
 #include <Protocol/TlsConfig.h>
