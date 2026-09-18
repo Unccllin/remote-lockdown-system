@@ -70,6 +70,13 @@ python3 "${FIRMWARE_DIR}/PblPkg/gen-policy-rot.py" \
   --emit-policy-tampered   "${BUILD_DIR}/policy-tampered.cose" \
   --emit-policy-wrongkid   "${BUILD_DIR}/policy-wrongkid.cose"
 
+# Force PolicyRootOfTrust.c recompilation: the generated header is gated by
+# __has_include, so it only appears in make's .deps when it existed at the
+# last compile. After a dev (unprovisioned) build, an incremental build
+# would skip the object and silently produce the unprovisioned binary —
+# the harness would then "test" the wrong efi. Touch forces the rebuild.
+touch "${FIRMWARE_DIR}/PblPkg/PblApp/PolicyRootOfTrust.c"
+
 # === Build RoT-provisioned firmware ===
 echo ""
 echo "=== Building RoT-provisioned PblApp.efi ==="
@@ -279,7 +286,7 @@ check "valid: continues to step 3"     "\[3/8\] Reading TPM NV state"           
 check "wrongkey: block message"        "Policy signature verification FAILED"   "${L_WRONGKEY}"
 check "wrongkey: refuse to boot"       "refusing to boot"                       "${L_WRONGKEY}"
 check_absent "wrongkey: never reaches step 3" "\[3/8\] Reading TPM NV state"    "${L_WRONGKEY}"
-check_absent "wrongkey: no lock screen"       "THIS DEVICE IS LOCKED"           "${L_WRONGKEY}"
+check "wrongkey: lock screen shown"           "THIS DEVICE IS LOCKED"           "${L_WRONGKEY}"
 
 check "tampered: block message"        "Policy signature verification FAILED"   "${L_TAMPERED}"
 check_absent "tampered: never reaches step 3" "\[3/8\] Reading TPM NV state"    "${L_TAMPERED}"

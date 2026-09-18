@@ -129,15 +129,22 @@ PblHttpsPost (
     return EFI_INVALID_PARAMETER;
   }
 
-  // Reject plaintext http:// — TODO: re-enable for production (D-109)
-  // Temporarily allow http:// for QEMU testing without TLS CA configuration
+  // C3 §4: "Plaintext fallback: never (http:// rejected)"
+  // RELEASE builds reject http:// outright — a plaintext verdict fetch is
+  // forgeable by any on-path attacker (B-016). DEBUG builds keep the QEMU
+  // test path (no TLS CA configured in the dev environment); the release
+  // artifact — the only one that ships — is fail-closed.
+#ifdef PBL_DEBUG
   if (AsciiStrnCmp (Uri, "http://", 7) != 0 && AsciiStrnCmp (Uri, "https://", 8) != 0) {
     return EFI_INVALID_PARAMETER;
   }
+#else
+  if (AsciiStrnCmp (Uri, "https://", 8) != 0) {
+    return EFI_INVALID_PARAMETER;
+  }
+#endif
 
-  // D-116: For https:// URIs, require TlsCaPin and hostname for verification
-  // C3 §4: "Plaintext fallback: never (http:// rejected)"
-  // For now, http:// is allowed in QEMU testing (no TLS stack configured).
+  // D-116: For https:// URIs, require TlsCaPin and hostname for verification.
   // When https:// is used, TlsCaPin must be provided for cert pinning.
   if (AsciiStrnCmp (Uri, "https://", 8) == 0) {
     if (TlsCaPin == NULL || ExpectedHostname == NULL) {
