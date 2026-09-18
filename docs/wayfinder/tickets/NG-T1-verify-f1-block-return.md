@@ -1,7 +1,7 @@
 # NG-T1: Verify F1 — does PBL's BLOCK path propagate an error that advances BootOrder?
 
 > **Label:** `wayfinder:task` (AFK)
-> **Status:** OPEN
+> **Status:** CLOSED (2026-09-18) — verdict: **REAL BUG**
 > **Blocks:** the F1-fix ticket (fog — graduates on resolution)
 > **Blocked by:** none
 
@@ -37,6 +37,21 @@ Inspect `firmware/PblPkg/PblApp/PblApp.c`, `Decision.c`, `LockScreen.c`,
 
 ## Resolution
 
-Record the return-path table and the verdict (real-bug / by-design) with
-file:line evidence. Graduate the fog: either a fix ticket (bug) or nothing
-(by-design).
+**RESOLVED 2026-09-18 — verdict: REAL BUG (2 propagating sites + 1 gap)**
+
+Return-path table (PblAppEntryPoint, `PblApp.c`):
+
+| Path | Line | Status to BDS | Consequence |
+|---|---|---|---|
+| Policy sig verify fails (RoT provisioned) | 379 | `EFI_SECURITY_VIOLATION` | **BDS advances BootOrder → bootmgfw.efi boots** — "refusing to boot" actually boots Windows |
+| Policy anti-rollback fail | 444 | `EFI_SECURITY_VIOLATION` | Same bypass; code even marked `// STUB: extend PCR + show lock screen` |
+| `PblResultBlock` (switch) | 819–838 | never returns | Safe: lock screen → override → `ResetSystem(EfiResetShutdown)` or override-chain-load |
+| `default:` unknown result | 840–844 | never returns | Safe: `ResetSystem(EfiResetShutdown)` |
+| `PblChainLoadWindows` fails | 809/817/831 | return ignored → `EFI_SUCCESS` @856 | BDS stops → boot menu; user can select Windows manually on most firmware — lesser fail-open gap |
+| Scaffold tail | 856 | `EFI_SUCCESS` | By design (dev scaffold comment) |
+
+Notes:
+- The two buggy returns are **invisible to current harnesses**: sig-verify only fires when the root of trust is provisioned (dev mode → `EFI_UNSUPPORTED` → skip); rollback needs NV counter > policy version. Same blind-spot class as the dead-TPM harness bug.
+- Fix design: BLOCK-intent paths must not `return` — route them into the same lock-screen → override → `ResetSystem` flow as the switch's BLOCK case (e.g., set forced result + jump to step-9 dispatch), and check the chain-load return.
+
+Graduated: **NG-T6 fix ticket** (both sites + chain-load-return check + a harness test that exercises the RoT-provisioned sig-fail path).

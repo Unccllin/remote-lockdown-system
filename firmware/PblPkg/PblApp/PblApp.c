@@ -275,6 +275,43 @@ PblHashSelfImage (
   return EFI_SUCCESS;
 }
 
+/** Fail-closed halt for BLOCK-intent paths.
+
+  A Boot#### option that returns a non-success status makes the boot
+  manager advance to the next BootOrder entry (typically bootmgfw.efi),
+  so a BLOCK-intent path that simply returns an error would boot Windows
+  — the opposite of its purpose. This helper shows the lock screen,
+  requests MOR, and shuts down. It never returns to BDS.
+
+  No override is offered on early paths: they run before the verdict
+  fetch, so there is no verdict-bound challenge, and on a tampered-policy
+  path the override material could itself be attacker-controlled.
+
+  @param  Reason   Human-readable block reason (serial log).
+  @param  Verdict  Optional verdict for the lock screen device-id display;
+                   NULL on pre-verdict paths.
+**/
+STATIC
+VOID
+EFIAPI
+PblBlockHalt (
+  IN CONST CHAR16       *Reason,
+  IN CONST PBL_VERDICT  *Verdict  OPTIONAL
+  )
+{
+  Print (L"  [BLOCK] %s — refusing to boot\n", Reason);
+  // D-124: request MOR on lockdown to clear memory on next boot
+  // (cold-boot attack mitigation).
+  PblRequestMor ();
+  PblShowLockScreen (Verdict, NULL);
+  PblTpmFlushSession ();
+  PblTpmFlushPcrSession ();
+  gRT->ResetSystem (EfiResetShutdown, EFI_SUCCESS, 0, NULL);
+  // ResetSystem should not return; if it does, hang rather than fall
+  // through to a return status that would advance BootOrder.
+  CpuDeadLoop ();
+}
+
 EFI_STATUS
 EFIAPI
 PblAppEntryPoint (
@@ -375,8 +412,9 @@ PblAppEntryPoint (
       // The verdict signing key, lock service URI, and TLS pins all come
       // from the policy blob — if the blob is tampered, an attacker could
       // redirect verdict fetches to a malicious server or inject their own
-      // signing key. Block immediately.
-      return EFI_SECURITY_VIOLATION;
+      // signing key. Block immediately. Must NOT return an error status —
+      // that would advance BootOrder to the next entry (Windows boots).
+      PblBlockHalt (L"Policy signature verification failed", NULL);
     } else {
       Print (L"  [OK] Policy signature verified (root of trust)\n");
     }
@@ -440,8 +478,9 @@ PblAppEntryPoint (
   if (Policy.Meta.Version > 0 && Policy.Meta.Version < NvPolicyVersion) {
     Print (L"  [BLOCK] Policy rollback detected: policy=%d NV=%d\n",
       Policy.Meta.Version, NvPolicyVersion);
-    // STUB: extend PCR + show lock screen
-    return EFI_SECURITY_VIOLATION;
+    // Must NOT return an error status — that would advance BootOrder to
+    // the next entry (Windows boots).
+    PblBlockHalt (L"Policy anti-rollback", NULL);
   }
   if (Policy.Meta.Version > NvPolicyVersion) {
     Print (L"  [OK] New policy version %d (was %d) — incrementing NV counter\n",
@@ -806,7 +845,10 @@ VerdictDone:
       Print (L"PASS — chain-loading Windows\n");
       PblTpmFlushSession ();
       PblTpmFlushPcrSession ();
-      PblChainLoadWindows (ImageHandle, &Policy);
+      Status = PblChainLoadWindows (ImageHandle, &Policy);
+      if (EFI_ERROR (Status)) {
+        PblBlockHalt (L"Chain-load failed", &Verdict);
+      }
       break;
     case PblResultDegraded:
       Print (L"DEGRADED — notice + chain-load\n");
@@ -814,7 +856,10 @@ VerdictDone:
         FixedPcdGet32(PcdDegradedNoticeSeconds));
       PblTpmFlushSession ();
       PblTpmFlushPcrSession ();
-      PblChainLoadWindows (ImageHandle, &Policy);
+      Status = PblChainLoadWindows (ImageHandle, &Policy);
+      if (EFI_ERROR (Status)) {
+        PblBlockHalt (L"Chain-load failed", &Verdict);
+      }
       break;
     case PblResultBlock: {
       BOOLEAN OverrideGranted = FALSE;
@@ -828,12 +873,16 @@ VerdictDone:
         Print (L"Override granted — chain-loading Windows\n");
         PblTpmFlushSession ();
         PblTpmFlushPcrSession ();
-        PblChainLoadWindows (ImageHandle, &Policy);
+        Status = PblChainLoadWindows (ImageHandle, &Policy);
+        if (EFI_ERROR (Status)) {
+          PblBlockHalt (L"Chain-load failed", &Verdict);
+        }
       } else {
         Print (L"Override denied — shutting down\n");
         PblTpmFlushSession ();
         PblTpmFlushPcrSession ();
         gRT->ResetSystem (EfiResetShutdown, EFI_SUCCESS, 0, NULL);
+        CpuDeadLoop ();
       }
       break;
     }
@@ -842,6 +891,7 @@ VerdictDone:
       PblTpmFlushSession ();
       PblTpmFlushPcrSession ();
       gRT->ResetSystem (EfiResetShutdown, EFI_SUCCESS, 0, NULL);
+      CpuDeadLoop ();
       break;
   }
 

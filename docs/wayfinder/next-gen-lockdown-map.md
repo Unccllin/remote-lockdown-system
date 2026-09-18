@@ -46,6 +46,8 @@ findings, ~40 capabilities across 5 feasibility tiers.
 
 - [NG-R2: Authenticated-variable options](tickets/NG-R2-variable-authentication.md) — per-var table in `NOTE-PBL-VAR-AUTH.md`: TBA-viable but mostly unneeded; MOR can't be authenticated (use `MemoryOverwriteRequestControlLock`); **found latent bug — PBL writes MOR under wrong GUID (no-op decoy)**; graduated NG-T4 fix ticket.
 - [NG-R1: BCD `osdevice` device-blob format](tickets/NG-R1-bcd-osdevice-blob.md) — **implementable-now**; full byte layout in `NOTE-BCD-DEVICE-BLOB.md` (PartitionID @0x20, TableType @0x34, DiskID @0x38 — GPT-vs-MBR inverted vs. WMI enum); graduated NG-T5 partition-binding ticket. Real hives (NG-T3) = validation, not blocker.
+- [NG-T1: Verify F1](tickets/NG-T1-verify-f1-block-return.md) — **REAL BUG**: `PblApp.c:379` (policy sig fail, RoT-provisioned) and `:444` (anti-rollback) return `EFI_SECURITY_VIOLATION` → BDS advances BootOrder → Windows boots. BLOCK switch path is safe (ResetSystem). Invisible to harnesses (RoT-unprovisioned dev mode skips sig verify). Graduated NG-T6 fix ticket — security-critical, needs human review.
+- [NG-T6: Fix F1](tickets/NG-T6-block-return-fix.md) — **implemented + verified**: `PblBlockHalt()` (lock screen → MOR → ResetSystem → CpuDeadLoop) replaced both propagating returns; chain-load return checked at all 3 sites; harnesses 16/0, 15/0, 16/0. Recorded as D-220 (CLOSED, SECURITY). Human review flagged.
 
 ## Not yet specified
 
