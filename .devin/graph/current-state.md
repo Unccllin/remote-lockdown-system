@@ -51,43 +51,42 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 116 — 2026-09-18 — Wayfinder map + F1 real bug found and fixed (D-220)
+## Latest session: 118 — 2026-09-18
 
-**Read:** `docs/wayfinder/` conventions (harness-engineering map precedent), `firmware/PblPkg/PblApp/PblApp.c` return paths (entry function, all early exits, decision switch), `LockScreen.c` (NULL-verdict tolerance), `ChainLoad.c` return semantics, `PblApp.inf`/`PblPkg.dsc` (BaseLib/CpuDeadLoop), edk2 `AuthService.c`/`TcgMor*`/`MdePkg.dec` (NG-R2 via agent), pybcd + BCD RE sources (NG-R1 via agent).
+### RULE-ZERO
+**Read**: scripts/memory.py conventions, .devin/graph/graph_loader.py (PyYAML), graph_assert.py invariant structure, CONFIRMATION-FINDINGS.md, synthesis §2 F-findings.
+**Finding**: All 7 synthesis findings verified against code — 6 confirmed, F5 killed (ConnectController sweep already exists at HttpsClient.c:171-184). MOR GUID bug confirmed via spec header. Verification-blind-spot pattern: harnesses checked log output not security outcomes.
 
-**Finding:** F1 is a REAL BUG. Two BLOCK-intent paths returned `EFI_SECURITY_VIOLATION` to BDS (`PblApp.c` policy-sig-fail @RoT-provisioned, anti-rollback). Per Boot#### semantics (Beyond BIOS p.186) a non-success return advances BDS to the next BootOrder entry — the "refusing to boot" paths actually booted Windows. Chain-load returns were also ignored (fail-open to boot menu). Bug invisible to harnesses: dev mode skips sig verify, and D-219's test checked serial lines not post-BLOCK behavior — the same blind-spot class as the dead-TPM bug.
+### Fog cleared this session
+- F2/F3/F4/F6/F7 confirmed with file:line evidence (MarkerTest.c:31, agent.py:2906, agent.py:3028, Decision.c:248, PlatformState.c:233-346)
+- F5 refuted — mitigation already present
+- MOR GUID + bit-semantics double bug confirmed against MemoryOverwriteControl.h:19,35-41
+- Bonus defects B1-B5 (QEMU static IP, http:// in release, no BootNext check, writable PblBootmgrSvn)
 
-**What changed**
+### Fog remaining
+- Whether undispatched NIC drivers (fast-boot) can be connected — hardware window
+- Resume-vs-cold-boot provenance mechanism — Tier-3
+- SVN from Authenticode (NG-R2 recommendation) — not yet implemented
 
-- Wayfinder map `next-gen-lockdown` charted (docs/wayfinder/): destination, notes (execution override), fog, 7 tickets.
-- NG-R1 (BCD osdevice blob) + NG-R2 (variable auth) resolved via research agents → `NOTE-BCD-DEVICE-BLOB.md`, `NOTE-PBL-VAR-AUTH.md`. NG-R2 side-finding: **MOR GUID bug** — PBL writes MOR under EFI_GLOBAL_VARIABLE but spec GUID is gEfiMemoryOverwriteControlDataGuid (no-op decoy); also found spec's `MemoryOverwriteRequestControlLock` as the correct hardening.
-- Graduated: NG-T4 (variable hardening/MOR fix — OPEN), NG-T5 (partition-level FVE binding — OPEN, format spec'd).
-- NG-T1 verified F1 → NG-T6 implemented: `PblBlockHalt()` helper (lock screen → MOR → ResetSystem → CpuDeadLoop, never returns) replaced both propagating returns; chain-load return checked at 3 sites; CpuDeadLoop after both ResetSystem calls.
-- D-220 added to PBL-DEBT-LEDGER (CLOSED, SECURITY).
-- `docs/reference/FETCH-LIST.md` created (Tier 1-3 source/artifact list for human fetch).
-- Commits: 6e6b37a (research corpus), bd06f72 (fetch list), 43209d (wayfinder map), 94877f (NG-R2), 9b7d3c (NG-R1+NG-T5), 6cd33f4 (F1 fix).
+### Debt items closed
+- None this session (confirmation + brain build only)
 
-**Test results**
+### Debt items still open
+- D-120 (real-media BitLocker/VMK residual), D-129 (real hardware), D-130 (signing)
+- Newly surfaced, not yet ledgered: MOR GUID fix (NG-T4), static-IP/DHCP (B-015), http:// release fallback (B-016), BootNext inspection (B-017), shell classification (B-010), deadman clock-rollback (B-005), detached-signature updates (B-006)
 
-- `PblApp.efi` `44c44e6485235cb1…` — build clean (-Werror).
-- test-fve-harness: 16/0 (3 topologies). ci-harness-docker: 15/0. ci-harness-persistence: 16/0.
-- QEMU timeout-at-lock-screen observed — confirms PBL holds control instead of returning to BDS.
-- `make graph-check`: all invariants pass.
+### Blockers
+- NG-Q1 architecture ruling still needs user decision (capability cut)
+- NG-T2/T3 need user-side artifacts (downloads, Windows media)
 
-**Fog cleared:** Boot#### return semantics verified against actual code (book claim confirmed); MOR writes proven no-op (GUID bug); BCD osdevice format fully decoded (was "fog" since session 113).
+### Session artifacts
+- scripts/brain.py + .devin/brain/beliefs.yaml (23 beliefs) + BELIEFS.md
+- .devin/skills/brain/SKILL.md; AGENTS.md brain section
+- docs/research/CONFIRMATION-FINDINGS.md
+- Commit: brain layer + findings committed this session
 
-**Fog remaining:** Whether real firmware BDS behaves identically (vendor boot-menu behavior after error/menu — D-129); the two fixed sites can't be exercised end-to-end in emulation without a RoT-provisioned harness scenario (future test ticket); `PblBlockHalt` skips PCR-12/13 extends on early paths (documented — pre-verdict paths have no decision payload to extend).
-
-**Debt items closed:** D-220 (new — found + fixed this session).
-**Debt items still open:** D-120 (partition binding ticketed NG-T5; real-media + VMK remain), D-129 (hardware), D-130 (signing). Ledger: 52 items / 49 CLOSED / 3 OPEN.
-
-**Blockers:** none.
-
-**Failure attribution**
-- Layer 4 (verification feedback): D-219's harness passed the buggy BLOCK-return code — it asserted serial lines, not post-BLOCK behavior. Prevention: NG-T6 ticket notes RoT-provisioned harness scenario as future work; finding recorded in ledger.
-
-**Next session opening**
-- NG-T4 (MOR GUID fix + MOR-lock + advisory vars) or NG-T5 (partition-level binding, ~60-line parser, spec'd) — both agent-doable; NG-Q1 capability cut and NG-T2/T3 fetch need the human.
+### Next session opening
+Present NG-Q1 for the architecture ruling — five laws + capability cut — using the now-verified belief store as ground truth; or take NG-T4 (MOR GUID fix) if user directs implementation first.
 
 ---
 

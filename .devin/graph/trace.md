@@ -1561,3 +1561,44 @@ Resolve the four EDK II/PBL source gaps (package-resolution order, Tcg2 protocol
 - NG-T4 (MOR GUID fix + MOR-lock + advisory vars) or NG-T5 (partition-level binding, ~60-line parser, spec'd) — both agent-doable; NG-Q1 capability cut and NG-T2/T3 fetch need the human.
 
 ---
+
+---
+
+## Session 118 — 2026-09-18
+
+### RULE-ZERO
+**Read**: scripts/memory.py conventions, .devin/graph/graph_loader.py (PyYAML), graph_assert.py invariant structure, CONFIRMATION-FINDINGS.md, synthesis §2 F-findings.
+**Finding**: All 7 synthesis findings verified against code — 6 confirmed, F5 killed (ConnectController sweep already exists at HttpsClient.c:171-184). MOR GUID bug confirmed via spec header. Verification-blind-spot pattern: harnesses checked log output not security outcomes.
+
+### Fog cleared this session
+- F2/F3/F4/F6/F7 confirmed with file:line evidence (MarkerTest.c:31, agent.py:2906, agent.py:3028, Decision.c:248, PlatformState.c:233-346)
+- F5 refuted — mitigation already present
+- MOR GUID + bit-semantics double bug confirmed against MemoryOverwriteControl.h:19,35-41
+- Bonus defects B1-B5 (QEMU static IP, http:// in release, no BootNext check, writable PblBootmgrSvn)
+
+### Fog remaining
+- Whether undispatched NIC drivers (fast-boot) can be connected — hardware window
+- Resume-vs-cold-boot provenance mechanism — Tier-3
+- SVN from Authenticode (NG-R2 recommendation) — not yet implemented
+
+### Debt items closed
+- None this session (confirmation + brain build only)
+
+### Debt items still open
+- D-120 (real-media BitLocker/VMK residual), D-129 (real hardware), D-130 (signing)
+- Newly surfaced, not yet ledgered: MOR GUID fix (NG-T4), static-IP/DHCP (B-015), http:// release fallback (B-016), BootNext inspection (B-017), shell classification (B-010), deadman clock-rollback (B-005), detached-signature updates (B-006)
+
+### Blockers
+- NG-Q1 architecture ruling still needs user decision (capability cut)
+- NG-T2/T3 need user-side artifacts (downloads, Windows media)
+
+### Session artifacts
+- scripts/brain.py + .devin/brain/beliefs.yaml (23 beliefs) + BELIEFS.md
+- .devin/skills/brain/SKILL.md; AGENTS.md brain section
+- docs/research/CONFIRMATION-FINDINGS.md
+- Commit: brain layer + findings committed this session
+
+### Next session opening
+Present NG-Q1 for the architecture ruling — five laws + capability cut — using the now-verified belief store as ground truth; or take NG-T4 (MOR GUID fix) if user directs implementation first.
+
+---
