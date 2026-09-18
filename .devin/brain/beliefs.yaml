@@ -378,7 +378,7 @@ beliefs:
   source: user correction x2, session 118
   asserted: '2026-09-18'
   last_verified: '2026-09-18'
-  commit_ref: pending
+  commit_ref: 6669a0
   supersedes: null
   superseded_by: null
   dependents: []
@@ -398,7 +398,7 @@ beliefs:
   source: refutes B-023
   asserted: '2026-09-18'
   last_verified: '2026-09-18'
-  commit_ref: null
+  commit_ref: 97f4a6e
   supersedes: B-023
   superseded_by: null
   dependents: []
@@ -418,7 +418,7 @@ beliefs:
   source: NG-T4 outcome verification
   asserted: '2026-09-18'
   last_verified: '2026-09-18'
-  commit_ref: pending
+  commit_ref: 97f4a6e
   supersedes: null
   superseded_by: null
   dependents: []
@@ -435,7 +435,7 @@ beliefs:
   source: NG-T4 S0.4 fix
   asserted: '2026-09-18'
   last_verified: '2026-09-18'
-  commit_ref: pending
+  commit_ref: 97f4a6e
   supersedes: null
   superseded_by: null
   dependents: []
