@@ -968,3 +968,111 @@ describe('T7/T8: PBA — Power-On Password and enable_pba flag', () => {
     expect(res.body.command.bitlocker_recovery_password).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// S0.6 (B-006): /api/agent/update detached-signature signing
+// ---------------------------------------------------------------------------
+
+describe('S0.6: GET /api/agent/update — detached Ed25519 signature', () => {
+  const app = createApp();
+  const crypto = require('crypto');
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+  const privPem = privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const pubPem = publicKey.export({ type: 'spki', format: 'pem' });
+  const savedKey = process.env.UPDATE_SIGNING_KEY;
+
+  afterEach(() => {
+    if (savedKey === undefined) {
+      delete process.env.UPDATE_SIGNING_KEY;
+    } else {
+      process.env.UPDATE_SIGNING_KEY = savedKey;
+    }
+  });
+
+  function agentUpdate(apiKey) {
+    return request(app)
+      .get('/api/agent/update')
+      .set('x-agent-key', apiKey)
+      .set('x-agent-version', '0.9.0');
+  }
+
+  test('signs update metadata when UPDATE_SIGNING_KEY is set (inline PEM)', async () => {
+    const { apiKey } = provisionDevice();
+    process.env.UPDATE_SIGNING_KEY = privPem;
+
+    const res = await agentUpdate(apiKey);
+    expect(res.status).toBe(200);
+    expect(res.body.update_available).toBe(true);
+    expect(res.body.signature_alg).toBe('ed25519');
+    expect(typeof res.body.signature).toBe('string');
+
+    // Signature must verify over exactly "v1:{version}:{sha256}"
+    const payload = `v1:${res.body.latest_version}:${res.body.sha256}`;
+    const ok = crypto.verify(
+      null,
+      Buffer.from(payload),
+      pubPem,
+      Buffer.from(res.body.signature, 'base64')
+    );
+    expect(ok).toBe(true);
+  });
+
+  test('sha256 in response binds the actual binary file', async () => {
+    const { apiKey } = provisionDevice();
+    process.env.UPDATE_SIGNING_KEY = privPem;
+
+    const res = await agentUpdate(apiKey);
+    expect(res.status).toBe(200);
+
+    const binPath = path.join(
+      __dirname, '..', '..', 'agent', 'dist', 'lockdown-agent'
+    );
+    const actual = crypto
+      .createHash('sha256')
+      .update(fs.readFileSync(binPath))
+      .digest('hex');
+    expect(res.body.sha256).toBe(actual);
+  });
+
+  test('accepts UPDATE_SIGNING_KEY as a filesystem path', async () => {
+    const { apiKey } = provisionDevice();
+    const keyFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'updkey-')), 'key.pem');
+    fs.writeFileSync(keyFile, privPem);
+    process.env.UPDATE_SIGNING_KEY = keyFile;
+
+    const res = await agentUpdate(apiKey);
+    expect(res.status).toBe(200);
+    expect(res.body.signature_alg).toBe('ed25519');
+
+    const payload = `v1:${res.body.latest_version}:${res.body.sha256}`;
+    expect(
+      crypto.verify(null, Buffer.from(payload), pubPem,
+        Buffer.from(res.body.signature, 'base64'))
+    ).toBe(true);
+  });
+
+  test('fails closed (500) when configured signing key is broken', async () => {
+    const { apiKey } = provisionDevice();
+    process.env.UPDATE_SIGNING_KEY = '-----BEGIN PRIVATE KEY-----\nbroken\n-----END PRIVATE KEY-----\n';
+
+    const res = await agentUpdate(apiKey);
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('update signing failed');
+    // Must NOT serve an unsigned update
+    expect(res.body.sha256).toBeUndefined();
+  });
+
+  test('no signing key → signature null (degraded compatibility mode)', async () => {
+    const { apiKey } = provisionDevice();
+    delete process.env.UPDATE_SIGNING_KEY;
+
+    const res = await agentUpdate(apiKey);
+    expect(res.status).toBe(200);
+    expect(res.body.signature).toBeNull();
+    expect(res.body.signature_alg).toBeNull();
+  });
+});

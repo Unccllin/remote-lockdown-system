@@ -310,6 +310,7 @@ def _load_json_config(config_path):
         "pending_ack_file",
         "recovery_key_file",
         "recovery_public_key",
+        "update_public_key",
     ):
         if json_key in data and data[json_key]:
             section[json_key] = data[json_key]
@@ -413,6 +414,12 @@ def load_config(config_path=None) -> dict:
         # A8: IT's offline master recovery PUBLIC key (PEM). Private key never on device.
         "recovery_public_key": os.environ.get(
             "RECOVERY_PUBLIC_KEY", section.get("recovery_public_key", "")
+        ),
+        # S0.6 (B-006): pinned update-domain public key (PEM, Ed25519) for
+        # detached-signature update verification — separate key domain from
+        # recovery_public_key.
+        "update_public_key": os.environ.get(
+            "UPDATE_PUBLIC_KEY", section.get("update_public_key", "")
         ),
         # A4: Flip to true once server supports command_id dedup on encryption_keys
         "server_supports_ack_dedup": os.environ.get(
@@ -3056,6 +3063,14 @@ def check_for_update(cfg: dict) -> None:
         expected_sha256 = data.get("sha256", "")
         download_url = data.get("download_url", "")
         size = data.get("size", 0)
+        signature = data.get("signature", "")
+        # Only Ed25519 signatures are meaningful to the verifier — an
+        # unexpected alg means the signature can't be trusted; treat as
+        # absent (fails closed when update_public_key is configured).
+        sig_alg = data.get("signature_alg")
+        if signature and sig_alg and sig_alg != "ed25519":
+            log.warning("Unsupported update signature_alg %r — ignoring signature", sig_alg)
+            signature = ""
 
         log.info("Update available: %s -> %s (%s bytes)", AGENT_VERSION, latest_version, size)
 
@@ -3065,7 +3080,7 @@ def check_for_update(cfg: dict) -> None:
             return
 
         full_url = f"{cfg['server_url']}{download_url}"
-        download_update(cfg, full_url, expected_sha256, latest_version)
+        download_update(cfg, full_url, expected_sha256, latest_version, signature=signature)
 
     except requests.RequestException as e:
         log.debug("Update check failed: %s", e)
@@ -3073,11 +3088,111 @@ def check_for_update(cfg: dict) -> None:
         log.warning("Update check error: %s", e)
 
 
-def download_update(cfg: dict, url: str, expected_sha256: str, version: str) -> None:
-    """Download the new agent binary, verify SHA-256, and signal the watchdog.
+def _load_pem_public_key(pem_path: str):
+    """Load a PEM public key from a path; None if unset/unreadable."""
+    if not pem_path:
+        return None
+    p = Path(pem_path)
+    if not p.exists():
+        return None
+    try:
+        from cryptography.hazmat.primitives import serialization
+
+        return serialization.load_pem_public_key(p.read_bytes())
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _get_update_public_key(cfg: dict):
+    """Load the pinned public key for update-signature verification (S0.6, B-006).
+
+    Separate key domain from recovery_public_key: the update key verifies
+    detached signatures over update metadata; the recovery key wraps
+    escrowed key material. Key-domain collisions are warned about in
+    download_update.
+    """
+    pem_path = cfg.get("update_public_key", "")
+    if not pem_path:
+        return None
+    if not Path(pem_path).exists():
+        log.warning("Update public key not found: %s", pem_path)
+        return None
+    public_key = _load_pem_public_key(pem_path)
+    if public_key is None:
+        log.warning("Could not load update public key: %s", pem_path)
+        return None
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    if not isinstance(public_key, Ed25519PublicKey):
+        log.warning("Update public key is not Ed25519 — refusing to use it")
+        return None
+    return public_key
+
+
+def _public_key_bytes(public_key) -> bytes:
+    from cryptography.hazmat.primitives import serialization
+
+    return public_key.public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+
+
+def _check_key_domain_separation(cfg: dict) -> None:
+    """Warn if the update and recovery keys are the same key (S0.6).
+
+    Compares actual key material (not just config paths) — the same key
+    pinned under two different paths is still one key domain.
+    """
+    update_key = _load_pem_public_key(cfg.get("update_public_key", ""))
+    recovery_key = _load_pem_public_key(cfg.get("recovery_public_key", ""))
+    if update_key is None or recovery_key is None:
+        return
+    try:
+        if _public_key_bytes(update_key) == _public_key_bytes(recovery_key):
+            log.warning(
+                "update_public_key and recovery_public_key are the SAME key "
+                "— key domains not separated (S0.6)"
+            )
+    except (ValueError, TypeError):
+        pass
+
+
+def verify_update_signature(cfg: dict, signature_b64: str, version: str, sha256: str) -> bool:
+    """Verify the detached Ed25519 signature over the update metadata.
+
+    Signed payload: "v1:{version}:{sha256}" — binds the binary's hash to
+    the version it claims. Returns True only when an update key is
+    configured AND the signature verifies.
+    """
+    if not signature_b64:
+        return False
+    public_key = _get_update_public_key(cfg)
+    if public_key is None:
+        return False
+    try:
+        import base64
+
+        from cryptography.exceptions import InvalidSignature
+
+        payload = f"v1:{version}:{sha256}".encode()
+        public_key.verify(base64.b64decode(signature_b64, validate=True), payload)
+        return True
+    except (InvalidSignature, ValueError, TypeError) as e:
+        log.warning("Update signature verification failed: %s", e)
+        return False
+
+
+def download_update(
+    cfg: dict, url: str, expected_sha256: str, version: str, signature: str = ""
+) -> None:
+    """Download the new agent binary, verify SHA-256 + detached signature,
+    and signal the watchdog.
 
     Downloads to UPDATE_DOWNLOAD_FILE, then writes UPDATE_PENDING_FILE
-    with metadata for the watchdog to consume.
+    with metadata for the watchdog to consume. When update_public_key is
+    configured, a valid detached signature is REQUIRED — a channel-
+    delivered SHA-256 alone is self-certifying (B-006).
     """
     try:
         log.info("Downloading update from %s ...", url)
@@ -3109,6 +3224,28 @@ def download_update(cfg: dict, url: str, expected_sha256: str, version: str) -> 
             tmp_file.unlink(missing_ok=True)
             return
 
+        # S0.6 (B-006): when an update key is pinned, the detached signature
+        # is mandatory — a channel-delivered hash alone is self-certifying.
+        update_key_configured = bool(cfg.get("update_public_key"))
+        signature_verified = False
+        if update_key_configured:
+            _check_key_domain_separation(cfg)
+            if not signature:
+                log.error("Update signature missing — refusing unverified update")
+                tmp_file.unlink(missing_ok=True)
+                return
+            if not verify_update_signature(cfg, signature, version, actual_sha256):
+                log.error("Update signature invalid — refusing update")
+                tmp_file.unlink(missing_ok=True)
+                return
+            signature_verified = True
+            log.info("Update signature verified (ed25519, pinned key)")
+        else:
+            log.warning(
+                "No update_public_key configured — update verified by channel "
+                "SHA-256 only (unauthenticated; B-006)"
+            )
+
         # Rename to final download path
         tmp_file.replace(UPDATE_DOWNLOAD_FILE)
         log.info("Update downloaded and verified (%s bytes, SHA-256 OK)", total)
@@ -3121,6 +3258,9 @@ def download_update(cfg: dict, url: str, expected_sha256: str, version: str) -> 
             "sha256": actual_sha256,
             "downloaded_at": time.time(),
             "download_path": str(UPDATE_DOWNLOAD_FILE),
+            # Provenance for the watchdog/auditor: whether this update was
+            # detached-signature verified or only channel-SHA-256 checked.
+            "signature_verified": signature_verified,
         }
         UPDATE_PENDING_FILE.write_text(_json.dumps(signal, indent=2))
         log.info("Update signal written — watchdog will apply on next check")

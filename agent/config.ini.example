@@ -46,6 +46,21 @@ recovery_key_file = C:\ProgramData\LockdownAgent\.recovery_key
 # Distribute recovery_master.pub to all devices; keep recovery_master.key offline.
 recovery_public_key = C:\ProgramData\LockdownAgent\recovery_master.pub
 
+# Update-signing PUBLIC key (PEM format, Ed25519) — S0.6 / B-006.
+# The agent verifies a detached Ed25519 signature over the update metadata
+# ("v1:{version}:{sha256}") served by /api/agent/update. This pins update
+# authenticity to a key the server never sees — a compromised server that
+# swaps both binary and hash still cannot forge the signature.
+# MUST be a DIFFERENT key from recovery_public_key (separate key domains:
+# update signing vs. recovery escrow).
+# Generate with: openssl genpkey -algorithm ed25519 -out update_signing.key
+#                openssl pkey -in update_signing.key -pubout -out update_signing.pub
+# Deploy update_signing.pub to devices; set UPDATE_SIGNING_KEY on the server
+# to the private key (file path or inline PEM). Keep the private key offline.
+# If unset, updates fall back to channel SHA-256 only (UNAUTHENTICATED —
+# a compromised server can push any binary). Configure this in production.
+update_public_key = C:\ProgramData\LockdownAgent\update_signing.pub
+
 # A4: Set to true once the server supports command_id dedup on encryption_keys.
 # When false, the pending ACK file is written (fixes A1 crash recovery) but
 # failed ACKs are not retried (the server may not have dedup yet).

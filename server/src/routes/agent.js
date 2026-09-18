@@ -643,6 +643,25 @@ router.get('/update', agentAuth, async (req, res) => {
   // Build download URL — the agent will use its server_url + this path
   const downloadPath = `/api/agent/download?platform=${agentPlatform}`;
 
+  // S0.6 (B-006): detached Ed25519 signature over the update metadata.
+  // Signed payload: "v1:{version}:{sha256}" — binds the binary's hash to
+  // the version it claims. UPDATE_SIGNING_KEY holds a PEM private key
+  // (file path or inline PEM); the agent verifies against a pinned
+  // update-domain public key — separate from the recovery-escrow key.
+  // A configured-but-broken key fails closed rather than serving
+  // unsigned updates.
+  const signingKey = process.env.UPDATE_SIGNING_KEY;
+  let signature = null;
+  if (signingKey) {
+    try {
+      const pem = fs.existsSync(signingKey) ? fs.readFileSync(signingKey) : signingKey;
+      const payload = `v1:${LATEST_VERSION}:${sha256}`;
+      signature = crypto.sign(null, Buffer.from(payload), pem).toString('base64');
+    } catch (e) {
+      return res.status(500).json({ error: 'update signing failed' });
+    }
+  }
+
   res.json({
     update_available: updateAvailable,
     latest_version: LATEST_VERSION,
@@ -651,6 +670,8 @@ router.get('/update', agentAuth, async (req, res) => {
     size: stat.size,
     download_url: downloadPath,
     built_at: stat.mtime.toISOString(),
+    signature,
+    signature_alg: signature ? 'ed25519' : null,
   });
 });
 
