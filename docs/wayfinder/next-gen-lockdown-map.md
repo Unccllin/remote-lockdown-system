@@ -70,6 +70,10 @@ Recorded in `.devin/PENDING-RULING.md`.
     BootNext read but BDS-consumed before app dispatch — best-effort;
     OVMF unordered-Boot#### wedge anomaly B-035; harness 14/0, regress 15/0)
   - S0.6 detached-signature updates + pinned key + key separation (B-006)
+    — **DONE** (B-006→B-036, `131732f`; server Ed25519-signs
+    v1:{version}:{sha256} via UPDATE_SIGNING_KEY, agent verifies pinned
+    update_public_key, fail-closed when configured; degraded SHA-256-only
+    mode warns; key domains compared by material; 14+5 tests)
   - S0.7 DHCP/policy IP config (B-015; hardware-window prep)
 - **S1 — loop-closers** (the architecture completing itself)
   - S1.1 TPM restart-counter boot-ID (PBL digest + agent report + server correlate)

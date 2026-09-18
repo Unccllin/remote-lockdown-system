@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-09-18 14:49:02 — 35 beliefs
+Generated: 2026-09-18 15:27:29 — 36 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -15,7 +15,8 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
-| B-006 | confirmed | code-read | Agent update verification trusts a channel-delivered SHA-256, not a detached signature — the server channel is the sole trust root; a compromised server serves both binary and matching hash. |
+| B-006 | refuted | code-read | Agent update verification trusts a channel-delivered SHA-256, not a detached signature — the server channel is the sole trust root; a compromised server serves both binary and matching hash. → see B-036 |
+| B-036 | confirmed | code-read | Agent updates are authenticity-pinned by a detached Ed25519 signature over "v1:{version}:{sha256}" verified against a device-pinned update_public_key — a compromised server serving binary+hash cannot forge the signature; key domain is separate from recovery escrow; configured-but-broken signing key fails closed (HTTP 500); agents with a pinned key refuse unsigned/invalid updates |
 
 ## architecture
 

@@ -51,49 +51,49 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 123 — 2026-09-18 (continuation)
+## Latest session: 124 — 2026-09-18 (continuation)
 
 ### RULE-ZERO
-**Read**: B-010/B-017 (boot-flow beliefs), PlatformState.c BootOrder walker, PblApp.h PBL_PLATFORM_STATE, PblApp.c digest path, EDK2 BdsEntry.c BootNext dispatch, QemuBootOrderLib pruning/survival.
-**Finding**: BootOrder walker checked only network subtypes; BootNext never read. EDK2 BDS deletes BootNext before dispatch (BdsEntry.c:1075) — a live BootNext is unobservable to any booted app by design.
+**Read**: B-006 (update channel belief), agent.py check_for_update/download_update flow, routes/agent.js /update + /download, config/paths.js binary resolution, agent config plumbing (INI/JSON/env), existing test conventions (agent/tests/, server/tests/agent.routes.test.js).
+**Finding**: Server returned sha256 + download_url from one channel; agent compared downloaded binary to that same-channel hash — self-certifying under server compromise. No detached signature anywhere in the path.
 
 ### IMPLEMENT
-- PblApp.h: PBL_PLATFORM_STATE += BootNextOption (u16, 0xFFFF unset), ShellEntryMask (u16, first-16 BootOrder positions), BootPathFlags (PBL_BPF_*: SHELL_IN_BOOT_ENTRY/BOOTNEXT_SET/SHELL_AS_BOOTNEXT/SHELL_ON_ESP).
-- PlatformState.c: PblPathContainsShell (bounded, NUL-safe), PblClassifyLoadOption (network + FILEPATH shell, malformed-node-safe walk), PblClassifyBootEntry, PblScanEspForShell (all SFS volumes, depth≤4, ≤512 entries), BootNext read + target classify. Missing BootOrder no longer skips BootNext/ESP scan.
-- PblApp.c: always-on summary line "Boot path: flags=.. shell-mask=.. bootnext=.." for harness observability.
-- test-s05-bootpath-harness.sh: NEW — 5 scenarios via vars.fd VARIABLE_HEADER injection + ESP file planting; swtpm per-boot restart (wedged-listener fix); PBL_NO_SWTPM escape hatch.
+- server/src/routes/agent.js: /update signs "v1:{version}:{sha256}" with UPDATE_SIGNING_KEY (Ed25519; file path or inline PEM); returns signature + signature_alg; configured-but-broken key → HTTP 500 (fail closed, no unsigned update served).
+- agent/agent.py: update_public_key config (env UPDATE_PUBLIC_KEY / INI / JSON); _load_pem_public_key, _get_update_public_key (Ed25519-only), verify_update_signature (strict b64 + InvalidSignature), _check_key_domain_separation (compares key MATERIAL not paths); download_update signature param — pinned key configured ⇒ signature mandatory, missing/invalid → refuse + cleanup; unpinned ⇒ SHA-256-only degraded with explicit unauthenticated warning; non-ed25519 signature_alg treated as absent; pending signal records signature_verified provenance.
+- agent/config.ini.example + server/.env.example: UPDATE_PUBLIC_KEY / UPDATE_SIGNING_KEY documented, keygen (openssl genpkey ed25519), key-domain separation required.
+- Tests: agent/tests/test_agent_update_signature.py NEW (14 tests — valid/ wrong-version/wrong-hash/wrong-domain/missing/garbage/no-key/missing-file verify; end-to-end signed-accept, missing-sig refuse, wrong-domain refuse, replay refuse, degraded mode, domain-collision warn). server/tests/agent.routes.test.js S0.6 block (5 tests — inline-PEM sign+verify, file-path key, sha256 binds binary, broken key → 500 no sha256 leaked, no key → null degraded).
 
 ### VERIFY
-- Release build clean; efi 3a7a0500b5c4b7d4.
-- s05 harness 14/0: baseline flags=0x00; ESP SHELL.EFI → warn + flags=0x08; injected Boot0007 FILEPATH shell → warn + flags=0x01 mask=0x0001; injected BootNext=0x9999 → consumed, PBL sees 0xFFFF; unordered Boot0009 → OVMF silent wedge (documented anomaly).
-- ci-harness-docker 15/0 (custom OVMF mounted).
+- Agent: 14/14 new tests; full suite green (exit 0, ~617); ruff check + format clean.
+- Server: 5/5 new S0.6 tests; npm test 604/604; eslint clean on touched files.
+- Brain: B-006 refuted→B-036 (code-read); 36 beliefs integrity clean; BELIEFS.md regenerated.
 
 ### Fog cleared this session
-- EDK2 BDS consumes BootNext before any app dispatch — BootNext detection is best-effort only (non-spec firmware, DXE-injected vars).
-- OVMF anomaly: unordered Boot#### or BootNext→existent entry wedges this build pre-console (0 serial bytes) — emulated, recorded as B-035.
-- swtpm unixio ctrl channel does not reliably accept a second QEMU connection — restart daemon per boot.
+- crypto.sign(null, payload, ed25519pem) works in Node for Ed25519 detached signatures; agent cryptography lib verifies same payload.
+- agent/dist exists gitignored — /update resolves a real binary in tests without mocking.
+- Bare `npx jest` fails on pglite dynamic-import flag — npm test wraps --experimental-vm-modules; environment quirk, not a regression.
 
 ### Fog remaining
-- Whether the OVMF wedge reproduces on real firmware (unordered Boot#### handling differs per vendor).
-- Whether any firmware leaves BootNext observable to a DXE-phase or non-BDS-launched PBL.
+- Whether watchdog should independently refuse signature_verified:false pending updates (currently provenance-only).
+- Serverless worker has no /update equivalent to sign (noted; Express route is the served path).
 
 ### Debt items closed
-- S0.5 implemented + verified: B-010 refuted→B-033, B-017 refuted→B-034, B-035 confirmed (all emulated). Commit e001f00.
+- S0.6 implemented + verified: B-006 refuted→B-036 (code-read). Commit 131732f.
 
 ### Debt items still open
-- S0.6 (detached-signature updates + key separation, B-006); S0.7 (DHCP/policy IP, B-015); S1–S5; D-120, D-129, D-130.
+- S0.7 (DHCP/policy IP config, B-015); S1–S5; D-120, D-129, D-130.
 
 ### Blockers
 - None.
 
 ### Session artifacts
-- Commit e001f00; efi 3a7a0500b5c4b7d4; test-s05-bootpath-harness.sh 14/0; beliefs 32→35.
+- Commit 131732f; 14 agent crypto tests + 5 server route tests; server suite 604/604; beliefs 35→36.
 
 ### Failure attribution
-- Layer 3 (execution environment): harness boot() clobbered injected vars with fresh template (own bug — layer 1/3 hybrid); swtpm socket lifecycle broke multi-boot runs. Both fixed in harness.
+- None — tests passed first-run after path-insert fix in new test file (layer 2, context: tests insert sys.path per-file, conftest lacks it).
 
 ### Next session opening
-S0.6 — detached-signature updates + pinned key + key-domain separation (B-006): agent update path verifies channel SHA-256 not a real signature.
+S0.7 — DHCP/policy IP configuration (B-015): last S0 repair; then S1 loop-closers begin with TPM restart-counter boot-ID.
 
 ---
 
