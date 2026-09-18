@@ -301,8 +301,10 @@ PblBlockHalt (
 {
   Print (L"  [BLOCK] %s — refusing to boot\n", Reason);
   // D-124: request MOR on lockdown to clear memory on next boot
-  // (cold-boot attack mitigation).
+  // (cold-boot attack mitigation), then lock it so the OS or a
+  // pre-OS attacker cannot clear the request before shutdown.
   PblRequestMor ();
+  PblLockMor ();
   PblShowLockScreen (Verdict, NULL);
   PblTpmFlushSession ();
   PblTpmFlushPcrSession ();
@@ -865,8 +867,10 @@ VerdictDone:
       BOOLEAN OverrideGranted = FALSE;
       Print (L"BLOCK — lock screen\n");
       // D-124: Request MOR (Memory Overwrite Request) on lockdown to
-      // trigger memory clear on next boot, preventing cold-boot attacks.
+      // trigger memory clear on next boot, preventing cold-boot attacks,
+      // then lock it so the request cannot be cleared before shutdown.
       PblRequestMor ();
+      PblLockMor ();
       PblShowLockScreen (&Verdict, NULL);
       PblHandleOverride (&Verdict, &OverrideGranted);
       if (OverrideGranted) {

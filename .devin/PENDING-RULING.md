@@ -10,13 +10,9 @@
 
 ## NG-Q1 architecture ruling (opened 2026-09-18)
 
-- [ ] Q1 — Ordering: fix-first vs interleaved (recommended: fix-first)
-- [ ] Q2 — Digest-drift engine: full / minimal / deferred (recommended: minimal — storage + raw-diff alarm now, taxonomy later)
-- [ ] Q3 — Firmware cut: accept proposed 6-in list (var-auth, shell/BootNext classification, monotonic counter, partition FVE binding, VMK proof, disk boot-structure)
-- [ ] Q4 — Agent cut: accept proposed 6-in list (clock-rollback, detached-sig updates, self-integrity, VM/snapshot detect, service watchdog, raw-disk tripwire)
-- [ ] Q5 — Server cut: accept proposed 5-in list (attestation enrichment, escrow-before-arm, lifecycle states, cross-layer alarms, role-scoped key reads)
-- [ ] Q6 — Provenance marker in, Computrace coexistence deferred (recommended)
-- [ ] Q7 — Resume-detection elevation into buildable set, server-side form (recommended: elevate — agent check-in + no PBL digest = resume signal)
-- [ ] Q8 — DXE-implant enforcement tier: design ticket or defer
-- [ ] Keystone anchor: TPM restart counter as boot-ID — confirmed or alternative?
-- [ ] Resume verdict semantics: DEGRADED alarm vs BLOCK-adjacent policy on detected resume
+- [x] Q1 — Ordering: fix-first vs interleaved → **fix-first**
+- [x] Q2-Q8 consolidated — approve the segmented plan → **approved via "proceed"** — S0–S5 as presented
+- [x] Keystone anchor: TPM restart counter as boot-ID → **adopted** (recommended default)
+- [x] Resume verdict semantics: DEGRADED alarm vs BLOCK-adjacent → **DEGRADED alarm** (recommended default)
+
+Ruling closed 2026-09-18 — plan accepted with recommended defaults. Task mode.

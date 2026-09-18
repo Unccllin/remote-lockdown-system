@@ -586,10 +586,12 @@ PblCollectMorState (
 
   State->MorRequested = FALSE;
 
+  // MOR lives under gEfiMemoryOverwriteControlDataGuid, not
+  // EFI_GLOBAL_VARIABLE — reading the wrong GUID sees only the decoy.
   Size = sizeof (MorControl);
   Status = gRT->GetVariable (
     L"MemoryOverwriteRequestControl",
-    &mGlobalVariableGuid,
+    &gEfiMemoryOverwriteControlDataGuid,
     NULL,
     &Size,
     &MorControl
@@ -902,8 +904,9 @@ PblCollectPlatformState (
   // REQ-12: PCR readings (4, 5, 7, 11)
   PblCollectPcrReadings (State);
 
-  // REQ-02: bootmgr SVN (delegated to Svn.c)
-  PblReadBootmgrSvn (&State->BootmgrSvn);
+  // REQ-02: bootmgr SVN (delegated to Svn.c) — advisory-only; the
+  // variable is unauthenticated so Trusted flag distinguishes it (B-004)
+  PblReadBootmgrSvn (&State->BootmgrSvn, &State->BootmgrSvnTrusted);
 
   // REQ-03: SPI protections (delegated to SpiProtections.c)
   PblCheckSpiProtections (State);

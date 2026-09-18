@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-09-18 09:50:49 — 23 beliefs
+Generated: 2026-09-18 12:00:18 — 27 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -41,7 +41,9 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-012 | confirmed | spec-checked | MemoryOverwriteRequestControl lives under e20939be-32d4-41be-a150-897f85d49829 — Mor.c writes under EFI_GLOBAL_VARIABLE, so PBL's MOR write is a no-op decoy the real TcgMor handler never sees. |
 | B-013 | refuted | spec-checked | Bit 1 of MemoryOverwriteRequestControl locks the MOR bit. → see B-014 |
 | B-014 | confirmed | spec-checked | The MOR byte has only bit 0 (clear-memory) and bit 4 (disable-autodetect); locking is a separate variable, MemoryOverwriteRequestControlLock. |
-| B-023 | proposed | assumed | PBL's MOR request actually reaches the platform TcgMor handler and causes a memory clear on BLOCK. |
+| B-023 | refuted | assumed | PBL's MOR request actually reaches the platform TcgMor handler and causes a memory clear on BLOCK. → see B-025 |
+| B-025 | confirmed | emulated | PBL's MOR request targets the correct spec-GUID variable and is evaluated by the platform's policy engine (WRITE_PROTECTED denial proves it reached the real variable, not a decoy), but functional memory-clear is platform-gated: non-SMM EDK2 variable drivers register LOCK_NOW VariablePolicies on both MOR vars at EndOfDxe, so no post-EndOfDxe writer can set MOR. Functional MOR requires SMM-capable firmware with legitimate MOR provisioning — hardware-gated. |
+| B-026 | confirmed | spec-checked | Non-SMM EDK2 variable drivers (VariableRuntimeDxe, incl. the custom OVMF and Ubuntu OVMF builds) treat MOR as unsupported: MorLockInit deletes both MOR vars and MorLockInitAtEndOfDxe registers unconditional LOCK_NOW VariablePolicies — no BDS-phase or OS writer can set MOR on such platforms. A DXE-phase writer before EndOfDxe would beat the policy lock (relevant to DXE-tier enforcement-depth decision). |
 
 ## firmware/network
 
@@ -64,6 +66,13 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-003 | confirmed | code-read | PBL variables PblMarkerTest and MemoryOverwriteRequestControl are written without authentication — any boot-time writer can spoof or erase them. |
 | B-004 | confirmed | code-read | PblBootmgrSvn is attacker-writable — the SVN anti-rollback decision reads an unauthenticated variable any OS process or UEFI shell can plant. |
+| B-027 | confirmed | code-read | PblBootmgrSvn is demoted to advisory-only telemetry: PblReadBootmgrSvn now reports a Trusted flag from the variable's TIME_BASED_AUTHENTICATED attribute (BootmgrSvnTrusted in PBL_PLATFORM_STATE); the value must not drive decisions. |
+
+## meta/process
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-024 | confirmed | code-read | Ambiguous imperatives ('proceed','go','continue') during an open ruling mean continue the discussion — never start implementing; .devin/PENDING-RULING.md gates code edits |
 
 ## meta/verification
 

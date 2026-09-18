@@ -215,6 +215,9 @@ typedef struct {
   BOOLEAN   DbxHasMs2011Revocation;
   BOOLEAN   DbxHasBootHoleHashes;
   UINT32    BootmgrSvn;
+  // NG-T4/B-004: TRUE only if PblBootmgrSvn carried TIME_BASED_AUTHENTICATED
+  // attributes. PBL's own writes are unauthenticated → advisory telemetry.
+  BOOLEAN   BootmgrSvnTrusted;
 
   // REQ-03: SPI protections
   BOOLEAN   SpiProtectionsKnown;
@@ -361,9 +364,13 @@ PblVerifyPolicySignature (
   );
 
 // Svn.c — REQ-02
+// Trusted reports whether the variable was written with TIME_BASED_
+// AUTHENTICATED attributes; PBL's own writes are unauthenticated (B-004),
+// so callers must treat the value as advisory-only telemetry.
 EFI_STATUS
 PblReadBootmgrSvn (
-  OUT UINT32  *Svn
+  OUT UINT32   *Svn,
+  OUT BOOLEAN  *Trusted
   );
 
 // AmtCheck.c — REQ-04
@@ -387,6 +394,13 @@ PblCheckDmaProtection (
 // Mor.c — REQ-07
 EFI_STATUS
 PblRequestMor (
+  VOID
+  );
+
+// Locks MemoryOverwriteRequestControl so the OS cannot clear it before
+// reboot (MemoryOverwriteRequestControlLock, Microsoft Secure MOR).
+EFI_STATUS
+PblLockMor (
   VOID
   );
 

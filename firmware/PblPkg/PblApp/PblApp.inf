@@ -126,6 +126,10 @@
   gEfiRngAlgorithmRaw
   gEfiRngAlgorithmSp80090Hash256Guid
   gEfiFileInfoGuid
+  ## MemoryOverwriteRequestControl — TCG spec GUID (REQ-07, NG-T4)
+  gEfiMemoryOverwriteControlDataGuid
+  ## MemoryOverwriteRequestControlLock — Microsoft Secure MOR lock
+  gEfiMemoryOverwriteRequestControlLockGuid
 
 [Pcd]
   gPblPkgTokenSpaceGuid.PcdPblVersion
