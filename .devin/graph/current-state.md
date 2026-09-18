@@ -51,51 +51,52 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 120 — 2026-09-18 (continuation)
+## Latest session: 121 — 2026-09-18 (continuation)
 
 ### RULE-ZERO
-**Read**: `HttpsClient.c` (URI acceptance + contract comments), `PblApp.c` verdict-fetch call site, `test-d215-harness.sh` + `gen-policy-rot.py` (policy provisioning path), `build-pbl.sh` BUILD_TYPE → -DPBL_DEBUG wiring.
-**Finding**: `http://` was accepted in ALL builds despite contract "Plaintext fallback: never". Verdict URI comes from signed policy CBOR key 70 — the D-215 valid policy carries http://10.0.2.2:8080, making it the outcome-evidence vehicle for release rejection.
+**Read**: `agent.py` deadman block (`update_deadman_timer`, `check_deadman`, `_read_deadman_state`), main-loop checkin flow (:3466-3511), `server/src/routes/agent.js` checkin handler, `test_agent_encryption.py` TestDeadmanKey conventions, `agent.routes.test.js` checkin tests.
+**Finding**: B-005 confirmed — `elapsed = time.time() - last_seen` trusts the local wall clock; rollback → negative elapsed → deadman never fires. Checkin response carried no server timestamp to anchor against. Rollback check only matters when status=stolen (early return otherwise), so false-positive blast radius is confined to flagged devices — fail-secure is the right posture there.
 
-### IMPLEMENT (S0.2 / B-016)
-- HttpsClient.c:132-145 — `#ifdef PBL_DEBUG`: accept http://+https:// (QEMU dev path, no TLS CA); `#else` (release): https:// only, all other schemes → EFI_INVALID_PARAMETER. Comment documents the fail-closed rationale.
-- test-d215-harness.sh — two fixes:
-  1. `touch PolicyRootOfTrust.c` before RoT build — the generated header is __has_include-gated, so an incremental build after a dev compile skipped the object and silently tested the UNPROVISIONED binary (RoT efi hash == dev efi hash on run 1). B-029.
-  2. `check_absent "no lock screen"` → `check "lock screen shown"` — PblBlockHalt displays the lock screen by design (D-220 semantics); the stale assertion predated that fix.
+### IMPLEMENT (S0.3 / B-005)
+- `server/src/routes/agent.js`: checkin response gains `server_time` (epoch seconds) — the anchor.
+- `agent/agent.py`:
+  - `DEADMAN_CLOCK_ROLLBACK_TOLERANCE_SEC = 300` (NTP slew/step stays under; attacker rewind must exceed it)
+  - `check_deadman`: `now < last_seen - tolerance` → "clock rollback detected", treated as stolen + expired (fail-secure); sentinel gains `clock_rollback: true` forensic marker
+  - `update_deadman_timer(status, server_time=None)`: anchors `last_seen` to server time when provided, records `last_seen_source`; local fallback for older servers
+  - main loop passes `data.get("server_time")`
+- Tests: 4 agent tests (rollback→lockdown+marker, 60s skew tolerated, server anchor, local fallback) + 1 server test (server_time present and sane).
 
 ### VERIFY
-- Release build clean (-Werror -Wall -Wextra); artifact 074f1617….
-- Release efi + signed http:// policy: "Online fetch failed: Invalid Parameter — falling back to cache" — param-check rejection, fail-closed (reproduced across 2 harness runs).
-- DEBUG RoT build (7d9feb7a…) + same policy: "Online fetch failed: Not Found" — passes param check, fails at network layer. Both branches proven end-to-end.
-- test-d215-harness.sh: 12 PASS / 0 FAIL (valid flows through; wrongkey/tampered/wrongkid all blocked with lock screen; QEMU exits 0 via PblBlockHalt reset — F1 semantics working).
-- ci-harness-docker.sh regression on release build: 15/0 (prior run).
-- Cleanup verified: generated.h removed, dev RELEASE efi restored to tree.
+- `.venv/bin/pytest tests/test_agent_encryption.py`: 49 tests pass (4 new); full agent suite 100%.
+- `npx jest tests/agent.routes.test.js`: 45/45 (1 new server_time test).
+- `ruff check` + `ruff format --check`: clean.
+- Security property: attacker window bounded — rewind >5min trips wire; forward-set fires deadman early; either direction hostile.
 
 ### Fog cleared this session
-- The release/debug split is provable by error-code at the serial line: Invalid Parameter = param-check rejection; Not Found = network-layer failure past the check.
-- __has_include + incremental builds = silent wrong-artifact testing — the same failure class that let B-016 itself survive (green harness, wrong binary). Fixed generically in the harness.
+- The deadman's trust boundary is now the server clock, not the device clock — the remaining local-clock dependence is the *gap between checkins*, which is what the rollback wire covers.
+- Tolerance sizing: 300s bounds attacker gain to 5min per rewound boot while absorbing legitimate NTP corrections; only evaluated on stolen-flagged devices.
 
 ### Fog remaining
-- Whether production policy generators should emit https:// URIs by default (test fixtures still carry http:// — acceptable for DEBUG/QEMU, flagged for S0.6 key-separation work).
-- TLS CA pin provisioning path for real https:// verdict fetch (needs the deployment-side PKI decision, D-130-adjacent).
+- Whether `server_time` should also feed other agent clock uses (pending-ack timestamps, location report times) — out of S0.3 scope, flagged.
+- NTP/hostile-time-server manipulation (server_time is ours, but local `time.time()` between checkins can still be NTP-shifted forward — early fire = fail-secure direction, acceptable).
 
 ### Debt items closed
-- S0.2 implemented + verified: B-016 refuted→B-028 (emulated); B-029 confirmed (harness trap). Commit f229cc9.
+- S0.3 implemented + verified: B-005 refuted→B-030 (emulated). Commit c8b9f96.
 
 ### Debt items still open
-- S0.3–S0.7; S1–S5 per approved plan (next-gen-lockdown-map.md); D-120, D-129, D-130.
+- S0.4–S0.7; S1–S5 per approved plan; D-120, D-129, D-130.
 
 ### Blockers
 - None.
 
 ### Session artifacts
-- Commit f229cc9 (S0.2 + harness fixes); release efi 074f1617, debug RoT efi 7d9feb7a; /tmp/pbl-d215-ci/pbl-serial-valid.log + pbl-d215-result.txt (12/0); beliefs 27→29; next-gen-lockdown-map.md approved-sequence section.
+- Commit c8b9f96; beliefs 29→30; map S0.3 marked done.
 
 ### Failure attribution
-- Layer 4 (verification feedback): the D-215 harness's first S0.2 run tested the wrong binary — no artifact-identity check. Fixed by forcing recompilation; future harnesses should hash-check provisioned vs dev binaries as an assertion.
+- None.
 
 ### Next session opening
-S0.3 — deadman clock-rollback: `now < last_seen` tamper detection + server-timestamp anchor (agent.py:2906, B-005).
+S0.4 — variable advisory treatment: audit remaining plain-variable consumers of PblBootmgrSvn/MarkerTest semantics (B-003/B-004 partially done via NG-T4; verify what remains).
 
 ---
 

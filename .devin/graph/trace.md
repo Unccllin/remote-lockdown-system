@@ -1709,3 +1709,56 @@ S0.3 — deadman clock-rollback: `now < last_seen` tamper detection + server-tim
 ---
 
 ---
+
+---
+
+## Session 121 — 2026-09-18 (continuation)
+
+### RULE-ZERO
+**Read**: `agent.py` deadman block (`update_deadman_timer`, `check_deadman`, `_read_deadman_state`), main-loop checkin flow (:3466-3511), `server/src/routes/agent.js` checkin handler, `test_agent_encryption.py` TestDeadmanKey conventions, `agent.routes.test.js` checkin tests.
+**Finding**: B-005 confirmed — `elapsed = time.time() - last_seen` trusts the local wall clock; rollback → negative elapsed → deadman never fires. Checkin response carried no server timestamp to anchor against. Rollback check only matters when status=stolen (early return otherwise), so false-positive blast radius is confined to flagged devices — fail-secure is the right posture there.
+
+### IMPLEMENT (S0.3 / B-005)
+- `server/src/routes/agent.js`: checkin response gains `server_time` (epoch seconds) — the anchor.
+- `agent/agent.py`:
+  - `DEADMAN_CLOCK_ROLLBACK_TOLERANCE_SEC = 300` (NTP slew/step stays under; attacker rewind must exceed it)
+  - `check_deadman`: `now < last_seen - tolerance` → "clock rollback detected", treated as stolen + expired (fail-secure); sentinel gains `clock_rollback: true` forensic marker
+  - `update_deadman_timer(status, server_time=None)`: anchors `last_seen` to server time when provided, records `last_seen_source`; local fallback for older servers
+  - main loop passes `data.get("server_time")`
+- Tests: 4 agent tests (rollback→lockdown+marker, 60s skew tolerated, server anchor, local fallback) + 1 server test (server_time present and sane).
+
+### VERIFY
+- `.venv/bin/pytest tests/test_agent_encryption.py`: 49 tests pass (4 new); full agent suite 100%.
+- `npx jest tests/agent.routes.test.js`: 45/45 (1 new server_time test).
+- `ruff check` + `ruff format --check`: clean.
+- Security property: attacker window bounded — rewind >5min trips wire; forward-set fires deadman early; either direction hostile.
+
+### Fog cleared this session
+- The deadman's trust boundary is now the server clock, not the device clock — the remaining local-clock dependence is the *gap between checkins*, which is what the rollback wire covers.
+- Tolerance sizing: 300s bounds attacker gain to 5min per rewound boot while absorbing legitimate NTP corrections; only evaluated on stolen-flagged devices.
+
+### Fog remaining
+- Whether `server_time` should also feed other agent clock uses (pending-ack timestamps, location report times) — out of S0.3 scope, flagged.
+- NTP/hostile-time-server manipulation (server_time is ours, but local `time.time()` between checkins can still be NTP-shifted forward — early fire = fail-secure direction, acceptable).
+
+### Debt items closed
+- S0.3 implemented + verified: B-005 refuted→B-030 (emulated). Commit c8b9f96.
+
+### Debt items still open
+- S0.4–S0.7; S1–S5 per approved plan; D-120, D-129, D-130.
+
+### Blockers
+- None.
+
+### Session artifacts
+- Commit c8b9f96; beliefs 29→30; map S0.3 marked done.
+
+### Failure attribution
+- None.
+
+### Next session opening
+S0.4 — variable advisory treatment: audit remaining plain-variable consumers of PblBootmgrSvn/MarkerTest semantics (B-003/B-004 partially done via NG-T4; verify what remains).
+
+---
+
+---

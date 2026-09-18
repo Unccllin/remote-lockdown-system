@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-09-18 12:37:09 — 29 beliefs
+Generated: 2026-09-18 12:52:06 — 30 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -8,7 +8,8 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
-| B-005 | confirmed | code-read | The deadman switch computes elapsed time from the wall clock — a clock rollback yields negative elapsed hours and the switch never triggers. |
+| B-005 | refuted | code-read | The deadman switch computes elapsed time from the wall clock — a clock rollback yields negative elapsed hours and the switch never triggers. → see B-030 |
+| B-030 | confirmed | emulated | Deadman last_seen is server-anchored via checkin server_time; local clock rollback beyond 300s tolerance is detected and treated as stolen + expired (fail-secure); forward clock fires early — both directions hostile to an attacker. |
 
 ## agent/update
 

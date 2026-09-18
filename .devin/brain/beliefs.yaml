@@ -69,7 +69,7 @@ beliefs:
   statement: The deadman switch computes elapsed time from the wall clock — a clock rollback yields negative
     elapsed hours and the switch never triggers.
   domain: agent/deadman
-  status: confirmed
+  status: refuted
   evidence_level: code-read
   provenance: agent.py:2868 (time.time() written), :2906 (elapsed=(time.time()-last_seen)/3600); no now<last_seen
     tamper check
@@ -78,9 +78,13 @@ beliefs:
   last_verified: '2026-09-18'
   commit_ref: 6cd33f4
   supersedes: null
-  superseded_by: null
+  superseded_by: B-030
   dependents: []
   notes: TPM seal protects the file contents, not the clock. Needs non-RTC anchor.
+  refuted_on: '2026-09-18'
+  refute_evidence: agent/agent.py:2922-2929 rollback check + :2847-2852 tolerance + update_deadman_timer
+    server anchor; server/src/routes/agent.js:231 server_time; 4 new unit tests (rollback→lockdown, skew
+    tolerated, server anchor, local fallback); commit c8b9f96
 - id: B-006
   statement: Agent update verification trusts a channel-delivered SHA-256, not a detached signature —
     the server channel is the sole trust root; a compromised server serves both binary and matching hash.
@@ -477,3 +481,20 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: 'Same class of bug as B-016''s survival: a green harness testing the wrong artifact.'
+- id: B-030
+  statement: Deadman last_seen is server-anchored via checkin server_time; local clock rollback beyond
+    300s tolerance is detected and treated as stolen + expired (fail-secure); forward clock fires early
+    — both directions hostile to an attacker.
+  domain: agent/deadman
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'pytest test_agent_encryption.py: rollback test locks sentinel with clock_rollback=True;
+    60s skew tolerated; server_time anchor written; agent suite 100%, jest agent.routes 45/45'
+  source: refutes B-005
+  asserted: '2026-09-18'
+  last_verified: '2026-09-18'
+  commit_ref: c8b9f96
+  supersedes: B-005
+  superseded_by: null
+  dependents: []
+  notes: ''
