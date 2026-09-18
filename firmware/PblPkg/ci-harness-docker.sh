@@ -77,6 +77,13 @@ if [ "${USE_SWTPM:-1}" = "1" ] && command -v swtpm >/dev/null 2>&1; then
     --daemon \
     --flags not-need-init \
     --pid file="${BUILD_DIR}/swtpm.pid"
+  # Wait for the control socket before init — without this, ioctl races
+  # the daemon startup and QEMU connects to a half-initialized TPM
+  # (NV commands fail while PCR/GetRandom still work).
+  for _ in $(seq 1 50); do
+    [ -S "${BUILD_DIR}/swtpm-ctrl.sock" ] && break
+    sleep 0.1
+  done
   swtpm_ioctl --unix "${BUILD_DIR}/swtpm-ctrl.sock" -i 2>/dev/null || true
   SWTPM_ARGS="-chardev socket,id=chrtpm,path=${BUILD_DIR}/swtpm-ctrl.sock -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0"
   echo "  swtpm started (PID $(cat "${BUILD_DIR}/swtpm.pid" 2>/dev/null || echo '?'))"

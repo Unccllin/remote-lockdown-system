@@ -8,6 +8,11 @@
   PBL reads the SBAT variable to verify it exists and has a non-zero
   version, indicating that SBAT-based revocation is active.
 
+  ADVISORY ONLY (B-004 class): the Sbat variable is unauthenticated —
+  any OS process or UEFI shell can plant or erase it. This reader has
+  no decision consumer; any future caller must treat the value as
+  untrusted telemetry, never as a gate.
+
   Copyright (c) 2026 Remote Lockdown System. All rights reserved.
 **/
 
