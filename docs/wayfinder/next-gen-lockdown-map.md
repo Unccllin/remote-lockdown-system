@@ -44,7 +44,7 @@ findings, ~40 capabilities across 5 feasibility tiers.
 
 <!-- one line per closed ticket — gist + link -->
 
-- (none yet)
+- [NG-R2: Authenticated-variable options](tickets/NG-R2-variable-authentication.md) — per-var table in `NOTE-PBL-VAR-AUTH.md`: TBA-viable but mostly unneeded; MOR can't be authenticated (use `MemoryOverwriteRequestControlLock`); **found latent bug — PBL writes MOR under wrong GUID (no-op decoy)**; graduated NG-T4 fix ticket.
 
 ## Not yet specified
 

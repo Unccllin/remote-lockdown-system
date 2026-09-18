@@ -1,7 +1,7 @@
 # NG-R2: Authenticated-variable options for PBL's shell-writable variables
 
 > **Label:** `wayfinder:research` (AFK)
-> **Status:** OPEN
+> **Status:** CLOSED (2026-09-18)
 > **Blocks:** variable-hardening fix ticket (fog — finding F2)
 > **Blocked by:** none
 
@@ -39,5 +39,28 @@ hardening → code changes needed) written as `docs/research/NOTE-PBL-VAR-AUTH.m
 
 ## Resolution
 
-The per-variable table becomes the fix ticket's implementation spec;
-graduates the variable-hardening ticket from fog.
+**RESOLVED 2026-09-18** — `docs/research/NOTE-PBL-VAR-AUTH.md`
+
+Per-variable verdicts:
+
+| Variable | Auth-feasible? | Verdict |
+|---|---|---|
+| `PblMarkerTest` | Yes (private TBA) | Diagnostic-only — keep unauthenticated, advisory; if a "PBL ran" canary is needed use a PCR-13 extend, not a var |
+| `PblBootmgrSvn` | Conditionally | Preferred: stop trusting the var — parse SVN from `bootmgfw.efi`'s Authenticode cert table + SVN floor in signed `policy.cose` |
+| `MemoryOverwriteRequestControl` | **No** | Spec-defined unauthenticated; TBA write breaks OS use. Correct hardening = spec's `MemoryOverwriteRequestControlLock` (0x01 = locked till reboot) |
+
+Key findings:
+- Counter-based `AUTHENTICATED_WRITE_ACCESS` is **dead** (deprecated + `EFI_UNSUPPORTED`); only TIME_BASED viable.
+- Private TBA vars need **no** PK/KEK/db enrollment — first self-signed write binds `certdb`.
+- Signing key can't live in PblApp.efi (ESP is shell-readable) — offline-signed AUTH2 payloads in signed `policy.cose` is the pattern; `Pkcs7Sign` is RSA-only in this edk2.
+- Deletion caveat: unsigned delete allowed when `UserPhysicalPresent()` — TBA is spoof-resistance, not guaranteed existence.
+
+**Critical side-finding (latent bug):** `Mor.c`/`PlatformState.c` use
+`EFI_GLOBAL_VARIABLE` for `MemoryOverwriteRequestControl`, but the spec
+GUID is `gEfiMemoryOverwriteControlDataGuid`
+(`e20939be-32d4-41be-a150-897f85d49829`). PBL's MOR write is a **no-op
+decoy** — the firmware's real TcgMor reads a different variable. Also the
+"bit 1 = lock" comment is wrong; lock is a separate variable.
+
+Graduated: **NG-T4 variable-hardening fix ticket** (MOR GUID bug is a
+prerequisite functional fix inside it).
