@@ -45,7 +45,11 @@ INDEX_FILE = MEMORY_DIR / "index.md"
 
 DECAY_HALF_LIFE_DAYS = 60  # recency_weight half-life
 DECAY_THRESHOLD = 0.1      # effective_score below this → archive
-MAX_INDEX_LINES = 200      # index must stay under this
+# Index size: line_count ≈ #active_memories + ~30 header/footer lines, so
+# the warning threshold must track the memory count, not a fixed cap. Warn
+# only when the index is much larger than the data it holds — i.e. there's
+# genuine bloat (runaway formatting), not just a large healthy memory base.
+INDEX_BLOAT_SLACK = 100    # warn if index exceeds (#active + this)
 RETRIEVE_DEFAULT_N = 8     # default number of memories to retrieve
 CONSOLIDATE_INTERVAL = 5   # consolidate every N sessions
 DECAY_INTERVAL = 10        # decay every N sessions
@@ -1147,8 +1151,10 @@ def stage_index(args):
     # Check line count
     content = "\n".join(lines)
     line_count = len(lines)
-    if line_count > MAX_INDEX_LINES:
-        print(f"[WARN] Index has {line_count} lines (max {MAX_INDEX_LINES}). Consider running decay.")
+    if line_count > len(entries) + INDEX_BLOAT_SLACK:
+        print(f"[WARN] Index has {line_count} lines but only {len(entries)} active "
+              f"memories ({line_count - len(entries)} overhead lines) — index format "
+              f"may be bloated. Consider compacting stage_index().")
 
     atomic_write(INDEX_FILE, content)
     print(f"[OK] Index rebuilt: {len(entries)} active, {len(superseded)} superseded, {len(decayed)} decayed")
