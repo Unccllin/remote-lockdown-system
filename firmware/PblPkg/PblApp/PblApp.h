@@ -241,6 +241,18 @@ typedef struct {
   // REQ-06: TPM firmware version (for floor check)
   UINT32    TpmFirmwareVersion;  // e.g., 0x00070002 = 7.2
 
+  // S1.1: TPM reset-counter boot-ID (TPM2_ReadClock → TPMS_TIME_INFO).
+  // BootId = resetCount: increments on every TPM reset (cold boot /
+  // TPM2_Startup CLEAR), unreadable/rollback-proof from the OS — the
+  // hardware anchor the server uses to correlate a PBL boot with an agent
+  // check-in. RestartCount covers TPM_SU_STATE resumes and is the S1.4
+  // resume-detection signal (a wake with no resetCount bump but a
+  // restartCount bump = S3 resume, PBL may not have run). ClockSafe
+  // reports TPMS_CLOCK_INFO.safe (clock reliability).
+  UINT32    BootId;          // TPMS_CLOCK_INFO.resetCount  (cold-boot ID)
+  UINT32    TpmRestartCount; // TPMS_CLOCK_INFO.restartCount (resume count)
+  BOOLEAN   TpmClockSafe;    // TPMS_CLOCK_INFO.safe (TPMI_YES_NO)
+
   // REQ-07: Boot config
   BOOLEAN   S3Enabled;
   BOOLEAN   KernelDmaProtection;
@@ -491,6 +503,14 @@ PblTpmGetRandom (
 EFI_STATUS
 PblTpmGetFirmwareVersion (
   OUT UINT32  *Version
+  );
+
+// TpmClient.c — S1.1: TPM restart-counter boot-ID (TPM2_ReadClock)
+EFI_STATUS
+PblTpmReadRestartCounter (
+  OUT UINT32   *RestartCount,
+  OUT UINT32   *ResetCount,
+  OUT BOOLEAN  *ClockSafe
   );
 
 // TpmClient.c — D-102: HMAC session with AES-256-CFB (C2 §3)
@@ -801,6 +821,7 @@ PblCborEncodeVerdictRequest (
   IN CONST UINT8  *Nonce,          // 32 bytes
   IN CONST UINT8  *PlatformStateDigest, // 32 bytes
   IN UINT64        PolicyVersion,
+  IN UINT32        BootId,         // S1.1 TPM restart counter
   OUT UINT8       **Output,
   OUT UINTN        *OutputSize
   );

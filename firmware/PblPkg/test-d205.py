@@ -337,7 +337,12 @@ class VerdictHandler(BaseHTTPRequestHandler):
             req = cbor2.loads(request_body)
             device_id = req.get(1, device_id)
             nonce = req.get(2, nonce)
+            # S1.1: boot_id (key 5) is the TPM restart/reset counter PBL
+            # read via TPM2_ReadClock — the hardware boot-ID anchor the
+            # server correlates with the next agent check-in.
+            boot_id = req.get(5)
             print(f"[SERVER] device_id: {device_id[:4].hex()}... nonce: {nonce[:4].hex()}...")
+            print(f"[SERVER] boot_id: {boot_id}")
         except Exception as e:
             print(f"[SERVER] Failed to parse request: {e}")
 

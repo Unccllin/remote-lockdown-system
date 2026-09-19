@@ -2,12 +2,13 @@
   CborEncode.c — CBOR encoder for the PBL verdict request body.
 
   Implements PblCborEncodeVerdictRequest() per C3 §3.2. The request body
-  is a CBOR map with 4 entries:
+  is a CBOR map with 5 entries:
 
     { 1: device_id (bstr 32),
       2: nonce (bstr 32),
       3: platform_state_digest (bstr 32),
-      4: policy_version (uint) }
+      4: policy_version (uint),
+      5: boot_id (uint) }  — S1.1 TPM restart counter, server correlation
 
   The encoded output is allocated via AllocatePool and must be freed by
   the caller via FreePool.
@@ -173,6 +174,7 @@ PblCborPutUint (
   @param[in]  Nonce                32-byte nonce from EFI_RNG_PROTOCOL.
   @param[in]  PlatformStateDigest  32-byte SHA-256 of platform state.
   @param[in]  PolicyVersion        Current policy version from C4.
+  @param[in]  BootId               TPM restart counter (S1.1 boot-ID).
   @param[out] Output               Pointer to allocated output buffer.
   @param[out] OutputSize           Size of the output buffer in bytes.
 
@@ -186,12 +188,13 @@ PblCborEncodeVerdictRequest (
   IN CONST UINT8  *Nonce,
   IN CONST UINT8  *PlatformStateDigest,
   IN UINT64        PolicyVersion,
+  IN UINT32        BootId,
   OUT UINT8       **Output,
   OUT UINTN        *OutputSize
   )
 {
   // Compute the encoded size:
-  //   Map header: 1 byte (map(4) = 0xA4)
+  //   Map header: 1 byte (map(5) = 0xA5)
   //   Key 1 (uint 1): 1 byte
   //   device_id bstr(32): 1 head byte + 32 data bytes = 33 bytes
   //   Key 2 (uint 2): 1 byte
@@ -200,10 +203,12 @@ PblCborEncodeVerdictRequest (
   //   platform_state_digest bstr(32): 33 bytes
   //   Key 4 (uint 4): 1 byte
   //   policy_version uint: 1-9 bytes (depends on value)
+  //   Key 5 (uint 5): 1 byte
+  //   boot_id uint: 1-5 bytes (restart counter is a UINT32)
   //
-  // Total fixed: 1 + 1 + 33 + 1 + 33 + 1 + 33 + 1 = 104 bytes
+  // Total fixed: 1 + 1 + 33 + 1 + 33 + 1 + 33 + 1 + 1 + 5 = 110 bytes
   // Plus policy_version encoding size (1-9 bytes).
-  // Worst case: 104 + 9 = 113 bytes. Allocate 128 for safety.
+  // Worst case: 110 + 9 = 119 bytes. Allocate 128 for safety.
 
   if (DeviceId == NULL || Nonce == NULL || PlatformStateDigest == NULL ||
       Output == NULL || OutputSize == NULL) {
@@ -224,12 +229,14 @@ PblCborEncodeVerdictRequest (
     VersionSize = 9;
   }
 
-  UINTN TotalSize = 1 +    // map(4)
+  UINTN TotalSize = 1 +    // map(5)
                     1 + 33 +  // key 1 + bstr(32)
                     1 + 33 +  // key 2 + bstr(32)
                     1 + 33 +  // key 3 + bstr(32)
                     1 +       // key 4
-                    VersionSize;
+                    VersionSize +
+                    1 +       // key 5
+                    5;        // boot_id (UINT32 worst case)
 
   UINT8 *Buf = AllocatePool (TotalSize);
   if (Buf == NULL) {
@@ -238,8 +245,8 @@ PblCborEncodeVerdictRequest (
 
   UINT8 *Cursor = Buf;
 
-  // Map header: map(4) = 0xA4
-  PblCborPutByte (&Cursor, (UINT8)(CBOR_MAJOR_MAP << 5 | 4));
+  // Map header: map(5) = 0xA5
+  PblCborPutByte (&Cursor, (UINT8)(CBOR_MAJOR_MAP << 5 | 5));
 
   // Key 1: device_id
   PblCborPutUint (&Cursor, 1);
@@ -256,6 +263,11 @@ PblCborEncodeVerdictRequest (
   // Key 4: policy_version
   PblCborPutUint (&Cursor, 4);
   PblCborPutUint (&Cursor, PolicyVersion);
+
+  // Key 5: boot_id (S1.1 TPM restart counter — readable by server so it
+  // can correlate this PBL boot with the agent's next check-in)
+  PblCborPutUint (&Cursor, 5);
+  PblCborPutUint (&Cursor, BootId);
 
   *Output = Buf;
   *OutputSize = (UINTN)(Cursor - Buf);

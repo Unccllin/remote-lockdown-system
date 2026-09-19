@@ -375,6 +375,11 @@ PblAppEntryPoint (
   Print (L"  [INFO] Boot path: flags=0x%02x shell-mask=0x%04x bootnext=0x%04x\n",
          PlatformState.BootPathFlags, PlatformState.ShellEntryMask,
          PlatformState.BootNextOption);
+  // S1.1: TPM reset-counter boot-ID — always printed so a zero BootId
+  // (no TPM / command failed) is as observable as a real counter value.
+  Print (L"  [INFO] Boot-ID: reset=%u restart=%u safe=%u\n",
+         PlatformState.BootId, PlatformState.TpmRestartCount,
+         PlatformState.TpmClockSafe);
 
   //
   // Step 2: Parse + verify policy blob (C4, REQ-11)
@@ -546,6 +551,7 @@ PblAppEntryPoint (
     Nonce,
     PlatformStateDigest,
     Policy.Meta.Version,
+    PlatformState.BootId,
     &RequestBody,
     &RequestBodySize
   );

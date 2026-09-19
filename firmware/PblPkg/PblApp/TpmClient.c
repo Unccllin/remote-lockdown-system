@@ -2116,3 +2116,91 @@ PblTpmGetFirmwareVersion (
 
   return EFI_SUCCESS;
 }
+
+/** S1.1: Read TPM reset/restart counters via TPM2_ReadClock.
+
+  Sends TPM2_ReadClock and parses TPMS_TIME_INFO. Per TPM 2.0 Part 1:
+    - resetCount   increments on every TPM reset (cold boot /
+                   TPM2_Startup CLEAR) — the hardware boot-ID anchor the
+                   server uses to correlate a PBL boot with an agent
+                   check-in; unreadable and rollback-proof from the OS.
+    - restartCount increments on every TPM restart from saved state
+                   (TPM_SU_STATE / S3 resume) — the resume signal.
+    - safe         reports the clock's reliability.
+
+  TPM2_ReadClock requires no authorization and no session.
+
+  Response layout (TPM 2.0 Part 3 §23.4):
+    header(10) + TPMS_TIME_INFO
+    TPMS_TIME_INFO   = time(8) + TPMS_CLOCK_INFO
+    TPMS_CLOCK_INFO  = clock(8) + resetCount(4) + restartCount(4) + safe(1)
+
+  @param[out]  ResetCount    TPM reset counter (cold-boot count = boot-ID).
+  @param[out]  RestartCount  TPM restart counter (S3-resume count).
+  @param[out]  ClockSafe     TRUE if the clock is reliable (safe=YES).
+
+  @retval EFI_SUCCESS          Counters read.
+  @retval EFI_INVALID_PARAMETER Null output pointer.
+  @retval EFI_NOT_FOUND        No TPM present.
+  @retval EFI_DEVICE_ERROR     TPM command failed or malformed response.
+**/
+EFI_STATUS
+PblTpmReadRestartCounter (
+  OUT UINT32   *ResetCount,
+  OUT UINT32   *RestartCount,
+  OUT BOOLEAN  *ClockSafe
+  )
+{
+  EFI_TCG2_PROTOCOL *Tcg2;
+  EFI_STATUS         Status;
+  UINT8              CmdBuf[64];
+  UINT8              RespBuf[128];
+  UINT32             RespSize;
+  UINT8             *Ptr;
+  UINT8             *RespPtr;
+
+  if (ResetCount == NULL || RestartCount == NULL || ClockSafe == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  *ResetCount   = 0;
+  *RestartCount = 0;
+  *ClockSafe    = FALSE;
+
+  Tcg2 = PblTcg2Locate ();
+  if (Tcg2 == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  // TPM2_ReadClock — no handles, no parameters, no session.
+  Ptr = PblTpmBeginCommand (CmdBuf, sizeof (CmdBuf), TPM_CC_ReadClock);
+  PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
+
+  Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
+                                RespBuf, sizeof (RespBuf), &RespSize);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  // Minimum response: header(10) + time(8) + clock(8) + resetCount(4) +
+  // restartCount(4) + safe(1) = 35 bytes.
+  if (RespSize < 10 + 8 + 8 + 4 + 4 + 1) {
+    return EFI_DEVICE_ERROR;
+  }
+
+  RespPtr = RespBuf;
+  // Response header: tag(2) + size(4) + responseCode(4)
+  if (SwapBytes32 (*(UINT32 *)(RespPtr + 6)) != 0) {
+    return EFI_DEVICE_ERROR;  // non-TPM_RC_SUCCESS
+  }
+  RespPtr += 10;
+
+  RespPtr += 8;  // time (UINT64) — unused
+  RespPtr += 8;  // clock (UINT64) — unused
+
+  *ResetCount   = SwapBytes32 (*(UINT32 *)RespPtr);  RespPtr += 4;
+  *RestartCount = SwapBytes32 (*(UINT32 *)RespPtr);  RespPtr += 4;
+  *ClockSafe    = (*RespPtr != 0);
+
+  return EFI_SUCCESS;
+}

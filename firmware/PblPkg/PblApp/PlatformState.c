@@ -1210,6 +1210,17 @@ PblCollectPlatformState (
   // REQ-06: TPM firmware version (for floor check in Decision.c step 10)
   PblTpmGetFirmwareVersion (&State->TpmFirmwareVersion);
 
+  // S1.1: TPM reset-counter boot-ID (keystone anchor). Reads
+  // TPM2_ReadClock → resetCount into State->BootId; included in the
+  // platform-state digest and emitted as boot_id in the verdict request
+  // so the server can correlate this PBL boot with the agent check-in.
+  // restartCount (TpmRestartCount) is retained separately — it is the
+  // S1.4 resume-detection signal. Failure leaves both zeroed — absence is
+  // itself a signal (no TPM or command failed → attestation downgrade),
+  // not a block.
+  PblTpmReadRestartCounter (&State->BootId, &State->TpmRestartCount,
+                            &State->TpmClockSafe);
+
   // RE-hardening #3: Enumerate loaded EFI images (bootkit detection).
   // A UEFI bootkit (e.g., LoJax, EFiGuard) that installs itself as a DXE
   // driver before PBL runs would be visible in the loaded image list.
