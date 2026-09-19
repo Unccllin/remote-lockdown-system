@@ -321,10 +321,19 @@ router.post('/verdict', async (req, res) => {
     const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || '');
     const reqMap = cbor.decodeFirst(body);
 
-    // Extract fields: {1: device_id, 2: nonce, 3: platform_state_digest, 4: policy_version}
+    // Extract fields: {1: device_id, 2: nonce, 3: platform_state_digest, 4: policy_version,
+    //                   5: boot_id}  — S1.1 TPM restart-counter boot-ID (resetCount).
     const deviceId = reqMap.get(1) || reqMap.get(cbor.decodeFirst(Buffer.from([0x01])));
     const nonce = reqMap.get(2);
     const policyVersion = reqMap.get(4) || 0;
+    // S1.2: boot_id is the TPM reset counter — increments on every cold boot
+    // (TPM2_Startup CLEAR), unreadable/rollback-proof from the OS. It is the
+    // cross-layer anchor S1.2 uses to correlate an agent check-in with a real
+    // PBL boot. Optional: older firmware has no key 5.
+    const bootIdRaw = reqMap.get(5);
+    const bootId = (typeof bootIdRaw === 'number' && Number.isInteger(bootIdRaw) && bootIdRaw >= 0)
+      ? bootIdRaw
+      : null;
 
     if (!deviceId || deviceId.length !== 32) {
       return res.status(400).json({ error: 'device_id must be 32 bytes' });
@@ -336,6 +345,20 @@ router.post('/verdict', async (req, res) => {
     const deviceIdHex = bytesToHex(deviceId);
     const deviceData = await env.LOCKDOWN_KV.get(`pbl_devices:${deviceIdHex}`, 'text');
     const device = deviceData ? JSON.parse(deviceData) : null;
+
+    // S1.2: Record the PBL boot event. A verdict request IS the firmware's
+    // boot report — every verdict fetch means PBL ran this boot. Persist the
+    // boot counter + wall-clock time so the agent /checkin handler can tell
+    // "agent alive + fresh PBL boot" (normal) from "agent alive + stale/absent
+    // PBL boot" (possible bypass or S3 resume). Best-effort: never fail the
+    // verdict on a KV write error.
+    if (device) {
+      try {
+        device.last_boot_id = bootId;
+        device.last_boot_at = new Date().toISOString();
+        await env.LOCKDOWN_KV.put(`pbl_devices:${deviceIdHex}`, JSON.stringify(device));
+      } catch (e) { /* boot bookkeeping is non-fatal */ }
+    }
 
     const keys = await getSigningKeys(env);
     const now = Math.floor(Date.now() / 1000);

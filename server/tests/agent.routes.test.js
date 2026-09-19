@@ -8,6 +8,7 @@ jest.mock('../src/db/pool', () => mockPool);
 // We need to require the router AFTER the mock is set up
 const agentRoutes = require('../src/routes/agent');
 const { generateApiKey, hashApiKey } = require('../src/db/apiKey');
+const { setSharedKvStore } = require('../src/pbl/kvStore');
 
 const AGENT_KEY = 'test-agent-key-that-is-long-enough-24';
 
@@ -47,6 +48,7 @@ function provisionDevice(overrides = {}) {
 
 beforeEach(() => {
   mockPool.query.reset();
+  setSharedKvStore(new Map());  // S1.2: reset shared PBL KV between tests
 });
 
 // ---------------------------------------------------------------------------
@@ -128,6 +130,85 @@ describe('POST /api/agent/checkin', () => {
     expect(res.status).toBe(200);
     expect(typeof res.body.server_time).toBe('number');
     expect(Math.abs(Date.now() / 1000 - res.body.server_time)).toBeLessThan(10);
+  });
+
+  // S1.2: cross-layer boot-ID correlation — pbl_boot in the check-in response.
+  test('S1.2: pbl_boot is null when device has no PBL identity', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.pbl_boot).toBeNull();
+  });
+
+  test('S1.2: pbl_boot.boot_fresh=true for a recent PBL boot', async () => {
+    const pblId = 'ab'.repeat(32);
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active', pbl_device_id: pblId };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    setSharedKvStore(new Map([
+      [`pbl_devices:${pblId}`, JSON.stringify({
+        device_id: pblId, status: 'active',
+        last_boot_id: 7, last_boot_at: new Date().toISOString(),
+      })],
+    ]));
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.pbl_boot).toBeTruthy();
+    expect(res.body.pbl_boot.enrolled).toBe(true);
+    expect(res.body.pbl_boot.last_boot_id).toBe(7);
+    expect(res.body.pbl_boot.boot_fresh).toBe(true);
+  });
+
+  test('S1.2: pbl_boot.boot_fresh=false for a stale PBL boot (absence alarm)', async () => {
+    const pblId = 'ab'.repeat(32);
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active', pbl_device_id: pblId };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    // Boot recorded 2 hours ago — outside the 900s freshness window.
+    const stale = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+    setSharedKvStore(new Map([
+      [`pbl_devices:${pblId}`, JSON.stringify({
+        device_id: pblId, status: 'active',
+        last_boot_id: 7, last_boot_at: stale,
+      })],
+    ]));
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.pbl_boot.boot_fresh).toBe(false);
+    expect(res.body.pbl_boot.last_boot_id).toBe(7);
+  });
+
+  test('S1.2: pbl_boot.boot_fresh=false when PBL linked but never booted', async () => {
+    const pblId = 'ab'.repeat(32);
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active', pbl_device_id: pblId };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    // PBL device enrolled but no boot ever recorded (no last_boot_at).
+    setSharedKvStore(new Map([
+      [`pbl_devices:${pblId}`, JSON.stringify({ device_id: pblId, status: 'active' })],
+    ]));
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.pbl_boot.enrolled).toBe(true);
+    expect(res.body.pbl_boot.boot_fresh).toBe(false);
   });
 
   test('returns pending command for device', async () => {

@@ -8,6 +8,7 @@ const { hmacVerify } = require('../middleware/hmacAuth');
 const { getAgentBinariesDir } = require('../config/paths');
 const { sendNotification } = require('../notifications/notify');
 const { getDeviceByApiKeyHash, getDeviceByHostname, getDeviceByHardwareIdentity } = require('../db/deviceQueries');
+const { createSharedEnv } = require('../pbl/kvStore');
 const logger = require('../logger');
 
 const router = express.Router();
@@ -98,6 +99,59 @@ async function updateDeviceCheckin(deviceId, hostname, macAddress, hardwareUuid)
      WHERE id = $4`,
     [hostname, macAddress || null, hardwareUuid || null, deviceId]
   );
+}
+
+/**
+ * S1.2: Correlate an agent check-in with the freshest PBL boot recorded for
+ * this device's linked PBL identity.
+ *
+ * The firmware records last_boot_id (TPM reset counter) + last_boot_at into
+ * pbl_devices:{id} on every /v1/verdict fetch — i.e., every cold boot where
+ * PBL ran. This reads that record and classifies the boot's freshness
+ * relative to now.
+ *
+ * Returns null when the device has no PBL identity (pbl_device_id unset) —
+ * correlation is not applicable, not an alarm. Otherwise:
+ *   { enrolled, last_boot_id, last_boot_at, boot_fresh }
+ * boot_fresh=false is the absence-alarm signal: agent is alive and checking
+ * in, but no recent PBL boot — either a bypass or an S3 resume (which S1.4
+ * disambiguates via restartCount). Flag only; never blocks the check-in.
+ *
+ * Freshness window: PBL_BOOT_FRESH_SECONDS env (default 900s = 15min). A cold
+ * boot → PBL verdict → first agent check-in should land well inside this on
+ * any healthy device. Best-effort — returns a degrade note on KV error.
+ */
+async function correlatePblBoot(device) {
+  if (!device || !device.pbl_device_id) return null;
+
+  const freshSec = parseInt(process.env.PBL_BOOT_FRESH_SECONDS || '900', 10);
+  try {
+    const env = createSharedEnv();
+    const data = await env.LOCKDOWN_KV.get(`pbl_devices:${device.pbl_device_id}`, 'text');
+    if (!data) {
+      // Linked to a PBL id that has no KV record — treat as "no boot seen".
+      return { enrolled: false, last_boot_id: null, last_boot_at: null, boot_fresh: false };
+    }
+    const pbl = JSON.parse(data);
+    const lastBootAt = pbl.last_boot_at || null;
+    const lastBootId = (pbl.last_boot_id === undefined) ? null : pbl.last_boot_id;
+
+    let bootFresh = false;
+    if (lastBootAt) {
+      const ageSec = (Date.now() - new Date(lastBootAt).getTime()) / 1000;
+      bootFresh = ageSec <= freshSec;
+    }
+
+    return {
+      enrolled: true,
+      last_boot_id: lastBootId,
+      last_boot_at: lastBootAt,
+      boot_fresh: bootFresh,
+    };
+  } catch (err) {
+    // KV unavailable / parse error — degrade, don't fail the check-in.
+    return { enrolled: true, last_boot_id: null, last_boot_at: null, boot_fresh: false, note: 'pbl_lookup_failed' };
+  }
 }
 
 /**
@@ -222,10 +276,24 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   // default (poll_interval from config file or env var).
   const serverPollInterval = calculatePollInterval(device.status);
 
+  // S1.2: Cross-layer absence correlation. If this agent device is linked to
+  // a PBL identity (pbl_device_id set at enroll), read the PBL device's
+  // last_boot_id / last_boot_at — recorded by /v1/verdict every time the
+  // firmware fetched a verdict (i.e., every cold boot PBL ran). Compare
+  // last_boot_at to this check-in: a running agent with a stale or absent
+  // PBL boot means either (a) PBL was bypassed this boot, or (b) an S3
+  // resume (no TPM reset → no new boot_id — disambiguated by S1.4's
+  // restartCount). We flag, not block, per the DEGRADED-alarm ruling.
+  const pblBoot = await correlatePblBoot(device);
+
   res.json({
     device_id: device.id,
     status: device.status,
     poll_interval: serverPollInterval,
+    // S1.2: boot-ID correlation result. null = device has no PBL identity.
+    // Otherwise { enrolled: true, last_boot_id, last_boot_at, boot_fresh }
+    // where boot_fresh=false is the absence-alarm signal (bypass or resume).
+    pbl_boot: pblBoot,
     // B-005: server-authoritative timestamp — the agent anchors its deadman
     // last_seen to this, so a local clock rollback becomes detectable.
     server_time: Math.floor(Date.now() / 1000),

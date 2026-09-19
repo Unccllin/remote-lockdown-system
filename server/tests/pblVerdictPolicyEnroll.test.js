@@ -41,13 +41,19 @@ function createApp(env) {
 }
 
 /** Build a CBOR verdict request body. */
-function buildVerdictRequest(deviceId, nonce, policyVersion = 1) {
-  return cbor.encodeMap([
+function buildVerdictRequest(deviceId, nonce, policyVersion = 1, bootId = null) {
+  const entries = [
     [cbor.encodeUint(1), cbor.encodeBstr(deviceId)],
     [cbor.encodeUint(2), cbor.encodeBstr(nonce)],
     [cbor.encodeUint(3), cbor.encodeBstr(Buffer.alloc(32))],
     [cbor.encodeUint(4), cbor.encodeUint(policyVersion)],
-  ]);
+  ];
+  // S1.1: boot_id (key 5) — TPM reset counter, present only when firmware
+  // emitted it. null means older firmware with no key 5.
+  if (bootId !== null) {
+    entries.push([cbor.encodeUint(5), cbor.encodeUint(bootId)]);
+  }
+  return cbor.encodeMap(entries);
 }
 
 /** Build a CBOR enrollment request body. */
@@ -141,6 +147,91 @@ describe('D-200: POST /v1/verdict', () => {
       .send(Buffer.from([0xff, 0xff, 0xff]));
 
     expect(resp.status).toBe(400);
+  });
+
+  // S1.2: boot-ID recording — the verdict fetch IS the firmware boot report.
+  it('S1.2: records boot_id and last_boot_at on the PBL device', async () => {
+    const env = createEnv();
+    const deviceIdHex = 'ab'.repeat(32);
+    await env.LOCKDOWN_KV.put(`pbl_devices:${deviceIdHex}`, JSON.stringify({
+      device_id: deviceIdHex,
+      status: 'active',
+      enrolled_at: '2026-01-01T00:00:00Z',
+    }));
+
+    const app = createApp(env);
+    const body = buildVerdictRequest(Buffer.alloc(32, 0xab), Buffer.alloc(32, 0xcd), 1, 7);
+
+    const resp = await request(app)
+      .post('/v1/verdict')
+      .set('Content-Type', 'application/cbor')
+      .send(body);
+
+    expect(resp.status).toBe(200);
+    const stored = JSON.parse(await env.LOCKDOWN_KV.get(`pbl_devices:${deviceIdHex}`, 'text'));
+    expect(stored.last_boot_id).toBe(7);
+    expect(stored.last_boot_at).toBeTruthy();
+    // last_boot_at should be ~now (within the last minute)
+    expect(Date.now() - new Date(stored.last_boot_at).getTime()).toBeLessThan(60000);
+  });
+
+  it('S1.2: a second verdict bumps the recorded boot_id', async () => {
+    const env = createEnv();
+    const deviceIdHex = 'ab'.repeat(32);
+    await env.LOCKDOWN_KV.put(`pbl_devices:${deviceIdHex}`, JSON.stringify({
+      device_id: deviceIdHex,
+      status: 'active',
+      last_boot_id: 7,
+      last_boot_at: '2026-01-01T00:00:00Z',
+    }));
+
+    const app = createApp(env);
+    const body = buildVerdictRequest(Buffer.alloc(32, 0xab), Buffer.alloc(32, 0xcd), 1, 8);
+    await request(app).post('/v1/verdict').set('Content-Type', 'application/cbor').send(body);
+
+    const stored = JSON.parse(await env.LOCKDOWN_KV.get(`pbl_devices:${deviceIdHex}`, 'text'));
+    expect(stored.last_boot_id).toBe(8);
+  });
+
+  it('S1.2: older firmware (no key 5) records null boot_id but still timestamps', async () => {
+    const env = createEnv();
+    const deviceIdHex = 'ab'.repeat(32);
+    await env.LOCKDOWN_KV.put(`pbl_devices:${deviceIdHex}`, JSON.stringify({
+      device_id: deviceIdHex,
+      status: 'active',
+    }));
+
+    const app = createApp(env);
+    const body = buildVerdictRequest(Buffer.alloc(32, 0xab), Buffer.alloc(32, 0xcd), 1, null);
+    const resp = await request(app).post('/v1/verdict').set('Content-Type', 'application/cbor').send(body);
+
+    expect(resp.status).toBe(200);
+    const stored = JSON.parse(await env.LOCKDOWN_KV.get(`pbl_devices:${deviceIdHex}`, 'text'));
+    expect(stored.last_boot_id).toBeNull();
+    expect(stored.last_boot_at).toBeTruthy();
+  });
+
+  it('S1.2: non-integer boot_id is stored as null (defensive)', async () => {
+    const env = createEnv();
+    const deviceIdHex = 'ab'.repeat(32);
+    await env.LOCKDOWN_KV.put(`pbl_devices:${deviceIdHex}`, JSON.stringify({
+      device_id: deviceIdHex, status: 'active',
+    }));
+
+    const app = createApp(env);
+    // Craft a request with a non-integer value at key 5 (float/string).
+    const body = cbor.encodeMap([
+      [cbor.encodeUint(1), cbor.encodeBstr(Buffer.alloc(32, 0xab))],
+      [cbor.encodeUint(2), cbor.encodeBstr(Buffer.alloc(32, 0xcd))],
+      [cbor.encodeUint(3), cbor.encodeBstr(Buffer.alloc(32))],
+      [cbor.encodeUint(4), cbor.encodeUint(1)],
+      [cbor.encodeUint(5), cbor.encodeBstr(Buffer.from('notanint'))],
+    ]);
+    const resp = await request(app).post('/v1/verdict').set('Content-Type', 'application/cbor').send(body);
+
+    expect(resp.status).toBe(200);
+    const stored = JSON.parse(await env.LOCKDOWN_KV.get(`pbl_devices:${deviceIdHex}`, 'text'));
+    expect(stored.last_boot_id).toBeNull();
   });
 });
 
