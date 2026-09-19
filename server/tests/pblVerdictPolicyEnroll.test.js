@@ -41,7 +41,7 @@ function createApp(env) {
 }
 
 /** Build a CBOR verdict request body. */
-function buildVerdictRequest(deviceId, nonce, policyVersion = 1, bootId = null) {
+function buildVerdictRequest(deviceId, nonce, policyVersion = 1, bootId = null, s13 = {}) {
   const entries = [
     [cbor.encodeUint(1), cbor.encodeBstr(deviceId)],
     [cbor.encodeUint(2), cbor.encodeBstr(nonce)],
@@ -52,6 +52,16 @@ function buildVerdictRequest(deviceId, nonce, policyVersion = 1, bootId = null) 
   // emitted it. null means older firmware with no key 5.
   if (bootId !== null) {
     entries.push([cbor.encodeUint(5), cbor.encodeUint(bootId)]);
+  }
+  // S1.3: attestation enrichment keys 6/7/8 (all optional).
+  if (s13.fveProtectionMask !== undefined) {
+    entries.push([cbor.encodeUint(6), cbor.encodeUint(s13.fveProtectionMask)]);
+  }
+  if (s13.loadedImageDigest !== undefined) {
+    entries.push([cbor.encodeUint(7), cbor.encodeBstr(s13.loadedImageDigest)]);
+  }
+  if (s13.bootPathFlags !== undefined) {
+    entries.push([cbor.encodeUint(8), cbor.encodeUint(s13.bootPathFlags)]);
   }
   return cbor.encodeMap(entries);
 }
@@ -232,6 +242,68 @@ describe('D-200: POST /v1/verdict', () => {
     expect(resp.status).toBe(200);
     const stored = JSON.parse(await env.LOCKDOWN_KV.get(`pbl_devices:${deviceIdHex}`, 'text'));
     expect(stored.last_boot_id).toBeNull();
+  });
+
+  // S1.3: attestation enrichment — keys 6/7/8 stored on the PBL device.
+  it('S1.3: stores fve_protection_mask, loaded_image_digest, boot_path_flags', async () => {
+    const env = createEnv();
+    const deviceIdHex = 'ab'.repeat(32);
+    await env.LOCKDOWN_KV.put(`pbl_devices:${deviceIdHex}`, JSON.stringify({
+      device_id: deviceIdHex, status: 'active',
+    }));
+
+    const app = createApp(env);
+    const digest = Buffer.alloc(32, 0x55);
+    const body = buildVerdictRequest(Buffer.alloc(32, 0xab), Buffer.alloc(32, 0xcd), 1, 7, {
+      fveProtectionMask: 0x0006,
+      loadedImageDigest: digest,
+      bootPathFlags: 0x0a,
+    });
+    const resp = await request(app).post('/v1/verdict').set('Content-Type', 'application/cbor').send(body);
+
+    expect(resp.status).toBe(200);
+    const stored = JSON.parse(await env.LOCKDOWN_KV.get(`pbl_devices:${deviceIdHex}`, 'text'));
+    expect(stored.fve_protection_mask).toBe(0x0006);
+    expect(stored.loaded_image_digest).toBe(digest.toString('hex'));
+    expect(stored.boot_path_flags).toBe(0x0a);
+    expect(stored.last_boot_id).toBe(7);
+  });
+
+  it('S1.3: omits enrichment fields when keys absent (old firmware)', async () => {
+    const env = createEnv();
+    const deviceIdHex = 'ab'.repeat(32);
+    await env.LOCKDOWN_KV.put(`pbl_devices:${deviceIdHex}`, JSON.stringify({
+      device_id: deviceIdHex, status: 'active',
+    }));
+
+    const app = createApp(env);
+    const body = buildVerdictRequest(Buffer.alloc(32, 0xab), Buffer.alloc(32, 0xcd), 1, 7);
+    await request(app).post('/v1/verdict').set('Content-Type', 'application/cbor').send(body);
+
+    const stored = JSON.parse(await env.LOCKDOWN_KV.get(`pbl_devices:${deviceIdHex}`, 'text'));
+    expect(stored.fve_protection_mask).toBeUndefined();
+    expect(stored.loaded_image_digest).toBeUndefined();
+    expect(stored.boot_path_flags).toBeUndefined();
+  });
+
+  it('S1.3: malformed loaded_image_digest (wrong length) is ignored', async () => {
+    const env = createEnv();
+    const deviceIdHex = 'ab'.repeat(32);
+    await env.LOCKDOWN_KV.put(`pbl_devices:${deviceIdHex}`, JSON.stringify({
+      device_id: deviceIdHex, status: 'active',
+    }));
+
+    const app = createApp(env);
+    const body = buildVerdictRequest(Buffer.alloc(32, 0xab), Buffer.alloc(32, 0xcd), 1, 7, {
+      loadedImageDigest: Buffer.alloc(16),  // wrong length — must not store
+      bootPathFlags: 0x02,
+    });
+    const resp = await request(app).post('/v1/verdict').set('Content-Type', 'application/cbor').send(body);
+
+    expect(resp.status).toBe(200);
+    const stored = JSON.parse(await env.LOCKDOWN_KV.get(`pbl_devices:${deviceIdHex}`, 'text'));
+    expect(stored.loaded_image_digest).toBeUndefined();
+    expect(stored.boot_path_flags).toBe(0x02);  // the valid field still stored
   });
 });
 

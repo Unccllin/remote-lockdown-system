@@ -2,13 +2,20 @@
   CborEncode.c — CBOR encoder for the PBL verdict request body.
 
   Implements PblCborEncodeVerdictRequest() per C3 §3.2. The request body
-  is a CBOR map with 5 entries:
+  is a CBOR map with 8 entries:
 
     { 1: device_id (bstr 32),
       2: nonce (bstr 32),
       3: platform_state_digest (bstr 32),
       4: policy_version (uint),
-      5: boot_id (uint) }  — S1.1 TPM restart counter, server correlation
+      5: boot_id (uint),            — S1.1 TPM reset counter
+      6: fve_protection_mask (uint), — S1.3 BitLocker VMK protection types
+      7: loaded_image_digest (bstr), — S1.3 aggregate hash of loaded images
+      8: boot_path_flags (uint) }    — S1.3 PBL_BPF_* boot-path class bitmask
+
+  Keys 6-8 are the S1.3 attestation enrichment: they lift three fields out
+  of the opaque platform_state_digest so the server can classify and alarm
+  on them individually without recomputing the digest.
 
   The encoded output is allocated via AllocatePool and must be freed by
   the caller via FreePool.
@@ -189,6 +196,9 @@ PblCborEncodeVerdictRequest (
   IN CONST UINT8  *PlatformStateDigest,
   IN UINT64        PolicyVersion,
   IN UINT32        BootId,
+  IN UINT16        FveProtectionMask,
+  IN CONST UINT8  *LoadedImageDigest,
+  IN UINT8         BootPathFlags,
   OUT UINT8       **Output,
   OUT UINTN        *OutputSize
   )
@@ -204,14 +214,20 @@ PblCborEncodeVerdictRequest (
   //   Key 4 (uint 4): 1 byte
   //   policy_version uint: 1-9 bytes (depends on value)
   //   Key 5 (uint 5): 1 byte
-  //   boot_id uint: 1-5 bytes (restart counter is a UINT32)
+  //   boot_id uint: 1-5 bytes (reset counter is a UINT32)
+  //   Key 6 (uint 6): 1 byte
+  //   fve_protection_mask uint: 1-3 bytes (UINT16)
+  //   Key 7 (uint 7): 1 byte
+  //   loaded_image_digest bstr(32): 33 bytes
+  //   Key 8 (uint 8): 1 byte
+  //   boot_path_flags uint: 1-2 bytes (UINT8)
   //
-  // Total fixed: 1 + 1 + 33 + 1 + 33 + 1 + 33 + 1 + 1 + 5 = 110 bytes
+  // Total fixed: 1 + 1+33 + 1+33 + 1+33 + 1 + 1+5 + 1+3 + 1+33 + 1+2 = 148
   // Plus policy_version encoding size (1-9 bytes).
-  // Worst case: 110 + 9 = 119 bytes. Allocate 128 for safety.
+  // Worst case: 148 + 9 = 157 bytes. Allocate 192 for safety.
 
   if (DeviceId == NULL || Nonce == NULL || PlatformStateDigest == NULL ||
-      Output == NULL || OutputSize == NULL) {
+      LoadedImageDigest == NULL || Output == NULL || OutputSize == NULL) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -229,14 +245,19 @@ PblCborEncodeVerdictRequest (
     VersionSize = 9;
   }
 
-  UINTN TotalSize = 1 +    // map(5)
+  UINTN TotalSize = 1 +    // map(8)
                     1 + 33 +  // key 1 + bstr(32)
                     1 + 33 +  // key 2 + bstr(32)
                     1 + 33 +  // key 3 + bstr(32)
                     1 +       // key 4
                     VersionSize +
                     1 +       // key 5
-                    5;        // boot_id (UINT32 worst case)
+                    5 +       // boot_id (UINT32 worst case)
+                    1 +       // key 6
+                    3 +       // fve_protection_mask (UINT16 worst case)
+                    1 + 33 +  // key 7 + bstr(32)
+                    1 +       // key 8
+                    2;        // boot_path_flags (UINT8 worst case)
 
   UINT8 *Buf = AllocatePool (TotalSize);
   if (Buf == NULL) {
@@ -245,8 +266,8 @@ PblCborEncodeVerdictRequest (
 
   UINT8 *Cursor = Buf;
 
-  // Map header: map(5) = 0xA5
-  PblCborPutByte (&Cursor, (UINT8)(CBOR_MAJOR_MAP << 5 | 5));
+  // Map header: map(8) = 0xA8
+  PblCborPutByte (&Cursor, (UINT8)(CBOR_MAJOR_MAP << 5 | 8));
 
   // Key 1: device_id
   PblCborPutUint (&Cursor, 1);
@@ -264,10 +285,21 @@ PblCborEncodeVerdictRequest (
   PblCborPutUint (&Cursor, 4);
   PblCborPutUint (&Cursor, PolicyVersion);
 
-  // Key 5: boot_id (S1.1 TPM restart counter — readable by server so it
-  // can correlate this PBL boot with the agent's next check-in)
+  // Key 5: boot_id (S1.1 TPM reset counter — the cold-boot anchor)
   PblCborPutUint (&Cursor, 5);
   PblCborPutUint (&Cursor, BootId);
+
+  // Key 6: fve_protection_mask (S1.3 — BitLocker VMK protection bitmask)
+  PblCborPutUint (&Cursor, 6);
+  PblCborPutUint (&Cursor, FveProtectionMask);
+
+  // Key 7: loaded_image_digest (S1.3 — aggregate hash of loaded EFI images)
+  PblCborPutUint (&Cursor, 7);
+  PblCborPutBstr (&Cursor, LoadedImageDigest, 32);
+
+  // Key 8: boot_path_flags (S1.3 — PBL_BPF_* boot-path class bitmask)
+  PblCborPutUint (&Cursor, 8);
+  PblCborPutUint (&Cursor, BootPathFlags);
 
   *Output = Buf;
   *OutputSize = (UINTN)(Cursor - Buf);

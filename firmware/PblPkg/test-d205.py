@@ -341,8 +341,16 @@ class VerdictHandler(BaseHTTPRequestHandler):
             # read via TPM2_ReadClock — the hardware boot-ID anchor the
             # server correlates with the next agent check-in.
             boot_id = req.get(5)
+            # S1.3: attestation enrichment — discrete fields lifted out of
+            # the opaque platform_state_digest so the server can classify
+            # them individually.
+            fve_mask = req.get(6)          # BitLocker VMK protection bitmask
+            loaded_digest = req.get(7)     # aggregate loaded-image hash (bstr32)
+            boot_path_flags = req.get(8)   # PBL_BPF_* boot-path class bitmask
             print(f"[SERVER] device_id: {device_id[:4].hex()}... nonce: {nonce[:4].hex()}...")
             print(f"[SERVER] boot_id: {boot_id}")
+            lid = loaded_digest.hex()[:8] if isinstance(loaded_digest, (bytes, bytearray)) else loaded_digest
+            print(f"[SERVER] fve_mask={fve_mask} loaded_digest={lid} boot_path_flags={boot_path_flags}")
         except Exception as e:
             print(f"[SERVER] Failed to parse request: {e}")
 

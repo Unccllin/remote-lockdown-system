@@ -335,6 +335,22 @@ router.post('/verdict', async (req, res) => {
       ? bootIdRaw
       : null;
 
+    // S1.3 attestation enrichment — three discrete fields lifted out of the
+    // opaque platform_state_digest so the server can classify/alarm on them
+    // without recomputing the digest. All optional (older firmware omits).
+    //   6: fve_protection_mask (uint)  — BitLocker VMK protection types
+    //   7: loaded_image_digest (bstr)  — aggregate hash of loaded EFI images
+    //   8: boot_path_flags (uint)      — PBL_BPF_* boot-path class bitmask
+    const fveMaskRaw = reqMap.get(6);
+    const fveProtectionMask = (typeof fveMaskRaw === 'number' && Number.isInteger(fveMaskRaw) && fveMaskRaw >= 0)
+      ? fveMaskRaw : null;
+    const loadedDigestRaw = reqMap.get(7);
+    const loadedImageDigest = (Buffer.isBuffer(loadedDigestRaw) && loadedDigestRaw.length === 32)
+      ? bytesToHex(loadedDigestRaw) : null;
+    const bootPathRaw = reqMap.get(8);
+    const bootPathFlags = (typeof bootPathRaw === 'number' && Number.isInteger(bootPathRaw) && bootPathRaw >= 0)
+      ? bootPathRaw : null;
+
     if (!deviceId || deviceId.length !== 32) {
       return res.status(400).json({ error: 'device_id must be 32 bytes' });
     }
@@ -356,6 +372,11 @@ router.post('/verdict', async (req, res) => {
       try {
         device.last_boot_id = bootId;
         device.last_boot_at = new Date().toISOString();
+        // S1.3: persist the enriched attestation fields alongside the boot
+        // record so the dashboard/audit can report them per-boot.
+        if (fveProtectionMask !== null) device.fve_protection_mask = fveProtectionMask;
+        if (loadedImageDigest !== null) device.loaded_image_digest = loadedImageDigest;
+        if (bootPathFlags !== null) device.boot_path_flags = bootPathFlags;
         await env.LOCKDOWN_KV.put(`pbl_devices:${deviceIdHex}`, JSON.stringify(device));
       } catch (e) { /* boot bookkeeping is non-fatal */ }
     }

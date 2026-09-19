@@ -821,7 +821,10 @@ PblCborEncodeVerdictRequest (
   IN CONST UINT8  *Nonce,          // 32 bytes
   IN CONST UINT8  *PlatformStateDigest, // 32 bytes
   IN UINT64        PolicyVersion,
-  IN UINT32        BootId,         // S1.1 TPM restart counter
+  IN UINT32        BootId,         // S1.1 TPM reset counter
+  IN UINT16        FveProtectionMask,   // S1.3 BitLocker VMK mask
+  IN CONST UINT8  *LoadedImageDigest,   // S1.3 loaded-image digest (32)
+  IN UINT8         BootPathFlags,       // S1.3 PBL_BPF_* bitmask
   OUT UINT8       **Output,
   OUT UINTN        *OutputSize
   );

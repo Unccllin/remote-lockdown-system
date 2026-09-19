@@ -552,6 +552,9 @@ PblAppEntryPoint (
     PlatformStateDigest,
     Policy.Meta.Version,
     PlatformState.BootId,
+    PlatformState.FveProtectionMask,
+    PlatformState.LoadedImageDigest,
+    PlatformState.BootPathFlags,
     &RequestBody,
     &RequestBodySize
   );
