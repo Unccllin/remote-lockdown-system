@@ -112,16 +112,25 @@ async function updateDeviceCheckin(deviceId, hostname, macAddress, hardwareUuid)
  *
  * Returns null when the device has no PBL identity (pbl_device_id unset) —
  * correlation is not applicable, not an alarm. Otherwise:
- *   { enrolled, last_boot_id, last_boot_at, boot_fresh }
+ *   { enrolled, last_boot_id, last_boot_at, boot_fresh, boot_class }
  * boot_fresh=false is the absence-alarm signal: agent is alive and checking
- * in, but no recent PBL boot — either a bypass or an S3 resume (which S1.4
- * disambiguates via restartCount). Flag only; never blocks the check-in.
+ * in, but no recent PBL boot — either a bypass or an S3 resume.
+ *
+ * S1.4 disambiguation via the agent-reported TPM restartCount
+ * (tpmRestartCount). PBL never runs on S3 resume (finding F6), so on a
+ * resume restartCount bumps while resetCount (boot_id) does not:
+ *   restartCount > last_boot_id → a wake happened without a cold boot →
+ *     boot_class = 's3_resume' (downgrade the alarm — expected behaviour)
+ *   restartCount <= last_boot_id → no wake since last cold boot; a stale
+ *     last_boot_at is a genuine bypass → boot_class = 'pbl_bypass'
+ *   tpmRestartCount absent/unknown → can't disambiguate → 'unknown'
+ * boot_class is only meaningful when boot_fresh === false.
  *
  * Freshness window: PBL_BOOT_FRESH_SECONDS env (default 900s = 15min). A cold
  * boot → PBL verdict → first agent check-in should land well inside this on
  * any healthy device. Best-effort — returns a degrade note on KV error.
  */
-async function correlatePblBoot(device) {
+async function correlatePblBoot(device, tpmRestartCount) {
   if (!device || !device.pbl_device_id) return null;
 
   const freshSec = parseInt(process.env.PBL_BOOT_FRESH_SECONDS || '900', 10);
@@ -130,7 +139,7 @@ async function correlatePblBoot(device) {
     const data = await env.LOCKDOWN_KV.get(`pbl_devices:${device.pbl_device_id}`, 'text');
     if (!data) {
       // Linked to a PBL id that has no KV record — treat as "no boot seen".
-      return { enrolled: false, last_boot_id: null, last_boot_at: null, boot_fresh: false };
+      return { enrolled: false, last_boot_id: null, last_boot_at: null, boot_fresh: false, boot_class: 'unknown' };
     }
     const pbl = JSON.parse(data);
     const lastBootAt = pbl.last_boot_at || null;
@@ -142,15 +151,31 @@ async function correlatePblBoot(device) {
       bootFresh = ageSec <= freshSec;
     }
 
+    // S1.4: classify a stale/absent boot as resume vs bypass. Only worth
+    // classifying when the boot is stale — a fresh boot is unambiguous.
+    let bootClass = null;
+    if (!bootFresh) {
+      if (tpmRestartCount === null || tpmRestartCount === undefined) {
+        bootClass = 'unknown';  // agent didn't/can't report restartCount
+      } else if (lastBootId === null) {
+        bootClass = 'unknown';  // no PBL boot baseline to compare against
+      } else if (tpmRestartCount > lastBootId) {
+        bootClass = 's3_resume';   // wake without a cold boot
+      } else {
+        bootClass = 'pbl_bypass';  // check-in but PBL never ran this boot
+      }
+    }
+
     return {
       enrolled: true,
       last_boot_id: lastBootId,
       last_boot_at: lastBootAt,
       boot_fresh: bootFresh,
+      boot_class: bootClass,
     };
   } catch (err) {
     // KV unavailable / parse error — degrade, don't fail the check-in.
-    return { enrolled: true, last_boot_id: null, last_boot_at: null, boot_fresh: false, note: 'pbl_lookup_failed' };
+    return { enrolled: true, last_boot_id: null, last_boot_at: null, boot_fresh: false, boot_class: 'unknown', note: 'pbl_lookup_failed' };
   }
 }
 
@@ -241,6 +266,12 @@ function calculatePollInterval(deviceStatus) {
 
 router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, mac_address, hardware_uuid } = req.body;
+  // S1.4: agent-reported TPM restartCount (optional; absent on non-Windows
+  // or no-TBS). Used to classify a stale PBL boot as S3-resume vs bypass.
+  const tpmRestartCount = (typeof req.body.tpm_restart_count === 'number'
+    && Number.isInteger(req.body.tpm_restart_count)
+    && req.body.tpm_restart_count >= 0)
+    ? req.body.tpm_restart_count : null;
   if (!hostname) return res.status(400).json({ error: 'hostname required. Include the hostname field in the request body.' });
 
   // FA3: If authenticated via per-device key, req.device is already set.
@@ -284,15 +315,17 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   // PBL boot means either (a) PBL was bypassed this boot, or (b) an S3
   // resume (no TPM reset → no new boot_id — disambiguated by S1.4's
   // restartCount). We flag, not block, per the DEGRADED-alarm ruling.
-  const pblBoot = await correlatePblBoot(device);
+  const pblBoot = await correlatePblBoot(device, tpmRestartCount);
 
   res.json({
     device_id: device.id,
     status: device.status,
     poll_interval: serverPollInterval,
-    // S1.2: boot-ID correlation result. null = device has no PBL identity.
-    // Otherwise { enrolled: true, last_boot_id, last_boot_at, boot_fresh }
-    // where boot_fresh=false is the absence-alarm signal (bypass or resume).
+    // S1.2/S1.4: boot-ID correlation result. null = device has no PBL
+    // identity. Otherwise { enrolled, last_boot_id, last_boot_at, boot_fresh,
+    // boot_class } — boot_fresh=false is the absence signal; boot_class
+    // disambiguates it ('s3_resume'|'pbl_bypass'|'unknown') via the
+    // agent-reported restartCount.
     pbl_boot: pblBoot,
     // B-005: server-authoritative timestamp — the agent anchors its deadman
     // last_seen to this, so a local clock rollback becomes detectable.

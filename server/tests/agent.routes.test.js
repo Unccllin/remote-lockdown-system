@@ -211,6 +211,92 @@ describe('POST /api/agent/checkin', () => {
     expect(res.body.pbl_boot.boot_fresh).toBe(false);
   });
 
+  // S1.4: resume-vs-bypass classification via agent-reported restartCount.
+  // PBL never runs on S3 resume (F6) — restartCount bumps but resetCount
+  // (boot_id) does not. restartCount > last_boot_id => s3_resume.
+  test('S1.4: stale boot + restartCount>last_boot_id => boot_class=s3_resume', async () => {
+    const pblId = 'ab'.repeat(32);
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active', pbl_device_id: pblId };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    const stale = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+    setSharedKvStore(new Map([
+      [`pbl_devices:${pblId}`, JSON.stringify({
+        device_id: pblId, status: 'active', last_boot_id: 7, last_boot_at: stale,
+      })],
+    ]));
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001', tpm_restart_count: 8 });  // restart bumped past boot
+
+    expect(res.status).toBe(200);
+    expect(res.body.pbl_boot.boot_fresh).toBe(false);
+    expect(res.body.pbl_boot.boot_class).toBe('s3_resume');
+  });
+
+  test('S1.4: stale boot + restartCount==last_boot_id => boot_class=pbl_bypass', async () => {
+    const pblId = 'ab'.repeat(32);
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active', pbl_device_id: pblId };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    const stale = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+    setSharedKvStore(new Map([
+      [`pbl_devices:${pblId}`, JSON.stringify({
+        device_id: pblId, status: 'active', last_boot_id: 7, last_boot_at: stale,
+      })],
+    ]));
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001', tpm_restart_count: 7 });  // no wake since boot
+
+    expect(res.status).toBe(200);
+    expect(res.body.pbl_boot.boot_fresh).toBe(false);
+    expect(res.body.pbl_boot.boot_class).toBe('pbl_bypass');
+  });
+
+  test('S1.4: stale boot + no restartCount reported => boot_class=unknown', async () => {
+    const pblId = 'ab'.repeat(32);
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active', pbl_device_id: pblId };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    const stale = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+    setSharedKvStore(new Map([
+      [`pbl_devices:${pblId}`, JSON.stringify({
+        device_id: pblId, status: 'active', last_boot_id: 7, last_boot_at: stale,
+      })],
+    ]));
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001' });  // no tpm_restart_count (non-Windows agent)
+
+    expect(res.status).toBe(200);
+    expect(res.body.pbl_boot.boot_fresh).toBe(false);
+    expect(res.body.pbl_boot.boot_class).toBe('unknown');
+  });
+
+  test('S1.4: fresh boot => boot_class is null (no classification needed)', async () => {
+    const pblId = 'ab'.repeat(32);
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active', pbl_device_id: pblId };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    setSharedKvStore(new Map([
+      [`pbl_devices:${pblId}`, JSON.stringify({
+        device_id: pblId, status: 'active', last_boot_id: 7, last_boot_at: new Date().toISOString(),
+      })],
+    ]));
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001', tpm_restart_count: 9 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.pbl_boot.boot_fresh).toBe(true);
+    expect(res.body.pbl_boot.boot_class).toBeNull();
+  });
+
   test('returns pending command for device', async () => {
     const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
     const command = { id: 'cmd-1', command_type: 'lockdown', status: 'pending' };

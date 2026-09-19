@@ -1178,15 +1178,33 @@ def _post_with_fallback(endpoint: str, cfg: dict, json_body: dict, **kwargs) -> 
 
 
 def checkin(cfg: dict) -> dict | None:
+    # S1.4: read the TPM restart counter OS-side (TPM2_ReadClock via TBS).
+    # PBL never runs on an S3 resume (finding F6), so the firmware cannot
+    # report a resume — only the agent can observe restartCount. The server
+    # compares this against the last PBL-recorded boot_id (resetCount):
+    # restartCount > last_boot_id => wake without cold boot => S3 resume,
+    # which downgrades the S1.2 boot_fresh=false absence alarm. None on
+    # non-Windows / no-TBS; the server treats absent as "unknown".
+    tpm_restart = None
+    try:
+        from tpm_clock import read_restart_count
+        tpm_restart = read_restart_count()
+    except Exception as e:  # never let TPM read break check-in
+        log.debug("TPM restart-count read unavailable: %s", e)
+
+    body = {
+        "hostname": cfg["hostname"],
+        "mac_address": get_mac_address(),
+        "hardware_uuid": get_hardware_uuid(),
+    }
+    if tpm_restart is not None:
+        body["tpm_restart_count"] = tpm_restart
+
     try:
         resp = _post_with_fallback(
             "/api/agent/checkin",
             cfg,
-            {
-                "hostname": cfg["hostname"],
-                "mac_address": get_mac_address(),
-                "hardware_uuid": get_hardware_uuid(),
-            },
+            body,
             timeout=15,
             verify=cfg["verify_tls"],
         )
