@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-09-18 17:21:55 — 37 beliefs
+Generated: 2026-09-20 09:29:43 — 42 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -10,6 +10,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-005 | refuted | code-read | The deadman switch computes elapsed time from the wall clock — a clock rollback yields negative elapsed hours and the switch never triggers. → see B-030 |
 | B-030 | confirmed | emulated | Deadman last_seen is server-anchored via checkin server_time; local clock rollback beyond 300s tolerance is detected and treated as stolen + expired (fail-secure); forward clock fires early — both directions hostile to an attacker. |
+
+## agent/tpm
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-040 | confirmed | code-read | On S3 resume the TPM restartCount bumps (TPM2_Startup STATE) but resetCount (boot_id) does not, AND PBL never runs — so the OS agent (not firmware) must report restartCount. resetCount==restartCount baseline + stale last_boot_at = bypass; restartCount>resetCount = resume. |
 
 ## agent/update
 
@@ -24,6 +30,13 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-020 | confirmed | code-read | Everything a UEFI application reads can be forged by earlier DXE/SMM code — the only trust anchors are TPM-sealed/measured state, server-side verdicts, and cross-layer disagreement. |
 | B-021 | confirmed | code-read | A user-mode agent cannot defeat a kernel/admin adversary — it can only detect, delay, and re-assert; real anchors are TPM, PBL, and the server. |
+
+## firmware/bcd
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-038 | confirmed | emulated | BCD osdevice/device element (0x21000001/0x11000001) packet type 6 is a partition device: PartitionID@0x20 (GPT GUID / MBR u64 byte offset), TableType@0x34 (0=GPT,1=MBR — INVERTED vs WMI PartitionStyle), DiskID@0x38 (GPT disk GUID / MBR u32 sig). Same identity as UEFI HD() device-path node — partition-level FVE binding needs no disk reads. |
+| B-039 | confirmed | spec-checked | HARDDRIVE_DEVICE_PATH's signature-kind selector is SignatureType (0x01=MBR sig, 0x02=GPT GUID), NOT MBRType (which is partition format 0x01/0x02). Easy field-name trap when binding to a partition. |
 
 ## firmware/boot-flow
 
@@ -43,12 +56,13 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-011 | refuted | spec-checked | MemoryOverwriteRequestControl lives under EFI_GLOBAL_VARIABLE. → see B-012 |
-| B-012 | confirmed | spec-checked | MemoryOverwriteRequestControl lives under e20939be-32d4-41be-a150-897f85d49829 — Mor.c writes under EFI_GLOBAL_VARIABLE, so PBL's MOR write is a no-op decoy the real TcgMor handler never sees. |
+| B-012 | refuted | spec-checked | MemoryOverwriteRequestControl lives under e20939be-32d4-41be-a150-897f85d49829 — Mor.c writes under EFI_GLOBAL_VARIABLE, so PBL's MOR write is a no-op decoy the real TcgMor handler never sees. → see B-042 |
 | B-013 | refuted | spec-checked | Bit 1 of MemoryOverwriteRequestControl locks the MOR bit. → see B-014 |
 | B-014 | confirmed | spec-checked | The MOR byte has only bit 0 (clear-memory) and bit 4 (disable-autodetect); locking is a separate variable, MemoryOverwriteRequestControlLock. |
 | B-023 | refuted | assumed | PBL's MOR request actually reaches the platform TcgMor handler and causes a memory clear on BLOCK. → see B-025 |
 | B-025 | confirmed | emulated | PBL's MOR request targets the correct spec-GUID variable and is evaluated by the platform's policy engine (WRITE_PROTECTED denial proves it reached the real variable, not a decoy), but functional memory-clear is platform-gated: non-SMM EDK2 variable drivers register LOCK_NOW VariablePolicies on both MOR vars at EndOfDxe, so no post-EndOfDxe writer can set MOR. Functional MOR requires SMM-capable firmware with legitimate MOR provisioning — hardware-gated. |
 | B-026 | confirmed | spec-checked | Non-SMM EDK2 variable drivers (VariableRuntimeDxe, incl. the custom OVMF and Ubuntu OVMF builds) treat MOR as unsupported: MorLockInit deletes both MOR vars and MorLockInitAtEndOfDxe registers unconditional LOCK_NOW VariablePolicies — no BDS-phase or OS writer can set MOR on such platforms. A DXE-phase writer before EndOfDxe would beat the policy lock (relevant to DXE-tier enforcement-depth decision). |
+| B-042 | confirmed | code-read | Mor.c now writes MemoryOverwriteRequestControl under the CORRECT spec GUID e20939be-32d4-41be-a150-897f85d49829 (gEfiMemoryOverwriteControlDataGuid), not EFI_GLOBAL_VARIABLE — the latent decoy-variable bug is fixed (Mor.c:9-12,27-28). |
 
 ## firmware/network
 
@@ -58,7 +72,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-008 | confirmed | code-read | PblHttpsPost sweeps ConnectController on all handles before HTTP use — the fast-boot NIC-connection gap is mitigated for already-dispatched drivers. |
 | B-015 | refuted | code-read | PblHttpsPost hardcodes QEMU static IP 10.0.2.15 with UseDefaultAddress=FALSE — no DHCP; the HTTPS path cannot work on real hardware as written. → see B-037 |
 | B-016 | refuted | code-read | PblHttpsPost accepts http:// URIs (marked temporary for QEMU, D-109) — plaintext fallback is live in the release build. → see B-028 |
-| B-028 | confirmed | emulated | Release PblHttpsPost requires https:// and rejects http:// with EFI_INVALID_PARAMETER; http:// survives only in PBL_DEBUG builds for the QEMU dev path — the shipping artifact is fail-closed. |
+| B-028 | confirmed | code-read | Release PblHttpsPost requires https:// and rejects http:// with EFI_INVALID_PARAMETER; http:// survives only in PBL_DEBUG builds for the QEMU dev path — the shipping artifact is fail-closed. |
 | B-037 | confirmed | emulated | PblHttpsPost configures IPv4 via Ip4Config2PolicyDhcp — real DHCP DORA on every Ip4Config2 instance with an event-pumped InterfaceInfo poll; the HTTP instance uses UseDefaultAddress=TRUE so the verdict fetch works on any DHCP-served network; the QEMU static fallback exists only under PBL_DEBUG and release builds fail closed on DHCP timeout |
 
 ## firmware/s3
@@ -88,6 +102,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-029 | confirmed | emulated | test-d215-harness incremental-build trap: PolicyRootOfTrust.generated.h is __has_include-gated, so it enters make deps only when present at the last compile — a dev→RoT incremental build silently produces the unprovisioned binary; touching the .c file forces correct recompilation. |
+| B-041 | confirmed | emulated | QEMU slirp 10.0.2.2 under docker --network host forwards to the docker HOST loopback — a host-side mock server on :8080 is reachable from the guest. In-container mock server fails because pbl-qemu images lack cryptography/cbor2. |
 
 ## meta/verification
 

@@ -30,6 +30,7 @@ Usage:
 
 import argparse
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -299,8 +300,51 @@ def cmd_gen_view(args):
     print(f"[OK] Generated {VIEW_FILE}")
 
 
+def _resolve_provenance_file(match: str) -> Path | None:
+    """Resolve a provenance path token to a repo file (direct or basename)."""
+    direct = REPO_ROOT / match
+    if direct.exists():
+        return direct
+    found = list(REPO_ROOT.rglob(Path(match).name))
+    return found[0] if found else None
+
+
+def _file_changed_since_commit(repo_file: Path, commit_ref: str) -> bool | None:
+    """True if repo_file changed in any commit after commit_ref.
+
+    Returns None when the check can't run (no git / commit unknown / file
+    untracked). Commit-aware staleness is precise: it only fires when the
+    provenance file actually changed in a later commit, not merely when its
+    mtime moved (e.g. an unrelated same-day edit).
+    """
+    if not commit_ref:
+        return None
+    try:
+        rel = repo_file.relative_to(REPO_ROOT)
+    except ValueError:
+        return None
+    try:
+        # 0 exit + empty output => no commits touching the file after ref.
+        out = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "log", "--oneline",
+             f"{commit_ref}..HEAD", "--", str(rel)],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None  # bad commit_ref or not a git op context
+    return bool(out.stdout.strip())
+
+
 def cmd_stale(args):
-    """Beliefs whose provenance files changed after last_verified."""
+    """Beliefs whose provenance files changed after last_verified.
+
+    Precise path (preferred): when a belief carries commit_ref, flag stale
+    only if a provenance file changed in a commit AFTER commit_ref
+    (git log commit_ref..HEAD -- file). Fallback: mtime-day comparison for
+    beliefs without commit_ref.
+    """
     store = load_store()
     stale = []
     for b in store["beliefs"]:
@@ -309,18 +353,23 @@ def cmd_stale(args):
         if not b.get("last_verified"):
             continue
         prov = b.get("provenance", "")
+        commit_ref = b.get("commit_ref")
         # Extract repo-relative file paths from provenance (e.g., "Mor.c:18", "agent/agent.py:2906")
         for match in re.findall(r"([\w./-]+\.(?:c|h|py|js|md|yaml|yml|sh))", prov):
-            # Try direct path, then basename search
-            candidates = [REPO_ROOT / match]
-            if not candidates[0].exists():
-                found = list(REPO_ROOT.rglob(Path(match).name))
-                candidates = found[:1]
-            for f in candidates:
-                if f.exists():
-                    mtime = datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d")
-                    if mtime > b["last_verified"]:
-                        stale.append((b["id"], match, mtime, b["last_verified"]))
+            f = _resolve_provenance_file(match)
+            if f is None:
+                continue
+            # Commit-aware path first — precise, ignores same-day unrelated edits.
+            changed = _file_changed_since_commit(f, commit_ref)
+            if changed is True:
+                stale.append((b["id"], match, f"changed-after-{commit_ref[:8]}", b["last_verified"]))
+                continue
+            if changed is False:
+                continue  # no post-commit change — not stale on this file
+            # Fallback: mtime-day granularity when commit path unavailable.
+            mtime = datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d")
+            if mtime > b["last_verified"]:
+                stale.append((b["id"], match, mtime, b["last_verified"]))
     if stale:
         print(f"[WARN] {len(stale)} belief(s) may be stale — provenance file changed after verification:")
         for bid, f, mtime, verified in stale:

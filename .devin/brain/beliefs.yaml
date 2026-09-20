@@ -10,11 +10,12 @@ beliefs:
   domain: firmware/boot-flow
   status: confirmed
   evidence_level: emulated
-  provenance: PblApp.c:417,483 — former EFI_SECURITY_VIOLATION returns; Beyond BIOS p.186; fixed by PblBlockHalt()
+  provenance: PblApp.c PblBlockHalt still at :297, call sites :429 :495 :866 :877 :896; S1.x edits did
+    not touch block paths
   source: SYNTHESIS F1; CONFIRMATION-FINDINGS.md
   asserted: '2026-09-18'
-  last_verified: '2026-09-18'
-  commit_ref: 6cd33f4
+  last_verified: '2026-09-20'
+  commit_ref: 450d283
   supersedes: null
   superseded_by: null
   dependents:
@@ -26,11 +27,11 @@ beliefs:
   domain: firmware/boot-flow
   status: confirmed
   evidence_level: emulated
-  provenance: PblApp.c:297 (helper), :417 :483 :850 :861 :878 (call sites); QEMU harnesses 16/0 15/0 16/0
+  provenance: PblBlockHalt helper + all call sites intact post-S1.x
   source: D-220 fix
   asserted: '2026-09-18'
-  last_verified: '2026-09-18'
-  commit_ref: 6cd33f4
+  last_verified: '2026-09-20'
+  commit_ref: 450d283
   supersedes: null
   superseded_by: null
   dependents: []
@@ -41,11 +42,11 @@ beliefs:
   domain: firmware/variables
   status: confirmed
   evidence_level: code-read
-  provenance: MarkerTest.c:31, Mor.c:66 — plain gRT->SetVariable, no TIME_BASED_AUTHENTICATED_WRITE_ACCESS
+  provenance: Mor.c:78,:115 plain gRT->SetVariable, no TIME_BASED_AUTHENTICATED_WRITE_ACCESS
   source: SYNTHESIS F2; CONFIRMATION-FINDINGS.md
   asserted: '2026-09-18'
-  last_verified: '2026-09-18'
-  commit_ref: 6cd33f4
+  last_verified: '2026-09-20'
+  commit_ref: df91b56
   supersedes: null
   superseded_by: null
   dependents: []
@@ -104,10 +105,9 @@ beliefs:
   dependents: []
   notes: Fix = detached signature + pinned public key (update rings per MDM study).
   refuted_on: '2026-09-18'
-  refute_evidence: agent.py verify_update_signature + download_update fail-closed;
-    routes/agent.js /update Ed25519-signs v1:{version}:{sha256} via UPDATE_SIGNING_KEY;
-    test_agent_update_signature.py 14/0 + agent.routes.test.js S0.6 5/0 (wrong key,
-    missing sig, broken key all refused)
+  refute_evidence: agent.py verify_update_signature + download_update fail-closed; routes/agent.js /update
+    Ed25519-signs v1:{version}:{sha256} via UPDATE_SIGNING_KEY; test_agent_update_signature.py 14/0 +
+    agent.routes.test.js S0.6 5/0 (wrong key, missing sig, broken key all refused)
 - id: B-007
   statement: Fast-boot firmware may never connect the NIC before PBL's HTTPS use.
   domain: firmware/network
@@ -130,11 +130,11 @@ beliefs:
   domain: firmware/network
   status: confirmed
   evidence_level: code-read
-  provenance: HttpsClient.c:171-184
+  provenance: HttpsClient.c:471 ConnectController sweep intact post-S0.7
   source: refutes B-007
   asserted: '2026-09-18'
-  last_verified: '2026-09-18'
-  commit_ref: 6cd33f4
+  last_verified: '2026-09-20'
+  commit_ref: df91b56
   supersedes: B-007
   superseded_by: null
   dependents: []
@@ -196,7 +196,7 @@ beliefs:
   statement: MemoryOverwriteRequestControl lives under e20939be-32d4-41be-a150-897f85d49829 — Mor.c writes
     under EFI_GLOBAL_VARIABLE, so PBL's MOR write is a no-op decoy the real TcgMor handler never sees.
   domain: firmware/mor
-  status: confirmed
+  status: refuted
   evidence_level: spec-checked
   provenance: MemoryOverwriteControl.h:17-29 vs Mor.c:18-21
   source: refutes B-011
@@ -204,9 +204,11 @@ beliefs:
   last_verified: '2026-09-18'
   commit_ref: 6cd33f4
   supersedes: B-011
-  superseded_by: null
+  superseded_by: B-042
   dependents: []
   notes: Fix ticket NG-T4.
+  refuted_on: '2026-09-20'
+  refute_evidence: code-read
 - id: B-013
   statement: Bit 1 of MemoryOverwriteRequestControl locks the MOR bit.
   domain: firmware/mor
@@ -452,12 +454,11 @@ beliefs:
   domain: firmware/variables
   status: confirmed
   evidence_level: code-read
-  provenance: Svn.c:47-85 (TBA attribute check + Trusted out-param); PblApp.h:220 (BootmgrSvnTrusted field);
-    PlatformState.c:909 (call site); compiles clean under -Werror
+  provenance: Svn.c:48 PblReadBootmgrSvn + PblApp.h:226 BootmgrSvnTrusted intact
   source: NG-T4 S0.4 fix
   asserted: '2026-09-18'
-  last_verified: '2026-09-18'
-  commit_ref: 97f4a6e
+  last_verified: '2026-09-20'
+  commit_ref: df91b56
   supersedes: null
   superseded_by: null
   dependents: []
@@ -467,13 +468,12 @@ beliefs:
     survives only in PBL_DEBUG builds for the QEMU dev path — the shipping artifact is fail-closed.
   domain: firmware/network
   status: confirmed
-  evidence_level: emulated
-  provenance: 'QEMU release boot: ''Online fetch failed: Invalid Parameter'' on signed http:// policy
-    (/tmp/pbl-d215-ci/pbl-serial-valid.log); QEMU debug boot: ''Not Found'' past param check; HttpsClient.c:132-145'
+  evidence_level: code-read
+  provenance: HttpsClient.c:331 release rejects http:// w/ EFI_INVALID_PARAMETER
   source: refutes B-016
   asserted: '2026-09-18'
-  last_verified: '2026-09-18'
-  commit_ref: f229cc9
+  last_verified: '2026-09-20'
+  commit_ref: df91b56
   supersedes: B-016
   superseded_by: null
   dependents: []
@@ -538,12 +538,11 @@ beliefs:
   domain: firmware/variables
   status: confirmed
   evidence_level: code-read
-  provenance: 'Svn.c:47-85 TBA check, PlatformState.c:909 call, PblApp.c:536 struct digest; grep: no BootmgrSvn
-    decision consumer; NG-T4 commit 97f4a6e'
+  provenance: Svn.c TBA check + PlatformState.c call intact
   source: refutes B-004
   asserted: '2026-09-18'
-  last_verified: '2026-09-18'
-  commit_ref: 0391bde
+  last_verified: '2026-09-20'
+  commit_ref: df91b56
   supersedes: B-004
   superseded_by: null
   dependents: []
@@ -600,40 +599,36 @@ beliefs:
   dependents: []
   notes: ''
 - id: B-036
-  statement: Agent updates are authenticity-pinned by a detached Ed25519 signature over
-    "v1:{version}:{sha256}" verified against a device-pinned update_public_key — a compromised
-    server serving binary+hash cannot forge the signature; key domain is separate from
-    recovery escrow; configured-but-broken signing key fails closed (HTTP 500); agents with
-    a pinned key refuse unsigned/invalid updates
+  statement: Agent updates are authenticity-pinned by a detached Ed25519 signature over "v1:{version}:{sha256}"
+    verified against a device-pinned update_public_key — a compromised server serving binary+hash cannot
+    forge the signature; key domain is separate from recovery escrow; configured-but-broken signing key
+    fails closed (HTTP 500); agents with a pinned key refuse unsigned/invalid updates
   domain: agent/update
   status: confirmed
   evidence_level: code-read
-  provenance: agent.py:3162-3190 verify_update_signature (Ed25519-only, strict b64); :3225-3240
-    download_update fail-closed; routes/agent.js:646-675 /update signing + 500 on broken key;
-    config.ini.example + server/.env.example document UPDATE_PUBLIC_KEY / UPDATE_SIGNING_KEY
-    + key-domain separation
+  provenance: agent.py Ed25519 verifier intact (:3085 :3142)
   source: S0.6 implementation; SYNTHESIS F4 fix
   asserted: '2026-09-18'
-  last_verified: '2026-09-18'
-  commit_ref: 131732f
+  last_verified: '2026-09-20'
+  commit_ref: f1b8bdc
   supersedes: B-006
   superseded_by: null
   dependents: []
-  notes: 'Degraded mode retained: no pinned key → SHA-256-only with explicit unauthenticated
-    warning. Pending-update signal records signature_verified provenance. 14 agent + 5 server
-    tests cover wrong-key/missing-sig/broken-key refusal and payload binding.'
+  notes: 'Degraded mode retained: no pinned key → SHA-256-only with explicit unauthenticated warning.
+    Pending-update signal records signature_verified provenance. 14 agent + 5 server tests cover wrong-key/missing-sig/broken-key
+    refusal and payload binding.'
 - id: B-037
-  statement: PblHttpsPost configures IPv4 via Ip4Config2PolicyDhcp — real DHCP DORA on every
-    Ip4Config2 instance with an event-pumped InterfaceInfo poll; the HTTP instance uses
-    UseDefaultAddress=TRUE so the verdict fetch works on any DHCP-served network; the QEMU
-    static fallback exists only under PBL_DEBUG and release builds fail closed on DHCP timeout
+  statement: PblHttpsPost configures IPv4 via Ip4Config2PolicyDhcp — real DHCP DORA on every Ip4Config2
+    instance with an event-pumped InterfaceInfo poll; the HTTP instance uses UseDefaultAddress=TRUE so
+    the verdict fetch works on any DHCP-served network; the QEMU static fallback exists only under PBL_DEBUG
+    and release builds fail closed on DHCP timeout
   domain: firmware/network
   status: confirmed
   evidence_level: emulated
-  provenance: HttpsClient.c:41-308 PblConfigureDhcpV4 (SetData Dhcp + two-call variable-length
-    GetData); QEMU/slirp pcap shows DISCOVER->OFFER->REQUEST->ACK then ARP+TCP+HTTP POST over
-    leased 10.0.2.15; serial shows 'lease on ifinfo[0] station=10.0.2.15' + verdict=0 ES256-verified;
-    release binary e7283452 has no fallback string
+  provenance: HttpsClient.c:41-308 PblConfigureDhcpV4 (SetData Dhcp + two-call variable-length GetData);
+    QEMU/slirp pcap shows DISCOVER->OFFER->REQUEST->ACK then ARP+TCP+HTTP POST over leased 10.0.2.15;
+    serial shows 'lease on ifinfo[0] station=10.0.2.15' + verdict=0 ES256-verified; release binary e7283452
+    has no fallback string
   source: S0.7 implementation; test-s07-dhcp-harness.sh 7/7; ci-harness-docker 15/0
   asserted: '2026-09-18'
   last_verified: '2026-09-18'
@@ -641,9 +636,90 @@ beliefs:
   supersedes: B-015
   superseded_by: null
   dependents: []
-  notes: 'Root cause of the long lease-propagation failure: EFI_IP4_CONFIG2_INTERFACE_INFO is
-    variable-length (RouteTable tail) — once the lease binds, the default route grows the data
-    item past sizeof() and fixed-buffer GetData returns EFI_BUFFER_TOO_SMALL, hiding success.
-    QEMU docker caveat: slirp 10.0.2.2 maps to the container loopback — mock server must run
-    inside the container or use --network host. PcdDhcpTimeoutMs=30s covers Dhcp4 {4,8,16,32}s
-    early retries.'
+  notes: 'Root cause of the long lease-propagation failure: EFI_IP4_CONFIG2_INTERFACE_INFO is variable-length
+    (RouteTable tail) — once the lease binds, the default route grows the data item past sizeof() and
+    fixed-buffer GetData returns EFI_BUFFER_TOO_SMALL, hiding success. QEMU docker caveat: slirp 10.0.2.2
+    maps to the container loopback — mock server must run inside the container or use --network host.
+    PcdDhcpTimeoutMs=30s covers Dhcp4 {4,8,16,32}s early retries.'
+- id: B-038
+  statement: 'BCD osdevice/device element (0x21000001/0x11000001) packet type 6 is a partition device:
+    PartitionID@0x20 (GPT GUID / MBR u64 byte offset), TableType@0x34 (0=GPT,1=MBR — INVERTED vs WMI PartitionStyle),
+    DiskID@0x38 (GPT disk GUID / MBR u32 sig). Same identity as UEFI HD() device-path node — partition-level
+    FVE binding needs no disk reads.'
+  domain: firmware/bcd
+  status: confirmed
+  evidence_level: emulated
+  provenance: gen-bcd-hive.py hive + test-fve-harness.sh partbind 20/20 — serial 'objects=2'+'bound to
+    boot partition'
+  source: NG-T5 + NOTE-BCD-DEVICE-BLOB.md
+  asserted: '2026-09-20'
+  last_verified: '2026-09-20'
+  commit_ref: df91b56
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: NG-T5; verified emulated via synthetic hive harness 20/20
+- id: B-039
+  statement: HARDDRIVE_DEVICE_PATH's signature-kind selector is SignatureType (0x01=MBR sig, 0x02=GPT
+    GUID), NOT MBRType (which is partition format 0x01/0x02). Easy field-name trap when binding to a partition.
+  domain: firmware/bcd
+  status: confirmed
+  evidence_level: spec-checked
+  provenance: EDK2 DevicePath.h:1036-1056 SignatureType field doc
+  source: NG-T5 DevicePath.h
+  asserted: '2026-09-20'
+  last_verified: '2026-09-20'
+  commit_ref: 450d283
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Caught MBRType/SignatureType confusion pre-commit
+- id: B-040
+  statement: On S3 resume the TPM restartCount bumps (TPM2_Startup STATE) but resetCount (boot_id) does
+    not, AND PBL never runs — so the OS agent (not firmware) must report restartCount. resetCount==restartCount
+    baseline + stale last_boot_at = bypass; restartCount>resetCount = resume.
+  domain: agent/tpm
+  status: confirmed
+  evidence_level: code-read
+  provenance: tpm_clock.py+agent.js boot_class; 616 server + agent tests
+  source: S1.4 design; F6 finding
+  asserted: '2026-09-20'
+  last_verified: '2026-09-20'
+  commit_ref: f1b8bdc
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Design A; TBS constants unverified on real hardware
+- id: B-041
+  statement: QEMU slirp 10.0.2.2 under docker --network host forwards to the docker HOST loopback — a
+    host-side mock server on :8080 is reachable from the guest. In-container mock server fails because
+    pbl-qemu images lack cryptography/cbor2.
+  domain: meta/testing
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'test-s11-bootid-harness.sh 7/7 — host server.log ''boot_id: 1'''
+  source: S1.1 bring-up
+  asserted: '2026-09-20'
+  last_verified: '2026-09-20'
+  commit_ref: 3c17459
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Verified emulated; earlier 'container loopback not host' note applies only without --network
+    host
+- id: B-042
+  statement: Mor.c now writes MemoryOverwriteRequestControl under the CORRECT spec GUID e20939be-32d4-41be-a150-897f85d49829
+    (gEfiMemoryOverwriteControlDataGuid), not EFI_GLOBAL_VARIABLE — the latent decoy-variable bug is fixed
+    (Mor.c:9-12,27-28).
+  domain: firmware/mor
+  status: confirmed
+  evidence_level: code-read
+  provenance: Mor.c:9-12,27-28 uses gEfiMemoryOverwriteControlDataGuid
+  source: refutes B-012
+  asserted: '2026-09-20'
+  last_verified: '2026-09-20'
+  commit_ref: df91b56
+  supersedes: B-012
+  superseded_by: null
+  dependents: []
+  notes: ''
