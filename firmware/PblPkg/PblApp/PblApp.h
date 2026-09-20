@@ -57,6 +57,11 @@
 #define PBL_NV_LOCK_STATE      (FixedPcdGet32(PcdNvIndexBase) + 0x01)  // 0x01C00001
 #define PBL_NV_POLICY_VERSION  (FixedPcdGet32(PcdNvIndexBase) + 0x02)  // 0x01C00002
 #define PBL_NV_AK_NAME         (FixedPcdGet32(PcdNvIndexBase) + 0x03)  // 0x01C00003
+// NG-T7: monotonic epoch counter — incremented on every lock-state write.
+// The cache record carries the epoch it was written under; a stored epoch
+// below the live counter means the lock-state NV was rolled back (replayed
+// stale state) and must not be trusted.
+#define PBL_NV_LOCK_EPOCH      (FixedPcdGet32(PcdNvIndexBase) + 0x04)  // 0x01C00004
 
 // C2 §1.1: Lock state cache structure (64 bytes)
 #define PBL_LOCK_STATE_SIZE    64
@@ -126,7 +131,8 @@ typedef struct {
   UINT32  IssuedAt;         // Unix timestamp (BE)
   UINT32  GraceUntil;       // Unix timestamp (BE)
   UINT8   DeviceId[32];     // SHA-256(AK public Area)
-  UINT8   Reserved[20];     // padding to 64 bytes
+  UINT64  Epoch;            // NG-T7: lock-epoch counter at write time
+  UINT8   Reserved[12];     // padding to 64 bytes
 } PBL_LOCK_STATE_CACHE;
 
 // ============================================================================

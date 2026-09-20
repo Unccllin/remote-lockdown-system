@@ -50,6 +50,11 @@ STATIC UINT32 mCurrentCmdHandleCount = 0;
 // D-206: Track current command code for per-command encrypt/decrypt decisions
 STATIC TPM_CC mCurrentCmdCode = 0;
 
+// NG-T7: forward declarations — the lock-epoch helpers are defined later
+// in this file but used by PblTpmReadLockState/WriteLockState above them.
+STATIC EFI_STATUS PblTpmNvIncrementCounter (IN UINT32 NvIndex);
+STATIC EFI_STATUS PblTpmNvReadCounter (IN UINT32 NvIndex, OUT UINT64 *Value);
+
 /** Locate the EFI_TCG2_PROTOCOL. Returns NULL if no TPM present. **/
 EFI_TCG2_PROTOCOL *
 PblTcg2Locate (
@@ -1311,6 +1316,16 @@ PblTpmProvisionNvIndices (
   }
   PblTpmCacheNvName (PBL_NV_AK_NAME, NvAttr, 34);
 
+  // NG-T7: Lock-epoch counter — 8 bytes, monotonic. Incremented on every
+  // lock-state write; the cache stores the epoch so a rolled-back NV state
+  // is detectable at read time.
+  Status = PblTpmNvDefineSpace (PBL_NV_LOCK_EPOCH, 8, TRUE);
+  if (EFI_ERROR (Status) && Status != EFI_ALREADY_STARTED) {
+    Print (L"  [WARN] NV_DefineSpace(LOCK_EPOCH): %r\n", Status);
+    return Status;
+  }
+  PblTpmCacheNvName (PBL_NV_LOCK_EPOCH, NvAttr | (1 << 4), 8);
+
   // D-206: Refresh the cached names from NV_ReadPublic so the attributes
   // reflect the actual index state — in particular TPMA_NV_WRITTEN on an
   // index that persisted from a previous boot. The Name feeds both cpHash
@@ -1469,6 +1484,23 @@ PblTpmReadLockState (
   if (Cache->Magic != PBL_LOCK_STATE_MAGIC) {
     ZeroMem (Cache, sizeof (PBL_LOCK_STATE_CACHE));
     return EFI_NOT_FOUND;
+  }
+
+  // NG-T7: freshness check. The lock-epoch counter is monotonic — a cache
+  // written under an epoch lower than the live counter was rolled back
+  // (a stale pre-lock 'unlocked' state replayed over the current NV).
+  // Distrust it: report EFI_NOT_FOUND so the caller falls back to a fresh
+  // verdict fetch. Epoch==0 means the write predates epoch stamping
+  // (old firmware) — treat as no freshness info, don't fail closed.
+  if (Cache->Epoch != 0) {
+    UINT64 LiveEpoch = 0;
+    EFI_STATUS EpochStatus = PblTpmNvReadCounter (PBL_NV_LOCK_EPOCH, &LiveEpoch);
+    if (!EFI_ERROR (EpochStatus) && Cache->Epoch < LiveEpoch) {
+      Print (L"  [WARN] lock-state epoch stale (cache=%lu live=%lu) — rolled back?\n",
+             Cache->Epoch, LiveEpoch);
+      ZeroMem (Cache, sizeof (PBL_LOCK_STATE_CACHE));
+      return EFI_NOT_FOUND;
+    }
   }
 
   return EFI_SUCCESS;
@@ -1643,6 +1675,122 @@ PblTpmIncrementPolicyVersion (
   return Status;
 }
 
+/** NG-T7: Increment an arbitrary NV counter index with session auth.
+
+  Generalises PblTpmIncrementPolicyVersion for any TPMA_NV_COUNTER index.
+
+  @param  NvIndex  The counter NV index to increment.
+  @retval EFI_SUCCESS  Counter incremented (and Name cache refreshed).
+**/
+STATIC
+EFI_STATUS
+PblTpmNvIncrementCounter (
+  IN UINT32  NvIndex
+  )
+{
+  EFI_TCG2_PROTOCOL *Tcg2;
+  EFI_STATUS         Status;
+  UINT8              CmdBuf[256];
+  UINT8              RespBuf[256];
+  UINT32             RespSize;
+
+  Tcg2 = PblTcg2Locate ();
+  if (Tcg2 == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  UINT32 IncHandles[] = { NvIndex, NvIndex };
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Increment, 2, IncHandles);
+  PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
+  PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
+
+  Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
+                                RespBuf, sizeof (RespBuf), &RespSize);
+  if (EFI_ERROR (Status) && RespSize >= 10) {
+    UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
+    Print (L"  [WARN] NV_Increment(0x%x) RC=0x%x\n", NvIndex, Rc);
+  }
+  if (!EFI_ERROR (Status)) {
+    PblTpmNvMarkWritten (NvIndex);
+    PblTpmRollNonceFromSessionResponse (RespBuf, RespSize);
+  }
+  return Status;
+}
+
+/** NG-T7: Read an NV counter index's current value (uint64).
+
+  Generalises PblTpmReadPolicyVersion for any TPMA_NV_COUNTER index.
+
+  @param  NvIndex  The counter NV index to read.
+  @param  Value    Output counter value (host order).
+  @retval EFI_SUCCESS    Counter read.
+  @retval EFI_NOT_FOUND  Index never written (TPM_RC_NV_UNINITIALIZED).
+**/
+STATIC
+EFI_STATUS
+PblTpmNvReadCounter (
+  IN  UINT32   NvIndex,
+  OUT UINT64  *Value
+  )
+{
+  EFI_TCG2_PROTOCOL *Tcg2;
+  EFI_STATUS         Status;
+  UINT8              CmdBuf[256];
+  UINT8              RespBuf[512];
+  UINT32             RespSize;
+
+  if (Value == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *Value = 0;
+
+  Tcg2 = PblTcg2Locate ();
+  if (Tcg2 == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  UINT32 Handles[] = { NvIndex, NvIndex };
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read, 2, Handles);
+  *(UINT16 *)Ptr = SwapBytes16 (8);   // size (uint64)
+  Ptr += 2;
+  *(UINT16 *)Ptr = SwapBytes16 (0);   // offset
+  Ptr += 2;
+  PblTpmFillCommandHmac (CmdBuf, (UINT32)(Ptr - CmdBuf));
+  PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
+
+  Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
+                                RespBuf, sizeof (RespBuf), &RespSize);
+  if (EFI_ERROR (Status)) {
+    if (RespSize >= 10) {
+      UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
+      if (Rc == 0x14A) {  // TPM_RC_NV_UNINITIALIZED
+        return EFI_NOT_FOUND;
+      }
+      Print (L"  [WARN] NV_Read(counter 0x%x) RC=0x%x\n", NvIndex, Rc);
+    }
+    return Status;
+  }
+
+  UINT32 ParamSize;
+  UINT8 *RespPtr = PblTpmParseSessionResponse (RespBuf, RespSize, TPM_CC_NV_Read, &ParamSize);
+  if (RespPtr == NULL || ParamSize < 10) {
+    return EFI_DEVICE_ERROR;
+  }
+  if (PblTpmIsSessionActive () && PblTpmGetSessionKeySize () > 0 && PblTpmCommandSupportsEncrypt (mCurrentCmdCode)) {
+    PblTpmDecryptResponseParams (RespPtr, ParamSize);
+  }
+
+  UINT16 DataSize = SwapBytes16 (*(UINT16 *)RespPtr);
+  RespPtr += 2;
+  if (DataSize < 8) {
+    return EFI_DEVICE_ERROR;
+  }
+  UINT64 BeValue;
+  CopyMem (&BeValue, RespPtr, 8);
+  *Value = SwapBytes64 (BeValue);
+  return EFI_SUCCESS;
+}
+
 // ============================================================================
 // C2 §5.2: Write lock state cache (after verdict verification)
 // ============================================================================
@@ -1667,6 +1815,21 @@ PblTpmWriteLockState (
     return EFI_NOT_FOUND;
   }
 
+  // NG-T7: stamp the record with a fresh lock-epoch. Increment the
+  // monotonic counter, read the new value into a mutable copy, and write
+  // that — a rolled-back NV state will carry an epoch lower than the live
+  // counter and be rejected on read. If the epoch index is unavailable
+  // (unprovisioned / old TPM), the write proceeds with Epoch=0 — which a
+  // read treats as "no freshness info" rather than failing closed.
+  PBL_LOCK_STATE_CACHE Stamped = *Cache;
+  UINT64 NewEpoch = 0;
+  if (!EFI_ERROR (PblTpmNvIncrementCounter (PBL_NV_LOCK_EPOCH)) &&
+      !EFI_ERROR (PblTpmNvReadCounter (PBL_NV_LOCK_EPOCH, &NewEpoch))) {
+    Stamped.Epoch = NewEpoch;
+  } else {
+    Stamped.Epoch = 0;
+  }
+
   // TPM2_NV_Write(0x01C00001, offset=0, data=64 bytes) with HMAC session auth.
   // D-102: When HMAC session is active, command parameters (including the
   // data being written) are encrypted with AES-256-CFB before sending.
@@ -1675,7 +1838,7 @@ PblTpmWriteLockState (
   // TPM2B_NV_BUFFER: 2-byte size + data
   *(UINT16 *)Ptr = SwapBytes16 (PBL_LOCK_STATE_SIZE);
   Ptr += 2;
-  CopyMem (Ptr, Cache, PBL_LOCK_STATE_SIZE);
+  CopyMem (Ptr, &Stamped, PBL_LOCK_STATE_SIZE);
   Ptr += PBL_LOCK_STATE_SIZE;
   // offset
   *(UINT16 *)Ptr = SwapBytes16 (0);
