@@ -1,7 +1,8 @@
 # NG-T7: Monotonic-counter freshness for the lock-state NV cache
 
 > **Label:** `wayfinder:task` (AFK-able, firmware session lifecycle)
-> **Status:** OPEN
+> **Status:** PARTIAL (2026-09-20) — implemented + round-trip verified;
+>   stale-epoch rejection branch unreachable in swtpm (needs real TPM)
 > **Blocks:** S2 (firmware) — closes the stale-lock-state replay gap
 > **Blocked by:** none (TPM NV counter infra exists — PBL_NV_POLICY_VERSION
 > is already a TPMA_NV_COUNTER index with Define/Read paths)
@@ -62,12 +63,26 @@ current counter means the cache was rolled back → distrust it.
 
 ## Resolution
 
-Record harness evidence (fresh read trusted, rolled-back read rejected).
-Update D-120/PBL-DEBT-LEDGER if it covers lock-state freshness.
+Implemented 2026-09-20 (`ed46ab1`).
+
+**Resolved during implementation:** an NV counter index's value IS
+readable via `TPM2_NV_Read` (returns the uint64 count, big-endian) —
+confirmed by the existing `PblTpmReadPolicyVersion` path. `Epoch` carved
+from `PBL_LOCK_STATE_CACHE.Reserved` so the index stays 64 bytes.
+
+**Verified (emulated):** `ci-harness-persistence` 16/16 — `LOCK_EPOCH`
+provisions as a counter, `NV_Increment`/`NV_Read` round-trip under swtpm,
+lock-state write/read unaffected (no regression).
+
+**Not verified (needs hardware):** the stale-epoch rejection branch
+(`Cache.Epoch < LiveEpoch → EFI_NOT_FOUND`). swtpm stores all NV in a
+single `tpm2-00.permall` blob, so the counter and cache cannot be rolled
+back independently in emulation — and the app couples increment+write so
+the branch is unreachable via the normal flow. Exercising it needs a real
+TPM's independent monotonic counter (D-129 window) or a host-side test
+seam (none exists — all firmware tests run in QEMU).
 
 ## Open sub-questions (resolve during implementation)
 
-- Is an NV counter index's count readable via `TPM2_NV_Read`, or only via
-  `NV_ReadPublic`/certify? (swtpm test answers this first.)
-- Counter NV increment requires auth consistent with the lock-state index
-  (platform hierarchy vs auth session) — reuse the same provisioning attrs.
+- ~~Is an NV counter index's count readable via `TPM2_NV_Read`?~~
+  **Resolved: yes** — counter value readable via `NV_Read` (uint64 BE).
