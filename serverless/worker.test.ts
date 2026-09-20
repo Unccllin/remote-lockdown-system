@@ -1176,6 +1176,37 @@ describe('Serverless Worker', () => {
       expect(resp.status).toBe(403);
     });
 
+    it('bios_passwords are AES-GCM-encrypted at rest when KV_KEK is set', async () => {
+      // env2 carries a KV_KEK — stored credential must be ciphertext.
+      const kekBytes = crypto.getRandomValues(new Uint8Array(32));
+      const kekB64 = btoa(String.fromCharCode(...kekBytes));
+      const env2 = { ...env, KV_KEK: kekB64 };
+      const { apiKey, device } = await enrollDevice(worker, env2, 'KEK-001');
+      await worker.fetch(makeRequest('POST', `/api/devices/${device.id}/flag`,
+        { hostname_confirm: 'KEK-001' }, { Authorization: 'Bearer test-admin-token' }), env2);
+      const ci = await worker.fetch(makeRequest('POST', '/api/agent/checkin',
+        JSON.stringify({ hostname: 'KEK-001' }), signRequest(JSON.stringify({ hostname: 'KEK-001' }), apiKey)), env2);
+      const cmdId = ((await parseResponse(ci) as any).command).id;
+      const ackBody = JSON.stringify({
+        hostname: 'KEK-001', command_id: cmdId, result_status: 'executed',
+        key_material: 'k', bios_password: 'SECRET-BIOS-PW',
+      });
+      await worker.fetch(makeRequest('POST', '/api/agent/command-ack', ackBody, signRequest(ackBody, apiKey)), env2);
+
+      // The KV record must NOT contain the plaintext password.
+      const stored = JSON.parse(await (env2.LOCKDOWN_KV as any).get('bios_passwords'));
+      const row = stored.find((r: any) => r.device_id === device.id);
+      expect(row.password).toBeUndefined();
+      expect(row.password_enc).toBeDefined();
+      expect(JSON.stringify(stored)).not.toContain('SECRET-BIOS-PW');
+
+      // But pba-credentials decrypts it transparently for super-admin.
+      const pba = await worker.fetch(makeRequest('GET', `/api/devices/${device.id}/pba-credentials`, undefined,
+        { Authorization: 'Bearer test-admin-token' }), env2);
+      const creds: any = await parseResponse(pba);
+      expect(creds.setup_password).toBe('SECRET-BIOS-PW');
+    });
+
     it('operator CAN flag-stolen but CANNOT create admins (super-admin gate)', async () => {
       await seedAdmin(env, 'sa1', 'password123');
       await worker.fetch(makeRequest('POST', '/api/admins',

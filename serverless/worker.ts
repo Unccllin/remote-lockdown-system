@@ -529,13 +529,78 @@ async function saveKeys(env: Env, keys: EncryptionKey[]): Promise<void> {
   await env.LOCKDOWN_KV.put(KEYS_KEY, JSON.stringify(keys));
 }
 
+// S4-serverless: secrets envelope for bios_passwords at rest. When KV_KEK
+// is provisioned, each credential's `password` is AES-256-GCM-encrypted
+// before it lands in KV and decrypted transparently on read. Rows written
+// before KV_KEK existed (plaintext `password`) still read back — a row is
+// treated as encrypted only when `password_enc` is present.
+interface StoredBiosPassword extends Omit<BiosPassword, 'password'> {
+  password?: string;      // plaintext (legacy / no KEK)
+  password_enc?: string;  // base64(nonce||ciphertext) when KV_KEK set
+}
+
+async function getKek(env: Env): Promise<CryptoKey | null> {
+  const kek = (env as { KV_KEK?: string }).KV_KEK;
+  if (!kek) return null;
+  const raw = b64decode(kek);
+  return crypto.subtle.importKey('raw', raw as BufferSource, 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+
+async function encSecret(env: Env, plaintext: string): Promise<{ password_enc?: string; password?: string }> {
+  const kek = await getKek(env);
+  if (!kek) return { password: plaintext };
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonce as BufferSource }, kek, new TextEncoder().encode(plaintext));
+  const blob = new Uint8Array(nonce.length + ct.byteLength);
+  blob.set(nonce, 0);
+  blob.set(new Uint8Array(ct), nonce.length);
+  return { password_enc: b64encode(blob.buffer) };
+}
+
+async function decSecret(env: Env, row: StoredBiosPassword): Promise<string> {
+  if (row.password_enc) {
+    const kek = await getKek(env);
+    if (!kek) return ''; // encrypted but no KEK — can't decrypt
+    const blob = b64decode(row.password_enc);
+    const nonce = blob.slice(0, 12);
+    const ct = blob.slice(12);
+    const pt = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: nonce as BufferSource }, kek, ct as BufferSource);
+    return new TextDecoder().decode(pt);
+  }
+  return row.password ?? '';
+}
+
 async function listBiosPasswords(env: Env): Promise<BiosPassword[]> {
   const data = await env.LOCKDOWN_KV.get(BIOS_PASSWORDS_KEY);
-  return data ? JSON.parse(data) : [];
+  if (!data) return [];
+  const stored = JSON.parse(data) as StoredBiosPassword[];
+  // Decrypt each row's password transparently.
+  const out: BiosPassword[] = [];
+  for (const r of stored) {
+    out.push({
+      device_id: r.device_id,
+      password_type: r.password_type,
+      password: await decSecret(env, r),
+      created_at: r.created_at,
+    });
+  }
+  return out;
 }
 
 async function saveBiosPasswords(env: Env, pws: BiosPassword[]): Promise<void> {
-  await env.LOCKDOWN_KV.put(BIOS_PASSWORDS_KEY, JSON.stringify(pws));
+  const stored: StoredBiosPassword[] = [];
+  for (const p of pws) {
+    const enc = await encSecret(env, p.password);
+    stored.push({
+      device_id: p.device_id,
+      password_type: p.password_type,
+      created_at: p.created_at,
+      ...enc,
+    });
+  }
+  await env.LOCKDOWN_KV.put(BIOS_PASSWORDS_KEY, JSON.stringify(stored));
 }
 
 async function listLocations(env: Env): Promise<LocationReport[]> {
@@ -2491,9 +2556,8 @@ async function handlePblRoute(
 
     // POST /v1/policy — store a policy blob (admin only)
     if (path === '/v1/policy' && method === 'POST') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'operator');
+      if (__a instanceof Response) return __a;
       const policyKeys = await getPolicySigningKeys(env);
       const verdictKeys = await getSigningKeys(env);
       return handleStorePolicy(request, env, policyKeys, verdictKeys);
@@ -2534,9 +2598,8 @@ async function handlePblRoute(
 
     // GET /v1/devices — list all PBL devices (admin only, D-206)
     if (path === '/v1/devices' && method === 'GET') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'viewer');
+      if (__a instanceof Response) return __a;
       const devices = await listPblDevices(env.LOCKDOWN_KV);
       return new Response(
         JSON.stringify({ devices, count: devices.length }),
@@ -2546,9 +2609,8 @@ async function handlePblRoute(
 
     // GET /v1/devices/:id — get a single PBL device (admin only, D-206)
     if (path.startsWith('/v1/devices/') && !path.includes('/lock') && !path.includes('/unlock') && !path.includes('/track') && !path.includes('/agent-mapping') && method === 'GET') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'viewer');
+      if (__a instanceof Response) return __a;
       const deviceId = path.substring('/v1/devices/'.length);
       const device = await getPblDevice(env.LOCKDOWN_KV, deviceId);
       if (!device) {
@@ -2562,9 +2624,8 @@ async function handlePblRoute(
 
     // POST /v1/devices/:id/lock — admin lock device (D-206)
     if (path.startsWith('/v1/devices/') && path.endsWith('/lock') && method === 'POST') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'operator');
+      if (__a instanceof Response) return __a;
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/lock'.length);
       const device = await setPblDeviceStatus(env.LOCKDOWN_KV, deviceId, 'locked', 'admin_lock');
       if (!device) {
@@ -2578,9 +2639,8 @@ async function handlePblRoute(
 
     // POST /v1/devices/:id/unlock — admin unlock device (D-206)
     if (path.startsWith('/v1/devices/') && path.endsWith('/unlock') && method === 'POST') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'operator');
+      if (__a instanceof Response) return __a;
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/unlock'.length);
       const device = await setPblDeviceStatus(env.LOCKDOWN_KV, deviceId, 'active');
       if (!device) {
@@ -2594,9 +2654,8 @@ async function handlePblRoute(
 
     // POST /v1/devices/:id/track — admin track device (C5 covert tracking, D-211)
     if (path.startsWith('/v1/devices/') && path.endsWith('/track') && method === 'POST') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'operator');
+      if (__a instanceof Response) return __a;
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/track'.length);
       const device = await setPblDeviceStatus(env.LOCKDOWN_KV, deviceId, 'tracking', 'reported_stolen');
       if (!device) {
@@ -2610,9 +2669,8 @@ async function handlePblRoute(
 
     // POST /v1/devices/:id/stop-track — admin stop tracking device (C5, D-211)
     if (path.startsWith('/v1/devices/') && path.endsWith('/stop-track') && method === 'POST') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'operator');
+      if (__a instanceof Response) return __a;
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/stop-track'.length);
       const device = await setPblDeviceStatus(env.LOCKDOWN_KV, deviceId, 'active');
       if (!device) {
@@ -2631,9 +2689,8 @@ async function handlePblRoute(
     // `pbl_device_mapping:{pbl_device_id}` → { agent_device_id }.
     // NOTE: Must come before the general DELETE /v1/devices/:id route.
     if (path.startsWith('/v1/devices/') && path.endsWith('/agent-mapping') && method === 'GET') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'operator');
+      if (__a instanceof Response) return __a;
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/agent-mapping'.length);
       const mappingKey = `pbl_device_mapping:${deviceId}`;
       const mapping = await env.LOCKDOWN_KV.get(mappingKey, 'text');
@@ -2652,9 +2709,8 @@ async function handlePblRoute(
     // POST /v1/devices/:id/agent-mapping — link a PBL device to an agent device (D-206)
     // Body: { agent_device_id: string } — the UUID of the agent device record.
     if (path.startsWith('/v1/devices/') && path.endsWith('/agent-mapping') && method === 'POST') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'operator');
+      if (__a instanceof Response) return __a;
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/agent-mapping'.length);
       const pblDevice = await getPblDevice(env.LOCKDOWN_KV, deviceId);
       if (!pblDevice) {
@@ -2679,9 +2735,8 @@ async function handlePblRoute(
 
     // DELETE /v1/devices/:id/agent-mapping — unlink a PBL device from an agent device (D-206)
     if (path.startsWith('/v1/devices/') && path.endsWith('/agent-mapping') && method === 'DELETE') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'operator');
+      if (__a instanceof Response) return __a;
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/agent-mapping'.length);
       const mappingKey = `pbl_device_mapping:${deviceId}`;
       const existing = await env.LOCKDOWN_KV.get(mappingKey, 'text');
@@ -2697,9 +2752,8 @@ async function handlePblRoute(
 
     // DELETE /v1/devices/:id — admin delete device (D-206)
     if (path.startsWith('/v1/devices/') && method === 'DELETE') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'operator');
+      if (__a instanceof Response) return __a;
       const deviceId = path.substring('/v1/devices/'.length);
       const deleted = await deletePblDevice(env.LOCKDOWN_KV, deviceId);
       if (!deleted) {
@@ -2713,9 +2767,8 @@ async function handlePblRoute(
 
     // POST /v1/admin/rotate-key — rotate the verdict signing key (D-205, admin only)
     if (path === '/v1/admin/rotate-key' && method === 'POST') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'super-admin');
+      if (__a instanceof Response) return __a;
       try {
         const { keys: newKeys, kidHistory } = await rotateSigningKey(env.LOCKDOWN_KV);
         // Invalidate the cached key so subsequent requests use the new key
@@ -2744,9 +2797,8 @@ async function handlePblRoute(
 
     // GET /v1/admin/key-info — get current signing key info (D-205, admin only)
     if (path === '/v1/admin/key-info' && method === 'GET') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'viewer');
+      if (__a instanceof Response) return __a;
       const keys = await getSigningKeys(env);
       const policyKeys = await getPolicySigningKeys(env);
       const kidHistory = await getKidHistory(env.LOCKDOWN_KV);
@@ -2773,9 +2825,8 @@ async function handlePblRoute(
     // POST /v1/admin/cert-chain — store the X.509 cert chain in KV (D-205, admin only)
     // Body: raw DER bytes (concatenated certs) or JSON { chain: "<base64>" }
     if (path === '/v1/admin/cert-chain' && method === 'POST') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'super-admin');
+      if (__a instanceof Response) return __a;
       try {
         const contentType = request.headers.get('Content-Type') || '';
         let chainBytes: Uint8Array;
@@ -2823,9 +2874,8 @@ async function handlePblRoute(
 
     // GET /v1/admin/cert-chain — get cert chain info (D-205, admin only)
     if (path === '/v1/admin/cert-chain' && method === 'GET') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'viewer');
+      if (__a instanceof Response) return __a;
       const certs = await loadCertChain(env.LOCKDOWN_KV);
       return new Response(
         JSON.stringify({
@@ -2839,9 +2889,8 @@ async function handlePblRoute(
 
     // DELETE /v1/admin/cert-chain — remove cert chain from KV (D-205, admin only)
     if (path === '/v1/admin/cert-chain' && method === 'DELETE') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'super-admin');
+      if (__a instanceof Response) return __a;
       await env.LOCKDOWN_KV.delete('pbl_cert_chain:current');
       return new Response(
         JSON.stringify({ deleted: true }),
@@ -2852,9 +2901,8 @@ async function handlePblRoute(
     // POST /v1/admin/operator-key — store the operator override public key (D-204, admin only)
     // Body: JSON { spki: "<base64>" } — the ES256 public key SPKI
     if (path === '/v1/admin/operator-key' && method === 'POST') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'super-admin');
+      if (__a instanceof Response) return __a;
       try {
         const body = await request.json() as { spki?: string };
         if (!body.spki) {
@@ -2887,9 +2935,8 @@ async function handlePblRoute(
 
     // GET /v1/admin/operator-key — get operator key info (D-204, admin only)
     if (path === '/v1/admin/operator-key' && method === 'GET') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'viewer');
+      if (__a instanceof Response) return __a;
       const stored = await env.LOCKDOWN_KV.get('pbl_operator_key:current', 'text');
       return new Response(
         JSON.stringify({
@@ -2902,9 +2949,8 @@ async function handlePblRoute(
 
     // DELETE /v1/admin/operator-key — remove operator key (D-204, admin only)
     if (path === '/v1/admin/operator-key' && method === 'DELETE') {
-      if (!(await verifyAdminAuth(request, env))) {
-        return errorResponse('Admin authentication required', 401);
-      }
+      const __a = await requireRole(request, env, 'super-admin');
+      if (__a instanceof Response) return __a;
       await env.LOCKDOWN_KV.delete('pbl_operator_key:current');
       return new Response(
         JSON.stringify({ deleted: true }),
