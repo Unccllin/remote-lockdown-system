@@ -769,6 +769,60 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
   return jsonResponse({ ok: true });
 }
 
+/**
+ * S4: Escrow-before-arm — dedicated key-escrow endpoint (agent path).
+ *
+ * Mirrors the Express server's /api/agent/escrow-key. The agent calls this
+ * BEFORE encrypting during a lockdown; the server persists the key bound
+ * to the command_id so the recovery key is escrowed before the point of
+ * no return. If escrow fails the agent refuses to encrypt — the device
+ * stays unlocked rather than locked-out.
+ *
+ * Idempotent on (device_id, command_id): retries keep the first key.
+ */
+async function handleEscrowKey(request: Request, env: Env): Promise<Response> {
+  const body = await request.text();
+  const device = await verifyAgentAuth(request, env, body);
+  if (!device) {
+    return errorResponse('Authentication failed', 401);
+  }
+
+  const payload = JSON.parse(body);
+  const { command_id, key_material } = payload;
+  if (!command_id || !key_material) {
+    return errorResponse('command_id and key_material required', 400);
+  }
+  if (typeof key_material !== 'string') {
+    return errorResponse('key_material must be a string', 400);
+  }
+
+  // The command must exist and belong to this device.
+  const commands = await listCommands(env);
+  const cmd = commands.find(
+    (c) => c.id === command_id && c.device_id === device.id,
+  );
+  if (!cmd) {
+    return errorResponse('Command not found for this device', 404);
+  }
+
+  // Idempotent: keep the first escrowed key for this device+command.
+  const keys = await listKeys(env);
+  const exists = keys.some(
+    (k) => k.device_id === device.id && k.command_id === command_id,
+  );
+  if (!exists) {
+    keys.push({
+      device_id: device.id,
+      command_id,
+      key_material,
+      released_at: null,
+    });
+    await saveKeys(env, keys);
+  }
+
+  return jsonResponse({ escrowed: true, command_id });
+}
+
 async function handleEnroll(request: Request, env: Env): Promise<Response> {
   if (!verifyAdminAuth(request, env)) {
     return errorResponse('Admin authentication required', 401);
@@ -1544,6 +1598,9 @@ export default {
     }
     if (path === '/api/agent/command-ack' && method === 'POST') {
       return handleCommandAck(request, env);
+    }
+    if (path === '/api/agent/escrow-key' && method === 'POST') {
+      return handleEscrowKey(request, env);
     }
     if (path === '/api/agent/deadman-report' && method === 'POST') {
       return handleDeadmanReport(request, env);

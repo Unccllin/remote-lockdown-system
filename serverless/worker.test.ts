@@ -536,6 +536,109 @@ describe('Serverless Worker', () => {
     });
   });
 
+  // S4: escrow-before-arm — dedicated key-escrow endpoint. The agent calls
+  // this BEFORE encrypting during a lockdown; the key is persisted bound to
+  // the command_id so the recovery key is escrowed before the point of no
+  // return.
+  describe('POST /api/agent/escrow-key', () => {
+    it('stores the key bound to command_id and returns escrowed:true', async () => {
+      const { apiKey, device } = await enrollDevice(worker, env, 'ESCROW-001');
+      // Flag stolen → queue a lockdown command
+      const flagReq = makeRequest(
+        'POST',
+        `/api/devices/${device.id}/flag`,
+        { hostname_confirm: 'ESCROW-001' },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      await worker.fetch(flagReq, env);
+
+      const checkinBody = JSON.stringify({ hostname: 'ESCROW-001' });
+      const checkinResp = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', checkinBody, signRequest(checkinBody, apiKey)), env);
+      const checkinData: any = await parseResponse(checkinResp);
+      const cmdId = checkinData.command.id;
+
+      const body = JSON.stringify({
+        hostname: 'ESCROW-001',
+        command_id: cmdId,
+        key_material: 'escrowed-fernet-key-base64',
+      });
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/escrow-key', body, signRequest(body, apiKey)), env);
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.escrowed).toBe(true);
+      expect(data.command_id).toBe(cmdId);
+
+      // Agent ACKs the lockdown so it completes (pending → unlock next).
+      const ackBody = JSON.stringify({
+        hostname: 'ESCROW-001',
+        command_id: cmdId,
+        result_status: 'executed',
+      });
+      await worker.fetch(makeRequest('POST', '/api/agent/command-ack', ackBody, signRequest(ackBody, apiKey)), env);
+
+      // The escrowed key is released to the agent on unlock.
+      const recoverReq = makeRequest(
+        'POST',
+        `/api/devices/${device.id}/recover`,
+        { hostname_confirm: 'ESCROW-001' },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      await worker.fetch(recoverReq, env);
+      const checkin2Body = JSON.stringify({ hostname: 'ESCROW-001' });
+      const checkin2Resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', checkin2Body, signRequest(checkin2Body, apiKey)), env);
+      const checkin2Data: any = await parseResponse(checkin2Resp);
+      expect(checkin2Data.command.key_material).toBe('escrowed-fernet-key-base64');
+    });
+
+    it('is idempotent — second call keeps the first key', async () => {
+      const { apiKey, device } = await enrollDevice(worker, env, 'ESCROW-002');
+      const flagReq = makeRequest(
+        'POST',
+        `/api/devices/${device.id}/flag`,
+        { hostname_confirm: 'ESCROW-002' },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      await worker.fetch(flagReq, env);
+      const checkinBody = JSON.stringify({ hostname: 'ESCROW-002' });
+      const checkinResp = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', checkinBody, signRequest(checkinBody, apiKey)), env);
+      const checkinData: any = await parseResponse(checkinResp);
+      const cmdId = checkinData.command.id;
+
+      const mk = (key: string) => makeRequest(
+        'POST', '/api/agent/escrow-key',
+        JSON.stringify({ hostname: 'ESCROW-002', command_id: cmdId, key_material: key }),
+        signRequest(JSON.stringify({ hostname: 'ESCROW-002', command_id: cmdId, key_material: key }), apiKey));
+      const r1 = await worker.fetch(mk('first-key'), env);
+      expect((await parseResponse(r1) as any).escrowed).toBe(true);
+      const r2 = await worker.fetch(mk('second-key'), env);
+      expect((await parseResponse(r2) as any).escrowed).toBe(true);
+    });
+
+    it('rejects a command_id that does not belong to the device', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'ESCROW-003');
+      const body = JSON.stringify({
+        hostname: 'ESCROW-003',
+        command_id: 'nonexistent-cmd',
+        key_material: 'key-base64',
+      });
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/escrow-key', body, signRequest(body, apiKey)), env);
+      expect(resp.status).toBe(404);
+    });
+
+    it('rejects without key_material', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'ESCROW-004');
+      const body = JSON.stringify({ hostname: 'ESCROW-004', command_id: 'c1' });
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/escrow-key', body, signRequest(body, apiKey)), env);
+      expect(resp.status).toBe(400);
+    });
+  });
+
   describe('Dashboard-compatible endpoints', () => {
     it('POST /api/auth/login validates admin token', async () => {
       const req = makeRequest('POST', '/api/auth/login', {
