@@ -63,6 +63,16 @@
 #define BCD_E_DISPLAY_ORDER    0x24000001
 #define BCD_E_RECOVERY_SEQ     0x24000010
 #define BCD_E_INHERIT          0x14000006
+// NG-T5: device-blob element IDs (device format).
+#define BCD_E_DEVICE           0x11000001
+#define BCD_E_OSDEVICE         0x21000001
+// osdevice blob offsets (NOTE-BCD-DEVICE-BLOB.md).
+#define BCD_DEV_PACKET_TYPE    0x10
+#define BCD_DEV_PART_ID        0x20   // GPT:part GUID / MBR:u64 byte offset
+#define BCD_DEV_TABLE_TYPE     0x34   // 0=GPT, 1=MBR
+#define BCD_DEV_DISK_ID        0x38   // GPT:disk GUID / MBR:u32 signature
+#define BCD_DEV_MIN_SIZE       0x48   // packet header(0x10)+diskpartition(0x38)
+#define BCD_DEV_TYPE_PARTITION 6      // packet type for a partition device
 
 STATIC
 BOOLEAN
@@ -449,6 +459,63 @@ BcdCountMultiSz (
   return Count;
 }
 
+/** NG-T5: Decode an osdevice/device element blob into a partition identity.
+
+  Blob layout (NOTE-BCD-DEVICE-BLOB.md §layout):
+    0x00 16B options GUID | 0x10 packet hdr {type,flags,size,unknown} |
+    0x20 PartitionID(16) | 0x30 u32=0 | 0x34 TableType(0=GPT,1=MBR) |
+    0x38 DiskID(16) | 0x48 pad
+
+  Only a top-level type-6 (partition) packet yields a usable identity;
+  type 5 (boot) and nested type-0/8 (file/ramdisk/vhd) chains carry no
+  partition leaf we bind at this level — the caller falls back to
+  disk-level binding for those.
+
+  @param  Data        Element value bytes.
+  @param  DataLength  Length of Data.
+  @param  State       Platform state to receive the decoded blob (appended
+                      to the BcdOsDevice* arrays if a slot is free).
+  @retval TRUE  A partition-device identity was decoded and recorded.
+  @retval FALSE Not a partition device, malformed, or no free slot.
+**/
+STATIC
+BOOLEAN
+BcdParseDeviceBlob (
+  IN     CONST UINT8        *Data,
+  IN     UINTN               DataLength,
+  IN OUT PBL_PLATFORM_STATE *State
+  )
+{
+  UINT32 PacketType;
+  UINT32 TableType;
+  UINT8  Slot;
+
+  if (Data == NULL || State == NULL || DataLength < BCD_DEV_MIN_SIZE) {
+    return FALSE;
+  }
+
+  PacketType = BcdReadDword (Data, DataLength, BCD_DEV_PACKET_TYPE);
+  if (PacketType != BCD_DEV_TYPE_PARTITION) {
+    return FALSE;  // boot(5)/file/ramdisk/vhd — no partition leaf to bind
+  }
+
+  TableType = BcdReadDword (Data, DataLength, BCD_DEV_TABLE_TYPE);
+  if (TableType > 1) {
+    return FALSE;  // 0=GPT, 1=MBR — anything else is malformed
+  }
+
+  if (State->BcdOsDeviceCount >= PBL_MAX_OSDEVICE) {
+    return FALSE;  // table full — first PBL_MAX_OSDEVICE loaders recorded
+  }
+  Slot = State->BcdOsDeviceCount;
+
+  State->BcdOsDeviceTableType[Slot] = (UINT8)TableType;
+  CopyMem (State->BcdOsDevicePartId[Slot], Data + BCD_DEV_PART_ID, 16);
+  CopyMem (State->BcdOsDeviceDiskId[Slot], Data + BCD_DEV_DISK_ID, 16);
+  State->BcdOsDeviceCount++;
+  return TRUE;
+}
+
 STATIC
 VOID
 BcdApplyElement (
@@ -456,7 +523,8 @@ BcdApplyElement (
   IN     UINT32              ElementId,
   IN     UINT32              DataType,
   IN     CONST UINT8        *Data,
-  IN     UINTN               DataLength
+  IN     UINTN               DataLength,
+  IN     BOOLEAN             IsOsLoader
   )
 {
   UINT8 FirstByte = 0;
@@ -538,6 +606,17 @@ BcdApplyElement (
       State->BcdInheritCount += BcdCountMultiSz (Data, DataLength);
       break;
 
+    // NG-T5: capture the osdevice blob only from osloader objects —
+    // application-class 0x21000001 is the OS-load device. (The library-class
+    // 0x11000001 `device` element is also accepted on osloader objects for
+    // completeness; both carry the same partition-device blob format.)
+    case BCD_E_OSDEVICE:
+    case BCD_E_DEVICE:
+      if (IsOsLoader) {
+        BcdParseDeviceBlob (Data, DataLength, State);
+      }
+      break;
+
     default:
       break;
   }
@@ -550,7 +629,8 @@ BcdParseElement (
   IN     UINTN              Size,
   IN     UINTN              HbinBase,
   IN     UINTN              ElementNkDataOff,
-  IN OUT PBL_PLATFORM_STATE *State
+  IN OUT PBL_PLATFORM_STATE *State,
+  IN     BOOLEAN            IsOsLoader
   )
 {
   CHAR8        ElementIdStr[16];
@@ -601,7 +681,7 @@ BcdParseElement (
     return;
   }
 
-  BcdApplyElement (State, ElementId, ValueType, ValueData, ValueLength);
+  BcdApplyElement (State, ElementId, ValueType, ValueData, ValueLength, IsOsLoader);
 }
 
 STATIC
@@ -615,12 +695,32 @@ BcdParseObject (
   )
 {
   UINTN   ElementsNkDataOff;
+  UINTN   DescNkDataOff;
+  UINTN   TypeVkDataOff;
   UINTN   Count;
   UINTN   ListRel;
   UINTN   ListAbs;
   UINTN   ListCellSize;
   UINTN   ListDataOff;
   UINTN   i;
+  BOOLEAN IsOsLoader;
+  CONST   UINT8 *TypeData;
+  UINTN   TypeLen;
+
+  // NG-T5: classify the object — only osloader objects (Description\Type ==
+  // 0x10200003) carry an osdevice blob we want for partition-level binding.
+  // Other objects ({bootmgr}, memdiag, options) may also have device
+  // elements; we ignore them for binding.
+  IsOsLoader = FALSE;
+  if (BcdFindSubkeyByName (Data, Size, HbinBase, ObjectNkDataOff, "Description", &DescNkDataOff) &&
+      Data[DescNkDataOff] == 'n' && Data[DescNkDataOff + 1] == 'k' &&
+      BcdFindValueByName (Data, Size, HbinBase, DescNkDataOff, "Type", &TypeVkDataOff) &&
+      BcdReadValueData (Data, Size, HbinBase, TypeVkDataOff, &TypeData, &TypeLen) &&
+      TypeLen >= 4) {
+    // TypeData points into the hive buffer; the Type value is a REG_DWORD
+    // stored little-endian.
+    IsOsLoader = (ReadUnaligned32 ((UINT32 *)TypeData) == PBL_BCD_OBJTYPE_OSLOADER);
+  }
 
   if (!BcdFindSubkeyByName (Data, Size, HbinBase, ObjectNkDataOff, "Elements", &ElementsNkDataOff)) {
     return;
@@ -648,7 +748,7 @@ BcdParseObject (
     if (Data[ElementNkDataOff] != 'n' || Data[ElementNkDataOff + 1] != 'k') {
       continue;
     }
-    BcdParseElement (Data, Size, HbinBase, ElementNkDataOff, State);
+    BcdParseElement (Data, Size, HbinBase, ElementNkDataOff, State, IsOsLoader);
   }
 }
 
@@ -749,6 +849,9 @@ PblBcdParse (
   State->BcdDisplayOrderCount     = 0;
   State->BcdRecoverySequenceCount = 0;
   State->BcdInheritCount          = 0;
+  // NG-T5: osdevice partition-binding table.
+  State->BcdOsDeviceCount         = 0;
+  SetMem (State->BcdOsDeviceTableType, sizeof (State->BcdOsDeviceTableType), 0xFF);
 
   // Validate REGF signature.
   if (BcdReadDword (BcdData, BcdSize, 0) != 0x66676572) {

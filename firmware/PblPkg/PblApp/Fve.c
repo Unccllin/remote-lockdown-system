@@ -185,6 +185,96 @@ PblFveSameDisk (
          CompareMem (Dp, BootDp, PrefixLen) == 0;
 }
 
+/** NG-T5: Return the first MEDIA_DEVICE_PATH HD() node on Handle's device
+  path, or NULL. The HD node carries the partition identity (GPT partition
+  GUID in Signature[16] with SignatureType 0x02, or MBR signature +
+  PartitionStart with SignatureType 0x01) that the BCD osdevice blob
+  encodes.
+**/
+STATIC
+CONST HARDDRIVE_DEVICE_PATH *
+PblFveHdNode (
+  IN EFI_HANDLE  Handle
+  )
+{
+  EFI_DEVICE_PATH_PROTOCOL       *Dp;
+  CONST EFI_DEVICE_PATH_PROTOCOL *Node;
+
+  if (EFI_ERROR (gBS->HandleProtocol (
+                    Handle, &gEfiDevicePathProtocolGuid, (VOID **)&Dp)) ||
+      Dp == NULL) {
+    return NULL;
+  }
+  for (Node = Dp; !IsDevicePathEnd (Node); Node = NextDevicePathNode (Node)) {
+    if (DevicePathType (Node) == MEDIA_DEVICE_PATH &&
+        DevicePathSubType (Node) == MEDIA_HARDDRIVE_DP) {
+      return (CONST HARDDRIVE_DEVICE_PATH *)Node;
+    }
+  }
+  return NULL;
+}
+
+/** NG-T5: TRUE when Handle's HD() node matches one of the decoded osdevice
+  partition identities — i.e. the FVE volume IS a Windows boot partition,
+  not merely a volume on the boot disk.
+
+  GPT (TableType 0): blob.PartitionID is the unique partition GUID, which
+    the HD node carries verbatim in Signature[16] (SignatureType 0x02). The
+    partition GUID is globally unique, so the disk GUID is redundant
+    confirmation and not required.
+  MBR (TableType 1): blob.DiskID[0:4] is the MBR disk signature and
+    blob.PartitionID is the partition's byte offset; the HD node carries
+    the MBR signature in Signature[0:4] (SignatureType 0x01) and the
+    partition start LBA in PartitionStart, so we compare signature AND
+    PartitionStart * BlockSize == byte offset.
+
+  @param  Handle  Device handle whose HD() node is tested.
+  @param  Bio     BlockIo on the same handle (for BlockSize on MBR).
+  @param  State   Platform state carrying the decoded osdevice blobs.
+**/
+STATIC
+BOOLEAN
+PblFveSamePartition (
+  IN EFI_HANDLE              Handle,
+  IN EFI_BLOCK_IO_PROTOCOL  *Bio,
+  IN PBL_PLATFORM_STATE     *State
+  )
+{
+  CONST HARDDRIVE_DEVICE_PATH *Hd;
+  UINT8  i;
+
+  if (State == NULL || State->BcdOsDeviceCount == 0) {
+    return FALSE;
+  }
+  Hd = PblFveHdNode (Handle);
+  if (Hd == NULL) {
+    return FALSE;
+  }
+
+  for (i = 0; i < State->BcdOsDeviceCount; i++) {
+    UINT8 TableType = State->BcdOsDeviceTableType[i];
+    if (TableType == 0) {
+      // GPT: HD.SignatureType 0x02 + Signature[16] == partition GUID.
+      if (Hd->SignatureType == 0x02 &&
+          CompareMem (Hd->Signature, State->BcdOsDevicePartId[i], 16) == 0) {
+        return TRUE;
+      }
+    } else if (TableType == 1) {
+      // MBR: HD.SignatureType 0x01 + Signature[0:4] == disk signature AND
+      // PartitionStart(LBA) * BlockSize == byte offset in PartId[0:8].
+      if (Hd->SignatureType == 0x01 && Bio != NULL && Bio->Media != NULL &&
+          Bio->Media->BlockSize != 0 &&
+          CompareMem (Hd->Signature, State->BcdOsDeviceDiskId[i], 4) == 0) {
+        UINT64 PartOffset = ReadUnaligned64 ((UINT64 *)State->BcdOsDevicePartId[i]);
+        if (PartOffset == (UINT64)Hd->PartitionStart * Bio->Media->BlockSize) {
+          return TRUE;
+        }
+      }
+    }
+  }
+  return FALSE;
+}
+
 /** Inspect one FVE volume: walk the three metadata block offsets and
   parse the first block that verifies. Caller resets the Fve* fields
   before calling so a boot-disk volume can supersede a provisional parse.
@@ -288,6 +378,7 @@ PblCheckFve (
   State->FveClearKeyOnly     = FALSE;
   State->FveVolumeCount      = 0;
   State->FveOnBootDisk       = FALSE;
+  State->FveOnBootPartition  = FALSE;
   State->FveBootDiskKnown    = FALSE;
 
   // Resolve PBL's boot disk: the device PBL itself was loaded from.
@@ -347,6 +438,14 @@ PblCheckFve (
     if (Bound) {
       State->FveOnBootDisk = TRUE;
       Print (L"  [OK] FVE volume bound to boot disk (device %u)\n", (UINT32)i);
+      // NG-T5: upgrade to partition-level binding — does this FVE volume's
+      // HD() node match a decoded osdevice partition identity? Any-match:
+      // an osloader pointing at this partition proves it is a real Windows
+      // boot target. Degrades silently when no osdevice blobs were decoded.
+      if (PblFveSamePartition (Handles[i], Bio, State)) {
+        State->FveOnBootPartition = TRUE;
+        Print (L"  [OK] FVE volume bound to boot partition (device %u)\n", (UINT32)i);
+      }
     } else if (State->FveBootDiskKnown) {
       Print (L"  [WARN] FVE volume not on boot disk (device %u)\n", (UINT32)i);
     }

@@ -90,6 +90,10 @@
 #define PBL_PCR_DECISION       12
 #define PBL_PCR_INPUTS         13
 
+// NG-T5: max osloader osdevice blobs captured per store (multi-boot).
+// Defined early — PBL_PLATFORM_STATE sizes its osdevice arrays by it.
+#define PBL_MAX_OSDEVICE       8
+
 // Decision results (C4 §5)
 typedef enum {
   PblResultPass     = 0,
@@ -288,6 +292,20 @@ typedef struct {
   BOOLEAN   FveOnBootDisk;        // an FVE volume shares PBL's boot disk
   BOOLEAN   FveBootDiskKnown;     // boot-disk prefix resolved (binding evaluated)
 
+  // NG-T5: partition-level FVE binding. Decoded from the osloader object's
+  // `osdevice` device-blob (BCD element 0x21000001, packet type 6). The
+  // partition identity (GPT partition GUID, or MBR signature+byte-offset)
+  // is compared against each FVE volume's HD() device-path node — "this FVE
+  // volume IS the Windows boot partition", stronger than disk-level. We
+  // capture up to PBL_MAX_OSDEVICE osloader blobs (multi-boot stores have
+  // several) and bind on any-match: an osloader pointing at the FVE
+  // partition proves it is a real Windows boot target.
+  UINT8     BcdOsDeviceTableType[PBL_MAX_OSDEVICE];  // 0=GPT,1=MBR,0xFF=none
+  UINT8     BcdOsDevicePartId[PBL_MAX_OSDEVICE][16]; // GPT:partGUID/MBR:u64 off
+  UINT8     BcdOsDeviceDiskId[PBL_MAX_OSDEVICE][16]; // GPT:diskGUID/MBR:u32 sig
+  UINT8     BcdOsDeviceCount;      // osloader osdevice blobs decoded
+  BOOLEAN   FveOnBootPartition;    // an FVE volume matches an osdevice partition
+
   // REQ-09: BCD element parsing (D-120)
   // These are deterministic summaries of the BCD store that feed the
   // platform-state digest. 0xFF means "not present / unknown" for the
@@ -343,6 +361,12 @@ typedef struct {
 #define PBL_BPF_BOOTNEXT_SET         0x02  // BootNext variable present (one-shot override)
 #define PBL_BPF_SHELL_AS_BOOTNEXT    0x04  // BootNext target's loader is a shell
 #define PBL_BPF_SHELL_ON_ESP         0x08  // *shell*.efi file found on an ESP volume
+
+// NG-T5: BCD object-type dwords (Description\Type value).
+#define PBL_BCD_OBJTYPE_OSLOADER     0x10200003  // Windows OS loader
+// BCD device-blob element IDs (device format, class 1=library / 2=app).
+#define PBL_BCD_E_DEVICE             0x11000001  // `device`  (library class)
+#define PBL_BCD_E_OSDEVICE           0x21000001  // `osdevice`(application)
 
 // ============================================================================
 // Function prototypes (one per source file)
