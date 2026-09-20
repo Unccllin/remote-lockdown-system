@@ -100,6 +100,42 @@ interface AuditEntry {
   admin_username?: string;
 }
 
+// S4-serverless: BIOS/PBA credential store (mirrors server's bios_passwords
+// table). The agent ACKs these during lockdown (bios_password → 'setup',
+// power_on_password → 'power_on', bitlocker_pin → 'bitlocker_pin',
+// bitlocker_recovery_password → 'bitlocker_recovery'). Stored plaintext in
+// KV — same threat posture as the encryption_keys store; a KV_KEK envelope
+// layer can be added uniformly later.
+interface BiosPassword {
+  device_id: string;
+  password_type: 'setup' | 'power_on' | 'bitlocker_pin' | 'bitlocker_recovery';
+  password: string;
+  created_at: string;
+}
+
+/** Group bios_password rows by type, most recent of each (server parity). */
+function groupPbaCredentials(rows: BiosPassword[]): {
+  setup_password: string | null;
+  power_on_password: string | null;
+  bitlocker_pin: string | null;
+  bitlocker_recovery_password: string | null;
+} {
+  const creds = {
+    setup_password: null as string | null,
+    power_on_password: null as string | null,
+    bitlocker_pin: null as string | null,
+    bitlocker_recovery_password: null as string | null,
+  };
+  // rows sorted newest-first; first of each type wins.
+  for (const row of rows) {
+    if (row.password_type === 'setup' && !creds.setup_password) creds.setup_password = row.password;
+    else if (row.password_type === 'power_on' && !creds.power_on_password) creds.power_on_password = row.password;
+    else if (row.password_type === 'bitlocker_pin' && !creds.bitlocker_pin) creds.bitlocker_pin = row.password;
+    else if (row.password_type === 'bitlocker_recovery' && !creds.bitlocker_recovery_password) creds.bitlocker_recovery_password = row.password;
+  }
+  return creds;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -423,6 +459,7 @@ const COMMANDS_KEY = 'commands';
 const KEYS_KEY = 'encryption_keys';
 const LOCATIONS_KEY = 'locations';
 const AUDIT_KEY = 'audit_log';
+const BIOS_PASSWORDS_KEY = 'bios_passwords';
 
 // KV-RACE-001: Checkin metadata is stored in a separate KV key from device
 // status. This prevents the checkin handler's read-modify-write of the
@@ -490,6 +527,15 @@ async function listKeys(env: Env): Promise<EncryptionKey[]> {
 
 async function saveKeys(env: Env, keys: EncryptionKey[]): Promise<void> {
   await env.LOCKDOWN_KV.put(KEYS_KEY, JSON.stringify(keys));
+}
+
+async function listBiosPasswords(env: Env): Promise<BiosPassword[]> {
+  const data = await env.LOCKDOWN_KV.get(BIOS_PASSWORDS_KEY);
+  return data ? JSON.parse(data) : [];
+}
+
+async function saveBiosPasswords(env: Env, pws: BiosPassword[]): Promise<void> {
+  await env.LOCKDOWN_KV.put(BIOS_PASSWORDS_KEY, JSON.stringify(pws));
 }
 
 async function listLocations(env: Env): Promise<LocationReport[]> {
@@ -758,6 +804,9 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
   // flag; it's just returned when an unlock command is pending.
   let keyMaterial: string | null = null;
   let biosPassword: string | null = null;
+  let powerOnPassword: string | null = null;
+  let bitlockerPin: string | null = null;
+  let bitlockerRecoveryPassword: string | null = null;
   if (pendingCmd.command_type === 'unlock') {
     const keys = await listKeys(env);
     // Find the most recent key for this device (lockdown ACK key, not
@@ -775,12 +824,18 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
         await saveKeys(env, keys);
       }
     }
-    // BIOS password is not stored separately in the serverless KV model;
-    // the full server stores it in bios_passwords, but the serverless
-    // endpoint doesn't have that table. The agent can operate without it
-    // for the serverless path (BIOS password is only needed for UEFI
-    // lockdown removal, which requires the full server's encrypted-at-rest
-    // password storage).
+    // S4-serverless: fetch the stored BIOS/PBA credentials the agent needs
+    // to remove UEFI lockdown (setup + power-on) and that the dashboard
+    // shows in the PBA Recovery panel (bitlocker pin + recovery).
+    const pws = await listBiosPasswords(env);
+    const devicePws = pws
+      .filter((p) => p.device_id === device.id)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const creds = groupPbaCredentials(devicePws);
+    biosPassword = creds.setup_password;
+    powerOnPassword = creds.power_on_password;
+    bitlockerPin = creds.bitlocker_pin;
+    bitlockerRecoveryPassword = creds.bitlocker_recovery_password;
   }
 
   return jsonResponse({
@@ -793,10 +848,10 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
       command_uuid: pendingCmd.command_uuid || null,
       key_material: keyMaterial,
       bios_password: biosPassword,
-      power_on_password: null,
+      power_on_password: powerOnPassword,
       enable_pba: false,
-      bitlocker_pin: null,
-      bitlocker_recovery_password: null,
+      bitlocker_pin: bitlockerPin,
+      bitlocker_recovery_password: bitlockerRecoveryPassword,
       // Duress code: forwarded from the queued unlock command so the
       // agent knows to pretend-unlock and silently re-lock.
       duress_code: pendingCmd.duress_code ?? null,
@@ -894,6 +949,9 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
     result_status,
     key_material,
     bios_password,
+    power_on_password,
+    bitlocker_pin,
+    bitlocker_recovery_password,
     boot_lock_status,
     boot_lock_detail,
   } = payload;
@@ -937,6 +995,33 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
       released_at: null,
     });
     await saveKeys(env, filtered);
+  }
+
+  // S4-serverless: store BIOS/PBA credentials by type (mirrors server's
+  // bios_passwords inserts). These power both the unlock-materials path in
+  // checkin and the pba-credentials admin endpoint.
+  const credsToStore: Array<[string | undefined, BiosPassword['password_type']]> = [
+    [bios_password, 'setup'],
+    [power_on_password, 'power_on'],
+    [bitlocker_pin, 'bitlocker_pin'],
+    [bitlocker_recovery_password, 'bitlocker_recovery'],
+  ];
+  const anyCreds = credsToStore.some(([v]) => v != null && v !== '');
+  if (anyCreds) {
+    const pws = await listBiosPasswords(env);
+    for (const [value, type] of credsToStore) {
+      if (value == null || value === '') continue;
+      // Replace any existing credential of this type for the device.
+      const idx = pws.findIndex((p) => p.device_id === device.id && p.password_type === type);
+      const row: BiosPassword = {
+        device_id: device.id,
+        password_type: type,
+        password: value,
+        created_at: new Date().toISOString(),
+      };
+      if (idx >= 0) pws[idx] = row; else pws.push(row);
+    }
+    await saveBiosPasswords(env, pws);
   }
 
   // Update device status based on command result
@@ -1647,6 +1732,94 @@ async function handleDownloadEfsCert(
 }
 
 /**
+ * GET /api/devices/:id/pba-credentials — PBA recovery credentials for the
+ * dashboard (super-admin only, mirrors server's T10).
+ *
+ * Returns { setup_password, power_on_password, bitlocker_pin,
+ * bitlocker_recovery_password } — the most recent credential of each type
+ * the agent escrowed during lockdown. Audited as a sensitive disclosure.
+ */
+async function handleGetPbaCredentials(
+  request: Request,
+  env: Env,
+  deviceId: string,
+): Promise<Response> {
+  const auth = await requireRole(request, env, 'super-admin');
+  if (auth instanceof Response) return auth;
+
+  const devices = await listDevices(env);
+  const device = devices.find((d) => d.id === deviceId);
+  if (!device) return errorResponse('Device not found', 404);
+
+  const pws = await listBiosPasswords(env);
+  const devicePws = pws
+    .filter((p) => p.device_id === deviceId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const creds = groupPbaCredentials(devicePws);
+
+  await addAuditEntry(
+    env, deviceId, 'pba_credentials_accessed',
+    `by=${auth.username} types=${Object.values(creds).filter((v) => v !== null).length}`,
+  );
+  return jsonResponse(creds);
+}
+
+/**
+ * DELETE /api/devices/:id/release — offboard a device (operator+).
+ *
+ * Deletes the device and cascades its commands, keys, bios_passwords,
+ * locations, and checkin metadata. Audit entries are preserved but
+ * anonymized (device_id nulled) for accountability — mirrors the server's
+ * release semantics.
+ */
+async function handleReleaseDevice(
+  request: Request,
+  env: Env,
+  deviceId: string,
+): Promise<Response> {
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
+
+  let payload: { hostname_confirm?: string } = {};
+  try { payload = JSON.parse(await request.text()); } catch { /* empty ok */ }
+
+  const devices = await listDevices(env);
+  const device = devices.find((d) => d.id === deviceId);
+  if (!device) return errorResponse('Device not found', 404);
+  if (device.hostname !== payload.hostname_confirm) {
+    return errorResponse('Confirmation hostname does not match.', 400);
+  }
+  if (['locked', 'stolen', 'recovering'].includes(device.status)) {
+    return errorResponse(
+      `Cannot release a device in '${device.status}' state. Recover (unlock) the device first.`, 409);
+  }
+
+  // Anonymize audit entries for this device (preserve for accountability).
+  const audit = await listAudit(env);
+  const releasedAt = new Date().toISOString();
+  for (const e of audit) {
+    if (e.device_id === deviceId) {
+      e.detail = `${e.detail || ''} released_at=${releasedAt}`.trim();
+    }
+  }
+  await saveAudit(env, audit);
+  await addAuditEntry(env, deviceId, 'device_released', `hostname=${device.hostname} by=${auth.username}`);
+
+  // Cascade-delete the device's data across the KV stores.
+  await saveDevices(env, devices.filter((d) => d.id !== deviceId));
+  await saveCommands(env, (await listCommands(env)).filter((c) => c.device_id !== deviceId));
+  await saveKeys(env, (await listKeys(env)).filter((k) => k.device_id !== deviceId));
+  await saveBiosPasswords(env, (await listBiosPasswords(env)).filter((p) => p.device_id !== deviceId));
+  await saveLocations(env, (await listLocations(env)).filter((l) => l.device_id !== deviceId));
+  await env.LOCKDOWN_KV.delete(`${CHECKIN_KEY_PREFIX}${deviceId}`);
+
+  return jsonResponse({
+    ok: true,
+    message: `Device '${device.hostname}' has been released. All associated data has been deleted.`,
+  });
+}
+
+/**
  * GET /api/audit — return audit log entries (optionally filtered by device_id).
  */
 async function handleGetAudit(request: Request, env: Env): Promise<Response> {
@@ -2051,6 +2224,12 @@ export default {
       }
       if (action === 'locations' && method === 'GET') {
         return handleGetLocations(request, env, deviceId);
+      }
+      if (action === 'pba-credentials' && method === 'GET') {
+        return handleGetPbaCredentials(request, env, deviceId);
+      }
+      if (action === 'release' && method === 'DELETE') {
+        return handleReleaseDevice(request, env, deviceId);
       }
       if (action === 'efs-cert' && method === 'GET') {
         return handleDownloadEfsCert(request, env, deviceId);

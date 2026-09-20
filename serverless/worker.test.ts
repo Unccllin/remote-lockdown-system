@@ -1068,6 +1068,83 @@ describe('Serverless Worker', () => {
       expect(flag.status).toBe(403);
     });
 
+    it('pba-credentials returns agent-escrowed creds; release offboards the device', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      const { apiKey, device } = await enrollDevice(worker, env, 'PBA-001');
+      // Flag → lockdown
+      await worker.fetch(makeRequest('POST', `/api/devices/${device.id}/flag`,
+        { hostname_confirm: 'PBA-001' }, { Authorization: 'Bearer test-admin-token' }), env);
+      const ci = await worker.fetch(makeRequest('POST', '/api/agent/checkin',
+        JSON.stringify({ hostname: 'PBA-001' }), signRequest(JSON.stringify({ hostname: 'PBA-001' }), apiKey)), env);
+      const cmdId = ((await parseResponse(ci) as any).command).id;
+
+      // Agent ACKs lockdown with bios + bitlocker creds
+      const ackBody = JSON.stringify({
+        hostname: 'PBA-001', command_id: cmdId, result_status: 'executed',
+        key_material: 'k', bios_password: 'bios123',
+        power_on_password: 'po456', bitlocker_pin: 'pin789',
+        bitlocker_recovery_password: 'rec000',
+      });
+      await worker.fetch(makeRequest('POST', '/api/agent/command-ack', ackBody, signRequest(ackBody, apiKey)), env);
+
+      // pba-credentials (super-admin) returns the escrowed creds
+      const pba = await worker.fetch(makeRequest('GET', `/api/devices/${device.id}/pba-credentials`, undefined,
+        { Authorization: 'Bearer test-admin-token' }), env);
+      const creds: any = await parseResponse(pba);
+      expect(pba.status).toBe(200);
+      expect(creds.setup_password).toBe('bios123');
+      expect(creds.power_on_password).toBe('po456');
+      expect(creds.bitlocker_pin).toBe('pin789');
+      expect(creds.bitlocker_recovery_password).toBe('rec000');
+
+      // Recover → unlock returns the creds to the agent
+      await worker.fetch(makeRequest('POST', `/api/devices/${device.id}/recover`,
+        { hostname_confirm: 'PBA-001' }, { Authorization: 'Bearer test-admin-token' }), env);
+      const ci2 = await worker.fetch(makeRequest('POST', '/api/agent/checkin',
+        JSON.stringify({ hostname: 'PBA-001' }), signRequest(JSON.stringify({ hostname: 'PBA-001' }), apiKey)), env);
+      const cmd2 = (await parseResponse(ci2) as any).command;
+      expect(cmd2.bios_password).toBe('bios123');
+      expect(cmd2.power_on_password).toBe('po456');
+      expect(cmd2.bitlocker_recovery_password).toBe('rec000');
+
+      // ACK the unlock so the device returns to 'active' (release rejects
+      // locked/stolen/recovering devices).
+      const ack2 = JSON.stringify({
+        hostname: 'PBA-001', command_id: cmd2.id, result_status: 'executed',
+      });
+      await worker.fetch(makeRequest('POST', '/api/agent/command-ack', ack2, signRequest(ack2, apiKey)), env);
+
+      // release (operator) offboards the device — cascades all data
+      const rel = await worker.fetch(makeRequest('DELETE', `/api/devices/${device.id}/release`,
+        { hostname_confirm: 'PBA-001' }, { Authorization: 'Bearer test-admin-token' }), env);
+      expect(rel.status).toBe(200);
+      const list = await worker.fetch(makeRequest('GET', '/api/devices', undefined,
+        { Authorization: 'Bearer test-admin-token' }), env);
+      const devs: any = await parseResponse(list);
+      expect(devs.some((d: any) => d.id === device.id)).toBe(false);
+    });
+
+    it('pba-credentials requires super-admin; release rejects a locked device', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      await worker.fetch(makeRequest('POST', '/api/admins',
+        { username: 'op1', password: 'password123', role: 'operator' },
+        { Authorization: 'Bearer test-admin-token' }), env);
+      const { data } = await login(env, 'op1', 'password123');
+      const { device } = await enrollDevice(worker, env, 'PBA-002');
+
+      // operator (not super-admin) can't read pba-credentials → 403
+      const pba = await worker.fetch(makeRequest('GET', `/api/devices/${device.id}/pba-credentials`, undefined,
+        { Authorization: `Bearer ${data.token}` }), env);
+      expect(pba.status).toBe(403);
+
+      // a stolen device can't be released → 409
+      await worker.fetch(makeRequest('POST', `/api/devices/${device.id}/flag`,
+        { hostname_confirm: 'PBA-002' }, { Authorization: 'Bearer test-admin-token' }), env);
+      const rel = await worker.fetch(makeRequest('DELETE', `/api/devices/${device.id}/release`,
+        { hostname_confirm: 'PBA-002' }, { Authorization: 'Bearer test-admin-token' }), env);
+      expect(rel.status).toBe(409);
+    });
+
     it('operator CAN flag-stolen but CANNOT create admins (super-admin gate)', async () => {
       await seedAdmin(env, 'sa1', 'password123');
       await worker.fetch(makeRequest('POST', '/api/admins',
