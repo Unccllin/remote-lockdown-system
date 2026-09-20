@@ -51,49 +51,47 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 130 — 2026-09-20
+## Latest session: 131 — 2026-09-20
 
 ### RULE-ZERO
-**Read**: docs/wayfinder/tickets/NG-T5-partition-binding.md (full ticket + work items + bind-policy open question), docs/research/NOTE-BCD-DEVICE-BLOB.md (byte-level osdevice blob layout — PartitionID@0x20, TableType@0x34 [0=GPT,1=MBR inverted vs WMI], DiskID@0x38, packet type 6=partition), Bcd.c (BcdParseObject/BcdParseElement/BcdApplyElement/BcdReadValueData/Description\Type machinery), Fve.c (PblFveSameDisk/PblFveDiskPrefixLen/PblCheckFve), PblApp.h PBL_PLATFORM_STATE Fve* fields, EDK2 DevicePath.h HARDDRIVE_DEVICE_PATH (SignatureType 0x01=MBR sig/0x02=GPT GUID, NOT MBRType), test-fve-harness.sh.
-**Finding**: NG-T5 upgrades disk-level FVE binding to partition-level by decoding the osloader's osdevice blob and matching it against the FVE volume's HD() node. Bind-policy question resolved → **any-match** (safest: an osloader pointing at the FVE partition proves it IS a Windows boot target; false-positive requires a planted valid osdevice, already a tamper event).
+**Read**: Bcd.c regf/nk/vk/li cell offsets (NK_OFF_*, VK_OFF_*, BcdCellInfo, BcdFindSubkeyByName/ValueByName, BcdSubkeyListGetChild 'li' stride-4, BcdReadValueData inline-vs-cell rule), test-fve-harness.sh (samedisk/otherdisk/nofve boots, sgdisk combo image), real Win11 BCD at tmp/winre/Win11Extract (found: only type-5 boot devices — DVD/WinPE store, no partition osdevice → can't reuse, must synthesize).
+**Finding**: No usable partition-device osdevice exists in local BCD artifacts — must build a synthetic hive. The regf/nk/vk format Bcd.c consumes is fully documented by its own offsets; a Python generator emitting root→Objects→{bootmgr}+osloader(Type=0x10200003)→Elements→21000001(type-6 blob) is sufficient.
 
 ### IMPLEMENT
-- PblApp.h: PBL_MAX_OSDEVICE=8 (early, before struct), PBL_BCD_OBJTYPE_OSLOADER=0x10200003, PBL_BCD_E_DEVICE/OSDEVICE; state fields BcdOsDeviceTableType/PartId/DiskId[8]/BcdOsDeviceCount/FveOnBootPartition.
-- Bcd.c: BCD_DEV_* offsets + BcdParseDeviceBlob (bounds-checked type-6 decode); BcdParseObject reads Description\Type → IsOsLoader; BcdParseElement/BcdApplyElement thread IsOsLoader; osdevice/device captured only for osloader objects; state init.
-- Fve.c: PblFveHdNode (first HD() MEDIA node) + PblFveSamePartition (GPT: SigType2+partGUID match; MBR: SigType1+disksig+PartitionStart*BlockSize==byteoff); wired into PblCheckFve bound-branch → FveOnBootPartition.
-- Policy: **any-match** (user-confirmed after analysis).
+- firmware/PblPkg/gen-bcd-hive.py NEW (~370 lines): HbinBuilder (cells at hbin+0x20 so buf offset = hive-relative offset), build_nk/vk/li_list/vk_list, build_partition_blob (type-6, PartitionID@0x20/TableType@0x34/DiskID@0x38), build_boot_blob (type-5), build_hive assembles bootmgr + N osloaders. CLI: --partition-guid/--mbr SIG:OFF/--boot-device/--objects N.
+- test-fve-harness.sh: Boot 4 'partbind' — combo image + BCD on ESP naming partition-2 unique GUID; asserts 'FVE volume bound to boot partition'.
 
 ### VERIFY
-- DEBUG+RELEASE firmware builds clean (PBL_MAX_OSDEVICE forward-decl fix; SignatureType-vs-MBRType field fix caught by header read).
-- test-fve-harness.sh: **16/16 PASS** — no regression; partition path degrades gracefully (BcdOsDeviceCount=0 → FALSE, disk-level binding intact).
+- Hive self-walk in Python: BCD00000000→Objects→{bootmgr}+osloader(GUID); osloader→Description(Type=0x10200003)+Elements→21000001→type-6 blob, PartitionID=partition GUID. Correct.
+- QEMU+swtpm harness **20/20 PASS**: partbind serial `[Bcd] objects=2` → `bound to boot disk` → `bound to boot partition`. Discriminator: samedisk (no BCD) partition line count=0; partbind count=1. Positive + degrade + no-false-positive all proven.
+- Commit `df91b56`.
 
 ### Fog cleared this session
-- osdevice blob: packet type 6 = partition; PartitionID@0x20 (GPT GUID / MBR u64 offset), TableType@0x34 (0=GPT,1=MBR — inverted vs WMI), DiskID@0x38 (GPT disk GUID / MBR u32 sig). Same identity lives in HD() node — no disk reads needed.
-- HARDDRIVE_DEVICE_PATH: signature-kind selector is SignatureType (0x01 MBR, 0x02 GPT), NOT MBRType (that's partition format). Caught + fixed pre-commit.
-- BcdReadValueData returns a pointer into the hive buffer; REG_DWORD Type read via ReadUnaligned32 on that pointer.
+- Real Win11 DVD BCD has only type-5 boot devices — installed-Windows partition osdevice isn't in local artifacts; synthetic generation is the only local verification path.
+- Hive cell offsets are relative to hbin data area (cells at hbin+0x20); rootRel points at the cell size field, not hbin start.
+- vk data: <=4 bytes inline at data_offset (high bit of data_len set); >4 bytes → separate cell.
 
 ### Fog remaining
-- Partition-match POSITIVE path untested — needs a synthetic/real BCD hive with an osdevice blob (NG-T3 artifact or a synthetic hive builder); current harness only proves the no-hive degrade.
-- `flags`/`unknown` packet header fields partly understood (ramdisk +4 quirk); partition path doesn't depend on them.
-- Whether Windows 11 writes mbrindex vs mbroffset partition-identifier forms (all observed blobs use byte-offset).
+- Nested file/ramdisk/vhd chains (type 0/8) decode-only-to-recognize; multi-boot bind across >1 osloader untested (single-loader fixture only).
+- Real-hive validation (NG-T3) still valuable for flags/unknown quirks + Win11 partition-id forms.
 
 ### Debt items closed
-- NG-T5 implemented (any-match); narrows D-120 — partition-level binding done in code, real-media/VMK validation remain open.
+- NG-T5 fully verified (code + positive-path emulated test): commits `450d283` + `df91b56`. D-120 partition-binding sub-item done; real-media + VMK lock-state remain.
 
 ### Debt items still open
-- S2 remainder (VMK lock-state proof, monotonic-counter freshness, disk boot-structure baseline); S3–S5; D-120 (partial), D-129, D-130.
+- S2 remainder (VMK lock-state proof, monotonic-counter freshness, disk boot-structure baseline); S3–S5; D-120(partial), D-129, D-130.
 
 ### Blockers
-- NG-T5 positive verification needs a BCD hive fixture (NG-T3) — flagged.
+- None for NG-T5. Real-hive confirmation (NG-T3) is a separate ticket.
 
 ### Session artifacts
-- Commit `450d283`; test-fve-harness 16/16; DEBUG+RELEASE builds clean.
+- Commit `df91b56`; gen-bcd-hive.py; test-fve-harness 20/20; partbind serial 'objects=2'+'bound to boot partition'; samedisk partition-count=0 discriminator.
 
 ### Failure attribution
-- Two compile-time catches (PBL_MAX_OSDEVICE order, SignatureType field name) — layer 2 (context: EDK II header semantics), resolved by reading DevicePath.h before commit. No runtime failures.
+- One generator bug (hbin cell offset base — cells must start at 0x20 not 0) caught by self-walk before harness run: layer 4 (verification feedback — self-check caught it before the slow QEMU path).
 
 ### Next session opening
-NG-T5 positive-path fixture (synthetic BCD hive with osdevice blob) OR next S2 item — VMK lock-state proof / monotonic-counter freshness / disk boot-structure baseline.
+NG-T5 complete. Next S2 item: VMK lock-state proof OR monotonic-counter freshness OR disk boot-structure baseline; or NG-T3 real-hive validation of the osdevice decoder.
 
 ---
 

@@ -2195,3 +2195,49 @@ S1 complete. Next: S2 firmware items (NG-T5 FVE partition binding, VMK lock-stat
 NG-T5 positive-path fixture (synthetic BCD hive with osdevice blob) OR next S2 item — VMK lock-state proof / monotonic-counter freshness / disk boot-structure baseline.
 
 ---
+
+---
+
+## Session 131 — 2026-09-20
+
+### RULE-ZERO
+**Read**: Bcd.c regf/nk/vk/li cell offsets (NK_OFF_*, VK_OFF_*, BcdCellInfo, BcdFindSubkeyByName/ValueByName, BcdSubkeyListGetChild 'li' stride-4, BcdReadValueData inline-vs-cell rule), test-fve-harness.sh (samedisk/otherdisk/nofve boots, sgdisk combo image), real Win11 BCD at tmp/winre/Win11Extract (found: only type-5 boot devices — DVD/WinPE store, no partition osdevice → can't reuse, must synthesize).
+**Finding**: No usable partition-device osdevice exists in local BCD artifacts — must build a synthetic hive. The regf/nk/vk format Bcd.c consumes is fully documented by its own offsets; a Python generator emitting root→Objects→{bootmgr}+osloader(Type=0x10200003)→Elements→21000001(type-6 blob) is sufficient.
+
+### IMPLEMENT
+- firmware/PblPkg/gen-bcd-hive.py NEW (~370 lines): HbinBuilder (cells at hbin+0x20 so buf offset = hive-relative offset), build_nk/vk/li_list/vk_list, build_partition_blob (type-6, PartitionID@0x20/TableType@0x34/DiskID@0x38), build_boot_blob (type-5), build_hive assembles bootmgr + N osloaders. CLI: --partition-guid/--mbr SIG:OFF/--boot-device/--objects N.
+- test-fve-harness.sh: Boot 4 'partbind' — combo image + BCD on ESP naming partition-2 unique GUID; asserts 'FVE volume bound to boot partition'.
+
+### VERIFY
+- Hive self-walk in Python: BCD00000000→Objects→{bootmgr}+osloader(GUID); osloader→Description(Type=0x10200003)+Elements→21000001→type-6 blob, PartitionID=partition GUID. Correct.
+- QEMU+swtpm harness **20/20 PASS**: partbind serial `[Bcd] objects=2` → `bound to boot disk` → `bound to boot partition`. Discriminator: samedisk (no BCD) partition line count=0; partbind count=1. Positive + degrade + no-false-positive all proven.
+- Commit `df91b56`.
+
+### Fog cleared this session
+- Real Win11 DVD BCD has only type-5 boot devices — installed-Windows partition osdevice isn't in local artifacts; synthetic generation is the only local verification path.
+- Hive cell offsets are relative to hbin data area (cells at hbin+0x20); rootRel points at the cell size field, not hbin start.
+- vk data: <=4 bytes inline at data_offset (high bit of data_len set); >4 bytes → separate cell.
+
+### Fog remaining
+- Nested file/ramdisk/vhd chains (type 0/8) decode-only-to-recognize; multi-boot bind across >1 osloader untested (single-loader fixture only).
+- Real-hive validation (NG-T3) still valuable for flags/unknown quirks + Win11 partition-id forms.
+
+### Debt items closed
+- NG-T5 fully verified (code + positive-path emulated test): commits `450d283` + `df91b56`. D-120 partition-binding sub-item done; real-media + VMK lock-state remain.
+
+### Debt items still open
+- S2 remainder (VMK lock-state proof, monotonic-counter freshness, disk boot-structure baseline); S3–S5; D-120(partial), D-129, D-130.
+
+### Blockers
+- None for NG-T5. Real-hive confirmation (NG-T3) is a separate ticket.
+
+### Session artifacts
+- Commit `df91b56`; gen-bcd-hive.py; test-fve-harness 20/20; partbind serial 'objects=2'+'bound to boot partition'; samedisk partition-count=0 discriminator.
+
+### Failure attribution
+- One generator bug (hbin cell offset base — cells must start at 0x20 not 0) caught by self-walk before harness run: layer 4 (verification feedback — self-check caught it before the slow QEMU path).
+
+### Next session opening
+NG-T5 complete. Next S2 item: VMK lock-state proof OR monotonic-counter freshness OR disk boot-structure baseline; or NG-T3 real-hive validation of the osdevice decoder.
+
+---
