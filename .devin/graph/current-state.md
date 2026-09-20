@@ -51,51 +51,49 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 125 — 2026-09-18 (continuation)
+## Latest session: 130 — 2026-09-20
 
 ### RULE-ZERO
-**Read**: HttpsClient.c static-IP path (B-015), EDK2 NetworkPkg (Dhcp4Dxe Dhcp4Io/Impl, Ip4Dxe Ip4Config2Impl/Driver, HttpDxe HttpImpl/HttpProto, IScsiDxe IScsiDhcp), QEMU/slirp + filter-dump, ci-harness-docker.sh, test-s05-bootpath-harness.sh.
-**Finding**: Ip4Config2 InterfaceInfo is variable-length (RouteTable tail); Dhcp4 children share one per-controller state machine; Dhcp4 retransmits on {4,8,16,32}s.
+**Read**: docs/wayfinder/tickets/NG-T5-partition-binding.md (full ticket + work items + bind-policy open question), docs/research/NOTE-BCD-DEVICE-BLOB.md (byte-level osdevice blob layout — PartitionID@0x20, TableType@0x34 [0=GPT,1=MBR inverted vs WMI], DiskID@0x38, packet type 6=partition), Bcd.c (BcdParseObject/BcdParseElement/BcdApplyElement/BcdReadValueData/Description\Type machinery), Fve.c (PblFveSameDisk/PblFveDiskPrefixLen/PblCheckFve), PblApp.h PBL_PLATFORM_STATE Fve* fields, EDK2 DevicePath.h HARDDRIVE_DEVICE_PATH (SignatureType 0x01=MBR sig/0x02=GPT GUID, NOT MBRType), test-fve-harness.sh.
+**Finding**: NG-T5 upgrades disk-level FVE binding to partition-level by decoding the osloader's osdevice blob and matching it against the FVE volume's HD() node. Bind-policy question resolved → **any-match** (safest: an osloader pointing at the FVE partition proves it IS a Windows boot target; false-positive requires a planted valid osdevice, already a tamper event).
 
 ### IMPLEMENT
-- firmware/PblPkg/PblApp/HttpsClient.c: PblConfigureDhcpV4 — LocateHandleBuffer(Ip4Config2), SetData(Ip4Config2PolicyDhcp) per instance, WaitForEvent-pumped 50ms poll (TimeoutEvent + PollEvent), two-call variable-length GetData(InterfaceInfo), nonzero station = lease; DEBUG diagnostics (SNP/DHCP4-SB/child state dumps); PblHttpsPost uses UseDefaultAddress=TRUE on lease, DEBUG-only QEMU static fallback under PBL_DEBUG, release fails closed.
-- PblApp.h: Ip4Config2.h + Dhcp4.h includes. PblApp.inf: gEfiIp4Config2ProtocolGuid + DHCP4 guids + PcdDhcpTimeoutMs. PblPkg.dec: PcdDhcpTimeoutMs=30000 (covers Dhcp4 {4,8,16,32}s early retries).
-- firmware/PblPkg/test-s07-dhcp-harness.sh NEW — 7 assertions on lease/fetch/no-fallback.
-- Root cause of the long debugging arc: fixed-buffer GetData(InterfaceInfo) returned EFI_BUFFER_TOO_SMALL once the bound lease added a default route — the lease had succeeded on the wire (pcap DORA+ACK) all along; the poll literally couldn't see it.
+- PblApp.h: PBL_MAX_OSDEVICE=8 (early, before struct), PBL_BCD_OBJTYPE_OSLOADER=0x10200003, PBL_BCD_E_DEVICE/OSDEVICE; state fields BcdOsDeviceTableType/PartId/DiskId[8]/BcdOsDeviceCount/FveOnBootPartition.
+- Bcd.c: BCD_DEV_* offsets + BcdParseDeviceBlob (bounds-checked type-6 decode); BcdParseObject reads Description\Type → IsOsLoader; BcdParseElement/BcdApplyElement thread IsOsLoader; osdevice/device captured only for osloader objects; state init.
+- Fve.c: PblFveHdNode (first HD() MEDIA node) + PblFveSamePartition (GPT: SigType2+partGUID match; MBR: SigType1+disksig+PartitionStart*BlockSize==byteoff); wired into PblCheckFve bound-branch → FveOnBootPartition.
+- Policy: **any-match** (user-confirmed after analysis).
 
 ### VERIFY
-- QEMU+OVMF+swtpm docker run (DEBUG efi 3b307162): 'lease on ifinfo[0] station=10.0.2.15' + 'DHCP lease obtained' + 'Verdict response: 205 bytes' + 'Verdict signature verified (ES256)' + 'verdict=0'.
-- pcap wire evidence: DISCOVER->OFFER->REQUEST->ACK (yiaddr=10.0.2.15), ARP, TCP handshake, POST 209B, response 350B — all on the DHCP address.
-- Release build e7283452: no 'static fallback' string; fail-closed error path present.
-- test-s07-dhcp-harness.sh: 7/7. ci-harness-docker.sh regression: 15/0.
+- DEBUG+RELEASE firmware builds clean (PBL_MAX_OSDEVICE forward-decl fix; SignatureType-vs-MBRType field fix caught by header read).
+- test-fve-harness.sh: **16/16 PASS** — no regression; partition path degrades gracefully (BcdOsDeviceCount=0 → FALSE, disk-level binding intact).
 
 ### Fog cleared this session
-- GetData(InterfaceInfo) MUST use the two-call protocol — buffer size grows with routes.
-- Dhcp4 children share one DhcpSb state machine; a second Start hits ALREADY_STARTED — but the REAL bug was buffer size, not session theft (re-kick hypothesis disproven and removed).
-- QEMU-in-docker: slirp 10.0.2.2 → container loopback, NOT docker host — mock server must run in-container (needs cryptography pip) or use --network host.
-- Custom OVMF DOES contain the full network stack (earlier compressed-FV strings scan was misleading).
+- osdevice blob: packet type 6 = partition; PartitionID@0x20 (GPT GUID / MBR u64 offset), TableType@0x34 (0=GPT,1=MBR — inverted vs WMI), DiskID@0x38 (GPT disk GUID / MBR u32 sig). Same identity lives in HD() node — no disk reads needed.
+- HARDDRIVE_DEVICE_PATH: signature-kind selector is SignatureType (0x01 MBR, 0x02 GPT), NOT MBRType (that's partition format). Caught + fixed pre-commit.
+- BcdReadValueData returns a pointer into the hive buffer; REG_DWORD Type read via ReadUnaligned32 on that pointer.
 
 ### Fog remaining
-- Multi-NIC lease affinity: poll succeeds on first nonzero station; no binding between HTTP child and the leased interface (works on single-NIC QEMU; real multi-NIC hardware TBD).
-- Whether unordered Boot#### wedge (B-035) reproduces on real firmware.
+- Partition-match POSITIVE path untested — needs a synthetic/real BCD hive with an osdevice blob (NG-T3 artifact or a synthetic hive builder); current harness only proves the no-hive degrade.
+- `flags`/`unknown` packet header fields partly understood (ramdisk +4 quirk); partition path doesn't depend on them.
+- Whether Windows 11 writes mbrindex vs mbroffset partition-identifier forms (all observed blobs use byte-offset).
 
 ### Debt items closed
-- S0.7 implemented + verified: B-015 refuted→B-037 (emulated). Commit 75666ef. S0 complete (7/7).
+- NG-T5 implemented (any-match); narrows D-120 — partition-level binding done in code, real-media/VMK validation remain open.
 
 ### Debt items still open
-- S1.1–S1.4 loop-closers; S2–S5; D-120, D-129 (partially unblocked by S0.7), D-130.
+- S2 remainder (VMK lock-state proof, monotonic-counter freshness, disk boot-structure baseline); S3–S5; D-120 (partial), D-129, D-130.
 
 ### Blockers
-- None.
+- NG-T5 positive verification needs a BCD hive fixture (NG-T3) — flagged.
 
 ### Session artifacts
-- Commit 75666ef; test-s07-dhcp-harness.sh 7/7; ci-harness-docker 15/0; pcap DORA+ARP+TCP+POST; release e7283452 no-fallback; beliefs 36→37.
+- Commit `450d283`; test-fve-harness 16/16; DEBUG+RELEASE builds clean.
 
 ### Failure attribution
-- Long debugging arc from two blind spots: (layer 4, verification feedback) fixed-size GetData hid lease success — needed per-instance GetData status + pcap to see it; (layer 3, execution environment) docker slirp loopback mapping produced a misleading TCP RST that looked like a code bug.
+- Two compile-time catches (PBL_MAX_OSDEVICE order, SignatureType field name) — layer 2 (context: EDK II header semantics), resolved by reading DevicePath.h before commit. No runtime failures.
 
 ### Next session opening
-S1.1 — TPM restart-counter boot-ID: PBL digest + agent report + server correlation; first loop-closer.
+NG-T5 positive-path fixture (synthetic BCD hive with osdevice blob) OR next S2 item — VMK lock-state proof / monotonic-counter freshness / disk boot-structure baseline.
 
 ---
 

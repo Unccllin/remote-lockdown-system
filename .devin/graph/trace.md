@@ -1953,3 +1953,245 @@ S0.7 — DHCP/policy IP configuration (B-015): last S0 repair; then S1 loop-clos
 S1.1 — TPM restart-counter boot-ID: PBL digest + agent report + server correlation; first loop-closer.
 
 ---
+
+---
+
+## Session 126 — 2026-09-19
+
+### RULE-ZERO
+**Read**: current-state.md (session 125 next-opening = S1.1), existing S1.1 diff in working tree (TpmClient.c PblTpmReadRestartCounter, PlatformState.c collect hook, CborEncode.c key 5, PblApp.c print+arg, test-d205.py boot_id decode, test-s11-bootid-harness.sh), ci-harness-docker.sh + test-s07-dhcp-harness.sh (docker/swtpm topology), test-d205.py --serve/--generate-policy, gen-policy-rot.py (key 77 cert chain), CborDecode.c/CoseVerify.c/PblApp.c D-205 cert-chain fail-closed path.
+**Finding**: S1.1 code was already fully implemented in the working tree (uncommitted) with a matching harness. The DEBUG efi (built Sep 19 09:22) already contained the Boot-ID string. Remaining work was verification + topology + commit.
+
+### IMPLEMENT
+- No new firmware code — S1.1 was already written last session. This session = verify, fix topology, commit.
+- test-s11-bootid-harness.sh: header documented the verified host-server topology (pbl-qemu image lacks cryptography/cbor2 → server must run on host via `python3 -u`, `--network host` makes slirp 10.0.2.2 reach host loopback). Server-side boot_id check now scans /test/server.log (host log) in addition to in-container log; SKIP if no log found.
+
+### VERIFY
+- QEMU+OVMF+swtpm, DEBUG efi, `--network host`, host-side `python3 -u test-d205.py --serve`:
+  - `Boot-ID: reset=1 restart=0 safe=1` (TPM2_ReadClock resetCount=1 = cold-boot anchor)
+  - `[SERVER] Received 110 bytes` (new 5-entry CBOR map) → `[SERVER] boot_id: 1`
+  - `Verdict signature verified (ES256)` → `Verdict decoded: verdict=0 policy_version=1`
+- test-s11-bootid-harness.sh: **7/7 PASS** (was 4/2 then 6/1 during topology/policy bring-up).
+- Commit `3c17459`.
+
+### Fog cleared this session
+- slirp `10.0.2.2` under `--network host` DOES forward to the docker HOST loopback — host-side server reachable from guest. (Earlier note "container loopback, NOT docker host" applies to the in-container-server case without host net.)
+- The committed `firmware/policy.cose` is a MINIMAL dev blob (keys 1,2,70, no cert chain) — it trips the D-205 fail-closed guard ("policy has no cert chain"). Verdict verification needs a FULL policy from `test-d205.py --generate-policy` (keys 1,2,70,71,76,77 + cert chain key 77, signed by `.pbl_policy_signing_key`).
+- `python3 test-d205.py --serve` redirected to a file is block-buffered — `boot_id` prints don't land until buffer flush. Use `python3 -u` for live wire evidence.
+- pbl-qemu / pbl-qemu-debian / pbl-qemu-u22 images all lack `cryptography`/`cbor2` (pbl-qemu-tpm2tools has no python3) — in-container mock server is not viable on current images.
+
+### Fog remaining
+- Multi-NIC lease affinity still untested (carried from S0.7).
+- Whether the boot_id→agent-check-in correlation survives a real TPM on HP hardware (resetCount increments per cold boot — emulated only so far).
+- The minimal committed `firmware/policy.cose` vs full test policy divergence — may confuse future harness runs; consider regenerating committed blob or a README note.
+
+### Debt items closed
+- S1.1 implemented + verified (emulated): boot-ID read, CBOR emit, server correlation. Commit `3c17459`. First loop-closer.
+
+### Debt items still open
+- S1.2 (server-side boot-ID correlation / bypass detection), S1.3, S1.4; S2–S5; D-120, D-129, D-130.
+
+### Blockers
+- None.
+
+### Session artifacts
+- Commit `3c17459`; test-s11-bootid-harness.sh 7/7; serial-s11.log (`reset=1`); host server.log (`boot_id: 1`, `Received 110 bytes`, ES256 verify); verdict=0 ALLOW.
+
+### Failure attribution
+- Two-run debugging arc: (layer 3, execution environment) pbl-qemu image lacks crypto deps so in-container server silently never started → `Invalid Parameter` on POST; resolved by host-server + `--network host`. (layer 4, verification feedback) the minimal committed policy.cose caused a D-205 fail-closed rejection indistinguishable from a code bug until the policy keys were decoded; also `print` buffering hid the server-side boot_id line.
+
+### Next session opening
+S1.2 — server-side boot-ID correlation: persist last PBL boot_id per device; flag an agent check-in with no matching PBL boot as a bypass signal.
+
+---
+
+---
+
+## Session 127 — 2026-09-19
+
+### RULE-ZERO
+**Read**: docs/wayfinder/next-gen-lockdown-map.md (S1.1–S1.4 definitions), server/src/routes/pbl.js (/verdict, /enroll, pbl_devices KV), server/src/routes/agent.js (/checkin, updateDeviceCheckin), server/src/pbl/kvStore.js (createSharedEnv/getSharedKvStore), server/src/routes/devices.js (syncAgentStatusToPbl pattern), migrations/011_pbl_device_mapping.sql, tests/pblVerdictPolicyEnroll.test.js + tests/agent.routes.test.js (mock conventions), AGENTS.md (project split: server=Node/Express/CommonJS, firmware=C/EDK II, agent=Python).
+**Finding**: The verdict fetch IS the firmware's boot report — /v1/verdict already decodes the CBOR request but ignored key 5 (boot_id). The agent check-in links to a PBL identity via devices.pbl_device_id (D-206). S1.2 is pure server-side Node.js: persist boot_id at /verdict, correlate freshness at /checkin. Shared KV singleton (getSharedKvStore/createSharedEnv) is the existing seam for cross-route PBL state.
+
+### IMPLEMENT
+- server/src/routes/pbl.js /v1/verdict: extract optional CBOR key 5 (boot_id, integer>=0 else null); on a known device write last_boot_id + last_boot_at into pbl_devices:{id} (best-effort, non-fatal on KV error).
+- server/src/routes/agent.js: correlatePblBoot(device) — returns null when device has no pbl_device_id; else reads pbl_devices:{id} via createSharedEnv and returns {enrolled, last_boot_id, last_boot_at, boot_fresh}. boot_fresh = last_boot_at within PBL_BOOT_FRESH_SECONDS (default 900s). /checkin response gains a pbl_boot field.
+- Design: flag-only (DEGRADED alarm ruling) — boot_fresh=false signals bypass OR S3-resume; never blocks check-in. S1.4 restartCount disambiguates resume vs bypass.
+
+### VERIFY
+- npx jest tests/agent.routes.test.js tests/pblVerdictPolicyEnroll.test.js: 85/85 pass.
+- npm test (full server suite, --experimental-vm-modules): 37 suites / **612 tests pass**, 0 regressions.
+- eslint clean on all touched files (agent.js + both test files exit 0; pbl.js has 4 pre-existing unused-var errors on master, unrelated).
+
+### Fog cleared this session
+- Shared KV singleton (pbl/kvStore.js createSharedEnv/getSharedKvStore) is the established cross-route seam for PBL state — agent routes already use it via syncAgentStatusToPbl.
+- Server test suite MUST run via `npm test` (node --experimental-vm-modules) — plain `npx jest` crashes PGlite tests with ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG (pre-existing, not a code bug).
+- devices.pbl_device_id (migration 011) is the agent↔PBL link; verdict-request CBOR key 4 = smbiosUuid auto-links at enroll.
+
+### Fog remaining
+- Whether boot_fresh semantics hold on real TPM hardware (resetCount bump per cold boot emulated only).
+- PBL_BOOT_FRESH_SECONDS=900 is a guess — real boot→check-in lag on Windows agent is unmeasured; may need widening.
+- S3-resume false-positive: a resume produces check-in with stale boot — boot_fresh=false is correct-but-ambiguous until S1.4 restartCount lands.
+
+### Debt items closed
+- S1.2 implemented + verified (unit): cross-layer absence correlation. Commit `ab62d1e`.
+
+### Debt items still open
+- S1.3 (attestation enrichment), S1.4 (resume detection via restartCount); S2–S5; D-120, D-129, D-130.
+
+### Blockers
+- None.
+
+### Session artifacts
+- Commit `ab62d1e`; 612 server tests pass; 8 new S1.2 tests (4 verdict + 4 checkin); eslint clean on touched files.
+
+### Failure attribution
+- None — implementation + tests passed first run. (One process note: plain `npx jest` misleads with PGlite VM-import crash; `npm test` is the correct runner — documented in fog-cleared.)
+
+### Next session opening
+S1.3 — attestation enrichment (FveProtectionMask, LoadedImageDigest, boot-path class) OR S1.4 resume detection (restartCount) — S1.4 disambiguates the S1.2 boot_fresh=false alarm, so it may be the higher-value next item.
+
+---
+
+---
+
+## Session 128 — 2026-09-19
+
+### RULE-ZERO
+**Read**: firmware CborEncode.c (only boot_id/key5 emitted — restartCount read but NOT on wire), PblApp.inf (UEFI_APPLICATION, runs BDS-phase), docs/research/STUDY-BEYOND-BIOS-DELTA.md item 6 + CONFIRMATION-FINDINGS.md F6 (S3 resume bypasses PBL entirely — PEI S3 path → OS resume vector, no DXE/BDS), agent/tpm_seal.py (CNG via ctypes/PowerShell, no raw TBS), agent/agent.py checkin payload, server/src/routes/agent.js correlatePblBoot.
+**Finding**: Design B (firmware emits restartCount) is architecturally broken — PBL doesn't run on resume, so restartCount can never be sent on the event it's meant to detect. S1.4 must be agent-side: the OS agent reads restartCount via TBS and reports it at check-in; the server compares it to last PBL boot_id. User confirmed Design A.
+
+### IMPLEMENT
+- agent/tpm_clock.py NEW: TPM2_ReadClock via Windows TBS (Tbsi_Context_Create → Tbsip_Submit_Command → Tbsip_Context_Close). parse_readclock_response() is a pure function (testable). Returns {reset_count, restart_count, clock_safe} or None on non-Windows/no-TBS/short-buffer/non-success.
+- agent/agent.py checkin: reads read_restart_count() (guarded — never breaks check-in), adds tpm_restart_count to the payload when available.
+- server/src/routes/agent.js /checkin: accepts optional tpm_restart_count (validated int>=0), passes to correlatePblBoot. boot classification when boot_fresh=false: restartCount>last_boot_id → 's3_resume'; restartCount<=last_boot_id → 'pbl_bypass'; absent → 'unknown'. boot_class added to pbl_boot response.
+
+### VERIFY
+- agent: tests/test_tpm_clock.py 10/10 (command layout, parse counters, safe flag, short/None/non-success buffers, big-endian, graceful degradation). Full agent suite green. ruff check + format clean.
+- server: 4 new S1.4 tests (s3_resume, pbl_bypass, unknown, fresh→null class). npm test 37 suites / **616 tests** pass.
+- eslint clean on agent.js.
+
+### Fog cleared this session
+- S1.4's restartCount cannot come from firmware — PBL is absent on resume (F6). The agent is the only observer. resetCount(boot_id) vs restartCount is the discriminator: resume bumps restartCount without resetCount.
+- Windows OS-side TPM command path: tbs.dll Tbsi_Context_Create + Tbsip_Submit_Command (locality 0, priority normal), no auth/session needed for ReadClock.
+- Agent pytest needs .venv/bin/python (pyproject sets --timeout=30 via pytest-timeout; system python3 lacks the plugin → unrecognized arg).
+
+### Fog remaining
+- TBS constants unverified on real Windows (TBS_PRIORITY_NORMAL=300, TBS_CONTEXT_PARAMS v1) — emulated/ctypes-signature only; needs hardware run (D-129 window).
+- Whether Windows allows unprivileged ReadClock via TBS on the agent's service account — TPM2_ReadClock is unauthenticated in spec, but TBS access may need the TSS/TPM ACL on some SKUs.
+- PBL_BOOT_FRESH_SECONDS=900 still a guess; S1.4 now makes a too-short window show 's3_resume'/'pbl_bypass' rather than silent stale.
+
+### Debt items closed
+- S1.4 implemented + verified (unit + emulated path): resume-vs-bypass disambiguation. Commit `f1b8bdc`. S1.2's boot_fresh=false is now actionable.
+
+### Debt items still open
+- S1.3 (attestation enrichment); S2–S5; D-120, D-129, D-130.
+
+### Blockers
+- TBS hardware validation pending (D-129 window) — constants/ACL unverified on real TPM.
+
+### Session artifacts
+- Commit `f1b8bdc`; agent tpm_clock tests 10/10; server 616 tests; ruff+eslint clean.
+
+### Failure attribution
+- None — design ruling (firmware-vs-agent restartCount source) was resolved before coding; tests passed first run.
+
+### Next session opening
+S1.3 — attestation enrichment (FveProtectionMask, LoadedImageDigest, boot-path class) — last S1 loop-closer; then S2 firmware work.
+
+---
+
+---
+
+## Session 129 — 2026-09-19
+
+### RULE-ZERO
+**Read**: docs/wayfinder/next-gen-lockdown-map.md S1.3 def, PblApp.h PBL_PLATFORM_STATE (FveProtectionMask UINT16, LoadedImageDigest[32], BootPathFlags UINT8 all already collected + hashed into digest), CborEncode.c wire format, PblApp.c encoder call site, server pbl.js /verdict decode, test-d205.py mock, tests/pblVerdictPolicyEnroll.test.js.
+**Finding**: The three S1.3 fields already exist in PBL_PLATFORM_STATE and feed the platform_state_digest — S1.3 is purely lifting them into discrete CBOR keys (6/7/8) so the server sees them individually. Firmware C + server Node change; no new collection needed.
+
+### IMPLEMENT
+- firmware CborEncode.c: map 5→8 entries; new params FveProtectionMask/LoadedImageDigest/BootPathFlags; keys 6(uint),7(bstr32),8(uint). Size accounting → 149 bytes worst case observed on wire.
+- PblApp.h signature + PblApp.c call site updated.
+- server pbl.js /verdict: decode keys 6/7/8 (int>=0 / 32-byte bstr→hex / int>=0), persist on pbl_devices record (best-effort, optional).
+- test-d205.py mock: decode + print fve_mask/loaded_digest/boot_path_flags.
+
+### VERIFY
+- DEBUG + RELEASE firmware builds clean (PblApp.efi rebuilt; map now 8 entries).
+- QEMU+OVMF+swtpm host-server harness: 7/7 — wire `Received 149 bytes`, `fve_mask=0 loaded_digest=618bc2a4 boot_path_flags=0`, ES256 verdict verified.
+- server npm test: 37 suites / **619 tests** pass (3 new S1.3). eslint clean.
+
+### Fog cleared this session
+- S1.3 fields were already collected (FveProtectionMask/LoadedImageDigest/BootPathFlags in PBL_PLATFORM_STATE) — the work was wire exposure, not collection.
+- The verdict-request map is now 8 keys; wire grew 110→149 bytes.
+
+### Fog remaining
+- loaded_image_digest is an aggregate hash — server can't tell WHICH image changed without a per-device baseline (that's the S5 moat / digest-drift engine, still a design-grilling item).
+- boot_path_flags/fve_mask semantics on real hardware unverified (emulated only).
+
+### Debt items closed
+- S1.3 implemented + verified (emulated). Commit `7ea6ed1`. **S1 complete (4/4).**
+
+### Debt items still open
+- S2 (firmware: FVE binding, VMK lock-state, monotonic counter, disk baseline); S3 (agent); S4 (server); S5 (moat); D-120, D-129, D-130.
+
+### Blockers
+- S5 digest-drift engine needs its own design grilling before ticketing.
+
+### Session artifacts
+- Commit `7ea6ed1`; harness 7/7; wire evidence 149-byte 8-key map; 619 server tests; DEBUG+RELEASE builds.
+
+### Failure attribution
+- One self-inflicted: first harness run showed old 110-byte request because /test/PblApp.efi was stale (copied before rebuild). Recopied post-build → correct 149 bytes. Layer 3 (execution environment / stale artifact).
+
+### Next session opening
+S1 complete. Next: S2 firmware items (NG-T5 FVE partition binding, VMK lock-state proof, monotonic-counter freshness, disk boot-structure baseline) — or revisit the 9 unverified enforcement paths / hardware window.
+
+---
+
+---
+
+## Session 130 — 2026-09-20
+
+### RULE-ZERO
+**Read**: docs/wayfinder/tickets/NG-T5-partition-binding.md (full ticket + work items + bind-policy open question), docs/research/NOTE-BCD-DEVICE-BLOB.md (byte-level osdevice blob layout — PartitionID@0x20, TableType@0x34 [0=GPT,1=MBR inverted vs WMI], DiskID@0x38, packet type 6=partition), Bcd.c (BcdParseObject/BcdParseElement/BcdApplyElement/BcdReadValueData/Description\Type machinery), Fve.c (PblFveSameDisk/PblFveDiskPrefixLen/PblCheckFve), PblApp.h PBL_PLATFORM_STATE Fve* fields, EDK2 DevicePath.h HARDDRIVE_DEVICE_PATH (SignatureType 0x01=MBR sig/0x02=GPT GUID, NOT MBRType), test-fve-harness.sh.
+**Finding**: NG-T5 upgrades disk-level FVE binding to partition-level by decoding the osloader's osdevice blob and matching it against the FVE volume's HD() node. Bind-policy question resolved → **any-match** (safest: an osloader pointing at the FVE partition proves it IS a Windows boot target; false-positive requires a planted valid osdevice, already a tamper event).
+
+### IMPLEMENT
+- PblApp.h: PBL_MAX_OSDEVICE=8 (early, before struct), PBL_BCD_OBJTYPE_OSLOADER=0x10200003, PBL_BCD_E_DEVICE/OSDEVICE; state fields BcdOsDeviceTableType/PartId/DiskId[8]/BcdOsDeviceCount/FveOnBootPartition.
+- Bcd.c: BCD_DEV_* offsets + BcdParseDeviceBlob (bounds-checked type-6 decode); BcdParseObject reads Description\Type → IsOsLoader; BcdParseElement/BcdApplyElement thread IsOsLoader; osdevice/device captured only for osloader objects; state init.
+- Fve.c: PblFveHdNode (first HD() MEDIA node) + PblFveSamePartition (GPT: SigType2+partGUID match; MBR: SigType1+disksig+PartitionStart*BlockSize==byteoff); wired into PblCheckFve bound-branch → FveOnBootPartition.
+- Policy: **any-match** (user-confirmed after analysis).
+
+### VERIFY
+- DEBUG+RELEASE firmware builds clean (PBL_MAX_OSDEVICE forward-decl fix; SignatureType-vs-MBRType field fix caught by header read).
+- test-fve-harness.sh: **16/16 PASS** — no regression; partition path degrades gracefully (BcdOsDeviceCount=0 → FALSE, disk-level binding intact).
+
+### Fog cleared this session
+- osdevice blob: packet type 6 = partition; PartitionID@0x20 (GPT GUID / MBR u64 offset), TableType@0x34 (0=GPT,1=MBR — inverted vs WMI), DiskID@0x38 (GPT disk GUID / MBR u32 sig). Same identity lives in HD() node — no disk reads needed.
+- HARDDRIVE_DEVICE_PATH: signature-kind selector is SignatureType (0x01 MBR, 0x02 GPT), NOT MBRType (that's partition format). Caught + fixed pre-commit.
+- BcdReadValueData returns a pointer into the hive buffer; REG_DWORD Type read via ReadUnaligned32 on that pointer.
+
+### Fog remaining
+- Partition-match POSITIVE path untested — needs a synthetic/real BCD hive with an osdevice blob (NG-T3 artifact or a synthetic hive builder); current harness only proves the no-hive degrade.
+- `flags`/`unknown` packet header fields partly understood (ramdisk +4 quirk); partition path doesn't depend on them.
+- Whether Windows 11 writes mbrindex vs mbroffset partition-identifier forms (all observed blobs use byte-offset).
+
+### Debt items closed
+- NG-T5 implemented (any-match); narrows D-120 — partition-level binding done in code, real-media/VMK validation remain open.
+
+### Debt items still open
+- S2 remainder (VMK lock-state proof, monotonic-counter freshness, disk boot-structure baseline); S3–S5; D-120 (partial), D-129, D-130.
+
+### Blockers
+- NG-T5 positive verification needs a BCD hive fixture (NG-T3) — flagged.
+
+### Session artifacts
+- Commit `450d283`; test-fve-harness 16/16; DEBUG+RELEASE builds clean.
+
+### Failure attribution
+- Two compile-time catches (PBL_MAX_OSDEVICE order, SignatureType field name) — layer 2 (context: EDK II header semantics), resolved by reading DevicePath.h before commit. No runtime failures.
+
+### Next session opening
+NG-T5 positive-path fixture (synthetic BCD hive with osdevice blob) OR next S2 item — VMK lock-state proof / monotonic-counter freshness / disk boot-structure baseline.
+
+---
