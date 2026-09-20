@@ -60,6 +60,22 @@ def cfg(tmp_folder, tmp_sentinel):
 
 
 @pytest.fixture(autouse=True)
+def _default_escrow_ok():
+    """Default-stub agent.escrow_key to succeed.
+
+    S4 escrow-before-arm made handle_lockdown call escrow_key() before
+    encrypt_folder. Tests that exercise handle_lockdown for OTHER reasons
+    (encryption, ACK, sentinel, boot-lock detail) shouldn't make a real
+    network call — stub it True by default. Tests that specifically test
+    escrow behaviour patch agent.escrow_key themselves; their patch wins
+    because it applies after this fixture's.
+    """
+    from unittest.mock import patch
+    with patch.object(agent, "escrow_key", return_value=True):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def cleanup_guardian():
     """Ensure lock guardian is stopped and temp files cleaned up after each test.
 

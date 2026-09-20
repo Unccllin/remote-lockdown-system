@@ -580,6 +580,52 @@ router.post('/command-ack', agentAuth, hmacVerify(), async (req, res) => {
 });
 
 // A2: deadman-report wrapped in transaction
+/**
+ * S4: Escrow-before-arm — dedicated key-escrow endpoint.
+ *
+ * The agent calls this BEFORE it starts encrypting during a lockdown. It
+ * sends the freshly-generated encryption key bound to the lockdown
+ * command_id; the server persists it (encrypted at rest) so the key is
+ * escrowed BEFORE the point of no return. If escrow fails the agent
+ * refuses to encrypt — a device stays unlocked rather than locked-out
+ * (unlocked > locked-without-recovery-key).
+ *
+ * Idempotent on (device_id, command_id): retries on the same command are
+ * safe — ON CONFLICT DO NOTHING keeps the first escrowed key.
+ */
+router.post('/escrow-key', agentAuth, hmacVerify(), async (req, res) => {
+  const { hostname, command_id, key_material, mac_address, hardware_uuid } = req.body;
+  if (!hostname || !command_id || !key_material) {
+    return res.status(400).json({ error: 'hostname, command_id, key_material required. Include all three fields in the request body.' });
+  }
+  if (typeof key_material !== 'string') {
+    return res.status(400).json({ error: 'key_material must be a string (base64-encoded key).' });
+  }
+
+  const device = req.device || await findDevice(hostname, mac_address, hardware_uuid);
+  if (!device) return res.status(404).json({ error: 'Device not registered. Enroll the device first via POST /api/devices, or verify the hostname and hardware identity fields match an enrolled device.' });
+
+  // The command must exist and belong to this device — escrow is bound to
+  // a real lockdown command, not free-floating key material.
+  const cmdRow = await pool.query(
+    'SELECT id, command_type FROM commands WHERE id = $1 AND device_id = $2',
+    [command_id, device.id]
+  );
+  if (!cmdRow.rows[0]) {
+    return res.status(404).json({ error: 'Command not found for this device.' });
+  }
+
+  const enc = encryptField(key_material);
+  await pool.query(
+    `INSERT INTO encryption_keys (device_id, command_id, key_material, key_material_encrypted, key_enc_nonce, key_enc_tag)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (device_id, command_id) WHERE command_id IS NOT NULL DO NOTHING`,
+    [device.id, command_id, key_material, enc.ciphertext, enc.nonce, enc.tag]
+  );
+
+  res.json({ escrowed: true, command_id });
+});
+
 router.post('/deadman-report', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, mac_address, hardware_uuid, key_material } = req.body;
   if (!hostname || !key_material) {

@@ -1314,6 +1314,47 @@ def ack_command(
         return False
 
 
+def escrow_key(cfg: dict, command_id: str, key_material: str) -> bool:
+    """S4: Escrow the encryption key to the server BEFORE encryption.
+
+    Called during lockdown, after generate_key() and BEFORE encrypt_folder.
+    The server persists the key (encrypted at rest) bound to the lockdown
+    command_id, so the recovery key is escrowed before the point of no
+    return. If this returns False the caller must NOT encrypt — a device
+    that can't confirm its key is escrowed stays unlocked rather than
+    locked-out (unlocked > locked-without-recovery-key).
+
+    Idempotent on (device_id, command_id) — retries are safe.
+
+    Returns True on confirmed escrow, False on any failure.
+    """
+    payload = {
+        "hostname": cfg["hostname"],
+        "mac_address": get_mac_address(),
+        "hardware_uuid": get_hardware_uuid(),
+        "command_id": command_id,
+        "key_material": key_material,
+    }
+    try:
+        resp = _post_with_fallback(
+            "/api/agent/escrow-key",
+            cfg,
+            payload,
+            timeout=15,
+            verify=cfg["verify_tls"],
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        if body.get("escrowed"):
+            log.info("Recovery key escrowed to server (command=%s)", command_id)
+            return True
+        log.error("Escrow rejected by server: %s", body)
+        return False
+    except requests.RequestException as e:
+        log.error("Escrow failed: %s", e)
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Offline queue (Phase 5) — SQLite-based queue for location reports
 # ---------------------------------------------------------------------------
@@ -1761,6 +1802,25 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     # File B: long-lived recovery blob, wrapped with master public key (A8)
     recovery_key_file = cfg.get("recovery_key_file", RECOVERY_KEY_FILE)
     write_recovery_key(recovery_key_file, command["id"], key_b64, cfg=cfg)
+
+    # --- S4: Escrow-before-arm. Confirm the recovery key reached the server
+    # BEFORE encrypting a single file. This is the point of no return — if
+    # the key isn't escrowed and the agent dies mid-encryption, the device
+    # is permanently locked out. Refusing to encrypt leaves the device
+    # unlocked (recoverable) instead of locked-out (unrecoverable).
+    if not escrow_key(cfg, command["id"], key_b64):
+        log.error(
+            "Escrow-before-arm: key not confirmed on server — refusing to "
+            "encrypt. Device stays unlocked rather than locked-out."
+        )
+        # Remove the sentinel so a later retry can re-attempt lockdown.
+        try:
+            sentinel.unlink()
+        except OSError:
+            pass
+        write_pending_ack(pending_ack_file, command["id"], "failed", key_material=key_b64)
+        ack_command(cfg, command["id"], "failed")
+        return
 
     try:
         blocked_files = encrypt_folder(folder, key)

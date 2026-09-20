@@ -377,6 +377,63 @@ describe('POST /api/agent/checkin', () => {
 // /api/agent/command-ack
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// S4: /api/agent/escrow-key — escrow-before-arm
+// ---------------------------------------------------------------------------
+describe('POST /api/agent/escrow-key', () => {
+  const app = createApp();
+
+  test('rejects without x-agent-key', async () => {
+    const res = await request(app)
+      .post('/api/agent/escrow-key')
+      .send({ hostname: 'DEV-001', command_id: 'cmd-1', key_material: 'k' });
+    expect(res.status).toBe(401);
+  });
+
+  test('rejects when key_material missing', async () => {
+    const { apiKey } = provisionDevice();
+    const res = await request(app)
+      .post('/api/agent/escrow-key')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', command_id: 'cmd-1' });
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects when command_id missing', async () => {
+    const { apiKey } = provisionDevice();
+    const res = await request(app)
+      .post('/api/agent/escrow-key')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', key_material: 'k' });
+    expect(res.status).toBe(400);
+  });
+
+  test('404 when command does not belong to device', async () => {
+    const { apiKey } = provisionDevice();
+    // command lookup returns no rows
+    mockPool.query.setResult('SELECT id, command_type FROM commands', { rows: [] });
+    const res = await request(app)
+      .post('/api/agent/escrow-key')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', command_id: 'cmd-x', key_material: 'k' });
+    expect(res.status).toBe(404);
+  });
+
+  test('escrows the key and returns escrowed:true', async () => {
+    const { apiKey } = provisionDevice();
+    mockPool.query.setResult('SELECT id, command_type FROM commands', {
+      rows: [{ id: 'cmd-1', command_type: 'lockdown' }],
+    });
+    const res = await request(app)
+      .post('/api/agent/escrow-key')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', command_id: 'cmd-1', key_material: 'a2V5' });
+    expect(res.status).toBe(200);
+    expect(res.body.escrowed).toBe(true);
+    expect(res.body.command_id).toBe('cmd-1');
+  });
+});
+
 describe('POST /api/agent/command-ack', () => {
   const app = createApp();
 
