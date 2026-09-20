@@ -1044,6 +1044,49 @@ describe('Serverless Worker', () => {
       expect(r.status).toBe(200);
       expect(data.role).toBe('viewer');
     });
+
+    // Phase 2: role enforcement on operational routes.
+    it('viewer CAN read devices but CANNOT flag-stolen (operator gate)', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      await worker.fetch(makeRequest('POST', '/api/admins',
+        { username: 'view1', password: 'password123', role: 'viewer' },
+        { Authorization: 'Bearer test-admin-token' }), env);
+      const { data } = await login(env, 'view1', 'password123');
+      const viewerTok = data.token;
+      const { device } = await enrollDevice(worker, env, 'ROLE-001');
+
+      // viewer can list devices
+      const list = await worker.fetch(makeRequest('GET', '/api/devices', undefined, {
+        Authorization: `Bearer ${viewerTok}`,
+      }), env);
+      expect(list.status).toBe(200);
+
+      // viewer cannot flag-stolen (operator required)
+      const flag = await worker.fetch(makeRequest('POST', `/api/devices/${device.id}/flag-stolen`,
+        { hostname_confirm: 'ROLE-001' },
+        { Authorization: `Bearer ${viewerTok}` }), env);
+      expect(flag.status).toBe(403);
+    });
+
+    it('operator CAN flag-stolen but CANNOT create admins (super-admin gate)', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      await worker.fetch(makeRequest('POST', '/api/admins',
+        { username: 'op2', password: 'password123', role: 'operator' },
+        { Authorization: 'Bearer test-admin-token' }), env);
+      const { data } = await login(env, 'op2', 'password123');
+      const opTok = data.token;
+      const { device } = await enrollDevice(worker, env, 'ROLE-002');
+
+      const flag = await worker.fetch(makeRequest('POST', `/api/devices/${device.id}/flag-stolen`,
+        { hostname_confirm: 'ROLE-002' },
+        { Authorization: `Bearer ${opTok}` }), env);
+      expect(flag.status).toBe(200);
+
+      const mkAdmin = await worker.fetch(makeRequest('POST', '/api/admins',
+        { username: 'x', password: 'password123', role: 'viewer' },
+        { Authorization: `Bearer ${opTok}` }), env);
+      expect(mkAdmin.status).toBe(403);
+    });
   });
 
   describe('404 handling', () => {

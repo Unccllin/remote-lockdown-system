@@ -1019,9 +1019,8 @@ async function handleEscrowKey(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleEnroll(request: Request, env: Env): Promise<Response> {
-  if (!(await verifyAdminAuth(request, env))) {
-    return errorResponse('Admin authentication required', 401);
-  }
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
 
   const payload = await request.json() as {
     hostname: string;
@@ -1119,9 +1118,8 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
  * `enroll_token:{token}` with the admin's user ID and expiration timestamp.
  */
 async function handleEnrollToken(request: Request, env: Env): Promise<Response> {
-  if (!(await verifyAdminAuth(request, env))) {
-    return errorResponse('Admin authentication required', 401);
-  }
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
 
   const token = generateApiKey(); // 32 random bytes, base64 — high entropy
   const now = Math.floor(Date.now() / 1000);
@@ -1288,9 +1286,8 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
 }
 
 async function handleListDevices(request: Request, env: Env): Promise<Response> {
-  if (!(await verifyAdminAuth(request, env))) {
-    return errorResponse('Admin authentication required', 401);
-  }
+  const auth = await requireRole(request, env, 'viewer');
+  if (auth instanceof Response) return auth;
   const devices = await listDevices(env);
   // Merge checkin metadata from separate KV keys (KV-RACE-001 fix)
   // and strip api_key_hash before returning.
@@ -1309,9 +1306,8 @@ async function handleGetDevice(
   env: Env,
   deviceId: string,
 ): Promise<Response> {
-  if (!(await verifyAdminAuth(request, env))) {
-    return errorResponse('Admin authentication required', 401);
-  }
+  const auth = await requireRole(request, env, 'viewer');
+  if (auth instanceof Response) return auth;
   const devices = await listDevices(env);
   const device = devices.find((d) => d.id === deviceId);
   if (!device) {
@@ -1340,9 +1336,8 @@ async function handleDeviceByHardware(
   env: Env,
   hardwareUuid: string,
 ): Promise<Response> {
-  if (!(await verifyAdminAuth(request, env))) {
-    return errorResponse('Admin authentication required', 401);
-  }
+  const auth = await requireRole(request, env, 'viewer');
+  if (auth instanceof Response) return auth;
   const devices = await listDevices(env);
   // Search both the device record and merged checkin metadata, since the
   // hardware_uuid may have been reported via checkin after enrollment.
@@ -1362,9 +1357,8 @@ async function handleFlagStolen(
   env: Env,
   deviceId: string,
 ): Promise<Response> {
-  if (!(await verifyAdminAuth(request, env))) {
-    return errorResponse('Admin authentication required', 401);
-  }
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
 
   const payload = await request.json() as { hostname_confirm?: string };
 
@@ -1423,9 +1417,8 @@ async function handleRecover(
   env: Env,
   deviceId: string,
 ): Promise<Response> {
-  if (!(await verifyAdminAuth(request, env))) {
-    return errorResponse('Admin authentication required', 401);
-  }
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
 
   const payload = await request.json() as {
     hostname_confirm?: string;
@@ -1510,9 +1503,8 @@ async function handleTrackAction(
   deviceId: string,
   action: 'track' | 'stop_track' | 'locate',
 ): Promise<Response> {
-  if (!(await verifyAdminAuth(request, env))) {
-    return errorResponse('Admin authentication required', 401);
-  }
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
 
   const devices = await listDevices(env);
   const device = devices.find((d) => d.id === deviceId);
@@ -1561,9 +1553,8 @@ async function handleGetLocations(
   env: Env,
   deviceId: string,
 ): Promise<Response> {
-  if (!(await verifyAdminAuth(request, env))) {
-    return errorResponse('Admin authentication required', 401);
-  }
+  const auth = await requireRole(request, env, 'viewer');
+  if (auth instanceof Response) return auth;
   const url = new URL(request.url);
   const limit = parseInt(url.searchParams.get('limit') || '20', 10);
   const locations = await listLocations(env);
@@ -1636,9 +1627,9 @@ async function handleDownloadEfsCert(
   env: Env,
   deviceId: string,
 ): Promise<Response> {
-  if (!(await verifyAdminAuth(request, env))) {
-    return errorResponse('Admin authentication required', 401);
-  }
+  // EFS cert download returns a sensitive secret — super-admin only.
+  const auth = await requireRole(request, env, 'super-admin');
+  if (auth instanceof Response) return auth;
 
   const devices = await listDevices(env);
   const device = devices.find((d) => d.id === deviceId);
@@ -1659,9 +1650,8 @@ async function handleDownloadEfsCert(
  * GET /api/audit — return audit log entries (optionally filtered by device_id).
  */
 async function handleGetAudit(request: Request, env: Env): Promise<Response> {
-  if (!(await verifyAdminAuth(request, env))) {
-    return errorResponse('Admin authentication required', 401);
-  }
+  const auth = await requireRole(request, env, 'viewer');
+  if (auth instanceof Response) return auth;
   const url = new URL(request.url);
   const limit = parseInt(url.searchParams.get('limit') || '50', 10);
   const deviceId = url.searchParams.get('device_id');
