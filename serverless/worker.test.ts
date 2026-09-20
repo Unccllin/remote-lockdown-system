@@ -648,8 +648,18 @@ describe('Serverless Worker', () => {
       const resp = await worker.fetch(req, env);
       const data: any = await parseResponse(resp);
       expect(resp.status).toBe(200);
-      expect(data.token).toBe('test-admin-token');
+      // Break-glass ADMIN_TOKEN login now returns a signed session token
+      // (JWT-shape), not the raw token back.
+      expect(typeof data.token).toBe('string');
+      expect(data.token.split('.')).toHaveLength(3); // header.payload.sig
       expect(data.user.role).toBe('super-admin');
+
+      // The returned signed token must be usable as a Bearer credential.
+      const devReq = makeRequest('GET', '/api/devices', undefined, {
+        Authorization: `Bearer ${data.token}`,
+      });
+      const devResp = await worker.fetch(devReq, env);
+      expect(devResp.status).toBe(200);
     });
 
     it('POST /api/auth/login rejects wrong token', async () => {
@@ -661,12 +671,26 @@ describe('Serverless Worker', () => {
       expect(resp.status).toBe(401);
     });
 
-    it('GET /api/setup/status returns setupComplete true', async () => {
+    it('GET /api/setup/status reports needsSetup true before first admin, false after', async () => {
       const req = makeRequest('GET', '/api/setup/status');
       const resp = await worker.fetch(req, env);
       const data: any = await parseResponse(resp);
       expect(resp.status).toBe(200);
-      expect(data.setupComplete).toBe(true);
+      // First-run: no admin exists yet → needsSetup true.
+      expect(data.setupComplete).toBe(false);
+      expect(data.needsSetup).toBe(true);
+
+      // Create the first admin → setupComplete flips to true.
+      const createReq = makeRequest('POST', '/api/setup/create-admin', {
+        username: 'firstadmin', password: 'supersecret1',
+      });
+      const createResp = await worker.fetch(createReq, env);
+      expect(createResp.status).toBe(200);
+
+      const resp2 = await worker.fetch(makeRequest('GET', '/api/setup/status'), env);
+      const data2: any = await parseResponse(resp2);
+      expect(data2.setupComplete).toBe(true);
+      expect(data2.needsSetup).toBe(false);
     });
 
     it('GET /api/health/detailed returns counts', async () => {
@@ -919,6 +943,106 @@ describe('Serverless Worker', () => {
       expect(locData.length).toBe(1);
       expect(locData[0].latitude).toBe(37.77);
       expect(locData[0].city).toBe('San Francisco');
+    });
+  });
+
+  // S4-serverless: multi-admin RBAC on KV — username+password login →
+  // signed session token, role hierarchy, /api/admins CRUD.
+  describe('S4-serverless: admin RBAC', () => {
+    async function seedAdmin(env: unknown, username = 'sa1', password = 'password123', role = 'super-admin') {
+      // First admin via setup; subsequent via /api/admins.
+      const resp = await worker.fetch(makeRequest('GET', '/api/setup/status'), env);
+      const needsSetup = (await parseResponse(resp) as any).needsSetup;
+      if (needsSetup) {
+        const r = await worker.fetch(makeRequest('POST', '/api/setup/create-admin', { username, password }), env);
+        return (await parseResponse(r) as any);
+      }
+      const r = await worker.fetch(
+        makeRequest('POST', '/api/admins', { username, password, role }, { Authorization: 'Bearer test-admin-token' }), env);
+      return (await parseResponse(r) as any);
+    }
+    async function login(env: unknown, username: string, password: string) {
+      const r = await worker.fetch(makeRequest('POST', '/api/auth/login', { username, password }), env);
+      return { resp: r, data: (await parseResponse(r) as any) };
+    }
+
+    it('first admin created via setup becomes super-admin and gets a token', async () => {
+      const data = await seedAdmin(env);
+      expect(data.admin.role).toBe('super-admin');
+      expect(data.token.split('.')).toHaveLength(3);
+    });
+
+    it('setup/create-admin is closed after the first admin exists', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      const r = await worker.fetch(makeRequest('POST', '/api/setup/create-admin', { username: 'x', password: 'password123' }), env);
+      expect(r.status).toBe(409);
+    });
+
+    it('login with correct credentials returns a usable signed token', async () => {
+      await seedAdmin(env, 'op1', 'password123');
+      const { resp, data } = await login(env, 'op1', 'password123');
+      expect(resp.status).toBe(200);
+      expect(data.user.role).toBeDefined();
+      const r = await worker.fetch(makeRequest('GET', '/api/devices', undefined, {
+        Authorization: `Bearer ${data.token}`,
+      }), env);
+      expect(r.status).toBe(200);
+    });
+
+    it('login with wrong password returns 401', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      const { resp } = await login(env, 'sa1', 'wrongpassword');
+      expect(resp.status).toBe(401);
+    });
+
+    it('login with unknown username returns 401', async () => {
+      const { resp } = await login(env, 'nosuchadmin', 'password123');
+      expect(resp.status).toBe(401);
+    });
+
+    it('POST /api/admins requires super-admin; operator token is rejected', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      // create an operator via super-admin
+      await worker.fetch(makeRequest('POST', '/api/admins',
+        { username: 'op1', password: 'password123', role: 'operator' },
+        { Authorization: 'Bearer test-admin-token' }), env);
+      const { data } = await login(env, 'op1', 'password123');
+      // operator tries to create another admin → 403
+      const r = await worker.fetch(makeRequest('POST', '/api/admins',
+        { username: 'x', password: 'password123', role: 'viewer' },
+        { Authorization: `Bearer ${data.token}` }), env);
+      expect(r.status).toBe(403);
+    });
+
+    it('GET /api/admins lists admins for super-admin', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      const r = await worker.fetch(makeRequest('GET', '/api/admins', undefined, {
+        Authorization: 'Bearer test-admin-token',
+      }), env);
+      const data: any = await parseResponse(r);
+      expect(r.status).toBe(200);
+      expect(data.some((a: any) => a.username === 'sa1')).toBe(true);
+      expect(data[0].password_hash).toBeUndefined(); // never leak hashes
+    });
+
+    it('cannot delete the last super-admin', async () => {
+      const me = await seedAdmin(env, 'onlyadmin', 'password123');
+      const r = await worker.fetch(
+        makeRequest('DELETE', `/api/admins/${me.admin.id}`, undefined, { Authorization: 'Bearer test-admin-token' }), env);
+      expect(r.status).toBe(400); // last super-admin (and self)
+    });
+
+    it('PATCH /api/admins/:id changes a role', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      const op = await worker.fetch(makeRequest('POST', '/api/admins',
+        { username: 'op1', password: 'password123', role: 'operator' },
+        { Authorization: 'Bearer test-admin-token' }), env);
+      const opData: any = await parseResponse(op);
+      const r = await worker.fetch(
+        makeRequest('PATCH', `/api/admins/${opData.id}`, { role: 'viewer' }, { Authorization: 'Bearer test-admin-token' }), env);
+      const data: any = await parseResponse(r);
+      expect(r.status).toBe(200);
+      expect(data.role).toBe('viewer');
     });
   });
 

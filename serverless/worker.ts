@@ -200,16 +200,62 @@ async function verifyAgentAuth(
 }
 
 // ---------------------------------------------------------------------------
-// Admin auth (simple bearer token)
+// Admin auth — resolves a Bearer credential to an admin record.
+//
+// Accepts either a signed session token (issued by /api/auth/login) or the
+// break-glass ADMIN_TOKEN env secret (which maps to a synthetic super-admin).
+// Returns the authenticated admin claims (id, username, role) or null.
 // ---------------------------------------------------------------------------
 
-function verifyAdminAuth(request: Request, env: Env): boolean {
+interface AdminClaims {
+  id: string;
+  username: string;
+  role: AdminRole;
+}
+
+async function resolveAdminAuth(request: Request, env: Env): Promise<AdminClaims | null> {
   const auth = request.headers.get('Authorization');
   if (!auth || !auth.startsWith('Bearer ')) {
-    return false;
+    return null;
   }
   const token = auth.slice(7);
-  return token === env.ADMIN_TOKEN;
+
+  // Break-glass: the env ADMIN_TOKEN maps to a synthetic super-admin so the
+  // Worker is usable before any admin is created (bootstrap / recovery).
+  if (token === env.ADMIN_TOKEN) {
+    return { id: 'admin-token', username: 'admin', role: 'super-admin' };
+  }
+
+  // Otherwise verify a signed session token.
+  return verifyAdminToken(env, token);
+}
+
+// Back-compat boolean form used by existing handlers.
+async function verifyAdminAuth(request: Request, env: Env): Promise<boolean> {
+  return (await resolveAdminAuth(request, env)) !== null;
+}
+
+/**
+ * Role gate — mirrors the Express server's requireRole(minRole).
+ * Returns the admin claims if authorized, or a Response (401/403) to return.
+ */
+async function requireRole(
+  request: Request,
+  env: Env,
+  minRole: AdminRole,
+): Promise<AdminClaims | Response> {
+  const admin = await resolveAdminAuth(request, env);
+  if (!admin) {
+    return errorResponse('Admin authentication required', 401);
+  }
+  const level = ROLE_HIERARCHY[admin.role] ?? 0;
+  if (level < ROLE_HIERARCHY[minRole]) {
+    return errorResponse(
+      `Insufficient permissions. This endpoint requires the '${minRole}' role.`,
+      403,
+    );
+  }
+  return admin;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +267,147 @@ interface Env {
   LOCKDOWN_KV: KVNamespace;
   PBL_SIGNING_KEY?: string; // PKCS8 base64 of ES256 private key for PBL verdict signing
   PBL_POLICY_SIGNING_KEY?: string; // D-205: PKCS8 base64 of ES256 private key for policy signing (separate from verdict)
+  JWT_SECRET?: string; // S4-serverless: HMAC secret for admin session tokens
+}
+
+// ---------------------------------------------------------------------------
+// S4-serverless: multi-admin RBAC on KV (end-state serverless auth).
+//
+// The end goal is a fully-serverless system; the Worker is the deployed
+// authority. This layer ports the Express server's admin model (username +
+// password + role) onto KV so the dashboard and admin-plane endpoints work
+// without Postgres.
+//
+// - admins[] stored in a single KV key (low-cardinality, mirrors devices).
+// - Passwords hashed with PBKDF2-SHA256 (native WebCrypto, NIST floor).
+// - Sessions are stateless HMAC-signed tokens ({id, username, role, exp}).
+// - ADMIN_TOKEN remains as a break-glass super-admin fallback so the Worker
+//   still works before any admin is created (bootstrap / recovery).
+// ---------------------------------------------------------------------------
+
+type AdminRole = 'viewer' | 'operator' | 'super-admin';
+
+interface Admin {
+  id: string;
+  username: string;
+  password_hash: string; // base64 PBKDF2
+  salt: string;          // base64
+  role: AdminRole;
+  created_at: string;
+}
+
+const ADMINS_KEY = 'admins';
+const PBKDF2_ITERATIONS = 210_000; // NIST-recommended floor for PBKDF2-SHA256
+const TOKEN_TTL_SECONDS = 8 * 3600; // match server's JWT_EXPIRES_IN default (8h)
+
+const ROLE_HIERARCHY: Record<AdminRole, number> = {
+  viewer: 0,
+  operator: 1,
+  'super-admin': 2,
+};
+
+async function listAdmins(env: Env): Promise<Admin[]> {
+  const data = await env.LOCKDOWN_KV.get(ADMINS_KEY);
+  return data ? JSON.parse(data) : [];
+}
+
+async function saveAdmins(env: Env, admins: Admin[]): Promise<void> {
+  await env.LOCKDOWN_KV.put(ADMINS_KEY, JSON.stringify(admins));
+}
+
+function b64encode(buf: ArrayBuffer): string {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)));
+}
+
+function b64decode(b64: string): Uint8Array {
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+/** PBKDF2-SHA256 password hash (base64) for a given salt. */
+async function pbkdf2Hash(password: string, saltB64: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits'],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt: b64decode(saltB64) as BufferSource,
+      iterations: PBKDF2_ITERATIONS,
+    },
+    keyMaterial,
+    256,
+  );
+  return b64encode(bits);
+}
+
+/** Create an admin record with a fresh random salt + PBKDF2 hash. */
+async function makeAdmin(username: string, password: string, role: AdminRole): Promise<Admin> {
+  const salt = b64encode(crypto.getRandomValues(new Uint8Array(16)).buffer);
+  const password_hash = await pbkdf2Hash(password, salt);
+  return {
+    id: generateId(),
+    username,
+    password_hash,
+    salt,
+    role,
+    created_at: new Date().toISOString(),
+  };
+}
+
+function b64urlEncode(str: string): string {
+  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64urlDecode(s: string): string {
+  const pad = s.length % 4 === 0 ? '' : '='.repeat(4 - (s.length % 4));
+  return atob(s.replace(/-/g, '+').replace(/_/g, '/') + pad);
+}
+
+/** Issue a stateless HMAC-signed session token (JWT-shape: header.payload.sig). */
+async function signAdminToken(env: Env, admin: Admin): Promise<string> {
+  const secret = env.JWT_SECRET || env.ADMIN_TOKEN || 'dev-secret';
+  const header = b64urlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const payload = b64urlEncode(
+    JSON.stringify({
+      id: admin.id,
+      username: admin.username,
+      role: admin.role,
+      exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS,
+    }),
+  );
+  const sig = await hmacSha256(secret, `${header}.${payload}`);
+  return `${header}.${payload}.${b64urlEncode(sig)}`;
+}
+
+/** Verify a signed token; returns the embedded admin claims or null. */
+async function verifyAdminToken(
+  env: Env,
+  token: string,
+): Promise<{ id: string; username: string; role: AdminRole } | null> {
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const secret = env.JWT_SECRET || env.ADMIN_TOKEN || 'dev-secret';
+  const expected = await hmacSha256(secret, `${parts[0]}.${parts[1]}`);
+  const sig = b64urlDecode(parts[2]);
+  // Constant-time comparison.
+  if (sig.length !== expected.length) return null;
+  let diff = 0;
+  for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
+  if (diff !== 0) return null;
+  try {
+    const payload = JSON.parse(b64urlDecode(parts[1]));
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null; // expired
+    if (!payload.id || !payload.role) return null;
+    return { id: payload.id, username: payload.username, role: payload.role };
+  } catch {
+    return null;
+  }
 }
 
 const DEVICES_KEY = 'devices';
@@ -824,7 +1011,7 @@ async function handleEscrowKey(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleEnroll(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminAuth(request, env)) {
+  if (!(await verifyAdminAuth(request, env))) {
     return errorResponse('Admin authentication required', 401);
   }
 
@@ -924,7 +1111,7 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
  * `enroll_token:{token}` with the admin's user ID and expiration timestamp.
  */
 async function handleEnrollToken(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminAuth(request, env)) {
+  if (!(await verifyAdminAuth(request, env))) {
     return errorResponse('Admin authentication required', 401);
   }
 
@@ -1093,7 +1280,7 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
 }
 
 async function handleListDevices(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminAuth(request, env)) {
+  if (!(await verifyAdminAuth(request, env))) {
     return errorResponse('Admin authentication required', 401);
   }
   const devices = await listDevices(env);
@@ -1114,7 +1301,7 @@ async function handleGetDevice(
   env: Env,
   deviceId: string,
 ): Promise<Response> {
-  if (!verifyAdminAuth(request, env)) {
+  if (!(await verifyAdminAuth(request, env))) {
     return errorResponse('Admin authentication required', 401);
   }
   const devices = await listDevices(env);
@@ -1145,7 +1332,7 @@ async function handleDeviceByHardware(
   env: Env,
   hardwareUuid: string,
 ): Promise<Response> {
-  if (!verifyAdminAuth(request, env)) {
+  if (!(await verifyAdminAuth(request, env))) {
     return errorResponse('Admin authentication required', 401);
   }
   const devices = await listDevices(env);
@@ -1167,7 +1354,7 @@ async function handleFlagStolen(
   env: Env,
   deviceId: string,
 ): Promise<Response> {
-  if (!verifyAdminAuth(request, env)) {
+  if (!(await verifyAdminAuth(request, env))) {
     return errorResponse('Admin authentication required', 401);
   }
 
@@ -1228,7 +1415,7 @@ async function handleRecover(
   env: Env,
   deviceId: string,
 ): Promise<Response> {
-  if (!verifyAdminAuth(request, env)) {
+  if (!(await verifyAdminAuth(request, env))) {
     return errorResponse('Admin authentication required', 401);
   }
 
@@ -1315,7 +1502,7 @@ async function handleTrackAction(
   deviceId: string,
   action: 'track' | 'stop_track' | 'locate',
 ): Promise<Response> {
-  if (!verifyAdminAuth(request, env)) {
+  if (!(await verifyAdminAuth(request, env))) {
     return errorResponse('Admin authentication required', 401);
   }
 
@@ -1366,7 +1553,7 @@ async function handleGetLocations(
   env: Env,
   deviceId: string,
 ): Promise<Response> {
-  if (!verifyAdminAuth(request, env)) {
+  if (!(await verifyAdminAuth(request, env))) {
     return errorResponse('Admin authentication required', 401);
   }
   const url = new URL(request.url);
@@ -1441,7 +1628,7 @@ async function handleDownloadEfsCert(
   env: Env,
   deviceId: string,
 ): Promise<Response> {
-  if (!verifyAdminAuth(request, env)) {
+  if (!(await verifyAdminAuth(request, env))) {
     return errorResponse('Admin authentication required', 401);
   }
 
@@ -1464,7 +1651,7 @@ async function handleDownloadEfsCert(
  * GET /api/audit — return audit log entries (optionally filtered by device_id).
  */
 async function handleGetAudit(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminAuth(request, env)) {
+  if (!(await verifyAdminAuth(request, env))) {
     return errorResponse('Admin authentication required', 401);
   }
   const url = new URL(request.url);
@@ -1485,33 +1672,65 @@ async function handleGetAudit(request: Request, env: Env): Promise<Response> {
 }
 
 /**
- * POST /api/auth/login — accept the admin token and return it as a "token".
- * The dashboard expects a JWT-like response: { token, user: { username, role } }.
- * Since the Worker uses a simple bearer token, we validate it and return it.
+ * POST /api/auth/login — username+password → signed session token.
+ *
+ * Mirrors the Express server's contract: the dashboard sends
+ * { username, password } and expects { token, user: { username, role } }.
+ * The returned token is an HMAC-signed JWT-shape token the dashboard stores
+ * in localStorage and sends as a Bearer credential.
+ *
+ * Break-glass: if { token } (or a password equal to ADMIN_TOKEN) is sent and
+ * matches the env ADMIN_TOKEN, issue a super-admin session — keeps the
+ * pre-multi-admin behavior working for bootstrap / recovery.
  */
 async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
   const body = await request.text();
-  let payload: { password?: string; token?: string };
+  let payload: { username?: string; password?: string; token?: string };
   try {
     payload = JSON.parse(body);
   } catch {
     return errorResponse('Invalid JSON body', 400);
   }
 
-  // The dashboard sends { username, password }. We treat password as the
-  // admin token. Alternatively, the client can send { token } directly.
-  const token = payload.token || payload.password;
-  if (!token) {
-    return errorResponse('Token or password required', 400);
+  // Break-glass: direct ADMIN_TOKEN, or a password equal to ADMIN_TOKEN, →
+  // super-admin. The dashboard may send { username, password } where the
+  // password is the break-glass token, so check the password field too.
+  const direct = payload.token || payload.password;
+  if (direct && direct === env.ADMIN_TOKEN) {
+    const sa: Admin = {
+      id: 'admin-token', username: 'admin', password_hash: '', salt: '',
+      role: 'super-admin', created_at: new Date().toISOString(),
+    };
+    return jsonResponse({
+      token: await signAdminToken(env, sa),
+      user: { username: 'admin', role: 'super-admin' },
+      admin: { id: sa.id, username: 'admin', role: 'super-admin' },
+    });
   }
 
-  if (token !== env.ADMIN_TOKEN) {
-    return errorResponse('Invalid credentials', 401);
+  // Normal path: username + password → look up admin → PBKDF2 verify.
+  const { username, password } = payload;
+  if (!username || !password) {
+    return errorResponse('username and password required', 400);
+  }
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    return errorResponse('username and password must be strings', 400);
+  }
+
+  const admins = await listAdmins(env);
+  const admin = admins.find((a) => a.username === username);
+  if (!admin) {
+    return errorResponse('Invalid credentials. Check your username and password and try again.', 401);
+  }
+  const hash = await pbkdf2Hash(password, admin.salt);
+  if (hash !== admin.password_hash) {
+    return errorResponse('Invalid credentials. Check your username and password and try again.', 401);
   }
 
   return jsonResponse({
-    token: token,
-    user: { username: 'admin', role: 'super-admin' },
+    token: await signAdminToken(env, admin),
+    user: { username: admin.username, role: admin.role },
+    admin: { id: admin.id, username: admin.username, role: admin.role },
   });
 }
 
@@ -1519,8 +1738,147 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
  * GET /api/setup/status — report setup as complete (Worker is always ready).
  */
 async function handleSetupStatus(env: Env): Promise<Response> {
-  // Dashboard checks data.needsSetup — Worker is always ready (no first-run setup)
-  return jsonResponse({ setupComplete: true, needsSetup: false });
+  // First-run setup is needed only when no admin exists yet. Once an admin
+  // is created (or the break-glass ADMIN_TOKEN is relied on), setup is done.
+  const admins = await listAdmins(env);
+  const needsSetup = admins.length === 0;
+  return jsonResponse({ setupComplete: !needsSetup, needsSetup, admins: admins.length });
+}
+
+const VALID_ADMIN_ROLES: AdminRole[] = ['viewer', 'operator', 'super-admin'];
+
+/**
+ * POST /api/setup/create-admin — create the first admin (first-run setup).
+ * Open only while no admin exists; after that, creating admins requires
+ * super-admin auth via /api/admins.
+ */
+async function handleCreateFirstAdmin(request: Request, env: Env): Promise<Response> {
+  const existing = await listAdmins(env);
+  if (existing.length > 0) {
+    return errorResponse('Setup already complete. Use /api/admins to manage admins.', 409);
+  }
+  let payload: { username?: string; password?: string; role?: string };
+  try {
+    payload = JSON.parse(await request.text());
+  } catch {
+    return errorResponse('Invalid JSON body', 400);
+  }
+  const { username, password } = payload;
+  if (!username || !password) {
+    return errorResponse('username and password required', 400);
+  }
+  if (typeof password !== 'string' || password.length < 8) {
+    return errorResponse('Password must be at least 8 characters.', 400);
+  }
+  if (!/^[a-zA-Z0-9_@.\-]+$/.test(username)) {
+    return errorResponse('username contains invalid characters.', 400);
+  }
+  // First admin is always super-admin.
+  const admin = await makeAdmin(username, password, 'super-admin');
+  await saveAdmins(env, [admin]);
+  return jsonResponse({
+    admin: { id: admin.id, username: admin.username, role: admin.role },
+    token: await signAdminToken(env, admin),
+  });
+}
+
+/**
+ * GET /api/admins — list admins (super-admin only).
+ */
+async function handleListAdmins(request: Request, env: Env): Promise<Response> {
+  const auth = await requireRole(request, env, 'super-admin');
+  if (auth instanceof Response) return auth;
+  const admins = await listAdmins(env);
+  return jsonResponse(
+    admins.map((a) => ({ id: a.id, username: a.username, role: a.role, created_at: a.created_at })),
+  );
+}
+
+/**
+ * POST /api/admins — create an admin (super-admin only).
+ */
+async function handleCreateAdmin(request: Request, env: Env): Promise<Response> {
+  const auth = await requireRole(request, env, 'super-admin');
+  if (auth instanceof Response) return auth;
+  let payload: { username?: string; password?: string; role?: AdminRole };
+  try {
+    payload = JSON.parse(await request.text());
+  } catch {
+    return errorResponse('Invalid JSON body', 400);
+  }
+  const { username, password, role } = payload;
+  if (!username || !password || !role) {
+    return errorResponse('username, password, and role are required.', 400);
+  }
+  if (typeof password !== 'string' || password.length < 8) {
+    return errorResponse('Password must be at least 8 characters.', 400);
+  }
+  if (!VALID_ADMIN_ROLES.includes(role)) {
+    return errorResponse(`role must be one of: ${VALID_ADMIN_ROLES.join(', ')}.`, 400);
+  }
+  if (!/^[a-zA-Z0-9_@.\-]+$/.test(username)) {
+    return errorResponse('username contains invalid characters.', 400);
+  }
+  const admins = await listAdmins(env);
+  if (admins.some((a) => a.username === username)) {
+    return errorResponse('An admin with that username already exists.', 409);
+  }
+  const admin = await makeAdmin(username, password, role);
+  admins.push(admin);
+  await saveAdmins(env, admins);
+  await addAuditEntry(env, '', 'admin_created', `username=${username} role=${role} by=${auth.username}`);
+  return jsonResponse({ id: admin.id, username: admin.username, role: admin.role, created_at: admin.created_at }, 201);
+}
+
+/**
+ * PATCH /api/admins/:id — change an admin's role (super-admin only).
+ */
+async function handleUpdateAdmin(request: Request, env: Env, id: string): Promise<Response> {
+  const auth = await requireRole(request, env, 'super-admin');
+  if (auth instanceof Response) return auth;
+  let payload: { role?: AdminRole };
+  try {
+    payload = JSON.parse(await request.text());
+  } catch {
+    return errorResponse('Invalid JSON body', 400);
+  }
+  if (!payload.role || !VALID_ADMIN_ROLES.includes(payload.role)) {
+    return errorResponse(`role must be one of: ${VALID_ADMIN_ROLES.join(', ')}.`, 400);
+  }
+  const admins = await listAdmins(env);
+  const target = admins.find((a) => a.id === id);
+  if (!target) return errorResponse('Admin not found', 404);
+  // Guard: can't demote the last super-admin.
+  const superAdmins = admins.filter((a) => a.role === 'super-admin');
+  if (target.role === 'super-admin' && payload.role !== 'super-admin' && superAdmins.length === 1) {
+    return errorResponse('Cannot demote the last super-admin.', 400);
+  }
+  target.role = payload.role;
+  await saveAdmins(env, admins);
+  await addAuditEntry(env, '', 'admin_role_changed', `username=${target.username} role=${payload.role} by=${auth.username}`);
+  return jsonResponse({ id: target.id, username: target.username, role: target.role });
+}
+
+/**
+ * DELETE /api/admins/:id — delete an admin (super-admin only).
+ * Cannot delete self or the last super-admin.
+ */
+async function handleDeleteAdmin(request: Request, env: Env, id: string): Promise<Response> {
+  const auth = await requireRole(request, env, 'super-admin');
+  if (auth instanceof Response) return auth;
+  const admins = await listAdmins(env);
+  const target = admins.find((a) => a.id === id);
+  if (!target) return errorResponse('Admin not found', 404);
+  if (target.id === auth.id) {
+    return errorResponse('Cannot delete your own admin account.', 400);
+  }
+  const superAdmins = admins.filter((a) => a.role === 'super-admin');
+  if (target.role === 'super-admin' && superAdmins.length === 1) {
+    return errorResponse('Cannot delete the last super-admin.', 400);
+  }
+  await saveAdmins(env, admins.filter((a) => a.id !== id));
+  await addAuditEntry(env, '', 'admin_deleted', `username=${target.username} by=${auth.username}`);
+  return jsonResponse({ deleted: true, id });
 }
 
 /**
@@ -1575,6 +1933,24 @@ export default {
     }
     if (path === '/api/setup/status' && method === 'GET') {
       return handleSetupStatus(env);
+    }
+    if (path === '/api/setup/create-admin' && method === 'POST') {
+      return handleCreateFirstAdmin(request, env);
+    }
+
+    // Multi-admin management (S4-serverless RBAC on KV)
+    if (path === '/api/admins' && method === 'GET') {
+      return handleListAdmins(request, env);
+    }
+    if (path === '/api/admins' && method === 'POST') {
+      return handleCreateAdmin(request, env);
+    }
+    const adminMatch = path.match(/^\/api\/admins\/([^/]+)$/);
+    if (adminMatch && method === 'PATCH') {
+      return handleUpdateAdmin(request, env, adminMatch[1]);
+    }
+    if (adminMatch && method === 'DELETE') {
+      return handleDeleteAdmin(request, env, adminMatch[1]);
     }
 
     // Audit log (admin auth)
@@ -1854,7 +2230,7 @@ async function handlePblRoute(
 
     // POST /v1/policy — store a policy blob (admin only)
     if (path === '/v1/policy' && method === 'POST') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const policyKeys = await getPolicySigningKeys(env);
@@ -1897,7 +2273,7 @@ async function handlePblRoute(
 
     // GET /v1/devices — list all PBL devices (admin only, D-206)
     if (path === '/v1/devices' && method === 'GET') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const devices = await listPblDevices(env.LOCKDOWN_KV);
@@ -1909,7 +2285,7 @@ async function handlePblRoute(
 
     // GET /v1/devices/:id — get a single PBL device (admin only, D-206)
     if (path.startsWith('/v1/devices/') && !path.includes('/lock') && !path.includes('/unlock') && !path.includes('/track') && !path.includes('/agent-mapping') && method === 'GET') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const deviceId = path.substring('/v1/devices/'.length);
@@ -1925,7 +2301,7 @@ async function handlePblRoute(
 
     // POST /v1/devices/:id/lock — admin lock device (D-206)
     if (path.startsWith('/v1/devices/') && path.endsWith('/lock') && method === 'POST') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/lock'.length);
@@ -1941,7 +2317,7 @@ async function handlePblRoute(
 
     // POST /v1/devices/:id/unlock — admin unlock device (D-206)
     if (path.startsWith('/v1/devices/') && path.endsWith('/unlock') && method === 'POST') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/unlock'.length);
@@ -1957,7 +2333,7 @@ async function handlePblRoute(
 
     // POST /v1/devices/:id/track — admin track device (C5 covert tracking, D-211)
     if (path.startsWith('/v1/devices/') && path.endsWith('/track') && method === 'POST') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/track'.length);
@@ -1973,7 +2349,7 @@ async function handlePblRoute(
 
     // POST /v1/devices/:id/stop-track — admin stop tracking device (C5, D-211)
     if (path.startsWith('/v1/devices/') && path.endsWith('/stop-track') && method === 'POST') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/stop-track'.length);
@@ -1994,7 +2370,7 @@ async function handlePblRoute(
     // `pbl_device_mapping:{pbl_device_id}` → { agent_device_id }.
     // NOTE: Must come before the general DELETE /v1/devices/:id route.
     if (path.startsWith('/v1/devices/') && path.endsWith('/agent-mapping') && method === 'GET') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/agent-mapping'.length);
@@ -2015,7 +2391,7 @@ async function handlePblRoute(
     // POST /v1/devices/:id/agent-mapping — link a PBL device to an agent device (D-206)
     // Body: { agent_device_id: string } — the UUID of the agent device record.
     if (path.startsWith('/v1/devices/') && path.endsWith('/agent-mapping') && method === 'POST') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/agent-mapping'.length);
@@ -2042,7 +2418,7 @@ async function handlePblRoute(
 
     // DELETE /v1/devices/:id/agent-mapping — unlink a PBL device from an agent device (D-206)
     if (path.startsWith('/v1/devices/') && path.endsWith('/agent-mapping') && method === 'DELETE') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const deviceId = path.substring('/v1/devices/'.length, path.length - '/agent-mapping'.length);
@@ -2060,7 +2436,7 @@ async function handlePblRoute(
 
     // DELETE /v1/devices/:id — admin delete device (D-206)
     if (path.startsWith('/v1/devices/') && method === 'DELETE') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const deviceId = path.substring('/v1/devices/'.length);
@@ -2076,7 +2452,7 @@ async function handlePblRoute(
 
     // POST /v1/admin/rotate-key — rotate the verdict signing key (D-205, admin only)
     if (path === '/v1/admin/rotate-key' && method === 'POST') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       try {
@@ -2107,7 +2483,7 @@ async function handlePblRoute(
 
     // GET /v1/admin/key-info — get current signing key info (D-205, admin only)
     if (path === '/v1/admin/key-info' && method === 'GET') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const keys = await getSigningKeys(env);
@@ -2136,7 +2512,7 @@ async function handlePblRoute(
     // POST /v1/admin/cert-chain — store the X.509 cert chain in KV (D-205, admin only)
     // Body: raw DER bytes (concatenated certs) or JSON { chain: "<base64>" }
     if (path === '/v1/admin/cert-chain' && method === 'POST') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       try {
@@ -2186,7 +2562,7 @@ async function handlePblRoute(
 
     // GET /v1/admin/cert-chain — get cert chain info (D-205, admin only)
     if (path === '/v1/admin/cert-chain' && method === 'GET') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const certs = await loadCertChain(env.LOCKDOWN_KV);
@@ -2202,7 +2578,7 @@ async function handlePblRoute(
 
     // DELETE /v1/admin/cert-chain — remove cert chain from KV (D-205, admin only)
     if (path === '/v1/admin/cert-chain' && method === 'DELETE') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       await env.LOCKDOWN_KV.delete('pbl_cert_chain:current');
@@ -2215,7 +2591,7 @@ async function handlePblRoute(
     // POST /v1/admin/operator-key — store the operator override public key (D-204, admin only)
     // Body: JSON { spki: "<base64>" } — the ES256 public key SPKI
     if (path === '/v1/admin/operator-key' && method === 'POST') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       try {
@@ -2250,7 +2626,7 @@ async function handlePblRoute(
 
     // GET /v1/admin/operator-key — get operator key info (D-204, admin only)
     if (path === '/v1/admin/operator-key' && method === 'GET') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       const stored = await env.LOCKDOWN_KV.get('pbl_operator_key:current', 'text');
@@ -2265,7 +2641,7 @@ async function handlePblRoute(
 
     // DELETE /v1/admin/operator-key — remove operator key (D-204, admin only)
     if (path === '/v1/admin/operator-key' && method === 'DELETE') {
-      if (!verifyAdminAuth(request, env)) {
+      if (!(await verifyAdminAuth(request, env))) {
         return errorResponse('Admin authentication required', 401);
       }
       await env.LOCKDOWN_KV.delete('pbl_operator_key:current');
