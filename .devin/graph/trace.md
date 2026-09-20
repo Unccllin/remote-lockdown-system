@@ -2241,3 +2241,51 @@ NG-T5 positive-path fixture (synthetic BCD hive with osdevice blob) OR next S2 i
 NG-T5 complete. Next S2 item: VMK lock-state proof OR monotonic-counter freshness OR disk boot-structure baseline; or NG-T3 real-hive validation of the osdevice decoder.
 
 ---
+
+---
+
+## Session 132 — 2026-09-20
+
+### RULE-ZERO
+**Read**: .devin/brain/beliefs.yaml (37 beliefs, schema: status/evidence_level/provenance/commit_ref/dependents), scripts/brain.py (cmd_stale mtime-day logic, cmd_check, cmd_gen_view, evidence ladder), brain SKILL conventions.
+**Finding**: brain staleness was mtime-day-granularity — flags beliefs on unrelated same-day edits AND misses real staleness. commit_ref is present on 37/41 beliefs, enabling a precise commit-aware check.
+
+### IMPLEMENT
+- scripts/brain.py: cmd_stale upgraded — _resolve_provenance_file + _file_changed_since_commit (git log commit_ref..HEAD -- file). Belief is stale only when a provenance file changed in a commit AFTER commit_ref; mtime remains fallback when no commit_ref. import subprocess added.
+- Backfill: B-038 (osdevice blob layout), B-039 (SignatureType≠MBRType), B-040 (restartCount>resetCount=resume), B-041 (slirp --network host). All asserted + confirmed.
+- Refute: B-012 → B-042 (Mor.c now uses correct MOR GUID e20939be — the stale belief described the pre-fix decoy-variable bug).
+- Re-confirm after S1.x edits: B-001/002/003/008/027/028/032/036.
+
+### VERIFY
+- brain.py check: 42 beliefs, integrity clean (30 confirmed / 12 refuted).
+- brain.py stale: no stale beliefs (commit-aware path + re-confirmed refs).
+- gen-view regenerated BELIEFS.md.
+- Commit `f395df6`.
+
+### Fog cleared this session
+- Commit-aware staleness is strictly better than mtime — it distinguishes "file touched" from "file changed after the belief was verified," and caught a genuinely-fixed bug (B-012) that mtime couldn't characterize.
+- 37/41 beliefs carry commit_ref — the 4 without one fall back to mtime.
+
+### Fog remaining
+- 4 beliefs lack commit_ref → still on the coarser mtime path (B-024, B-029?, others without refs).
+- No auto-hook runs `stale`/`check` at session start — staleness is discovered only on demand (could wire into session-start retrieve).
+
+### Debt items closed
+- Brain hygiene pass done; harness precision improved.
+
+### Debt items still open
+- S2 remainder (VMK lock-state, monotonic counter, disk baseline); S3–S5; D-120(partial), D-129, D-130; NG-T3 real-hive validation.
+
+### Blockers
+- None.
+
+### Session artifacts
+- Commit `f395df6`; brain store 42 beliefs clean; BELIEFS.md regenerated.
+
+### Failure attribution
+- Process gap surfaced: S1.x/NG-T5 produced assertable beliefs but only memory-captured them — fixed by backfill. Layer 5 (state management): the brain feed-back loop wasn't exercised during work.
+
+### Next session opening
+NG-T3 real-hive validation of the osdevice decoder, OR next S2 item (VMK lock-state proof / monotonic-counter freshness / disk boot-structure baseline).
+
+---

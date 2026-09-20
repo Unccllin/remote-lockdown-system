@@ -51,47 +51,49 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 131 — 2026-09-20
+## Latest session: 132 — 2026-09-20
 
 ### RULE-ZERO
-**Read**: Bcd.c regf/nk/vk/li cell offsets (NK_OFF_*, VK_OFF_*, BcdCellInfo, BcdFindSubkeyByName/ValueByName, BcdSubkeyListGetChild 'li' stride-4, BcdReadValueData inline-vs-cell rule), test-fve-harness.sh (samedisk/otherdisk/nofve boots, sgdisk combo image), real Win11 BCD at tmp/winre/Win11Extract (found: only type-5 boot devices — DVD/WinPE store, no partition osdevice → can't reuse, must synthesize).
-**Finding**: No usable partition-device osdevice exists in local BCD artifacts — must build a synthetic hive. The regf/nk/vk format Bcd.c consumes is fully documented by its own offsets; a Python generator emitting root→Objects→{bootmgr}+osloader(Type=0x10200003)→Elements→21000001(type-6 blob) is sufficient.
+**Read**: .devin/brain/beliefs.yaml (37 beliefs, schema: status/evidence_level/provenance/commit_ref/dependents), scripts/brain.py (cmd_stale mtime-day logic, cmd_check, cmd_gen_view, evidence ladder), brain SKILL conventions.
+**Finding**: brain staleness was mtime-day-granularity — flags beliefs on unrelated same-day edits AND misses real staleness. commit_ref is present on 37/41 beliefs, enabling a precise commit-aware check.
 
 ### IMPLEMENT
-- firmware/PblPkg/gen-bcd-hive.py NEW (~370 lines): HbinBuilder (cells at hbin+0x20 so buf offset = hive-relative offset), build_nk/vk/li_list/vk_list, build_partition_blob (type-6, PartitionID@0x20/TableType@0x34/DiskID@0x38), build_boot_blob (type-5), build_hive assembles bootmgr + N osloaders. CLI: --partition-guid/--mbr SIG:OFF/--boot-device/--objects N.
-- test-fve-harness.sh: Boot 4 'partbind' — combo image + BCD on ESP naming partition-2 unique GUID; asserts 'FVE volume bound to boot partition'.
+- scripts/brain.py: cmd_stale upgraded — _resolve_provenance_file + _file_changed_since_commit (git log commit_ref..HEAD -- file). Belief is stale only when a provenance file changed in a commit AFTER commit_ref; mtime remains fallback when no commit_ref. import subprocess added.
+- Backfill: B-038 (osdevice blob layout), B-039 (SignatureType≠MBRType), B-040 (restartCount>resetCount=resume), B-041 (slirp --network host). All asserted + confirmed.
+- Refute: B-012 → B-042 (Mor.c now uses correct MOR GUID e20939be — the stale belief described the pre-fix decoy-variable bug).
+- Re-confirm after S1.x edits: B-001/002/003/008/027/028/032/036.
 
 ### VERIFY
-- Hive self-walk in Python: BCD00000000→Objects→{bootmgr}+osloader(GUID); osloader→Description(Type=0x10200003)+Elements→21000001→type-6 blob, PartitionID=partition GUID. Correct.
-- QEMU+swtpm harness **20/20 PASS**: partbind serial `[Bcd] objects=2` → `bound to boot disk` → `bound to boot partition`. Discriminator: samedisk (no BCD) partition line count=0; partbind count=1. Positive + degrade + no-false-positive all proven.
-- Commit `df91b56`.
+- brain.py check: 42 beliefs, integrity clean (30 confirmed / 12 refuted).
+- brain.py stale: no stale beliefs (commit-aware path + re-confirmed refs).
+- gen-view regenerated BELIEFS.md.
+- Commit `f395df6`.
 
 ### Fog cleared this session
-- Real Win11 DVD BCD has only type-5 boot devices — installed-Windows partition osdevice isn't in local artifacts; synthetic generation is the only local verification path.
-- Hive cell offsets are relative to hbin data area (cells at hbin+0x20); rootRel points at the cell size field, not hbin start.
-- vk data: <=4 bytes inline at data_offset (high bit of data_len set); >4 bytes → separate cell.
+- Commit-aware staleness is strictly better than mtime — it distinguishes "file touched" from "file changed after the belief was verified," and caught a genuinely-fixed bug (B-012) that mtime couldn't characterize.
+- 37/41 beliefs carry commit_ref — the 4 without one fall back to mtime.
 
 ### Fog remaining
-- Nested file/ramdisk/vhd chains (type 0/8) decode-only-to-recognize; multi-boot bind across >1 osloader untested (single-loader fixture only).
-- Real-hive validation (NG-T3) still valuable for flags/unknown quirks + Win11 partition-id forms.
+- 4 beliefs lack commit_ref → still on the coarser mtime path (B-024, B-029?, others without refs).
+- No auto-hook runs `stale`/`check` at session start — staleness is discovered only on demand (could wire into session-start retrieve).
 
 ### Debt items closed
-- NG-T5 fully verified (code + positive-path emulated test): commits `450d283` + `df91b56`. D-120 partition-binding sub-item done; real-media + VMK lock-state remain.
+- Brain hygiene pass done; harness precision improved.
 
 ### Debt items still open
-- S2 remainder (VMK lock-state proof, monotonic-counter freshness, disk boot-structure baseline); S3–S5; D-120(partial), D-129, D-130.
+- S2 remainder (VMK lock-state, monotonic counter, disk baseline); S3–S5; D-120(partial), D-129, D-130; NG-T3 real-hive validation.
 
 ### Blockers
-- None for NG-T5. Real-hive confirmation (NG-T3) is a separate ticket.
+- None.
 
 ### Session artifacts
-- Commit `df91b56`; gen-bcd-hive.py; test-fve-harness 20/20; partbind serial 'objects=2'+'bound to boot partition'; samedisk partition-count=0 discriminator.
+- Commit `f395df6`; brain store 42 beliefs clean; BELIEFS.md regenerated.
 
 ### Failure attribution
-- One generator bug (hbin cell offset base — cells must start at 0x20 not 0) caught by self-walk before harness run: layer 4 (verification feedback — self-check caught it before the slow QEMU path).
+- Process gap surfaced: S1.x/NG-T5 produced assertable beliefs but only memory-captured them — fixed by backfill. Layer 5 (state management): the brain feed-back loop wasn't exercised during work.
 
 ### Next session opening
-NG-T5 complete. Next S2 item: VMK lock-state proof OR monotonic-counter freshness OR disk boot-structure baseline; or NG-T3 real-hive validation of the osdevice decoder.
+NG-T3 real-hive validation of the osdevice decoder, OR next S2 item (VMK lock-state proof / monotonic-counter freshness / disk boot-structure baseline).
 
 ---
 
