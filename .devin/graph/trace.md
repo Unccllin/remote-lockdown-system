@@ -2289,3 +2289,135 @@ NG-T5 complete. Next S2 item: VMK lock-state proof OR monotonic-counter freshnes
 NG-T3 real-hive validation of the osdevice decoder, OR next S2 item (VMK lock-state proof / monotonic-counter freshness / disk boot-structure baseline).
 
 ---
+
+---
+
+## Session 133 — 2026-09-20
+
+### RULE-ZERO
+**Read**: next-gen-lockdown-map S2 items (VMK lock-state, monotonic-counter freshness, disk baseline — none graduated to tickets), TpmClient.c NV infra (PBL_NV_* indices, PblTpmNvDefineSpace IsCounter arm, PblTpmIncrementPolicyVersion/PblTpmReadPolicyVersion patterns, PblTpmReadLockState/WriteLockState, session HMAC paths), PBL_LOCK_STATE_CACHE struct (64B, 20B Reserved), ci-harness-persistence.sh (two-boot swtpm pattern), ticket format (NG-T6).
+**Finding**: Monotonic-counter freshness is the most tractable S2 item — swtpm supports NV counters, NV/HMAC plumbing exists, no hardware dependency. The other S2 items need either the S5 digest-drift grilling (disk baseline) or hit testability limits (VMK proof). NG-T3 is HITL (needs real Windows bcdedit artifacts).
+
+### IMPLEMENT
+- docs/wayfinder/tickets/NG-T7-monotonic-freshness.md NEW — graduated S2 item to a T-ticket.
+- PblApp.h: PBL_NV_LOCK_EPOCH=base+0x04; PBL_LOCK_STATE_CACHE.Epoch (8B) carved from Reserved[20]→[12] (index stays 64B).
+- TpmClient.c: PblTpmNvIncrementCounter + PblTpmNvReadCounter (generalise policy-version counter pattern); LOCK_EPOCH provisioned in PblTpmProvisionNvIndices; WriteLockState increments epoch + stamps it into a mutable copy before NV_Write; ReadLockState rejects Cache.Epoch < live counter (EFI_NOT_FOUND, prints 'lock-state epoch stale').
+
+### VERIFY
+- DEBUG firmware build clean (forward-decl fix for the new helpers).
+- ci-harness-persistence **16/16 PASS** — LOCK_EPOCH provisions, NV_Increment/NV_Read on a counter index work under swtpm, lock-state write/read round-trips, no regression.
+- Commit `ed46ab1`.
+
+### Fog cleared this session
+- An NV counter index's count IS readable via TPM2_NV_Read (uint64 BE) — confirmed by PblTpmReadPolicyVersion. Sub-question resolved.
+- swtpm stores all NV in a single tpm2-00.permall blob — counter and cache cannot be rolled back independently, so the stale-epoch rejection branch is unreachable in emulation AND via the normal app flow (increment+write coupled).
+
+### Fog remaining
+- Stale-epoch rejection needs a real TPM's independent monotonic counter (D-129) or a host test seam (none exists — all firmware tests are QEMU). Marked PARTIAL, not verified-on-hardware.
+- Whether TPMA_NV_WRITTEN semantics on a counter index differ across TPMs (works on swtpm).
+
+### Debt items closed
+- NG-T7 implemented + emulated-round-trip verified (PARTIAL — negative path hardware-gated). Commit `ed46ab1`.
+
+### Debt items still open
+- S2 remainder (VMK lock-state proof, disk boot-structure baseline); S3–S5; D-120(partial), D-129, D-130; NG-T3 (HITL).
+
+### Blockers
+- Stale-epoch negative path + NG-T3 both hardware/HITL-gated.
+
+### Session artifacts
+- Commit `ed46ab1`; NG-T7 ticket; persistence harness 16/16.
+
+### Failure attribution
+- One compile miss (forward declarations for new helpers) — layer 2 (C ordering); trivial fix.
+
+### Next session opening
+S2 remaining: VMK lock-state proof OR disk boot-structure baseline (both need care — disk baseline is really an S5 primitive; VMK proof is deep FVE crypto). Alternatively NG-T3 if real Windows artifacts materialize, or pick the D-129 hardware window when allocated.
+
+---
+
+---
+
+## Session 134 — 2026-09-20
+
+### RULE-ZERO
+**Read**: devices.js flag_stolen (arm = status→stolen + lockdown command insert), agent.js command-ack (key_material escrowed only on 'executed' ACK — post-lockdown), agent.py handle_lockdown sequence (sentinel → generate_key → pending_ack/recovery_key_file → encrypt_folder → ack), conftest fixtures, next-gen-lockdown-map S2–S5 + D-129/NG-T3 (hardware/HITL blockers).
+**Finding**: Key is escrowed only AFTER encryption — a crash/lost-ACK = permanent lockout (the worst outcome for a lockdown system). True escrow-before-arm must be an agent-side precondition: generate key → confirm escrow → encrypt. Server can't pre-check at flag time because the key doesn't exist until the agent makes it mid-lockdown.
+
+### IMPLEMENT
+- server agent.js: new POST /api/agent/escrow-key — hostname+command_id+key_material; verifies command belongs to device; INSERT encryption_keys (encryptField, ON CONFLICT DO NOTHING idempotent).
+- agent.py: escrow_key() POSTs key, returns True only on {escrowed:true}; handle_lockdown calls it after generate_key and BEFORE encrypt_folder — failure removes sentinel, marks 'failed', leaves device unlocked.
+- tests/conftest.py: autouse _default_escrow_ok stubs escrow_key=True so existing handle_lockdown tests don't hit the network; test_escrow_before_arm.py calls the real fn via a captured ref.
+
+### VERIFY
+- server npm test: 37 suites / **624 tests** (5 new escrow-key). agent pytest: full suite green (7 new escrow tests — refuse-encrypt, sentinel removed, pending_ack failed, ordering, endpoint payload, net-error, rejected-body). ruff+eslint clean.
+
+### Fog cleared this session
+- Escrow-before-arm is an AGENT-side ordering guarantee, not a server flag-time check — the key doesn't exist until the agent generates it mid-lockdown.
+- Adding a precondition to handle_lockdown breaks existing tests that don't mock the new call — an autouse conftest stub (default-True) is the least-invasive fix; tests for the new behaviour call the captured real function.
+
+### Fog remaining
+- Escrow endpoint is on the agent path — if the server is unreachable at lockdown time, the device refuses to lock at all (safe default, but means a stolen device whose network is cut won't lock). Whether to add an offline-queue escrow or accept unlock-priority is a product call.
+- recover/unlock flow unchanged — the escrowed key serves the existing recover endpoint.
+
+### Debt items closed
+- S4 escrow-before-arm implemented + verified (unit). Commit `8b88bdf`.
+
+### Debt items still open
+- S4 remainder (command lifecycle, role-scoped key reads + audit, lock-screen provenance); S3, S5; S2 (VMK proof, disk baseline); D-120(partial), D-129, D-130; NG-T3 (HITL).
+
+### Blockers
+- Hardware window (D-129) still needed for stale-epoch + NG-T3 + 9 enforcement paths.
+
+### Session artifacts
+- Commit `8b88bdf`; 624 server tests; agent suite green; test_escrow_before_arm.py.
+
+### Failure attribution
+- conftest autouse-stub needed after escrow precondition broke 6 existing handle_lockdown tests — layer 4 (verification feedback: new precondition must be stubbed for unrelated-path tests). Resolved with default-True stub + real-fn capture for the escrow tests.
+
+### Next session opening
+S4 remainder (command lifecycle / role-scoped key reads + audit / lock-screen provenance), or S3 agent items (self-integrity, VM/snapshot, watchdog, raw-disk tripwire) — all software-tractable while hardware is unavailable.
+
+---
+
+---
+
+## Session 135 — 2026-09-20
+
+### RULE-ZERO
+**Read**: devices.js recover endpoint (key_material returned to any operator), auth.js role hierarchy (viewer<operator<super-admin), pba-credentials/rotate-key (already super-admin), agent.js fetchUnlockMaterials (agent reads key via checkin, NOT the recover response), audit_log schema, devices.routes.test.js recover tests + makeToken (default super-admin).
+**Finding**: recover's key_material goes to the ADMIN UI (agent gets it via checkin), so an operator triggering recovery got plaintext material. Agent unlock path is independent — restricting admin-facing disclosure doesn't break recovery.
+
+### IMPLEMENT
+- devices.js recover: key_material returned only for super-admin; operators get key_released:true + key_material_disclosed:false. key_material_read audit entry {command_id, role, disclosed} on every read (best-effort).
+
+### VERIFY
+- npm test: 37 suites / **626 tests** (2 new S4 role-scope: operator-withheld, super-admin-disclosed + audit flags). eslint clean.
+
+### Fog cleared this session
+- recover's key_material is an admin-UI disclosure, not the agent unlock path (agent reads via checkin/fetchUnlockMaterials) — so role-scoping it is safe.
+- makeToken() default role is super-admin — existing tests still pass with disclosed=true.
+
+### Fog remaining
+- Command lifecycle + lock-screen provenance (rest of S4) not yet done.
+- Whether operator unlock UX needs the material at all (dashboard may want to show it — now returns null for operators; UI may need a 'restricted' indicator).
+
+### Debt items closed
+- S4 role-scoped key reads + audit (part). Commit `15aec00`.
+
+### Debt items still open
+- S4 remainder (command lifecycle, lock-screen provenance); S3; S5; S2 (VMK proof, disk baseline); D-120(partial), D-129, D-130; NG-T3 (HITL).
+
+### Blockers
+- Hardware window (D-129) for enforcement paths + stale-epoch + NG-T3.
+
+### Session artifacts
+- Commit `15aec00`; 626 server tests.
+
+### Failure attribution
+- None — implementation + tests passed first run.
+
+### Next session opening
+S4 remainder (command lifecycle, lock-screen provenance) or S3 agent items (self-integrity, VM/snapshot, watchdog, raw-disk tripwire) — all software-tractable.
+
+---

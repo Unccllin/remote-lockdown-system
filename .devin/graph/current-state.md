@@ -51,49 +51,43 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 132 — 2026-09-20
+## Latest session: 135 — 2026-09-20
 
 ### RULE-ZERO
-**Read**: .devin/brain/beliefs.yaml (37 beliefs, schema: status/evidence_level/provenance/commit_ref/dependents), scripts/brain.py (cmd_stale mtime-day logic, cmd_check, cmd_gen_view, evidence ladder), brain SKILL conventions.
-**Finding**: brain staleness was mtime-day-granularity — flags beliefs on unrelated same-day edits AND misses real staleness. commit_ref is present on 37/41 beliefs, enabling a precise commit-aware check.
+**Read**: devices.js recover endpoint (key_material returned to any operator), auth.js role hierarchy (viewer<operator<super-admin), pba-credentials/rotate-key (already super-admin), agent.js fetchUnlockMaterials (agent reads key via checkin, NOT the recover response), audit_log schema, devices.routes.test.js recover tests + makeToken (default super-admin).
+**Finding**: recover's key_material goes to the ADMIN UI (agent gets it via checkin), so an operator triggering recovery got plaintext material. Agent unlock path is independent — restricting admin-facing disclosure doesn't break recovery.
 
 ### IMPLEMENT
-- scripts/brain.py: cmd_stale upgraded — _resolve_provenance_file + _file_changed_since_commit (git log commit_ref..HEAD -- file). Belief is stale only when a provenance file changed in a commit AFTER commit_ref; mtime remains fallback when no commit_ref. import subprocess added.
-- Backfill: B-038 (osdevice blob layout), B-039 (SignatureType≠MBRType), B-040 (restartCount>resetCount=resume), B-041 (slirp --network host). All asserted + confirmed.
-- Refute: B-012 → B-042 (Mor.c now uses correct MOR GUID e20939be — the stale belief described the pre-fix decoy-variable bug).
-- Re-confirm after S1.x edits: B-001/002/003/008/027/028/032/036.
+- devices.js recover: key_material returned only for super-admin; operators get key_released:true + key_material_disclosed:false. key_material_read audit entry {command_id, role, disclosed} on every read (best-effort).
 
 ### VERIFY
-- brain.py check: 42 beliefs, integrity clean (30 confirmed / 12 refuted).
-- brain.py stale: no stale beliefs (commit-aware path + re-confirmed refs).
-- gen-view regenerated BELIEFS.md.
-- Commit `f395df6`.
+- npm test: 37 suites / **626 tests** (2 new S4 role-scope: operator-withheld, super-admin-disclosed + audit flags). eslint clean.
 
 ### Fog cleared this session
-- Commit-aware staleness is strictly better than mtime — it distinguishes "file touched" from "file changed after the belief was verified," and caught a genuinely-fixed bug (B-012) that mtime couldn't characterize.
-- 37/41 beliefs carry commit_ref — the 4 without one fall back to mtime.
+- recover's key_material is an admin-UI disclosure, not the agent unlock path (agent reads via checkin/fetchUnlockMaterials) — so role-scoping it is safe.
+- makeToken() default role is super-admin — existing tests still pass with disclosed=true.
 
 ### Fog remaining
-- 4 beliefs lack commit_ref → still on the coarser mtime path (B-024, B-029?, others without refs).
-- No auto-hook runs `stale`/`check` at session start — staleness is discovered only on demand (could wire into session-start retrieve).
+- Command lifecycle + lock-screen provenance (rest of S4) not yet done.
+- Whether operator unlock UX needs the material at all (dashboard may want to show it — now returns null for operators; UI may need a 'restricted' indicator).
 
 ### Debt items closed
-- Brain hygiene pass done; harness precision improved.
+- S4 role-scoped key reads + audit (part). Commit `15aec00`.
 
 ### Debt items still open
-- S2 remainder (VMK lock-state, monotonic counter, disk baseline); S3–S5; D-120(partial), D-129, D-130; NG-T3 real-hive validation.
+- S4 remainder (command lifecycle, lock-screen provenance); S3; S5; S2 (VMK proof, disk baseline); D-120(partial), D-129, D-130; NG-T3 (HITL).
 
 ### Blockers
-- None.
+- Hardware window (D-129) for enforcement paths + stale-epoch + NG-T3.
 
 ### Session artifacts
-- Commit `f395df6`; brain store 42 beliefs clean; BELIEFS.md regenerated.
+- Commit `15aec00`; 626 server tests.
 
 ### Failure attribution
-- Process gap surfaced: S1.x/NG-T5 produced assertable beliefs but only memory-captured them — fixed by backfill. Layer 5 (state management): the brain feed-back loop wasn't exercised during work.
+- None — implementation + tests passed first run.
 
 ### Next session opening
-NG-T3 real-hive validation of the osdevice decoder, OR next S2 item (VMK lock-state proof / monotonic-counter freshness / disk boot-structure baseline).
+S4 remainder (command lifecycle, lock-screen provenance) or S3 agent items (self-integrity, VM/snapshot, watchdog, raw-disk tripwire) — all software-tractable.
 
 ---
 
