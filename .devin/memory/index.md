@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-09-20 09:11:16
-Active memories: 488 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-09-20 11:45:11
+Active memories: 505 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -36,29 +36,46 @@ Active memories: 488 | Superseded: 0 | Decayed: 20
 | m-236 | MISTAKE: none |  | 0.55 | 2026-09-17 | 0.266 | 0 |  |
 | m-105 | MISTAKE: None — this was a verification session wi |  | 0.55 | 2026-09-15 | 0.260 | 0 |  |
 | m-507 | gen-bcd-hive.py builds root->Objects->{bootmgr}+os |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-520 | Adding a precondition to handle_lockdown breaks ex |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-489 | MISTAKE: Ran plain 'npx jest' first → misleading P |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-514 | An NV counter index's value IS readable via TPM2_N |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-485 | pbl/kvStore.js createSharedEnv/getSharedKvStore is |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-509 | brain.py stale was mtime-day-based → false positiv |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-496 | The verdict request map is now 8 keys (~149 bytes  |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-525 | key_material_read audit entry records {command_id, |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-484 | The /v1/verdict fetch IS the firmware's boot repor |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-515 | swtpm stores all NV in one tpm2-00.permall blob →  |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-498 | MISTAKE: First harness run showed the old 110-byte |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-491 | Windows OS-side TPM command path: tbs.dll Tbsi_Con |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-502 | BcdReadValueData returns a pointer into the hive b |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-487 | Server tests MUST run via 'npm test' (node --exper |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-510 | The improved check caught B-012 as actually-refute |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-517 | Generalize counter helpers (PblTpmNvIncrementCount |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-488 | Flag-only (DEGRADED alarm) is the right posture fo |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-512 | B-003/B-008/B-028/B-027/B-032/B-036 re-confirmed i |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-508 | MISTAKE: First generator run placed cells at buf o |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-505 | Hive cell offsets are relative to hbin data area ( |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-523 | recover's key_material is an admin-UI disclosure,  |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-504 | Real Win11 DVD BCD hives contain only type-5 boot  |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-503 | MISTAKE: Used Hd->MBRType for the signature-type c |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-499 | osdevice/device blob: packet type 6 = partition; P |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-524 | makeToken() default role is super-admin — existing |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-494 | MISTAKE: Almost scoped S1.4 as a firmware change — |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-522 | MISTAKE: First test run broke 6 existing handle_lo |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-516 | Carving a field from a struct's Reserved/padding k |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-495 | S1.3 fields (FveProtectionMask/LoadedImageDigest/B |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-490 | PBL NEVER runs on S3 resume (finding F6): PEI S3 p |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-493 | Agent pytest needs .venv/bin/python — pyproject se |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-501 | Any-match is the safe bind policy: an osloader poi |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-518 | MISTAKE: Forgot forward declarations for new STATI |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-513 | MISTAKE: Under-used the brain during S1.x/NG-T5: p |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-500 | HARDDRIVE_DEVICE_PATH signature-kind selector is S |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-506 | vk value data: <=4 bytes inline at data_offset (hi |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-492 | resetCount (boot_id) vs restartCount is the S3 dis |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-497 | Must recopy PblApp.efi to the harness /test dir AF |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-519 | Escrow-before-arm is an AGENT-side ordering guaran |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-521 | _post_with_fallback raises on requests exceptions; |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
+| m-511 | Beliefs not auto-asserted during work are lost to  |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-486 | devices.pbl_device_id (migration 011) links an age |  | 0.50 | 2026-09-20 | 0.250 | 0 |  |
 | m-470 | Key-domain separation checked by key MATERIAL not  |  | 0.50 | 2026-09-19 | 0.247 | 0 |  |
 | m-482 | MISTAKE: Left a stale probe listener holding :8080 |  | 0.50 | 2026-09-19 | 0.247 | 0 |  |
