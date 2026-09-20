@@ -51,43 +51,49 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 135 — 2026-09-20
+## Latest session: 136 — 2026-09-20
 
 ### RULE-ZERO
-**Read**: devices.js recover endpoint (key_material returned to any operator), auth.js role hierarchy (viewer<operator<super-admin), pba-credentials/rotate-key (already super-admin), agent.js fetchUnlockMaterials (agent reads key via checkin, NOT the recover response), audit_log schema, devices.routes.test.js recover tests + makeToken (default super-admin).
-**Finding**: recover's key_material goes to the ADMIN UI (agent gets it via checkin), so an operator triggering recovery got plaintext material. Agent unlock path is independent — restricting admin-facing disclosure doesn't break recovery.
+**Read**: worker.ts (KV model, verifyAdminAuth boolean, download handlers, route table), server/src/routes/{admins,devices,agent,installer}.js (role map, groupPbaCredentials, bios_passwords, installer config/ZIP/NSIS), auth.js middleware (JWT + ROLE_HIERARCHY), dashboard api/{alerts,admins}.js (alerts already client-side). Wayfinder next-gen-lockdown-map (out-of-scope: production/deployment — this work is an endorsed scope change).
+**Finding**: Worker had no role model (single ADMIN_TOKEN) and silently dropped all BIOS/PBA creds on the serverless path — UEFI unlock didn't work serverless. Installer needs zip/makensis (impossible) → self-contained install.ps1.
 
-### IMPLEMENT
-- devices.js recover: key_material returned only for super-admin; operators get key_released:true + key_material_disclosed:false. key_material_read audit entry {command_id, role, disclosed} on every read (best-effort).
+### IMPLEMENT (fully-serverless migration, 4 phases)
+- P1 `2301d1e`+`97068bc`: admins[] KV store, PBKDF2-SHA256 (210k, WebCrypto), HMAC-signed JWT-shape tokens, resolveAdminAuth+requireRole, ADMIN_TOKEN break-glass, /api/admins CRUD + /api/setup/create-admin + login. Constant-time compare + break-glass scoping (review fixes).
+- P2 `72bc6f4`: role enforcement — operator on enroll/flag/recover/track, viewer on read, super-admin on efs-cert.
+- P3 `61ea938`: bios_passwords KV store + groupPbaCredentials; command-ack stores 4 cred types; checkin returns them on unlock (FIXED the silent-cred-drop bug); /pba-credentials (super-admin); /release (operator, cascade + anonymize audit).
+- P4 `50f0caf`: /api/installer/:deviceId → self-contained install.ps1 (fresh api_key + config embedded, downloads agent, sc.exe service) — serverless answer to on-the-fly ZIP/NSIS.
 
 ### VERIFY
-- npm test: 37 suites / **626 tests** (2 new S4 role-scope: operator-withheld, super-admin-disclosed + audit flags). eslint clean.
+- serverless npm test: 2 files / **324 tests** (was 305 → +19 across the 4 phases). All green.
 
 ### Fog cleared this session
-- recover's key_material is an admin-UI disclosure, not the agent unlock path (agent reads via checkin/fetchUnlockMaterials) — so role-scoping it is safe.
-- makeToken() default role is super-admin — existing tests still pass with disclosed=true.
+- alerts is fully client-side (dashboard/src/api/alerts.js derives from /devices+/audit) — no server port needed.
+- Serverless unlock path dropped ALL bios/PBA creds — real production bug fixed in P3.
+- Worker's binary:installer/agent KV model already exists — per-device config is the only gap, solved via install.ps1.
 
 ### Fog remaining
-- Command lifecycle + lock-screen provenance (rest of S4) not yet done.
-- Whether operator unlock UX needs the material at all (dashboard may want to show it — now returns null for operators; UI may need a 'restricted' indicator).
+- /v1/* PBL admin routes still on boolean verifyAdminAuth (not role-scoped — separate surface, follow-up).
+- install.ps1 unproven on real Windows hardware (one-click NSIS UX vs .ps1 — needs hardware-window validation).
+- Dashboard cutover (Phase 5) not yet done — server/ still the dev/default.
+- KV_KEK envelope for bios_passwords not yet added (plaintext in KV, same as encryption_keys — uniform layer later).
 
 ### Debt items closed
-- S4 role-scoped key reads + audit (part). Commit `15aec00`.
+- Fully-serverless admin plane: Phases 1–4 complete. Commits `2301d1e`, `97068bc`, `72bc6f4`, `61ea938`, `50f0caf`.
 
 ### Debt items still open
-- S4 remainder (command lifecycle, lock-screen provenance); S3; S5; S2 (VMK proof, disk baseline); D-120(partial), D-129, D-130; NG-T3 (HITL).
+- /v1/* PBL route role-scoping; KV_KEK secrets envelope; dashboard cutover (Phase 5); install.ps1 hardware validation; earlier S4/S3/S5/S2 items.
 
 ### Blockers
-- Hardware window (D-129) for enforcement paths + stale-epoch + NG-T3.
+- Hardware window (D-129) for enforcement paths + install.ps1 one-click validation.
 
 ### Session artifacts
-- Commit `15aec00`; 626 server tests.
+- 5 commits; 324 worker tests.
 
 ### Failure attribution
-- None — implementation + tests passed first run.
+- Two orphaned-brace syntax errors mid-Phase-2 (mechanical edit artifacts — caught by vitest transform, fixed). Layer 2 (context) — batch sed edits need per-site verification.
 
 ### Next session opening
-S4 remainder (command lifecycle, lock-screen provenance) or S3 agent items (self-integrity, VM/snapshot, watchdog, raw-disk tripwire) — all software-tractable.
+Phase 5 cutover decision (dashboard → worker) OR /v1/* PBL role-scoping + KV_KEK secrets envelope — remaining serverless gaps.
 
 ---
 

@@ -2421,3 +2421,51 @@ S4 remainder (command lifecycle / role-scoped key reads + audit / lock-screen pr
 S4 remainder (command lifecycle, lock-screen provenance) or S3 agent items (self-integrity, VM/snapshot, watchdog, raw-disk tripwire) — all software-tractable.
 
 ---
+
+---
+
+## Session 136 — 2026-09-20
+
+### RULE-ZERO
+**Read**: worker.ts (KV model, verifyAdminAuth boolean, download handlers, route table), server/src/routes/{admins,devices,agent,installer}.js (role map, groupPbaCredentials, bios_passwords, installer config/ZIP/NSIS), auth.js middleware (JWT + ROLE_HIERARCHY), dashboard api/{alerts,admins}.js (alerts already client-side). Wayfinder next-gen-lockdown-map (out-of-scope: production/deployment — this work is an endorsed scope change).
+**Finding**: Worker had no role model (single ADMIN_TOKEN) and silently dropped all BIOS/PBA creds on the serverless path — UEFI unlock didn't work serverless. Installer needs zip/makensis (impossible) → self-contained install.ps1.
+
+### IMPLEMENT (fully-serverless migration, 4 phases)
+- P1 `2301d1e`+`97068bc`: admins[] KV store, PBKDF2-SHA256 (210k, WebCrypto), HMAC-signed JWT-shape tokens, resolveAdminAuth+requireRole, ADMIN_TOKEN break-glass, /api/admins CRUD + /api/setup/create-admin + login. Constant-time compare + break-glass scoping (review fixes).
+- P2 `72bc6f4`: role enforcement — operator on enroll/flag/recover/track, viewer on read, super-admin on efs-cert.
+- P3 `61ea938`: bios_passwords KV store + groupPbaCredentials; command-ack stores 4 cred types; checkin returns them on unlock (FIXED the silent-cred-drop bug); /pba-credentials (super-admin); /release (operator, cascade + anonymize audit).
+- P4 `50f0caf`: /api/installer/:deviceId → self-contained install.ps1 (fresh api_key + config embedded, downloads agent, sc.exe service) — serverless answer to on-the-fly ZIP/NSIS.
+
+### VERIFY
+- serverless npm test: 2 files / **324 tests** (was 305 → +19 across the 4 phases). All green.
+
+### Fog cleared this session
+- alerts is fully client-side (dashboard/src/api/alerts.js derives from /devices+/audit) — no server port needed.
+- Serverless unlock path dropped ALL bios/PBA creds — real production bug fixed in P3.
+- Worker's binary:installer/agent KV model already exists — per-device config is the only gap, solved via install.ps1.
+
+### Fog remaining
+- /v1/* PBL admin routes still on boolean verifyAdminAuth (not role-scoped — separate surface, follow-up).
+- install.ps1 unproven on real Windows hardware (one-click NSIS UX vs .ps1 — needs hardware-window validation).
+- Dashboard cutover (Phase 5) not yet done — server/ still the dev/default.
+- KV_KEK envelope for bios_passwords not yet added (plaintext in KV, same as encryption_keys — uniform layer later).
+
+### Debt items closed
+- Fully-serverless admin plane: Phases 1–4 complete. Commits `2301d1e`, `97068bc`, `72bc6f4`, `61ea938`, `50f0caf`.
+
+### Debt items still open
+- /v1/* PBL route role-scoping; KV_KEK secrets envelope; dashboard cutover (Phase 5); install.ps1 hardware validation; earlier S4/S3/S5/S2 items.
+
+### Blockers
+- Hardware window (D-129) for enforcement paths + install.ps1 one-click validation.
+
+### Session artifacts
+- 5 commits; 324 worker tests.
+
+### Failure attribution
+- Two orphaned-brace syntax errors mid-Phase-2 (mechanical edit artifacts — caught by vitest transform, fixed). Layer 2 (context) — batch sed edits need per-site verification.
+
+### Next session opening
+Phase 5 cutover decision (dashboard → worker) OR /v1/* PBL role-scoping + KV_KEK secrets envelope — remaining serverless gaps.
+
+---
