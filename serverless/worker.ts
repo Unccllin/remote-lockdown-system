@@ -1820,6 +1820,80 @@ async function handleReleaseDevice(
 }
 
 /**
+ * GET /api/installer/:deviceId — per-device installer (S4-serverless).
+ *
+ * The Express server builds a per-device ZIP/NSIS on the fly — that needs
+ * zip/makensis, which a Worker can't run. The serverless-native answer is
+ * a self-contained install.ps1: it generates a fresh api_key + config.json
+ * here, embeds them in the script, and the script (run on the target) writes
+ * config.json, downloads the agent binary from /api/download/agent, and
+ * registers it as a service via sc.exe — the same one-click effect.
+ *
+ * Returns a downloadable .ps1. Operator+ required.
+ */
+async function handleInstaller(request: Request, env: Env, deviceId: string): Promise<Response> {
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
+
+  const devices = await listDevices(env);
+  const device = devices.find((d) => d.id === deviceId);
+  if (!device) return errorResponse('Device not found', 404);
+
+  // Fresh api_key for this install (re-keys the device; old key is replaced).
+  const apiKey = generateApiKey();
+  device.api_key_hash = await sha256(apiKey);
+  await saveDevices(env, devices);
+  await addAuditEntry(env, deviceId, 'installer_generated', `by=${auth.username} host=${device.hostname}`);
+
+  // Base URL the agent should check in against (this Worker's origin).
+  const serverUrl = new URL(request.url).origin;
+  const config = {
+    server_url: serverUrl,
+    device_hostname: device.hostname,
+    api_key: apiKey,
+    poll_interval: 30,
+    sign_requests: true,
+    server_supports_ack_dedup: true,
+    boot_lock_enabled: true,
+    enrolled_at: new Date().toISOString(),
+  };
+  const configB64 = btoa(JSON.stringify(config, null, 2));
+
+  // Self-contained install.ps1 — writes config, downloads the agent binary,
+  // registers + starts the service. Run elevated on the target Windows host.
+  const script = `# Remote Lockdown — per-device installer for ${device.hostname}
+# Generated ${config.enrolled_at} — run elevated (Administrator) on the target.
+$ErrorActionPreference = 'Stop'
+$inst = "$env:ProgramData\\RemoteLockdown"
+New-Item -ItemType Directory -Force -Path $inst | Out-Null
+
+# 1. Write config.json (embedded, base64 to avoid quoting issues)
+$configB64 = @'
+${configB64}
+'@
+[System.IO.File]::WriteAllBytes("$inst\\config.json", [Convert]::FromBase64String($configB64))
+
+# 2. Download the agent binary from this server
+Invoke-WebRequest -Uri '${serverUrl}/api/download/agent' -OutFile "$inst\\lockdown-agent.exe"
+
+# 3. Register + start the agent as an auto-start service
+sc.exe create RemoteLockdownAgent binPath= "\"$inst\\lockdown-agent.exe\" --config \"$inst\\config.json\"" start= auto DisplayName= "Remote Lockdown Agent" | Out-Null
+sc.exe description RemoteLockdownAgent "Anti-theft agent for ${device.hostname}" | Out-Null
+sc.exe start RemoteLockdownAgent | Out-Null
+
+Write-Host "Remote Lockdown agent installed and started for ${device.hostname}."
+`;
+
+  return new Response(script, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': `attachment; filename="install-${device.hostname}.ps1"`,
+      'Cache-Control': 'no-cache',
+    },
+  });
+}
+
+/**
  * GET /api/audit — return audit log entries (optionally filtered by device_id).
  */
 async function handleGetAudit(request: Request, env: Env): Promise<Response> {
@@ -2242,6 +2316,12 @@ export default {
     //   wrangler kv:key put --binding LOCKDOWN_KV "binary:agent" --path lockdown-agent.exe
     // No admin auth required — these are public downloads (the enrollment
     // token controls who can enroll, not who can download the installer).
+    // Per-device installer (S4-serverless) — self-contained install.ps1.
+    const installerMatch = path.match(/^\/api\/installer\/([^/]+)$/);
+    if (installerMatch && method === 'GET') {
+      return handleInstaller(request, env, installerMatch[1]);
+    }
+
     if (path === '/api/download/installer' && method === 'GET') {
       return handleDownloadBinary(env, 'installer');
     }

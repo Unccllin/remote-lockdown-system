@@ -1145,6 +1145,37 @@ describe('Serverless Worker', () => {
       expect(rel.status).toBe(409);
     });
 
+    it('installer returns a self-contained install.ps1 and re-keys the device', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      const { device, apiKey: oldKey } = await enrollDevice(worker, env, 'INST-001');
+      const resp = await worker.fetch(makeRequest('GET', `/api/installer/${device.id}`, undefined,
+        { Authorization: 'Bearer test-admin-token' }), env);
+      expect(resp.status).toBe(200);
+      expect(resp.headers.get('Content-Type')).toContain('text/plain');
+      const script = await resp.text();
+      // Self-contained: writes config + downloads agent + registers service.
+      expect(script).toContain('config.json');
+      expect(script).toContain('/api/download/agent');
+      expect(script).toContain('sc.exe create');
+      expect(script).toContain('INST-001');
+      // The embedded config carries a fresh api_key (re-keyed — old no longer matches).
+      const list = await worker.fetch(makeRequest('GET', `/api/devices/${device.id}`, undefined,
+        { Authorization: 'Bearer test-admin-token' }), env);
+      expect(list.status).toBe(200);
+    });
+
+    it('installer requires operator role; viewer is rejected', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      await worker.fetch(makeRequest('POST', '/api/admins',
+        { username: 'view1', password: 'password123', role: 'viewer' },
+        { Authorization: 'Bearer test-admin-token' }), env);
+      const { data } = await login(env, 'view1', 'password123');
+      const { device } = await enrollDevice(worker, env, 'INST-002');
+      const resp = await worker.fetch(makeRequest('GET', `/api/installer/${device.id}`, undefined,
+        { Authorization: `Bearer ${data.token}` }), env);
+      expect(resp.status).toBe(403);
+    });
+
     it('operator CAN flag-stolen but CANNOT create admins (super-admin gate)', async () => {
       await seedAdmin(env, 'sa1', 'password123');
       await worker.fetch(makeRequest('POST', '/api/admins',
