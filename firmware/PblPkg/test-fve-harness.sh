@@ -111,6 +111,28 @@ dd if="${FVE_IMG}"      of="${COMBO_IMG}" bs=512 seek="${P2_START}" conv=notrunc
 
 cp "${OVMF_VARS_SRC}" "${BUILD_DIR}/OVMF_VARS.fd"
 
+# === NG-T5: partition-binding combo image (combo + BCD osdevice) ===
+# A second combo image whose ESP ALSO carries \EFI\Microsoft\Boot\BCD —
+# a synthetic hive (gen-bcd-hive.py) with one osloader whose osdevice
+# partition-device blob names the FVE partition's GUID. PBL should bind
+# the FVE volume at PARTITION level, not just disk level.
+COMBO_BCD_IMG="${BUILD_DIR}/combo-bcd.img"
+ESP_BCD_IMG="${BUILD_DIR}/esp-bcd.img"
+
+# Partition 2's unique GUID is what the osdevice blob must name.
+P2_GUID=$(sgdisk -i 2 "${COMBO_IMG}" | awk '/Partition unique GUID/{print $4}')
+python3 "${FIRMWARE_DIR}/PblPkg/gen-bcd-hive.py" \
+  --out "${BUILD_DIR}/BCD" --partition-guid "${P2_GUID}" >/dev/null
+
+dd if=/dev/zero of="${ESP_BCD_IMG}" bs=1M count=16 2>/dev/null
+mkfs.vfat "${ESP_BCD_IMG}" >/dev/null 2>&1
+mmd -i "${ESP_BCD_IMG}" ::/EFI ::/EFI/BOOT ::/EFI/Microsoft ::/EFI/Microsoft/Boot 2>/dev/null || true
+mcopy -i "${ESP_BCD_IMG}" "${PBL_APP}" ::/EFI/BOOT/BOOTX64.EFI
+mcopy -i "${ESP_BCD_IMG}" "${BUILD_DIR}/BCD" ::/EFI/Microsoft/Boot/BCD
+
+cp "${COMBO_IMG}" "${COMBO_BCD_IMG}"
+dd if="${ESP_BCD_IMG}" of="${COMBO_BCD_IMG}" bs=512 seek="${P1_START}" conv=notrunc 2>/dev/null
+
 SWTPM_DIR="${BUILD_DIR}/swtpm-state"
 mkdir -p "${SWTPM_DIR}"
 
@@ -163,10 +185,13 @@ echo "=== Boot 2: FVE on a separate disk ==="
 boot otherdisk "${ESP_IMG}" "-drive format=raw,file=${FVE_IMG}"
 echo "=== Boot 3: no FVE disk ==="
 boot nofve "${ESP_IMG}"
+echo "=== Boot 4: FVE + BCD osdevice (partition binding) ==="
+boot partbind "${COMBO_BCD_IMG}"
 
 S1="${BUILD_DIR}/serial-samedisk.log"
 S2="${BUILD_DIR}/serial-otherdisk.log"
 S3="${BUILD_DIR}/serial-nofve.log"
+S4="${BUILD_DIR}/serial-partbind.log"
 
 echo ""
 echo "=== Checking serial output ==="
@@ -189,6 +214,11 @@ check "Lock screen (otherdisk)"   "THIS DEVICE IS LOCKED" "${S2}"
 check "PBL banner (nofve)"       "PBL — Pre-Boot Lock" "${S3}"
 check_absent "No FVE detection without disk" "FVE-FS volume detected" "${S3}"
 check "Lock screen (nofve)"      "THIS DEVICE IS LOCKED" "${S3}"
+# Boot 4 — NG-T5 partition-level binding: osdevice names the FVE partition
+check "PBL banner (partbind)"      "PBL — Pre-Boot Lock" "${S4}"
+check "FVE detected (partbind)"    "FVE-FS volume detected" "${S4}"
+check "FVE bound to boot disk (partbind)" "FVE volume bound to boot disk" "${S4}"
+check "FVE bound to boot PARTITION" "FVE volume bound to boot partition" "${S4}"
 
 echo ""
 echo "=== Results: ${PASS} PASS / ${FAIL} FAIL ==="
@@ -199,6 +229,7 @@ echo "=== Results: ${PASS} PASS / ${FAIL} FAIL ==="
   echo "--- serial-samedisk.log ---";  cat "${S1}"
   echo "--- serial-otherdisk.log ---"; cat "${S2}"
   echo "--- serial-nofve.log ---";     cat "${S3}"
+  echo "--- serial-partbind.log ---";  cat "${S4}"
 } > "${RESULT}"
 echo "Artifact written: ${RESULT}"
 
