@@ -318,12 +318,70 @@ describe('POST /api/devices/:id/recover', () => {
     expect(res.body.command.command_type).toBe('unlock');
     expect(res.body.key_released).toBe(true);
     expect(res.body.key_material).toBe('fernet-key==');
+    // S4: super-admin gets the material disclosed
+    expect(res.body.key_material_disclosed).toBe(true);
 
     // Verify status was set to recovering
     const statusCall = mockPool.query.mock.calls.find(
       c => c[0].includes("UPDATE devices SET status = $1") && c[1][0] === 'recovering'
     );
     expect(statusCall).toBeDefined();
+  });
+
+  // S4: role-scoped key reads — operator gets release confirmation but NOT
+  // the plaintext key material (super-admin only).
+  test('S4: operator gets key_released but not key_material', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const key = { id: 'key-1', key_material: 'fernet-key==', released_at: null };
+    const cmd = { id: 'cmd-2', command_type: 'unlock', status: 'pending' };
+
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM encryption_keys', { rows: [key] });
+    mockPool.query.setResult('INSERT INTO commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/recover')
+      .set('Authorization', `Bearer ${makeToken('admin-2', 'op', 'operator')}`)
+      .send({ hostname_confirm: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.device.status).toBe('recovering');
+    expect(res.body.key_released).toBe(true);          // release still happens
+    expect(res.body.key_material).toBeNull();          // but material withheld
+    expect(res.body.key_material_disclosed).toBe(false);
+
+    // Audit entry for the key-material read must be recorded.
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1][2] === 'key_material_read'
+    );
+    expect(auditCall).toBeDefined();
+    expect(auditCall[1][3].disclosed).toBe(false);
+    expect(auditCall[1][3].role).toBe('operator');
+  });
+
+  test('S4: super-admin gets key_material and disclosed audit flag', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'stolen' };
+    const key = { id: 'key-1', key_material: 'fernet-key==', released_at: null };
+    const cmd = { id: 'cmd-2', command_type: 'unlock', status: 'pending' };
+
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [device] });
+    mockPool.query.setResult('SELECT * FROM encryption_keys', { rows: [key] });
+    mockPool.query.setResult('INSERT INTO commands', { rows: [cmd] });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/recover')
+      .set('Authorization', `Bearer ${makeToken('admin-3', 'sa', 'super-admin')}`)
+      .send({ hostname_confirm: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.key_material).toBe('fernet-key==');
+    expect(res.body.key_material_disclosed).toBe(true);
+
+    const auditCall = mockPool.query.mock.calls.find(
+      c => c[0].includes('INSERT INTO audit_log') && c[1][2] === 'key_material_read'
+    );
+    expect(auditCall).toBeDefined();
+    expect(auditCall[1][3].disclosed).toBe(true);
   });
 
   test('allows recovery from locked status (not just stolen)', async () => {

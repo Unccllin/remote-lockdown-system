@@ -309,6 +309,24 @@ router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, re
     key, 'key_material', 'key_material_encrypted', 'key_enc_nonce', 'key_enc_tag'
   ) : null;
 
+  // S4: role-scoped key reads + audit. Recovery-key MATERIAL is sensitive
+  // disclosure — return the plaintext only to super-admin. Operators still
+  // learn the key was released (the agent retrieves it via checkin), but
+  // the response withholds the material for non-super-admin roles.
+  const discloseKey = req.admin.role === 'super-admin' && keyMaterial != null;
+  if (keyMaterial != null) {
+    try {
+      await pool.query(
+        'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
+        [device.id, req.admin.id, 'key_material_read', {
+          command_id: cmd.id,
+          role: req.admin.role,
+          disclosed: discloseKey,
+        }]
+      );
+    } catch (auditErr) { /* audit is best-effort — don't fail recovery */ }
+  }
+
   // Fire-and-forget notification — admin gets confirmation that recovery
   // has been initiated and the unlock key has been released to the agent.
   sendNotification('device_recovery_initiated', {
@@ -326,7 +344,10 @@ router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, re
     device: { ...device, status: 'recovering' },
     command: cmd,
     key_released: !!key,
-    key_material: keyMaterial,
+    // S4: plaintext material only for super-admin; operators get the
+    // release confirmation without the secret itself.
+    key_material: discloseKey ? keyMaterial : null,
+    key_material_disclosed: discloseKey,
   });
 });
 
