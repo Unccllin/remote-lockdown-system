@@ -112,6 +112,14 @@ async function sha256(data: string): Promise<string> {
     .join('');
 }
 
+/** Constant-time string comparison (length + byte-wise). */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 async function hmacSha256(key: string, message: string): Promise<string> {
   const encoder = new TextEncoder();
   const cryptoKey = await crypto.subtle.importKey(
@@ -1692,11 +1700,19 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
     return errorResponse('Invalid JSON body', 400);
   }
 
-  // Break-glass: direct ADMIN_TOKEN, or a password equal to ADMIN_TOKEN, →
-  // super-admin. The dashboard may send { username, password } where the
-  // password is the break-glass token, so check the password field too.
-  const direct = payload.token || payload.password;
-  if (direct && direct === env.ADMIN_TOKEN) {
+  // Normal path: username + password → look up admin → PBKDF2 verify.
+  const { username, password } = payload;
+  const admins = await listAdmins(env);
+  const admin = username ? admins.find((a) => a.username === username) : undefined;
+
+  // Break-glass: a { token } equal to ADMIN_TOKEN, OR a password equal to
+  // ADMIN_TOKEN for a username that is NOT a registered admin. Restricting
+  // the password form to non-registered usernames prevents a coincidental
+  // admin password from silently escalating to super-admin.
+  const breakGlass =
+    (payload.token && payload.token === env.ADMIN_TOKEN) ||
+    (!admin && password && password === env.ADMIN_TOKEN);
+  if (breakGlass) {
     const sa: Admin = {
       id: 'admin-token', username: 'admin', password_hash: '', salt: '',
       role: 'super-admin', created_at: new Date().toISOString(),
@@ -1708,22 +1724,18 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  // Normal path: username + password → look up admin → PBKDF2 verify.
-  const { username, password } = payload;
   if (!username || !password) {
     return errorResponse('username and password required', 400);
   }
   if (typeof username !== 'string' || typeof password !== 'string') {
     return errorResponse('username and password must be strings', 400);
   }
-
-  const admins = await listAdmins(env);
-  const admin = admins.find((a) => a.username === username);
   if (!admin) {
     return errorResponse('Invalid credentials. Check your username and password and try again.', 401);
   }
   const hash = await pbkdf2Hash(password, admin.salt);
-  if (hash !== admin.password_hash) {
+  // Constant-time compare — don't let timing leak match position.
+  if (!timingSafeEqualStr(hash, admin.password_hash)) {
     return errorResponse('Invalid credentials. Check your username and password and try again.', 401);
   }
 
