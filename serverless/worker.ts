@@ -336,12 +336,25 @@ interface Admin {
   username: string;
   password_hash: string; // base64 PBKDF2
   salt: string;          // base64
+  // PBKDF2 iteration count used for password_hash. Optional for backward
+  // compat — admins created before this field existed used the then-current
+  // PBKDF2_ITERATIONS default. Recording it per-admin lets us change the
+  // cost without invalidating existing hashes.
+  pbkdf2_iterations?: number;
   role: AdminRole;
   created_at: string;
 }
 
 const ADMINS_KEY = 'admins';
-const PBKDF2_ITERATIONS = 210_000; // NIST-recommended floor for PBKDF2-SHA256
+// Cloudflare Workers' WebCrypto caps PBKDF2 at 100,000 iterations
+// (NotSupportedError above that). 210k was the NIST floor we targeted but it
+// crashes on the real Workers runtime (error 1101 on create-admin). 100k is
+// the platform max and still a strong PBKDF2-SHA256 cost.
+const PBKDF2_ITERATIONS = 100_000;
+// Iteration count used for admins created before pbkdf2_iterations was
+// recorded (they were hashed at the original 210k — which only ever ran in
+// Node tests, never on the live Worker, so no live admin uses it).
+const LEGACY_PBKDF2_ITERATIONS = 210_000;
 const TOKEN_TTL_SECONDS = 8 * 3600; // match server's JWT_EXPIRES_IN default (8h)
 
 const ROLE_HIERARCHY: Record<AdminRole, number> = {
@@ -367,8 +380,8 @@ function b64decode(b64: string): Uint8Array {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }
 
-/** PBKDF2-SHA256 password hash (base64) for a given salt. */
-async function pbkdf2Hash(password: string, saltB64: string): Promise<string> {
+/** PBKDF2-SHA256 password hash (base64) for a given salt + iteration count. */
+async function pbkdf2Hash(password: string, saltB64: string, iterations: number = PBKDF2_ITERATIONS): Promise<string> {
   const encoder = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
@@ -382,7 +395,7 @@ async function pbkdf2Hash(password: string, saltB64: string): Promise<string> {
       name: 'PBKDF2',
       hash: 'SHA-256',
       salt: b64decode(saltB64) as BufferSource,
-      iterations: PBKDF2_ITERATIONS,
+      iterations,
     },
     keyMaterial,
     256,
@@ -393,12 +406,13 @@ async function pbkdf2Hash(password: string, saltB64: string): Promise<string> {
 /** Create an admin record with a fresh random salt + PBKDF2 hash. */
 async function makeAdmin(username: string, password: string, role: AdminRole): Promise<Admin> {
   const salt = b64encode(crypto.getRandomValues(new Uint8Array(16)).buffer);
-  const password_hash = await pbkdf2Hash(password, salt);
+  const password_hash = await pbkdf2Hash(password, salt, PBKDF2_ITERATIONS);
   return {
     id: generateId(),
     username,
     password_hash,
     salt,
+    pbkdf2_iterations: PBKDF2_ITERATIONS,
     role,
     created_at: new Date().toISOString(),
   };
@@ -2035,7 +2049,9 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
   if (!admin) {
     return errorResponse('Invalid credentials. Check your username and password and try again.', 401);
   }
-  const hash = await pbkdf2Hash(password, admin.salt);
+  // Verify with the admin's recorded iteration count; fall back to the
+  // legacy 210k for admins created before the field existed.
+  const hash = await pbkdf2Hash(password, admin.salt, admin.pbkdf2_iterations ?? LEGACY_PBKDF2_ITERATIONS);
   // Constant-time compare — don't let timing leak match position.
   if (!timingSafeEqualStr(hash, admin.password_hash)) {
     return errorResponse('Invalid credentials. Check your username and password and try again.', 401);
