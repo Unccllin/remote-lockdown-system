@@ -99,10 +99,10 @@ describe('DashboardLayout', () => {
     expect(screen.getByText('Admins')).toBeInTheDocument();
   });
 
-  it('hides Admins link in serverless mode', () => {
+  it('shows Admins link in serverless mode (Worker has /api/admins RBAC)', () => {
     useServerlessMode.mockReturnValue({ serverless: true, loading: false });
     renderWithRouter();
-    expect(screen.queryByText('Admins')).not.toBeInTheDocument();
+    expect(screen.getByText('Admins')).toBeInTheDocument();
   });
 
   it('renders system status indicator', () => {

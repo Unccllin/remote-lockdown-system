@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Download, Copy, Check, Key, AlertTriangle, Package, Cloud } from 'lucide-react';
+import { ArrowLeft, Download, Copy, Check, Key, AlertTriangle, Package } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/client';
 import { useServerlessMode } from '../hooks/useServerlessMode';
@@ -176,6 +176,31 @@ echo "Done!"
     }
   }
 
+  // Serverless: the Worker can't run zip/makensis, so instead of a .exe/.zip
+  // it serves a self-contained install.ps1 (S4-serverless P4). We fetch it
+  // and save it as a .ps1 the admin runs elevated on the target.
+  async function downloadServerlessInstaller() {
+    setDownloadingInstaller(true);
+    try {
+      const response = await api.get(`/installer/${enrolled.device.id}`, {
+        responseType: 'text',
+      });
+      const blob = new Blob([response.data], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `install-${enrolled.device.hostname.toLowerCase().replace(/[^a-z0-9]/g, '-')}.ps1`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Install script downloaded — run it elevated on the target device');
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message || 'Installer download failed';
+      toast.error(msg);
+    } finally {
+      setDownloadingInstaller(false);
+    }
+  }
+
   async function downloadOneClickInstaller() {
     setDownloadingInstaller(true);
     try {
@@ -308,21 +333,35 @@ echo "Done!"
         </div>
 
         {/* One-click installer (primary — for non-IT users).
-            Not available in serverless mode — the Worker has no
-            /installer/:id/nsis endpoint. */}
+            Serverless: the Worker has no NSIS/zip toolchain, so instead of a
+            .exe it serves a self-contained install.ps1 (S4-serverless P4). */}
         {serverless ? (
-          <div className="card mb-6 border-slate-700/40">
-            <div className="flex items-start gap-3">
-              <Cloud size={18} className="text-blue-400/60 shrink-0 mt-0.5" />
-              <div className="text-sm text-slate-400">
-                <p className="font-medium text-slate-300 mb-1">Installer downloads unavailable</p>
-                <p className="text-xs">
-                  The serverless backend doesn't serve installer binaries. Use the
-                  Config JSON or Setup Script above to configure the agent manually,
-                  or connect to the full Express server to download pre-built installers.
-                </p>
+          <div className="card mb-6 border-emerald-700/30 bg-emerald-950/10">
+            <h3 className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
+              <Package size={14} className="text-emerald-400" />
+              Serverless Installer (PowerShell)
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Download a self-contained install.ps1. Run it elevated on the target
+              device — it writes the config, downloads the agent, and registers it
+              as an auto-start service. No wizard, but one command does it all.
+            </p>
+            <button
+              onClick={downloadServerlessInstaller}
+              disabled={downloadingInstaller}
+              className="w-full flex items-center gap-3 px-4 py-4 rounded-lg bg-emerald-900/30 hover:bg-emerald-900/50 border border-emerald-700/50 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Download size={20} className="text-emerald-400" />
+              <div className="text-left">
+                <div className="font-medium">Download Install Script (.ps1)</div>
+                <div className="text-xs text-slate-500">
+                  {downloadingInstaller ? 'Generating script…' : 'PowerShell — run elevated on the target device'}
+                </div>
               </div>
-            </div>
+            </button>
+            <p className="text-xs text-amber-500/60 mt-3">
+              Note: Generating the script rotates this device's API key — the old key stops working.
+            </p>
           </div>
         ) : (
           <>

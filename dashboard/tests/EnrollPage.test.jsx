@@ -157,7 +157,7 @@ describe('EnrollPage', () => {
   });
 
   describe('Serverless mode', () => {
-    it('hides installer download buttons in serverless mode', async () => {
+    it('shows the serverless install.ps1 download in serverless mode', async () => {
       useServerlessMode.mockReturnValue({ serverless: true });
       renderWithRouter(<EnrollPage />);
       fireEvent.change(screen.getByPlaceholderText('e.g. AGENT-LAPTOP-001'), {
@@ -172,9 +172,10 @@ describe('EnrollPage', () => {
         expect(screen.getByText('Device Enrolled')).toBeTruthy();
       });
 
-      // Should show the "unavailable" message instead of installer buttons
-      expect(screen.getByText('Installer downloads unavailable')).toBeTruthy();
+      // Serverless serves install.ps1 (not .exe/.zip) — show that button
+      expect(screen.getByText('Download Install Script (.ps1)')).toBeTruthy();
       expect(screen.queryByText('Download Windows Installer (.exe)')).toBeNull();
+      expect(screen.queryByText('Installer downloads unavailable')).toBeNull();
     });
   });
 

@@ -148,13 +148,15 @@ describe('AdminsPage', () => {
     });
   });
 
-  it('shows serverless mode message when serverless', async () => {
+  it('loads admins in serverless mode (Worker has /api/admins RBAC)', async () => {
     useServerlessMode.mockReturnValue({ serverless: true });
     renderWithRouter(<AdminsPage />);
 
+    // Should render the admin list, not the "unavailable" message
     await waitFor(() => {
-      expect(screen.getByText(/Not available in serverless mode/i)).toBeInTheDocument();
+      expect(screen.getByText('alice')).toBeInTheDocument();
     });
+    expect(screen.queryByText(/Not available in serverless mode/i)).not.toBeInTheDocument();
   });
 
   it('shows (you) label next to the current user', async () => {

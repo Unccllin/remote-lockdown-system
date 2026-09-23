@@ -56,9 +56,10 @@ export default function DashboardLayout() {
   navItems.push({ to: '/audit', icon: ClipboardList, label: 'Audit Log' });
   navItems.push({ to: '/alerts', icon: Bell, label: 'Alerts' });
 
-  // Admins link is only visible to super-admins (and not in serverless mode —
-  // the Worker is single-admin, so there's no admin management UI)
-  if (isSuperAdmin && !serverless) {
+  // Admins link is only visible to super-admins. The Worker now exposes
+  // /api/admins CRUD (S4-serverless P1), so admin management works in both
+  // Express and serverless mode.
+  if (isSuperAdmin) {
     navItems.push({ to: '/admins', icon: UserCog, label: 'Admins' });
     navItems.push({ to: '/pbl-policy', icon: FileText, label: 'PBL Policy' });
   }

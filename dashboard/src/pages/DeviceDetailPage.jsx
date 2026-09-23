@@ -9,7 +9,6 @@ import toast from 'react-hot-toast';
 import api from '../api/client';
 import ConfirmModal from '../components/ConfirmModal';
 import { useCurrentUser } from '../hooks/useCurrentUser';
-import { useServerlessMode } from '../hooks/useServerlessMode';
 import { safeFromNow, safeFormat } from '../utils/time';
 
 const STATUS_BADGE = {
@@ -121,7 +120,6 @@ export default function DeviceDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const currentUser = useCurrentUser();
-  const { serverless } = useServerlessMode();
   const [device, setDevice] = useState(null);
   const [audit, setAudit] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -609,8 +607,9 @@ export default function DeviceDetailPage() {
           Tier 2 BitLocker TPM+PIN). The super-admin needs these credentials
           to physically unlock a rebooted PBA device. Credentials are
           fetched on-demand to minimize exposure. Only super-admins can
-          access the PBA credentials endpoint. */}
-      {isLockedOrStolen && pbaActive && isSuperAdmin && !serverless && (
+          access the PBA credentials endpoint. Served by both Express and
+          the Worker (S4-serverless P3). */}
+      {isLockedOrStolen && pbaActive && isSuperAdmin && (
         <div className="card mb-6 border-l-4 border-l-red-500">
           <div className="flex items-center gap-2 mb-3">
             <Key size={16} className="text-red-400" />
@@ -967,9 +966,8 @@ export default function DeviceDetailPage() {
           </span>
         )}
         {/* Phase 7: Release device (ownership transfer / GDPR erasure).
-            Not available in serverless mode — the Worker has no
-            DELETE /devices/:id/release endpoint. */}
-        {isOperator && device.status === 'active' && !serverless && (
+            Served by both Express and the Worker (S4-serverless P3). */}
+        {isOperator && device.status === 'active' && (
           <button
             className="btn-ghost text-red-400 border-red-800/50 hover:bg-red-900/20 ml-auto"
             onClick={() => setModal('release')}
