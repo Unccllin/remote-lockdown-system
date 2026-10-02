@@ -1,0 +1,10 @@
+PblPersistDxe harness result
+date: 2026-10-02T08:49:00Z
+driver_sha256: a006c437048ae8bc63a22d225ba392f53a8e3840bf2d07c17d33ce3b6a664fbc
+boot1: PASS — ReadyToBoot callback fired, PBL_REARM.TXT + lockdown-agent-installer.ps1 written to ESP
+wipe:  ESP rebuilt with only the driver (simulated reinstall/disk replacement)
+boot2: PASS — driver re-armed both payload files on wiped ESP
+VERDICT: PASS — agent re-armed on fresh AND wiped ESP (persistence proven in QEMU/OVMF)
+note:   event-group signal is via a member event in the test loader (UEFI §7.1);
+        in production the driver lives in an SPI-flash firmware volume and BDS
+        signals ReadyToBoot natively on every boot.

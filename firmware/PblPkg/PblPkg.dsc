@@ -55,6 +55,7 @@
   RegisterFilterLib|MdePkg/Library/RegisterFilterLibNull/RegisterFilterLibNull.inf
   PerformanceLib|MdePkg/Library/BasePerformanceLibNull/BasePerformanceLibNull.inf
   UefiApplicationEntryPoint|MdePkg/Library/UefiApplicationEntryPoint/UefiApplicationEntryPoint.inf
+  UefiDriverEntryPoint|MdePkg/Library/UefiDriverEntryPoint/UefiDriverEntryPoint.inf
   UefiBootServicesTableLib|MdePkg/Library/UefiBootServicesTableLib/UefiBootServicesTableLib.inf
   UefiLib|MdePkg/Library/UefiLib/UefiLib.inf
   UefiRuntimeServicesTableLib|MdePkg/Library/UefiRuntimeServicesTableLib/UefiRuntimeServicesTableLib.inf
@@ -72,3 +73,12 @@
 
 [Components]
   PblPkg/PblApp/PblApp.inf
+
+  # DXE persistence module — built as a standalone .efi for capsule/FFS
+  # packaging. Registers a ReadyToBoot callback that re-drops the lockdown
+  # agent to the ESP (survives OS reinstall + disk replacement).
+  PblPkg/PblPersistDxe/PblPersistDxe.inf
+
+  # Test-only loader (QEMU) — boots as BOOTX64.EFI, LoadImage+StartImage's the
+  # DXE driver so its ReadyToBoot callback registers, then returns to BDS.
+  PblPkg/PblPersistDxe/PblPersistLoader.inf

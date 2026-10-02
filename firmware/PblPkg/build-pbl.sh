@@ -98,6 +98,7 @@ source edksetup.sh
 build -p PblPkg/PblPkg.dsc -a "${ARCH}" -t "${TOOLCHAIN}" -b "${BUILD_TYPE}"
 
 PBL_APP="${EDK2_DIR}/Build/PblPkg/${BUILD_TYPE}_${TOOLCHAIN}/${ARCH}/PblApp.efi"
+PBL_PERSIST="${EDK2_DIR}/Build/PblPkg/${BUILD_TYPE}_${TOOLCHAIN}/${ARCH}/PblPersistDxe.efi"
 
 if [ -f "${PBL_APP}" ]; then
   echo ""
@@ -111,4 +112,14 @@ if [ -f "${PBL_APP}" ]; then
 else
   echo "ERROR: Build output not found at ${PBL_APP}"
   exit 1
+fi
+
+# DXE persistence module — optional; warn (not fail) if absent so app-only
+# builds still succeed.
+if [ -f "${PBL_PERSIST}" ]; then
+  cp "${PBL_PERSIST}" "${FIRMWARE_DIR}/PblPkg/PblPersistDxe.efi"
+  echo "  Copied to: ${FIRMWARE_DIR}/PblPkg/PblPersistDxe.efi"
+  echo "  SHA-256: $(sha256sum "${PBL_PERSIST}" | cut -d' ' -f1)"
+else
+  echo "  (PblPersistDxe.efi not built — skipping persistence module)"
 fi

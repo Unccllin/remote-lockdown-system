@@ -1,0 +1,47 @@
+## @file
+# PblPersistDxe.inf — DXE persistence module for the remote-lockdown agent.
+#
+# Resides in a firmware volume on SPI flash. Registers an
+# EFI_EVENT_GROUP_READY_TO_BOOT callback; on each boot it re-drops the
+# agent installer to the ESP, restoring the lockdown agent after OS
+# reinstall or disk replacement (the ESP is rebuilt empty in both cases).
+#
+# Delivery: signed FMP capsule (db-enrolled cert) or provisioning-time
+# external SPI flash. See docs/adr for the deployment model.
+#
+# Copyright (c) 2026 Remote Lockdown System. All rights reserved.
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = PblPersistDxe
+  FILE_GUID                      = 7C3B9A2E-4E1F-4A6D-B8C5-2D0F1E3A5B7C
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 0.1.0
+  ENTRY_POINT                    = PblPersistDxeEntryPoint
+  UEFI_SPECIFICATION_VERSION     = 2.70
+
+[Sources]
+  PblPersistDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  UefiLib
+  MemoryAllocationLib
+  BaseMemoryLib
+  DebugLib
+
+[Protocols]
+  gEfiSimpleFileSystemProtocolGuid
+
+[Guids]
+  gEfiFileInfoGuid
+
+# Always dispatch — we register a ReadyToBoot callback and need no
+# protocol dependencies satisfied before entry.
+[Depex]
+  TRUE

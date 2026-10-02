@@ -1,0 +1,42 @@
+## @file
+# PblPersistLoader.inf — QEMU test loader for PblPersistDxe.
+#
+# DXE_DRIVER modules are not boot targets, so the QEMU harness needs a
+# UEFI_APPLICATION that loads the driver image off the ESP and starts it.
+# That runs the driver's entry point (registering the ReadyToBoot
+# callback); the loader then signals the event and reports whether the
+# driver re-armed the agent onto the ESP.
+#
+# Test-only module — not part of the production firmware volume.
+#
+# Copyright (c) 2026 Remote Lockdown System. All rights reserved.
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = PblPersistLoader
+  FILE_GUID                      = 9D4C1B3F-5A2E-4B7D-C9E6-3F1A2B4C6D8E
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1.0
+  ENTRY_POINT                    = PblPersistLoaderEntryPoint
+  UEFI_SPECIFICATION_VERSION     = 2.70
+
+[Sources]
+  PblPersistLoader.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  UefiLib
+  MemoryAllocationLib
+  BaseMemoryLib
+  DevicePathLib
+  DebugLib
+
+[Protocols]
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiLoadedImageProtocolGuid
+  gEfiDevicePathProtocolGuid
