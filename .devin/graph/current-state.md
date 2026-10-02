@@ -51,49 +51,51 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 136 — 2026-09-20
+## Latest session: 137 — 2026-08-13 (Phase 5 dashboard→worker cutover)
 
 ### RULE-ZERO
-**Read**: worker.ts (KV model, verifyAdminAuth boolean, download handlers, route table), server/src/routes/{admins,devices,agent,installer}.js (role map, groupPbaCredentials, bios_passwords, installer config/ZIP/NSIS), auth.js middleware (JWT + ROLE_HIERARCHY), dashboard api/{alerts,admins}.js (alerts already client-side). Wayfinder next-gen-lockdown-map (out-of-scope: production/deployment — this work is an endorsed scope change).
-**Finding**: Worker had no role model (single ADMIN_TOKEN) and silently dropped all BIOS/PBA creds on the serverless path — UEFI unlock didn't work serverless. Installer needs zip/makensis (impossible) → self-contained install.ps1.
+**Read**: `.devin/graph/current-state.md` (S136 closeout), dashboard/src/api/{client,pblClient}.js, `useServerlessMode`/`useCurrentUser` hooks, `serverless/worker.ts` route table + `signAdminToken`/`pbkdf2Hash`/`handleCreateFirstAdmin`, electron/config.js, `serverless/wrangler.toml`, `dashboard/.env`, all `serverless`-gated JSX.
+**Finding**: The "cutover" was mostly already wired — `.env`→Worker, `useServerlessMode` hook, Electron serverless shell, PBL client, role-aware `useCurrentUser`. The real remaining work was **stale `!serverless` UI guards** built when the Worker was ping-only. Worker now has parity on admins/PBA/release/installer. ALSO found a **live-deploy bug**: deployed Worker was stale AND create-admin crashed with error 1101 (PBKDF2 210k > Workers' 100k cap).
 
-### IMPLEMENT (fully-serverless migration, 4 phases)
-- P1 `2301d1e`+`97068bc`: admins[] KV store, PBKDF2-SHA256 (210k, WebCrypto), HMAC-signed JWT-shape tokens, resolveAdminAuth+requireRole, ADMIN_TOKEN break-glass, /api/admins CRUD + /api/setup/create-admin + login. Constant-time compare + break-glass scoping (review fixes).
-- P2 `72bc6f4`: role enforcement — operator on enroll/flag/recover/track, viewer on read, super-admin on efs-cert.
-- P3 `61ea938`: bios_passwords KV store + groupPbaCredentials; command-ack stores 4 cred types; checkin returns them on unlock (FIXED the silent-cred-drop bug); /pba-credentials (super-admin); /release (operator, cascade + anonymize audit).
-- P4 `50f0caf`: /api/installer/:deviceId → self-contained install.ps1 (fresh api_key + config embedded, downloads agent, sc.exe service) — serverless answer to on-the-fly ZIP/NSIS.
+### IMPLEMENT
+- `904028f`: Removed stale serverless guards — Admins nav + AdminsPage load, DeviceDetailPage PBA Recovery + Release Device, EnrollPage "unavailable"→real install.ps1 download. Updated 3 tests to assert parity.
+- `520b689`: PBKDF2_ITERATIONS 210k→100k (Workers cap), added per-admin `pbkdf2_iterations` field for forward migration. Redeployed Worker (Version 91290a6c).
+- Deployed worker twice via `npx wrangler deploy` (auth already configured).
 
 ### VERIFY
-- serverless npm test: 2 files / **324 tests** (was 305 → +19 across the 4 phases). All green.
+- dashboard vitest: 21 files / **197 tests** green; eslint clean; vite build OK.
+- serverless vitest: 2 files / **325 tests** green.
+- **LIVE VERIFIED**: Worker at lockdown-serverless.mainacollins196.workers.dev — all admin/device endpoints return 401 (auth-gated, not 404). Real first-run flow: `setup/create-admin`→201+token, `auth/login`→signed JWT, authed `/api/admins`+`/api/devices` return live data (8 devices). The deployed Worker had been running a stale pre-P1 build until this session.
 
-### Fog cleared this session
-- alerts is fully client-side (dashboard/src/api/alerts.js derives from /devices+/audit) — no server port needed.
-- Serverless unlock path dropped ALL bios/PBA creds — real production bug fixed in P3.
-- Worker's binary:installer/agent KV model already exists — per-device config is the only gap, solved via install.ps1.
+### Fog cleared
+- The deployed Worker was STALE (pre-Phase-1) — all the Phase 1-4 code existed in repo but was never deployed. `/api/admins` etc. returned 404 on live.
+- error 1101 root cause: Cloudflare Workers WebCrypto caps PBKDF2 at 100k iterations; Node allows 210k so tests passed but live crashed.
+- Dashboard `.env` already pointed at Worker; the cutover block was purely the stale `!serverless` guards.
 
 ### Fog remaining
-- /v1/* PBL admin routes still on boolean verifyAdminAuth (not role-scoped — separate surface, follow-up).
-- install.ps1 unproven on real Windows hardware (one-click NSIS UX vs .ps1 — needs hardware-window validation).
-- Dashboard cutover (Phase 5) not yet done — server/ still the dev/default.
-- KV_KEK envelope for bios_passwords not yet added (plaintext in KV, same as encryption_keys — uniform layer later).
+- `install.ps1` still unproven on real Windows hardware (needs hardware window).
+- Worker `needsSetup` was true on live (0 admins) — I created a bootstrap admin `cllin` (super-admin) during verification; password is temporary `TempSetup!2026x` and should be rotated.
+- No CI deploy step for the Worker — deploys are manual `npx wrangler deploy`.
 
 ### Debt items closed
-- Fully-serverless admin plane: Phases 1–4 complete. Commits `2301d1e`, `97068bc`, `72bc6f4`, `61ea938`, `50f0caf`.
+- Dashboard cutover (Phase 5) — dashboard now fully functional against the serverless Worker backend.
 
 ### Debt items still open
-- /v1/* PBL route role-scoping; KV_KEK secrets envelope; dashboard cutover (Phase 5); install.ps1 hardware validation; earlier S4/S3/S5/S2 items.
+- install.ps1 hardware validation; earlier S4/S3/S5/S2 items; the 9 unit-test-only enforcement paths (blocked on hardware window D-129).
 
 ### Blockers
-- Hardware window (D-129) for enforcement paths + install.ps1 one-click validation.
+- Hardware window (D-129) — unchanged. Live Worker is now correct + deployed.
 
 ### Session artifacts
-- 5 commits; 324 worker tests.
+- Worker Version IDs: 6f4f145f (stale→new code), 91290a6c (PBKDF2 fix). Live verified via curl.
+- 2 commits.
 
 ### Failure attribution
-- Two orphaned-brace syntax errors mid-Phase-2 (mechanical edit artifacts — caught by vitest transform, fixed). Layer 2 (context) — batch sed edits need per-site verification.
+- Layer 4 (Verification feedback): 325 vitest tests all passed but the live Worker crashed — Node/WebCrypto ≠ Workers runtime (PBKDF2 cap). **Harness gap**: no live-smoke test post-deploy; a `wrangler deploy` + curl health/setup check in CI would have caught both the stale deploy and the 1101 crash.
+- Layer 3 (Execution environment): deployed Worker had never been redeployed since Phase 1 — no deploy tracking.
 
 ### Next session opening
-Phase 5 cutover decision (dashboard → worker) OR /v1/* PBL role-scoping + KV_KEK secrets envelope — remaining serverless gaps.
+Worker deploy is now live + correct; remaining serverless gap is install.ps1 hardware validation (needs the Windows hardware window) — otherwise pick up S4 remainder or the 9 unverified enforcement paths.
 
 ---
 
