@@ -1193,6 +1193,18 @@ def checkin(cfg: dict) -> dict | None:
     except Exception as e:  # never let TPM read break check-in
         log.debug("TPM restart-count read unavailable: %s", e)
 
+    # PblPersistDxe delivery audit: probe Secure Boot / SPI-observable state
+    # so the operator can decide per-unit which persistence delivery path
+    # works (signed capsule / Setup-Mode / external flash). Best-effort —
+    # runs read-only PowerShell/WMI; returns a dict or None on non-Windows.
+    fw_audit = None
+    try:
+        from firmware_audit import audit_firmware
+
+        fw_audit = audit_firmware()
+    except Exception as e:  # never let audit break check-in
+        log.debug("Firmware audit unavailable: %s", e)
+
     body = {
         "hostname": cfg["hostname"],
         "mac_address": get_mac_address(),
@@ -1200,6 +1212,8 @@ def checkin(cfg: dict) -> dict | None:
     }
     if tpm_restart is not None:
         body["tpm_restart_count"] = tpm_restart
+    if fw_audit is not None:
+        body["firmware_audit"] = fw_audit
 
     try:
         resp = _post_with_fallback(
