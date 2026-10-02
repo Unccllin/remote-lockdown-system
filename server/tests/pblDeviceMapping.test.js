@@ -6,9 +6,8 @@
  */
 
 const request = require('supertest');
-const jwt = require('jsonwebtoken');
 
-const { mockPool, makeToken, JWT_SECRET, createApp: _createApp } = require('./helpers');
+const { mockPool, makeToken, createApp: _createApp } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
 const devicesRoutes = require('../src/routes/devices');

@@ -2,7 +2,7 @@ const request = require('supertest');
 const express = require('express');
 
 const { mockPool } = require('./helpers');
-const { makeToken, JWT_SECRET } = require('./helpers');
+const { makeToken } = require('./helpers');
 
 jest.mock('../src/db/pool', () => mockPool);
 jest.mock('../src/logger', () => ({

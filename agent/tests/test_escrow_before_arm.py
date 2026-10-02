@@ -35,10 +35,12 @@ def _call_real_escrow(cfg, command_id, key_material):
 class TestEscrowBeforeArm:
     def test_encrypt_not_called_when_escrow_fails(self, cfg, cmd):
         """Escrow failure must skip encrypt_folder entirely."""
-        with patch.object(agent, "report_location"), \
-             patch.object(agent, "escrow_key", return_value=False) as m_esc, \
-             patch.object(agent, "encrypt_folder") as m_enc, \
-             patch.object(agent, "ack_command") as m_ack:
+        with (
+            patch.object(agent, "report_location"),
+            patch.object(agent, "escrow_key", return_value=False) as m_esc,
+            patch.object(agent, "encrypt_folder") as m_enc,
+            patch.object(agent, "ack_command") as m_ack,
+        ):
             agent.handle_lockdown(cfg, cmd)
             m_esc.assert_called_once()
             m_enc.assert_not_called()
@@ -47,18 +49,23 @@ class TestEscrowBeforeArm:
 
     def test_sentinel_removed_when_escrow_fails(self, cfg, cmd):
         """Sentinel is removed on escrow failure so a retry can lock."""
-        with patch.object(agent, "report_location"), \
-             patch.object(agent, "escrow_key", return_value=False), \
-             patch.object(agent, "ack_command"):
+        with (
+            patch.object(agent, "report_location"),
+            patch.object(agent, "escrow_key", return_value=False),
+            patch.object(agent, "ack_command"),
+        ):
             agent.handle_lockdown(cfg, cmd)
             assert not cfg["lock_sentinel"].exists()
 
     def test_pending_ack_marked_failed_when_escrow_fails(self, cfg, cmd):
         """pending_ack records 'failed' so the server knows."""
         import json
-        with patch.object(agent, "report_location"), \
-             patch.object(agent, "escrow_key", return_value=False), \
-             patch.object(agent, "ack_command"):
+
+        with (
+            patch.object(agent, "report_location"),
+            patch.object(agent, "escrow_key", return_value=False),
+            patch.object(agent, "ack_command"),
+        ):
             agent.handle_lockdown(cfg, cmd)
             state = json.loads(cfg["pending_ack_file"].read_text())
             assert state["result_status"] == "failed"
@@ -66,24 +73,30 @@ class TestEscrowBeforeArm:
     def test_encrypt_called_after_successful_escrow(self, cfg, cmd):
         """On escrow success, encrypt_folder runs (ordering preserved)."""
         calls = []
+
         def fake_escrow(c, cid, km):
             calls.append("escrow")
             return True
+
         def fake_enc(folder, key):
             calls.append("encrypt")
             return []
-        with patch.object(agent, "report_location"), \
-             patch.object(agent, "escrow_key", side_effect=fake_escrow), \
-             patch.object(agent, "encrypt_folder", side_effect=fake_enc), \
-             patch.object(agent, "apply_lock_screen"), \
-             patch.object(agent, "start_lock_guardian"), \
-             patch.object(agent, "ack_command", return_value=True):
+
+        with (
+            patch.object(agent, "report_location"),
+            patch.object(agent, "escrow_key", side_effect=fake_escrow),
+            patch.object(agent, "encrypt_folder", side_effect=fake_enc),
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "ack_command", return_value=True),
+        ):
             agent.handle_lockdown(cfg, cmd)
             assert calls == ["escrow", "encrypt"], calls
 
     def test_escrow_key_posts_to_endpoint(self, cfg):
         """escrow_key hits /api/agent/escrow-key and returns True on 2xx."""
         from unittest.mock import MagicMock
+
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
         resp.json.return_value = {"escrowed": True}
@@ -98,13 +111,16 @@ class TestEscrowBeforeArm:
     def test_escrow_key_false_on_network_error(self, cfg):
         """escrow_key returns False (not raises) on network failure."""
         import requests as real_requests
-        with patch.object(agent, "_post_with_fallback",
-                          side_effect=real_requests.RequestException("down")):
+
+        with patch.object(
+            agent, "_post_with_fallback", side_effect=real_requests.RequestException("down")
+        ):
             assert _call_real_escrow(cfg, "cmd-1", "a2V5") is False
 
     def test_escrow_key_false_on_rejected_body(self, cfg):
         """escrow_key returns False when server body lacks escrowed:true."""
         from unittest.mock import MagicMock
+
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
         resp.json.return_value = {"escrowed": False, "error": "no"}

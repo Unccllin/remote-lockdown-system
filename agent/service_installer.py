@@ -311,10 +311,7 @@ Set-ScheduledTask -TaskName '{TASK_NAME}' -Trigger $task.Triggers
         # is closed. This is the most reliable detachment method on Windows.
         install_dir = Path(agent_cmd.split('"')[1]).parent
         vbs_path = install_dir / "launch_agent.vbs"
-        vbs_content = (
-            'Set sh = CreateObject("WScript.Shell")\n'
-            f'sh.Run "{agent_cmd}", 0, False\n'
-        )
+        vbs_content = f'Set sh = CreateObject("WScript.Shell")\nsh.Run "{agent_cmd}", 0, False\n'
         vbs_path.write_text(vbs_content, encoding="utf-8")
         subprocess.Popen(
             ["wscript.exe", str(vbs_path)],

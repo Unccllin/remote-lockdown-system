@@ -76,6 +76,17 @@ const METHOD_RULES = [
   { pattern: /^(\/v1)?\/admin\/(rotate-key|key-info|cert-chain|operator-key)$/, methods: ['GET', 'POST', 'DELETE'] },
 ];
 
+/** Parse JSON from a KV value, returning `fallback` on malformed input
+ *  instead of throwing (KV data can be corrupt/partial). */
+function safeJsonParse(text, fallback = null) {
+  if (text === null || text === undefined) return fallback;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
 /** Classify a path as 'firmware', 'admin', or 'unprotected'.
  *  Handles both /v1-prefixed (app root) and unprefixed (router mount) paths. */
 function classifyPath(path) {
@@ -142,7 +153,7 @@ router.use(pblWafGuard);
  * D-206: When no kvStore is provided, uses the shared KV store singleton
  * from pbl/kvStore.js so that agent routes can sync status to PBL devices.
  */
-const { createSharedEnv, getSharedKvStore } = require('../pbl/kvStore');
+const { createSharedEnv } = require('../pbl/kvStore');
 
 function createEnv(kvStore) {
   if (!kvStore) {
@@ -184,42 +195,11 @@ function createEnv(kvStore) {
 // handler, then converts the fetch Response → Express res.
 // ---------------------------------------------------------------------------
 
-/** Convert an Express Request to a fetch Request. */
-function expressToFetchRequest(req) {
-  const url = `http://${req.headers.host || 'localhost'}${req.originalUrl}`;
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (Array.isArray(value)) {
-      value.forEach((v) => headers.append(key, v));
-    } else if (value !== undefined) {
-      headers.set(key, value);
-    }
-  }
-  const body = req.method === 'POST' || req.method === 'PUT'
-    ? JSON.stringify(req.body)
-    : null;
-  return new Request(url, {
-    method: req.method,
-    headers,
-    body,
-  });
-}
-
-/** Convert a fetch Response to an Express response. */
-async function fetchResponseToExpress(resp, res) {
-  res.status(resp.status);
-  resp.headers.forEach((value, key) => {
-    res.set(key, value);
-  });
-  const buf = await resp.arrayBuffer();
-  res.send(Buffer.from(buf));
-}
-
 // ---------------------------------------------------------------------------
 // Health endpoint (no auth, no rate limit)
 // ---------------------------------------------------------------------------
 
-router.get('/health', (req, res) => {
+router.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'pbl-express', timestamp: new Date().toISOString() });
 });
 
@@ -230,7 +210,6 @@ router.get('/health', (req, res) => {
 /** C1 + C5 verdict values. */
 const VERDICT_UNLOCKED = 0;
 const VERDICT_LOCKED = 1;
-const VERDICT_WIPE_PENDING = 2;
 const VERDICT_TRACKING = 3;
 
 /** Build the verdict payload CBOR map (C1 §2). */
@@ -360,7 +339,7 @@ router.post('/verdict', async (req, res) => {
 
     const deviceIdHex = bytesToHex(deviceId);
     const deviceData = await env.LOCKDOWN_KV.get(`pbl_devices:${deviceIdHex}`, 'text');
-    const device = deviceData ? JSON.parse(deviceData) : null;
+    const device = deviceData ? safeJsonParse(deviceData) : null;
 
     // S1.2: Record the PBL boot event. A verdict request IS the firmware's
     // boot report — every verdict fetch means PBL ran this boot. Persist the
@@ -748,7 +727,7 @@ router.post('/attest', async (req, res) => {
 
   // Lookup device
   const deviceData = await env.LOCKDOWN_KV.get(`pbl_devices:${device_id}`, 'text');
-  const device = deviceData ? JSON.parse(deviceData) : null;
+  const device = deviceData ? safeJsonParse(deviceData) : null;
   if (!device) {
     return res.status(404).json({ error: 'device not enrolled' });
   }
@@ -882,7 +861,7 @@ router.post('/override/challenge', async (req, res) => {
 
   // Lookup device
   const deviceData = await env.LOCKDOWN_KV.get(`pbl_devices:${device_id}`, 'text');
-  const device = deviceData ? JSON.parse(deviceData) : null;
+  const device = deviceData ? safeJsonParse(deviceData) : null;
   if (!device) {
     return res.status(404).json({ error: 'device not enrolled' });
   }
@@ -945,7 +924,7 @@ router.post('/override/response', async (req, res) => {
 
   // Lookup device
   const deviceData = await env.LOCKDOWN_KV.get(`pbl_devices:${device_id}`, 'text');
-  const device = deviceData ? JSON.parse(deviceData) : null;
+  const device = deviceData ? safeJsonParse(deviceData) : null;
   if (!device) {
     return res.status(404).json({ error: 'device not enrolled' });
   }
@@ -959,7 +938,10 @@ router.post('/override/response', async (req, res) => {
   if (!storedChallengeData) {
     return res.status(400).json({ error: 'no challenge found — request a challenge first' });
   }
-  const storedChallenge = JSON.parse(storedChallengeData);
+  const storedChallenge = safeJsonParse(storedChallengeData);
+  if (!storedChallenge) {
+    return res.status(400).json({ error: 'no challenge found — request a challenge first' });
+  }
 
   if (Date.now() > storedChallenge.expires_at) {
     await logOverrideAudit(env, device_id, 'response', false, 'challenge expired');
@@ -1048,7 +1030,7 @@ router.get('/devices/:id', requireAuth, requireRole('operator'), async (req, res
   if (!deviceData) {
     return res.status(404).json({ error: 'Device not found' });
   }
-  res.json({ device: JSON.parse(deviceData) });
+  res.json({ device: safeJsonParse(deviceData) });
 });
 
 // ---------------------------------------------------------------------------
@@ -1092,7 +1074,7 @@ router.post('/devices/:id/lock', requireAuth, requireRole('operator'), async (re
   if (!deviceData) {
     return res.status(404).json({ error: 'Device not found' });
   }
-  const device = JSON.parse(deviceData);
+  const device = safeJsonParse(deviceData);
   device.status = 'locked';
   device.lock_reason = 'admin_lock';
   await env.LOCKDOWN_KV.put(`pbl_devices:${id}`, JSON.stringify(device));
@@ -1108,7 +1090,7 @@ router.post('/devices/:id/unlock', requireAuth, requireRole('operator'), async (
   if (!deviceData) {
     return res.status(404).json({ error: 'Device not found' });
   }
-  const device = JSON.parse(deviceData);
+  const device = safeJsonParse(deviceData);
   device.status = 'active';
   delete device.lock_reason;
   await env.LOCKDOWN_KV.put(`pbl_devices:${id}`, JSON.stringify(device));
@@ -1124,7 +1106,7 @@ router.post('/devices/:id/track', requireAuth, requireRole('operator'), async (r
   if (!deviceData) {
     return res.status(404).json({ error: 'Device not found' });
   }
-  const device = JSON.parse(deviceData);
+  const device = safeJsonParse(deviceData);
   device.status = 'tracking';
   device.lock_reason = 'reported_stolen';
   await env.LOCKDOWN_KV.put(`pbl_devices:${id}`, JSON.stringify(device));
@@ -1140,7 +1122,7 @@ router.post('/devices/:id/stop-track', requireAuth, requireRole('operator'), asy
   if (!deviceData) {
     return res.status(404).json({ error: 'Device not found' });
   }
-  const device = JSON.parse(deviceData);
+  const device = safeJsonParse(deviceData);
   device.status = 'active';
   delete device.lock_reason;
   await env.LOCKDOWN_KV.put(`pbl_devices:${id}`, JSON.stringify(device));
@@ -1337,7 +1319,7 @@ router.delete('/admin/operator-key', requireAuth, requireRole('super-admin'), as
 // Ensures the WAF guard (router.use) runs even when no specific route
 // handler matches (e.g. wrong method on a known path returns 405 from
 // the WAF guard, not 404 from Express's default handler).
-router.all('*', (req, res) => {
+router.all('*', (_req, res) => {
   res.status(404).json({ error: 'not found' });
 });
 

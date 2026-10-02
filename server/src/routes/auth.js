@@ -28,7 +28,7 @@ router.post('/login', async (req, res) => {
     return res.status(400).json({ error: 'password must be 1-1000 characters.' });
   }
   // Prevent username injection (SQL wildcard abuse, log injection)
-  if (!/^[a-zA-Z0-9_@.\-]+$/.test(username)) {
+  if (!/^[a-zA-Z0-9_@.-]+$/.test(username)) {
     return res.status(400).json({ error: 'username contains invalid characters. Allowed: letters, numbers, _ @ . -' });
   }
 

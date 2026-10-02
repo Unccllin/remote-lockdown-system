@@ -71,6 +71,7 @@ def _default_escrow_ok():
     because it applies after this fixture's.
     """
     from unittest.mock import patch
+
     with patch.object(agent, "escrow_key", return_value=True):
         yield
 

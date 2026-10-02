@@ -43,9 +43,6 @@ router.post('/', requireAuth, async (req, res) => {
   const harnessVersion = isCtrf
     ? artifact.results.tool?.version
     : artifact.harness_version;
-  const tests = isCtrf
-    ? artifact.results.tests
-    : artifact.results;
 
   if (!summary) {
     return res.status(400).json({ error: 'Artifact missing summary' });

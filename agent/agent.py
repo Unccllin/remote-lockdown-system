@@ -1188,6 +1188,7 @@ def checkin(cfg: dict) -> dict | None:
     tpm_restart = None
     try:
         from tpm_clock import read_restart_count
+
         tpm_restart = read_restart_count()
     except Exception as e:  # never let TPM read break check-in
         log.debug("TPM restart-count read unavailable: %s", e)

@@ -20,13 +20,11 @@ function algorithmToCoseAlg(alg) {
 
 /** Generate or load an ES256 signing key pair. */
 async function generateSigningKey(algorithm = 'ES256') {
-  let keyParams, signParams;
+  let keyParams;
   if (algorithm === 'Ed25519') {
     keyParams = { name: 'Ed25519' };
-    signParams = 'Ed25519';
   } else {
     keyParams = { name: 'ECDSA', namedCurve: 'P-256' };
-    signParams = { name: 'ECDSA', hash: 'SHA-256' };
   }
 
   const { publicKey, privateKey } = await crypto.subtle.generateKey(

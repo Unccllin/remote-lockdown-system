@@ -14,14 +14,10 @@ const jwt = require('jsonwebtoken');
 const { mockPool, JWT_SECRET } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
-const { withTransaction } = require('../src/db/withTransaction');
-const { encryptField, decryptField, readDualMode } = require('../src/db/fieldCrypto');
+const { encryptField } = require('../src/db/fieldCrypto');
 const { clearKeyCache } = require('../src/db/crypto');
 
-const agentRoutes = require('../src/routes/agent');
 const devicesRoutes = require('../src/routes/devices');
-
-const AGENT_KEY = 'test-agent-key-that-is-long-enough-24';
 
 function makeToken(adminId = 'admin-1', username = 'admin') {
   return jwt.sign({ id: adminId, username, role: 'super-admin' }, JWT_SECRET, { expiresIn: '1h' });

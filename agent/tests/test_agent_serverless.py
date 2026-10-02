@@ -348,10 +348,7 @@ class TestTrackingDataProtection:
             assert state["decoy_account"] == agent.DECOY_ACCOUNT_NAME
             assert "decoy_password" in state
             # Verify localgroup add was called
-            localgroup_calls = [
-                c for c in mock_run.call_args_list
-                if "localgroup" in str(c)
-            ]
+            localgroup_calls = [c for c in mock_run.call_args_list if "localgroup" in str(c)]
             assert len(localgroup_calls) > 0
 
     def test_apply_protection_windows_efs_encrypts(self, cfg):
@@ -446,10 +443,11 @@ class TestTrackingStealth:
         """On Windows, should try to install if task is missing."""
         mock_missing = MagicMock()
         mock_missing.returncode = 1
+        installer_ok = MagicMock(install=MagicMock(return_value=True))
         with (
             patch.object(agent.platform, "system", return_value="Windows"),
             patch("subprocess.run", return_value=mock_missing),
-            patch.dict("sys.modules", {"service_installer": MagicMock(install=MagicMock(return_value=True))}),
+            patch.dict("sys.modules", {"service_installer": installer_ok}),
         ):
             assert agent.ensure_tracking_stealth(cfg) is True
 
@@ -457,10 +455,11 @@ class TestTrackingStealth:
         """On Windows, should return False if install fails."""
         mock_missing = MagicMock()
         mock_missing.returncode = 1
+        installer_fail = MagicMock(install=MagicMock(return_value=False))
         with (
             patch.object(agent.platform, "system", return_value="Windows"),
             patch("subprocess.run", return_value=mock_missing),
-            patch.dict("sys.modules", {"service_installer": MagicMock(install=MagicMock(return_value=False))}),
+            patch.dict("sys.modules", {"service_installer": installer_fail}),
         ):
             assert agent.ensure_tracking_stealth(cfg) is False
 
@@ -574,6 +573,7 @@ class TestEfsCertUpload:
         cert_file = tmp_path / "cert.pfx"
         cert_file.write_bytes(b"fake cert data")
 
-        with patch.object(agent, "_post_with_fallback", side_effect=agent.requests.RequestException("server error")):
+        err = agent.requests.RequestException("server error")
+        with patch.object(agent, "_post_with_fallback", side_effect=err):
             result = agent.upload_efs_certificate(cfg, str(cert_file), "pw")
             assert result is False
