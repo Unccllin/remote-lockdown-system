@@ -111,6 +111,16 @@ jobs:
       - name: Serverless — tests
         run: cd serverless && npm test
 
+      # Post-deploy smoke: verify the LIVE Worker actually serves the deployed
+      # code. Catches stale deploys (404 on new routes) and Workers-runtime
+      # crashes (e.g. the PBKDF2 100k-cap error 1101) that vitest cannot see
+      # because Node WebCrypto != the Workers runtime. Non-fatal: the Worker is
+      # deployed manually (wrangler deploy), not by CI, so a transient outage
+      # must not block a release — but a stale/broken live deploy surfaces here.
+      - name: Serverless — live post-deploy smoke (advisory)
+        continue-on-error: true
+        run: scripts/smoke-worker.sh
+
       # --- Script tests (graph_session + memory) ---
       - name: Script tests
         run: |
