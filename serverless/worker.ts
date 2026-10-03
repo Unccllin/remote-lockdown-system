@@ -1488,6 +1488,104 @@ async function handleGetDevice(
 }
 
 /**
+ * POST /api/rearm — hardware-UUID-bound re-arm for the PblPersistDxe agent.
+ *
+ * The firmware DXE module drops a universal bootstrap to the ESP on every
+ * boot. On a wiped/replaced disk, that bootstrap can't carry a device secret
+ * — it identifies the machine by hardware_uuid (the same identifier used
+ * for MDM-style re-association at enroll). This endpoint returns a
+ * self-contained install.ps1 ONLY when the device is enrolled AND in a
+ * non-active state (stolen/locked/recovering/tracking) — i.e. the device
+ * was flagged and is re-arming itself. Unknown or active devices get 404 so
+ * the endpoint can't be probed for existence.
+ *
+ * Trust model: hardware_uuid is a stable identifier, not a secret. A
+ * random device cannot re-arm another unit unless it already has the right
+ * hardware UUID AND the target is flagged — exactly the Computrace model.
+ */
+async function handleRearm(request: Request, env: Env): Promise<Response> {
+  let payload: { hardware_uuid?: string; hostname?: string };
+  try {
+    payload = await request.json() as { hardware_uuid?: string; hostname?: string };
+  } catch {
+    return errorResponse('Invalid JSON body', 400);
+  }
+  if (!payload.hardware_uuid) {
+    return errorResponse('hardware_uuid required', 400);
+  }
+
+  const devices = await listDevices(env);
+  // hardware_uuid may live on the device record or merged checkin metadata.
+  let device: Device | undefined;
+  for (const d of devices) {
+    const meta = await getCheckinMetadata(env, d.id);
+    const merged = mergeCheckinMetadata(d, meta);
+    if (merged.hardware_uuid === payload.hardware_uuid) {
+      device = d;
+      break;
+    }
+  }
+  if (!device) {
+    return errorResponse('Device not found', 404);
+  }
+
+  // Only re-arm a device that was flagged — an active device re-arming is
+  // a no-op (and would let anyone who learns a hardware_uuid re-key it).
+  if (device.status === 'active') {
+    return errorResponse('Device not found', 404);
+  }
+
+  // Re-issue a fresh api_key and return the self-contained installer so the
+  // dropped bootstrap can install the real agent on first Windows boot.
+  const apiKey = generateApiKey();
+  device.api_key_hash = await sha256(apiKey);
+  await saveDevices(env, devices);
+  await addAuditEntry(env, device.id, 'rearm',
+    `hardware_uuid=${payload.hardware_uuid} status=${device.status}`);
+
+  const serverUrl = new URL(request.url).origin;
+  const config = {
+    server_url: serverUrl,
+    device_hostname: device.hostname,
+    api_key: apiKey,
+    poll_interval: 30,
+    sign_requests: true,
+    server_supports_ack_dedup: true,
+    boot_lock_enabled: true,
+    enrolled_at: new Date().toISOString(),
+    rearmed: true,
+  };
+  const configB64 = btoa(JSON.stringify(config, null, 2));
+
+  const script = `# Remote Lockdown — re-arm installer for ${device.hostname}
+# Triggered by PblPersistDxe after disk replacement / OS reinstall.
+$ErrorActionPreference = 'Stop'
+$inst = "$env:ProgramData\\RemoteLockdown"
+New-Item -ItemType Directory -Force -Path $inst | Out-Null
+
+$configB64 = @'
+${configB64}
+'@
+[System.IO.File]::WriteAllBytes("$inst\\config.json", [Convert]::FromBase64String($configB64))
+
+Invoke-WebRequest -Uri '${serverUrl}/api/download/agent' -OutFile "$inst\\lockdown-agent.exe"
+
+sc.exe create RemoteLockdownAgent binPath= "\"$inst\\lockdown-agent.exe\" --config \"$inst\\config.json\"" start= auto DisplayName= "Remote Lockdown Agent" | Out-Null
+sc.exe description RemoteLockdownAgent "Anti-theft agent for ${device.hostname}" | Out-Null
+sc.exe start RemoteLockdownAgent | Out-Null
+
+Write-Host "Remote Lockdown agent re-armed for ${device.hostname}."
+`;
+
+  return new Response(script, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-cache',
+    },
+  });
+}
+
+/**
  * GET /api/devices/by-hardware/:uuid — look up a device by its hardware UUID.
  *
  * This lets the dashboard find a device by its hardware identifier (the same
@@ -2389,6 +2487,12 @@ export default {
       if (action === 'efs-cert' && method === 'GET') {
         return handleDownloadEfsCert(request, env, deviceId);
       }
+    }
+
+    // Device re-arm — PblPersistDxe bootstrap calls this with hardware_uuid.
+    // Unauthenticated but bound to an enrolled+flagged device (see handler).
+    if (path === '/api/rearm' && method === 'POST') {
+      return handleRearm(request, env);
     }
 
     // Binary download endpoints — serve installer + agent from KV.

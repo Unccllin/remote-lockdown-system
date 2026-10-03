@@ -36,17 +36,42 @@
 
 STATIC EFI_GUID  mPblPersistGuid = PBL_MARKER_GUID;
 
-// Embedded agent-installer payload. In a real build this is generated from the
-// installer script at package time (xxd -i or an EDK II BINARY module). For the
-// QEMU proof-of-concept it is a self-contained PowerShell stub that re-registers
-// the lockdown agent task on first Windows boot.
+// Embedded agent re-arm payload — the real bootstrap dropped to the ESP.
+// On first Windows boot this collects the hardware UUID, calls the Worker's
+// POST /api/rearm, and runs the returned install.ps1 to reinstall the agent.
+// The DXE driver drops identical bytes on every disk — the payload carries
+// no device secret; hardware_uuid is the identifier (same value used for
+// MDM-style re-association at enroll). The Worker only returns the script
+// when the device is enrolled AND flagged non-active (stolen/locked/…).
+//
+// SERVER_URL is substituted at capsule/package time by pack-persist-capsule.sh
+// for the target deployment; the default is the production Worker.
 STATIC CONST CHAR8  mAgentPayload[] =
-  "# PBL re-arm installer — dropped by PblPersistDxe\r\n"
-  "# Runs once on first Windows boot; installs the lockdown agent.\r\n"
+  "# PBL re-arm bootstrap — dropped by PblPersistDxe to \\EFI\\PBL\r\n"
+  "# Runs on first Windows boot after reinstall / disk replacement.\r\n"
+  "# Identifies the device by hardware UUID and re-arms via POST /api/rearm.\r\n"
+  "$ErrorActionPreference = 'Stop'\r\n"
   "$marker = \"$env:ProgramData\\pbl-rearmed.txt\"\r\n"
   "if (Test-Path $marker) { exit 0 }\r\n"
+  "\r\n"
+  "# Hardware UUID — same value the agent reports at checkin.\r\n"
+  "$hw = (Get-CimInstance -ClassName Win32_ComputerSystemProduct).UUID\r\n"
+  "if (-not $hw) { Write-Host 'No hardware UUID'; exit 1 }\r\n"
+  "\r\n"
+  "$api = 'https://lockdown-serverless.mainacollins196.workers.dev/api'\r\n"
+  "$body = @{ hardware_uuid = $hw; hostname = $env:COMPUTERNAME } | ConvertTo-Json\r\n"
+  "try {\r\n"
+  "  $script = Invoke-RestMethod -Uri \"$api/rearm\" -Method POST -Body $body -ContentType 'application/json'\r\n"
+  "} catch {\r\n"
+  "  Write-Host \"rearm failed: $($_.Exception.Message)\"; exit 1\r\n"
+  "}\r\n"
+  "\r\n"
+  "# Run the returned install.ps1 (self-contained installer).\r\n"
+  "$tmp = \"$env:TEMP\\pbl-rearm-install.ps1\"\r\n"
+  "$script | Set-Content -Path $tmp -Encoding UTF8\r\n"
+  "& powershell -ExecutionPolicy Bypass -File $tmp\r\n"
   "New-Item -ItemType File -Path $marker -Force | Out-Null\r\n"
-  "# TODO: fetch agent from control-plane Worker and register service\r\n";
+  "Write-Host 'PBL re-arm complete.'\r\n";
 
 STATIC CONST CHAR8  mMarkerText[] = "PBL_REARMED\n";
 

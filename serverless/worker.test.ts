@@ -1592,6 +1592,76 @@ describe('Serverless Worker', () => {
     });
   });
 
+  describe('POST /api/rearm', () => {
+    it('re-arms an enrolled+stolen device by hardware_uuid and returns an install script', async () => {
+      // Enroll a device with a hardware_uuid.
+      const enrollResp = await worker.fetch(
+        makeRequest('POST', '/api/enroll', {
+          hostname: 'REARM-001',
+          hardware_uuid: 'uuid-rearm-001',
+        }, { Authorization: 'Bearer test-admin-token' }),
+        env,
+      );
+      const enrollData: any = await parseResponse(enrollResp);
+      const deviceId = enrollData.device.id;
+
+      // Flag the device stolen — handleFlagStolen requires hostname_confirm.
+      const flagResp = await worker.fetch(
+        makeRequest('POST', `/api/devices/${deviceId}/flag-stolen`, {
+          hostname_confirm: 'REARM-001',
+        }, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(flagResp.status).toBe(200);
+
+      // The PblPersistDxe bootstrap POSTs hardware_uuid — no auth needed.
+      const rearmReq = makeRequest('POST', '/api/rearm', {
+        hardware_uuid: 'uuid-rearm-001',
+        hostname: 'REARM-001',
+      });
+      const rearmResp = await worker.fetch(rearmReq, env);
+      const script = await rearmResp.text();
+
+      expect(rearmResp.status).toBe(200);
+      expect(script).toContain('REARM-001');
+      expect(script).toContain('lockdown-agent.exe');
+      expect(script).toContain('config.json');
+    });
+
+    it('returns 404 for an active (non-flagged) device', async () => {
+      await worker.fetch(
+        makeRequest('POST', '/api/enroll', {
+          hostname: 'REARM-ACTIVE',
+          hardware_uuid: 'uuid-rearm-active',
+        }, { Authorization: 'Bearer test-admin-token' }),
+        env,
+      );
+      const req = makeRequest('POST', '/api/rearm', {
+        hardware_uuid: 'uuid-rearm-active',
+        hostname: 'REARM-ACTIVE',
+      });
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(404);
+    });
+
+    it('returns 404 for an unknown hardware_uuid', async () => {
+      const req = makeRequest('POST', '/api/rearm', {
+        hardware_uuid: 'uuid-not-enrolled',
+        hostname: 'GHOST',
+      });
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(404);
+    });
+
+    it('rejects missing hardware_uuid', async () => {
+      const req = makeRequest('POST', '/api/rearm', { hostname: 'NO-UUID' });
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(400);
+    });
+  });
+
   describe('Serial number in checkin metadata', () => {
     it('serial_number from checkin appears in device detail', async () => {
       const { apiKey, device } = await enrollDevice(worker, env, 'SERIAL-001');
