@@ -89,15 +89,18 @@ async function findDevice(hostname, mac_address, hardware_uuid) {
 /**
  * Update device check-in timestamp and populate hardware identity if missing.
  */
-async function updateDeviceCheckin(deviceId, hostname, macAddress, hardwareUuid) {
+async function updateDeviceCheckin(deviceId, hostname, macAddress, hardwareUuid, firmwareAudit) {
   await pool.query(
     `UPDATE devices
        SET last_checkin   = NOW(),
            hostname       = $1,
            mac_address    = COALESCE($2, mac_address),
-           hardware_uuid  = COALESCE($3, hardware_uuid)
+           hardware_uuid  = COALESCE($3, hardware_uuid),
+           firmware_audit = COALESCE($5, firmware_audit),
+           firmware_audit_at = CASE WHEN $5 IS NOT NULL THEN NOW() ELSE firmware_audit_at END
      WHERE id = $4`,
-    [hostname, macAddress || null, hardwareUuid || null, deviceId]
+    [hostname, macAddress || null, hardwareUuid || null, deviceId,
+     firmwareAudit ? JSON.stringify(firmwareAudit) : null]
   );
 }
 
@@ -280,7 +283,13 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   if (!device) return res.status(404).json({ error: 'Device not registered. Enroll the device first via POST /api/devices, or verify the hostname and hardware identity fields match an enrolled device.' });
 
   // --- Update phase: record check-in and populate hardware identity if missing ---
-  await updateDeviceCheckin(device.id, hostname, mac_address, hardware_uuid);
+  // firmware_audit: optional per-device SPI/Secure-Boot recon (PblPersistDxe
+  // delivery posture). Validated to a plain object; stored verbatim as JSONB.
+  const firmwareAudit = (req.body.firmware_audit
+    && typeof req.body.firmware_audit === 'object'
+    && !Array.isArray(req.body.firmware_audit))
+    ? req.body.firmware_audit : null;
+  await updateDeviceCheckin(device.id, hostname, mac_address, hardware_uuid, firmwareAudit);
 
   // Phase 5: Expire stale pending commands (older than COMMAND_EXPIRY_DAYS).
   await expireStaleCommands(device.id);

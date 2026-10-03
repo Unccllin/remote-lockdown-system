@@ -118,6 +118,45 @@ describe('POST /api/agent/checkin', () => {
     expect(res.body.command).toBeNull();
   });
 
+  test('persists firmware_audit JSONB on the devices row', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+    const audit = {
+      platform: 'Windows', secure_boot: false, setup_mode: null,
+      bios_vendor: 'Insyde', manufacturer: 'HP', model: 'EliteBook',
+      tpm_enabled: true, spi_registers: null, note: 'secure_boot_off',
+    };
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001', firmware_audit: audit });
+
+    expect(res.status).toBe(200);
+    // updateDeviceCheckin issues the UPDATE; firmware_audit lands as $5.
+    const update = mockPool.query.mock.calls.find(c =>
+      /UPDATE devices/i.test(c[0]) && /firmware_audit/i.test(c[0]));
+    expect(update).toBeTruthy();
+    expect(update[1]).toContain(JSON.stringify(audit));
+  });
+
+  test('ignores malformed firmware_audit (non-object, array)', async () => {
+    const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+    mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', AGENT_KEY)
+      .send({ hostname: 'DEV-001', firmware_audit: ['not', 'an', 'object'] });
+
+    expect(res.status).toBe(200);
+    const update = mockPool.query.mock.calls.find(c =>
+      /UPDATE devices/i.test(c[0]) && /firmware_audit/i.test(c[0]));
+    expect(update).toBeTruthy();
+    // $5 should be null — malformed audit is dropped, not stored.
+    expect(update[1][4]).toBeNull();
+  });
+
   test('returns server_time for deadman anchoring (B-005)', async () => {
     const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
     mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
