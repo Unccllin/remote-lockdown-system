@@ -2574,3 +2574,29 @@ Worker deploy is now live + correct; remaining serverless gap is install.ps1 har
 
 ### Next session opening
 Fleet posture data starts landing via firmware_audit on next agent checkins — review `devices.firmware_audit` to classify each remote unit's delivery path (signed capsule / Setup-Mode / external flash), then build the FV/capsule packaging for PblPersistDxe and the real agent-payload installer.
+
+### Session end — S138 continued (persistence system complete)
+
+This session's work landed across 9 commits:
+- b83c644 — lint→zero (server eslint 26→0, agent ruff 3→0, safeJsonParse guard for 9 bare JSON.parse)
+- b87bc88 — S137 session closeout
+- 5437490 — post-deploy Worker smoke check (scripts/smoke-worker.sh + release.yml advisory)
+- 3c4235d — PblPersistDxe DXE persistence module + QEMU proof (drop→wipe→re-drop PASS)
+- f4f9481 — firmware_audit agent recon (WMI/PowerShell SPI/Secure-Boot posture)
+- c2c7b6d — firmware_audit server persistence (migration 013, JSONB on devices)
+- 01383b3 — dashboard Firmware Posture card
+- 6485b7b — PblPersistDxe capsule packaging pipeline (GenSec→GenFfs→GenFv→GenerateCapsule)
+- 81dba16 — POST /api/rearm endpoint + real agent-installer payload (closes the re-arm loop)
+
+**The LoJax-style persistence system is code-complete:**
+SPI-resident DXE driver → re-drops agent bootstrap to ESP → bootstrap calls
+/api/rearm with hardware_uuid → Worker returns install.ps1 (enrolled+flagged
+only) → agent reinstalled + service starts → lockdown restored.
+
+Verified: 329 worker tests (+4 rearm), 665 agent, 628 server, 197 dashboard,
+30 electron — 1,549+1,843 cumulative, all green, lint clean, QEMU-proven.
+
+Operational: Worker admin rotated (uncletom), temp credential dead.
+
+Next session: FV/capsule signing decision (db-enrolled cert vs external
+SPI clip), then real-hardware delivery when the D-129 window opens.
