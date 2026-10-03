@@ -1,0 +1,25 @@
+===== BOOT 1 (fresh ESP) =====
+[2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;056;240t[2J[001;001H[2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;042;160t[2J[001;001HBdsDxe: loading Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1,0x1)/Ata(Primary,Master,0x0)
+BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1,0x1)/Ata(Primary,Master,0x0)
+[PersistTest] loading \EFI\PBL\PblPersistDxe.efi
+[PersistTest] driver started — callback registered
+[PersistTest] ReadyToBoot group signaled
+[PersistTest] marker=PRESENT agent=PRESENT
+[PersistTest] PASS — agent re-armed on ESP
+BdsDxe: loading Boot0000 "BootManagerMenuApp" from Fv(7CB8BDC9-F8EB-4F34-AAEA-3EE4AF6516A1)/FvFile(EEC25BDC-67F2-4D95-B1D5-F81B2039D11D)
+BdsDxe: starting Boot0000 "BootManagerMenuApp" from Fv(7CB8BDC9-F8EB-4F34-AAEA-3EE4AF6516A1)/FvFile(EEC25BDC-67F2-4D95-B1D5-F81B2039D11D)
+[2J[001;001H[1m[37m[44m[017;063H┌[017;064H─[017;065H─[017;066H─[017;067H─[017;068H─[017;069H─[017;070H─[017;071H─[017;072H─[017;073H─[017;074H─[017;075H─[017;076H─[017;077H─[017;078H─[017;079H─[017;080H─[017;081H─[017;082H─[017;083H─[017;084H─[017;085H─[017;086H─[017;087H─[017;088H─[017;089H─[017;090H─[017;091H─[017;092H─[017;093H─[017;094H─[017;095H─[017;096H─[017;097H┐[018;063H│[018;064H                                 [018;097H│[019;063H├[019;064H─[019;065H─[019;066H─[019;067H─[019;068H─[019;069H─[019;070H─[019;071H─[019;072H─[019;073H─[019;074H─[019;075H─[019;076H─[019;077H─[019;078H─[019;079H─[019;080H─[019;081H─[019;082H─[019;083H─[019;084H─[019;085H─[019;086H─[019;087H─[019;088H─[019;089H─[019;090H─[019;091H─[019;092H─[019;093H─[019;094H─[019;095H─[019;096H─[019;097H┤[020;063H│[020;064H                                 [020;097H│[021;063H│[021;064H                                 [021;097H│[022;063H├[022;064H─[022;065H─[022;066H─[022;067H─[022;068H─[022;069H─[022;070H─[022;071H─[022;072H─[022;073H─[022;074H─[022;075H─[022;076H─[022;077H─[022;078H─[022;079H─[022;080H─[022;081H─[022;082H─[022;083H─[022;084H─[022;085H─[022;086H─[022;087H─[022;088H─[022;089H─[022;090H─[022;091H─[022;092H─[022;093H─[022;094H─[022;095H─[022;096H─[022;097H┤[023;063H│[023;064H                                 [023;097H│[024;063H│[024;064H                                 [024;097H│[025;063H│[025;064H                                 [025;097H│[026;063H└[026;064H─[026;065H─[026;066H─[026;067H─[026;068H─[026;069H─[026;070H─[026;071H─[026;072H─[026;073H─[026;074H─[026;075H─[026;076H─[026;077H─[026;078H─[026;079H─[026;080H─[026;081H─[026;082H─[026;083H─[026;084H─[026;085H─[026;086H─[026;087H─[026;088H─[026;089H─[026;090H─[026;091H─[026;092H─[026;093H─[026;094H─[026;095H─[026;096H─[026;097H┘[018;067HPlease select boot device:[020;064HEFI Firmware Setup[021;064HUEFI QEMU HARDDISK QM00001 [023;068H↑ and ↓ to move selection[024;067HENTER to select boot device[025;075HESC to exit[0m[37m[40m[1m[37m[40m[020;064HEFI Firmware Setup[0m[37m[40mqemu-system-x86_64: terminating on signal 15 from pid 14 (timeout)
+===== ESP contents after boot 1 =====
+ Volume in drive : is ESP        
+ Volume Serial Number is FAE4-ECEE
+Directory for ::/EFI/PBL
+
+.            <DIR>     2026-10-02   8:47 
+..           <DIR>     2026-10-02   8:47 
+PBLPER~1 EFI     28672 2026-10-02   8:47  PblPersistDxe.efi
+PBL_RE~1 TXT        12 2026-10-02   8:47  PBL_REARM.TXT
+LOCKDO~1 PS1       324 2026-10-02   8:47  lockdown-agent-installer.ps1
+        5 files              29 008 bytes
+                         50 512 896 bytes free
+
+===== WIPE ESP (simulate reinstall / disk swap) =====
