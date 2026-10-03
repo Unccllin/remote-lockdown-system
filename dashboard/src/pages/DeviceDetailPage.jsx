@@ -1,10 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { ArrowLeft, ShieldAlert, ShieldCheck, Unlock, RefreshCw, ClipboardList, Loader, Crosshair, MapPin, Square, Locate, UserX, AlertTriangle, FileWarning, Lock, Key, Eye, EyeOff, Copy } from 'lucide-react';
-import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
 import ConfirmModal from '../components/ConfirmModal';
@@ -757,6 +756,81 @@ export default function DeviceDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Firmware Posture — agent-reported SPI/Secure-Boot recon. Tells the
+          operator which PblPersistDxe delivery path is possible per unit:
+          signed capsule / Setup-Mode key enrollment / external flash. */}
+      {device.firmware_audit && typeof device.firmware_audit === 'object' && (
+        <div className="card mb-6">
+          <h2 className="font-semibold text-slate-200 text-sm mb-3">Firmware Posture</h2>
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-xs text-slate-500">Secure Boot</span>
+              <span className={`text-sm font-medium ${
+                device.firmware_audit.secure_boot === true ? 'text-green-400'
+                : device.firmware_audit.secure_boot === false ? 'text-red-400'
+                : 'text-slate-400'
+              }`}>
+                {device.firmware_audit.secure_boot === true ? 'Enabled'
+                  : device.firmware_audit.secure_boot === false ? 'Disabled'
+                  : 'Unknown'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-xs text-slate-500">Setup Mode</span>
+              <span className={`text-sm font-medium ${
+                device.firmware_audit.setup_mode === true ? 'text-amber-400'
+                : device.firmware_audit.setup_mode === false ? 'text-slate-200'
+                : 'text-slate-400'
+              }`}>
+                {device.firmware_audit.setup_mode === true ? 'Yes (db writable)'
+                  : device.firmware_audit.setup_mode === false ? 'No'
+                  : 'Unknown'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-xs text-slate-500">TPM Enabled</span>
+              <span className={`text-sm font-medium ${
+                device.firmware_audit.tpm_enabled === true ? 'text-green-400'
+                : device.firmware_audit.tpm_enabled === false ? 'text-red-400'
+                : 'text-slate-400'
+              }`}>
+                {device.firmware_audit.tpm_enabled === true ? 'Yes'
+                  : device.firmware_audit.tpm_enabled === false ? 'No'
+                  : 'Unknown'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-xs text-slate-500">BIOS Vendor</span>
+              <span className="text-sm font-mono text-slate-200">
+                {device.firmware_audit.bios_vendor || 'N/A'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-xs text-slate-500">Manufacturer / Model</span>
+              <span className="text-sm font-mono text-slate-200">
+                {[device.firmware_audit.manufacturer, device.firmware_audit.model]
+                  .filter(Boolean).join(' ') || 'N/A'}
+              </span>
+            </div>
+            {device.firmware_audit.note && (
+              <div className="pt-2 border-t border-slate-800/50">
+                <p className="text-xs text-slate-500">
+                  Note: <span className="text-slate-400">{device.firmware_audit.note}</span>
+                </p>
+              </div>
+            )}
+            <div className="pt-2 border-t border-slate-800/50">
+              <p className="text-xs text-slate-500">
+                Audited {safeFromNow(device.firmware_audit_at)}
+                {device.firmware_audit.spi_registers === null && (
+                  <span className="text-slate-500"> · SPI registers need kernel probe</span>
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Location map + details — dark-themed Leaflet map with GPS pin,
           accuracy radius, and location history trail. */}
