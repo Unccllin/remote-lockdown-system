@@ -2609,3 +2609,49 @@ SPI clip), then real-hardware delivery when the D-129 window opens.
 - NG-T5 (partition-level FVE binding) is **already implemented + verified** — commits `450d283` (any-match bind) + `df91b56` (synthetic hive harness). BcdParseDeviceBlob, BcdOsDevice* arrays, FveOnBootPartition, and the 4-boot partbind harness all exist. Ledger/ticket stale — flagged for narrowing, NOT re-implementation.
 - **Real gap found**: agent.py:1216 sends `firmware_audit` on every checkin and Express server persists it (migration 013), but the **serverless Worker's handleAgentCheckin drops it** — destructures only hostname/mac_address/hardware_uuid/serial_number. The deployed fleet path (Cloudflare KV) silently discards the firmware_audit the whole S138 posture pipeline was built to collect. `CheckinMetadata` + `mergeCheckinMetadata` have no field for it, so it never reaches `/api/devices`/`/api/devices/:id` (dashboard Firmware Posture card source).
 - **Fix**: add `firmware_audit` (+ `firmware_audit_at`) to CheckinMetadata, accept+validate it in handleAgentCheckin, surface via mergeCheckinMetadata → Device. Non-blocking (partial dict still useful — matches "always returns a dict" contract). GET /api/devices + GET /api/devices/:id then carry it to the dashboard. Closes the S138 "fleet posture lands on next checkins" loop on the *deployed* backend.
+
+---
+
+## Session 139 — 2026-10-14 (firmware_audit Worker persistence + NG-T5 stale-ledger fix)
+
+### RULE-ZERO
+**Read**: `.devin/graph/current-state.md` (S138 next-opening), `docs/adr/PBL-DEBT-LEDGER.md` (D-120/D-129/D-130), `docs/wayfinder/tickets/NG-T5-partition-binding.md`, `docs/research/NOTE-BCD-DEVICE-BLOB.md`, `firmware/PblPkg/PblApp/{Bcd.c,Fve.c}` + git log, `serverless/worker.ts` (handleAgentCheckin, CheckinMetadata, mergeCheckinMetadata, handleRearm, handleGetDevice), `agent/firmware_audit.py` (audit shape), `server/src/routes/agent.js`, `serverless/worker.test.ts`.
+**Finding**: (a) NG-T5 partition-level FVE binding already implemented + verified (`450d283`, `df91b56`) — ledger/ticket stale, corrected this session. (b) Real gap: agent.py:1216 sends `firmware_audit` every checkin; Express server persists it (migration 013) but the serverless Worker's checkin destructured only hostname/mac/hw_uuid/serial and dropped it — the S138 fleet-posture pipeline never landed data on the deployed KV path.
+
+### IMPLEMENT (2 commits)
+- `3234da2` — persist `firmware_audit` on agent checkin in the serverless Worker: added `firmware_audit`/`firmware_audit_at` to `CheckinMetadata` + `Device`, validate+persist in `handleAgentCheckin` (object-only, malformed→null, same contract as agent.js), surface via `mergeCheckinMetadata` on `GET /api/devices[/:id]` so the dashboard Firmware Posture card works on the deployed backend. Dropped unused `hostname` destructure.
+- `620a7f6` — this session's RULE-ZERO block.
+
+### VERIFY
+- Serverless vitest: 331 tests pass (+2 new `firmware_audit` cases: persists+surfaces, malformed→null).
+- `make graph-check` — all invariants pass.
+- pi-lens delta on `worker.ts`: 0 errors in changed region (the file's pre-existing unused-var / JSON.parse-no-trycatch findings are unchanged HEAD noise, confirmed via `git show HEAD:`).
+
+### Fog cleared
+- NG-T5 was already done and QEMU-verified — the D-120 ledger line and NG-T5 ticket status were stale (the exact trap AGENTS.md §debt-ledger warns about). Narrowed D-120 residual to real-media + VMK lock-state only.
+- The serverless Worker was the missing link in the S138 firmware-posture pipeline — agents send the audit, Express stores it, but KV dropped it.
+
+### Fog remaining
+- `firmware_audit` now *lands* in KV checkin-metadata, but nothing yet consumes it to auto-classify delivery path (signed-capsule vs Setup-Mode vs external-flash) — that's the operator/dashboard read, still pending real fleet checkins.
+- PblPersistDxe FV/capsule signing decision (D-130) still open — needs the db-enrolled-cert vs external-SPI-clip ruling + the hardware window (D-129).
+
+### Debt items closed
+- Stale D-120 sub-item (partition binding) correctly attributed; ledger entry updated in commit `3234da2`.
+
+### Debt items still open
+- D-120 (real-media + VMK lock-state only now), D-129 hardware window, D-130 signing; 9 enforcement paths still unit-test-only.
+
+### Blockers
+- Hardware window (D-129) unchanged — enforcement-path verification + SPI flash need real machines. Signing decision (D-130) is a product ruling.
+
+### Session artifacts
+- Commit `3234da2` (worker.ts + worker.test.ts + ledger), commit `620a7f6` (RULE-ZERO trace).
+- serverless/worker.test.ts: 163 tests (was 161); full serverless suite 331.
+
+### Failure attribution
+- None this session. The lens STOP-block on worker.ts was pre-existing HEAD noise (unused vars, unguarded JSON.parse across the file) not introduced by the change — confirmed by `git show HEAD:` before proceeding; serverless/ is outside the repo's eslint scope (server+dashboard only), so the file's existing style is intentional.
+
+### Next session opening
+Firmware posture now lands on the serverless path — when agents check in, `GET /api/devices/:id` carries `firmware_audit`. Next: D-130 signing decision (db-enrolled cert vs external SPI clip) as a ruling, then FV/capsule delivery once the D-129 hardware window opens.
+
+---

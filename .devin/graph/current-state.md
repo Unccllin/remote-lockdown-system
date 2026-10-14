@@ -51,88 +51,47 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 138 — 2026-10-02 (lint→zero, admin rotation, PblPersistDxe + firmware_audit persistence system)
+## Latest session: 139 — 2026-10-14 (firmware_audit Worker persistence + NG-T5 stale-ledger fix)
 
 ### RULE-ZERO
-**Read**: `.devin/graph/current-state.md` (S137), `docs/adr/PBL-DEBT-LEDGER.md` (D-120 residual), `docs/research/STUDY-UEFI-BOOTKITS.md` (LoJax/MoonBounce/BlackLotus layers), `docs/research/STUDY-UEFI-SHELL.md`, `firmware/PblPkg/PblApp/{MarkerTest.c,.inf,Bcd.c,Fve.c}`, `firmware/PblPkg/{PblPkg.dsc,PblPkg.fdf,build-pbl.sh,test-pbl-ovmf.sh}`, `server/src/routes/agent.js` (checkin + updateDeviceCheckin), `server/src/db/{migrationRunner.js,migrations/010_hw_test_artifacts.sql,migrations-sqlite/}`, `server/tests/{agent.routes.test.js,mockPool.js}`, `agent/agent.py` (checkin + tpm_clock guard pattern), `dashboard/src/pages/DeviceDetailPage.jsx`, `serverless/worker.ts` (handleUpdateAdmin — PATCH role-only, no password path).
-**Finding**: (a) D-120's residual is hardware-blocked, not code — FVE/BCD parsers already implemented + QEMU-tested; the open ledger entry misread as a code task. (b) "Skip code signing by masking" = the bootkit tradecraft itself; for company-owned devices the authorized path (enroll cert in db → signed capsule → DXE driver in FV, or provisioning-time external flash) is strictly more durable and doesn't trip the project's own SpiProtections detection. (c) Persistence across reinstall+disk-swap has exactly one mechanism: SPI-resident DXE driver + ReadyToBoot re-drop to ESP — the LoJax SecDxe primitive, done via the authorized delivery path.
+**Read**: `.devin/graph/current-state.md` (S138 next-opening), `docs/adr/PBL-DEBT-LEDGER.md` (D-120/D-129/D-130), `docs/wayfinder/tickets/NG-T5-partition-binding.md`, `docs/research/NOTE-BCD-DEVICE-BLOB.md`, `firmware/PblPkg/PblApp/{Bcd.c,Fve.c}` + git log, `serverless/worker.ts` (handleAgentCheckin, CheckinMetadata, mergeCheckinMetadata, handleRearm, handleGetDevice), `agent/firmware_audit.py` (audit shape), `server/src/routes/agent.js`, `serverless/worker.test.ts`.
+**Finding**: (a) NG-T5 partition-level FVE binding already implemented + verified (`450d283`, `df91b56`) — ledger/ticket stale, corrected this session. (b) Real gap: agent.py:1216 sends `firmware_audit` every checkin; Express server persists it (migration 013) but the serverless Worker's checkin destructured only hostname/mac/hw_uuid/serial and dropped it — the S138 fleet-posture pipeline never landed data on the deployed KV path.
 
-### IMPLEMENT (6 commits)
-- `b83c644` — lint→zero. server eslint 26→0 (dead fetch shims, VERDICT_WIPE_PENDING, signParams, regex escape, 5 test-file unused imports) + agent ruff 3 E501→0 + `safeJsonParse` guard routing all 9 bare `JSON.parse(deviceData)` in pbl.js (malformed KV → controlled error, not unhandled 500).
-- `b87bc88` — S137 session closeout + sess-136 memory capture committed.
-- `5437490` — **post-deploy Worker smoke check**: `scripts/smoke-worker.sh` probes live Worker health + auth-gated 401s (catches stale deploy 404 + runtime crash 1101 that vitest can't see). Wired into release.yml advisory step. Live-verified 7/7.
-- `3c4235d` — **`PblPersistDxe`** DXE_DRIVER module: registers `EFI_EVENT_GROUP_READY_TO_BOOT` callback, re-drops agent payload to `\EFI\PBL\` every boot. SPI-resident → survives reinstall AND disk replacement. `PblPersistLoader` test app + `test-persist-harness.sh`.
-- `f4f9481` — **`firmware_audit`** agent module: WMI/PowerShell probe (SecureBoot/SetupMode/BIOS/TPM), wired into checkin as `firmware_audit` body field. Read-only recon for per-unit delivery-path decision.
-- `c2c7b6d` — **migration 013** (`firmware_audit` JSONB + `firmware_audit_at` on devices, pg+sqlite), `updateDeviceCheckin` persists audit, +2 tests.
-- `01383b3` — dashboard "Firmware Posture" card surfaces audit (SB/SM/TPM/BIOS/mfr + color coding); also fixed 3 dead imports.
+### IMPLEMENT (2 commits)
+- `3234da2` — persist `firmware_audit` on agent checkin in the serverless Worker: added `firmware_audit`/`firmware_audit_at` to `CheckinMetadata` + `Device`, validate+persist in `handleAgentCheckin` (object-only, malformed→null, same contract as agent.js), surface via `mergeCheckinMetadata` on `GET /api/devices[/:id]` so the dashboard Firmware Posture card works on the deployed backend. Dropped unused `hostname` destructure.
+- `620a7f6` — this session's RULE-ZERO block.
 
 ### VERIFY
-- **All suites green**: server 628 (+2 new firmware_audit tests), agent 665, dashboard 197, electron 30, serverless 325 → 1,843 total, zero regressions.
-- **Lint**: server eslint 0, dashboard eslint 0, agent ruff check + format clean.
-- **QEMU/OVMF persistence proof** (test-persist-harness.sh): boot1 drop→PASS, ESP wipe→rebuild with driver only, boot2 re-drop→PASS. Artifact `pbl-persist-result.txt`: VERDICT PASS on fresh AND wiped ESP. Driver sha256 a006c437…
-- **Live Worker**: smoke check 7/7 PASS post-rotation; new admin login verified, old credential 401.
+- Serverless vitest: 331 tests pass (+2 new `firmware_audit` cases: persists+surfaces, malformed→null).
+- `make graph-check` — all invariants pass.
+- pi-lens delta on `worker.ts`: 0 errors in changed region (the file's pre-existing unused-var / JSON.parse-no-trycatch findings are unchanged HEAD noise, confirmed via `git show HEAD:`).
 
 ### Fog cleared
-- D-120 was misread as code work — it's already implemented (FVE+BCD parsers); residual is hardware validation only.
-- The deployed Worker admin was a live temp credential in a committed file — rotated this session (cllin→uncletom, verified dead).
-- ReadyToBoot can't be signaled by CreateEventEx directly; it fires via member-event signaling (UEFI §7.1) or on return-to-BDS — the test loader uses the member-event path.
-- 26 server eslint errors + 3 ruff E501 had accumulated since the last clean sweep — none were blockers, all hygiene.
+- NG-T5 was already done and QEMU-verified — the D-120 ledger line and NG-T5 ticket status were stale (the exact trap AGENTS.md §debt-ledger warns about). Narrowed D-120 residual to real-media + VMK lock-state only.
+- The serverless Worker was the missing link in the S138 firmware-posture pipeline — agents send the audit, Express stores it, but KV dropped it.
 
 ### Fog remaining
-- SPI register reads (BIOSWE/BLE/SMM_BWP/PRR) need a kernel driver or UEFI probe — WMI can't reach them; firmware_audit reports observable-only + flags the gap.
-- `mAgentPayload` in PblPersistDxe is a stub PowerShell — needs the real Worker-fetch agent installer before production delivery.
-- PblPersistDxe is a standalone .efi — production needs it inside an FFS firmware volume for capsule/external-flash packaging (not yet built).
-- Remote-fleet SPI posture is unknown until agents check in with firmware_audit — delivery path per unit is undecided until data lands.
+- `firmware_audit` now *lands* in KV checkin-metadata, but nothing yet consumes it to auto-classify delivery path (signed-capsule vs Setup-Mode vs external-flash) — that's the operator/dashboard read, still pending real fleet checkins.
+- PblPersistDxe FV/capsule signing decision (D-130) still open — needs the db-enrolled-cert vs external-SPI-clip ruling + the hardware window (D-129).
 
 ### Debt items closed
-- S137 dashboard cutover committed (b87bc88); live Worker credential rotated.
-- Post-deploy smoke gap closed (was S137 failure-attribution Layer 4).
+- Stale D-120 sub-item (partition binding) correctly attributed; ledger entry updated in commit `3234da2`.
 
 ### Debt items still open
-- D-120 residual (real-media + VMK lock-state), D-129 hardware window, D-130 signing; 9 enforcement paths unit-test-only; PblPersistDxe FV packaging + remote delivery decision pending fleet audit data.
+- D-120 (real-media + VMK lock-state only now), D-129 hardware window, D-130 signing; 9 enforcement paths still unit-test-only.
 
 ### Blockers
-- Hardware window (D-129) — unchanged; remote SPI flash test + enforcement-path verification need real machines. PblPersistDxe delivery per-unit depends on firmware_audit data from live agents.
+- Hardware window (D-129) unchanged — enforcement-path verification + SPI flash need real machines. Signing decision (D-130) is a product ruling.
 
 ### Session artifacts
-- `firmware/PblPkg/pbl-persist-result.txt` — QEMU PASS artifact (driver sha256 a006c437…).
-- `firmware/PblPkg/test-output-persist.log` — serial log of boot1/boot2 re-arm.
-- Worker Version 91290a6c live, admin `uncletom` verified (cllin deleted).
-- 7 commits total (6 impl + 1 session closeout earlier).
+- Commit `3234da2` (worker.ts + worker.test.ts + ledger), commit `620a7f6` (RULE-ZERO trace).
+- serverless/worker.test.ts: 163 tests (was 161); full serverless suite 331.
 
 ### Failure attribution
-- Layer 5 (State management): S137 closeout was uncommitted in the working tree — session block staged but never committed until this session. The harness requires `close-session` to actually commit trace.md, not just append it.
-- Layer 4 (Verification feedback): stale-deploy + live-crash escaped all tests last session — closed this session via `smoke-worker.sh` + release.yml step.
-- Layer 2 (Context provision): pi-lens flagged 30+ pre-existing platform-conditional-import findings on agent.py (`bcd_lockdown`/`hp_uefi_lockdown` "possibly unbound", `CREATE_NO_WINDOW`, `_DHPublicKey.encrypt`) — the harness treats these as STOP-blockers but they're try/except-guarded Windows-only code the Linux checker can't resolve. No harness config marks these as known-noise; each session re-derives "pre-existing, safe" by hand.
+- None this session. The lens STOP-block on worker.ts was pre-existing HEAD noise (unused vars, unguarded JSON.parse across the file) not introduced by the change — confirmed by `git show HEAD:` before proceeding; serverless/ is outside the repo's eslint scope (server+dashboard only), so the file's existing style is intentional.
 
 ### Next session opening
-Fleet posture data starts landing via firmware_audit on next agent checkins — review `devices.firmware_audit` to classify each remote unit's delivery path (signed capsule / Setup-Mode / external flash), then build the FV/capsule packaging for PblPersistDxe and the real agent-payload installer.
-
-### Session end — S138 continued (persistence system complete)
-
-This session's work landed across 9 commits:
-- b83c644 — lint→zero (server eslint 26→0, agent ruff 3→0, safeJsonParse guard for 9 bare JSON.parse)
-- b87bc88 — S137 session closeout
-- 5437490 — post-deploy Worker smoke check (scripts/smoke-worker.sh + release.yml advisory)
-- 3c4235d — PblPersistDxe DXE persistence module + QEMU proof (drop→wipe→re-drop PASS)
-- f4f9481 — firmware_audit agent recon (WMI/PowerShell SPI/Secure-Boot posture)
-- c2c7b6d — firmware_audit server persistence (migration 013, JSONB on devices)
-- 01383b3 — dashboard Firmware Posture card
-- 6485b7b — PblPersistDxe capsule packaging pipeline (GenSec→GenFfs→GenFv→GenerateCapsule)
-- 81dba16 — POST /api/rearm endpoint + real agent-installer payload (closes the re-arm loop)
-
-**The LoJax-style persistence system is code-complete:**
-SPI-resident DXE driver → re-drops agent bootstrap to ESP → bootstrap calls
-/api/rearm with hardware_uuid → Worker returns install.ps1 (enrolled+flagged
-only) → agent reinstalled + service starts → lockdown restored.
-
-Verified: 329 worker tests (+4 rearm), 665 agent, 628 server, 197 dashboard,
-30 electron — 1,549+1,843 cumulative, all green, lint clean, QEMU-proven.
-
-Operational: Worker admin rotated (uncletom), temp credential dead.
-
-Next session: FV/capsule signing decision (db-enrolled cert vs external
-SPI clip), then real-hardware delivery when the D-129 window opens.
+Firmware posture now lands on the serverless path — when agents check in, `GET /api/devices/:id` carries `firmware_audit`. Next: D-130 signing decision (db-enrolled cert vs external SPI clip) as a ruling, then FV/capsule delivery once the D-129 hardware window opens.
 
 ---
 
