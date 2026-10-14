@@ -2600,3 +2600,12 @@ Operational: Worker admin rotated (uncletom), temp credential dead.
 
 Next session: FV/capsule signing decision (db-enrolled cert vs external
 SPI clip), then real-hardware delivery when the D-129 window opens.
+
+### Session 139 — RULE-ZERO (firmware_audit Worker persistence gap)
+
+**Read**: `.devin/graph/current-state.md` (S138 next-opening), `docs/adr/PBL-DEBT-LEDGER.md` (D-120/D-129/D-130), `docs/wayfinder/tickets/NG-T5-partition-binding.md`, `docs/research/NOTE-BCD-DEVICE-BLOB.md`, `firmware/PblPkg/PblApp/{Bcd.c,Fve.c}` + git log, `serverless/worker.ts` (handleAgentCheckin:856, CheckinMetadata:498, mergeCheckinMetadata:517, handleRearm:1505, handleGetDevice:1470), `agent/firmware_audit.py` (audit_firmware shape), `server/src/routes/agent.js` (firmware_audit persist), `serverless/worker.test.ts` (checkin test conventions).
+
+**Finding**: 
+- NG-T5 (partition-level FVE binding) is **already implemented + verified** — commits `450d283` (any-match bind) + `df91b56` (synthetic hive harness). BcdParseDeviceBlob, BcdOsDevice* arrays, FveOnBootPartition, and the 4-boot partbind harness all exist. Ledger/ticket stale — flagged for narrowing, NOT re-implementation.
+- **Real gap found**: agent.py:1216 sends `firmware_audit` on every checkin and Express server persists it (migration 013), but the **serverless Worker's handleAgentCheckin drops it** — destructures only hostname/mac_address/hardware_uuid/serial_number. The deployed fleet path (Cloudflare KV) silently discards the firmware_audit the whole S138 posture pipeline was built to collect. `CheckinMetadata` + `mergeCheckinMetadata` have no field for it, so it never reaches `/api/devices`/`/api/devices/:id` (dashboard Firmware Posture card source).
+- **Fix**: add `firmware_audit` (+ `firmware_audit_at`) to CheckinMetadata, accept+validate it in handleAgentCheckin, surface via mergeCheckinMetadata → Device. Non-blocking (partial dict still useful — matches "always returns a dict" contract). GET /api/devices + GET /api/devices/:id then carry it to the dashboard. Closes the S138 "fleet posture lands on next checkins" loop on the *deployed* backend.
