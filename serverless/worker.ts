@@ -53,6 +53,9 @@ interface Device {
   last_checkin: string | null;
   enrolled_at: string;
   api_key_hash: string;
+  // Populated from checkin metadata (KV-RACE-001), not stored on `devices`.
+  firmware_audit?: Record<string, unknown> | null;
+  firmware_audit_at?: string | null;
 }
 
 interface Command {
@@ -500,6 +503,12 @@ interface CheckinMetadata {
   mac_address: string | null;
   hardware_uuid: string | null;
   serial_number: string | null;
+  // firmware_audit: per-device SPI/Secure-Boot recon sent by the agent's
+  // firmware_audit module (PblPersistDxe delivery-path decision input).
+  // Stored on the checkin-metadata KV key (not `devices`) so it survives the
+  // KV-RACE-001 separation and is refreshed every checkin.
+  firmware_audit?: Record<string, unknown> | null;
+  firmware_audit_at?: string | null;
 }
 
 async function getCheckinMetadata(env: Env, deviceId: string): Promise<CheckinMetadata | null> {
@@ -522,6 +531,8 @@ function mergeCheckinMetadata(device: Device, metadata: CheckinMetadata | null):
     mac_address: metadata.mac_address ?? device.mac_address,
     hardware_uuid: metadata.hardware_uuid ?? device.hardware_uuid,
     serial_number: metadata.serial_number ?? device.serial_number,
+    firmware_audit: metadata.firmware_audit ?? device.firmware_audit ?? null,
+    firmware_audit_at: metadata.firmware_audit_at ?? device.firmware_audit_at ?? null,
   };
 }
 
@@ -675,7 +686,7 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   }
 
   const payload = JSON.parse(body);
-  const { hostname, mac_address, hardware_uuid, serial_number } = payload;
+  const { mac_address, hardware_uuid, serial_number } = payload;
 
   // KV-RACE-001: Write checkin metadata to a separate KV key, NOT to
   // the `devices` key. Same fix as handleAgentCheckin.
@@ -832,7 +843,16 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
   }
 
   const payload = JSON.parse(body);
-  const { hostname, mac_address, hardware_uuid, serial_number } = payload;
+  const { mac_address, hardware_uuid, serial_number } = payload;
+  // firmware_audit: optional per-device SPI/Secure-Boot recon (PblPersistDxe
+  // delivery-path decision). Validate it is a plain object — same contract
+  // as the Express server (agent.js): malformed/non-object → null, still
+  // records the checkin (partial data is still useful posture signal).
+  const firmwareAudit = (payload.firmware_audit
+    && typeof payload.firmware_audit === 'object'
+    && !Array.isArray(payload.firmware_audit))
+    ? payload.firmware_audit as Record<string, unknown>
+    : null;
 
   // KV-RACE-001: Write checkin metadata to a separate KV key, NOT to the
   // `devices` key. This prevents the checkin handler from overwriting the
@@ -850,6 +870,8 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
     mac_address: mac_address || devices[idx].mac_address,
     hardware_uuid: hardware_uuid || devices[idx].hardware_uuid,
     serial_number: serial_number || devices[idx].serial_number,
+    firmware_audit: firmwareAudit,
+    firmware_audit_at: firmwareAudit ? new Date().toISOString() : null,
   });
   // Do NOT call saveDevices() here — that would race with the ACK handler.
 

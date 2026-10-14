@@ -542,14 +542,23 @@
   unchanged (`!BitLockerEnabled` → BLOCK on any-FVE or BCD-GUID); whether
   the gate should require `FveOnBootDisk` when FVE is detected is a
   deferred policy choice.
+- **Update (NG-T5, commits `450d283` + `df91b56`)**: Partition-level
+  binding implemented + verified.  `BcdParseDeviceBlob` decodes the
+  osloader `osdevice`/`device` blob (partition/disk identity per
+  `NOTE-BCD-DEVICE-BLOB.md`), `PblFveSameDisk` was upgraded to compare
+  the decoded partition identity against each FVE volume's `HD()` node
+  (GPT: partition GUID; MBR: signature+byte-offset), and the new
+  `FveOnBootPartition` state field is set on any-match.  `test-fve-harness.sh`
+  gained a `partbind` boot (BCD hive with `osdevice` naming the FVE
+  partition's GUID) → bind confirmed in QEMU serial.  Residual is now
+  strictly real-media validation + VMK lock-state proof.
 - **Blocker (residual)**: FVE-FS detection + binding proves a
-  BitLocker-managed volume on the boot disk and how its VMKs are
-  protected; it does NOT prove the volume is currently locked/unlocked
-  (that needs TPM-side VMK unseal verification, not metadata) or interop
-  against a real Windows-encrypted disk (the test image is synthetic;
-  same-disk binding is device-path-level, not BCD osdevice partition-GUID
-  level).  Keep open until real-media validation and VMK lock-state
-  proof exist.
+  BitLocker-managed volume on the Windows boot partition and how its
+  VMKs are protected; it does NOT prove the volume is currently
+  locked/unlocked (that needs TPM-side VMK unseal verification, not
+  metadata) or interop against a real Windows-encrypted disk (the test
+  image is synthetic).  Keep open until real-media validation and VMK
+  lock-state proof exist.
 - **Close criteria**: Real BitLocker locked/unlocked state requires FVE
   volume metadata + TPM inspection.  Metadata parsing and boot-disk
   binding are implemented and emulated-tested; residual is real-media
@@ -1381,7 +1390,7 @@
 | D-117 | No runtime tests for PBL modules | CLOSED (QEMU+swtpm: 8 test-output logs) | TEST |
 | D-118 | EFI_RNG_PROTOCOL nonce generation not implemented | CLOSED | SECURITY |
 | D-119 | ACPI FADT S3 parsing stubbed | CLOSED | STUB |
-| D-120 | BitLocker detection not implemented | OPEN (FVE-FS metadata inspection + boot-disk binding implemented in `Fve.c` + QEMU 3-boot test 16/0; `osdevice` device-blob format decoded in `NOTE-BCD-DEVICE-BLOB.md` — partition-level binding implementable via NG-T5; residual: partition binding, real-media validation, VMK lock-state proof) | TODO |
+| D-120 | BitLocker detection not implemented | OPEN (FVE-FS metadata inspection + disk-level AND partition-level boot-volume binding implemented in `Fve.c`/`Bcd.c` + QEMU 4-boot test incl. `partbind`; `osdevice` device-blob decoded per `NOTE-BCD-DEVICE-BLOB.md` — NG-T5 partition binding DONE commits `450d283`+`df91b56` any-match; residual: real-media validation + VMK lock-state proof) | TODO |
 | D-121 | SPI protections check not implemented | CLOSED | TODO |
 | D-122 | DCI/DCP check not implemented | CLOSED | TODO |
 | D-123 | DMA protection check not implemented | CLOSED | TODO |

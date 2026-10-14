@@ -507,6 +507,51 @@ describe('Serverless Worker', () => {
     });
   });
 
+  describe('firmware_audit on checkin', () => {
+    it('persists firmware_audit and surfaces it via GET /api/devices/:id', async () => {
+      const { apiKey, device } = await enrollDevice(worker, env, 'FWAUDIT-001');
+      const audit = {
+        platform: 'Windows',
+        secure_boot: true,
+        setup_mode: false,
+        bios_vendor: 'HP',
+        bios_version: 'W91 Ver. 01.02.03',
+        manufacturer: 'HP',
+        model: 'HP EliteBook 840',
+        tpm_enabled: true,
+        spi_registers: null,
+        note: null,
+      };
+      const body = JSON.stringify({ hostname: 'FWAUDIT-001', firmware_audit: audit });
+      const req = makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey));
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(200);
+
+      const devReq = makeRequest('GET', `/api/devices/${device.id}`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const devResp = await worker.fetch(devReq, env);
+      const devData: any = await parseResponse(devResp);
+      expect(devData.firmware_audit).toEqual(audit);
+      expect(devData.firmware_audit_at).toBeTruthy();
+    });
+
+    it('tolerates malformed firmware_audit (non-object) — checkin still records', async () => {
+      const { apiKey, device } = await enrollDevice(worker, env, 'FWAUDIT-002');
+      const body = JSON.stringify({ hostname: 'FWAUDIT-002', firmware_audit: 'not-an-object' });
+      const req = makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey));
+      const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(200);
+
+      const devReq = makeRequest('GET', `/api/devices/${device.id}`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const devData: any = await parseResponse(await worker.fetch(devReq, env));
+      // Malformed audit → null, not persisted as a string.
+      expect(devData.firmware_audit).toBeNull();
+    });
+  });
+
   describe('POST /api/agent/deadman-report', () => {
     it('stores key and marks device locked', async () => {
       const { apiKey, device } = await enrollDevice(worker, env, 'DEADMAN-001');
