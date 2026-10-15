@@ -1,0 +1,7 @@
+D-130 Secure Boot provisioning proof — 2026-10-15T10:30:41Z
+
+Toolchain: gen-secureboot-keys.sh (virt-firmware) -> auth bundle -> enrolled OVMF vars
+ENROLLED SIGNED: PblApp.signed.efi booted to lock screen under SecureBoot
+TAMPERED: PblApp-tampered.efi (1 byte appended) -> 'Access Denied -- rejected probably by Secure Boot'
+
+vars: SecureBootEnable=ON, PK/KEK/db/dbx enrolled
