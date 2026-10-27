@@ -109,3 +109,6 @@ tmp/
 # A literal Windows path can be created on POSIX by naive defaults (S141 root
 # cause fixed in agent.py._programdata_dir; this is belt-and-braces).
 C:\\ProgramData/
+
+# Generated C compile database (machine-local EDK II paths)
+firmware/PblPkg/compile_commands.json
