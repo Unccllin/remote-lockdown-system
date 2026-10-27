@@ -1450,6 +1450,92 @@ paths:
 # =============================================================================
 # Components
 # =============================================================================
+  # -------------------------------------------------------------------------
+  # Integrations — read-only, ours (docs/adr/INTEGRATION-OWNERSHIP.md)
+  # -------------------------------------------------------------------------
+  /api/integrations:
+    get:
+      tags: [Integrations]
+      summary: List configured integrations and their mode
+      description: Cheap status only — does not call any upstream.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Connector status list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  integrations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        enabled: { type: boolean }
+                        configured: { type: boolean }
+                        mode: { type: string, enum: [read-only] }
+        '401': { description: Missing or invalid admin token }
+        '403': { description: Requires operator role or higher }
+
+  /api/integrations/meshcentral/devices:
+    get:
+      tags: [Integrations]
+      summary: Read-only device inventory from MeshCentral (optional integration)
+      description: >
+        Returns this server's normalized inventory shape, not the upstream's.
+        Read-only by construction: lockdown, unlock and policy actions are never
+        proxied to MeshCentral — they stay in this server's command queue and
+        audit log. A missing or broken upstream degrades only this endpoint.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Normalized inventory
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source: { type: string, enum: [meshcentral] }
+                  readOnly: { type: boolean }
+                  fetchedAt: { type: string, format: date-time }
+                  devices:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        source: { type: string }
+                        id: { type: string }
+                        name: { type: string }
+                        online: { type: boolean }
+                        lastSeenAt: { type: string, format: date-time, nullable: true }
+                        platform: { type: string, nullable: true }
+                        meshId: { type: string, nullable: true }
+        '401': { description: Missing or invalid admin token }
+        '403': { description: Requires operator role or higher }
+        '502':
+          description: Upstream unreachable or malformed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [UPSTREAM_ERROR] }
+        '503':
+          description: Integration not configured or switched off
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [NOT_CONFIGURED] }
+
 components:
   securitySchemes:
     bearerAuth:

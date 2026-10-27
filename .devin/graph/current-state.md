@@ -51,72 +51,52 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 141 — 2026-10-27 (check-sweep fixes: secret leak in device payloads, POSIX path bug)
+## Latest session: 142 — 2026-10-27 (owned MeshCentral connector, read-only)
 
 ### RULE-ZERO
-- **Read**: `server/src/routes/devices.js` — every response that returns a device row (list 123, detail 129, enroll 160, patch 180, flag-stolen 265, recover 343) plus the `SELECT *` / `RETURNING *` statements that produce them.
-- **Read**: `server/src/routes/agent.js` — confirms `api_key_hash` is read server-side for device auth and must stay in the DB.
-- **Read**: `agent/agent.py` — the 7 `PROGRAMDATA` sites (101, 208, 219, 2361, 2506, 2665, 3807) and the module-import-time `_log_dir.mkdir()` at line 101.
-- **Read**: `.gitignore` (`agent/C:*` rule) and `agent/tests/` conventions.
-**Finding**: (a) `api_key_hash` is returned to clients by five endpoints because the rows come from `SELECT *` / `RETURNING *` and are serialised directly — a SHA-256 of the device API key needs no client and only enables offline guessing. (b) `os.environ.get("PROGRAMDATA", "C:\\ProgramData")` runs on Linux with no fallback, so importing `agent.py` creates a literal `C:\ProgramData/LockdownAgent/` directory in the CWD; a test run left one at the repo root, and `.gitignore` only covers `agent/C:*`.
+- **Read**: `server/src/index.js` — route require/mount pattern (`app.use('/api/<x>', dashboardLimiter, xRoutes)`, line 132-141).
+- **Read**: `server/src/routes/health.js` — minimal router shape, logger usage, typed error returns.
+- **Read**: `server/src/middleware/auth.js` — `requireAuth` / `requireRole(minRole)` and ROLE_HIERARCHY.
+- **Read**: `docs/adr/INTEGRATION-OWNERSHIP.md` — the ownership rules this code must satisfy (connector not plugin, no hard dependency, authority never leaves our system).
+- **Read**: `server/tests/helpers.js` — `createApp`, `makeToken`, `mockPool` conventions for route tests.
+**Finding**: integration must be ours, so the connector lives in our server, exposes OUR route namespace and OUR normalized device shape, is off unless configured, and is read-only (inventory only — no lockdown/unlock is ever proxied to an upstream API; those stay in our command queue and audit log). No third-party client library: plain `fetch` with an abort timeout, credential never logged.
 
-### IMPLEMENT (findings #1 and #2 from the S141 check sweep)
-- `server/src/routes/devices.js` — `publicDevice()` strips `api_key_hash` at the serialisation boundary, applied to all 7 device-bearing responses (list, detail, enroll, patch, by-pbl, flag-stolen, recover). Enrollment still returns the plaintext `api_key` once. Extracted the two command-INSERT statements into named constants so the "validated positive integer, cannot inject" argument sits next to the SQL.
-- `agent/agent.py` — `_programdata_dir()` replaces 7 copies of `os.environ.get("PROGRAMDATA", "C:\\ProgramData")`; POSIX now resolves to `$XDG_DATA_HOME` or `~/.local/share`, Windows behaviour unchanged.
-- `.gitignore` — `C:\\ProgramData/` as belt-and-braces.
-- `agent/hw_test_harness.py` — repaired three latent crashes: `tpm_seal.seal_data/unseal_data` (do not exist; real API is `seal_state`/`unseal_state`), `hp_uefi_lockdown._read_current_bios_settings` (does not exist; now uses `_check_sure_admin`/`_check_secure_boot`), and `retry_on_error` raising `None` after exhausting retries. Also wrapped three `json.loads(resp.read())` calls and the `ctypes.windll` access.
-- `agent/simulate_lockdown.py` — narrow `command` with `isinstance(dict)` before `.get()`.
-- New tests: `server/tests/devices.routes.test.js` (+5), `agent/tests/test_agent_paths.py` (5).
+### IMPLEMENT (S142)
+- `server/src/integrations/meshcentral.js` — READ-ONLY connector: plain `fetch` (no third-party client), 8s abort timeout, `ConnectorNotConfigured` vs `ConnectorUpstreamError`, and OUR normalized device shape (`source/id/name/online/lastSeenAt/platform/meshId`) rather than the upstream's.
+- `server/src/routes/integrations.js` — our namespace: `GET /api/integrations` (cheap status, no upstream call) and `GET /api/integrations/meshcentral/devices` (200 / 502 / 503 with machine-readable codes). Auth: `requireAuth` + `requireRole('operator')`.
+- `server/src/index.js` — mounted under `/api/integrations` behind the dashboard limiter.
+- `server/tests/integrations.routes.test.js` — 8 tests, including an invariant that the connector exports **no mutating operation** (read-only by construction, per the ADR).
+- `server/.env.example` — documents the optional vars and that the connector is off by default.
+- `docs/openapi.yaml` — both endpoints documented (paths 36 → 38).
 
 ### VERIFY
-- Server Jest **638 passed** (was 633; +5). Agent pytest **670 passed** (was 665; +5). `ruff check` + `ruff format --check` clean. `server eslint src/ tests/ --max-warnings=0` exit 0.
-- `agent/tests/test_hw_harness.py` passes after the harness repairs.
-- Live functional check of the fixed route: `/api/installer/agent-version` → 200 with hash/size (previously always 404).
-- Verified each "pre-existing" lens finding against `git diff -U0` hunks before touching it; the 5 `no-sql-in-code-js` hits in devices.js are the integer-validated `commandExpirySql()` interpolation, addressed by extraction rather than suppression.
+- Server suite: **39 suites / 646 tests pass** (638 + 8 new). `eslint src/ tests/ --max-warnings=0` exit 0.
+- Live smoke with no integration configured: `/api/integrations` → `{enabled:false, configured:false, mode:"read-only"}`; `/api/integrations/meshcentral/devices` → **503** `{"code":"NOT_CONFIGURED"}` — off by default, fails soft, no credential echoed.
 
 ### Fog cleared
-- The sweep's finding #1 and #2 are real and now fixed with regression tests.
-- The hardware harness could never have passed E-TPM or captured an HP UEFI before-state — that is why those paths have no hardware artifact.
-- `api_key_hash` was returned by seven endpoints, not the three I first reported.
+- The connector can be built without any MeshCentral code or client library: their REST surface is two GET/POST calls, so ownership costs nothing in dependency terms.
+- A read-only invariant is testable (export-surface check), not just a comment.
 
 ### Fog remaining
-- Findings #3 (`openapi.yaml` missing 32 endpoints), #4 (root `npm test` agent stage), #5 (AGENTS.md stale counts + electron description), #6 (firmware README "scaffold") are untouched.
-- Playwright + Electron still cannot run on this host (`libnspr4.so` absent; no sudo, no xvfb). Worth a container-based job.
-- The 30 pyright platform findings in `agent/agent.py` are exempted via a documented file-level pragma, not fixed; the real fix (narrow the key type before `.encrypt()`, initialise optional modules to `None`) is recorded in that comment.
+- No live MeshCentral instance was available, so the UpstreamError path is only exercised by mocked tests — the real `/login` and `/api/nodes` payload shapes should be confirmed against a real server before relying on it.
+- `docs/openapi.yaml` still omits the 28 `/v1/*` PBL routes and 4 `/api` routes (sweep finding #3).
+- The Hippocratic-2.1 dependency decision (react-leaflet) is still open.
 
 ### Debt items closed
-- None (D-120, D-129, D-130 remain open; this session fixed shipping defects that had no ledger entry).
+- None.
 
 ### Debt items still open
-- D-120, D-129, D-130 and the 9 `verified-in-unit-test` enforcement paths.
+- D-120, D-129, D-130; 9 enforcement paths unit-test-only; sweep finding #3.
 
 ### Blockers
-- Hardware window (D-129) unchanged.
-- CI cannot be executed locally; the release-permissions change from the previous session is still unverified until a tag push.
+- D-129 hardware window; Hippocratic licence decision; live MeshCentral instance for connector verification.
 
 ### Session artifacts
-- Commits `d0d8349` (api_key_hash), `20b5809` (POSIX data dir), `deb43ed` (hw harness).
-- Test counts: server 638, agent 670, dashboard 197, serverless 331, electron 30.
-- Sweep evidence: pg-smoke 65/65, verify-env 60/0/2, API+agent E2E 10/10, installer ZIPs (27 MB Linux / 22.5 MB Windows) inspected.
-
-### Failure attribution
-- **Layer 4 — Verification feedback**: the harness's broken calls were invisible because `test_hw_harness.py` only exercises dry-run/unit paths; nothing executed the real E-TPM or HP-UEFI action bodies. Harness change needed: assert that every `module.function` referenced by the harness exists (a 10-line reflection test would have caught both).
-- **Layer 2 — Context provision**: `api_key_hash` leaked because "rows come from SELECT *, serialise explicitly" was never written down. Fixed behaviourally via `publicDevice()` plus tests.
+- Commits: `e9e96ff` (licensing gate), plus this session's connector commit.
+- `make check-licenses` exit 0 (964 packages, 0 copyleft); `--strict` fails on the react-leaflet decision.
 
 ### Next session opening
-Findings #3–#6 of the S141 sweep remain (openapi's 32 missing endpoints, the broken root `npm test` agent stage, and the stale AGENTS.md / firmware README claims) — start with #4 since it makes the documented verification command work again.
-
-### S141 addendum — findings #4, #5, #6 closed; firmware build re-verified
-
-- **#4 (root `npm test` broken).** `scripts/run-agent-tests.sh` is now the single place that picks the pytest interpreter (agent/.venv when present, python3 with an explicit warning otherwise) and forwards flags. package.json (`test:agent`, `test:agent:coverage`), the Makefile (`test-agent`, coverage) and AGENTS.md all delegate to it. Proof: `npm test` completes — 638 server + 670 agent tests.
-- **#5 (AGENTS.md drift).** Counts corrected (388/603/191/54 → 638/670/197/331); `electron/` no longer described as bundling a server; verify-env summary 61/1 → 60/2; sweep section records pg-smoke 65/65, E2E 10/10, actionlint clean, and that Playwright/Electron cannot run on this host.
-- **#6 (firmware README).** "Scaffold — all source files are stubs" replaced with the real status (27 modules, ~12.5k lines, 1.26 MB PblApp.efi, QEMU+swtpm verified at 10/0–16/0, D-129/D-130 outstanding), and the matching claim in `PblApp.c` corrected.
-- **Firmware tooling.** `scripts/gen-firmware-compile-db.sh` emits a real EDK II `compile_commands.json` (27 TUs, incl. CryptoPkg and PblApp's generated `AutoGen.h`). Without it clangd reported `'Uefi.h' file not found` and 8 cascading type errors; PblApp.c is now at 0 diagnostics.
-- **Firmware build re-verified** after this session's edits: `build-pbl.sh --arch X64 --toolchain GCC` completes, producing a 1,355,776-byte `PblApp.efi`.
-
-Verified: server 638, agent 670, ruff + eslint clean, `bash -n` clean on the new scripts, PblApp.c and TpmClient.c at 0 diagnostics.
-
-Still open from the sweep: **#3** — `openapi.yaml` documents 42 of 74 registered endpoints; all 28 `/v1/*` PBL routes and 4 `/api` routes are undocumented.
+Confirm the connector against a real MeshCentral instance (or document it as untested), then close sweep finding #3 by documenting the 28 `/v1/*` PBL routes in `openapi.yaml`.
 
 ---
 

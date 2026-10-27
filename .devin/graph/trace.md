@@ -2867,3 +2867,50 @@ Findings #3–#6 of the S141 sweep remain (openapi's 32 missing endpoints, the b
 Verified: server 638, agent 670, ruff + eslint clean, `bash -n` clean on the new scripts, PblApp.c and TpmClient.c at 0 diagnostics.
 
 Still open from the sweep: **#3** — `openapi.yaml` documents 42 of 74 registered endpoints; all 28 `/v1/*` PBL routes and 4 `/api` routes are undocumented.
+
+## Session 142 — 2026-10-27 (owned MeshCentral connector, read-only)
+
+### RULE-ZERO
+- **Read**: `server/src/index.js` — route require/mount pattern (`app.use('/api/<x>', dashboardLimiter, xRoutes)`, line 132-141).
+- **Read**: `server/src/routes/health.js` — minimal router shape, logger usage, typed error returns.
+- **Read**: `server/src/middleware/auth.js` — `requireAuth` / `requireRole(minRole)` and ROLE_HIERARCHY.
+- **Read**: `docs/adr/INTEGRATION-OWNERSHIP.md` — the ownership rules this code must satisfy (connector not plugin, no hard dependency, authority never leaves our system).
+- **Read**: `server/tests/helpers.js` — `createApp`, `makeToken`, `mockPool` conventions for route tests.
+**Finding**: integration must be ours, so the connector lives in our server, exposes OUR route namespace and OUR normalized device shape, is off unless configured, and is read-only (inventory only — no lockdown/unlock is ever proxied to an upstream API; those stay in our command queue and audit log). No third-party client library: plain `fetch` with an abort timeout, credential never logged.
+
+### IMPLEMENT (S142)
+- `server/src/integrations/meshcentral.js` — READ-ONLY connector: plain `fetch` (no third-party client), 8s abort timeout, `ConnectorNotConfigured` vs `ConnectorUpstreamError`, and OUR normalized device shape (`source/id/name/online/lastSeenAt/platform/meshId`) rather than the upstream's.
+- `server/src/routes/integrations.js` — our namespace: `GET /api/integrations` (cheap status, no upstream call) and `GET /api/integrations/meshcentral/devices` (200 / 502 / 503 with machine-readable codes). Auth: `requireAuth` + `requireRole('operator')`.
+- `server/src/index.js` — mounted under `/api/integrations` behind the dashboard limiter.
+- `server/tests/integrations.routes.test.js` — 8 tests, including an invariant that the connector exports **no mutating operation** (read-only by construction, per the ADR).
+- `server/.env.example` — documents the optional vars and that the connector is off by default.
+- `docs/openapi.yaml` — both endpoints documented (paths 36 → 38).
+
+### VERIFY
+- Server suite: **39 suites / 646 tests pass** (638 + 8 new). `eslint src/ tests/ --max-warnings=0` exit 0.
+- Live smoke with no integration configured: `/api/integrations` → `{enabled:false, configured:false, mode:"read-only"}`; `/api/integrations/meshcentral/devices` → **503** `{"code":"NOT_CONFIGURED"}` — off by default, fails soft, no credential echoed.
+
+### Fog cleared
+- The connector can be built without any MeshCentral code or client library: their REST surface is two GET/POST calls, so ownership costs nothing in dependency terms.
+- A read-only invariant is testable (export-surface check), not just a comment.
+
+### Fog remaining
+- No live MeshCentral instance was available, so the UpstreamError path is only exercised by mocked tests — the real `/login` and `/api/nodes` payload shapes should be confirmed against a real server before relying on it.
+- `docs/openapi.yaml` still omits the 28 `/v1/*` PBL routes and 4 `/api` routes (sweep finding #3).
+- The Hippocratic-2.1 dependency decision (react-leaflet) is still open.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130; 9 enforcement paths unit-test-only; sweep finding #3.
+
+### Blockers
+- D-129 hardware window; Hippocratic licence decision; live MeshCentral instance for connector verification.
+
+### Session artifacts
+- Commits: `e9e96ff` (licensing gate), plus this session's connector commit.
+- `make check-licenses` exit 0 (964 packages, 0 copyleft); `--strict` fails on the react-leaflet decision.
+
+### Next session opening
+Confirm the connector against a real MeshCentral instance (or document it as untested), then close sweep finding #3 by documenting the 28 `/v1/*` PBL routes in `openapi.yaml`.

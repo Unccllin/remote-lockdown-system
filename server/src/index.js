@@ -38,6 +38,7 @@ const metricsRoutes = require('./routes/metrics');
 const adminsRoutes = require('./routes/admins');
 const hwTestArtifactRoutes = require('./routes/hwTestArtifact');
 const pblRoutes = require('./routes/pbl');
+const integrationsRoutes = require('./routes/integrations');
 const { startAlertScheduler } = require('./jobs/alertScheduler');
 
 const app = express();
@@ -139,6 +140,8 @@ app.use('/api/health', healthRoutes); // No rate limit — health checks
 app.use('/metrics', metricsRoutes);    // No rate limit — Prometheus scraping
 app.use('/api/admins', dashboardLimiter, adminsRoutes);
 app.use('/api/hw-test-artifact', dashboardLimiter, hwTestArtifactRoutes);
+// S142: read-only integration inventory (ours — see docs/adr/INTEGRATION-OWNERSHIP.md)
+app.use('/api/integrations', dashboardLimiter, integrationsRoutes);
 
 // D-200/D-201/D-202/D-210: PBL routes (/v1/*) — CBOR/COSE firmware protocol.
 // Mounted at /v1 (not /api) to match the serverless Worker URL scheme.
