@@ -2855,3 +2855,15 @@ Rotate the two SSH passwords on the hosts as soon as they are reachable and forc
 
 ### Next session opening
 Findings #3–#6 of the S141 sweep remain (openapi's 32 missing endpoints, the broken root `npm test` agent stage, and the stale AGENTS.md / firmware README claims) — start with #4 since it makes the documented verification command work again.
+
+### S141 addendum — findings #4, #5, #6 closed; firmware build re-verified
+
+- **#4 (root `npm test` broken).** `scripts/run-agent-tests.sh` is now the single place that picks the pytest interpreter (agent/.venv when present, python3 with an explicit warning otherwise) and forwards flags. package.json (`test:agent`, `test:agent:coverage`), the Makefile (`test-agent`, coverage) and AGENTS.md all delegate to it. Proof: `npm test` completes — 638 server + 670 agent tests.
+- **#5 (AGENTS.md drift).** Counts corrected (388/603/191/54 → 638/670/197/331); `electron/` no longer described as bundling a server; verify-env summary 61/1 → 60/2; sweep section records pg-smoke 65/65, E2E 10/10, actionlint clean, and that Playwright/Electron cannot run on this host.
+- **#6 (firmware README).** "Scaffold — all source files are stubs" replaced with the real status (27 modules, ~12.5k lines, 1.26 MB PblApp.efi, QEMU+swtpm verified at 10/0–16/0, D-129/D-130 outstanding), and the matching claim in `PblApp.c` corrected.
+- **Firmware tooling.** `scripts/gen-firmware-compile-db.sh` emits a real EDK II `compile_commands.json` (27 TUs, incl. CryptoPkg and PblApp's generated `AutoGen.h`). Without it clangd reported `'Uefi.h' file not found` and 8 cascading type errors; PblApp.c is now at 0 diagnostics.
+- **Firmware build re-verified** after this session's edits: `build-pbl.sh --arch X64 --toolchain GCC` completes, producing a 1,355,776-byte `PblApp.efi`.
+
+Verified: server 638, agent 670, ruff + eslint clean, `bash -n` clean on the new scripts, PblApp.c and TpmClient.c at 0 diagnostics.
+
+Still open from the sweep: **#3** — `openapi.yaml` documents 42 of 74 registered endpoints; all 28 `/v1/*` PBL routes and 4 `/api` routes are undocumented.
