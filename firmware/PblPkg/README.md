@@ -10,8 +10,27 @@ while never bricking a machine.
 
 ## Status
 
-**Scaffold** — all source files are stubs returning `EFI_UNSUPPORTED`.
-The contracts (C1–C4) are frozen. Agents A, B, D fill in the implementations.
+**Implemented and verified in QEMU + swtpm; NOT yet verified on real hardware.**
+
+The "scaffold" status this section used to claim is long obsolete: PblApp is 27
+modules / ~12.5k lines of C building to a 1.26 MB `PblApp.efi`, plus
+PblPersistDxe (2 modules, 28 KB). The QEMU + swtpm harnesses
+(`ci-harness-docker.sh`, `ci-harness-persistence.sh`) pass 10–16 checks per run;
+the debt ledger records runs at 10/0, 11/0, 12/0, 14/0, 15/0 and 16/0.
+
+The remaining `return EFI_UNSUPPORTED` sites are error paths for unsupported
+input (indefinite-length CBOR, non-ECDSA COSE algorithms, an override with no
+challenge seed, an unreachable SPI controller) — not unimplemented stubs.
+
+What is genuinely outstanding:
+
+- **D-129 (open)** — no real-hardware validation. The same blocker leaves 9 of
+  the 13 enforcement paths `verified-in-unit-test`.
+- **D-130 (decided, rollout incomplete)** — signing strategy is owner-cert +
+  provisioning-time `db` enrolment (Microsoft portal dropped);
+  `scripts/sign-pbl.sh` implements signing, and `pack-persist-capsule.sh
+  --sign` signs the capsule.
+- **D-120 (open)** — BitLocker detection residual (real-media + VMK lock state).
 
 ## Contracts (frozen 2026-09-05)
 

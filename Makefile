@@ -97,7 +97,7 @@ test-server:
 	@cd server && npm test
 
 test-agent:
-	@cd agent && python3 -m pytest tests/ -q
+	@scripts/run-agent-tests.sh -q
 
 test-dashboard:
 	@cd dashboard && npm test
@@ -157,7 +157,7 @@ test-e2e-dashboard:
 test-coverage:
 	@export PATH="/home/cllin/.local/node/bin:$$PATH" && \
 	echo "=== Server coverage ===" && cd server && npm run test:coverage && cd .. && \
-	echo "=== Agent coverage ===" && cd agent && python3 -m pytest tests/ --cov=. --cov-report=term -q && cd .. && \
+	echo "=== Agent coverage ===" && scripts/run-agent-tests.sh --cov=. --cov-report=term -q && \
 	echo "=== Dashboard coverage ===" && cd dashboard && npx vitest run --coverage && cd .. && \
 	echo "=== Worker coverage ===" && cd serverless && npx vitest run --coverage && cd .. && \
 	echo "=== Electron coverage ===" && cd electron && npm run test:coverage && cd .. && \

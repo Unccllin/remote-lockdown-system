@@ -11,8 +11,10 @@
     7. Extend PCR 12/13 (TpmClient.c, C2 §4)
     8. Act: PASS → chain-load; DEGRADED → notice + chain-load; BLOCK → lock screen
 
-  This is a scaffold — all functions are stubs that return EFI_UNSUPPORTED.
-  Agents A, B, D fill in the implementations per the frozen contracts.
+  This is the implemented entry point: the 8-step flow above runs end to end and
+  the app is verified in QEMU + swtpm (see ci-harness*.sh). Individual
+  EFI_UNSUPPORTED returns are error paths for unsupported input, not stubs.
+  Real-hardware verification is tracked as D-129.
 
   Copyright (c) 2026 Remote Lockdown System. All rights reserved.
 **/

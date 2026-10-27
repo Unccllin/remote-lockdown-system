@@ -122,6 +122,7 @@ def _programdata_dir() -> Path:
         return Path("C:\\ProgramData")
     return Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
 
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------

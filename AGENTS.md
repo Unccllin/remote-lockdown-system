@@ -7,7 +7,8 @@ Project-specific guidance for AI agents working in this repo.
 - `server/` — Node.js / Express API + PostgreSQL/SQLite (CommonJS, Jest)
 - `dashboard/` — React + Vite + Tailwind admin UI (ESM, Vitest)
 - `agent/` — Python background agent (pytest, ruff)
-- `electron/` — Electron desktop app bundling server + dashboard + agent
+- `electron/` — Electron desktop serverless shell: serves the built dashboard
+  and points the UI at a Cloudflare Worker (no local database, no bundled server)
 - `scripts/` — single source of truth for build/verify logic (wrapped by Makefile)
 - `.devin/skills/phase-N-*` — knowledge base for the 17 production-readiness phases
 - `.devin/skills/memory/` — **memory harness skill** (5-stage persistent agent memory)
@@ -232,11 +233,15 @@ export PATH="/home/cllin/.local/node/bin:$PATH"
 npm test
 
 # Per-component
-cd server   && npm test                       # 388 Jest tests
-cd agent    && python3 -m pytest tests/ -q    # 603 pytest tests
-cd dashboard && npx vitest run                # 191 Vitest tests
+cd server   && npm test                       # 638 Jest tests
+scripts/run-agent-tests.sh -q                 # 670 pytest tests (uses agent/.venv)
+cd dashboard && npx vitest run                # 197 Vitest tests
 cd electron  && npm test                      # 30 Jest tests
-cd serverless && npm test                     # 54 Vitest tests
+cd serverless && npm test                     # 331 Vitest tests
+
+# NOTE: pytest must run through scripts/run-agent-tests.sh, which picks
+# agent/.venv/bin/python. A bare `python3 -m pytest` fails on machines whose
+# system Python lacks pytest-timeout (pyproject sets --timeout=30).
 
 # Lint
 cd server    && npx eslint .                  # exit 0 = clean
@@ -317,13 +322,15 @@ make build
   check. The convention prepares for future failures without backfilling a
   failure log with no data.
 
-## Diagnostic Sweep Results (2026-08-04, updated 2026-08-29)
+## Diagnostic Sweep Results (2026-08-04, updated 2026-10-27)
 
-All green: 388 server tests, 603 agent tests, 191 dashboard tests, 30 electron tests,
-54 serverless tests, eslint clean on server + dashboard, ruff clean + formatted on
+All green: 638 server tests, 670 agent tests, 197 dashboard tests, 30 electron tests,
+331 serverless tests, eslint clean on server + dashboard, ruff clean + formatted on
 agent, vite build OK, all shell scripts `bash -n` OK, all YAML configs valid, all
-local imports resolve, git tree clean.
-`verify-environment.sh` final: **61 PASS / 0 FAIL / 1 SKIP** (the 1 skip is the
+local imports resolve, git tree clean. Also green: `make pg-smoke` 65/65 on real
+PostgreSQL 16, API+agent E2E 10/10, `actionlint` 1.7.12 clean on all 5 workflows.
+Not runnable on this host: Playwright + Electron (missing `libnspr4.so`).
+`verify-environment.sh` final: **60 PASS / 0 FAIL / 2 SKIP** (the skips are the
 intentional `installer-windows-execpolicy` by-design skip).
 
 Hardware test harness (D-003): `make hw-test-dry` runs the harness in dry-run mode.
