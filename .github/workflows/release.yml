@@ -152,7 +152,7 @@ jobs:
   # Plus a SHA256SUMS file for checksum verification.
   #
   # NOTE: macos-latest is arm64 (Apple Silicon). We build darwin-arm64 there
-  # natively, and darwin-x64 on macos-13 (the last Intel macOS runner).
+  # natively, and darwin-x64 on macos-15-intel (Intel).
   # ---------------------------------------------------------------------------
   publish-agent-binaries:
     name: Agent Binaries (${{ matrix.label }})
@@ -323,7 +323,7 @@ jobs:
   #
   # Uses a matrix to build each arch on its native runner:
   #   - macos-latest (arm64): builds arm64 agent + arm64 sqlite3 → arm64 DMG
-  #   - macos-13 (x64):       builds x64 agent   + x64 sqlite3   → x64 DMG
+  #   - macos-15-intel (x64): builds x64 agent   + x64 sqlite3   → x64 DMG
   #
   # This avoids the arch-mismatch bug where a single runner builds one arch
   # of agent binary and sqlite3, then bundles it into both DMGs. Both the

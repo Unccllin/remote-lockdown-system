@@ -51,85 +51,63 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 140 — 2026-10-27 (DB driver precedence + SQLite migration idempotency)
+## Latest session: 140 — continuation (installer route, Electron run, CI lint, credential scrub)
 
 ### RULE-ZERO
-- **Read**: `.devin/skills/phase-11-postgres/SKILL.md` — SQLite↔PG divergence, scope of the PGlite suite.
-- **Read**: `server/src/index.js` — dotenv load order, migration call, dbMode log, degraded-boot catch.
-- **Read**: `server/src/db/pool.js` — the `USE_SQLITE` branch that decides the driver.
-- **Read**: `server/src/db/sqlitePool.js` — `translateSql`, `returnsRows` (incl. PRAGMA), `query`.
-- **Read**: `server/src/db/migrationRunner.js` — `runMigrations`, dialect→directory, schema_migrations tracking, `splitSqlStatements`.
-- **Read**: `server/src/db/migrate.js`, `server/src/config/env.js` (validateEnv/PLACEHOLDERS).
-- **Read**: `server/src/db/migrations-sqlite/*.sql` — which DDL forms are idempotent.
-- **Read**: `server/tests/sqlitePool.test.js` — migrate-once-on-a-fresh-DB, the coverage gap.
-- **Read**: `Dockerfile.server`, `.dockerignore`, `docker-compose*.yml`, `server/.env` — how the image gets its config.
-- **Read**: `tests/pg-smoke/pg-smoke.js` — the real-Postgres harness and its module resolution.
-**Finding**: The reported "SQL crashes" is not a SQL defect — real Postgres is clean (13/13 migrations, pg-smoke 65/65, JSONB/HMAC/encryption verified) and a *fresh* SQLite file is clean (13/13). It is a **driver-precedence + migration-idempotency** defect reproduced three ways:
-(a) `server/src/index.js:2` runs `require('dotenv').config()` unconditionally, so the dev `server/.env` (`USE_SQLITE=true`, `SQLITE_PATH=./lockdown.db`) loads whenever cwd is `server/` — including production runs.
-(b) `server/src/db/pool.js:28` gives `USE_SQLITE=true` precedence over `DATABASE_URL` with no conflict guard, while `index.js:274` logs `dbMode` from `DATABASE_URL` presence — the log reports Postgres while SQLite is actually serving.
-(c) `migrations-sqlite/009` (and 8 sibling files) use bare `ALTER TABLE … ADD COLUMN`; SQLite has no `IF NOT EXISTS` for columns, so `server/lockdown.db` (schema_migrations=001–008, but 009 columns already present out-of-band) throws `duplicate column name: boot_lock_status`, aborting the whole sweep → **010–013 never apply** (no `hw_test_artifacts`, no `pbl_kv_store`, no firmware-audit columns) → PBL/hw-artifact/firmware routes 500.
-(d) `index.js:266` catches the failure and calls `startServer()` anyway — degraded boot labelled only "API may be degraded".
-(e) Docker is *accidentally* safe (`WORKDIR /app`, so dotenv looks for `/app/.env`), but `COPY server/ ./server/` still **bakes `server/.env` into the image** with no `.dockerignore` rule.
-(f) `tests/pg-smoke/pg-smoke.js` — the only real-Postgres harness — cannot start as documented (`Cannot find module 'express'`: no `node_modules` above `tests/pg-smoke/`), and is not in CI, so none of this was catchable.
-**Fix intent**: fail fast on the ambiguous driver, stop loading `.env` in production, log the driver actually selected, make SQLite DDL drift-healing, refuse degraded boot in production, add a drift regression test, and make pg-smoke runnable + CI-wired.
+- **Read**: `server/src/routes/installer.js` — route registration order (`/:deviceId` at 1496 vs `/agent-version` at 1616).
+- **Read**: `server/tests/installer.routes.test.js`, `server/tests/helpers.js` — `createApp`/`makeToken` factories, supertest conventions.
+- **Read**: `electron/main.js`, `electron/config.js`, `electron/server-starter.js`, `electron/preload.js`, `dashboard/src/api/client.js` — the actual serverless wiring (`ELECTRON_API_BASE_URL` → preload → `window.electronApp.apiBaseUrl` → axios baseURL).
+- **Read**: `.github/workflows/release.yml`, `.github/workflows/ci.yml` — runner labels and the new pg-smoke job.
+- **Read**: `scripts/rsh.py`, `scripts/hp_ssh.py` — embedded host/user/password and `AutoAddPolicy`.
+**Finding**: (1) `/agent-version` was unreachable because Express matches registration order — the auto-update check always got `404 {"error":"Device not found"}`. (2) The Electron app is a **serverless shell**: it has no database and never sets `USE_SQLITE`, so my earlier S140 claim that it does was wrong — `server-starter.js` only serves `dashboard/dist`. (3) The repo is private (GitHub API 404), so CI status needs a token; local `actionlint` 1.7.12 is clean, and an older 1.7.7 produced a false positive on `macos-15-intel` (which does exist — reverted). (4) `scripts/rsh.py` was tracked with a plaintext password and `AutoAddPolicy`.
 
-### IMPLEMENT (7 files + 2 new)
-- `server/src/config/env.js` — reject `USE_SQLITE=true` together with `DATABASE_URL` (ambiguous driver) in `validateEnv`.
-- `server/src/db/pool.js` — warn when `DATABASE_URL` is being ignored; tag the pg pool `driver: 'pg'`.
-- `server/src/db/sqlitePool.js` — export `driver: 'sqlite'`.
-- `server/src/index.js` — load dotenv only when `NODE_ENV !== 'production'` (warn if a local `.env` is ignored); derive the migration dialect from `pool.driver`; log the driver actually selected; exit 1 on migration failure in production instead of booting degraded.
-- `server/src/db/migrationRunner.js` — `sqliteStatementAlreadyApplied()`: skip `ALTER TABLE … ADD COLUMN` whose column already exists and `CREATE TRIGGER` whose name exists, then record the version (drift healing).
-- `tests/pg-smoke/pg-smoke.js` — resolve `server/node_modules` via `module.paths` so the documented invocation works; drop two pre-existing unused bindings.
-- `.dockerignore` — exclude `.env`/`**/.env` (keep `.env.example`).
-- `scripts/run-pg-smoke.sh` (new) + `make pg-smoke` — ephemeral `postgres:16` or `PG_SMOKE_URL`.
-- `.github/workflows/ci.yml` — new `pg-smoke` job with a `postgres:16` service.
-- `server/tests/migrationIdempotency.test.js` (new) — 3 tests incl. the drift regression.
+### IMPLEMENT
+- `server/src/routes/installer.js` — literal `/agent-version` registered before `/:deviceId`, with a comment recording why order matters.
+- `server/tests/installer.routes.test.js` — 2 tests: router stack order, and the endpoint no longer answering "Device not found".
+- `scripts/rsh.py`, `scripts/hp_ssh.py` — credentials now come from `RLS_SSH_*` env vars; strict host-key verification by default (`RLS_SSH_INSECURE=1` to opt out).
+- Git history rewritten with `git-filter-repo --replace-text` to expunge the password from all 323 commits (backup bundle kept outside the repo).
 
 ### VERIFY
-- Drift replay on a copy of the broken DB: 009's 3 columns logged as "already-applied DDL", versions 009–013 recorded, `hw_test_artifacts` + `pbl_kv_store` created, second run "No new migrations to apply."
-- Real `server/lockdown.db` healed on boot; log is now honest: `dbMode: "sqlite (./lockdown.db)", driver: "sqlite", dialect: "sqlite"`.
-- Authenticated route matrix on the healed DB: `/api/devices` 200, `/api/audit` 200, `/api/admins` 200, `/api/hw-test-artifact` 200 `[]`, `/v1/devices` 200, `/v1/admin/{key-info,operator-key,cert-chain}` 200, `/v1/policy` 200 — **0 level-50 log entries**.
-- Fail-fast: `USE_SQLITE=true` + `DATABASE_URL` → `FATAL: invalid configuration`, exit 1. Production + unreachable DB → `Refusing to start in production with an unmigrated schema`, exit 1, no `Server running`.
-- Red/green proof: `migrationIdempotency.test.js` passes 3/3 with the fix; with the pre-fix runner restored it fails 1/3 with exactly `SQLITE_ERROR: duplicate column name: boot_lock_status`.
-- Server Jest full suite: **38 suites / 631 tests pass** (was 628; +3 new). `npx eslint src/ tests/ --max-warnings=0` → exit 0.
-- Real PostgreSQL: migrations 13/13; `node tests/pg-smoke/pg-smoke.js` as documented → **65 PASS / 0 FAIL**; `make pg-smoke` (docker script) → same.
-- `.dockerignore` verified by building a stub image from the real context: `/x/.env` absent, `/x/.env.example` present.
-- `ci.yml` parses (12 jobs, `pg-smoke` with postgres service, 5 steps); `bash -n scripts/run-pg-smoke.sh` OK.
+- Installer: 25/25 tests in `installer.routes.test.js`; full server suite **38 suites / 633 tests pass**.
+- Electron (real run, not reasoning): `config.saveWorkerUrl` → `config.json` on disk → `ELECTRON_API_BASE_URL` → `startStaticServer` over the **real** `dashboard/dist`: `/` 200 `no-cache`, `/devices` 200 SPA fallback serving `index.html`, `/assets/index-D9ptcHx7.js` 200 `immutable` (614230B), server closed cleanly. The Electron **binary cannot run here** (`libnspr4.so` missing, no xvfb), so the GUI/main-process path is still unproven.
+- CI: `actionlint` 1.7.12 over all 5 workflows → **exit 0** (includes the new `pg-smoke` job). Repo API requires auth, so workflow *run* results remain unchecked.
+- Credentials: `git log --all -S '***REMOVED-CREDENTIAL-S140***'` → 0 commits; `git log -p --all | grep -c` → 0; stashes 0; reflog pruned; old commit `58f5ac4` unreachable. Working tree/refs intact (1361 files, 323 commits), `origin` re-added after filter-repo dropped it.
 
 ### Fog cleared
-- The "SQL crash" is not a SQL defect: real Postgres is clean (13/13 + 65/65) and a fresh SQLite file is clean (13/13). The breakage was driver precedence + migration drift on an *existing* SQLite DB.
-- Why the API half-worked: `/api/health` never touches the missing tables, so the server looked alive while PBL/firmware/hw-artifact routes 500'd.
-- Why no test caught it: the only SQLite migration test migrated once against a fresh in-memory DB, and the real-Postgres harness could not start (`Cannot find module 'express'`) and was not in CI.
+- The Electron desktop app genuinely has no local database — the S140 DB defect cannot affect it, and the app only needed its Worker URL.
+- The `macos-15-intel` runner-label "defect" was a stale-local-tool false positive, not a workflow bug.
+- `/api/installer/agent-version` 404 was pure route ordering, not a missing feature.
 
 ### Fog remaining
-- GitHub Actions results for the new `pg-smoke` job are unverified — no `gh` CLI and no network from here; YAML parses and the steps run locally, nothing more.
-- `GET /api/installer/agent-version` returns 404 `{"error":"Device not found"}` — `/:deviceId` shadows the literal route. Pre-existing, found while probing, **not fixed**.
-- The Electron path (`electron/server-starter.js`) was not exercised; it sets `USE_SQLITE` deliberately and is masked from the new conflict guard only because it never sets `DATABASE_URL`.
-- Agent/Windows behaviour and firmware were not touched — if the user's crash is there, this session does not cover it.
+- Electron GUI path (main process, preload → renderer baseURL, updater) still unrun: `libnspr4.so` missing and no xvfb on this host.
+- GitHub Actions run status unverified — private repo, no token.
+- **Rotation not performed**: 192.168.1.40 and 192.168.1.219 both refuse port 22 from here, so the password cannot be changed on the hosts right now. It must be treated as compromised.
+- Force-pushing the rewritten history is a manual, coordinate-with-collaborators step; local `origin` still points at the old remote history.
+- The unknown-asset SPA fallback returns 200 + `index.html` for a missing `.js` (browser shows a MIME error instead of 404). Behaviour observed, not changed.
 
 ### Debt items closed
-- None. This was an undiscovered defect with no ledger entry (D-001..D-021 and D-100..D-211 are unrelated); recorded here rather than retro-fitted onto a ledger item.
+- None (no ledger entry described these; the harness gaps are recorded here and fixed).
 
 ### Debt items still open
-- D-120 (BitLocker detection real-media residual), D-129 (hardware window), D-130 (code signing rollout), and the 9 enforcement paths still `verified-in-unit-test`.
+- D-120, D-129, D-130 and the 9 `verified-in-unit-test` enforcement paths — unchanged.
 
 ### Blockers
-- D-129 hardware window — unchanged, needs the physical machine.
-- GitHub CI confirmation — needs network/credentials unavailable in this environment.
-- `scripts/rsh.py` still carries a plaintext SSH password in tracked history; scrubbing history is a decision for the owner (rotating the password is the urgent half).
+- D-129 hardware window (unchanged).
+- Both SSH test hosts offline → credential rotation blocked until they are reachable.
+- GitHub CI confirmation needs a token.
 
 ### Session artifacts
-- Diff: 9 modified + 2 new files (258 insertions). New: `scripts/run-pg-smoke.sh`, `server/tests/migrationIdempotency.test.js`.
-- Server: 631 tests pass; pg-smoke 65/65 on real PG 16; eslint clean.
-- Healed DB: `server/lockdown.db` now at schema_migrations 001–013 with `pbl_kv_store`, `hw_test_artifacts`, and the firmware-audit columns present.
+- Commits: `6dcd08a` (db driver + migration drift + pg-smoke harness/CI), `6ffd674` (installer route order), `22a824c` (credential sanitization), `9b3cbf7` (graph/docs/memory). All SHAs are post-rewrite.
+- Pre-rewrite backup: `~/rls-pre-scrub-20261027-110852.bundle` (contains the old history, i.e. the secret — delete once satisfied).
+- Server 633 tests; actionlint 1.7.12 clean; pg-smoke 65/65.
 
 ### Failure attribution
-- **Layer 4 — Verification feedback** (primary): the migration test ran once on a fresh DB and the one real-Postgres harness could not start, so no gate could ever observe drift. Harness change applied: drift regression test + `pg-smoke` in CI + `make pg-smoke`.
-- **Layer 2 — Context provision**: "USE_SQLITE is a dev/Electron switch, never combined with DATABASE_URL" was never written down, and the deciding file (`server/.env`) is gitignored, so its effect was invisible in review. Harness change applied: the conflict is now an explicit `validateEnv` error and the startup log names the driver actually loaded.
-- **Layer 5 — State management**: `schema_migrations` silently diverged from the real schema across sessions with nothing to detect it. Harness change applied: startup now heals and logs drift; production refuses to serve on a failed migration.
+- **Layer 4 — Verification feedback** (again): the installer route had no test asserting registration order, and CI linting never ran locally, so both defects survived. Harness change: route-order tests; `actionlint` now available at `~/.local/bin/actionlint`.
+- **Layer 3 — Execution environment**: Electron cannot start on this host (`libnspr4.so`, no xvfb), which is why the GUI path is still unverified. Harness change needed: a containerised or xvfb-backed Electron smoke test in CI.
+- **Layer 2 — Context provision**: embedding credentials in a tracked helper was normalised by repetition. Harness change: env-only credentials + strict host keys, enforced by review.
 
 ### Next session opening
-The DB layer is now honest and self-healing (driver logged, drift healed, prod fail-fast, pg-smoke in CI) — next: triage the remaining "it never works as expected" reports against the Electron app and a real Windows agent run, since this session only proved the server/Postgres/SQLite paths.
+Rotate the two SSH passwords on the hosts as soon as they are reachable and force-push the rewritten history with `git push --force-with-lease` after coordinating, then close the remaining Electron gap by adding an xvfb-backed GUI smoke job.
 
 ---
 

@@ -2735,3 +2735,61 @@ Firmware posture now lands on the serverless path — when agents check in, `GET
 
 ### Next session opening
 The DB layer is now honest and self-healing (driver logged, drift healed, prod fail-fast, pg-smoke in CI) — next: triage the remaining "it never works as expected" reports against the Electron app and a real Windows agent run, since this session only proved the server/Postgres/SQLite paths.
+
+## Session 140 — continuation (installer route, Electron run, CI lint, credential scrub)
+
+### RULE-ZERO
+- **Read**: `server/src/routes/installer.js` — route registration order (`/:deviceId` at 1496 vs `/agent-version` at 1616).
+- **Read**: `server/tests/installer.routes.test.js`, `server/tests/helpers.js` — `createApp`/`makeToken` factories, supertest conventions.
+- **Read**: `electron/main.js`, `electron/config.js`, `electron/server-starter.js`, `electron/preload.js`, `dashboard/src/api/client.js` — the actual serverless wiring (`ELECTRON_API_BASE_URL` → preload → `window.electronApp.apiBaseUrl` → axios baseURL).
+- **Read**: `.github/workflows/release.yml`, `.github/workflows/ci.yml` — runner labels and the new pg-smoke job.
+- **Read**: `scripts/rsh.py`, `scripts/hp_ssh.py` — embedded host/user/password and `AutoAddPolicy`.
+**Finding**: (1) `/agent-version` was unreachable because Express matches registration order — the auto-update check always got `404 {"error":"Device not found"}`. (2) The Electron app is a **serverless shell**: it has no database and never sets `USE_SQLITE`, so my earlier S140 claim that it does was wrong — `server-starter.js` only serves `dashboard/dist`. (3) The repo is private (GitHub API 404), so CI status needs a token; local `actionlint` 1.7.12 is clean, and an older 1.7.7 produced a false positive on `macos-15-intel` (which does exist — reverted). (4) `scripts/rsh.py` was tracked with a plaintext password and `AutoAddPolicy`.
+
+### IMPLEMENT
+- `server/src/routes/installer.js` — literal `/agent-version` registered before `/:deviceId`, with a comment recording why order matters.
+- `server/tests/installer.routes.test.js` — 2 tests: router stack order, and the endpoint no longer answering "Device not found".
+- `scripts/rsh.py`, `scripts/hp_ssh.py` — credentials now come from `RLS_SSH_*` env vars; strict host-key verification by default (`RLS_SSH_INSECURE=1` to opt out).
+- Git history rewritten with `git-filter-repo --replace-text` to expunge the password from all 323 commits (backup bundle kept outside the repo).
+
+### VERIFY
+- Installer: 25/25 tests in `installer.routes.test.js`; full server suite **38 suites / 633 tests pass**.
+- Electron (real run, not reasoning): `config.saveWorkerUrl` → `config.json` on disk → `ELECTRON_API_BASE_URL` → `startStaticServer` over the **real** `dashboard/dist`: `/` 200 `no-cache`, `/devices` 200 SPA fallback serving `index.html`, `/assets/index-D9ptcHx7.js` 200 `immutable` (614230B), server closed cleanly. The Electron **binary cannot run here** (`libnspr4.so` missing, no xvfb), so the GUI/main-process path is still unproven.
+- CI: `actionlint` 1.7.12 over all 5 workflows → **exit 0** (includes the new `pg-smoke` job). Repo API requires auth, so workflow *run* results remain unchecked.
+- Credentials: `git log --all -S '***REMOVED-CREDENTIAL-S140***'` → 0 commits; `git log -p --all | grep -c` → 0; stashes 0; reflog pruned; old commit `58f5ac4` unreachable. Working tree/refs intact (1361 files, 323 commits), `origin` re-added after filter-repo dropped it.
+
+### Fog cleared
+- The Electron desktop app genuinely has no local database — the S140 DB defect cannot affect it, and the app only needed its Worker URL.
+- The `macos-15-intel` runner-label "defect" was a stale-local-tool false positive, not a workflow bug.
+- `/api/installer/agent-version` 404 was pure route ordering, not a missing feature.
+
+### Fog remaining
+- Electron GUI path (main process, preload → renderer baseURL, updater) still unrun: `libnspr4.so` missing and no xvfb on this host.
+- GitHub Actions run status unverified — private repo, no token.
+- **Rotation not performed**: 192.168.1.40 and 192.168.1.219 both refuse port 22 from here, so the password cannot be changed on the hosts right now. It must be treated as compromised.
+- Force-pushing the rewritten history is a manual, coordinate-with-collaborators step; local `origin` still points at the old remote history.
+- The unknown-asset SPA fallback returns 200 + `index.html` for a missing `.js` (browser shows a MIME error instead of 404). Behaviour observed, not changed.
+
+### Debt items closed
+- None (no ledger entry described these; the harness gaps are recorded here and fixed).
+
+### Debt items still open
+- D-120, D-129, D-130 and the 9 `verified-in-unit-test` enforcement paths — unchanged.
+
+### Blockers
+- D-129 hardware window (unchanged).
+- Both SSH test hosts offline → credential rotation blocked until they are reachable.
+- GitHub CI confirmation needs a token.
+
+### Session artifacts
+- Commits: `6dcd08a` (db driver + migration drift + pg-smoke harness/CI), `6ffd674` (installer route order), `22a824c` (credential sanitization), `9b3cbf7` (graph/docs/memory). All SHAs are post-rewrite.
+- Pre-rewrite backup: `~/rls-pre-scrub-20261027-110852.bundle` (contains the old history, i.e. the secret — delete once satisfied).
+- Server 633 tests; actionlint 1.7.12 clean; pg-smoke 65/65.
+
+### Failure attribution
+- **Layer 4 — Verification feedback** (again): the installer route had no test asserting registration order, and CI linting never ran locally, so both defects survived. Harness change: route-order tests; `actionlint` now available at `~/.local/bin/actionlint`.
+- **Layer 3 — Execution environment**: Electron cannot start on this host (`libnspr4.so`, no xvfb), which is why the GUI path is still unverified. Harness change needed: a containerised or xvfb-backed Electron smoke test in CI.
+- **Layer 2 — Context provision**: embedding credentials in a tracked helper was normalised by repetition. Harness change: env-only credentials + strict host keys, enforced by review.
+
+### Next session opening
+Rotate the two SSH passwords on the hosts as soon as they are reachable and force-push the rewritten history with `git push --force-with-lease` after coordinating, then close the remaining Electron gap by adding an xvfb-backed GUI smoke job.
