@@ -2,6 +2,12 @@
 # node_modules are installed inside the container to avoid host/container
 # platform mismatches (especially for native modules like sqlite3).
 **/node_modules
+# S140: never bake local .env files into the image. server/.env was copied by
+# `COPY server/ ./server/` and carried dev values (USE_SQLITE=true, SQLITE_PATH).
+.env
+**/.env
+**/.env.*
+!**/.env.example
 agent/.venv
 agent/dist
 agent/build

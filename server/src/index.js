@@ -1,5 +1,12 @@
 require('express-async-errors');
-require('dotenv').config();
+// S140: .env is a local-dev convenience, not a production config source.
+// Docker/systemd/CI must supply real env vars. Loading server/.env during a
+// production run silently re-introduced USE_SQLITE=true and overrode
+// DATABASE_URL, so the process served from a local SQLite file while logging
+// "DATABASE_URL (cloud)".
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
 const { validateEnv } = require('./config/env');
 validateEnv(); // CC2/CC11: fail fast on bad config before anything else loads
 const express = require('express');
@@ -10,6 +17,15 @@ const path = require('path');
 const fs = require('fs');
 const pinoHttp = require('pino-http');
 const logger = require('./logger');
+
+// S140: make it visible when a local .env is being ignored, instead of
+// silently differing from a dev run.
+if (process.env.NODE_ENV === 'production' && fs.existsSync(path.resolve(process.cwd(), '.env'))) {
+  logger.warn(
+    'NODE_ENV=production — ignoring .env in the working directory. ' +
+      'Environment variables must come from the environment (compose/systemd/CI).'
+  );
+}
 
 const authRoutes = require('./routes/auth');
 const devicesRoutes = require('./routes/devices');
@@ -206,7 +222,7 @@ if (fs.existsSync(dashboardDistPath)) {
 
 // 404 JSON for unmatched API routes — prevents API clients from receiving
 // index.html (the SPA fallback) for non-existent endpoints.
-app.all('/api/*', (req, res) => {
+app.all('/api/*', (_req, res) => {
   res.status(404).json({ error: 'Not found. Check the API endpoint path and method. Available routes are under /api/devices, /api/agent, /api/auth, /api/admins, /api/audit, /api/setup, /api/health.' });
 });
 
@@ -255,8 +271,10 @@ startAlertScheduler();
 // In Electron mode, server-starter.js handles this separately (SQLite).
 // In cloud/Docker mode, this ensures the schema is initialized on first boot
 // and updated on subsequent deploys — no manual migration step needed.
+// The dialect comes from the pool that was actually loaded, not from the env
+// var again — one source of truth (S140).
 const { runMigrations } = require('./db/migrationRunner');
-const migrationDialect = process.env.USE_SQLITE === 'true' ? 'sqlite' : 'pg';
+const migrationDialect = pool.driver === 'sqlite' ? 'sqlite' : 'pg';
 
 runMigrations(pool, { dialect: migrationDialect })
   .then(() => {
@@ -264,14 +282,39 @@ runMigrations(pool, { dialect: migrationDialect })
     startServer();
   })
   .catch((err) => {
-    logger.error({ err }, 'Migration failed — server will start anyway (API may be degraded)');
+    // S140: a half-migrated schema is not a survivable production state — the
+    // previous behaviour was to log one line and boot a degraded API whose
+    // PBL/firmware/hw-artifact routes all 500'd. Refuse to serve in prod.
+    logger.error({ err, dialect: migrationDialect }, 'Migration failed');
+    if (process.env.NODE_ENV === 'production') {
+      logger.fatal(
+        'Refusing to start in production with an unmigrated schema. ' +
+          'Fix the migration (or restore the DB) and restart.'
+      );
+      process.exit(1);
+    }
+    logger.warn('Starting anyway (non-production) — routes whose tables are missing will fail.');
     startServer();
   });
+
+function describeDbMode() {
+  // Report the driver actually in use, not whether DATABASE_URL is set.
+  if (pool.driver === 'sqlite') return `sqlite (${process.env.SQLITE_PATH || 'default path'})`;
+  if (process.env.DATABASE_URL) return 'DATABASE_URL (cloud)';
+  return 'individual vars (local)';
+}
 
 function startServer() {
 server = app.listen(PORT, async () => {
   logger.info({ port: PORT }, 'Server running');
-  logger.info({ dbMode: process.env.DATABASE_URL ? 'DATABASE_URL (cloud)' : 'individual vars (local)' }, 'DB mode');
+  logger.info(
+    {
+      dbMode: describeDbMode(),
+      driver: pool.driver,
+      dialect: migrationDialect,
+    },
+    'DB mode'
+  );
   try {
     await pool.query('SELECT 1');
     logger.info('DB connection: OK');

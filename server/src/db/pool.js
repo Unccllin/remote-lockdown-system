@@ -23,9 +23,18 @@ const logger = require('../logger');
 
 // SQLite mode: export the SQLite pool wrapper and skip Postgres entirely.
 if (process.env.USE_SQLITE === 'true') {
+  if (process.env.DATABASE_URL) {
+    // env.js rejects this combination at startup; this warning covers callers
+    // that import the pool directly (tests, scripts) without validateEnv().
+    logger.warn(
+      'USE_SQLITE=true and DATABASE_URL are both set — DATABASE_URL is IGNORED and SQLite will serve all queries (S140).'
+    );
+  }
   module.exports = require('./sqlitePool');
 } else {
-  module.exports = createPgPool();
+  const pgPool = createPgPool();
+  pgPool.driver = 'pg';
+  module.exports = pgPool;
 }
 
 function createPgPool() {

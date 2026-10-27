@@ -369,6 +369,10 @@ const sqlitePool = {
   // adjust parameter formatting (e.g. JSON objects must be stringified
   // for SQLite, but passed as-is for pg/PGlite which handle it natively).
   _isSqlite: true,
+  // Driver identity — logged at startup so the selected database is
+  // observable rather than inferred from whichever env var happens to be set
+  // (S140: the log said "DATABASE_URL (cloud)" while SQLite was serving).
+  driver: 'sqlite',
 };
 
 module.exports = sqlitePool;

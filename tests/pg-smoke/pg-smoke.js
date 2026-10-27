@@ -19,6 +19,13 @@
  * Exits 0 on success, 1 on any failure. Each step prints [PASS]/[FAIL].
  */
 
+// --- Module resolution ---
+// This file lives in tests/pg-smoke/, which has no node_modules and no parent
+// node_modules (the repo root one is not installed). Without this, running the
+// documented command fails immediately with "Cannot find module 'express'",
+// which is why this harness was effectively never executed (S140).
+module.paths.unshift(require('path').join(__dirname, '../../server/node_modules'));
+
 // --- Env setup — MUST run before any module that touches the DB pool ---
 process.env.NODE_ENV = process.env.NODE_ENV || 'test';
 process.env.ALLOW_NON_PROD = process.env.ALLOW_NON_PROD || '1';
@@ -47,7 +54,6 @@ const request = require('supertest');
 // Require AFTER env is set so pool.js picks up DATABASE_URL + USE_SQLITE=false.
 const pool = require('../../server/src/db/pool');
 const { runMigrations } = require('../../server/src/db/migrationRunner');
-const { verifyHmac } = require('../../server/src/middleware/hmacAuth');
 
 const authRoutes = require('../../server/src/routes/auth');
 const setupRoutes = require('../../server/src/routes/setup');
@@ -475,6 +481,6 @@ function maskUrl(url) {
 
 run().catch((err) => {
   console.error('[pg-smoke] FATAL:', err);
-  try { pool.end(); } catch (_) { /* ignore */ }
+  try { pool.end(); } catch { /* ignore */ }
   process.exit(1);
 });

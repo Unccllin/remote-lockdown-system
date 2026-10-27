@@ -108,6 +108,13 @@ test-worker:
 test-electron:
 	@cd electron && npm test
 
+# Real-PostgreSQL smoke test (S140). SQLite-only Jest runs cannot catch PG
+# dialect bugs, and this harness previously could not start at all.
+.PHONY: pg-smoke
+
+pg-smoke:
+	@bash scripts/run-pg-smoke.sh
+
 # Lint all components — server, dashboard, agent.
 .PHONY: lint lint-server lint-dashboard lint-agent
 

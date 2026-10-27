@@ -34,6 +34,18 @@ function validateEnv({ dev = false } = {}) {
   const warnings = [];
   const isProd = process.env.NODE_ENV === 'production';
 
+  // --- S140: database driver must be unambiguous ---
+  // USE_SQLITE is a dev/Electron switch; DATABASE_URL is the production
+  // driver. Setting both previously let USE_SQLITE silently win while the
+  // startup log claimed "DATABASE_URL (cloud)", so a production run served
+  // from a local SQLite file. Refuse to guess.
+  if ((process.env.USE_SQLITE || '').toLowerCase() === 'true' && process.env.DATABASE_URL) {
+    errors.push(
+      'USE_SQLITE=true and DATABASE_URL are both set — the database driver is ambiguous. ' +
+        'Unset USE_SQLITE to use PostgreSQL, or unset DATABASE_URL to use SQLite.'
+    );
+  }
+
   // --- CC11: non-production guard ---
   if (!isProd && !dev && process.env.ALLOW_NON_PROD !== '1') {
     errors.push(
