@@ -24,6 +24,25 @@ const logger = require('../logger');
 
 const TIMEOUT_MS = 8000;
 
+/**
+ * Build MeshCentral's authentication header.
+ *
+ * Verified against a real server (S142): authentication is NOT a JSON POST to
+ * /login — that endpoint serves the web UI and answers with HTML. MeshCentral's
+ * own CLI (meshctrl.js) sends:
+ *
+ *     x-meshauth: base64(username),base64(password)[,base64(2FA code)]
+ *
+ * A first implementation used POST /login and failed against the real server
+ * with "Unexpected token '<'" — the mock-based tests could not have caught it.
+ */
+function authHeader(user, pass, twoFactor) {
+  const b64 = (value) => Buffer.from(String(value), 'utf8').toString('base64');
+  const parts = [b64(user), b64(pass)];
+  if (twoFactor) parts.push(b64(twoFactor));
+  return parts.join(',');
+}
+
 /** Raised for configuration problems, as opposed to upstream failures. */
 class ConnectorNotConfigured extends Error {
   constructor(message) {
@@ -48,8 +67,9 @@ function config() {
   const token = (process.env.MESHCENTRAL_TOKEN || '').trim();
   const user = (process.env.MESHCENTRAL_USER || '').trim();
   const pass = process.env.MESHCENTRAL_PASS || '';
+  const twoFactor = (process.env.MESHCENTRAL_2FA || '').trim();
   const explicitlyOff = (process.env.INTEGRATIONS_MESHCENTRAL || '').toLowerCase() === 'off';
-  return { url, token, user, pass, explicitlyOff };
+  return { url, token, user, pass, twoFactor, explicitlyOff };
 }
 
 /** Is the connector switched on? Off unless a URL is configured. */
@@ -69,6 +89,14 @@ async function request(url, options = {}) {
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(url, { ...options, signal: controller.signal });
+    const contentType = res.headers.get('content-type') || '';
+    // MeshCentral 1.3.1 has no REST API: unknown paths are handed to the web
+    // UI, which answers 404 with HTML. Saying so beats "Unexpected token '<'".
+    if (contentType.includes('text/html')) {
+      throw new ConnectorUpstreamError(
+        `MeshCentral answered with HTML (HTTP ${res.status}) — this deployment has no REST API at that path. MeshCentral 1.3.x is WebSocket-only (see docs/adr/INTEGRATION-OWNERSHIP.md).`
+      );
+    }
     if (!res.ok) {
       throw new ConnectorUpstreamError(`MeshCentral returned HTTP ${res.status}`);
     }
@@ -83,19 +111,23 @@ async function request(url, options = {}) {
   }
 }
 
-/** Resolve a login token: a pre-issued one, or exchange user/password for one. */
-async function authToken(cfg) {
-  if (cfg.token) return cfg.token;
-  const body = JSON.stringify({ username: cfg.user, password: cfg.pass });
-  const res = await request(`${cfg.url}/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
-  });
-  if (!res || typeof res.token !== 'string' || !res.token) {
-    throw new ConnectorUpstreamError('MeshCentral login returned no token');
+/**
+ * Fetch the node inventory using whatever credentials are configured.
+ *
+ * Two supported shapes:
+ *   - user + password (+ optional 2FA): `x-meshauth` header. VERIFIED against a
+ *     real MeshCentral instance.
+ *   - a MeshCentral login token: `?login=<token>` query. Accepted by the web
+ *     layer for single-sign-on; not yet exercised against a real server, so
+ *     treat it as best-effort and prefer credentials.
+ */
+async function fetchNodes(cfg) {
+  if (cfg.token) {
+    return request(`${cfg.url}/api/nodes?login=${encodeURIComponent(cfg.token)}`);
   }
-  return res.token;
+  return request(`${cfg.url}/api/nodes`, {
+    headers: { 'x-meshauth': authHeader(cfg.user, cfg.pass, cfg.twoFactor) },
+  });
 }
 
 /**
@@ -139,8 +171,7 @@ async function getDevices() {
     );
   }
 
-  const token = await authToken(cfg);
-  const data = await request(`${cfg.url}/api/nodes?auth=${encodeURIComponent(token)}`);
+  const data = await fetchNodes(cfg);
   const nodes = data && data.nodes;
   if (!nodes || typeof nodes !== 'object') {
     throw new ConnectorUpstreamError('MeshCentral /api/nodes returned no node map');

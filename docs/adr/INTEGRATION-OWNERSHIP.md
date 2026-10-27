@@ -106,3 +106,46 @@ What to take from their work, and how:
 - Do we want an `E-AMT` enforcement path at all, or is PBL plus BCD/TPM enough
   for the target fleet?
 - Licence choice for this repository (needed before any code reuse).
+
+## Addendum (S142): the transport finding — REST does not exist
+
+The read-only connector was built against MeshCentral's apparent REST surface
+(`GET /api/nodes` with an `x-meshauth` header). Standing up a real instance
+(`ghcr.io/ylianst/meshcentral`, **1.3.1**) disproved that premise:
+
+- every `/api/*` path returns **404 with HTML** — the web UI handler, not an API;
+- `meshctrl.js`, their own CLI, authenticates over **WebSocket**
+  (`wss://…/control.ashx`) with the same `x-meshauth` header;
+- a search of the installed tree finds `/api/` only in `authenticode.js`, which
+  is unrelated.
+
+**What this changes:** the connector's *contract* (our routes, our normalized
+shape, read-only, fails soft) is unaffected and still correct. Its *transport*
+is wrong for MeshCentral 1.3.x, so the inventory read cannot succeed against
+this version.
+
+**What the real-hardware-style verification did prove** (see
+`scripts/verify-meshcentral-connector.sh`):
+
+| Case | Result |
+|---|---|
+| Not configured | `ConnectorNotConfigured`, 503 — verified live |
+| Unreachable host | `ConnectorUpstreamError`, real socket failure — verified live |
+| Upstream answers HTML/404 | `ConnectorUpstreamError`, actionable message — verified live |
+| Real inventory read | **blocked** — no REST surface in 1.3.x |
+
+**Decision required (owner):**
+
+1. **Implement the WebSocket protocol** — matches MeshCentral as it actually is,
+   but needs either a `ws` dependency (against our "no third-party client" rule)
+   or hand-rolled frame handling, plus their action/response envelope.
+2. **Target a REST/Graph upstream instead** — Tactical RMM (REST) or Intune
+   (Microsoft Graph) fit the connector shape we already built, with no protocol
+   work; MeshCentral support would then need (1) or a plugin, which the
+   ownership rule excludes.
+3. **Require a REST-capable MeshCentral** — only if such a build/plugin exists
+   and is supported; unverified.
+
+Until this is decided the connector stays **feature-flagged off**, and its error
+message states the limitation rather than pretending the upstream is merely
+unreachable.

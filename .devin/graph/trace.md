@@ -2914,3 +2914,45 @@ Still open from the sweep: **#3** — `openapi.yaml` documents 42 of 74 register
 
 ### Next session opening
 Confirm the connector against a real MeshCentral instance (or document it as untested), then close sweep finding #3 by documenting the 28 `/v1/*` PBL routes in `openapi.yaml`.
+
+### S142 addendum — real-MeshCentral verification: the transport premise was wrong
+
+Ran `scripts/verify-meshcentral-connector.sh` against a real
+`ghcr.io/ylianst/meshcentral` **1.3.1** instance (account created via the CLI in a
+one-off container, because the image ENTRYPOINT wraps commands and the server
+must be stopped during account creation).
+
+Result: **3 real error paths verified, and the happy path disproved the design.**
+
+| Case | Outcome |
+|---|---|
+| not configured | `ConnectorNotConfigured` — PASS |
+| unreachable host | `ConnectorUpstreamError`, real socket failure — PASS |
+| upstream answers HTML/404 | `ConnectorUpstreamError`, actionable message — PASS |
+| real inventory read | **SKIP** — this build has no REST API |
+
+**Finding:** MeshCentral 1.3.1 has no REST API. Every `/api/*` path returns 404
+HTML (the web-UI handler); `/api/` appears in the installed tree only inside
+`authenticode.js`; and `meshctrl.js`, their own CLI, authenticates over
+**WebSocket** (`wss://…/control.ashx`) with the `x-meshauth` header. The
+connector's first implementation POSTed JSON to `/login` and read `/api/nodes`
+— against the real server that produced `Unexpected token '<'`, then a 404.
+
+Kept (still correct): our route contract, our normalized shape, read-only by
+construction, fail-soft, feature-flagged off, and the `x-meshauth` credential
+handling (which is the real scheme, just used against a path that does not
+exist).
+
+Changed: the connector now detects an HTML response and says so —
+"this deployment has no REST API at that path. MeshCentral 1.3.x is
+WebSocket-only" — instead of surfacing a JSON parse error. The harness relabels
+the credentials case honestly (it proves fail-soft, not auth rejection) and
+skips the inventory read while `MC_EXPECT_REST=0`.
+
+Recorded as a decision in `docs/adr/INTEGRATION-OWNERSHIP.md`: (1) implement the
+WebSocket protocol (needs `ws` or hand-rolled frames), (2) target a REST/Graph
+upstream instead (Tactical RMM, Intune), or (3) require a REST-capable
+MeshCentral build. Owner decision; connector stays off until then.
+
+Verified: server suite 39 suites / 646 tests, eslint clean, harness
+`ALL CHECKS PASSED`, container and volume removed.
