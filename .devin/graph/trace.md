@@ -2956,3 +2956,77 @@ MeshCentral build. Owner decision; connector stays off until then.
 
 Verified: server suite 39 suites / 646 tests, eslint clean, harness
 `ALL CHECKS PASSED`, container and volume removed.
+
+### S142 continuation — Graph transport, OpenAPI 76/76, history published
+
+**#1 Connector transport swapped (commit `549ba0d`).** The S142 finding was that
+MeshCentral 1.3.x has no REST API, so the connector could never read inventory
+from it. Instead of implementing their WebSocket protocol, the transport the ADR
+pointed at is now in place:
+- `server/src/integrations/errors.js` — shared ConnectorNotConfigured /
+  ConnectorUpstreamError, so the route no longer imports a connector to catch
+  its errors.
+- `server/src/integrations/graph.js` — Microsoft Graph managedDevices, OAuth2
+  client credentials with a cached token, `@odata.nextLink` pagination capped at
+  20 pages, read-only by construction. Graph has no online flag, so `online`
+  derives from last sync within 15 minutes (our heuristic, documented; contract
+  unchanged).
+- `server/src/integrations/index.js` — registry with a load-time shape check.
+- `routes/integrations.js` — `GET /api/integrations/:id/devices` replaces the
+  upstream-specific path; unknown ids answer 404 UNKNOWN_CONNECTOR with the
+  available list. `/api/integrations/meshcentral/devices` still works.
+- 11 tests (649 server total). The read-only invariant now checks the public
+  surface only — my first version flagged `_resetTokenCache` because "reset"
+  contains "set", which is a test-seam, not a mutation.
+
+**#2 OpenAPI gap closed (commit `4432aaa`).** 42 of 76 routes were documented.
+- `scripts/check-openapi-routes.js` — mount-aware diff of the Express router
+  against `docs/openapi.yaml` (handles the `/v1` wrapper mount and `:param` →
+  `{param}`); exits 1 on any gap. Wired into `lint` and a CI job.
+- 34 path entries added (76/76, 62 paths), summaries taken from each handler's
+  own comment block (JSDoc and pbl.js's `// ---` banner style). Payload schemas
+  are deliberately not invented — each says the shape is defined by the handler.
+- Fixed two bugs of mine: the integration paths had been inserted after the
+  "# Components" banner (valid YAML, wrong section), and the checker's first
+  pass treated any column-0 line as the end of `paths`, hiding everything after
+  the first banner.
+
+**#3 History published.** `origin/master` was a strict ancestor, so this was a
+plain fast-forward, not the force-push earlier assumed:
+`b69c17d..4432aaa  master -> master` (231 commits). Both our own pre-push gate
+and `git merge-base --is-ancestor` were run *before* pushing.
+
+### VERIFY
+- Server **39 suites / 649 tests**; eslint `--max-warnings=0` clean.
+- `make check-openapi` → `registered 76 / documented 76 — every registered route is documented`.
+- `make pre-push-check` → fast-forward, no credential-shaped content in range.
+- Remote verified in sync: `origin/master == HEAD == 4432aaa`.
+- actionlint clean on all workflows (6 lint jobs now).
+
+### Fog cleared
+- MeshCentral cannot provide inventory over REST; Graph is the working transport.
+- The API spec now matches the router, and drift is mechanically impossible to
+  reintroduce silently.
+
+### Fog remaining
+- Graph's happy path is unit-tested against its documented response shape only —
+  no Azure tenant was available, so it has never spoken to live Graph.
+- **Password rotation is still blocked**: both 192.168.1.40 and 192.168.1.219
+  refuse port 22 from here.
+- The Hippocratic-2.1 dependency decision (react-leaflet) and the repository
+  licence choice remain owner decisions.
+
+### Debt items closed
+- None (sweep finding #3 closed, which was not a ledger item).
+
+### Debt items still open
+- D-120, D-129, D-130; 9 enforcement paths unit-test-only.
+
+### Blockers
+- D-129 hardware window (the dominant one); both SSH hosts offline; licence and
+  Hippocratic decisions.
+
+### Next session opening
+Prep the hardware session: turn `firmware/PblPkg/HARDWARE-TEST-PLAN.md` plus the
+harness into a step-by-step runbook with artifact capture, so the D-129 window
+converts the 9 unit-tested enforcement paths into hardware-verified ones.
