@@ -2800,3 +2800,58 @@ Rotate the two SSH passwords on the hosts as soon as they are reachable and forc
 - **No force-push is required — the earlier advice was wrong.** `origin/master` is `b69c17d` (114 commits); local `master` is a strict superset (326 commits) and `b69c17d` is an ancestor of `HEAD`, so `git push origin master` is a plain fast-forward that discards nothing. (An earlier read of `git ls-remote` suggested divergence; ancestry proved otherwise. A full mirror clone also showed the remote holds 0 occurrences of the old password — the secret never reached GitHub, because this lineage was never pushed.)
 - Local `master` is **211 commits ahead** of `origin/master`; publishing is the owner's call.
 - Local tag `v1.0.0` and remote `v1.0.0` both point at `21ac6ce` (pre-dates the secret), so no tag push is needed.
+
+## Session 141 — 2026-10-27 (check-sweep fixes: secret leak in device payloads, POSIX path bug)
+
+### RULE-ZERO
+- **Read**: `server/src/routes/devices.js` — every response that returns a device row (list 123, detail 129, enroll 160, patch 180, flag-stolen 265, recover 343) plus the `SELECT *` / `RETURNING *` statements that produce them.
+- **Read**: `server/src/routes/agent.js` — confirms `api_key_hash` is read server-side for device auth and must stay in the DB.
+- **Read**: `agent/agent.py` — the 7 `PROGRAMDATA` sites (101, 208, 219, 2361, 2506, 2665, 3807) and the module-import-time `_log_dir.mkdir()` at line 101.
+- **Read**: `.gitignore` (`agent/C:*` rule) and `agent/tests/` conventions.
+**Finding**: (a) `api_key_hash` is returned to clients by five endpoints because the rows come from `SELECT *` / `RETURNING *` and are serialised directly — a SHA-256 of the device API key needs no client and only enables offline guessing. (b) `os.environ.get("PROGRAMDATA", "C:\\ProgramData")` runs on Linux with no fallback, so importing `agent.py` creates a literal `C:\ProgramData/LockdownAgent/` directory in the CWD; a test run left one at the repo root, and `.gitignore` only covers `agent/C:*`.
+
+### IMPLEMENT (findings #1 and #2 from the S141 check sweep)
+- `server/src/routes/devices.js` — `publicDevice()` strips `api_key_hash` at the serialisation boundary, applied to all 7 device-bearing responses (list, detail, enroll, patch, by-pbl, flag-stolen, recover). Enrollment still returns the plaintext `api_key` once. Extracted the two command-INSERT statements into named constants so the "validated positive integer, cannot inject" argument sits next to the SQL.
+- `agent/agent.py` — `_programdata_dir()` replaces 7 copies of `os.environ.get("PROGRAMDATA", "C:\\ProgramData")`; POSIX now resolves to `$XDG_DATA_HOME` or `~/.local/share`, Windows behaviour unchanged.
+- `.gitignore` — `C:\\ProgramData/` as belt-and-braces.
+- `agent/hw_test_harness.py` — repaired three latent crashes: `tpm_seal.seal_data/unseal_data` (do not exist; real API is `seal_state`/`unseal_state`), `hp_uefi_lockdown._read_current_bios_settings` (does not exist; now uses `_check_sure_admin`/`_check_secure_boot`), and `retry_on_error` raising `None` after exhausting retries. Also wrapped three `json.loads(resp.read())` calls and the `ctypes.windll` access.
+- `agent/simulate_lockdown.py` — narrow `command` with `isinstance(dict)` before `.get()`.
+- New tests: `server/tests/devices.routes.test.js` (+5), `agent/tests/test_agent_paths.py` (5).
+
+### VERIFY
+- Server Jest **638 passed** (was 633; +5). Agent pytest **670 passed** (was 665; +5). `ruff check` + `ruff format --check` clean. `server eslint src/ tests/ --max-warnings=0` exit 0.
+- `agent/tests/test_hw_harness.py` passes after the harness repairs.
+- Live functional check of the fixed route: `/api/installer/agent-version` → 200 with hash/size (previously always 404).
+- Verified each "pre-existing" lens finding against `git diff -U0` hunks before touching it; the 5 `no-sql-in-code-js` hits in devices.js are the integer-validated `commandExpirySql()` interpolation, addressed by extraction rather than suppression.
+
+### Fog cleared
+- The sweep's finding #1 and #2 are real and now fixed with regression tests.
+- The hardware harness could never have passed E-TPM or captured an HP UEFI before-state — that is why those paths have no hardware artifact.
+- `api_key_hash` was returned by seven endpoints, not the three I first reported.
+
+### Fog remaining
+- Findings #3 (`openapi.yaml` missing 32 endpoints), #4 (root `npm test` agent stage), #5 (AGENTS.md stale counts + electron description), #6 (firmware README "scaffold") are untouched.
+- Playwright + Electron still cannot run on this host (`libnspr4.so` absent; no sudo, no xvfb). Worth a container-based job.
+- The 30 pyright platform findings in `agent/agent.py` are exempted via a documented file-level pragma, not fixed; the real fix (narrow the key type before `.encrypt()`, initialise optional modules to `None`) is recorded in that comment.
+
+### Debt items closed
+- None (D-120, D-129, D-130 remain open; this session fixed shipping defects that had no ledger entry).
+
+### Debt items still open
+- D-120, D-129, D-130 and the 9 `verified-in-unit-test` enforcement paths.
+
+### Blockers
+- Hardware window (D-129) unchanged.
+- CI cannot be executed locally; the release-permissions change from the previous session is still unverified until a tag push.
+
+### Session artifacts
+- Commits `d0d8349` (api_key_hash), `20b5809` (POSIX data dir), `deb43ed` (hw harness).
+- Test counts: server 638, agent 670, dashboard 197, serverless 331, electron 30.
+- Sweep evidence: pg-smoke 65/65, verify-env 60/0/2, API+agent E2E 10/10, installer ZIPs (27 MB Linux / 22.5 MB Windows) inspected.
+
+### Failure attribution
+- **Layer 4 — Verification feedback**: the harness's broken calls were invisible because `test_hw_harness.py` only exercises dry-run/unit paths; nothing executed the real E-TPM or HP-UEFI action bodies. Harness change needed: assert that every `module.function` referenced by the harness exists (a 10-line reflection test would have caught both).
+- **Layer 2 — Context provision**: `api_key_hash` leaked because "rows come from SELECT *, serialise explicitly" was never written down. Fixed behaviourally via `publicDevice()` plus tests.
+
+### Next session opening
+Findings #3–#6 of the S141 sweep remain (openapi's 32 missing endpoints, the broken root `npm test` agent stage, and the stale AGENTS.md / firmware README claims) — start with #4 since it makes the documented verification command work again.

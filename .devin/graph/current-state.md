@@ -51,63 +51,60 @@
 | E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 140 — continuation (installer route, Electron run, CI lint, credential scrub)
+## Latest session: 141 — 2026-10-27 (check-sweep fixes: secret leak in device payloads, POSIX path bug)
 
 ### RULE-ZERO
-- **Read**: `server/src/routes/installer.js` — route registration order (`/:deviceId` at 1496 vs `/agent-version` at 1616).
-- **Read**: `server/tests/installer.routes.test.js`, `server/tests/helpers.js` — `createApp`/`makeToken` factories, supertest conventions.
-- **Read**: `electron/main.js`, `electron/config.js`, `electron/server-starter.js`, `electron/preload.js`, `dashboard/src/api/client.js` — the actual serverless wiring (`ELECTRON_API_BASE_URL` → preload → `window.electronApp.apiBaseUrl` → axios baseURL).
-- **Read**: `.github/workflows/release.yml`, `.github/workflows/ci.yml` — runner labels and the new pg-smoke job.
-- **Read**: `scripts/rsh.py`, `scripts/hp_ssh.py` — embedded host/user/password and `AutoAddPolicy`.
-**Finding**: (1) `/agent-version` was unreachable because Express matches registration order — the auto-update check always got `404 {"error":"Device not found"}`. (2) The Electron app is a **serverless shell**: it has no database and never sets `USE_SQLITE`, so my earlier S140 claim that it does was wrong — `server-starter.js` only serves `dashboard/dist`. (3) The repo is private (GitHub API 404), so CI status needs a token; local `actionlint` 1.7.12 is clean, and an older 1.7.7 produced a false positive on `macos-15-intel` (which does exist — reverted). (4) `scripts/rsh.py` was tracked with a plaintext password and `AutoAddPolicy`.
+- **Read**: `server/src/routes/devices.js` — every response that returns a device row (list 123, detail 129, enroll 160, patch 180, flag-stolen 265, recover 343) plus the `SELECT *` / `RETURNING *` statements that produce them.
+- **Read**: `server/src/routes/agent.js` — confirms `api_key_hash` is read server-side for device auth and must stay in the DB.
+- **Read**: `agent/agent.py` — the 7 `PROGRAMDATA` sites (101, 208, 219, 2361, 2506, 2665, 3807) and the module-import-time `_log_dir.mkdir()` at line 101.
+- **Read**: `.gitignore` (`agent/C:*` rule) and `agent/tests/` conventions.
+**Finding**: (a) `api_key_hash` is returned to clients by five endpoints because the rows come from `SELECT *` / `RETURNING *` and are serialised directly — a SHA-256 of the device API key needs no client and only enables offline guessing. (b) `os.environ.get("PROGRAMDATA", "C:\\ProgramData")` runs on Linux with no fallback, so importing `agent.py` creates a literal `C:\ProgramData/LockdownAgent/` directory in the CWD; a test run left one at the repo root, and `.gitignore` only covers `agent/C:*`.
 
-### IMPLEMENT
-- `server/src/routes/installer.js` — literal `/agent-version` registered before `/:deviceId`, with a comment recording why order matters.
-- `server/tests/installer.routes.test.js` — 2 tests: router stack order, and the endpoint no longer answering "Device not found".
-- `scripts/rsh.py`, `scripts/hp_ssh.py` — credentials now come from `RLS_SSH_*` env vars; strict host-key verification by default (`RLS_SSH_INSECURE=1` to opt out).
-- Git history rewritten with `git-filter-repo --replace-text` to expunge the password from all 323 commits (backup bundle kept outside the repo).
+### IMPLEMENT (findings #1 and #2 from the S141 check sweep)
+- `server/src/routes/devices.js` — `publicDevice()` strips `api_key_hash` at the serialisation boundary, applied to all 7 device-bearing responses (list, detail, enroll, patch, by-pbl, flag-stolen, recover). Enrollment still returns the plaintext `api_key` once. Extracted the two command-INSERT statements into named constants so the "validated positive integer, cannot inject" argument sits next to the SQL.
+- `agent/agent.py` — `_programdata_dir()` replaces 7 copies of `os.environ.get("PROGRAMDATA", "C:\\ProgramData")`; POSIX now resolves to `$XDG_DATA_HOME` or `~/.local/share`, Windows behaviour unchanged.
+- `.gitignore` — `C:\\ProgramData/` as belt-and-braces.
+- `agent/hw_test_harness.py` — repaired three latent crashes: `tpm_seal.seal_data/unseal_data` (do not exist; real API is `seal_state`/`unseal_state`), `hp_uefi_lockdown._read_current_bios_settings` (does not exist; now uses `_check_sure_admin`/`_check_secure_boot`), and `retry_on_error` raising `None` after exhausting retries. Also wrapped three `json.loads(resp.read())` calls and the `ctypes.windll` access.
+- `agent/simulate_lockdown.py` — narrow `command` with `isinstance(dict)` before `.get()`.
+- New tests: `server/tests/devices.routes.test.js` (+5), `agent/tests/test_agent_paths.py` (5).
 
 ### VERIFY
-- Installer: 25/25 tests in `installer.routes.test.js`; full server suite **38 suites / 633 tests pass**.
-- Electron (real run, not reasoning): `config.saveWorkerUrl` → `config.json` on disk → `ELECTRON_API_BASE_URL` → `startStaticServer` over the **real** `dashboard/dist`: `/` 200 `no-cache`, `/devices` 200 SPA fallback serving `index.html`, `/assets/index-D9ptcHx7.js` 200 `immutable` (614230B), server closed cleanly. The Electron **binary cannot run here** (`libnspr4.so` missing, no xvfb), so the GUI/main-process path is still unproven.
-- CI: `actionlint` 1.7.12 over all 5 workflows → **exit 0** (includes the new `pg-smoke` job). Repo API requires auth, so workflow *run* results remain unchecked.
-- Credentials: `git log --all -S '<redacted-password>'` → 0 commits; `git log -p --all | grep -c` → 0; stashes 0; reflog pruned; old commit `58f5ac4` unreachable. Working tree/refs intact (1361 files, 323 commits), `origin` re-added after filter-repo dropped it.
+- Server Jest **638 passed** (was 633; +5). Agent pytest **670 passed** (was 665; +5). `ruff check` + `ruff format --check` clean. `server eslint src/ tests/ --max-warnings=0` exit 0.
+- `agent/tests/test_hw_harness.py` passes after the harness repairs.
+- Live functional check of the fixed route: `/api/installer/agent-version` → 200 with hash/size (previously always 404).
+- Verified each "pre-existing" lens finding against `git diff -U0` hunks before touching it; the 5 `no-sql-in-code-js` hits in devices.js are the integer-validated `commandExpirySql()` interpolation, addressed by extraction rather than suppression.
 
 ### Fog cleared
-- The Electron desktop app genuinely has no local database — the S140 DB defect cannot affect it, and the app only needed its Worker URL.
-- The `macos-15-intel` runner-label "defect" was a stale-local-tool false positive, not a workflow bug.
-- `/api/installer/agent-version` 404 was pure route ordering, not a missing feature.
+- The sweep's finding #1 and #2 are real and now fixed with regression tests.
+- The hardware harness could never have passed E-TPM or captured an HP UEFI before-state — that is why those paths have no hardware artifact.
+- `api_key_hash` was returned by seven endpoints, not the three I first reported.
 
 ### Fog remaining
-- Electron GUI path (main process, preload → renderer baseURL, updater) still unrun: `libnspr4.so` missing and no xvfb on this host.
-- GitHub Actions run status unverified — private repo, no token.
-- **Rotation not performed**: 192.168.1.40 and 192.168.1.219 both refuse port 22 from here, so the password cannot be changed on the hosts right now. It must be treated as compromised.
-- Force-pushing the rewritten history is a manual, coordinate-with-collaborators step; local `origin` still points at the old remote history.
-- The unknown-asset SPA fallback returns 200 + `index.html` for a missing `.js` (browser shows a MIME error instead of 404). Behaviour observed, not changed.
+- Findings #3 (`openapi.yaml` missing 32 endpoints), #4 (root `npm test` agent stage), #5 (AGENTS.md stale counts + electron description), #6 (firmware README "scaffold") are untouched.
+- Playwright + Electron still cannot run on this host (`libnspr4.so` absent; no sudo, no xvfb). Worth a container-based job.
+- The 30 pyright platform findings in `agent/agent.py` are exempted via a documented file-level pragma, not fixed; the real fix (narrow the key type before `.encrypt()`, initialise optional modules to `None`) is recorded in that comment.
 
 ### Debt items closed
-- None (no ledger entry described these; the harness gaps are recorded here and fixed).
+- None (D-120, D-129, D-130 remain open; this session fixed shipping defects that had no ledger entry).
 
 ### Debt items still open
-- D-120, D-129, D-130 and the 9 `verified-in-unit-test` enforcement paths — unchanged.
+- D-120, D-129, D-130 and the 9 `verified-in-unit-test` enforcement paths.
 
 ### Blockers
-- D-129 hardware window (unchanged).
-- Both SSH test hosts offline → credential rotation blocked until they are reachable.
-- GitHub CI confirmation needs a token.
+- Hardware window (D-129) unchanged.
+- CI cannot be executed locally; the release-permissions change from the previous session is still unverified until a tag push.
 
 ### Session artifacts
-- Commits: `6dcd08a` (db driver + migration drift + pg-smoke harness/CI), `6ffd674` (installer route order), `22a824c` (credential sanitization), `9b3cbf7` (graph/docs/memory). All SHAs are post-rewrite.
-- Pre-rewrite backup: `~/rls-pre-scrub-20261027-110852.bundle` (contains the old history, i.e. the secret — delete once satisfied).
-- Server 633 tests; actionlint 1.7.12 clean; pg-smoke 65/65.
+- Commits `d0d8349` (api_key_hash), `20b5809` (POSIX data dir), `deb43ed` (hw harness).
+- Test counts: server 638, agent 670, dashboard 197, serverless 331, electron 30.
+- Sweep evidence: pg-smoke 65/65, verify-env 60/0/2, API+agent E2E 10/10, installer ZIPs (27 MB Linux / 22.5 MB Windows) inspected.
 
 ### Failure attribution
-- **Layer 4 — Verification feedback** (again): the installer route had no test asserting registration order, and CI linting never ran locally, so both defects survived. Harness change: route-order tests; `actionlint` now available at `~/.local/bin/actionlint`.
-- **Layer 3 — Execution environment**: Electron cannot start on this host (`libnspr4.so`, no xvfb), which is why the GUI path is still unverified. Harness change needed: a containerised or xvfb-backed Electron smoke test in CI.
-- **Layer 2 — Context provision**: embedding credentials in a tracked helper was normalised by repetition. Harness change: env-only credentials + strict host keys, enforced by review.
+- **Layer 4 — Verification feedback**: the harness's broken calls were invisible because `test_hw_harness.py` only exercises dry-run/unit paths; nothing executed the real E-TPM or HP-UEFI action bodies. Harness change needed: assert that every `module.function` referenced by the harness exists (a 10-line reflection test would have caught both).
+- **Layer 2 — Context provision**: `api_key_hash` leaked because "rows come from SELECT *, serialise explicitly" was never written down. Fixed behaviourally via `publicDevice()` plus tests.
 
 ### Next session opening
-Rotate the two SSH passwords on the hosts as soon as they are reachable and force-push the rewritten history with `git push --force-with-lease` after coordinating, then close the remaining Electron gap by adding an xvfb-backed GUI smoke job.
+Findings #3–#6 of the S141 sweep remain (openapi's 32 missing endpoints, the broken root `npm test` agent stage, and the stale AGENTS.md / firmware README claims) — start with #4 since it makes the documented verification command work again.
 
 ---
 
