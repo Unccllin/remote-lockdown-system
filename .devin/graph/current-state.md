@@ -71,7 +71,7 @@
 - Installer: 25/25 tests in `installer.routes.test.js`; full server suite **38 suites / 633 tests pass**.
 - Electron (real run, not reasoning): `config.saveWorkerUrl` → `config.json` on disk → `ELECTRON_API_BASE_URL` → `startStaticServer` over the **real** `dashboard/dist`: `/` 200 `no-cache`, `/devices` 200 SPA fallback serving `index.html`, `/assets/index-D9ptcHx7.js` 200 `immutable` (614230B), server closed cleanly. The Electron **binary cannot run here** (`libnspr4.so` missing, no xvfb), so the GUI/main-process path is still unproven.
 - CI: `actionlint` 1.7.12 over all 5 workflows → **exit 0** (includes the new `pg-smoke` job). Repo API requires auth, so workflow *run* results remain unchecked.
-- Credentials: `git log --all -S '***REMOVED-CREDENTIAL-S140***'` → 0 commits; `git log -p --all | grep -c` → 0; stashes 0; reflog pruned; old commit `58f5ac4` unreachable. Working tree/refs intact (1361 files, 323 commits), `origin` re-added after filter-repo dropped it.
+- Credentials: `git log --all -S '<redacted-password>'` → 0 commits; `git log -p --all | grep -c` → 0; stashes 0; reflog pruned; old commit `58f5ac4` unreachable. Working tree/refs intact (1361 files, 323 commits), `origin` re-added after filter-repo dropped it.
 
 ### Fog cleared
 - The Electron desktop app genuinely has no local database — the S140 DB defect cannot affect it, and the app only needed its Worker URL.
