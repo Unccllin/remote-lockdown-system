@@ -314,3 +314,14 @@ clean:
 	@echo "Removing dist/ directories..."
 	@rm -rf dashboard/dist agent/dist agent/build electron/dist-electron
 	@echo "Clean complete."
+
+# Licence audit over the installed dependency trees (964 packages). Fails on
+# copyleft always; use check-licenses-strict in CI once the use-restricted
+# dependency decision (react-leaflet / Hippocratic-2.1) is settled.
+.PHONY: check-licenses check-licenses-strict
+
+check-licenses:
+	@python3 scripts/check_licenses.py
+
+check-licenses-strict:
+	@python3 scripts/check_licenses.py --strict

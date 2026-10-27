@@ -1,0 +1,39 @@
+Copyright (c) 2026 Remote Lockdown System. All rights reserved.
+
+PROVISIONAL LICENCE NOTICE — OWNER DECISION PENDING
+
+This file exists so that the repository has an explicit licensing posture
+instead of an implicit one. It is deliberately restrictive and reversible: it
+states the current default (proprietary, all rights reserved) and nothing more.
+
+The owner must confirm or replace it. Until then:
+
+  1. No part of this repository may be copied, modified, distributed,
+     sublicensed or used to provide a commercial service without written
+     permission from the copyright holder.
+
+  2. No third-party source code may be added to this repository unless its
+     licence is compatible with the posture chosen above and it is recorded in
+     THIRD-PARTY-NOTICES.md. In particular, Apache-2.0 code (for example from
+     MeshCentral) requires preserving its licence text and NOTICE, and marking
+     modified files — see docs/adr/INTEGRATION-OWNERSHIP.md.
+
+  3. Run `scripts/check_licenses.py` before any distribution. It fails on
+     copyleft dependencies and, with --strict, on licences with use
+     restrictions. Two dependencies (react-leaflet, @react-leaflet/core) are
+     currently under the Hippocratic Licence 2.1, which is not OSI-approved and
+     restricts *use*; that is an open product decision, not a settled fact.
+
+Why this matters practically: the repository ships anti-theft security
+software. An unclear licence is a liability for anyone deploying it, and it
+blocks lawful reuse of permissively licensed third-party work.
+
+To change this file, the owner should decide between, at minimum:
+
+  - Proprietary / all rights reserved (current default, above)
+  - A source-available licence (e.g. BUSL-1.1) with a change date
+  - An OSI-approved licence (e.g. Apache-2.0 or AGPL-3.0)
+
+Each has different consequences for distribution, commercial use, and the
+ability to accept upstream contributions. This file should not be edited by
+an automated agent without that decision being made explicitly.

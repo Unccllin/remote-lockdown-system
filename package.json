@@ -1,7 +1,7 @@
 {
   "name": "remote-lockdown-system",
   "version": "1.0.0",
-  "description": "Remote Device Lockdown System — unified test runner",
+  "description": "Remote Device Lockdown System \u2014 unified test runner",
   "private": true,
   "scripts": {
     "test": "npm run test:server && npm run test:agent",
@@ -22,5 +22,6 @@
     "dev:electron": "cd electron && npm run start:dev",
     "build:dashboard": "cd dashboard && npx vite build",
     "build:electron": "cd electron && npm run build"
-  }
+  },
+  "license": "UNLICENSED"
 }

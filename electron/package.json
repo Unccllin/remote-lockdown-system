@@ -1,7 +1,7 @@
 {
   "name": "remote-lockdown-admin",
   "version": "1.0.0",
-  "description": "Remote Device Lockdown System — Admin Desktop App",
+  "description": "Remote Device Lockdown System \u2014 Admin Desktop App",
   "author": {
     "name": "Remote Lockdown",
     "email": "research@remotelockdown.com",
@@ -39,7 +39,7 @@
   "build": {
     "appId": "com.remotelockdown.admin",
     "productName": "Remote Lockdown Admin",
-    "copyright": "Copyright © 2026 Remote Lockdown",
+    "copyright": "Copyright \u00a9 2026 Remote Lockdown",
     "directories": {
       "output": "dist-electron",
       "buildResources": "build"
@@ -192,5 +192,7 @@
       "repo": "remote-lockdown-system"
     },
     "generateUpdatesFilesForAllChannels": true
-  }
+  },
+  "license": "UNLICENSED",
+  "private": true
 }
