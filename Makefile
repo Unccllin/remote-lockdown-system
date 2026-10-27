@@ -115,6 +115,14 @@ test-electron:
 pg-smoke:
 	@bash scripts/run-pg-smoke.sh
 
+# Refuse to publish secrets or to drop commits accidentally (S140).
+# Scans the exact range that would be pushed. Install it as a git hook with:
+#   bash scripts/pre-push-check.sh --install
+.PHONY: pre-push-check
+
+pre-push-check:
+	@bash scripts/pre-push-check.sh
+
 # Lint all components — server, dashboard, agent.
 .PHONY: lint lint-server lint-dashboard lint-agent
 
