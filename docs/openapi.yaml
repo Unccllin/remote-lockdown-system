@@ -1481,10 +1481,16 @@ paths:
         '401': { description: Missing or invalid admin token }
         '403': { description: Requires operator role or higher }
 
-  /api/integrations/meshcentral/devices:
+  /api/integrations/{id}/devices:
     get:
       tags: [Integrations]
-      summary: Read-only device inventory from MeshCentral (optional integration)
+      summary: Read-only device inventory from a registered integration
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, enum: [graph, meshcentral] }
+          description: Connector id — see GET /api/integrations for what is registered.
       description: >
         Returns this server's normalized inventory shape, not the upstream's.
         Read-only by construction: lockdown, unlock and policy actions are never
@@ -1517,6 +1523,15 @@ paths:
                         meshId: { type: string, nullable: true }
         '401': { description: Missing or invalid admin token }
         '403': { description: Requires operator role or higher }
+        '404':
+          description: No connector with that id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [UNKNOWN_CONNECTOR] }
         '502':
           description: Upstream unreachable or malformed
           content:

@@ -52,8 +52,11 @@ describe('GET /api/integrations', () => {
       .set('Authorization', `Bearer ${makeToken()}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.integrations).toHaveLength(1);
-    expect(res.body.integrations[0]).toMatchObject({ id: 'meshcentral', mode: 'read-only' });
+    // Two connectors are registered: graph (the REST transport, per the S142
+    // finding) and meshcentral (kept, transport documented as unsupported).
+    const ids = res.body.integrations.map((i) => i.id).sort();
+    expect(ids).toEqual(['graph', 'meshcentral']);
+    expect(res.body.integrations.every((i) => i.mode === 'read-only')).toBe(true);
     expect(meshcentral.getDevices).not.toHaveBeenCalled();
   });
 });
@@ -64,6 +67,16 @@ describe('GET /api/integrations/meshcentral/devices', () => {
   test('requires auth', async () => {
     const res = await request(app).get('/api/integrations/meshcentral/devices');
     expect(res.status).toBe(401);
+  });
+
+  test('unknown connector -> 404 with the available ids', async () => {
+    const res = await request(app)
+      .get('/api/integrations/nope/devices')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('UNKNOWN_CONNECTOR');
+    expect(res.body.error).toMatch(/graph/);
   });
 
   test('returns our normalized inventory shape', async () => {
@@ -119,6 +132,40 @@ describe('GET /api/integrations/meshcentral/devices', () => {
     expect(res.status).toBe(502);
     expect(res.body.code).toBe('UPSTREAM_ERROR');
     expect(JSON.stringify(res.body)).not.toMatch(/token|auth=|password/i);
+  });
+});
+
+describe('graph connector is read-only by construction', () => {
+  const graph = jest.requireActual('../src/integrations/graph');
+
+  test('exports no mutating operation', () => {
+    // Only the public surface: `_`-prefixed exports are test seams (e.g.
+    // _resetTokenCache clears a local cache; it does not mutate the upstream).
+    const mutating = Object.keys(graph)
+      .filter((name) => !name.startsWith('_'))
+      .filter((name) =>
+        /delete|remove|create|update|set|lock|unlock|action|command|run/i.test(name)
+      );
+    expect(mutating).toEqual([]);
+  });
+
+  test('normalizes a managed device into our shape', () => {
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    const d = graph._normalizeDevice({
+      id: 'abc-123',
+      deviceName: 'LAPTOP-A',
+      operatingSystem: 'Windows',
+      lastSyncDateTime: recent,
+    });
+    expect(d).toMatchObject({ source: 'graph', id: 'abc-123', name: 'LAPTOP-A', online: true });
+
+    const stale = graph._normalizeDevice({
+      id: 'abc-456',
+      deviceName: 'LAPTOP-B',
+      lastSyncDateTime: '2020-01-01T00:00:00Z',
+    });
+    expect(stale.online).toBe(false);
+    expect(stale.lastSeenAt).toBe('2020-01-01T00:00:00.000Z');
   });
 });
 

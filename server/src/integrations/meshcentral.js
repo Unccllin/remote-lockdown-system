@@ -43,24 +43,9 @@ function authHeader(user, pass, twoFactor) {
   return parts.join(',');
 }
 
-/** Raised for configuration problems, as opposed to upstream failures. */
-class ConnectorNotConfigured extends Error {
-  constructor(message) {
-    super(message);
-    this.name = 'ConnectorNotConfigured';
-    this.code = 'NOT_CONFIGURED';
-  }
-}
-
-/** Raised when the upstream is configured but unusable right now. */
-class ConnectorUpstreamError extends Error {
-  constructor(message, cause) {
-    super(message);
-    this.name = 'ConnectorUpstreamError';
-    this.code = 'UPSTREAM_ERROR';
-    this.cause = cause;
-  }
-}
+// Shared with every other connector so the route layer does not care which
+// upstream is behind it (see ./errors.js).
+const { ConnectorNotConfigured, ConnectorUpstreamError } = require('./errors');
 
 function config() {
   const url = (process.env.MESHCENTRAL_URL || '').trim().replace(/\/+$/, '');
@@ -196,6 +181,7 @@ function status() {
 }
 
 module.exports = {
+  id: 'meshcentral',
   getDevices,
   status,
   isEnabled,

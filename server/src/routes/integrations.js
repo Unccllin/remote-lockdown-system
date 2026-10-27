@@ -1,7 +1,7 @@
 const express = require('express');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const logger = require('../logger');
-const meshcentral = require('../integrations/meshcentral');
+const integrations = require('../integrations');
 
 const router = express.Router();
 
@@ -22,38 +22,51 @@ const router = express.Router();
  *     written to the log.
  */
 
-const CONNECTORS = [meshcentral];
+
 
 /** GET /api/integrations — cheap status of each connector (no upstream call). */
 router.get('/', requireAuth, requireRole('operator'), (_req, res) => {
   res.json({
-    integrations: CONNECTORS.map((c) => c.status()),
+    integrations: integrations.list().map((c) => c.status()),
   });
 });
 
 /**
- * GET /api/integrations/meshcentral/devices
+ * GET /api/integrations/:id/devices
+ *
+ * Upstream-agnostic on purpose: the registry decides which connector answers,
+ * so adding or replacing an upstream never changes this route (the S142 finding
+ * was that the first upstream had no usable REST surface at all).
  *
  * 200 { devices, fetchedAt, source }  — normalized inventory
+ * 404 { error, code: 'UNKNOWN_CONNECTOR' } — no such connector
  * 503 { error, code: 'NOT_CONFIGURED' } — integration off / no credentials
  * 502 { error, code: 'UPSTREAM_ERROR' } — upstream unreachable or malformed
  */
-router.get('/meshcentral/devices', requireAuth, requireRole('operator'), async (_req, res) => {
+router.get('/:id/devices', requireAuth, requireRole('operator'), async (req, res) => {
+  const connector = integrations.get(req.params.id);
+  if (!connector) {
+    return res.status(404).json({
+      error: `No integration named "${req.params.id}". Available: ${integrations.list().map((c) => c.id).join(', ')}.`,
+      code: 'UNKNOWN_CONNECTOR',
+    });
+  }
+
   try {
-    const { devices, fetchedAt } = await meshcentral.getDevices();
-    res.json({ source: 'meshcentral', readOnly: true, fetchedAt, devices });
+    const { devices, fetchedAt } = await connector.getDevices();
+    res.json({ source: connector.id, readOnly: true, fetchedAt, devices });
   } catch (err) {
-    if (err instanceof meshcentral.ConnectorNotConfigured) {
+    if (err instanceof integrations.ConnectorNotConfigured) {
       return res.status(503).json({
-        error: 'The MeshCentral integration is not configured. Set MESHCENTRAL_URL and credentials.',
+        error: `The ${connector.id} integration is not configured. See server/.env.example.`,
         code: err.code,
       });
     }
-    if (err instanceof meshcentral.ConnectorUpstreamError) {
+    if (err instanceof integrations.ConnectorUpstreamError) {
       // Log the reason, not the URL (it may carry an auth token).
-      logger.warn({ reason: err.message }, '[integrations] meshcentral upstream failed');
+      logger.warn({ connector: connector.id, reason: err.message }, '[integrations] upstream failed');
       return res.status(502).json({
-        error: 'The MeshCentral upstream could not be read. Inventory is unavailable; the rest of the API is unaffected.',
+        error: `The ${connector.id} upstream could not be read. Inventory is unavailable; the rest of the API is unaffected.`,
         code: err.code,
       });
     }
