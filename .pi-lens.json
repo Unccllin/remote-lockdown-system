@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/apmantza/pi-lens/master/docs/schema/pi-lens-config-v1.json",
+  "ignore": [
+    "site/**",
+    "dashboard/dist/**",
+    "agent/dist/**",
+    "agent/build/**",
+    "electron/dist-electron/**",
+    "electron/build/**",
+    "server/coverage/**",
+    "dashboard/coverage/**",
+    "serverless/coverage/**",
+    "firmware/PblPkg/compile_commands.json",
+    "agent/.venv/**",
+    "**/node_modules/**"
+  ]
+}

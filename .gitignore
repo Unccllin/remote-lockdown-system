@@ -112,3 +112,6 @@ C:\\ProgramData/
 
 # Generated C compile database (machine-local EDK II paths)
 firmware/PblPkg/compile_commands.json
+
+# Generated documentation site (scripts/build_docs_site.py)
+site/

@@ -115,6 +115,13 @@ test-electron:
 pg-smoke:
 	@bash scripts/run-pg-smoke.sh
 
+# Static documentation site from docs/**/*.md (sidebar + search + sitemap).
+# Output goes to site/ (gitignored). Open site/index.html afterwards.
+.PHONY: docs-site
+
+docs-site:
+	@python3 scripts/build_docs_site.py
+
 # Refuse to publish secrets or to drop commits accidentally (S140).
 # Scans the exact range that would be pushed. Install it as a git hook with:
 #   bash scripts/pre-push-check.sh --install
