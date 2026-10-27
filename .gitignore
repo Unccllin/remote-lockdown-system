@@ -102,3 +102,6 @@ firmware/PblPkg/persist-capsule/
 
 # Large transient research artifacts (e.g., Windows ISO extraction)
 tmp/
+
+# pi agent task logs (per-session, local only)
+.pi/
