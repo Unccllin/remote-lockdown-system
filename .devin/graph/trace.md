@@ -2793,3 +2793,10 @@ The DB layer is now honest and self-healing (driver logged, drift healed, prod f
 
 ### Next session opening
 Rotate the two SSH passwords on the hosts as soon as they are reachable and force-push the rewritten history with `git push --force-with-lease` after coordinating, then close the remaining Electron gap by adding an xvfb-backed GUI smoke job.
+
+### S140 addendum — scrub correction and push reality
+
+- **The scrub leaked into its own log.** While documenting "`git log -S <password>` → 0 commits", the session log quoted the credential verbatim. That committed the secret into a *new*, unpushed commit (`7311c68`), undoing the rewrite. Caught by scanning the push range (`git log -p <remote-head>..HEAD`), not the full history — the whole-history scan had been run *before* that commit existed. The string is now redacted to `<redacted-password>` and a second `git filter-repo --replace-text` pass removed it from all history: 0 occurrences across `--all` **and** across the push range. Lesson recorded: always scan the exact range being published, immediately before publishing.
+- **No force-push is required — the earlier advice was wrong.** `origin/master` is `b69c17d` (114 commits); local `master` is a strict superset (326 commits) and `b69c17d` is an ancestor of `HEAD`, so `git push origin master` is a plain fast-forward that discards nothing. (An earlier read of `git ls-remote` suggested divergence; ancestry proved otherwise. A full mirror clone also showed the remote holds 0 occurrences of the old password — the secret never reached GitHub, because this lineage was never pushed.)
+- Local `master` is **211 commits ahead** of `origin/master`; publishing is the owner's call.
+- Local tag `v1.0.0` and remote `v1.0.0` both point at `21ac6ce` (pre-dates the secret), so no tag push is needed.
