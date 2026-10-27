@@ -99,10 +99,13 @@ if [ -z "$BASE" ]; then
 fi
 
 if [ -z "$BASE" ]; then
-  warn "no upstream remote ref found — scanning the working history (HEAD) instead."
-  warn "Pass --base <ref> to scan an exact publish range."
-  python3 "$SCANNER" --base "" --head HEAD
-  exit $?
+  # Do NOT silently fall back to scanning every commit: the result cannot be
+  # interpreted as "what this push publishes", and on a long history it is
+  # noisy enough to read as a false alarm. Refuse and say what to do.
+  err "cannot determine the publish range: no upstream and no origin/* ref."
+  echo "    Run 'git fetch origin' first, or pass --base <ref> explicitly."
+  echo "    To audit the whole history on purpose: $0 --all"
+  exit 2
 fi
 
 info "publish range: $BASE..HEAD"

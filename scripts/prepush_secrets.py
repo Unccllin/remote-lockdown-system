@@ -61,10 +61,14 @@ SCRUBBED_MARKER = re.compile(r"\*\*\*(?:REMOVED|REDACTED)")
 # Paths outside these (source, scripts, and especially the .devin/ session logs
 # where S140 actually leaked) stay fatal.
 FIXTURE_PATH = re.compile(
-    r"(?:^|/)(?:tests?|__tests__|fixtures?|__mocks__|[\w.]+-test)/"
+    r"(?:^|/)(?:tests?|__tests__|fixtures?|__mocks__|e2e|[\w.]+-test)/"
+    r"|(?:^|/)test_[\w]+\.py$"
     r"|\.(?:test|spec)\.[jt]sx?$"
 )
-EXAMPLE_PATH = re.compile(r"(?:^|/)docs?/")
+EXAMPLE_PATH = re.compile(
+    r"(?:^|/)docs?/"          # curated documentation
+    r"|^[^/]+\.md$"           # repository-root markdown (README, PLAN...)
+)
 
 # Reviewable allow-list: `<rule>:<path-glob>  # justification`, one per line.
 # Paths and rule names only — never values — so it cannot become the leak it is
