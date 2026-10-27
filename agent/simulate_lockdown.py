@@ -352,7 +352,10 @@ class SimulatedAgent:
         )
 
         command = data.get("command")
-        if command:
+        # S141: narrow to dict before .get() — the checkin payload is untyped at
+        # this boundary, and a malformed response used to raise AttributeError
+        # instead of reporting an unknown command.
+        if isinstance(command, dict):
             cmd_type = command.get("type")
             if cmd_type == "lockdown":
                 self.run_lockdown(command)

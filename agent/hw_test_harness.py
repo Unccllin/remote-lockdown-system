@@ -134,11 +134,16 @@ def with_retry(max_retries: int, retry_delay: float = 1.0):
             for attempt in range(max_retries + 1):
                 try:
                     return fn(*args, **kwargs)
-                except Exception:  # noqa: BLE001 — retries arbitrary test function on any exception
-                    pass  # will retry
+                except Exception as exc:  # noqa: BLE001 — retries arbitrary test function on any exception
+                    # S141: the handler used to `pass` without recording the
+                    # exception, so the final `raise last_error` raised None and
+                    # surfaced as TypeError instead of the real failure.
+                    last_error = exc
                     if attempt < max_retries:
                         time.sleep(retry_delay * (attempt + 1))
-            raise last_error
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError(f"{fn.__name__} produced no result and raised nothing")
 
         return wrapper
 
@@ -277,7 +282,11 @@ def detect_environment() -> dict:
     try:
         import ctypes
 
-        env["is_admin"] = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        # getattr: pyright cannot narrow ctypes.windll into the Windows-only
+        # branch above, and the attribute genuinely does not exist on POSIX.
+        windll = getattr(ctypes, "windll", None)
+        if windll is not None:
+            env["is_admin"] = bool(windll.shell32.IsUserAnAdmin())
     except Exception:  # noqa: S110
         pass
 
@@ -840,8 +849,15 @@ class TestHpUefiLockdown(HardwareTest):
             try:
                 import hp_uefi_lockdown
 
-                state["bios_settings"] = hp_uefi_lockdown._read_current_bios_settings()
-            except Exception:  # noqa: S110
+                # S141: this called hp_uefi_lockdown._read_current_bios_settings(),
+                # which does not exist — the snapshot always failed silently and
+                # the test had no before-state to compare against. Collect the
+                # three checks the module actually exposes.
+                state["bios_settings"] = {
+                    "sure_admin": hp_uefi_lockdown._check_sure_admin(),
+                    "secure_boot": hp_uefi_lockdown._check_secure_boot(),
+                }
+            except Exception:  # noqa: S110 — snapshot is best-effort
                 pass
         return state
 
@@ -1033,18 +1049,24 @@ class TestTpm(HardwareTest):
             test_data = b"tpm-seal-test-data"
             sealed_file = state_dir / "sealed.bin"
 
-            # Seal data with TPM
+            # S141: this called seal_data()/unseal_data(), which tpm_seal does
+            # not define — the E-TPM test could never pass. Real API:
+            # seal_state() returns the sealed blob; unseal_state() takes it back.
             try:
-                tpm_seal.seal_data(test_data, sealed_file)
+                blob = tpm_seal.seal_state(test_data)
             except Exception as e:  # noqa: BLE001 — TPM platform-specific errors
                 return f"TPM seal failed: {e}"
+
+            if blob is None:
+                return "TPM seal returned no blob (TPM unavailable?)"
+            sealed_file.write_bytes(blob)
 
             if not sealed_file.exists():
                 return "Sealed file not created"
 
             # Unseal data
             try:
-                unsealed = tpm_seal.unseal_data(sealed_file)
+                unsealed = tpm_seal.unseal_state(sealed_file.read_bytes())
             except Exception as e:  # noqa: BLE001 — TPM platform-specific errors
                 return f"TPM unseal failed: {e}"
 
@@ -1081,6 +1103,7 @@ class TestEnroll(HardwareTest):
         return True
 
     def action(self, env: dict, mode: str) -> str:
+        import urllib.error
         import urllib.request
 
         # Generate enrollment token via server API
@@ -1178,7 +1201,10 @@ class TestIntegration(HardwareTest):
             ).encode(),
         )
         resp = urllib.request.urlopen(enroll_req, timeout=10)  # noqa: S310
-        device = json.loads(resp.read())
+        try:
+            device = json.loads(resp.read())
+        except (ValueError, OSError) as exc:
+            return f"Enroll response unreadable: {exc}"
         device_id = device.get("id")
         api_key = device.get("api_key")
         if not device_id or not api_key:
@@ -1198,7 +1224,10 @@ class TestIntegration(HardwareTest):
             headers={"Authorization": f"Bearer {api_key}"},
         )
         resp = urllib.request.urlopen(get_req, timeout=10)  # noqa: S310
-        device_state = json.loads(resp.read())
+        try:
+            device_state = json.loads(resp.read())
+        except (ValueError, OSError) as exc:
+            return f"Device state unreadable: {exc}"
         if device_state.get("status") != "stolen":
             return f"Device not flagged as stolen: {device_state.get('status')}"
 
@@ -1212,7 +1241,10 @@ class TestIntegration(HardwareTest):
 
         # Step 5: Verify device is recovered
         resp = urllib.request.urlopen(get_req, timeout=10)  # noqa: S310
-        device_state = json.loads(resp.read())
+        try:
+            device_state = json.loads(resp.read())
+        except (ValueError, OSError) as exc:
+            return f"Device state unreadable: {exc}"
         if device_state.get("status") != "active":
             return f"Device not recovered: {device_state.get('status')}"
 
@@ -1449,13 +1481,14 @@ def run_harness(
         out_path = _AGENT_DIR / f"hw_test_artifact{suffix}"
 
     if fmt == "junit":
-        out_path.write_text(artifact)
+        out_path.write_text(artifact if isinstance(artifact, str) else str(artifact))
     else:
         out_path.write_text(json.dumps(artifact, indent=2, default=str))
     print(f"\nArtifact written to: {out_path}")
 
     # Pattern: Artifact upload to server
     if upload_url:
+        import urllib.error
         import urllib.request
 
         try:
@@ -1566,7 +1599,7 @@ def main():
             "hp-uefi": "E-HP-UEFI",
         }
         tag = name_to_tag.get(args.only, args.only)
-        tags = [tag]
+        tags = [tag] if tag else None
 
     services = None
     if args.services:
