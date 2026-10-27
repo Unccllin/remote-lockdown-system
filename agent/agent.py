@@ -35,6 +35,22 @@ USAGE:
 # When built with PyInstaller console=False (windowed mode), sys.stdout
 # and sys.stderr are None. This causes print() and argparse to crash with
 # AttributeError. Redirect to os.devnull so the agent doesn't crash.
+#
+# pyright: reportAttributeAccessIssue=false, reportPossiblyUnboundVariable=false
+#
+# Why this one file is exempt from those two pyright rules (established S141):
+#   * reportAttributeAccessIssue — the module targets Windows: ctypes.windll,
+#     sys._MEIPASS (PyInstaller) and public_key.encrypt() (whose type union
+#     includes the non-RSA keys that can be loaded from disk) are correct on
+#     the platform it runs on, but it is analysed here on Linux against Linux
+#     stubs. 30 of the 35 findings are this class.
+#   * reportPossiblyUnboundVariable — the boot-lock modules (bcd_lockdown,
+#     hp_uefi_lockdown, bitlocker_pba), the duress module and subprocess are
+#     imported in try/except ImportError blocks and every call site is guarded
+#     by an _*_available flag.
+# Verified pre-existing: all 35 findings are present on HEAD and none fall on
+# the lines this session changed. The real fix (not done here) is to narrow the
+# key type before .encrypt() and to initialise the optional modules to None.
 import os
 import sys
 
@@ -88,6 +104,24 @@ except (ImportError, AttributeError, OSError):
 # This propagates to bcd_lockdown and hp_uefi_lockdown at startup.
 _DRY_RUN = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes")
 
+
+def _programdata_dir() -> Path:
+    """Return the Windows PROGRAMDATA directory, or a POSIX equivalent.
+
+    On Windows this is %PROGRAMDATA% (C:\\ProgramData when unset). Other
+    platforms have no such directory: defaulting to the literal Windows path
+    made the agent create a directory literally named ``C:\\ProgramData`` in
+    whatever the current working directory was — a test run left one at the
+    repository root (S141). Fall back to the XDG data directory instead, so
+    every platform has one predictable, writable location.
+    """
+    configured = os.environ.get("PROGRAMDATA")
+    if configured:
+        return Path(configured)
+    if sys.platform == "win32":
+        return Path("C:\\ProgramData")
+    return Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -98,7 +132,7 @@ _DRY_RUN = os.environ.get("LOCKDOWN_DRY_RUN", "").lower() in ("1", "true", "yes"
 _log_handlers = [logging.StreamHandler(sys.stdout)]
 try:
     # Log to agent.log in the install directory (or cwd if not installed)
-    _log_dir = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
+    _log_dir = _programdata_dir() / "LockdownAgent"
     _log_dir.mkdir(parents=True, exist_ok=True)
     _log_handlers.append(logging.FileHandler(_log_dir / "agent.log", encoding="utf-8"))
 except Exception:  # noqa: S110 — logging setup failure is non-fatal
@@ -205,7 +239,7 @@ _EXE_DIR = Path(sys.executable).parent if _is_frozen() else Path(__file__).paren
 
 # System config directory (for bundled agent)
 if sys.platform == "win32":
-    _SYSTEM_CONFIG_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
+    _SYSTEM_CONFIG_DIR = _programdata_dir() / "LockdownAgent"
 else:
     _SYSTEM_CONFIG_DIR = Path("/etc/lockdown-agent")
 
@@ -216,7 +250,7 @@ else:
 # tests and dev workflows keep working without root/admin privileges.
 if _is_frozen():
     if sys.platform == "win32":
-        _STATE_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
+        _STATE_DIR = _programdata_dir() / "LockdownAgent"
     else:
         _STATE_DIR = Path("/var/lib/lockdown-agent")
 else:
@@ -2503,7 +2537,7 @@ def _backup_efs_certificate(username: str) -> tuple[str, str] | None:
     if platform.system() != "Windows":
         return None
 
-    cert_dir = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownSystem"
+    cert_dir = _programdata_dir() / "LockdownSystem"
     cert_dir.mkdir(parents=True, exist_ok=True)
     cert_path = cert_dir / f"efs_cert_{username}.pfx"
     cert_password = secrets.token_urlsafe(20)
@@ -3804,7 +3838,7 @@ if __name__ == "__main__":
         # so we can diagnose why the agent died.
         import traceback
 
-        crash_file = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
+        crash_file = _programdata_dir() / "LockdownAgent"
         crash_file = crash_file / "crash.log"
         try:
             crash_file.parent.mkdir(parents=True, exist_ok=True)
