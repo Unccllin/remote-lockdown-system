@@ -13,6 +13,7 @@ import { encodeCoseSign1 } from '../cose';
 import { encodeMap, encodeUint, encodeBstr, encodeTstr, encodeArray, encodeBool } from '../cbor';
 import { getKidHistory, type SigningKeyPair } from '../signing';
 import { loadCertChain } from '../certs';
+import type { Env } from '../env';
 
 // ---------------------------------------------------------------------------
 // Full C4 policy blob builder (D-209)

@@ -11,6 +11,7 @@ import { encodeCoseSign1 } from '../cose';
 import { getDevice, type PblDevice } from '../devices';
 import { checkDeviceRateLimit, rateLimitResponse, DEVICE_RATE_LIMITS } from '../rateLimit';
 import type { SigningKeyPair } from '../signing';
+import type { Env } from '../env';
 
 /** C1 + C5 verdict values. */
 const VERDICT_UNLOCKED = 0;
@@ -86,7 +87,7 @@ export async function handleVerdict(
   const deviceIdHex = bytesToHex(req.device_id);
   if (DEVICE_RATE_LIMITS.verdict) {
     const rl = await checkDeviceRateLimit(env.LOCKDOWN_KV, deviceIdHex, 'verdict', DEVICE_RATE_LIMITS.verdict);
-    if (!rl.allowed) {
+    if (rl.allowed === false) {
       return rateLimitResponse(rl.retryAfter);
     }
   }

@@ -36,15 +36,16 @@ export async function generateSigningKeyWithAlgorithm(
     signParams = { name: 'ECDSA', namedCurve: 'P-256' };
   }
 
-  keyPair = await crypto.subtle.generateKey(
+  // generateKey returns CryptoKey | CryptoKeyPair; with sign+verify usages on an
+  // asymmetric algorithm it is always a pair.
+  keyPair = (await crypto.subtle.generateKey(
     signParams,
     true,
     ['sign', 'verify'],
-  );
+  )) as CryptoKeyPair;
 
-  const spki = new Uint8Array(
-    await crypto.subtle.exportKey('spki', keyPair.publicKey),
-  );
+  const spkiBuf = (await crypto.subtle.exportKey('spki', keyPair.publicKey)) as ArrayBuffer;
+  const spki = new Uint8Array(spkiBuf);
   const kid = new Uint8Array(await crypto.subtle.digest('SHA-256', spki));
 
   return {
@@ -159,7 +160,7 @@ const SIGNING_KEY_KV_PREFIX = 'pbl_signing_key:';
 
 /** Export a private key to PKCS8 bytes. */
 export async function exportPrivateKey(privateKey: CryptoKey): Promise<Uint8Array> {
-  const pkcs8 = await crypto.subtle.exportKey('pkcs8', privateKey);
+  const pkcs8 = (await crypto.subtle.exportKey('pkcs8', privateKey)) as ArrayBuffer;
   return new Uint8Array(pkcs8);
 }
 
@@ -179,7 +180,7 @@ async function derivePublicKeyFromPrivate(
   spki: Uint8Array;
 }> {
   // Export private key as JWK (contains public parameters)
-  const jwk = await crypto.subtle.exportKey('jwk', privateKey);
+  const jwk = (await crypto.subtle.exportKey('jwk', privateKey)) as JsonWebKey;
 
   let keyParams: { name: string; namedCurve?: string };
   if (algorithm === 'Ed25519') {
@@ -198,7 +199,7 @@ async function derivePublicKeyFromPrivate(
       true,
       ['verify'],
     );
-    const spki = new Uint8Array(await crypto.subtle.exportKey('spki', publicKey));
+    const spki = new Uint8Array((await crypto.subtle.exportKey('spki', publicKey)) as ArrayBuffer);
     return { publicKey, spki };
   }
 
@@ -218,7 +219,7 @@ async function derivePublicKeyFromPrivate(
     true,
     ['verify'],
   );
-  const spki = new Uint8Array(await crypto.subtle.exportKey('spki', publicKey));
+  const spki = new Uint8Array((await crypto.subtle.exportKey('spki', publicKey)) as ArrayBuffer);
   return { publicKey, spki };
 }
 

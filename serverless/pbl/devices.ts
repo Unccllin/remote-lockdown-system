@@ -75,7 +75,11 @@ export async function listDevices(
         devices.push(data as PblDevice);
       }
     }
-    cursor = result.list_complete ? undefined : result.cursor;
+    // The Workers lib types `list_complete` as a boolean, so the union is not
+    // discriminated and neither `!result.allowed`-style nor ternary narrowing
+    // works. An `in` guard narrows on the property's presence, which is exactly
+    // what KV guarantees: `cursor` exists only when the listing is incomplete.
+    cursor = 'cursor' in result ? result.cursor : undefined;
   } while (cursor);
 
   return devices;

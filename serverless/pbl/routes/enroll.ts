@@ -20,6 +20,7 @@
 import { CborDecoder, encodeMap, encodeUint, encodeBstr } from '../cbor';
 import { putDevice, getDevice, type PblDevice } from '../devices';
 import { checkDeviceRateLimit, rateLimitResponse, DEVICE_RATE_LIMITS } from '../rateLimit';
+import type { Env } from '../env';
 
 /** Enroll request parsed from CBOR. */
 interface EnrollRequest {
@@ -89,7 +90,7 @@ export async function handleEnrollPbl(
   // D-210: Per-device rate limiting (NAT-safe)
   if (DEVICE_RATE_LIMITS.enroll) {
     const rl = await checkDeviceRateLimit(env.LOCKDOWN_KV, deviceIdHex, 'enroll', DEVICE_RATE_LIMITS.enroll);
-    if (!rl.allowed) {
+    if (rl.allowed === false) {
       return rateLimitResponse(rl.retryAfter);
     }
   }

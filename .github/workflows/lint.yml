@@ -120,3 +120,30 @@ jobs:
         with:
           version: v1.7.12
           fail-on-error: true
+
+  # ---------------------------------------------------------------------------
+  # Worker type-check — the Worker had no tsconfig/Workers types until S141, so
+  # `tsc --noEmit` had never run. First run found 18 real errors.
+  # ---------------------------------------------------------------------------
+  typecheck-worker:
+    name: Type-check Worker (tsc)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: serverless
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: serverless/package-lock.json
+
+      - run: npm ci
+
+      - name: tsc --noEmit
+        run: npx tsc --noEmit

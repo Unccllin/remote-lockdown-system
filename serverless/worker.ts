@@ -309,13 +309,7 @@ async function requireRole(
 // KV storage helpers
 // ---------------------------------------------------------------------------
 
-interface Env {
-  ADMIN_TOKEN: string;
-  LOCKDOWN_KV: KVNamespace;
-  PBL_SIGNING_KEY?: string; // PKCS8 base64 of ES256 private key for PBL verdict signing
-  PBL_POLICY_SIGNING_KEY?: string; // D-205: PKCS8 base64 of ES256 private key for policy signing (separate from verdict)
-  JWT_SECRET?: string; // S4-serverless: HMAC secret for admin session tokens
-}
+
 
 // ---------------------------------------------------------------------------
 // S4-serverless: multi-admin RBAC on KV (end-state serverless auth).
@@ -2110,7 +2104,7 @@ async function handleGetAudit(request: Request, env: Env): Promise<Response> {
   // server uses `timestamp`, the Worker uses `created_at` internally)
   const mapped = filtered.map((e) => ({
     ...e,
-    timestamp: e.created_at || e.timestamp,
+    timestamp: e.created_at,
   }));
   return jsonResponse(mapped);
 }
@@ -2634,6 +2628,7 @@ import { handleSigningKey } from './pbl/routes/signingKey';
 import { handleFirmwareDownload } from './pbl/routes/firmware';
 import { listDevices as listPblDevices, deleteDevice as deletePblDevice, getDevice as getPblDevice, setDeviceStatus as setPblDeviceStatus } from './pbl/devices';
 import { checkDeviceRateLimit, checkIpRateLimit, rateLimitResponse, DEVICE_RATE_LIMITS, IP_RATE_LIMITS } from './pbl/rateLimit';
+import type { Env } from './pbl/env';
 
 // Cache the signing key pair across requests within the same isolate.
 let cachedKeys: SigningKeyPair | null = null;
@@ -2676,7 +2671,7 @@ async function handlePblRoute(
     // IP-based rate limiting for admin device management endpoints
     if (path.startsWith('/v1/devices') && IP_RATE_LIMITS.devices) {
       const rl = await checkIpRateLimit(env.LOCKDOWN_KV, request, 'devices', IP_RATE_LIMITS.devices);
-      if (!rl.allowed) {
+      if (rl.allowed === false) {
         return rateLimitResponse(rl.retryAfter);
       }
     }

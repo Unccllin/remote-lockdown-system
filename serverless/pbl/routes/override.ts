@@ -22,7 +22,8 @@
 import { encodeMap, encodeUint, encodeBstr, encodeTstr } from '../cbor';
 import { encodeCoseSign1 } from '../cose';
 import { getDevice, setDeviceStatus } from '../devices';
-import { verifySignature, type SigningKeyPair } from '../signing';
+import { type SigningKeyPair } from '../signing';
+import type { Env } from '../env';
 
 const VERDICT_UNLOCKED = 0;
 const MAX_ATTEMPTS = 5;

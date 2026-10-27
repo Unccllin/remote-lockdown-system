@@ -18,6 +18,7 @@
 
 import { getDevice } from '../devices';
 import { checkDeviceRateLimit, rateLimitResponse, DEVICE_RATE_LIMITS } from '../rateLimit';
+import type { Env } from '../env';
 
 /** KV key prefix for the AK public area (stored as hex at enrollment). */
 const AK_PUBLIC_PREFIX = 'pbl_ak_public:';
@@ -282,7 +283,7 @@ export async function handleAttest(
   // D-210: Per-device rate limiting (NAT-safe)
   if (DEVICE_RATE_LIMITS.attest) {
     const rl = await checkDeviceRateLimit(env.LOCKDOWN_KV, req.device_id, 'attest', DEVICE_RATE_LIMITS.attest);
-    if (!rl.allowed) {
+    if (rl.allowed === false) {
       return rateLimitResponse(rl.retryAfter);
     }
   }

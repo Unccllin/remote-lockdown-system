@@ -133,10 +133,15 @@ pre-push-check:
 # Lint all components — server, dashboard, agent.
 .PHONY: lint lint-server lint-dashboard lint-agent
 
-lint: lint-server lint-dashboard lint-agent
+lint: lint-server lint-dashboard lint-agent typecheck-worker
 
 lint-server:
 	@cd server && npx eslint src/ tests/ --max-warnings=0
+
+# The Worker had no tsconfig and no Workers types, so it was never type-checked;
+# the first `tsc --noEmit` run found 18 real errors (S141). Keep it in `lint`.
+typecheck-worker:
+	@cd serverless && npx tsc --noEmit
 
 lint-dashboard:
 	@cd dashboard && npx eslint src/ tests/ --max-warnings=0

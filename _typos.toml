@@ -1,0 +1,81 @@
+# _typos.toml — domain vocabulary for the typos linter.
+#
+# Without this, the spell-checker flags correct technical terms as typos
+# ("COSE should be CASE", "mor should be more"), which trains people to ignore
+# it. Entries here are standards names and acronyms used throughout this repo.
+
+[default.extend-words]
+# COSE — CBOR Object Signing and Encryption (RFC 8152/9052); the wire format for
+# PBL verdicts and policy blobs.
+COSE = "COSE"
+Cose = "Cose"
+cose = "cose"
+# MOR — Memory Overwrite Request (TCG platform reset attack mitigation).
+MOR = "MOR"
+mor = "mor"
+Mor = "Mor"
+# UEFI/EDK II terms
+PBL = "PBL"
+Pbl = "Pbl"
+pbl = "pbl"
+EDK = "EDK"
+Bsd = "Bsd"
+BST = "BST"
+BDS = "BDS"
+PK = "PK"
+KEK = "KEK"
+dbx = "dbx"
+db = "db"
+Sbat = "Sbat"
+sbat = "sbat"
+SVN = "SVN"
+Svn = "Svn"
+svn = "svn"
+FV = "FV"
+OVMF = "OVMF"
+swtpm = "swtpm"
+TCG = "TCG"
+# Platform security
+AMT = "AMT"
+vPro = "vPro"
+CIRA = "CIRA"
+DCI = "DCI"
+DMA = "DMA"
+HSFS = "HSFS"
+BIOS = "BIOS"
+Bios = "Bios"
+bios = "bios"
+TPM = "TPM"
+PBA = "PBA"
+FVE = "FVE"
+Fve = "Fve"
+fve = "fve"
+VMK = "VMK"
+BitLocker = "BitLocker"
+bitlocker = "bitlocker"
+# Product/infra
+KV = "KV"
+RBAC = "RBAC"
+HMAC = "HMAC"
+JWT = "JWT"
+PBKDF = "PBKDF"
+CTRF = "CTRF"
+JUnit = "JUnit"
+Phoronix = "Phoronix"
+HIL = "HIL"
+PGlite = "PGlite"
+Wrangler = "Wrangler"
+wrangler = "wrangler"
+Caddyfile = "Caddyfile"
+
+[files]
+extend-exclude = [
+  "node_modules/",
+  ".venv/",
+  "site/",
+  "*/dist/",
+  "*/coverage/",
+  "*.json",
+  "*.lock",
+  "package-lock.json",
+]
