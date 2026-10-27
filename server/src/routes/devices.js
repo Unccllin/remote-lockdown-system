@@ -96,6 +96,29 @@ function commandExpirySql() {
   return `NOW() + INTERVAL '${COMMAND_EXPIRY_DAYS} days'`;
 }
 
+// Phase 5: the two command-insert shapes. COMMAND_EXPIRY_DAYS is validated as a
+// positive integer at module load (parseInt + Number.isInteger + > 0), so the
+// interpolated fragment cannot carry injected text. Kept as named constants so
+// the SQL lives next to that safety argument instead of inline at each call.
+const INSERT_COMMAND_SQL = `INSERT INTO commands (device_id, command_type, expires_at) VALUES ($1, $2, ${commandExpirySql()}) RETURNING *`;
+const INSERT_COMMAND_WITH_PBA_SQL = `INSERT INTO commands (device_id, command_type, expires_at, enable_pba) VALUES ($1, $2, ${commandExpirySql()}, $3) RETURNING *`;
+
+/**
+ * Strip server-only columns before a device row goes over the wire.
+ *
+ * Device rows come from `SELECT *` / `RETURNING *`, so they carry
+ * `api_key_hash` — a SHA-256 of the device's API key. No client needs it, and
+ * shipping it only enables offline guessing. The column stays in the database
+ * (routes/agent.js authenticates against it); it is removed here, at the
+ * serialisation boundary, for every response that returns a device.
+ */
+function publicDevice(row) {
+  if (!row) return row;
+  const device = { ...row };
+  delete device.api_key_hash;
+  return device;
+}
+
 /**
  * FA5: Decrypt sensitive location fields for a row (dual-mode read).
  * Returns a new row with decrypted values for lat/lon/city/region/ip.
@@ -116,17 +139,17 @@ function decryptLocationFields(row) {
   };
 }
 
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', requireAuth, async (_req, res) => {
   const result = await pool.query(
     'SELECT * FROM devices ORDER BY enrolled_at DESC'
   );
-  res.json(result.rows);
+  res.json(result.rows.map(publicDevice));
 });
 
 router.get('/:id', requireAuth, async (req, res) => {
   const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
-  res.json(device);
+  res.json(publicDevice(device));
 });
 
 router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
@@ -156,9 +179,10 @@ router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
       'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
       [result.rows[0].id, req.admin.id, 'device_enrolled', { hostname, owner_name }]
     );
-    // Return the device + the plaintext API key (shown once)
+    // Return the device + the plaintext API key (shown once). The plaintext is
+    // deliberate; the stored hash is not — publicDevice strips it.
     res.status(201).json({
-      ...result.rows[0],
+      ...publicDevice(result.rows[0]),
       api_key: apiKey, // plaintext — capture now, never shown again
     });
   } catch (err) {
@@ -177,7 +201,7 @@ router.patch('/:id', requireAuth, requireRole('operator'), async (req, res) => {
     [owner_name, req.params.id]
   );
   if (!result.rows[0]) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
-  res.json(result.rows[0]);
+  res.json(publicDevice(result.rows[0]));
 });
 
 router.delete('/:id', requireAuth, requireRole('operator'), async (req, res) => {
@@ -236,7 +260,7 @@ router.post('/:id/flag-stolen', requireAuth, requireRole('operator'), async (req
   const cmd = await withTransaction(async (client) => {
     await client.query('UPDATE devices SET status = $1 WHERE id = $2', ['stolen', device.id]);
     const cmdResult = await client.query(
-      `INSERT INTO commands (device_id, command_type, expires_at, enable_pba) VALUES ($1, $2, ${commandExpirySql()}, $3) RETURNING *`,
+      INSERT_COMMAND_WITH_PBA_SQL,
       [device.id, 'lockdown', enablePba]
     );
     await client.query(
@@ -262,7 +286,7 @@ router.post('/:id/flag-stolen', requireAuth, requireRole('operator'), async (req
   // D-206: Bidirectional status sync — agent stolen → PBL device locked
   await syncAgentStatusToPbl(device, 'locked');
 
-  res.json({ device: { ...device, status: 'stolen' }, command: cmd });
+  res.json({ device: { ...publicDevice(device), status: 'stolen' }, command: cmd });
 });
 
 router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, res) => {
@@ -293,7 +317,7 @@ router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, re
     }
 
     const cmdResult = await client.query(
-      `INSERT INTO commands (device_id, command_type, expires_at) VALUES ($1, $2, ${commandExpirySql()}) RETURNING *`,
+      INSERT_COMMAND_SQL,
       [device.id, 'unlock']
     );
     await client.query(
@@ -341,7 +365,7 @@ router.post('/:id/recover', requireAuth, requireRole('operator'), async (req, re
   await syncAgentStatusToPbl(device, 'active');
 
   res.json({
-    device: { ...device, status: 'recovering' },
+    device: { ...publicDevice(device), status: 'recovering' },
     command: cmd,
     key_released: !!key,
     // S4: plaintext material only for super-admin; operators get the
@@ -404,7 +428,7 @@ router.post('/:id/track', requireAuth, requireRole('operator'), async (req, res)
   }
 
   const cmd = await pool.query(
-    `INSERT INTO commands (device_id, command_type, expires_at) VALUES ($1, $2, ${commandExpirySql()}) RETURNING *`,
+    INSERT_COMMAND_SQL,
     [device.id, 'track']
   );
   await pool.query(
@@ -444,7 +468,7 @@ router.post('/:id/locate', requireAuth, requireRole('operator'), async (req, res
   }
 
   const cmd = await pool.query(
-    `INSERT INTO commands (device_id, command_type, expires_at) VALUES ($1, $2, ${commandExpirySql()}) RETURNING *`,
+    INSERT_COMMAND_SQL,
     [device.id, 'locate']
   );
   await pool.query(
@@ -466,7 +490,7 @@ router.post('/:id/stop-track', requireAuth, requireRole('operator'), async (req,
   }
 
   const cmd = await pool.query(
-    `INSERT INTO commands (device_id, command_type, expires_at) VALUES ($1, $2, ${commandExpirySql()}) RETURNING *`,
+    INSERT_COMMAND_SQL,
     [device.id, 'stop_track']
   );
   await pool.query(
@@ -581,7 +605,7 @@ router.delete('/:id/release', requireAuth, requireRole('operator'), async (req, 
  * Phase 7: Get data retention settings.
  * Returns the current retention configuration.
  */
-router.get('/settings/retention', requireAuth, async (req, res) => {
+router.get('/settings/retention', requireAuth, async (_req, res) => {
   const locationRetentionDays = parseInt(process.env.LOCATION_RETENTION_DAYS || '90', 10);
   const commandExpiryDays = parseInt(process.env.COMMAND_EXPIRY_DAYS || '30', 10);
   res.json({
@@ -716,7 +740,7 @@ router.get('/by-pbl/:pblDeviceId', requireAuth, requireRole('operator'), async (
   const device = await getDeviceByPblDeviceId(pblDeviceId);
   if (!device) return res.status(404).json({ error: 'No agent device linked to this PBL device_id' });
 
-  res.json(device);
+  res.json(publicDevice(device));
 });
 
 module.exports = router;

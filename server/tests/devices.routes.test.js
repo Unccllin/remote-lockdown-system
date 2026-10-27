@@ -922,3 +922,90 @@ describe('GET /api/devices/:id/pba-credentials', () => {
     expect(res.status).toBe(403);
   });
 });
+
+// ---------------------------------------------------------------------------
+// S141: device rows must never expose api_key_hash
+//
+// Device rows come from `SELECT *` / `RETURNING *`, so they carry the SHA-256
+// of the device's API key unless something strips it. It is server-only state
+// (routes/agent.js authenticates against it); shipping it to clients enables
+// offline guessing and serves no purpose. publicDevice() removes it at the
+// serialisation boundary, and these tests pin that behaviour for every
+// endpoint that returns a device.
+// ---------------------------------------------------------------------------
+
+describe('S141: api_key_hash never leaves the server', () => {
+  const app = createApp();
+  const withHash = {
+    id: 'dev-1',
+    hostname: 'DEV-001',
+    owner_name: 'Alice',
+    status: 'active',
+    api_key_hash: 'deadbeef'.repeat(8),
+  };
+
+  test('GET /api/devices strips api_key_hash', async () => {
+    mockPool.query.setResult('SELECT * FROM devices ORDER BY', { rows: [withHash] });
+
+    const res = await request(app)
+      .get('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).not.toHaveProperty('api_key_hash');
+    expect(res.body[0].hostname).toBe('DEV-001');
+  });
+
+  test('GET /api/devices/:id strips api_key_hash', async () => {
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [withHash] });
+
+    const res = await request(app)
+      .get('/api/devices/dev-1')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty('api_key_hash');
+    expect(res.body.id).toBe('dev-1');
+  });
+
+  test('POST /api/devices strips api_key_hash but still returns the plaintext key once', async () => {
+    mockPool.query.setResult('INSERT INTO devices', { rows: [withHash] });
+
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname: 'DEV-001', owner_name: 'Alice' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).not.toHaveProperty('api_key_hash');
+    expect(typeof res.body.api_key).toBe('string');
+    expect(res.body.api_key.length).toBeGreaterThan(0);
+  });
+
+  test('PATCH /api/devices/:id strips api_key_hash', async () => {
+    mockPool.query.setResult('UPDATE devices SET owner_name', { rows: [withHash] });
+
+    const res = await request(app)
+      .patch('/api/devices/dev-1')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ owner_name: 'Alice Smith' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty('api_key_hash');
+  });
+
+  test('POST /api/devices/:id/flag-stolen strips api_key_hash from the device payload', async () => {
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [withHash] });
+    mockPool.query.setResult('INSERT INTO commands', {
+      rows: [{ id: 'cmd-1', device_id: 'dev-1', command_type: 'lockdown', status: 'pending' }],
+    });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/flag-stolen')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname_confirm: 'DEV-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.device).not.toHaveProperty('api_key_hash');
+  });
+});
