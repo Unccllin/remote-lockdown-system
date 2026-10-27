@@ -223,3 +223,35 @@ describe('fetchChecksums — fail closed when SHA256SUMS is missing', () => {
     await expect(fetchChecksums(release)).rejects.toThrow(/\(unknown tag\)/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Route ordering (S140): literal segments must precede parameterised ones.
+//
+// `GET /api/installer/agent-version` answered 404 {"error":"Device not found"}
+// because `/:deviceId` was registered first and matched "agent-version" as a
+// device id. The auto-update check therefore always failed on the server.
+// ---------------------------------------------------------------------------
+
+describe('route ordering — literal before parameterised', () => {
+  test('/agent-version is registered before /:deviceId', () => {
+    const paths = installer.stack.filter((layer) => layer.route).map((layer) => layer.route.path);
+
+    expect(paths).toContain('/agent-version');
+    expect(paths).toContain('/:deviceId');
+    expect(paths.indexOf('/agent-version')).toBeLessThan(paths.indexOf('/:deviceId'));
+  });
+
+  test('GET /api/installer/agent-version is not shadowed by /:deviceId', async () => {
+    const request = require('supertest');
+    const { makeToken, createApp } = require('./helpers');
+    const app = createApp({ installer });
+
+    const res = await request(app)
+      .get('/api/installer/agent-version')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.body.error).not.toBe('Device not found');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('version');
+  });
+});

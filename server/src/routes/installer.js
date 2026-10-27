@@ -1483,6 +1483,38 @@ function crc32(buf) {
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
+// Literal route segments MUST be registered before parameterised ones:
+// Express matches in registration order, so `/:deviceId` used to swallow
+// `/agent-version` and answer `404 {"error":"Device not found"}`.
+
+/**
+ * GET /api/installer/agent-version
+ *
+ * Returns the current version of the bundled agent binary.
+ * Used by the auto-update check.
+ */
+router.get('/agent-version', requireAuth, async (req, res) => {
+  const plat = getPlatformConfig(req.query.platform);
+  const agentBinPath = await resolveAgentBinary(plat.platform, plat.agentName, 'lockdown-agent');
+
+  if (!agentBinPath) {
+    return res.json({ version: null, available: false });
+  }
+
+  const stat = fs.statSync(agentBinPath);
+  const hash = crypto.createHash('sha256');
+  hash.update(fs.readFileSync(agentBinPath));
+  const sha256 = hash.digest('hex');
+
+  res.json({
+    version: '1.0.0',
+    sha256,
+    size: stat.size,
+    built_at: stat.mtime.toISOString(),
+    platform: plat.platform,
+    source: agentBinPath.includes('agent-cache') ? 'cache' : 'local',
+  });
+});
 
 /**
  * GET /api/installer/:deviceId?platform=win|linux
@@ -1606,35 +1638,6 @@ router.get('/:deviceId/nsis', requireAuth, async (req, res) => {
     });
   }
 })
-
-/**
- * GET /api/installer/agent-version
- *
- * Returns the current version of the bundled agent binary.
- * Used by the auto-update check.
- */
-router.get('/agent-version', requireAuth, async (req, res) => {
-  const plat = getPlatformConfig(req.query.platform);
-  const agentBinPath = await resolveAgentBinary(plat.platform, plat.agentName, 'lockdown-agent');
-
-  if (!agentBinPath) {
-    return res.json({ version: null, available: false });
-  }
-
-  const stat = fs.statSync(agentBinPath);
-  const hash = crypto.createHash('sha256');
-  hash.update(fs.readFileSync(agentBinPath));
-  const sha256 = hash.digest('hex');
-
-  res.json({
-    version: '1.0.0',
-    sha256,
-    size: stat.size,
-    built_at: stat.mtime.toISOString(),
-    platform: plat.platform,
-    source: agentBinPath.includes('agent-cache') ? 'cache' : 'local',
-  });
-});
 
 // Exported for unit testing (additive — non-breaking for route usage).
 // The router remains the default export shape via the same object.
