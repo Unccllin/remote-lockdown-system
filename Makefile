@@ -133,7 +133,7 @@ pre-push-check:
 # Lint all components — server, dashboard, agent.
 .PHONY: lint lint-server lint-dashboard lint-agent
 
-lint: lint-server lint-dashboard lint-agent typecheck-worker
+lint: lint-server lint-dashboard lint-agent typecheck-worker check-openapi
 
 lint-server:
 	@cd server && npx eslint src/ tests/ --max-warnings=0
@@ -142,6 +142,11 @@ lint-server:
 # the first `tsc --noEmit` run found 18 real errors (S141). Keep it in `lint`.
 typecheck-worker:
 	@cd serverless && npx tsc --noEmit
+
+# Every registered Express route must exist in docs/openapi.yaml. The spec had
+# drifted to 42 of 76 endpoints before this check existed (sweep finding #3).
+check-openapi:
+	@node scripts/check-openapi-routes.js
 
 lint-dashboard:
 	@cd dashboard && npx eslint src/ tests/ --max-warnings=0

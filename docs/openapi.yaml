@@ -1451,6 +1451,456 @@ paths:
 # Components
 # =============================================================================
   # -------------------------------------------------------------------------
+  # PBL (/v1) and remaining /api routes — added S142 to close sweep finding #3.
+  # Summaries are derived from each handler's own comment block; payload shapes
+  # are intentionally not invented (see the handler for exact fields).
+  # -------------------------------------------------------------------------
+  /api/agent/escrow-key:
+    post:
+      tags: [Agent]
+      summary: "S4: escrow the encryption key BEFORE arming the lockdown"
+      description: "The agent calls this before encrypting during a lockdown: it sends the freshly generated key bound to the lockdown command_id and the server persists it encrypted at rest, so the key is escrowed before the point of no return. If escrow fails the agent refuses to encrypt — a device stays unlocked rather than locked-out. Idempotent on (device_id, command_id): retries are safe."
+      description: "S4: Escrow-before-arm — dedicated key-escrow endpoint. The agent calls this BEFORE it starts encrypting during a lockdown. It sends the freshly-generated encryption key bound to the lockdown command_i"
+      security: []
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /api/devices/by-pbl/{pblDeviceId}:
+    get:
+      tags: [Devices]
+      summary: "GET /api/devices/by-pbl/{pblDeviceId}"
+      description: "Look up an agent device by its PBL device_id. Operator+ only."
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /api/devices/{id}/link-pbl:
+    post:
+      tags: [Devices]
+      summary: "POST /api/devices/{id}/link-pbl"
+      description: "Link an agent device to its PBL (pre-boot) identity. Body: { pbl_device_id: string } — 64 hex chars (32 bytes). Operator+ only. The PBL device_id must not be linked to another agent device."
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /api/devices/{id}/unlink-pbl:
+    post:
+      tags: [Devices]
+      summary: "POST /api/devices/{id}/unlink-pbl"
+      description: "Unlink a PBL device_id from an agent device. Operator+ only."
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/admin/cert-chain:
+    post:
+      tags: [PBL (firmware)]
+      summary: "store X.509 cert chain (D-205)"
+      security:
+        - bearerAuth: [super-admin]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+    get:
+      tags: [PBL (firmware)]
+      summary: "get cert chain info (D-205)"
+      security:
+        - bearerAuth: [super-admin]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+    delete:
+      tags: [PBL (firmware)]
+      summary: "remove cert chain (D-205)"
+      security:
+        - bearerAuth: [super-admin]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/admin/key-info:
+    get:
+      tags: [PBL (firmware)]
+      summary: "D-209: Admin key info endpoints (GET /v1/admin/key-info)"
+      description: "Returns the KID (hex) of the verdict and policy signing keys."
+      security:
+        - bearerAuth: [super-admin]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/admin/operator-key:
+    post:
+      tags: [PBL (firmware)]
+      summary: "store operator override public key (D-204)"
+      security:
+        - bearerAuth: [super-admin]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+    get:
+      tags: [PBL (firmware)]
+      summary: "get operator key info (D-204)"
+      security:
+        - bearerAuth: [super-admin]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+    delete:
+      tags: [PBL (firmware)]
+      summary: "remove operator key (D-204)"
+      security:
+        - bearerAuth: [super-admin]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/admin/rotate-key:
+    post:
+      tags: [PBL (firmware)]
+      summary: "rotate the verdict signing key (D-205)"
+      security:
+        - bearerAuth: [super-admin]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/attest:
+    post:
+      tags: [PBL (firmware)]
+      summary: "D-203: Attest endpoint (POST /v1/attest)"
+      description: "Accepts JSON {device_id, quote, signature, pcr_selection, event_log} Verifies TPM2_Quote signature against the enrolled AK public key."
+      security: []
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/devices:
+    get:
+      tags: [PBL (firmware)]
+      summary: "D-206: Device admin endpoints (list, get, lock, unlock, track, stop-track, delete, agent-mapping)"
+      description: "All require JWT auth (requireAuth) + operator role (requireRole('operator'))."
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/devices/{id}:
+    get:
+      tags: [PBL (firmware)]
+      summary: "GET /v1/devices/{id}"
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+    delete:
+      tags: [PBL (firmware)]
+      summary: "DELETE /v1/devices/{id}"
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/devices/{id}/agent-mapping:
+    get:
+      tags: [PBL (firmware)]
+      summary: "D-206: Agent mapping endpoints"
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+    post:
+      tags: [PBL (firmware)]
+      summary: "POST /v1/devices/{id}/agent-mapping"
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+    delete:
+      tags: [PBL (firmware)]
+      summary: "DELETE /v1/devices/{id}/agent-mapping"
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/devices/{id}/lock:
+    post:
+      tags: [PBL (firmware)]
+      summary: "POST /v1/devices/{id}/lock"
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/devices/{id}/stop-track:
+    post:
+      tags: [PBL (firmware)]
+      summary: "POST /v1/devices/{id}/stop-track"
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/devices/{id}/track:
+    post:
+      tags: [PBL (firmware)]
+      summary: "POST /v1/devices/{id}/track"
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/devices/{id}/unlock:
+    post:
+      tags: [PBL (firmware)]
+      summary: "POST /v1/devices/{id}/unlock"
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/enroll:
+    post:
+      tags: [PBL (firmware)]
+      summary: "D-202: Enrollment endpoint (POST /v1/enroll)"
+      security: []
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/health:
+    get:
+      tags: [PBL (firmware)]
+      summary: "Health endpoint (no auth, no rate limit)"
+      security: []
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/override/challenge:
+    post:
+      tags: [PBL (firmware)]
+      summary: "POST /v1/override/challenge"
+      security: []
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/override/response:
+    post:
+      tags: [PBL (firmware)]
+      summary: "POST /v1/override/response"
+      security: []
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/policy:
+    post:
+      tags: [PBL (firmware)]
+      summary: "POST /v1/policy"
+      security:
+        - bearerAuth: [super-admin]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+    get:
+      tags: [PBL (firmware)]
+      summary: "D-209: GET /v1/policy — list all policy versions (admin only)"
+      security:
+        - bearerAuth: [operator]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/policy/create:
+    post:
+      tags: [PBL (firmware)]
+      summary: "D-209: POST /v1/policy/create — form-based policy creation."
+      description: "Accepts JSON with policy fields, encodes as CBOR, signs with the policy signing key, and stores the resulting COSE_Sign1 blob. This replaces the upload-only flow for operators who don't have an HSM-co"
+      security:
+        - bearerAuth: [super-admin]
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/policy/{version}:
+    get:
+      tags: [PBL (firmware)]
+      summary: "D-201: Policy endpoint (GET /v1/policy/:version, POST /v1/policy)"
+      security: []
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+  /v1/verdict:
+    post:
+      tags: [PBL (firmware)]
+      summary: "POST /v1/verdict"
+      security: []
+      responses:
+        '200':
+          description: Success (payload shape is defined by the handler)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Missing or invalid token }
+        '403': { description: Insufficient role }
+
+# =============================================================================
+# Components
+# =============================================================================
+  # -------------------------------------------------------------------------
   # Integrations — read-only, ours (docs/adr/INTEGRATION-OWNERSHIP.md)
   # -------------------------------------------------------------------------
   /api/integrations:
