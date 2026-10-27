@@ -1,0 +1,18 @@
+# .prepush-allow.txt — reviewable allow-list for scripts/pre-push-check.sh
+#
+# Format:  <rule>:<path-glob>    # justification
+#
+# Paths and rule names ONLY — never credential values. An entry downgrades that
+# rule for that path from blocking to advisory, so it stays visible on every run
+# instead of disappearing. Anything genuinely secret must be removed and its
+# commit rewritten; this file is for demonstrated false positives.
+#
+# Rules: private-key-block, aws-access-key, github-token, github-pat,
+#        slack-token, openai-style-key, assigned-secret, forbidden-term
+#
+# Test fixtures (*/tests/, *.test.*, *-test/) and docs/ are already advisory by
+# path, so they do not need entries here.
+
+# A Tkinter label whose text ends in "Enrollment Token:" is prose, not a
+# key/value pair — the regex sees `Token:"` and treats the label as a value.
+assigned-secret:agent/installer_gui.py
