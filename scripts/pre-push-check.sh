@@ -72,7 +72,11 @@ if [ "$INSTALL" = "1" ]; then
   cat > "$HOOK_DIR/pre-push" <<HOOK
 #!/usr/bin/env bash
 # Installed by scripts/pre-push-check.sh --install
-exec "$SCRIPT_DIR/pre-push-check.sh" --base "\$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null || echo origin/master)" "\$@"
+# NOTE: git passes "<remote-name> <remote-url>" to a pre-push hook. Those
+# positional args must NOT be forwarded — this script parses its own flags
+# and rejects unknown arguments, so forwarding them blocked every tag push
+# with "unknown argument: origin".
+exec "$SCRIPT_DIR/pre-push-check.sh" --base "\$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null || echo origin/master)"
 HOOK
   chmod +x "$HOOK_DIR/pre-push"
   ok "installed $HOOK_DIR/pre-push"

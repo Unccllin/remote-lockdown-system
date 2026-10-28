@@ -1,18 +1,7 @@
-# .prepush-allow.txt — reviewable allow-list for scripts/pre-push-check.sh
-#
-# Format:  <rule>:<path-glob>    # justification
-#
-# Paths and rule names ONLY — never credential values. An entry downgrades that
-# rule for that path from blocking to advisory, so it stays visible on every run
-# instead of disappearing. Anything genuinely secret must be removed and its
-# commit rewritten; this file is for demonstrated false positives.
-#
-# Rules: private-key-block, aws-access-key, github-token, github-pat,
-#        slack-token, openai-style-key, assigned-secret, forbidden-term
-#
-# Test fixtures (*/tests/, *.test.*, *-test/) and docs/ are already advisory by
-# path, so they do not need entries here.
-
-# A Tkinter label whose text ends in "Enrollment Token:" is prose, not a
-# key/value pair — the regex sees `Token:"` and treats the label as a value.
-assigned-secret:agent/installer_gui.py
+# NOTE: justify each entry by describing the finding. Do not quote the matched
+# text here — this file is scanned too, so quoting it makes the allow-list
+# itself the leak (that happened once, and the full-history scan caught it).
+assigned-secret:scripts/verify-environment.sh  # NSIS verify fixture: the key is a base64 of the words test-api-key, alongside two other obvious dummies
+assigned-secret:agent/installer_gui.py  # non-values: a parameter type annotation, an object key whose value is a variable, a call signature
+assigned-secret:dashboard/src/pages/EnrollPage.jsx  # non-values: object and template keys whose values are runtime variables
+assigned-secret:dashboard/src/pages/SetupPage.jsx  # non-values: form state initialised empty, and a human-readable validation message

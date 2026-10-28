@@ -685,36 +685,17 @@ stdio writes into oversized packets), so per-invocation 700 B chunks over a
 identical on both sides** (`9ca13a45…`), extracted to `~/repo`.
 
 **IMPLEMENT — HMAC signing for the load scripts (the audit's open P2 item).**
-- `tests/load/lib/sign.js` — one secret derives per-device keys
-  (`base64(HMAC-SHA256(secret, "load-test-device-0000i"))`); each request gets a
-  fresh 32-hex nonce and signs `"{ts}:{nonce}:{sha256(body)}"`. `authHeaders()`
-  is the single entry point, so a script cannot send unsigned while a secret is
-  configured.
-- `scripts/seed-loadtest-devices.js --hmac-secret S` — stores
-  `api_key_hash` via the server's own `hashApiKey()`, so the pepper logic cannot
-  drift. No key file is shipped and no plaintext key is stored.
-- `k6-{baseline,lockdown-spike,mixed}.js` — headers now come from
-  `authHeaders()` per request (the spike previously hoisted a module-level
-  headers object, which cannot work once every request needs its own nonce and
-  body hash).
-- `tests/load/hmac-probe.js` — proves enforcement by holding the key constant and
-  breaking signature / timestamp / key / nonce replay one at a time.
+Per-device keys derived from one secret (`tests/load/lib/sign.js`), fresh nonce
+per request, `authHeaders()` as the single entry point; the seeder stores
+`api_key_hash` via the server's own `hashApiKey()` so the pepper cannot drift;
+all three scripts sign per request; `tests/load/hmac-probe.js` proves enforcement
+one property at a time. Full detail in `docs/LOAD_TESTING.md`.
 
-**VERIFY**
-- Local, against the server's own verifier: `api_key_hash accepted: true`,
-  signed request `{"ok":true}`, tampered body / wrong key / stale timestamp /
-  malformed nonce all rejected with the expected reasons.
-- `k6 inspect` parses all three scripts, so `./lib/sign.js` resolves.
-- **Signed load run, server enforcing (`REQUIRE_HMAC=true`):**
-  `k6-lockdown-spike.js` 200 VUs / 60 s → **10,138 req, 166 req/s, p95 337 ms,
-  0.00 % failures, k6 exit 0**; all 200 commands ACKed; ~10 k distinct nonces
-  accepted by the replay cache. Artifact
-  `tests/load/results/k6-hmac-signed-spike-dl380p-20261028.json`.
-- **Enforcement proven, not inferred** (`tests/load/hmac-probe.js`, 5/5):
-  correct → 200, corrupted signature → 401 *signature mismatch*, stale
-  timestamp → 401, unknown key → 401, replayed nonce → 200 then 401.
-- Full repo on the box boots in enforcing mode with **0 boot errors** (the
-  scheduler fix holds on a fresh DB in a clean extraction).
+**VERIFY** — local verifier accepts the derivation and rejects tampered body /
+wrong key / stale timestamp / bad nonce; `k6 inspect` resolves the import; signed
+spike under `REQUIRE_HMAC=true` → **10,138 req, 166 req/s, p95 337 ms, 0.00 %
+failures, exit 0**; probe 5/5 (correct 200, corrupted signature 401, stale 401,
+unknown key 401, replay 401); full repo boots on the box with 0 errors.
 
 **Correction worth keeping.** A wrong `K6_HMAC_SECRET` yields 100 % failures for
 the *wrong* reason — an unknown `x-agent-key` is rejected by `agentAuth` before
@@ -751,7 +732,7 @@ mixed — the first two unsigned and then the spike and mixed signed under
 enforcement. `docs/LOAD_TESTING.md` carries the measured tables plus the
 first-admin bootstrap recipe.
 
-### S144 — Devin AI contributor credit removed from history (local rewrite, not pushed)
+## Session 145 — 2026-10-28 (Devin co-author credit removed; push guards fixed)
 
 **Asked for:** remove Devin AI as a contributor. Investigation showed **no
 attribution in any tracked file** — every "Devin" string outside `.devin/` is a
@@ -795,3 +776,142 @@ regenerated.
 **Not done, deliberately:** the force-push. GitHub still shows the old history
 (`refs/heads/master` = `0b823d8`, `refs/tags/v1.0.0` = `21ac6ce`) until the owner
 pushes; the old objects stay reachable by SHA until GitHub GCs them.
+
+### S144 — contributor credit rewritten and PUSHED; two guards fixed on the way
+
+**Pushed** (authorized with "proceed", SSH auth confirmed as `Unccllin`):
+- `master`: `0b823d8… → c998b08…` forced (348 → 349 commits).
+- `v1.0.0`: `21ac6ce… → bdc4dbf…` forced — without this the tag keeps the purged
+  chain reachable, which is the usual way this half-works.
+
+**The push guard blocked twice, correctly, and both were real work:**
+1. `assigned-secret: scripts/verify-environment.sh` → the value is
+   `base64("test-api-key")` in an NSIS verify fixture. Fixed with a scoped,
+   justified entry in the new `.prepush-allow.txt` (the scanner's documented
+   mechanism: rule + path, never values).
+2. Three `assigned-secret` FAILs in `agent/installer_gui.py`,
+   `dashboard/src/pages/EnrollPage.jsx`, `dashboard/src/pages/SetupPage.jsx` —
+   inspected line by line and are all non-values: a function-signature type
+   annotation, two JSON/object keys whose values are runtime variables, an
+   empty-string form field, and a human-readable validation message that merely
+   starts with the word "Password". All false positives; three more scoped
+   entries, each with the reason inline.
+
+   **The S140 lesson bit again inside this very entry.** The first version of the
+   paragraph above quoted each matched string verbatim — and the guard then
+   blocked the push because `.devin/graph/trace.md` and the generated
+   `current-state.md` had become the leak. Quoting the string to prove it is safe
+   is the same mistake as quoting it to prove it leaked. Descriptions only, never
+   the value.
+   `--allow-rewrite` was run deliberately and separately from the push.
+
+**Real bug found in our own hook.** `.git/hooks/pre-push` forwarded git's
+positional hook args (`<remote-name> <remote-url>`) into `pre-push-check.sh`,
+whose parser rejects unknown arguments — so **every tag push was blocked** with
+`unknown argument: origin`. Fixed in the `--install` template (args are no longer
+forwarded, with a comment saying why), reinstalled, and verified by invoking the
+hook exactly as git does: exit 0.
+
+**Verification after the push:** remote `refs/heads/master` and `refs/tags/v1.0.0`
+both point at rewritten commits; a fresh mirror clone of the remote scans **0**
+Devin trailers, **0** attribution lines, and only `.devin/` path references
+remain (the project's own harness directory, unrelated to the vendor).
+
+**Kept:** `~/rls-pre-contrib-rewrite-20261028-084955.bundle` (15 MB) — the only
+copy of the pre-rewrite history, i.e. the only rollback path. Delete on request.
+
+### S144 — failure attribution: three failed pushes, one hook bug, one bad report
+
+**Failure attribution — Layer 4 (Verification feedback) and Layer 2 (Context
+provision).** I reported "push exit=0" and "guard exit=0" for commands that had
+in fact failed. Cause: I wrote `git push … | tail -6; echo "exit=$?"`, which
+reports **tail's** status, not git's. Every success claim was later re-verified
+without a pipe, but the intermediate messages were wrong, and the pipeline
+pattern is the reason. Harness change: capture `$?` immediately after the git
+command, never after the pipe.
+
+Git operations that genuinely failed, and their resolution:
+1. `git push --force origin refs/tags/v1.0.0` → `[BLOCK] unknown argument: origin`.
+   The installed pre-push hook forwarded git's positional hook args into
+   `pre-push-check.sh`, whose parser rejects them, so **every tag push was
+   blocked**. Fixed in the `--install` template, reinstalled, retested through the
+   real hook (exit 0).
+2. `git push origin master` → the scanner flagged the session-log files. The
+   block was correct: my own trace entry had quoted the strings it was describing.
+   Reworded to describe, never reproduce.
+3. Retry → blocked again on the earlier unpushed commit that still held them.
+   Resolved by collapsing both unpushed commits into one, not by allowlisting
+   `.devin/graph/*` (the exact path S140 leaked through).
+4. `git ls-remote origin` after each filter-repo pass → origin is removed by
+   filter-repo; re-added each time.
+5. Stash patch export came out empty for one stash: its content lives in the
+   untracked-files parent, which `show -p` omits. Re-exported with
+   `--include-untracked` (607 lines).
+
+**Post-hoc audit (pipes avoided):** `git fsck` clean; no in-progress operations;
+`master` local == remote (`fe76548`, 351 commits each); tag `v1.0.0` local ==
+remote (`bdc4dbf`); linked worktree `/home/cllin/lockdown-installer-security` on
+`8f5152b`, clean, tree matches HEAD; 5 stashes intact; `git bundle verify` →
+"records a complete history".
+
+### Fog cleared
+- Devin AI no longer appears as a contributor: 261 attribution lines stripped from
+  347 commits, verified by a **fresh mirror clone from GitHub** (0 trailers, 0
+  attribution lines, 0 bot handle / devin.ai strings). Content is provably
+  unchanged — the pre/post tree hash for the old tip is identical.
+- Our own pre-push hook was blocking **every tag push** (forwarded git's hook args
+  into a flag parser). Fixed in the `--install` template and retested through the
+  real git path.
+- The secret scanner's allow-list is now used as designed: four scoped entries
+  (rule + path + inline reason), no values, no blanket exemptions.
+
+### Fog remaining
+- GitHub's contributor list recalculates on its own schedule, and the pre-rewrite
+  objects stay reachable by SHA until it GCs them. Nothing further to do locally.
+- 17 commit hashes cited in `trace.md` / `DEBT-LEDGER.md` were already dangling
+  before today (S140 casualties) and cannot be repaired — those commits exist
+  nowhere, including the backup bundle.
+- `task/installer-security` exists only locally; the linked worktree is clean but
+  unpushed.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130; enforcement paths still 3/13 verified on hardware.
+
+### Blockers
+- D-129 needs a machine with TPM 2.0 **and** a Windows target; the available
+  ProLiant has neither (no TPM module, Debian only).
+- Owner decisions outstanding: repository licence, react-leaflet (Hippocratic-2.1).
+
+### Next session opening
+Replace react-leaflet and @react-leaflet/core (Hippocratic-2.1) with a small
+in-repo wrapper over leaflet 1.9.4 (BSD-2-Clause) so `make check-licenses-strict`
+can gate the build.
+
+### S145 addendum — deeper audit found nothing broken, one thing still open
+
+Re-ran the audit with stricter checks after the owner asked twice:
+- `git fsck --full --strict` → clean, **0 dangling objects**; no `refs/original`;
+  every ref (`master`, `task/installer-security`, `origin/*`, `refs/stash`,
+  `v1.0.0`) points at post-rewrite commits.
+- **No commit was lost.** Comparing (author date, subject) multisets with embedded
+  hashes normalised: 346 pre-rewrite → 346 present, 0 missing. The 8 additions are
+  6 of this session's commits plus 2 stash commits the bundle clone never fetched.
+  Four commits looked "changed" only because their messages cite commit hashes and
+  the rewrite remapped those hashes inside the subject — verified per commit (old
+  resolved in the bundle, new resolves now, identical apart from the hash).
+- Corrected a flaw in my own check: the first comparison script matched two lines
+  containing `D-210` and reported a false miss.
+
+**Still open, and now measured rather than assumed:** the pre-rewrite tip
+`0b823d8` is **still fetchable from GitHub by SHA** (`git fetch --depth=1 origin
+<sha>` succeeds). So the attribution is gone from every ref and from the
+contributor list's input, but the objects persist on GitHub until it garbage
+collects unreachable commits — a schedule it does not publish. Prompt removal
+requires a support request (same route as a secret purge). A local tree cannot
+change that.
+
+**Also unverifiable from here:** whether GitHub's contributor list has already
+recalculated. No API token exists on this host, so that is a browser check.
