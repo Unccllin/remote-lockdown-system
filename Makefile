@@ -89,9 +89,9 @@ build-electron:
 # (build-all.sh is a build orchestrator; tests live in each component.)
 # ---------------------------------------------------------------------------
 
-.PHONY: test test-server test-agent test-dashboard test-worker test-electron test-e2e test-e2e-dashboard test-coverage
+.PHONY: test test-server test-agent test-dashboard test-worker test-electron test-scripts test-e2e test-e2e-dashboard test-coverage
 
-test: test-server test-agent test-dashboard
+test: test-server test-agent test-dashboard test-worker test-electron test-scripts
 
 test-server:
 	@cd server && npm test
@@ -101,6 +101,15 @@ test-agent:
 
 test-dashboard:
 	@cd dashboard && npm test
+
+test-scripts:
+	@echo "=== Graph session lifecycle tests ==="
+	@python3 scripts/test_graph_session.py
+	@echo "=== Memory harness tests ==="
+	@# Prefer the venv interpreter: test_memory.py is a pytest suite and the
+	@# system Python may not have pytest. Mirrors scripts/run-agent-tests.sh.
+	@PY=$$( [ -x agent/.venv/bin/python ] && echo agent/.venv/bin/python || echo python3 ); \
+	  "$$PY" scripts/test_memory.py
 
 test-worker:
 	@cd serverless && npx vitest run
@@ -189,7 +198,7 @@ test-coverage:
 # Full verification sweep — runs everything in order:
 #   1. Graph invariant check (fastest gate, catches structural issues first)
 #   2. Lint (all components)
-#   3. Tests (all 5 test suites)
+#   3. Tests (all 5 component suites + the script-level harness tests)
 #   4. E2E (API-level)
 #   5. Environment verification (build tooling, signing, Docker)
 #   6. Artifact check (build outputs exist)

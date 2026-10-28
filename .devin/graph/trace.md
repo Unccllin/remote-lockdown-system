@@ -953,3 +953,86 @@ file and rewrite the small number of unpushed commits.
 and they require signing secrets this repo may not have. Suite-level checks all
 pass locally with 2 points of slack, so the coverage gates I added are a
 possibility but not a demonstrated cause.
+
+## Session 146 — 2026-10-28 (completing the test suite; two silent harness failures)
+
+**RULE-ZERO.** Read `Makefile` (`test`, `full-verify`), the five component test
+commands, `scripts/test_memory.py` / `test_graph_session.py`, the CI
+`script-tests` job, and `scripts/prepush_secrets.py`'s invocation.
+
+**Bug 1 — `full-verify` lied about coverage.** Its own comment said "Tests (all 5
+test suites)"; `test` ran server, agent and dashboard only. Worker (331 tests) and
+electron (30) were never part of the local sweep. `test` now includes them plus a
+new `test-scripts` target, so the local sweep matches CI.
+
+**Bug 2 — a test command that could not fail.** `scripts/test_memory.py` contains
+44 pytest-style tests and had **no `__main__` block**. Running it directly imported
+those functions, executed none, and exited 0 — which is exactly how the CI
+`script-tests` job ran it (`python3 scripts/test_memory.py`). That job has never
+tested the memory harness. Added a runner (`pytest.main`, with an explicit error
+if pytest is absent) and made CI install pytest — it previously installed only
+pyyaml, so even a correct runner could not have worked there. Verified:
+44 passed.
+
+**Gaps closed with tests that provably fail.**
+- `server/tests/loadSigning.test.js` (11 tests) — the load-test signing contract
+  (`tests/load/lib/sign.js` cannot be imported into Jest, so the contract is
+  locked against `hashApiKey`/`verifyApiKey`/`verifyHmac`): key derivation is
+  deterministic and 44-char base64, hashes to an accepted `api_key_hash`, a
+  sign.js-shaped request verifies, and six single-field tampers are rejected.
+  Previously the only evidence was a manual probe against a live server.
+- `server/tests/bootOrder.test.js` (1 test) — spawns the real entry point against
+  a throwaway SQLite DB and asserts no `no such table` errors, that migrations
+  complete before the server listens, and that the DB file was created. Proved it
+  has teeth by reintroducing the bug in an isolated copy of `server/`: the test
+  failed with both original errors (`no such table: devices`,
+  `no such table: location_reports`).
+
+**Sweep result — `make full-verify`, exit 0, "FULL VERIFICATION PASSED":**
+graph-check ✓ · lint (eslint ×2, ruff + format, tsc worker, OpenAPI 76/76) ✓ ·
+server 663 (41 suites) ✓ · agent 689 ✓ · dashboard 197 ✓ · worker 331 ✓ ·
+electron 30 ✓ · script harness 27 + 44 ✓ · API E2E 10 ✓ · verify-env
+**60 PASS / 0 FAIL / 2 SKIP** ✓ · docker live validation ✓ · artifacts ✓.
+
+Note: the agent suite's summary line does not print — `pyproject.toml` adds `-q`
+and `run-agent-tests.sh` adds another, so pytest runs at `-qq` and emits dots
+only. Countable (9×72+41 = 689) but it makes the log look truncated; left as-is.
+
+**AGENTS.md** test counts corrected (638→663 server, 670→689 agent) and the
+sweep's real coverage recorded, with both harness bugs named.
+
+### Fog cleared
+- The local sweep now actually runs every component suite; `full-verify`'s claim
+  matches what it does.
+- The memory harness has 44 real, executing tests — and they pass.
+- The load-test signing scheme and the boot order are both covered by tests that
+  fail when the behaviour regresses (both verified by reintroducing the fault).
+- `make full-verify` is green end to end: exit 0, verify-env 60 PASS / 0 FAIL /
+  2 SKIP, E2E 10/10, docker live validation passed.
+
+### Fog remaining
+- CI run status is still unreadable from this host (private repo, no API token);
+  whether the jobs fail, and why, remains unverified. `release.yml` is the most
+  likely broad failure (7 jobs needing Azure + Apple signing secrets, fired by the
+  `v1.0.0` tag push).
+- The hardware-backed enforcement paths remain 3/13 verified on hardware — no
+  test change can move that.
+- The agent suite prints no summary line under `-qq`; countable but opaque.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130; enforcement 3/13 on hardware.
+
+### Blockers
+- D-129 needs a machine with TPM 2.0 and a Windows target; the ProLiant has
+  neither.
+- Owner decisions: repository licence; react-leaflet (Hippocratic-2.1).
+- CI failures need either a fine-grained token (Actions: read) or the failing job
+  names.
+
+### Next session opening
+Replace react-leaflet and @react-leaflet/core (Hippocratic-2.1) with a small
+in-repo wrapper over leaflet 1.9.4 (BSD-2-Clause) so `make check-licenses-strict`
+can gate the build.

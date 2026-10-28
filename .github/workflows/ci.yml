@@ -392,8 +392,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install PyYAML
-        run: pip install pyyaml
+      - name: Install test dependencies
+        # pytest is required: scripts/test_memory.py is a pytest suite. Without
+        # it the step used to "pass" by importing 44 test functions and running
+        # none of them.
+        run: pip install pyyaml pytest
 
       - name: Run graph_session tests
         run: python3 scripts/test_graph_session.py

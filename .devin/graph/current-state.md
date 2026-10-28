@@ -51,227 +51,88 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 145 — 2026-10-28 (Devin co-author credit removed; push guards fixed)
+## Latest session: 146 — 2026-10-28 (completing the test suite; two silent harness failures)
 
-**Asked for:** remove Devin AI as a contributor. Investigation showed **no
-attribution in any tracked file** — every "Devin" string outside `.devin/` is a
-path reference to this project's own harness directory. The credit existed only
-in git history: 259 `Co-Authored-By: Devin <…devin-ai-integration[bot]@…>`
-trailers plus 257 `Generated with [Devin](https://devin.ai)` lines (two message
-variants; the first pass only caught the trailer form, the second pass removed
-the markdown-link form). Author/committer was always `unccllin`; the bot was
-never an author.
+**RULE-ZERO.** Read `Makefile` (`test`, `full-verify`), the five component test
+commands, `scripts/test_memory.py` / `test_graph_session.py`, the CI
+`script-tests` job, and `scripts/prepush_secrets.py`'s invocation.
 
-**Safety:**
-- Full bundle of every ref: `~/rls-pre-contrib-rewrite-20261028-084955.bundle`
-  (15 MB, 346 commits, HEAD `0b823d8` = the pre-rewrite remote tip).
-- 5 stashes exported to `/tmp/stash-patches/stash-*.patch` first.
-- 79 uncommitted files from the session committed before touching history.
-- Two `git filter-repo --force --message-callback` passes (trailer form, then
-  attribution-line form). `--message-callback` only rewrites messages, so **file
-  content is provably untouched**: the tree hash of the pre-rewrite tip
-  (`63a4fde02dcb…`) is identical to the tree of its rewritten counterpart.
+**Bug 1 — `full-verify` lied about coverage.** Its own comment said "Tests (all 5
+test suites)"; `test` ran server, agent and dashboard only. Worker (331 tests) and
+electron (30) were never part of the local sweep. `test` now includes them plus a
+new `test-scripts` target, so the local sweep matches CI.
 
-**Evidence repair (the risk that mattered):** every SHA from `3b55d22` onward
-changed, so 18 cited commit references in `trace.md` and `DEBT-LEDGER.md` would
-have pointed at commits that no longer exist — and I2 only checks that a
-`commit_ref` is a **non-empty string**, so the rot would have been silent.
-Repointed all 17 by matching (author date, subject) against the bundle clone,
-plus the stash reference (`6990763` → `c6d678b`). Verified: every repaired
-reference resolves; **zero** references broken by this rewrite remain.
+**Bug 2 — a test command that could not fail.** `scripts/test_memory.py` contains
+44 pytest-style tests and had **no `__main__` block**. Running it directly imported
+those functions, executed none, and exited 0 — which is exactly how the CI
+`script-tests` job ran it (`python3 scripts/test_memory.py`). That job has never
+tested the memory harness. Added a runner (`pytest.main`, with an explicit error
+if pytest is absent) and made CI install pytest — it previously installed only
+pyyaml, so even a correct runner could not have worked there. Verified:
+44 passed.
 
-**Found while verifying:** 17 other cited hashes in the same files were **already
-dangling before this rewrite** — casualties of the S140 credential scrub
-(`4ed2f48`, `60c0a78`, `d111ada`, `ee311de`, `7311c68`, `58f5ac4`, …). They do
-not resolve in the pre-rewrite bundle either, so those commits exist nowhere and
-cannot be repaired, only annotated. Not caused by this session.
+**Gaps closed with tests that provably fail.**
+- `server/tests/loadSigning.test.js` (11 tests) — the load-test signing contract
+  (`tests/load/lib/sign.js` cannot be imported into Jest, so the contract is
+  locked against `hashApiKey`/`verifyApiKey`/`verifyHmac`): key derivation is
+  deterministic and 44-char base64, hashes to an accepted `api_key_hash`, a
+  sign.js-shaped request verifies, and six single-field tampers are rejected.
+  Previously the only evidence was a manual probe against a live server.
+- `server/tests/bootOrder.test.js` (1 test) — spawns the real entry point against
+  a throwaway SQLite DB and asserts no `no such table` errors, that migrations
+  complete before the server listens, and that the DB file was created. Proved it
+  has teeth by reintroducing the bug in an isolated copy of `server/`: the test
+  failed with both original errors (`no such table: devices`,
+  `no such table: location_reports`).
 
-**State:** 348 commits, clean tree, branches `master` + `task/installer-security`,
-tag `v1.0.0` retargeted, `origin` re-added (filter-repo removes it).
-`git log --all` → 0 trailers, 0 attribution mentions, 0 `devin.ai` /
-`devin-ai-integration` strings. Graph invariants pass; `current-state.md`
-regenerated.
+**Sweep result — `make full-verify`, exit 0, "FULL VERIFICATION PASSED":**
+graph-check ✓ · lint (eslint ×2, ruff + format, tsc worker, OpenAPI 76/76) ✓ ·
+server 663 (41 suites) ✓ · agent 689 ✓ · dashboard 197 ✓ · worker 331 ✓ ·
+electron 30 ✓ · script harness 27 + 44 ✓ · API E2E 10 ✓ · verify-env
+**60 PASS / 0 FAIL / 2 SKIP** ✓ · docker live validation ✓ · artifacts ✓.
 
-**Not done, deliberately:** the force-push. GitHub still shows the old history
-(`refs/heads/master` = `0b823d8`, `refs/tags/v1.0.0` = `21ac6ce`) until the owner
-pushes; the old objects stay reachable by SHA until GitHub GCs them.
+Note: the agent suite's summary line does not print — `pyproject.toml` adds `-q`
+and `run-agent-tests.sh` adds another, so pytest runs at `-qq` and emits dots
+only. Countable (9×72+41 = 689) but it makes the log look truncated; left as-is.
 
-### S144 — contributor credit rewritten and PUSHED; two guards fixed on the way
-
-**Pushed** (authorized with "proceed", SSH auth confirmed as `Unccllin`):
-- `master`: `0b823d8… → c998b08…` forced (348 → 349 commits).
-- `v1.0.0`: `21ac6ce… → bdc4dbf…` forced — without this the tag keeps the purged
-  chain reachable, which is the usual way this half-works.
-
-**The push guard blocked twice, correctly, and both were real work:**
-1. `assigned-secret: scripts/verify-environment.sh` → the value is
-   `base64("test-api-key")` in an NSIS verify fixture. Fixed with a scoped,
-   justified entry in the new `.prepush-allow.txt` (the scanner's documented
-   mechanism: rule + path, never values).
-2. Three `assigned-secret` FAILs in `agent/installer_gui.py`,
-   `dashboard/src/pages/EnrollPage.jsx`, `dashboard/src/pages/SetupPage.jsx` —
-   inspected line by line and are all non-values: a function-signature type
-   annotation, two JSON/object keys whose values are runtime variables, an
-   empty-string form field, and a human-readable validation message that merely
-   starts with the word "Password". All false positives; three more scoped
-   entries, each with the reason inline.
-
-   **The S140 lesson bit again inside this very entry.** The first version of the
-   paragraph above quoted each matched string verbatim — and the guard then
-   blocked the push because `.devin/graph/trace.md` and the generated
-   `current-state.md` had become the leak. Quoting the string to prove it is safe
-   is the same mistake as quoting it to prove it leaked. Descriptions only, never
-   the value.
-   `--allow-rewrite` was run deliberately and separately from the push.
-
-**Real bug found in our own hook.** `.git/hooks/pre-push` forwarded git's
-positional hook args (`<remote-name> <remote-url>`) into `pre-push-check.sh`,
-whose parser rejects unknown arguments — so **every tag push was blocked** with
-`unknown argument: origin`. Fixed in the `--install` template (args are no longer
-forwarded, with a comment saying why), reinstalled, and verified by invoking the
-hook exactly as git does: exit 0.
-
-**Verification after the push:** remote `refs/heads/master` and `refs/tags/v1.0.0`
-both point at rewritten commits; a fresh mirror clone of the remote scans **0**
-Devin trailers, **0** attribution lines, and only `.devin/` path references
-remain (the project's own harness directory, unrelated to the vendor).
-
-**Kept:** `~/rls-pre-contrib-rewrite-20261028-084955.bundle` (15 MB) — the only
-copy of the pre-rewrite history, i.e. the only rollback path. Delete on request.
-
-### S144 — failure attribution: three failed pushes, one hook bug, one bad report
-
-**Failure attribution — Layer 4 (Verification feedback) and Layer 2 (Context
-provision).** I reported "push exit=0" and "guard exit=0" for commands that had
-in fact failed. Cause: I wrote `git push … | tail -6; echo "exit=$?"`, which
-reports **tail's** status, not git's. Every success claim was later re-verified
-without a pipe, but the intermediate messages were wrong, and the pipeline
-pattern is the reason. Harness change: capture `$?` immediately after the git
-command, never after the pipe.
-
-Git operations that genuinely failed, and their resolution:
-1. `git push --force origin refs/tags/v1.0.0` → `[BLOCK] unknown argument: origin`.
-   The installed pre-push hook forwarded git's positional hook args into
-   `pre-push-check.sh`, whose parser rejects them, so **every tag push was
-   blocked**. Fixed in the `--install` template, reinstalled, retested through the
-   real hook (exit 0).
-2. `git push origin master` → the scanner flagged the session-log files. The
-   block was correct: my own trace entry had quoted the strings it was describing.
-   Reworded to describe, never reproduce.
-3. Retry → blocked again on the earlier unpushed commit that still held them.
-   Resolved by collapsing both unpushed commits into one, not by allowlisting
-   `.devin/graph/*` (the exact path S140 leaked through).
-4. `git ls-remote origin` after each filter-repo pass → origin is removed by
-   filter-repo; re-added each time.
-5. Stash patch export came out empty for one stash: its content lives in the
-   untracked-files parent, which `show -p` omits. Re-exported with
-   `--include-untracked` (607 lines).
-
-**Post-hoc audit (pipes avoided):** `git fsck` clean; no in-progress operations;
-`master` local == remote (`fe76548`, 351 commits each); tag `v1.0.0` local ==
-remote (`bdc4dbf`); linked worktree `/home/cllin/lockdown-installer-security` on
-`8f5152b`, clean, tree matches HEAD; 5 stashes intact; `git bundle verify` →
-"records a complete history".
+**AGENTS.md** test counts corrected (638→663 server, 670→689 agent) and the
+sweep's real coverage recorded, with both harness bugs named.
 
 ### Fog cleared
-- Devin AI no longer appears as a contributor: 261 attribution lines stripped from
-  347 commits, verified by a **fresh mirror clone from GitHub** (0 trailers, 0
-  attribution lines, 0 bot handle / devin.ai strings). Content is provably
-  unchanged — the pre/post tree hash for the old tip is identical.
-- Our own pre-push hook was blocking **every tag push** (forwarded git's hook args
-  into a flag parser). Fixed in the `--install` template and retested through the
-  real git path.
-- The secret scanner's allow-list is now used as designed: four scoped entries
-  (rule + path + inline reason), no values, no blanket exemptions.
+- The local sweep now actually runs every component suite; `full-verify`'s claim
+  matches what it does.
+- The memory harness has 44 real, executing tests — and they pass.
+- The load-test signing scheme and the boot order are both covered by tests that
+  fail when the behaviour regresses (both verified by reintroducing the fault).
+- `make full-verify` is green end to end: exit 0, verify-env 60 PASS / 0 FAIL /
+  2 SKIP, E2E 10/10, docker live validation passed.
 
 ### Fog remaining
-- GitHub's contributor list recalculates on its own schedule, and the pre-rewrite
-  objects stay reachable by SHA until it GCs them. Nothing further to do locally.
-- 17 commit hashes cited in `trace.md` / `DEBT-LEDGER.md` were already dangling
-  before today (S140 casualties) and cannot be repaired — those commits exist
-  nowhere, including the backup bundle.
-- `task/installer-security` exists only locally; the linked worktree is clean but
-  unpushed.
+- CI run status is still unreadable from this host (private repo, no API token);
+  whether the jobs fail, and why, remains unverified. `release.yml` is the most
+  likely broad failure (7 jobs needing Azure + Apple signing secrets, fired by the
+  `v1.0.0` tag push).
+- The hardware-backed enforcement paths remain 3/13 verified on hardware — no
+  test change can move that.
+- The agent suite prints no summary line under `-qq`; countable but opaque.
 
 ### Debt items closed
 - None.
 
 ### Debt items still open
-- D-120, D-129, D-130; enforcement paths still 3/13 verified on hardware.
+- D-120, D-129, D-130; enforcement 3/13 on hardware.
 
 ### Blockers
-- D-129 needs a machine with TPM 2.0 **and** a Windows target; the available
-  ProLiant has neither (no TPM module, Debian only).
-- Owner decisions outstanding: repository licence, react-leaflet (Hippocratic-2.1).
+- D-129 needs a machine with TPM 2.0 and a Windows target; the ProLiant has
+  neither.
+- Owner decisions: repository licence; react-leaflet (Hippocratic-2.1).
+- CI failures need either a fine-grained token (Actions: read) or the failing job
+  names.
 
 ### Next session opening
 Replace react-leaflet and @react-leaflet/core (Hippocratic-2.1) with a small
 in-repo wrapper over leaflet 1.9.4 (BSD-2-Clause) so `make check-licenses-strict`
 can gate the build.
-
-### S145 addendum — deeper audit found nothing broken, one thing still open
-
-Re-ran the audit with stricter checks after the owner asked twice:
-- `git fsck --full --strict` → clean, **0 dangling objects**; no `refs/original`;
-  every ref (`master`, `task/installer-security`, `origin/*`, `refs/stash`,
-  `v1.0.0`) points at post-rewrite commits.
-- **No commit was lost.** Comparing (author date, subject) multisets with embedded
-  hashes normalised: 346 pre-rewrite → 346 present, 0 missing. The 8 additions are
-  6 of this session's commits plus 2 stash commits the bundle clone never fetched.
-  Four commits looked "changed" only because their messages cite commit hashes and
-  the rewrite remapped those hashes inside the subject — verified per commit (old
-  resolved in the bundle, new resolves now, identical apart from the hash).
-- Corrected a flaw in my own check: the first comparison script matched two lines
-  containing `D-210` and reported a false miss.
-
-**Still open, and now measured rather than assumed:** the pre-rewrite tip
-`0b823d8` is **still fetchable from GitHub by SHA** (`git fetch --depth=1 origin
-<sha>` succeeds). So the attribution is gone from every ref and from the
-contributor list's input, but the objects persist on GitHub until it garbage
-collects unreachable commits — a schedule it does not publish. Prompt removal
-requires a support request (same route as a secret purge). A local tree cannot
-change that.
-
-**Also unverifiable from here:** whether GitHub's contributor list has already
-recalculated. No API token exists on this host, so that is a browser check.
-
-### S145 — CI failures: one cause found and fixed, and a mistake of mine
-
-Owner reported "most workflows have failed". I cannot read Actions runs from this
-host (private repo, no API token: `api.github.com/.../actions/runs` → 404), so I
-worked from what my pushes actually triggered:
-
-| Triggered by my pushes | Jobs | Note |
-|---|---|---|
-| `ci.yml` (push to master, 4 times) | 12 | 5 of them now run coverage gates I added |
-| `lint.yml` (same pushes) | 7 | includes the new `secrets` job |
-| `codeql.yml` | 1 | |
-| `release.yml` | 7 | **fired by the `v1.0.0` tag force-push**; needs 3 `AZURE_TRUSTED_SIGNING_*` + 5 `APPLE_*` secrets |
-
-**Definite cause, found and fixed.** `python3 scripts/prepush_secrets.py --all`
-(the path the `secrets` job takes when a force-push leaves no reachable base
-commit) exited 1 on `.prepush-allow.txt` — my own allow-list comments quoted the
-patterns they were describing, so the allow-list itself became the finding,
-including in the historical blob. Fixed by describing findings without quoting
-them, and by collapsing my four unpushed commits into one so no commit in the new
-history carries the quoted text. Verified: `--all` → exit 0, and the scan over the
-new history alone → 0 FAILs.
-
-**My mistake, recovered.** I first tried to scrub that historical blob with
-`git filter-repo --replace-text`, which is **not path-scoped** — it rewrote the
-literals in every blob, including `dashboard/src/pages/EnrollPage.jsx` and
-`SetupPage.jsx`, i.e. it corrupted real source. It was unpushed, so
-`git reset --hard origin/master` restored the exact code (verified: validation
-line present, api_key line present, no replacement text anywhere, and a fresh
-clone of the remote confirms). The correct fix needed no blob surgery at all.
-Lesson: `--replace-text` is global; use a path-checked blob callback, or fix the
-file and rewrite the small number of unpushed commits.
-
-**Not verifiable from here:** whether the other CI jobs fail, and why. The
-`release.yml` jobs are the most likely broad failure — a tag push triggers them
-and they require signing secrets this repo may not have. Suite-level checks all
-pass locally with 2 points of slack, so the coverage gates I added are a
-possibility but not a demonstrated cause.
 
 ---
 

@@ -669,3 +669,18 @@ class TestIndex:
         text = memory.INDEX_FILE.read_text()
         assert "Active memories: 1" in text
         assert "Superseded: 1" in text
+
+
+if __name__ == "__main__":
+    # Without this block the file was a silent no-op: `python3
+    # scripts/test_memory.py` imported 44 test functions and exited 0 without
+    # running one of them, which is exactly how the CI job invoked it. A test
+    # command that cannot fail is worse than no test.
+    try:
+        import pytest
+    except ImportError:
+        sys.exit(
+            "pytest is required to run these tests: "
+            "pip install pytest (or use agent/.venv/bin/python)"
+        )
+    sys.exit(pytest.main([__file__, "-q"]))

@@ -233,8 +233,8 @@ export PATH="/home/cllin/.local/node/bin:$PATH"
 npm test
 
 # Per-component
-cd server   && npm test                       # 638 Jest tests
-scripts/run-agent-tests.sh -q                 # 670 pytest tests (uses agent/.venv)
+cd server   && npm test                       # 663 Jest tests
+scripts/run-agent-tests.sh -q                 # 689 pytest tests (uses agent/.venv)
 cd dashboard && npx vitest run                # 197 Vitest tests
 cd electron  && npm test                      # 30 Jest tests
 cd serverless && npm test                     # 331 Vitest tests
@@ -327,12 +327,31 @@ make build
 
 ## Diagnostic Sweep Results (2026-08-04, updated 2026-10-27)
 
-All green: 638 server tests, 670 agent tests, 197 dashboard tests, 30 electron tests,
-331 serverless tests, eslint clean on server + dashboard, ruff clean + formatted on
+All green: 663 server tests (41 suites), 689 agent tests, 197 dashboard tests,
+30 electron tests, 331 serverless tests, 10 API E2E tests, 71 script-harness tests
+(27 graph-session + 44 memory), eslint clean on server + dashboard, ruff clean + formatted on
 agent, vite build OK, all shell scripts `bash -n` OK, all YAML configs valid, all
 local imports resolve, git tree clean. Also green: `make pg-smoke` 65/65 on real
 PostgreSQL 16, API+agent E2E 10/10, `actionlint` 1.7.12 clean on all 5 workflows.
 Not runnable on this host: Playwright + Electron (missing `libnspr4.so`).
+**`make full-verify` now covers all five component suites** (server, agent,
+dashboard, worker, electron) plus the script-level harness tests, E2E, env and
+artifact checks — it previously ran only three of the five while its own comment
+claimed "all 5 test suites". Current measured totals: server 663 (41 suites),
+agent 689, dashboard 197, worker 331, electron 30, API E2E 10, script harness 71.
+
+Two harness bugs found while completing this (both fixed):
+1. `scripts/test_memory.py` had 44 pytest tests and **no `__main__` block**, so
+   `python3 scripts/test_memory.py` imported them, ran none, and exited 0 — which
+   is exactly how the CI `script-tests` job invoked it. That job had never run a
+   single memory test. It now has a runner, and CI installs pytest (it only
+   installed pyyaml, so the suite could not have run there either).
+2. The server suite had no test for the boot order or for the load-test HMAC
+   signing contract; both were verified by hand. Now
+   `server/tests/bootOrder.test.js` spawns the real entry point against a fresh
+   SQLite DB (verified to fail when the bug is reintroduced) and
+   `server/tests/loadSigning.test.js` locks the signing scheme in 11 tests.
+
 `verify-environment.sh` final: **60 PASS / 0 FAIL / 2 SKIP** (the skips are the
 intentional `installer-windows-execpolicy` by-design skip).
 
