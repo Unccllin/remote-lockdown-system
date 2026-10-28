@@ -29,10 +29,61 @@ const PLACEHOLDERS = [
  * @param {boolean} opts.dev — if true, relax length floors (dev-start.js mode)
  * @returns {void} — throws or exits on failure
  */
+
+// Secrets that may be supplied as files (the CC12 _FILE convention). Each of
+// these was previously resolved ad hoc: db/crypto.js reads its own _FILE, and
+// db/apiKey.js reads AGENT_KEY_PEPPER_FILE — but JWT_SECRET_FILE had NO consumer
+// at all, so docker-compose.yml (which passes only the *_FILE variants) left
+// process.env.JWT_SECRET undefined and every login threw
+// "secretOrPrivateKey must have a value". Resolve them once, here, before any
+// consumer reads them.
+const FILE_SECRET_NAMES = [
+  'JWT_SECRET',
+  'AGENT_SHARED_KEY',
+  'AGENT_KEY_PEPPER',
+  'FIELD_ENCRYPTION_KEY',
+  'LOCATION_FIELD_KEY',
+];
+
+/**
+ * Load `<NAME>_FILE` into `process.env[NAME]` for every file-backed secret.
+ *
+ * An explicitly-set `NAME` always wins, so file and env configuration can be
+ * mixed per secret. Unreadable files are left for validateEnv to report, so the
+ * error message still names the variable.
+ * @returns {string[]} names resolved from files
+ */
+function resolveFileSecrets() {
+  const fs = require('fs');
+  const resolved = [];
+  for (const name of FILE_SECRET_NAMES) {
+    const fileVar = process.env[`${name}_FILE`];
+    if (!fileVar || process.env[name]) continue;
+    try {
+      const value = fs.readFileSync(fileVar, 'utf8').trim();
+      if (value) {
+        process.env[name] = value;
+        resolved.push(name);
+      }
+    } catch {
+      // Leave it unset; validateEnv reports `<NAME>_FILE points to ... which does
+      // not exist`, which is the actionable message.
+    }
+  }
+  return resolved;
+}
+
 function validateEnv({ dev = false } = {}) {
+  // Resolve file-backed secrets first: every consumer downstream (JWT signing,
+  // API-key hashing, field encryption) reads the plain variable.
+  const fromFiles = resolveFileSecrets();
+
   const errors = [];
   const warnings = [];
   const isProd = process.env.NODE_ENV === 'production';
+  if (fromFiles.length) {
+    warnings.push(`secrets loaded from files: ${fromFiles.join(', ')}`);
+  }
 
   // --- S140: database driver must be unambiguous ---
   // USE_SQLITE is a dev/Electron switch; DATABASE_URL is the production
@@ -200,4 +251,4 @@ function validateEnv({ dev = false } = {}) {
   }
 }
 
-module.exports = { validateEnv };
+module.exports = { validateEnv, resolveFileSecrets, FILE_SECRET_NAMES };

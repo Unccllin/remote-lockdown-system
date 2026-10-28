@@ -17,7 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { validateEnv } = require('../src/config/env');
+const { validateEnv, resolveFileSecrets } = require('../src/config/env');
 
 // Valid 32-byte hex key (64 hex chars)
 const VALID_HEX_KEY = 'a'.repeat(64);
@@ -64,6 +64,11 @@ const ALL_ENV_KEYS = [
   'DB_PASSWORD',
   'DB_SSL_VERIFY',
   'USE_SQLITE',
+  'JWT_SECRET_FILE',
+  'AGENT_SHARED_KEY_FILE',
+  'AGENT_KEY_PEPPER_FILE',
+  'FIELD_ENCRYPTION_KEY_FILE',
+  'LOCATION_FIELD_KEY_FILE',
   'SQLITE_PATH',
   'LOCATION_RETENTION_DAYS',
   'ALLOW_NON_PROD',
@@ -192,5 +197,74 @@ describe('env.js — validateEnv', () => {
     delete process.env.USE_SQLITE;
     expect(() => validateEnv()).toThrow('process.exit called');
     expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('env.js — _FILE secret resolution (CC12)', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  let exitSpy;
+  let tmpDir;
+
+  beforeEach(() => {
+    clearEnvKeys(ALL_ENV_KEYS);
+    setEnv(PROD_ENV);
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-file-'));
+    exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // Regression: JWT_SECRET_FILE had no consumer at all, so docker-compose.yml
+  // (which passes only the *_FILE variants) left JWT_SECRET undefined and every
+  // login threw "secretOrPrivateKey must have a value".
+  test('JWT_SECRET_FILE is loaded into JWT_SECRET', () => {
+    const value = 'x'.repeat(48);
+    const file = path.join(tmpDir, 'jwt');
+    fs.writeFileSync(file, value + '\n'); // trailing newline must be trimmed
+    delete process.env.JWT_SECRET;
+    process.env.JWT_SECRET_FILE = file;
+
+    const resolved = resolveFileSecrets();
+
+    expect(resolved).toContain('JWT_SECRET');
+    expect(process.env.JWT_SECRET).toBe(value);
+  });
+
+  test('an explicit variable wins over its _FILE', () => {
+    const file = path.join(tmpDir, 'jwt');
+    fs.writeFileSync(file, 'y'.repeat(48));
+    process.env.JWT_SECRET_FILE = file;
+    process.env.JWT_SECRET = 'explicit-value-that-must-survive';
+
+    resolveFileSecrets();
+
+    expect(process.env.JWT_SECRET).toBe('explicit-value-that-must-survive');
+  });
+
+  test('a missing _FILE leaves the variable unset so validation reports it', () => {
+    delete process.env.JWT_SECRET;
+    process.env.JWT_SECRET_FILE = path.join(tmpDir, 'nope');
+    expect(() => resolveFileSecrets()).not.toThrow();
+    expect(process.env.JWT_SECRET).toBeUndefined();
+  });
+
+  test('validateEnv succeeds with all secrets supplied as files', () => {
+    const names = ['JWT_SECRET', 'AGENT_SHARED_KEY', 'AGENT_KEY_PEPPER'];
+    for (const name of names) {
+      const file = path.join(tmpDir, name);
+      fs.writeFileSync(file, 'z'.repeat(64));
+      delete process.env[name];
+      process.env[`${name}_FILE`] = file;
+    }
+    expect(() => validateEnv()).not.toThrow();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(process.env.JWT_SECRET).toHaveLength(64);
   });
 });
