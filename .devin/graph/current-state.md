@@ -188,6 +188,51 @@ mixed — the first two unsigned and then the spike and mixed signed under
 enforcement. `docs/LOAD_TESTING.md` carries the measured tables plus the
 first-admin bootstrap recipe.
 
+### S144 — Devin AI contributor credit removed from history (local rewrite, not pushed)
+
+**Asked for:** remove Devin AI as a contributor. Investigation showed **no
+attribution in any tracked file** — every "Devin" string outside `.devin/` is a
+path reference to this project's own harness directory. The credit existed only
+in git history: 259 `Co-Authored-By: Devin <…devin-ai-integration[bot]@…>`
+trailers plus 257 `Generated with [Devin](https://devin.ai)` lines (two message
+variants; the first pass only caught the trailer form, the second pass removed
+the markdown-link form). Author/committer was always `unccllin`; the bot was
+never an author.
+
+**Safety:**
+- Full bundle of every ref: `~/rls-pre-contrib-rewrite-20261028-084955.bundle`
+  (15 MB, 346 commits, HEAD `0b823d8` = the pre-rewrite remote tip).
+- 5 stashes exported to `/tmp/stash-patches/stash-*.patch` first.
+- 79 uncommitted files from the session committed before touching history.
+- Two `git filter-repo --force --message-callback` passes (trailer form, then
+  attribution-line form). `--message-callback` only rewrites messages, so **file
+  content is provably untouched**: the tree hash of the pre-rewrite tip
+  (`63a4fde02dcb…`) is identical to the tree of its rewritten counterpart.
+
+**Evidence repair (the risk that mattered):** every SHA from `3b55d22` onward
+changed, so 18 cited commit references in `trace.md` and `DEBT-LEDGER.md` would
+have pointed at commits that no longer exist — and I2 only checks that a
+`commit_ref` is a **non-empty string**, so the rot would have been silent.
+Repointed all 17 by matching (author date, subject) against the bundle clone,
+plus the stash reference (`6990763` → `c6d678b`). Verified: every repaired
+reference resolves; **zero** references broken by this rewrite remain.
+
+**Found while verifying:** 17 other cited hashes in the same files were **already
+dangling before this rewrite** — casualties of the S140 credential scrub
+(`4ed2f48`, `60c0a78`, `d111ada`, `ee311de`, `7311c68`, `58f5ac4`, …). They do
+not resolve in the pre-rewrite bundle either, so those commits exist nowhere and
+cannot be repaired, only annotated. Not caused by this session.
+
+**State:** 348 commits, clean tree, branches `master` + `task/installer-security`,
+tag `v1.0.0` retargeted, `origin` re-added (filter-repo removes it).
+`git log --all` → 0 trailers, 0 attribution mentions, 0 `devin.ai` /
+`devin-ai-integration` strings. Graph invariants pass; `current-state.md`
+regenerated.
+
+**Not done, deliberately:** the force-push. GitHub still shows the old history
+(`refs/heads/master` = `0b823d8`, `refs/tags/v1.0.0` = `21ac6ce`) until the owner
+pushes; the old objects stay reachable by SHA until GitHub GCs them.
+
 ---
 
 ## Open debt items
