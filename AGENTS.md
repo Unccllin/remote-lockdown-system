@@ -259,6 +259,10 @@ cd serverless && npm test                     # 331 Vitest tests
 # Coverage gate (all 5 components; floors declared per component, dated 2026-10-27)
 make test-coverage
 
+# Load harness smoke: starts a throwaway server, seeds HMAC-keyed devices and runs
+# a small signed k6 scenario (needs k6 on PATH, or K6_BIN=/path/to/k6)
+make load-smoke
+
 # NOTE: pytest must run through scripts/run-agent-tests.sh, which picks
 # agent/.venv/bin/python. A bare `python3 -m pytest` fails on machines whose
 # system Python lacks pytest-timeout (pyproject sets --timeout=30).

@@ -1144,3 +1144,35 @@ the "no REST API" test; restoring returned green.
 tooling); `index.js` is invisible to in-process coverage; k6 scripts never execute
 in CI; Electron `main.js`/`preload.js` excluded by config; worker not tested
 against the real Workers runtime; 3/13 enforcement paths verified on hardware.
+
+### S147 — the load harness is now a gate (`make load-smoke` + CI job)
+
+**RULE-ZERO.** Read `tests/load/*.js` (thresholds per scenario, env knobs),
+`scripts/seed-loadtest-devices.js` (`--hmac-secret` path added earlier this
+session), `server/src/middleware/hmacAuth.js` (what "signed" has to satisfy), and
+the ci.yml job conventions (SHA-pinned actions, `needs: graph-check`).
+
+**IMPLEMENT.**
+- `scripts/run-load-smoke.sh` — one path shared by local and CI: starts the server
+  on a free port with a temp SQLite DB and `REQUIRE_HMAC=true`, seeds 20 devices
+  **with per-device HMAC keys** plus pending lockdown commands, runs the scenario,
+  and asserts four things rather than just k6's exit code: k6 exited 0, requests
+  actually happened, the server logged no `level:50` line, and no request arrived
+  unsigned. Cleans up via a trap.
+- `.github/workflows/ci.yml` — new `k6-smoke` job: `npm ci` for the server, k6
+  v2.3.0 installed from the pinned GitHub release tarball (no action to SHA-pin),
+  then the runner script with 5 VUs / 10s.
+- `Makefile` — `make load-smoke`, documented in the help block and in AGENTS.md.
+
+**VERIFY.** `make load-smoke` → 55 requests, 0.00 % failures, p95 62.6 ms, no
+server errors, all requests signed, exit 0. Teeth proven by mutation: signing with
+a tampered secret made k6 exit 99 (thresholds crossed) and the script exit 1;
+restoring returned exit 0. `actionlint` clean; 13 jobs now.
+
+**Why it matters:** the load scripts previously only ran by hand, so a broken
+script, a rotated header name or a changed response shape would surface during a
+manual test — i.e. never. Now any of those fails a PR.
+
+**Debian box:** not used for this (CI runners are ephemeral; the box holds only an
+older `~/repo` snapshot and its MTU path makes pushing megabytes a 700-byte-chunk
+slog). It remains useful for hardware-adjacent work only.

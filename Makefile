@@ -42,6 +42,7 @@ help:
 	@echo "  make test-coverage        run all test suites with coverage reporting"
 	@echo "  make full-verify          run everything: lint + test + e2e + verify-env + graph-check"
 	@echo "  make hw-test              run hardware test harness v2.0 (D-003, simulate mode)"
+	@echo "  make load-smoke           signed k6 load smoke against a throwaway server"
 	@echo "  make hw-test-dry          dry-run hardware test harness"
 	@echo "  make hw-test-check        check test eligibility (no execution)"
 	@echo ""
@@ -121,6 +122,10 @@ test-electron:
 
 # Real-PostgreSQL smoke test (S140). SQLite-only Jest runs cannot catch PG
 # dialect bugs, and this harness previously could not start at all.
+.PHONY: load-smoke
+load-smoke:
+	@scripts/run-load-smoke.sh
+
 .PHONY: pg-smoke
 
 pg-smoke:
