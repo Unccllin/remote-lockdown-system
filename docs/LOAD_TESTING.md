@@ -402,7 +402,7 @@ examined. To prove the *signature* is checked, use the probe, which holds the ke
 constant and breaks one thing at a time:
 
 ```bash
-BASE=http://100.114.96.76:3001 K6_HMAC_SECRET=hmac-load-2026 node tests/load/hmac-probe.js
+BASE=http://<tailnet-ip>:3001 K6_HMAC_SECRET=hmac-load-2026 node tests/load/hmac-probe.js
 ```
 
 ```console

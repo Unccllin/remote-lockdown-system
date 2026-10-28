@@ -1,13 +1,13 @@
 {
   "harness_version": "live-agent-test",
   "timestamp": "2026-08-21T08:22:47.148437Z",
-  "test_type": "Live agent \u2194 server enforcement path test on real HP hardware",
+  "test_type": "Live agent ↔ server enforcement path test on real HP hardware",
   "environment": {
-    "server": "WSL2 on HP EliteBook 840 G7 (Windows host 192.168.1.29)",
+    "server": "WSL2 on HP EliteBook 840 G7 (Windows host <lan-ip>)",
     "server_port": 3001,
     "database": "SQLite (server/lockdown.db)",
     "agent": "Standalone PyInstaller exe (lockdown-agent.exe v1.0.0)",
-    "agent_machine": "Spare HP machine on LAN (MAC: 74:70:FD:8F:85:CB, UUID: 128028639200715)",
+    "agent_machine": "Spare HP machine on LAN (MAC: <redacted-mac>, UUID: <redacted-uuid>)",
     "network": "Wi-Fi LAN via Windows portproxy + firewall rule",
     "auth": "Per-device API key + HMAC-SHA256 request signing"
   },
@@ -16,8 +16,8 @@
     "hostname": "HP-SPARE-TEST",
     "owner_name": "Test Operator",
     "status": "active",
-    "mac_address": "74:70:FD:8F:85:CB",
-    "hardware_uuid": "128028639200715",
+    "mac_address": "<redacted-mac>",
+    "hardware_uuid": "<redacted-uuid>",
     "last_checkin": "2026-08-21 08:20:44",
     "enrolled_at": "2026-08-21 07:38:41",
     "api_key_hash": "fd4ef2e13174fd4f598a...[REDACTED]"
@@ -140,7 +140,7 @@
     "lockdown_executed": "2026-08-21 08:17:33",
     "unlock_command_created": "2026-08-21 08:18:45",
     "unlock_executed": "2026-08-21 08:20:14",
-    "device_status_transitions": "active \u2192 stolen \u2192 locked \u2192 recovering \u2192 active",
+    "device_status_transitions": "active → stolen → locked → recovering → active",
     "recovery_successful": true
   },
   "summary": {
@@ -148,5 +148,6 @@
     "passed": 3,
     "failed": 2,
     "full_lockdown_recovery_cycle": true
-  }
+  },
+  "redaction_note": "Identifiers (MAC address, hardware UUID, LAN IP) redacted for public repo; structure/results/evidence preserved."
 }

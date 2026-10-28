@@ -178,11 +178,11 @@ Required because SSH is not available and the credential must be treated as
 compromised:
 
 ```console
-$ for h in 192.168.1.40 192.168.1.219; do
+$ for h in <lan-ip> <lan-ip>; do
     timeout 4 bash -c "cat < /dev/tcp/$h/22" 2>&1 | head -1
   done
-bash: connect: Connection refused      # 192.168.1.40  (host answers ICMP)
-bash: connect: No route to host        # 192.168.1.219 (no ICMP either)
+bash: connect: Connection refused      # <lan-ip>  (host answers ICMP)
+bash: connect: No route to host        # <lan-ip> (no ICMP either)
 ```
 
 At the machine, over console/physical access:

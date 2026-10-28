@@ -13,7 +13,7 @@
 // Derivation is the same one tests/load/lib/sign.js uses.
 const crypto = require('crypto');
 
-const BASE = process.env.BASE || 'http://100.114.96.76:3001';
+const BASE = process.env.BASE || 'http://<tailnet-ip>:3001';
 const SECRET = process.env.K6_HMAC_SECRET || 'hmac-load-2026';
 const VU = 1;
 const idx = String(VU).padStart(5, '0');

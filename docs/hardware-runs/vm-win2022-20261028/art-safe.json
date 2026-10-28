@@ -37,7 +37,7 @@
         "name": "E-HWID-01",
         "status": "passed",
         "duration": 3468,
-        "message": "Hardware ID collected: hostname=NEWARKW-HTP3LNT, uuid=00000000..., mac=E1:1E:A8:07:0E:D0. Hardware ID fields verified",
+        "message": "Hardware ID collected: hostname=<test-host>, uuid=00000000..., mac=<redacted-mac>. Hardware ID fields verified",
         "trace": null,
         "extra": {
           "enforcement_path": "E-HWID",
@@ -203,7 +203,7 @@
         "defender_exclusion": null,
         "agent_binary_hash": "4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a",
         "python_version": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
-        "hostname": "NEWARKW-HTP3LNT"
+        "hostname": "<test-host>"
       },
       "agent_binary_hash": "4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a"
     }

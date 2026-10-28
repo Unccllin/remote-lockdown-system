@@ -120,7 +120,7 @@ The DB layer is now honest and self-healing (driver logged, drift healed, prod f
 ### Fog remaining
 - Electron GUI path (main process, preload → renderer baseURL, updater) still unrun: `libnspr4.so` missing and no xvfb on this host.
 - GitHub Actions run status unverified — private repo, no token.
-- **Rotation not performed**: 192.168.1.40 and 192.168.1.219 both refuse port 22 from here, so the password cannot be changed on the hosts right now. It must be treated as compromised.
+- **Rotation not performed**: <lan-ip> and <lan-ip> both refuse port 22 from here, so the password cannot be changed on the hosts right now. It must be treated as compromised.
 - Force-pushing the rewritten history is a manual, coordinate-with-collaborators step; local `origin` still points at the old remote history.
 - The unknown-asset SPA fallback returns 200 + `index.html` for a missing `.js` (browser shows a MIME error instead of 404). Behaviour observed, not changed.
 
@@ -369,7 +369,7 @@ and `git merge-base --is-ancestor` were run *before* pushing.
 ### Fog remaining
 - Graph's happy path is unit-tested against its documented response shape only —
   no Azure tenant was available, so it has never spoken to live Graph.
-- **Password rotation is still blocked**: both 192.168.1.40 and 192.168.1.219
+- **Password rotation is still blocked**: both <lan-ip> and <lan-ip>
   refuse port 22 from here.
 - The Hippocratic-2.1 dependency decision (react-leaflet) and the repository
   licence choice remain owner decisions.
@@ -526,7 +526,7 @@ can gate the build.
 ### S143 continuation — the ProLiant box: what it can and cannot do (measured)
 
 **Context.** The owner offered a server for the blocked items. It is a **HP
-ProLiant DL380p Gen8** (`debian`, 100.114.96.76 via Tailscale, Debian 13,
+ProLiant DL380p Gen8** (`<host>`, <tailnet-ip> via Tailscale, Debian 13,
 32 threads, 15 GB, 931 GB, Docker 29.9 + `/dev/kvm`, no sudo for the login user).
 
 **Hardware verdict (measured on the box).**
@@ -1250,3 +1250,30 @@ slog). It remains useful for hardware-adjacent work only.
 Wire the VM run into the harness story (document how to recreate the guest), then
 either take react-leaflet for the licence gate or add the missing vTPM to the VM so
 E-TPM can execute.
+
+### S149 — repo goes public: exposure scrub + the production program starts
+
+**Decisions taken by the owner (this session):** repository licence = proprietary,
+all rights reserved; public-repo exposure = scrub topology and enable push
+protection; dashboard = full custom build; Windows hardware = **wipe Debian and
+install Windows on the ProLiant**.
+
+**Measured:** Dependabot alerts fell **161 → 19** (8 high, 6 moderate, 5 low, zero
+critical) after the dependency pass; code scanning is free on public repos, so
+`codeql.yml` is un-gated (opt-out via `CODE_SECURITY_ENABLED=false`).
+
+**Orchestration constraint discovered:** this harness allows **exactly one
+subagent call per turn**, and background children cannot start at all
+(`@earendil-works/pi-agent-core/node` missing). Parallel fan-out is therefore not
+available; the master orchestrator runs a **sequential** pipeline in which each
+workstream gets its own git worktree, is applied by the orchestrator, and is
+counter-checked against its own gate before the next starts.
+
+**W1 (public-repo hardening) — DONE and counter-verified by the orchestrator.**
+Redacted tailnet/LAN identifiers and host names from `trace.md`,
+`D-129-HARDWARE-RUNBOOK.md`, `LOAD_TESTING.md`, `hmac-probe.js`; redacted the real
+HP MAC + hardware UUID in `agent/hw_test_artifact_live_hp.json`; finalised LICENSE
+as proprietary (dropped provisional/pending language); the orchestrator then
+scrubbed the same identifiers from `docs/hardware-runs/vm-win2022-20261028/*.json`
+(4 files, outside W1's scope). Gate: topology grep 0 matches, secret scan exit 0,
+graph invariants pass.
