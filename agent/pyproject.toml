@@ -1,6 +1,15 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --timeout=30"
+# tests/conftest.py imports the top-level modules (`import agent`, ...), which
+# only worked when the working directory was on sys.path. `python -m pytest`
+# puts it there (that is what scripts/run-agent-tests.sh uses, and what every
+# local command did); the bare `pytest` console script does not. CI runs the
+# bare script, so collection died with "ModuleNotFoundError: No module named
+# 'agent'" and exit code 4 — reported as "Agent Tests failure" for days with no
+# visible reason. Declaring the rootdir as an import root makes collection
+# independent of the invocation form.
+pythonpath = ["."]
 markers = [
     "hardware: tests that require real Windows/HP hardware",
     "slow: tests that take more than 5 seconds",
