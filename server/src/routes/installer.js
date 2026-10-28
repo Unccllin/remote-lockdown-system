@@ -1651,4 +1651,21 @@ router.fetchChecksums = fetchChecksums;
 router.escapeSh = escapeSh;
 router.escapePs1 = escapePs1;
 
+// Express uses the router itself; the helpers below are attached for unit tests.
+// They build the shell/PowerShell installers, so an escaping bug here is an
+// injection bug — worth testing directly rather than only through the routes.
+router.helpers = {
+  getPlatformConfig,
+  getReleasePlatformName,
+  escapeSh,
+  escapePs1,
+  buildDeviceConfig,
+  assembleZipFiles,
+  generateInstallSh,
+  generateInstallPs1,
+  generateNsisScript,
+  generateNsisLicense,
+  generateReadme,
+};
+
 module.exports = router;

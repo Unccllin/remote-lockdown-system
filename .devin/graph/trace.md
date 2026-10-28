@@ -1107,3 +1107,40 @@ failed the two self-reference checks; restoring returned all-green.
 `meshcentral.js` 11.5 % and superseded), k6 scripts never executed in CI, Electron
 `main.js`/`preload.js` excluded from coverage, worker not tested against the real
 Workers runtime, and 3/13 enforcement paths verified on hardware.
+
+### S147 — coverage gaps: connector 11.5 % → 96.7 %, installer injection surface tested
+
+**IMPLEMENT.**
+- `server/tests/integrations.meshcentral.test.js` (17 tests). The connector was
+  registered in the registry but ~11.5 % covered, and its *failure* paths are the
+  interesting part (a real MeshCentral 1.3.1 has no REST API — `/api/*` answers
+  with the web UI's HTML). Covers: off-vs-configured precedence, `status()` never
+  echoing the credential, refusal paths naming the exact env var, the HTML answer
+  reported as "no REST API"/404 rather than a JSON parse error, non-2xx naming the
+  status, a network error wrapped without the token in the message, a payload
+  without a node map, and the normalized shape (never-connected nodes give
+  `lastSeenAt: null`, not 1970) plus `x-meshauth` carrying base64 user/pass while
+  the URL carries neither.
+- `server/tests/installer.helpers.test.js` (28 tests). `src/routes/installer.js`
+  was the largest coverage gap (20.4 % of 367 statements) and two of its helpers
+  build the shell/PowerShell installers customers run — an escaping bug there is an
+  injection bug. Covers `escapeSh`/`escapePs1` (embedded quote, POSIX `'\''` vs
+  PowerShell `''`, command-substitution attempts, null, non-strings),
+  `getPlatformConfig`, `getReleasePlatformName`, `buildDeviceConfig` (incl.
+  optional GOOGLE_API_KEY), the generated `install.sh`/`install.ps1` actually
+  applying the escaping, README/licence content, and `assembleZipFiles`
+  membership for both platforms.
+- `src/routes/installer.js` — helpers attached as `router.helpers` so they can be
+  unit-tested; the router export is unchanged.
+
+**VERIFY.** Server suite **708 tests / 43 suites** (was 663/41), eslint clean.
+Coverage on the targeted set: `meshcentral.js` **11.5 → 96.72 %** statements
+(100 % lines), `installer.js` **20.4 → 28.26 %** (branches 15.6 → 28.6, functions
+30 → 42.5). Teeth proven by mutation: disabling the HTML-response branch failed
+the "no REST API" test; restoring returned green.
+
+**Fog remaining on tests** (unchanged): `installer.js` 118-222/244-332/806-842/
+1368-1454 are cache-download, checksum and NSIS-compile paths (network + external
+tooling); `index.js` is invisible to in-process coverage; k6 scripts never execute
+in CI; Electron `main.js`/`preload.js` excluded by config; worker not tested
+against the real Workers runtime; 3/13 enforcement paths verified on hardware.
