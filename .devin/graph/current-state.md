@@ -235,6 +235,44 @@ change that.
 **Also unverifiable from here:** whether GitHub's contributor list has already
 recalculated. No API token exists on this host, so that is a browser check.
 
+### S145 — CI failures: one cause found and fixed, and a mistake of mine
+
+Owner reported "most workflows have failed". I cannot read Actions runs from this
+host (private repo, no API token: `api.github.com/.../actions/runs` → 404), so I
+worked from what my pushes actually triggered:
+
+| Triggered by my pushes | Jobs | Note |
+|---|---|---|
+| `ci.yml` (push to master, 4 times) | 12 | 5 of them now run coverage gates I added |
+| `lint.yml` (same pushes) | 7 | includes the new `secrets` job |
+| `codeql.yml` | 1 | |
+| `release.yml` | 7 | **fired by the `v1.0.0` tag force-push**; needs 3 `AZURE_TRUSTED_SIGNING_*` + 5 `APPLE_*` secrets |
+
+**Definite cause, found and fixed.** `python3 scripts/prepush_secrets.py --all`
+(the path the `secrets` job takes when a force-push leaves no reachable base
+commit) exited 1 on `.prepush-allow.txt` — my own allow-list comments quoted the
+patterns they were describing, so the allow-list itself became the finding,
+including in the historical blob. Fixed by describing findings without quoting
+them, and by collapsing my four unpushed commits into one so no commit in the new
+history carries the quoted text. Verified: `--all` → exit 0, and the scan over the
+new history alone → 0 FAILs.
+
+**My mistake, recovered.** I first tried to scrub that historical blob with
+`git filter-repo --replace-text`, which is **not path-scoped** — it rewrote the
+literals in every blob, including `dashboard/src/pages/EnrollPage.jsx` and
+`SetupPage.jsx`, i.e. it corrupted real source. It was unpushed, so
+`git reset --hard origin/master` restored the exact code (verified: validation
+line present, api_key line present, no replacement text anywhere, and a fresh
+clone of the remote confirms). The correct fix needed no blob surgery at all.
+Lesson: `--replace-text` is global; use a path-checked blob callback, or fix the
+file and rewrite the small number of unpushed commits.
+
+**Not verifiable from here:** whether the other CI jobs fail, and why. The
+`release.yml` jobs are the most likely broad failure — a tag push triggers them
+and they require signing secrets this repo may not have. Suite-level checks all
+pass locally with 2 points of slack, so the coverage gates I added are a
+possibility but not a demonstrated cause.
+
 ---
 
 ## Open debt items
