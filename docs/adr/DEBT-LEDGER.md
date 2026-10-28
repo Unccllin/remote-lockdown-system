@@ -35,7 +35,7 @@
 
 ### D-003 — No hardware-in-the-loop test harness for enforcement paths
 - **Status**: CLOSED (3 enforcement paths verified on real Windows VM)
-- **Commit ref**: 4e4b6e6 (hw_test_harness Unicode fix + Azure VM run)
+- **Commit ref**: c6a504b (hw_test_harness Unicode fix + Azure VM run)
 - **Artifact ref**: `agent/hw_test_artifact_azure.json` — run artifact from Azure
   Windows 11 Pro VM (Standard_D2s_v7, eastus, 2026-08-11T08:07:11Z). Results:
   E-ENCRYPT PASS (3 files encrypted/decrypted), E-LOCK-SCREEN PASS (tsdiscon
@@ -86,7 +86,7 @@
 
 ### D-007 — Lock guardian uses LockWorkStation from service session (Session 0 isolation)
 - **Status**: CLOSED (verified on Azure Windows 11 VM)
-- **Commit ref**: 56c579c (tsdiscon fix) + 4e4b6e6 (Azure VM verification)
+- **Commit ref**: 323e87a (tsdiscon fix) + c6a504b (Azure VM verification)
 - **Artifact ref**: `agent/hw_test_artifact_azure.json` — E-LOCK-SCREEN PASS
   (tsdiscon issued with session_id=0, console_session_id=1), E-GUARDIAN PASS
   (12s guardian run with re-lock). Session context correctly detected:
@@ -114,7 +114,7 @@
 
 ### D-008 — BCD lockdown does not check BitLocker status
 - **Status**: CLOSED (verified on Azure Windows 11 VM with BitLocker enabled)
-- **Commit ref**: 4e4b6e6 + 1511288
+- **Commit ref**: c6a504b + 59d7f8f
 - **Artifact ref**: `agent/hw_test_artifact_azure_bitlocker.json` — BitLocker
   detected (enabled=True), protectors suspended before BCD changes, resumed
   after rollback. E-BCD test output shows: "BitLocker is enabled — suspending
@@ -201,7 +201,7 @@
 
 ### D-011 — File encryption fails silently on open files
 - **Status**: CLOSED (verified on Azure Windows 11 VM)
-- **Commit ref**: 690abdd (code review fixes) + 4e4b6e6 (Azure VM verification)
+- **Commit ref**: e0109f0 (code review fixes) + c6a504b (Azure VM verification)
 - **Artifact ref**: `agent/hw_test_artifact_azure.json` — E-ENCRYPT PASS
   (3 files encrypted and decrypted successfully on real Windows in 33ms).
   Retry logic and blocked file reporting verified via unit tests.

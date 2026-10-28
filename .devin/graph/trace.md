@@ -136,7 +136,7 @@ The DB layer is now honest and self-healing (driver logged, drift healed, prod f
 - GitHub CI confirmation needs a token.
 
 ### Session artifacts
-- Commits: `6dcd08a` (db driver + migration drift + pg-smoke harness/CI), `6ffd674` (installer route order), `22a824c` (credential sanitization), `9b3cbf7` (graph/docs/memory). All SHAs are post-rewrite.
+- Commits: `15fb329` (db driver + migration drift + pg-smoke harness/CI), `175287e` (installer route order), `1353c13` (credential sanitization), `53a3c57` (graph/docs/memory). All SHAs are post-rewrite.
 - Pre-rewrite backup: `~/rls-pre-scrub-20261027-110852.bundle` (contains the old history, i.e. the secret — delete once satisfied).
 - Server 633 tests; actionlint 1.7.12 clean; pg-smoke 65/65.
 
@@ -151,9 +151,9 @@ Rotate the two SSH passwords on the hosts as soon as they are reachable and forc
 ### S140 addendum — scrub correction and push reality
 
 - **The scrub leaked into its own log.** While documenting "`git log -S <password>` → 0 commits", the session log quoted the credential verbatim. That committed the secret into a *new*, unpushed commit (`7311c68`), undoing the rewrite. Caught by scanning the push range (`git log -p <remote-head>..HEAD`), not the full history — the whole-history scan had been run *before* that commit existed. The string is now redacted to `<redacted-password>` and a second `git filter-repo --replace-text` pass removed it from all history: 0 occurrences across `--all` **and** across the push range. Lesson recorded: always scan the exact range being published, immediately before publishing.
-- **No force-push is required — the earlier advice was wrong.** `origin/master` is `b69c17d` (114 commits); local `master` is a strict superset (326 commits) and `b69c17d` is an ancestor of `HEAD`, so `git push origin master` is a plain fast-forward that discards nothing. (An earlier read of `git ls-remote` suggested divergence; ancestry proved otherwise. A full mirror clone also showed the remote holds 0 occurrences of the old password — the secret never reached GitHub, because this lineage was never pushed.)
+- **No force-push is required — the earlier advice was wrong.** `origin/master` is `7701f3c` (114 commits); local `master` is a strict superset (326 commits) and `7701f3c` is an ancestor of `HEAD`, so `git push origin master` is a plain fast-forward that discards nothing. (An earlier read of `git ls-remote` suggested divergence; ancestry proved otherwise. A full mirror clone also showed the remote holds 0 occurrences of the old password — the secret never reached GitHub, because this lineage was never pushed.)
 - Local `master` is **211 commits ahead** of `origin/master`; publishing is the owner's call.
-- Local tag `v1.0.0` and remote `v1.0.0` both point at `21ac6ce` (pre-dates the secret), so no tag push is needed.
+- Local tag `v1.0.0` and remote `v1.0.0` both point at `bdc4dbf` (pre-dates the secret), so no tag push is needed.
 
 ---
 
@@ -201,7 +201,7 @@ Rotate the two SSH passwords on the hosts as soon as they are reachable and forc
 - CI cannot be executed locally; the release-permissions change from the previous session is still unverified until a tag push.
 
 ### Session artifacts
-- Commits `d0d8349` (api_key_hash), `20b5809` (POSIX data dir), `deb43ed` (hw harness).
+- Commits `2a984ed` (api_key_hash), `456cfe3` (POSIX data dir), `dd8fd17` (hw harness).
 - Test counts: server 638, agent 670, dashboard 197, serverless 331, electron 30.
 - Sweep evidence: pg-smoke 65/65, verify-env 60/0/2, API+agent E2E 10/10, installer ZIPs (27 MB Linux / 22.5 MB Windows) inspected.
 
@@ -267,7 +267,7 @@ Still open from the sweep: **#3** — `openapi.yaml` documents 42 of 74 register
 - D-129 hardware window; Hippocratic licence decision; live MeshCentral instance for connector verification.
 
 ### Session artifacts
-- Commits: `e9e96ff` (licensing gate), plus this session's connector commit.
+- Commits: `289f960` (licensing gate), plus this session's connector commit.
 - `make check-licenses` exit 0 (964 packages, 0 copyleft); `--strict` fails on the react-leaflet decision.
 
 ### Next session opening
@@ -317,7 +317,7 @@ Verified: server suite 39 suites / 646 tests, eslint clean, harness
 
 ### S142 continuation — Graph transport, OpenAPI 76/76, history published
 
-**#1 Connector transport swapped (commit `549ba0d`).** The S142 finding was that
+**#1 Connector transport swapped (commit `d97a77c`).** The S142 finding was that
 MeshCentral 1.3.x has no REST API, so the connector could never read inventory
 from it. Instead of implementing their WebSocket protocol, the transport the ADR
 pointed at is now in place:
@@ -337,7 +337,7 @@ pointed at is now in place:
   surface only — my first version flagged `_resetTokenCache` because "reset"
   contains "set", which is a test-seam, not a mutation.
 
-**#2 OpenAPI gap closed (commit `4432aaa`).** 42 of 76 routes were documented.
+**#2 OpenAPI gap closed (commit `82e102e`).** 42 of 76 routes were documented.
 - `scripts/check-openapi-routes.js` — mount-aware diff of the Express router
   against `docs/openapi.yaml` (handles the `/v1` wrapper mount and `:param` →
   `{param}`); exits 1 on any gap. Wired into `lint` and a CI job.
@@ -351,14 +351,14 @@ pointed at is now in place:
 
 **#3 History published.** `origin/master` was a strict ancestor, so this was a
 plain fast-forward, not the force-push earlier assumed:
-`b69c17d..4432aaa  master -> master` (231 commits). Both our own pre-push gate
+`7701f3c..82e102e  master -> master` (231 commits). Both our own pre-push gate
 and `git merge-base --is-ancestor` were run *before* pushing.
 
 ### VERIFY
 - Server **39 suites / 649 tests**; eslint `--max-warnings=0` clean.
 - `make check-openapi` → `registered 76 / documented 76 — every registered route is documented`.
 - `make pre-push-check` → fast-forward, no credential-shaped content in range.
-- Remote verified in sync: `origin/master == HEAD == 4432aaa`.
+- Remote verified in sync: `origin/master == HEAD == 82e102e`.
 - actionlint clean on all workflows (6 lint jobs now).
 
 ### Fog cleared
@@ -594,9 +594,9 @@ build.
 - **Pre-scrub bundle deleted.** `~/rls-pre-scrub-20261027-110852.bundle` (3,930,088 B)
   `shred -u`'d after verifying which refs are unique to it: its pre-rewrite
   master tip `b0bd0b3` was the **only** content not already reachable in the
-  current repo (task branch `99e532d`, stash `6990763` and `origin/*` all resolve
+  current repo (task branch `8f5152b`, stash `c6d678b` and `origin/*` all resolve
   locally). Checked the remaining `-S` hit for `RLS_SSH_PASSWORD`: the single
-  match is commit `22a824c`, the one that *removed* the hardcoded credentials and
+  match is commit `1353c13`, the one that *removed* the hardcoded credentials and
   introduced the env-var name — a name, not a value.
 - **Platform `.pem` ignored.** `a0baa8a3-…-RemoteLockdownPlatformKey.pem` contains
   1 `BEGIN CERTIFICATE` and 0 `PRIVATE KEY` blocks (public cert, not a secret).
