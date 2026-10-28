@@ -53,43 +53,50 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 146 — 2026-10-28 (completing the test suite; two silent harness failures)
+## Latest session: 148 — 2026-10-28 (Windows Server 2022 VM: the Windows half finally runs)
+
+### VERIFY
+- **Windows run: 16 passed, 0 failed, 4 skipped, 0 errors** in a single 20-test sweep.
+  Evidence `docs/hardware-runs/vm-win2022-20261028/art-full-16passed.json`
+  (`is_admin: true`, `bitlocker_enabled: false`, `tpm_present: false`, agent hash).
+- `E-BCD` now **applies**: "3 critical, 5 best-effort succeeded", every setting
+  verified — the first time it has ever worked, after failing on the Azure VM, on real
+  HP hardware and on this VM for two different reasons.
+- Skips are the expected four: E-HP-UEFI (no HP client BIOS), E-TPM (no vTPM),
+  E-ENROLL/E-INTEGRATION (no server on :3000).
+- Agent suite 702 → **708**; ruff clean.
 
 ### Fog cleared
-- The local sweep now actually runs every component suite; `full-verify`'s claim
-  matches what it does.
-- The memory harness has 44 real, executing tests — and they pass.
-- The load-test signing scheme and the boot order are both covered by tests that
-  fail when the behaviour regresses (both verified by reintroducing the fault).
-- `make full-verify` is green end to end: exit 0, verify-env 60 PASS / 0 FAIL /
-  2 SKIP, E2E 10/10, docker live validation passed.
+- The Windows enforcement paths are no longer "written but never executed". 16 of 20
+  tests pass on a real Windows kernel with real `bcdedit`, `tsdiscon`, DPAPI and
+  service semantics.
+- BCD lockdown was broken by a *read* that never worked, not by anything
+  platform-specific — a class of bug only execution could expose.
+- A Windows-only SQLite handle leak existed in the offline queue; invisible on Linux.
 
 ### Fog remaining
-- CI run status is still unreadable from this host (private repo, no API token);
-  whether the jobs fail, and why, remains unverified. `release.yml` is the most
-  likely broad failure (7 jobs needing Azure + Apple signing secrets, fired by the
-  `v1.0.0` tag push).
-- The hardware-backed enforcement paths remain 3/13 verified on hardware — no
-  test change can move that.
-- The agent suite prints no summary line under `-qq`; countable but opaque.
+- This is `emulated`, not `hardware`: I3 still refuses these statuses, so
+  `GRAPH-SPEC.yaml` keeps `E-BCD` demoted and the convergence number stays 3/13.
+- `E-HP-UEFI` needs an HP *client* machine (a ProLiant has no `root\hp\InstrumentedBIOS`).
+- `E-TPM` needs a vTPM (this image has none) or real hardware.
+- `E-ENROLL`/`E-INTEGRATION` need a server on `localhost:3000` in the guest.
+- The VM has no Secure Boot: Gen8-era QEMU/OVMF path used here, so the D-130
+  Secure Boot posture is untested by this run.
 
 ### Debt items closed
-- None.
+- None (evidence level is emulated, not hardware).
 
 ### Debt items still open
 - D-120, D-129, D-130; enforcement 3/13 on hardware.
 
 ### Blockers
-- D-129 needs a machine with TPM 2.0 and a Windows target; the ProLiant has
-  neither.
-- Owner decisions: repository licence; react-leaflet (Hippocratic-2.1).
-- CI failures need either a fine-grained token (Actions: read) or the failing job
-  names.
+- Real hardware with TPM 2.0 + Windows for hardware-grade evidence; owner decisions on
+  the repository licence and react-leaflet.
 
 ### Next session opening
-Replace react-leaflet and @react-leaflet/core (Hippocratic-2.1) with a small
-in-repo wrapper over leaflet 1.9.4 (BSD-2-Clause) so `make check-licenses-strict`
-can gate the build.
+Wire the VM run into the harness story (document how to recreate the guest), then
+either take react-leaflet for the licence gate or add the missing vTPM to the VM so
+E-TPM can execute.
 
 ---
 

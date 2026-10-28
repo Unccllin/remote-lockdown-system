@@ -1176,3 +1176,77 @@ manual test — i.e. never. Now any of those fails a PR.
 **Debian box:** not used for this (CI runners are ephemeral; the box holds only an
 older `~/repo` snapshot and its MTU path makes pushing megabytes a 700-byte-chunk
 slog). It remains useful for hardware-adjacent work only.
+
+## Session 148 — 2026-10-28 (Windows Server 2022 VM: the Windows half finally runs)
+
+### RULE-ZERO
+- **Read**: `agent/hw_test_harness.py` (all 20 test classes, `_StubServer`, service gates),
+  `agent/agent.py` (offline queue: `_get_queue_db`/`queue_offline`/`_queue_size`/`drain_offline_queue`),
+  `agent/bcd_lockdown.py` (`_read_bcd_setting`, `_set_bcd_setting`, BCD command tables,
+  rollback/restore paths), `agent/duress.py` (`is_duress_unlock` contract).
+- **Finding**: the Windows-bound tests had never executed anywhere; several were
+  only ever exercised through mocks.
+
+### IMPLEMENT
+- **Infrastructure** (not in the repo): Windows Server 2022 Standard Evaluation in a
+  KVM/OVMF VM on the ProLiant via `dockurr/windows`, 8 vCPU / 8 GB / 64 GB. `/OEM`
+  first-logon payload installs OpenSSH (capability, with a Win32-OpenSSH fallback that
+  avoids Windows Update), opens firewall 22/3001/445, sets the PowerShell default
+  shell. `fix-ssh.ps1` + `setup.ps1` live in `~/windows/OEM/` on the box, parse-checked
+  with a locally installed pwsh 7.6.9 before use.
+- `agent/bcd_lockdown.py` — `_read_bcd_setting` uses `bcdedit /enum <entry>` (the
+  `/query <entry> <element>` form does not exist); `BOOTMGR_SCOPED_SETTINGS` +
+  `_apply_bcd_setting` dispatch set/read to the entry that owns the element;
+  `_set_bcd_setting_bootmgr` verifies through the shared reader; rollback and restore
+  paths use the dispatcher.
+- `agent/agent.py` — `_close_quietly` helper; `_get_queue_db` releases its connection if
+  schema init fails; `queue_offline` / `_queue_size` / `drain_offline_queue` close on
+  every path.
+- `agent/hw_test_harness.py` — `E-DURESS-01` now asserts the real contract
+  (truthy `duress_code`), plus empty-string and normal-command cases.
+- `agent/tests/test_boot_lockdown_bcd.py` — 6 new `TestReadBcdSetting` tests against
+  realistic `/enum` output, including a regression test that the command is `/enum`
+  and not `/query`; the apply-success mock now covers bootmgr settings.
+
+### VERIFY
+- **Windows run: 16 passed, 0 failed, 4 skipped, 0 errors** in a single 20-test sweep.
+  Evidence `docs/hardware-runs/vm-win2022-20261028/art-full-16passed.json`
+  (`is_admin: true`, `bitlocker_enabled: false`, `tpm_present: false`, agent hash).
+- `E-BCD` now **applies**: "3 critical, 5 best-effort succeeded", every setting
+  verified — the first time it has ever worked, after failing on the Azure VM, on real
+  HP hardware and on this VM for two different reasons.
+- Skips are the expected four: E-HP-UEFI (no HP client BIOS), E-TPM (no vTPM),
+  E-ENROLL/E-INTEGRATION (no server on :3000).
+- Agent suite 702 → **708**; ruff clean.
+
+### Fog cleared
+- The Windows enforcement paths are no longer "written but never executed". 16 of 20
+  tests pass on a real Windows kernel with real `bcdedit`, `tsdiscon`, DPAPI and
+  service semantics.
+- BCD lockdown was broken by a *read* that never worked, not by anything
+  platform-specific — a class of bug only execution could expose.
+- A Windows-only SQLite handle leak existed in the offline queue; invisible on Linux.
+
+### Fog remaining
+- This is `emulated`, not `hardware`: I3 still refuses these statuses, so
+  `GRAPH-SPEC.yaml` keeps `E-BCD` demoted and the convergence number stays 3/13.
+- `E-HP-UEFI` needs an HP *client* machine (a ProLiant has no `root\hp\InstrumentedBIOS`).
+- `E-TPM` needs a vTPM (this image has none) or real hardware.
+- `E-ENROLL`/`E-INTEGRATION` need a server on `localhost:3000` in the guest.
+- The VM has no Secure Boot: Gen8-era QEMU/OVMF path used here, so the D-130
+  Secure Boot posture is untested by this run.
+
+### Debt items closed
+- None (evidence level is emulated, not hardware).
+
+### Debt items still open
+- D-120, D-129, D-130; enforcement 3/13 on hardware.
+
+### Blockers
+- Real hardware with TPM 2.0 + Windows for hardware-grade evidence; owner decisions on
+  the repository licence and react-leaflet.
+
+### Next session opening
+Wire the VM run into the harness story (document how to recreate the guest), then
+either take react-leaflet for the licence gate or add the missing vTPM to the VM so
+E-TPM can execute.
