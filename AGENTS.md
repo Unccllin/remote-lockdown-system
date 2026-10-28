@@ -239,6 +239,9 @@ cd dashboard && npx vitest run                # 197 Vitest tests
 cd electron  && npm test                      # 30 Jest tests
 cd serverless && npm test                     # 331 Vitest tests
 
+# Coverage gate (all 5 components; floors declared per component, dated 2026-10-27)
+make test-coverage
+
 # NOTE: pytest must run through scripts/run-agent-tests.sh, which picks
 # agent/.venv/bin/python. A bare `python3 -m pytest` fails on machines whose
 # system Python lacks pytest-timeout (pyproject sets --timeout=30).
@@ -477,7 +480,8 @@ work — pick up here tomorrow.
 ### Improvements by harness
 
 #### 1. Server (368 tests) — 7 improvements
-- No coverage reporting (add test:coverage script + thresholds)
+- ~~No coverage reporting~~ — **DONE 2026-10-27**: `npm run test:coverage` gates at 66/62/70/67
+  (stmt/branch/func/line) in `jest.config.js`; CI runs it in place of `npm test`.
 - No shared fixtures/factories (DEVICE, adminToken duplicated inline)
 - Fragile SQL substring matching in mockPool.setResult()
 - No __mocks__ directory (manual require in every file)
@@ -486,10 +490,13 @@ work — pick up here tomorrow.
 - No serverless/worker integration tests
 
 #### 2. Agent (~463 tests) — 9 improvements
-- No conftest.py (cfg, tmp_folder, tmp_sentinel duplicated across 3+ files)
+- No conftest.py (cfg, tmp_folder, tmp_sentinel duplicated across 3+ files) — **largely
+  addressed**: `tests/conftest.py` exists with those three fixtures.
 - No pytest.ini or pyproject.toml (no markers, addopts, timeouts)
 - No pytest.mark.parametrize anywhere (0 occurrences)
-- No coverage reporting (no pytest-cov, .coveragerc)
+- No coverage reporting (no pytest-cov, .coveragerc) — **DONE 2026-10-27**:
+  `fail_under = 59` in `pyproject.toml`; `make test-coverage` passes
+  `--cov-fail-under=59` (pytest-cov decides on the flag, not on `fail_under`).
 - test_boot_lockdown.py is 3,056 lines (split into BCD + HP UEFI)
 - test_tamper_protection.py skips on Windows (backwards skip logic)
 - No tests for watchdog.py, offline_recovery.py, diagnose_boot_lockdown.py
@@ -497,7 +504,9 @@ work — pick up here tomorrow.
 - No timeout protection (hanging test hangs forever)
 
 #### 3. Dashboard (84 tests) — 7 improvements
-- No coverage reporting (@vitest/coverage-v8 not installed)
+- ~~No coverage reporting~~ — **DONE 2026-10-27**: thresholds 58/68/50/58 in
+  `vitest.config.js`; the coverage script raises `--testTimeout` to 60s because
+  v8 instrumentation roughly doubles render cost.
 - No renderWithRouter helper (each test redefines MemoryRouter)
 - @testing-library/user-event installed but unused (all use fireEvent)
 - Download buttons not tested (download-installer-btn, download-agent-btn)
@@ -595,12 +604,17 @@ work — pick up here tomorrow.
 - Clean-state checklist exists but is not enforced by any tooling
 
 ### Cross-cutting themes (apply to ALL harnesses)
-1. No coverage reporting anywhere (none of 21 harnesses have coverage configured)
+1. ~~No coverage reporting anywhere~~ — **DONE 2026-10-27 for all 5 components**
+   (server, dashboard, agent, electron, serverless): floors live in each
+   component's config, `make test-coverage` enforces them locally, and the CI
+   jobs run the same scripts in place of the plain test commands.
 2. No shared fixtures (every harness duplicates setup code)
 3. New features untested (download, duress, enrollment, tamper have gaps)
 4. No timeout protection (agent, server, memory tests can hang)
 5. No parametrize (agent has 0 parametrized tests)
-6. E2E is orphaned (not in Makefile, not in CI, not in verify-env)
+6. E2E is orphaned (not in Makefile, not in CI, not in verify-env) — **stale**:
+   `make test-e2e` / `make test-e2e-dashboard` exist and Playwright runs in
+   `ci.yml`.
 7. Large files not split (test_boot_lockdown.py 3056 lines, worker.test.ts 1273, test_agent.py 2027, memory.py 1360)
 8. No concurrency protection (memory harness has race conditions)
 9. Manual processes that should be automated (consolidate/decay, E2E, convergence)
@@ -609,7 +623,8 @@ work — pick up here tomorrow.
 ### Priority ranking for improvements
 
 P0 (low effort, benefit all):
-- Add coverage reporting to all 7 test harnesses
+- ~~Add coverage reporting to all 7 test harnesses~~ — done for the 5 code
+  components; the remaining harnesses (graph, memory, firmware) still have none
 - Add conftest.py / shared fixtures (agent, server, dashboard)
 - Add make full-verify + make test-e2e
 - Automate memory consolidate/decay (hook into session close)

@@ -16,4 +16,16 @@ module.exports = {
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'text-summary', 'lcov', 'json'],
+  // Coverage gate (measured 2026-10-27: 68.18 stmts / 64.06 branches /
+  // 71.85 funcs / 69.06 lines). Floors sit ~2 points below the measurement so
+  // ordinary refactoring does not flake CI, while a real slide fails it.
+  // Raise these when coverage improves — never lower them to make a build pass.
+  coverageThreshold: {
+    global: {
+      statements: 66,
+      branches: 62,
+      functions: 70,
+      lines: 67,
+    },
+  },
 };

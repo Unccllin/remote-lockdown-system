@@ -39,6 +39,7 @@ Every document is listed below with a one-line description and a relative link.
 | [E2E_TEST.md](E2E_TEST.md) | End-to-end test guide — full flow from admin install to device lockdown and recovery. |
 | [LOAD_TESTING.md](LOAD_TESTING.md) | Load testing guide using k6 — verifies 1000+ device fleet polling at ~33 req/s. |
 | [HARDWARE-TEST-CAPSULE.md](HARDWARE-TEST-CAPSULE.md) | Hardware test instructions for UEFI capsule updates on real target hardware. |
+| [D-129-HARDWARE-RUNBOOK.md](D-129-HARDWARE-RUNBOOK.md) | The hardware window, executed once: per-path coverage truth, pre-window test work, ordered window-day commands, and the artifact rule for flipping enforcement paths to `verified-on-hardware`. |
 
 ## Operations
 

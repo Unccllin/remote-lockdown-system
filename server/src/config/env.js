@@ -168,7 +168,13 @@ function validateEnv({ dev = false } = {}) {
   checkNumeric('RETENTION_SCHEDULER_INTERVAL_MS', 3600000, 604800000);
 
   // --- FA6: DB config ---
-  if (!process.env.DATABASE_URL) {
+  // SQLite mode (USE_SQLITE=true) serves every query from a file — the Electron
+  // shell and docker-compose.test.yml both run that way with NODE_ENV=production.
+  // Requiring Postgres credentials there made those stacks fail at boot with
+  // "DB_HOST is required when DATABASE_URL is not set (production)", which is
+  // why the test compose file had never actually been started.
+  const usingSqlite = process.env.USE_SQLITE === 'true';
+  if (!process.env.DATABASE_URL && !usingSqlite) {
     // Individual DB vars needed
     for (const v of ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD']) {
       if (!process.env[v] && isProd) {

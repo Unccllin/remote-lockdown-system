@@ -53,6 +53,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -551,7 +552,14 @@ class HardwareTest:
 
         # Pattern 1: Action + Verify (with timeout + retry)
         effective_timeout = timeout or self.default_timeout
-        effective_retries = retries if self.is_network else 0
+        # Pattern 8: a network test retries at least as often as its class
+        # declares. The CLI default of 0 means "use the test's default", not
+        # "never retry" — otherwise `default_retries` was dead configuration
+        # (docs/D-129-HARDWARE-RUNBOOK.md §7).
+        if self.is_network:
+            effective_retries = retries if retries else self.default_retries
+        else:
+            effective_retries = 0
 
         for attempt in range(effective_retries + 1):
             try:
@@ -1107,11 +1115,15 @@ class TestEnroll(HardwareTest):
         import urllib.request
 
         # Generate enrollment token via server API
+        # The admin key must match the server under test. Read it from the
+        # environment so a real-server run is not silently limited to the dev
+        # seed key (docs/D-129-HARDWARE-RUNBOOK.md §7).
+        admin_key = os.environ.get("RLS_ADMIN_KEY", "test-admin-key")
         req = urllib.request.Request(  # noqa: S310
             "http://localhost:3000/api/enroll/token",
             method="POST",
             headers={"Content-Type": "application/json"},
-            data=json.dumps({"admin_key": "test-admin-key"}).encode(),
+            data=json.dumps({"admin_key": admin_key}).encode(),
         )
         try:
             resp = urllib.request.urlopen(req, timeout=10)  # noqa: S310
@@ -1262,7 +1274,1041 @@ class TestIntegration(HardwareTest):
 
 
 # ---------------------------------------------------------------------------
-# Test registry — all 12 enforcement path tests
+# Phase A enforcement paths — D-129 runbook §3 (added 2026-10-27)
+#
+# Nine enforcement paths were `verified-in-unit-test` with no harness coverage
+# at all: `--tag E-DECRYPT` exited 1 with "No tests match tags". Each test
+# below drives the REAL agent function named in its graph node and asserts the
+# failure mode recorded in that node's `risk_notes` — the risk note is the
+# reason the test exists.
+#
+# Isolation: every test writes only to its own temporary directory, and the
+# agent's module-level state paths are patched for the duration of the call.
+# Stubs are named in the result detail so an artifact cannot overclaim: a test
+# that stubs the lock screen says so.
+# ---------------------------------------------------------------------------
+
+
+class _Checks:
+    """Collect assertion outcomes so a failure names itself in the artifact."""
+
+    def __init__(self):
+        self.passed: list[str] = []
+        self.failed: list[str] = []
+
+    def check(self, condition, description: str) -> bool:
+        if condition:
+            self.passed.append(description)
+        else:
+            self.failed.append(description)
+        return bool(condition)
+
+    def summary(self) -> str:
+        total = len(self.passed) + len(self.failed)
+        if self.failed:
+            return f"FAILED {len(self.failed)}/{total} assertions: " + "; ".join(self.failed[:4])
+        return f"{len(self.passed)}/{total} assertions passed"
+
+
+class _PhaseATest(HardwareTest):
+    """Shared verify for the Phase-A tests: the action returns a check summary."""
+
+    def verify(self, env: dict, mode: str, action_detail: str = "") -> tuple[bool, str]:
+        if "FAILED" in action_detail:
+            return False, action_detail
+        if "assertions passed" in action_detail:
+            return True, "All assertions hold"
+        return False, f"Unexpected action result: {action_detail!r}"
+
+
+class _StubServer:
+    """A throwaway HTTP server that records what the agent sends.
+
+    The network enforcement paths are tested against a real socket rather than
+    a mocked `requests` module, so HMAC signing, payload shaping, retry and
+    fail-soft behaviour are all exercised for real. Binds 127.0.0.1:0 so the
+    port is always free.
+    """
+
+    def __init__(
+        self,
+        responses: dict | None = None,
+        get_bodies: dict | None = None,
+        statuses: dict | None = None,
+    ):
+        self.responses = responses or {}
+        self.get_bodies = get_bodies or {}
+        self.statuses = statuses or {}
+        self.requests: list[dict] = []
+        self._server = None
+        self._thread = None
+
+    def __enter__(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        recorder = self
+
+        class _Handler(BaseHTTPRequestHandler):
+            def _reply(self, body: bytes, content_type: str, status: int = 200):
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):  # noqa: N802 — stdlib handler naming
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b""
+                try:
+                    body = json.loads(raw) if raw else {}
+                except ValueError:
+                    body = {"_unparsed": raw.decode("utf-8", "replace")}
+                recorder.requests.append(
+                    {
+                        "method": "POST",
+                        "path": self.path,
+                        "body": body,
+                        "headers": dict(self.headers),
+                    }
+                )
+                reply = recorder.responses.get(self.path, {})
+                status = recorder.statuses.get(self.path, 200)
+                self._reply(json.dumps(reply).encode(), "application/json", status)
+
+            def do_GET(self):  # noqa: N802 — stdlib handler naming
+                recorder.requests.append(
+                    {"method": "GET", "path": self.path, "body": {}, "headers": dict(self.headers)}
+                )
+                body = recorder.get_bodies.get(self.path)
+                if body is None:
+                    self._reply(b"{}", "application/json")
+                else:
+                    self._reply(body, "application/octet-stream")
+
+            def log_message(self, format, *args):  # noqa: A002 — base signature
+                pass
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self._server.daemon_threads = True
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc_info):
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        return False
+
+    @property
+    def url(self) -> str:
+        assert self._server is not None, "stub server used outside its context manager"
+        host, port = self._server.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def posts_to(self, path: str) -> list[dict]:
+        return [r for r in self.requests if r["method"] == "POST" and r["path"] == path]
+
+    def gets_to(self, path: str) -> list[dict]:
+        return [r for r in self.requests if r["method"] == "GET" and r["path"] == path]
+
+
+def _agent_cfg(state_dir: Path, server_url: str = "http://127.0.0.1:1") -> dict:
+    """A minimal agent config rooted entirely inside `state_dir`."""
+    folder = state_dir / "lockdown"
+    folder.mkdir(parents=True, exist_ok=True)
+    return {
+        "server_url": server_url,
+        "serverless_url": "",
+        "agent_key": "harness-agent-key",
+        "hostname": "HW-HARNESS",
+        "poll_interval": 1,
+        "lockdown_folder": folder,
+        "lock_sentinel": state_dir / ".sentinel",
+        "verify_tls": False,
+        "pending_ack_file": state_dir / ".pending_ack",
+        "recovery_key_file": state_dir / ".recovery_key",
+        "recovery_public_key": "",
+        "update_public_key": "",
+        "server_supports_ack_dedup": True,
+        "boot_lock_enabled": False,
+    }
+
+
+def _patch_agent_state(stack, agent, state_dir: Path) -> None:
+    """Point the agent's module-level state files at `state_dir`.
+
+    Without this, a hardware run would read and write the real
+    ``C:\\ProgramData\\LockdownSystem`` state — the harness must never touch
+    live agent state.
+    """
+    from unittest.mock import patch
+
+    for name in (
+        "PENDING_ACK_FILE",
+        "RECOVERY_KEY_FILE",
+        "DEADMAN_FILE",
+        "DEADMAN_KEY_FILE",
+        "OFFLINE_QUEUE_DB",
+        "UPDATE_DOWNLOAD_FILE",
+        "UPDATE_PENDING_FILE",
+    ):
+        stack.enter_context(patch.object(agent, name, state_dir / f".{name.lower()}"))
+
+
+class TestDecrypt(_PhaseATest):
+    """E-DECRYPT: decryption, including the wrong-key case that E-ENCRYPT skips.
+
+    The graph risk note is "Wrong-key handling (InvalidToken)" — a round-trip
+    proves nothing about it. This test drives `agent.decrypt_folder` directly:
+    wrong key must raise InvalidToken and leave the ciphertext intact; right key
+    must restore the plaintext and remove the ciphertext.
+    """
+
+    test_id = "E-DECRYPT-01"
+    enforcement_path = "E-DECRYPT"
+    name = "File decryption (wrong-key handling)"
+    tags = ["E-DECRYPT", "non-destructive"]
+    default_timeout = 30
+
+    def action(self, env: dict, mode: str) -> str:
+        from cryptography.fernet import Fernet, InvalidToken  # noqa: F401 — InvalidToken asserted
+
+        import agent
+
+        checks = _Checks()
+        with tempfile.TemporaryDirectory(prefix="hw_decrypt_") as tmp:
+            folder = Path(tmp)
+            (folder / "secret.txt").write_text("plaintext payload")
+            sub = folder / "nested"
+            sub.mkdir()
+            (sub / "deep.txt").write_text("nested payload")
+
+            key = agent.generate_key()
+            blocked = agent.encrypt_folder(folder, key)
+            checks.check(not blocked, "encryption completed without blocked files")
+            checks.check(len(list(folder.rglob("*.enc"))) == 2, "2 ciphertext files created")
+
+            wrong_key = Fernet.generate_key()
+            raised = None
+            try:
+                agent.decrypt_folder(folder, wrong_key)
+            except Exception as exc:  # noqa: BLE001 — the exception type IS the assertion
+                raised = exc
+            checks.check(
+                isinstance(raised, InvalidToken),
+                f"wrong key raises InvalidToken (got {type(raised).__name__})",
+            )
+            checks.check(
+                len(list(folder.rglob("*.enc"))) == 2,
+                "ciphertext intact after wrong-key attempt",
+            )
+            checks.check(
+                not (folder / "secret.txt").exists(),
+                "no plaintext produced by wrong-key attempt",
+            )
+
+            agent.decrypt_folder(folder, key)
+            checks.check(
+                (folder / "secret.txt").read_text() == "plaintext payload",
+                "content restored with the correct key",
+            )
+            checks.check(
+                (sub / "deep.txt").read_text() == "nested payload",
+                "nested content restored",
+            )
+            checks.check(not list(folder.rglob("*.enc")), "ciphertext removed after decrypt")
+
+        return checks.summary()
+
+
+class TestAck(_PhaseATest):
+    """E-ACK: command ACK, including the pending-ACK retry path.
+
+    Risk note: "Network failure retries via pending ACK file". The test proves
+    both halves against real sockets: a refused connection returns False and
+    preserves the pending file; a reachable stub accepts the retry and the file
+    is deleted, carrying an idempotent command_uuid.
+    """
+
+    test_id = "E-ACK-01"
+    enforcement_path = "E-ACK"
+    name = "Command ACK + pending-ACK retry"
+    tags = ["E-ACK", "network"]
+    is_network = True
+    default_retries = 2
+    default_timeout = 30
+
+    def action(self, env: dict, mode: str) -> str:
+        from contextlib import ExitStack
+        from unittest.mock import patch
+
+        import agent
+
+        checks = _Checks()
+        with tempfile.TemporaryDirectory(prefix="hw_ack_") as tmp, _StubServer() as stub:
+            state_dir = Path(tmp)
+            with ExitStack() as stack:
+                _patch_agent_state(stack, agent, state_dir)
+
+                # (a) Transport failure: returns False, pending ACK survives.
+                offline_cfg = _agent_cfg(state_dir, server_url="http://127.0.0.1:1")
+                pending = offline_cfg["pending_ack_file"]
+                ok = agent.ack_command(offline_cfg, "cmd-offline", "executed", key_material="k")
+                checks.check(ok is False, "ACK against a refused port returns False")
+
+                agent.write_pending_ack(
+                    pending,
+                    "cmd-offline",
+                    "executed",
+                    key_material="secret-key",
+                    command_uuid="uuid-direct",
+                )
+                checks.check(pending.exists(), "pending ACK file written")
+                try:
+                    state = json.loads(pending.read_text())
+                except (OSError, ValueError):
+                    state = {}
+                checks.check(
+                    state.get("command_uuid") == "uuid-direct",
+                    "pending ACK persists the command_uuid it was given",
+                )
+
+                agent.drain_pending_ack(offline_cfg)
+                checks.check(
+                    pending.exists(),
+                    "pending ACK preserved when the server is still unreachable",
+                )
+
+                # (b) Retry delivers exactly once, signed, then deletes the file.
+                online_cfg = _agent_cfg(state_dir, server_url=stub.url)
+                online_cfg["pending_ack_file"] = pending
+                agent.drain_pending_ack(online_cfg)
+
+                acks = stub.posts_to("/api/agent/command-ack")
+                checks.check(len(acks) == 1, f"exactly one ACK delivered (got {len(acks)})")
+                if acks:
+                    body = acks[0]["body"]
+                    headers = {k.lower(): v for k, v in acks[0]["headers"].items()}
+                    checks.check(
+                        body.get("command_id") == "cmd-offline",
+                        "delivered ACK carries the original command_id",
+                    )
+                    checks.check(
+                        body.get("key_material") == "secret-key",
+                        "delivered ACK carries the escrowed key material",
+                    )
+                    checks.check(
+                        body.get("command_uuid") == "uuid-direct",
+                        "retried ACK replays the SAME command_uuid (server can dedup)",
+                    )
+                    checks.check(
+                        "x-signature" in headers,
+                        "ACK is HMAC-signed (x-signature header present)",
+                    )
+                checks.check(
+                    not pending.exists(),
+                    "pending ACK deleted after a successful retry",
+                )
+
+                agent.drain_pending_ack(online_cfg)
+                checks.check(
+                    len(stub.posts_to("/api/agent/command-ack")) == 1,
+                    "second drain is a no-op (no duplicate ACK)",
+                )
+
+            # (c) A lockdown whose ACK fails must leave a pending ACK that
+            # replays with the same command_uuid — the idempotency contract.
+            lock_dir = state_dir / "lockdown-case"
+            recorded = None
+            with (
+                ExitStack() as stack,
+                _StubServer(
+                    responses={"/api/agent/escrow-key": {"escrowed": True}},
+                    statuses={"/api/agent/command-ack": 500},
+                ) as failing,
+            ):
+                _patch_agent_state(stack, agent, lock_dir)
+                lock_cfg = _agent_cfg(lock_dir, server_url=failing.url)
+                stack.enter_context(patch.object(agent, "report_location"))
+                stack.enter_context(patch.object(agent, "apply_lock_screen"))
+                stack.enter_context(patch.object(agent, "start_lock_guardian"))
+                stack.enter_context(patch.object(agent, "show_lockdown_notification"))
+                agent.handle_lockdown(lock_cfg, {"id": "cmd-lockdown", "enable_pba": False})
+
+                pending_lock = lock_cfg["pending_ack_file"]
+                checks.check(pending_lock.exists(), "failed ACK preserves the pending file")
+                if pending_lock.exists():
+                    try:
+                        recorded = json.loads(pending_lock.read_text()).get("command_uuid")
+                    except (OSError, ValueError):
+                        recorded = None
+                checks.check(
+                    bool(recorded),
+                    "lockdown writes a command_uuid into its pending ACK",
+                )
+                attempted = failing.posts_to("/api/agent/command-ack")
+                checks.check(
+                    bool(attempted) and attempted[0]["body"].get("command_uuid") == recorded,
+                    "the failing attempt used the same command_uuid it persisted",
+                )
+
+            if recorded:
+                with _StubServer() as retry_stub:
+                    retry_cfg = _agent_cfg(lock_dir, server_url=retry_stub.url)
+                    agent.drain_pending_ack(retry_cfg)
+                    replayed = retry_stub.posts_to("/api/agent/command-ack")
+                    checks.check(len(replayed) == 1, "lockdown ACK retried once")
+                    checks.check(
+                        bool(replayed) and replayed[0]["body"].get("command_uuid") == recorded,
+                        "retried lockdown ACK honours the persisted command_uuid",
+                    )
+                    checks.check(
+                        not retry_cfg["pending_ack_file"].exists(),
+                        "pending ACK deleted after the successful retry",
+                    )
+
+        return checks.summary()
+
+
+class TestRecovery(_PhaseATest):
+    """E-RECOVERY: unlock, including key release and sentinel cleanup.
+
+    Risk note: "Key release security; sentinel cleanup". `TestIntegration` only
+    flips a status via the API — it never calls `agent.handle_unlock`, so key
+    release, decryption, sentinel removal and recovery-key deletion were all
+    unproven. A failed unlock must leave the device encrypted and the sentinel
+    in place; only an authorised unlock may release the key.
+
+    Stubbed (named here so the artifact cannot overclaim): `remove_lock_screen`
+    and `apply_lock_screen` — the desktop lock is covered by E-LOCK-SCREEN.
+    """
+
+    test_id = "E-RECOVERY-01"
+    enforcement_path = "E-RECOVERY"
+    name = "Unlock recovery (key release + sentinel cleanup)"
+    tags = ["E-RECOVERY", "network"]
+    is_network = True
+    default_retries = 2
+    default_timeout = 60
+
+    def action(self, env: dict, mode: str) -> str:
+        from unittest.mock import patch
+
+        import agent
+
+        checks = _Checks()
+
+        def _armed_state(state_dir: Path) -> tuple[dict, bytes]:
+            cfg = _agent_cfg(state_dir)
+            folder = cfg["lockdown_folder"]
+            (folder / "doc.txt").write_text("recover me")
+            key = agent.generate_key()
+            agent.encrypt_folder(folder, key)
+            cfg["lock_sentinel"].write_text(json.dumps({"locked": True}))
+            cfg["recovery_key_file"].write_text(json.dumps({"wrapped": "blob"}))
+            cfg["pending_ack_file"].write_text(json.dumps({"command_id": "cmd-lock"}))
+            return cfg, key
+
+        with tempfile.TemporaryDirectory(prefix="hw_recovery_") as tmp:
+            state_dir = Path(tmp)
+            with (
+                _StubServer() as stub,
+                patch.object(agent, "remove_lock_screen"),
+                patch.object(agent, "apply_lock_screen"),
+            ):
+                # (a) No key material: must refuse, must not decrypt.
+                cfg, _key = _armed_state(state_dir / "a")
+                cfg["server_url"] = stub.url
+                agent.handle_unlock(cfg, {"id": "cmd-unlock-no-key"})
+                acks = stub.posts_to("/api/agent/command-ack")
+                checks.check(
+                    acks and acks[-1]["body"].get("result_status") == "failed",
+                    "unlock without key material ACKs 'failed'",
+                )
+                checks.check(
+                    len(list(cfg["lockdown_folder"].rglob("*.enc"))) == 1,
+                    "no key material: ciphertext untouched (nothing released)",
+                )
+                checks.check(cfg["lock_sentinel"].exists(), "no key material: sentinel intact")
+
+                # (b) Wrong key: the key must not be released either.
+                cfg, _key = _armed_state(state_dir / "b")
+                cfg["server_url"] = stub.url
+                wrong = agent.generate_key().decode()
+                raised = None
+                try:
+                    agent.handle_unlock(cfg, {"id": "cmd-unlock-wrong", "key_material": wrong})
+                except Exception as exc:  # noqa: BLE001 — the raise is itself a finding
+                    raised = exc
+                checks.check(
+                    len(list(cfg["lockdown_folder"].rglob("*.enc"))) == 1,
+                    "wrong key: ciphertext untouched",
+                )
+                checks.check(
+                    not (cfg["lockdown_folder"] / "doc.txt").exists(),
+                    "wrong key: no plaintext released",
+                )
+                checks.check(cfg["lock_sentinel"].exists(), "wrong key: sentinel intact")
+                checks.check(
+                    cfg["recovery_key_file"].exists(),
+                    "wrong key: recovery key file retained",
+                )
+                checks.check(
+                    raised is None
+                    or "failed"
+                    in str(
+                        [
+                            a["body"].get("result_status")
+                            for a in stub.posts_to("/api/agent/command-ack")
+                        ][-1:]
+                    ),
+                    "wrong key does not report a false success",
+                )
+
+                # (c) Correct key: full recovery.
+                cfg, key = _armed_state(state_dir / "c")
+                cfg["server_url"] = stub.url
+                before = len(stub.posts_to("/api/agent/command-ack"))
+                agent.handle_unlock(cfg, {"id": "cmd-unlock-ok", "key_material": key.decode()})
+                checks.check(
+                    (cfg["lockdown_folder"] / "doc.txt").read_text() == "recover me",
+                    "correct key: content restored",
+                )
+                checks.check(
+                    not list(cfg["lockdown_folder"].rglob("*.enc")),
+                    "correct key: ciphertext removed",
+                )
+                checks.check(not cfg["lock_sentinel"].exists(), "correct key: sentinel removed")
+                checks.check(
+                    not cfg["recovery_key_file"].exists(),
+                    "correct key: recovery key file deleted",
+                )
+                checks.check(
+                    not cfg["pending_ack_file"].exists(),
+                    "correct key: stale pending ACK cleared",
+                )
+                acks = stub.posts_to("/api/agent/command-ack")[before:]
+                checks.check(
+                    acks and acks[-1]["body"].get("result_status") == "executed",
+                    "correct key: ACK 'executed' sent",
+                )
+
+        return checks.summary()
+
+
+class TestTrack(_PhaseATest):
+    """E-TRACK: covert tracking location report and its degradation paths.
+
+    Risk note: "Platform-specific wifi scanning; geolocation API rate limits".
+    The test proves the report goes out when a provider answers, and that a
+    silent provider degrades to a queued offline report instead of raising.
+    """
+
+    test_id = "E-TRACK-01"
+    enforcement_path = "E-TRACK"
+    name = "Covert tracking location report"
+    tags = ["E-TRACK", "network"]
+    is_network = True
+    default_retries = 2
+    default_timeout = 60
+
+    def action(self, env: dict, mode: str) -> str:
+        from unittest.mock import patch
+
+        import agent
+
+        checks = _Checks()
+        fixed = {"latitude": 51.5, "longitude": -0.12, "source": "ip", "accuracy": "city"}
+
+        with tempfile.TemporaryDirectory(prefix="hw_track_") as tmp, _StubServer() as stub:
+            state_dir = Path(tmp)
+            stack_state = state_dir
+            from contextlib import ExitStack
+
+            with ExitStack() as stack:
+                _patch_agent_state(stack, agent, stack_state)
+                cfg = _agent_cfg(state_dir, server_url=stub.url)
+
+                with patch.object(agent, "get_ip_geolocation", return_value=fixed):
+                    location = agent.report_location(cfg)
+                    posts = stub.posts_to("/api/agent/location")
+                    checks.check(
+                        location is not None and location.get("source") == "ip",
+                        "location resolved from IP fallback",
+                    )
+                    checks.check(len(posts) == 1, f"one location POST delivered ({len(posts)})")
+                    if posts:
+                        body = posts[0]["body"]
+                        checks.check(
+                            body.get("location", {}).get("source") == "ip",
+                            "report carries the location source",
+                        )
+                        checks.check(
+                            bool(body.get("hardware_uuid")),
+                            "report carries the hardware UUID",
+                        )
+                checks.check(agent._queue_size() == 0, "no offline queue growth while online")
+
+                # Server unreachable but a location exists -> queued, not lost.
+                offline = _agent_cfg(state_dir, server_url="http://127.0.0.1:1")
+                with patch.object(agent, "get_ip_geolocation", return_value=fixed):
+                    result = agent.report_location(offline)
+                checks.check(result is None, "unreachable server: report returns None, no raise")
+                checks.check(
+                    agent._queue_size() == 1,
+                    f"failed report queued offline (size {agent._queue_size()})",
+                )
+
+                # No provider at all -> nothing to report, so nothing queued.
+                with patch.object(agent, "get_ip_geolocation", return_value=None):
+                    silent = _agent_cfg(state_dir, server_url=stub.url)
+                    checks.check(
+                        agent.report_location(silent) is None,
+                        "silent provider yields no location",
+                    )
+                    checks.check(
+                        agent._queue_size() == 1,
+                        "no phantom queue entry when there is no location to send",
+                    )
+
+                # wifi scan present but empty (the non-Windows case) must fall
+                # back to IP instead of failing.
+                with (
+                    patch.object(agent, "scan_wifi_networks", return_value=[]),
+                    patch.object(agent, "get_ip_geolocation", return_value=fixed),
+                ):
+                    wifi_cfg = _agent_cfg(state_dir, server_url=stub.url)
+                    wifi_cfg["google_api_key"] = "harness-google-key"
+                    wifi_location = agent.report_location(wifi_cfg)
+                    checks.check(
+                        wifi_location is not None and wifi_location.get("source") == "ip",
+                        "empty wifi scan falls back to IP (no exception)",
+                    )
+
+        return checks.summary()
+
+
+class TestDeadman(_PhaseATest):
+    """E-DEADMAN: the deadman switch must not fire on skew, must fire on expiry.
+
+    Risk note: "Clock skew; false trigger on network outage". Four cases:
+    flagged-stolen but recently seen (no fire), expiry exceeded (fire), wall
+    clock rolled backward (fire — tamper, fail-secure), and a corrupt state
+    file (fire — fail-secure).
+    """
+
+    test_id = "E-DEADMAN-01"
+    enforcement_path = "E-DEADMAN"
+    name = "Deadman switch (skew vs expiry)"
+    tags = ["E-DEADMAN", "non-destructive"]
+    default_timeout = 60
+
+    def action(self, env: dict, mode: str) -> str:
+        from contextlib import ExitStack
+        from unittest.mock import patch
+
+        import agent
+
+        checks = _Checks()
+        timeout_h = agent.DEADMAN_TIMEOUT_HOURS
+
+        def _scenario(state_dir: Path, state: dict | str):
+            cfg = _agent_cfg(state_dir)
+            (cfg["lockdown_folder"] / "data.txt").write_text("deadman target")
+            deadman_file = state_dir / "deadman.json"
+            deadman_file.write_text(state if isinstance(state, str) else json.dumps(state))
+            return cfg, deadman_file
+
+        def _run(cfg, deadman_file):
+            with ExitStack() as stack:
+                _patch_agent_state(stack, agent, cfg["lock_sentinel"].parent)
+                stack.enter_context(patch.object(agent, "DEADMAN_FILE", deadman_file))
+                stack.enter_context(patch.object(agent, "apply_lock_screen"))
+                stack.enter_context(patch.object(agent, "start_lock_guardian"))
+                agent.check_deadman(cfg)
+            return cfg["lock_sentinel"].exists()
+
+        with tempfile.TemporaryDirectory(prefix="hw_deadman_") as tmp:
+            root = Path(tmp)
+
+            cfg, dfile = _scenario(
+                root / "recent", {"status": "stolen", "last_seen": time.time() - 60}
+            )
+            checks.check(
+                not _run(cfg, dfile),
+                f"60s of skew does NOT fire the switch (timeout {timeout_h}h)",
+            )
+
+            cfg, dfile = _scenario(root / "active", {"status": "active", "last_seen": 0})
+            checks.check(not _run(cfg, dfile), "an unflagged device does not fire the switch")
+
+            expired = time.time() - (timeout_h + 1) * 3600
+            cfg, dfile = _scenario(root / "expired", {"status": "stolen", "last_seen": expired})
+            fired = _run(cfg, dfile)
+            checks.check(fired, "expiry beyond the timeout DOES fire the switch")
+            if fired:
+                checks.check(
+                    len(list(cfg["lockdown_folder"].rglob("*.enc"))) == 1,
+                    "fired switch encrypted the lockdown folder",
+                )
+
+            cfg, dfile = _scenario(
+                root / "rollback", {"status": "stolen", "last_seen": time.time() + 30 * 86400}
+            )
+            checks.check(
+                _run(cfg, dfile),
+                "clock rolled backward fires the switch (tamper, fail-secure)",
+            )
+
+            cfg, dfile = _scenario(root / "corrupt", "{not valid json")
+            checks.check(
+                _run(cfg, dfile),
+                "corrupt deadman state fires the switch (fail-secure)",
+            )
+
+        return checks.summary()
+
+
+class TestEffectiveness(_PhaseATest):
+    """E-EFFECTIVENESS: a lockdown that applied nothing must not look successful.
+
+    Risk note: "Closes the dangerous gap where critical_applied=0 was reported
+    as success". The ACK from `handle_lockdown` is the operator's only view of
+    what actually happened, so the test asserts on the delivered payload: when
+    both boot-lock layers report zero critical settings, the ACK must say
+    `partial` and carry `critical_applied_total: 0`; when the layers apply
+    settings, the totals must reflect them.
+
+    Stubbed (named here): `report_location`, `apply_lock_screen`,
+    `start_lock_guardian`, `show_lockdown_notification`, and the BCD/HP UEFI
+    modules — E-BCD and E-HP-UEFI are the tests that touch those for real.
+    """
+
+    test_id = "E-EFFECTIVENESS-01"
+    enforcement_path = "E-EFFECTIVENESS"
+    name = "Lockdown effectiveness (critical_applied reporting)"
+    tags = ["E-EFFECTIVENESS", "non-destructive"]
+    default_timeout = 120
+
+    def _ack_detail(self, stub, cfg, tmp_name: str, bcd, hp) -> dict:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        import agent
+
+        stub.responses["/api/agent/escrow-key"] = {"escrowed": True}
+        with (
+            patch.object(agent, "_boot_lock_modules_available", True),
+            patch.object(agent, "bcd_lockdown", SimpleNamespace(apply_bcd_lockdown=lambda: bcd)),
+            patch.object(
+                agent, "hp_uefi_lockdown", SimpleNamespace(apply_boot_lockdown=lambda *a, **k: hp)
+            ),
+            patch.object(agent, "report_location"),
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "show_lockdown_notification"),
+        ):
+            cfg["boot_lock_enabled"] = True
+            before = len(stub.posts_to("/api/agent/command-ack"))
+            agent.handle_lockdown(cfg, {"id": f"cmd-{tmp_name}", "enable_pba": False})
+            acks = stub.posts_to("/api/agent/command-ack")[before:]
+        return acks[-1]["body"] if acks else {}
+
+    def action(self, env: dict, mode: str) -> str:
+        import agent
+
+        checks = _Checks()
+        nothing_applied = {
+            "success": False,
+            "partial": False,
+            "rolled_back": True,
+            "critical_applied": 0,
+            "best_effort_applied": 0,
+            "best_effort_failed": 0,
+        }
+        nothing_applied_hp = {
+            "success": False,
+            "partial": False,
+            "rolled_back": False,
+            "not_hp": True,
+            "critical_applied": 0,
+            "best_effort_applied": 0,
+            "best_effort_failed": 0,
+        }
+        all_applied = {
+            "success": True,
+            "partial": False,
+            "rolled_back": False,
+            "critical_applied": 3,
+            "best_effort_applied": 2,
+            "best_effort_failed": 0,
+        }
+        all_applied_hp = {
+            "success": True,
+            "partial": False,
+            "rolled_back": False,
+            "not_hp": False,
+            "critical_applied": 2,
+            "best_effort_applied": 1,
+            "best_effort_failed": 0,
+        }
+
+        with tempfile.TemporaryDirectory(prefix="hw_effectiveness_") as tmp, _StubServer() as stub:
+            root = Path(tmp)
+            from contextlib import ExitStack
+
+            with ExitStack() as stack:
+                _patch_agent_state(stack, agent, root)
+
+                # (a) Nothing applied: the ACK must not read as full success.
+                bad_cfg = _agent_cfg(root / "nothing", server_url=stub.url)
+                bad = self._ack_detail(
+                    stub, bad_cfg, "nothing", nothing_applied, nothing_applied_hp
+                )
+                detail = bad.get("boot_lock_detail") or {}
+                checks.check(
+                    detail.get("critical_applied_total") == 0,
+                    f"critical_applied_total reported as "
+                    f"{detail.get('critical_applied_total')!r} when nothing applied",
+                )
+                checks.check(
+                    bad.get("boot_lock_status") == "partial",
+                    f"boot_lock_status is {bad.get('boot_lock_status')!r}, not a success claim",
+                )
+                checks.check(
+                    detail.get("boot_lock_attempted") is True,
+                    "ACK records that boot lockdown was attempted",
+                )
+                checks.check(
+                    detail.get("bcd", {}).get("rolled_back") is True,
+                    "ACK records the BCD rollback",
+                )
+
+                # (b) Fully applied: the counts must be non-zero and reflected.
+                good_cfg = _agent_cfg(root / "applied", server_url=stub.url)
+                good = self._ack_detail(stub, good_cfg, "applied", all_applied, all_applied_hp)
+                good_detail = good.get("boot_lock_detail") or {}
+                checks.check(
+                    good_detail.get("critical_applied_total") == 5,
+                    f"critical_applied_total sums both layers "
+                    f"({good_detail.get('critical_applied_total')!r})",
+                )
+                checks.check(
+                    good_detail.get("best_effort_applied_total") == 3,
+                    "best_effort_applied_total sums both layers",
+                )
+                checks.check(
+                    "boot_lock_status" not in good or good.get("boot_lock_status") != "partial",
+                    "a fully applied lockdown is not reported as partial",
+                )
+
+        return checks.summary()
+
+
+class TestOfflineQueue(_PhaseATest):
+    """E-OFFLINE-QUEUE: queue, drain in order, and survive a corrupt database.
+
+    Risk note: "Queue growth on extended offline; SQLite corruption". A corrupt
+    queue must not crash the agent loop and must not silently lose its handle on
+    future reports.
+    """
+
+    test_id = "E-OFFLINE-QUEUE-01"
+    enforcement_path = "E-OFFLINE-QUEUE"
+    name = "Offline queue (order, drain, corruption)"
+    tags = ["E-OFFLINE-QUEUE", "network"]
+    is_network = True
+    default_retries = 2
+    default_timeout = 60
+
+    def action(self, env: dict, mode: str) -> str:
+        from contextlib import ExitStack
+        from unittest.mock import patch
+
+        import agent
+
+        checks = _Checks()
+        with tempfile.TemporaryDirectory(prefix="hw_queue_") as tmp, _StubServer() as stub:
+            root = Path(tmp)
+            db = root / ".offline_queue.db"
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(agent, "OFFLINE_QUEUE_DB", db))
+
+                for i in range(3):
+                    agent.queue_offline("/api/agent/location", {"n": i, "hostname": "HW-HARNESS"})
+                checks.check(
+                    agent._queue_size() == 3,
+                    f"3 reports queued while offline (size {agent._queue_size()})",
+                )
+
+                cfg = _agent_cfg(root, server_url=stub.url)
+                agent.drain_offline_queue(cfg)
+                posts = stub.posts_to("/api/agent/location")
+                checks.check(
+                    agent._queue_size() == 0,
+                    f"queue drained after reconnect (size {agent._queue_size()})",
+                )
+                checks.check(len(posts) == 3, f"3 reports delivered ({len(posts)})")
+                checks.check(
+                    [p["body"].get("n") for p in posts] == [0, 1, 2],
+                    f"delivered in FIFO order (got {[p['body'].get('n') for p in posts]})",
+                )
+
+                # Corruption: a garbage database must not raise or wedge the loop.
+                db.write_bytes(b"this is not a sqlite database")
+                raised = None
+                try:
+                    agent.queue_offline("/api/agent/location", {"n": 99})
+                    agent.drain_offline_queue(cfg)
+                except Exception as exc:  # noqa: BLE001 — raising here IS the failure
+                    raised = exc
+                checks.check(
+                    raised is None,
+                    f"corrupt queue does not raise (got {type(raised).__name__})",
+                )
+                checks.check(
+                    agent._queue_size() == 0,
+                    "corrupt queue reports an empty size instead of crashing",
+                )
+
+                # Recovery: removing the corrupt file restores queueing.
+                db.unlink()
+                agent.queue_offline("/api/agent/location", {"n": 100})
+                checks.check(
+                    agent._queue_size() == 1,
+                    "queueing works again after the corrupt database is removed",
+                )
+
+        return checks.summary()
+
+
+class TestAutoUpdate(_PhaseATest):
+    """E-AUTO-UPDATE: signature verification is the point, not the download.
+
+    Risk note: "Update server availability; signature verification on Windows".
+    Four cases against a real socket and a real Ed25519 key: a bad signature is
+    refused, a missing signature is refused when a key is pinned, a correct
+    signature is applied, and an unreachable update server is a soft failure.
+    """
+
+    test_id = "E-AUTO-UPDATE-01"
+    enforcement_path = "E-AUTO-UPDATE"
+    name = "Agent auto-update (signature refusal)"
+    tags = ["E-AUTO-UPDATE", "network"]
+    is_network = True
+    default_retries = 2
+    default_timeout = 90
+
+    def action(self, env: dict, mode: str) -> str:
+        import base64
+        import hashlib
+        from contextlib import ExitStack
+
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        import agent
+
+        checks = _Checks()
+        payload = b"MZ fake agent binary for the harness"
+        sha256 = hashlib.sha256(payload).hexdigest()
+        version = "9.9.9"
+
+        with (
+            tempfile.TemporaryDirectory(prefix="hw_update_") as tmp,
+            _StubServer(get_bodies={"/agent.exe": payload}) as stub,
+        ):
+            root = Path(tmp)
+            priv = Ed25519PrivateKey.generate()
+            key_path = root / "update_pub.pem"
+            key_path.write_bytes(
+                priv.public_key().public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+            )
+            good_sig = base64.b64encode(priv.sign(f"v1:{version}:{sha256}".encode())).decode()
+
+            with ExitStack() as stack:
+                _patch_agent_state(stack, agent, root)
+                cfg = _agent_cfg(root, server_url=stub.url)
+                cfg["update_public_key"] = str(key_path)
+                download = agent.UPDATE_DOWNLOAD_FILE
+                pending = agent.UPDATE_PENDING_FILE
+                url = f"{stub.url}/agent.exe"
+
+                agent.download_update(cfg, url, sha256, version, signature="")
+                checks.check(
+                    not download.exists(),
+                    "pinned key + missing signature: update refused",
+                )
+                checks.check(not pending.exists(), "missing signature: no watchdog signal")
+
+                agent.download_update(cfg, url, sha256, version, signature="AAAA" + good_sig)
+                checks.check(
+                    not download.exists(),
+                    "invalid signature: update refused",
+                )
+                checks.check(not pending.exists(), "invalid signature: no watchdog signal")
+
+                agent.download_update(cfg, url, "0" * 64, version, signature=good_sig)
+                checks.check(
+                    not download.exists(),
+                    "SHA-256 mismatch refused even with a valid signature",
+                )
+
+                agent.download_update(cfg, url, sha256, version, signature=good_sig)
+                checks.check(download.exists(), "valid signature + matching hash: downloaded")
+                if download.exists():
+                    checks.check(
+                        download.read_bytes() == payload,
+                        "downloaded bytes match the served payload",
+                    )
+                checks.check(pending.exists(), "valid update wrote the watchdog signal")
+                if pending.exists():
+                    signal = json.loads(pending.read_text())
+                    checks.check(
+                        signal.get("signature_verified") is True,
+                        "signal records signature_verified=True",
+                    )
+                    checks.check(
+                        signal.get("version") == version,
+                        "signal records the update version",
+                    )
+
+                # Update server unreachable: soft failure, no exception, no signal.
+                download.unlink(missing_ok=True)
+                pending.unlink(missing_ok=True)
+                offline = _agent_cfg(root, server_url="http://127.0.0.1:1")
+                offline["update_public_key"] = str(key_path)
+                raised = None
+                try:
+                    agent.check_for_update(offline)
+                except Exception as exc:  # noqa: BLE001 — raising here IS the failure
+                    raised = exc
+                checks.check(
+                    raised is None,
+                    f"unreachable update server is a soft failure (got {type(raised).__name__})",
+                )
+                checks.check(
+                    not pending.exists(),
+                    "unreachable update server does not write a watchdog signal",
+                )
+
+        return checks.summary()
+
+
+# ---------------------------------------------------------------------------
+# Test registry — 20 enforcement path tests
+#
+# 12 from harness v2.0 + 8 Phase-A tests (D-129 runbook §3) covering the
+# enforcement paths that previously had no harness coverage at all. The seven
+# v2.0 tests for paths that are not graph enforcement nodes (E-DURESS,
+# E-HIDDEN-FILE, E-TAMPER, E-TPM, E-ENROLL, E-HWID, E-INTEGRATION) stay in the
+# registry: they are real coverage, they just do not move a graph status.
 # ---------------------------------------------------------------------------
 
 ALL_TESTS: list[HardwareTest] = [
@@ -1278,6 +2324,15 @@ ALL_TESTS: list[HardwareTest] = [
     TestEnroll(),
     TestHwid(),
     TestIntegration(),
+    # Phase A — the enforcement paths that had no coverage (D-129 runbook §3)
+    TestDecrypt(),
+    TestAck(),
+    TestRecovery(),
+    TestTrack(),
+    TestDeadman(),
+    TestEffectiveness(),
+    TestOfflineQueue(),
+    TestAutoUpdate(),
 ]
 
 

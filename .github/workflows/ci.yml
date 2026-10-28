@@ -73,7 +73,9 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: false
 
-      - run: npm test
+      # Coverage + gate: thresholds live in server/jest.config.js.
+      # Same script as `make test-coverage`, so local and CI agree.
+      - run: npm run test:coverage
 
   # ---------------------------------------------------------------------------
   # Real PostgreSQL smoke test (S140)
@@ -165,7 +167,9 @@ jobs:
         run: ../scripts/audit-with-exceptions.sh
         continue-on-error: false
 
-      - run: npm test
+      # Coverage + gate: thresholds live in dashboard/vitest.config.js.
+      # Same script as `make test-coverage`, so local and CI agree.
+      - run: npm run test:coverage
 
   # ---------------------------------------------------------------------------
   # Agent tests (Python + pytest)
@@ -205,7 +209,9 @@ jobs:
           pip-audit -r requirements.txt
         continue-on-error: false
 
-      - run: pytest tests/ -v
+      # Coverage + gate: fail_under in pyproject.toml, mirrored by the flag
+      # here because pytest-cov decides on --cov-fail-under, not fail_under.
+      - run: pytest tests/ -v --cov=. --cov-report=term-missing --cov-fail-under=59
 
   # ---------------------------------------------------------------------------
   # API E2E tests (Jest + Supertest, in-process Express + SQLite)
@@ -337,7 +343,9 @@ jobs:
 
       - run: npm ci
 
-      - run: npm test
+      # Coverage + gate: thresholds live in electron/jest.config.js.
+      # Same script as `make test-coverage`, so local and CI agree.
+      - run: npm run test:coverage
 
   # ---------------------------------------------------------------------------
   # Serverless worker tests (Vitest)
@@ -363,7 +371,9 @@ jobs:
 
       - run: npm ci
 
-      - run: npm test
+      # Coverage + gate: thresholds live in serverless/vitest.config.js.
+      # Same script as `make test-coverage`, so local and CI agree.
+      - run: npm run test:coverage
 
   # ---------------------------------------------------------------------------
   # Script tests (Python — graph_session + memory)

@@ -171,12 +171,18 @@ test-e2e-dashboard:
 	@cd dashboard && npx playwright test
 
 # Run all test suites with coverage reporting.
+# Coverage gate: every component enforces a floor declared in its own config
+# (server/electron jest coverageThreshold, dashboard/serverless vitest
+# coverage.thresholds, agent fail_under in pyproject.toml). Measured floors are
+# dated 2026-10-27; raise them when coverage improves, never lower them to make
+# a build pass. CI runs the same scripts, so local and CI agree.
 test-coverage:
 	@export PATH="/home/cllin/.local/node/bin:$$PATH" && \
 	echo "=== Server coverage ===" && cd server && npm run test:coverage && cd .. && \
-	echo "=== Agent coverage ===" && scripts/run-agent-tests.sh --cov=. --cov-report=term -q && \
-	echo "=== Dashboard coverage ===" && cd dashboard && npx vitest run --coverage && cd .. && \
-	echo "=== Worker coverage ===" && cd serverless && npx vitest run --coverage && cd .. && \
+	echo "=== Agent coverage ===" && \
+	  scripts/run-agent-tests.sh --cov=. --cov-report=term-missing --cov-fail-under=59 -q && \
+	echo "=== Dashboard coverage ===" && cd dashboard && npm run test:coverage && cd .. && \
+	echo "=== Worker coverage ===" && cd serverless && npm run test:coverage && cd .. && \
 	echo "=== Electron coverage ===" && cd electron && npm run test:coverage && cd .. && \
 	echo "=== All coverage reports generated ==="
 

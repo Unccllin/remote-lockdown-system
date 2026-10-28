@@ -439,9 +439,16 @@ enforcement_paths:
     component: C-AGENT
     entry_function: "bcd_lockdown.apply_bcd_lockdown"
     verified_by: [V-AGENT, V-HW-HARNESS]
-    status: verified-on-hardware
-    hardware_artifact_ref: "agent/hw_test_artifact_azure_bitlocker.json"
-    risk_notes: "D-008 CLOSED: BitLocker suspend/resume verified on Azure VM with BitLocker. BCD changes fail on Azure (platform restriction) but rollback + BitLocker resume work correctly."
+    # Demoted 2026-10-27 from verified-on-hardware: every artifact cited for
+    # this path records E-BCD-01 FAIL (Azure VM: platform restriction; the
+    # live HP run of 2026-08-21: critical_applied=0, rolled_back=true). The
+    # rollback and BitLocker suspend/resume do work, but "the enforcement path
+    # was verified on hardware" is not what those artifacts show. I3 now
+    # refuses the claim (see docs/D-129-HARDWARE-RUNBOOK.md §2, §6).
+    status: verified-in-unit-test
+    hardware_artifact_ref: "agent/hw_test_artifact_azure_bitlocker.json#E-BCD-01"
+    verification_note: "Attempted on hardware twice (Azure VM, HP SPARE_TEST 2026-08-21); both recorded FAIL. Re-run agent/hw_test_harness.py --tag E-BCD --services admin on Windows and cite the passing artifact to restore this claim."
+    risk_notes: "D-008 CLOSED: BitLocker suspend/resume verified on Azure VM with BitLocker. BCD changes fail on Azure (platform restriction) but rollback + BitLocker resume work correctly. On HP SPARE_TEST the BCD apply reported critical_applied=0 with rolled_back=true — the apply path, not just the platform, is unproven."
 
   - id: E-HP-UEFI
     name: hp-uefi-lockdown

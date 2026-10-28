@@ -166,3 +166,49 @@ jobs:
 
       - name: Check every registered route is documented
         run: node scripts/check-openapi-routes.js
+
+  # ---------------------------------------------------------------------------
+  # Secret scan — the publish range, not the whole history
+  #
+  # scripts/prepush_secrets.py + pre-push-check.sh already gate a human's push
+  # locally, but that gate only exists if the hook is installed — it was not,
+  # so the S140 leak class (a credential committed, then re-quoted inside its
+  # own log entry) had no automated defence. This job is the durable half.
+  #
+  # Scope is deliberately "exactly what this change publishes": the PR base, or
+  # the previous tip on a branch push. A whole-history scan on a long history is
+  # noisy enough to be read as a false alarm; run it on purpose with --all.
+  # ---------------------------------------------------------------------------
+  secrets:
+    name: Secret scan (publish range)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          # Full history: the scan needs a real base commit to diff against.
+          fetch-depth: 0
+
+      - name: Scan the publish range for credential-shaped content
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            git fetch --no-tags origin \
+              "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+            BASE="origin/${GITHUB_BASE_REF}"
+          elif [ -n "${BEFORE:-}" ] \
+            && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+            && git rev-parse --verify -q "$BEFORE" >/dev/null; then
+            BASE="$BEFORE"
+          else
+            # New branch, or the previous tip is unreachable. Scanning nothing
+            # would report a false pass, so scan everything on purpose.
+            echo "No usable base commit — scanning the full history."
+            python3 scripts/prepush_secrets.py --all
+            exit $?
+          fi
+          python3 scripts/prepush_secrets.py --base "$BASE" --head HEAD

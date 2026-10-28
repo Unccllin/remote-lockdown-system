@@ -27,6 +27,7 @@
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
+import { authHeaders } from './lib/sign.js';
 
 const BASE_URL = __ENV.K6_BASE_URL || 'http://localhost:3001';
 const VUS = parseInt(__ENV.MIXED_VUS || '500', 10);
@@ -69,10 +70,9 @@ export const options = {
   },
 };
 
-const agentHeaders = {
-  'Content-Type': 'application/json',
-  'x-agent-key': AGENT_KEY,
-};
+// Agent request headers come from authHeaders() per request: signed when
+// K6_HMAC_SECRET is set (each request needs its own nonce + body hash),
+// legacy shared-key headers otherwise. Admin traffic uses a bearer token.
 
 const adminHeaders = {
   'Authorization': `Bearer ${ADMIN_TOKEN}`,
@@ -95,7 +95,8 @@ function checkinPayload(vuId) {
 export function agentPoll() {
   const vuId = __VU;
   const url = `${BASE_URL}/api/agent/checkin`;
-  const res = http.post(url, JSON.stringify(checkinPayload(vuId)), { headers: agentHeaders });
+  const body = JSON.stringify(checkinPayload(vuId));
+  const res = http.post(url, body, { headers: authHeaders(AGENT_KEY, vuId, body) });
 
   check(res, {
     'checkin status is 200': (r) => r.status === 200,
@@ -139,7 +140,10 @@ export function agentAck() {
   const checkinUrl = `${BASE_URL}/api/agent/checkin`;
   const ackUrl = `${BASE_URL}/api/agent/command-ack`;
 
-  const checkinRes = http.post(checkinUrl, JSON.stringify(checkinPayload(vuId)), { headers: agentHeaders });
+  const checkinBody = JSON.stringify(checkinPayload(vuId));
+  const checkinRes = http.post(checkinUrl, checkinBody, {
+    headers: authHeaders(AGENT_KEY, vuId, checkinBody),
+  });
   check(checkinRes, { 'checkin status is 200': (r) => r.status === 200 });
 
   let command = null;
@@ -156,7 +160,9 @@ export function agentAck() {
       command_id: command.id,
       result_status: 'executed',
     });
-    const ackRes = http.post(ackUrl, ackPayload, { headers: agentHeaders });
+    const ackRes = http.post(ackUrl, ackPayload, {
+      headers: authHeaders(AGENT_KEY, vuId, ackPayload),
+    });
     check(ackRes, { 'ack status is 200': (r) => r.status === 200 });
   }
 

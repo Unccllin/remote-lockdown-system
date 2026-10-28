@@ -1814,6 +1814,10 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     log.warning("LOCKDOWN command received — executing")
     folder = cfg["lockdown_folder"]
     sentinel = cfg["lock_sentinel"]
+    # Phase 5: one command produces one idempotency key. It is written into the
+    # pending-ACK file and reused by every retry, so a resent ACK dedups on the
+    # server instead of looking like a second, different result (B-011).
+    command_uuid = str(uuid.uuid4())
 
     # Report location immediately so the operator knows where the device is
     log.info("Reporting location before lockdown...")
@@ -1829,6 +1833,8 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         fd = os.open(str(sentinel), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
         log.warning("Sentinel already exists — device already locked, skipping encryption")
+        # No pending-ACK file is written on this path, so there is no retry to
+        # keep idempotent — the caller's own UUID applies.
         ack_command(cfg, command["id"], "executed")
         return
 
@@ -1848,7 +1854,13 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     # --- A1: Durability boundary is HERE (before encrypt_folder), not at the ACK ---
     # File A: transient plaintext for ACK retry (A1 + A4)
     pending_ack_file = cfg.get("pending_ack_file", PENDING_ACK_FILE)
-    write_pending_ack(pending_ack_file, command["id"], "executed", key_material=key_b64)
+    write_pending_ack(
+        pending_ack_file,
+        command["id"],
+        "executed",
+        key_material=key_b64,
+        command_uuid=command_uuid,
+    )
     # File B: long-lived recovery blob, wrapped with master public key (A8)
     recovery_key_file = cfg.get("recovery_key_file", RECOVERY_KEY_FILE)
     write_recovery_key(recovery_key_file, command["id"], key_b64, cfg=cfg)
@@ -1868,8 +1880,14 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
             sentinel.unlink()
         except OSError:
             pass
-        write_pending_ack(pending_ack_file, command["id"], "failed", key_material=key_b64)
-        ack_command(cfg, command["id"], "failed")
+        write_pending_ack(
+            pending_ack_file,
+            command["id"],
+            "failed",
+            key_material=key_b64,
+            command_uuid=command_uuid,
+        )
+        ack_command(cfg, command["id"], "failed", command_uuid=command_uuid)
         return
 
     try:
@@ -1882,8 +1900,14 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         except OSError:
             pass
         # Update pending ACK to 'failed' so the server knows. Do NOT delete File A.
-        write_pending_ack(pending_ack_file, command["id"], "failed", key_material=key_b64)
-        ack_command(cfg, command["id"], "failed")
+        write_pending_ack(
+            pending_ack_file,
+            command["id"],
+            "failed",
+            key_material=key_b64,
+            command_uuid=command_uuid,
+        )
+        ack_command(cfg, command["id"], "failed", command_uuid=command_uuid)
         return
 
     # D-011: If some files were locked/open, log a warning and report to server.
@@ -2116,6 +2140,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         power_on_password=power_on_password,
         bitlocker_pin=bitlocker_pin,
         bitlocker_recovery_password=bitlocker_recovery_password,
+        command_uuid=command_uuid,
     )
     if ok:
         if pending_ack_file.exists():

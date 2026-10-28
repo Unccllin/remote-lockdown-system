@@ -26,6 +26,7 @@
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
+import { authHeaders } from './lib/sign.js';
 
 const BASE_URL = __ENV.K6_BASE_URL || 'http://localhost:3001';
 const VUS = parseInt(__ENV.K6_VUS || '1000', 10);
@@ -60,12 +61,8 @@ export default function () {
   const url = `${BASE_URL}/api/agent/checkin`;
   const payload = JSON.stringify(checkinPayload(vuId));
 
-  const params = {
-    headers: {
-      'Content-Type': 'application/json',
-      'x-agent-key': AGENT_KEY,
-    },
-  };
+  // Signed when K6_HMAC_SECRET is set, legacy shared-key headers otherwise.
+  const params = { headers: authHeaders(AGENT_KEY, vuId, payload) };
 
   const res = http.post(url, payload, params);
 

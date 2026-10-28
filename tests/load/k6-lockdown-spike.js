@@ -33,6 +33,7 @@
  */
 
 import http from 'k6/http';
+import { authHeaders } from './lib/sign.js';
 import { check, sleep } from 'k6';
 
 const BASE_URL = __ENV.K6_BASE_URL || 'http://localhost:3001';
@@ -59,18 +60,18 @@ function checkinPayload(vuId) {
   };
 }
 
-const headers = {
-  'Content-Type': 'application/json',
-  'x-agent-key': AGENT_KEY,
-};
-
 export default function () {
   const vuId = __VU;
   const checkinUrl = `${BASE_URL}/api/agent/checkin`;
   const ackUrl = `${BASE_URL}/api/agent/command-ack`;
 
   // 1. Checkin — may return a pending lockdown command.
-  const checkinRes = http.post(checkinUrl, JSON.stringify(checkinPayload(vuId)), { headers });
+  // Signed when K6_HMAC_SECRET is set. Each request needs its own nonce and its
+  // own body hash, so headers cannot be hoisted to a module-level constant.
+  const checkinBody = JSON.stringify(checkinPayload(vuId));
+  const checkinRes = http.post(checkinUrl, checkinBody, {
+    headers: authHeaders(AGENT_KEY, vuId, checkinBody),
+  });
 
   const checkinOk = check(checkinRes, {
     'checkin status is 200': (r) => r.status === 200,
@@ -94,7 +95,9 @@ export default function () {
         boot_lock_status: true,
       });
 
-      const ackRes = http.post(ackUrl, ackPayload, { headers });
+      const ackRes = http.post(ackUrl, ackPayload, {
+        headers: authHeaders(AGENT_KEY, vuId, ackPayload),
+      });
 
       check(ackRes, {
         'ack status is 200': (r) => r.status === 200,

@@ -184,7 +184,7 @@ class TestRunHarness:
         assert "environment" in artifact
         assert "results" in artifact
         assert "summary" in artifact
-        assert artifact["summary"]["total"] == 12
+        assert artifact["summary"]["total"] == len(hw_test_harness.ALL_TESTS)
         # On Linux, all should be skipped
         assert artifact["summary"]["passed"] == 0
         assert artifact["summary"]["failed"] == 0
@@ -286,7 +286,7 @@ class TestRunHarness:
 
 class TestTestRegistry:
     def test_all_tests_defined(self):
-        """v2.0: All 12 enforcement path tests should be registered."""
+        """All enforcement path tests should be registered."""
         test_ids = [t.test_id for t in hw_test_harness.ALL_TESTS]
         assert "E-ENCRYPT-01" in test_ids
         assert "E-LOCK-SCREEN-01" in test_ids
@@ -300,7 +300,68 @@ class TestTestRegistry:
         assert "E-ENROLL-01" in test_ids
         assert "E-HWID-01" in test_ids
         assert "E-INTEGRATION-01" in test_ids
-        assert len(hw_test_harness.ALL_TESTS) == 12
+        assert len(hw_test_harness.ALL_TESTS) == 20
+
+    def test_phase_a_tests_registered(self):
+        """D-129 Phase A: the 8 previously-uncovered paths have a test each."""
+        expected = {
+            "E-DECRYPT-01": "E-DECRYPT",
+            "E-ACK-01": "E-ACK",
+            "E-RECOVERY-01": "E-RECOVERY",
+            "E-TRACK-01": "E-TRACK",
+            "E-DEADMAN-01": "E-DEADMAN",
+            "E-EFFECTIVENESS-01": "E-EFFECTIVENESS",
+            "E-OFFLINE-QUEUE-01": "E-OFFLINE-QUEUE",
+            "E-AUTO-UPDATE-01": "E-AUTO-UPDATE",
+        }
+        by_id = {t.test_id: t for t in hw_test_harness.ALL_TESTS}
+        for test_id, path in expected.items():
+            assert test_id in by_id, f"missing Phase-A test {test_id}"
+            assert by_id[test_id].enforcement_path == path
+            assert path in by_id[test_id].tags
+
+    def test_every_graph_enforcement_path_has_a_harness_tag(self):
+        """The harness must have a runnable tag for every enforcement path.
+
+        `--tag <path>` used to exit 1 with "No tests match tags" for 8 of the
+        13 graph paths (D-129 runbook §1). This is the regression test.
+        """
+        import yaml
+
+        spec_path = Path(__file__).parent.parent.parent / ".devin" / "graph" / "GRAPH-SPEC.yaml"
+        if not spec_path.exists():  # pragma: no cover — spec is always in the repo
+            import pytest
+
+            pytest.skip("GRAPH-SPEC.yaml not found")
+        spec = yaml.safe_load(spec_path.read_text())
+        tags = {tag for test in hw_test_harness.ALL_TESTS for tag in test.tags}
+        missing = [p["id"] for p in spec["enforcement_paths"] if p["id"] not in tags]
+        assert not missing, f"enforcement paths with no harness test: {missing}"
+
+    def test_network_tests_declare_retries(self):
+        """A network test's default_retries must not be dead configuration."""
+        network = [t for t in hw_test_harness.ALL_TESTS if t.is_network]
+        assert network, "expected at least one network test"
+        for test in network:
+            assert test.default_retries > 0, f"{test.test_id} is network but has no retries"
+
+    def test_cli_zero_retries_means_use_test_default(self):
+        """retries=0 falls back to default_retries for network tests."""
+        test = hw_test_harness.TestAck()
+        seen = {}
+
+        def _action(env, mode):
+            seen["attempts"] = seen.get("attempts", 0) + 1
+            if seen["attempts"] <= test.default_retries:
+                raise OSError("transient")
+            return "recovered"
+
+        test.action = _action
+        test.verify = lambda env, mode, action_detail="": (True, action_detail)
+        env = hw_test_harness.detect_environment()
+        result = test.run(env, "simulate", timeout=10, retries=0)
+        assert result.status == "PASS"
+        assert result.retries == test.default_retries
 
     def test_each_test_is_hardware_test_instance(self):
         """v2.0: Each test should be a HardwareTest instance."""

@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-10-27 10:50:37
-Active memories: 521 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-10-27 17:29:44
+Active memories: 555 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -32,22 +32,56 @@ Active memories: 521 | Superseded: 0 | Decayed: 20
 | m-040 | The EFI_HTTP_PROTOCOL uses token-based async API ( |  | 0.60 | 2026-08-18 | 0.276 | 0 |  |
 | m-016 | MISTAKE: Used wrong MSS1 signature byte order (0x4 |  | 0.60 | 2026-08-18 | 0.276 | 0 |  |
 | m-001 | EDK2 GenerateCapsule --signer-private-cert needs a |  | 0.60 | 2026-08-18 | 0.276 | 0 |  |
+| m-564 | run coverage scripts IN PLACE OF the plain test co |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-545 | the harness records platform, not machine: no mode |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-547 | MISTAKE: mistake: the S142 handover assumed the ha |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-544 | retry defaults to 0 and silently overrides each te |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-573 | MISTAKE: mistake: tested 20MB and 5MB to judge the |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-530 | ADMIN_TOKEN kept as break-glass super-admin for bo |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-539 | MISTAKE: pi-lens STOP-block on worker.ts was entir |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-558 | scripts/pre-push-check.sh was tracked 100644 so it |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-527 | alerts is fully CLIENT-SIDE (dashboard/src/api/ale |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-563 | floors sit ~2 points under the measurement and are |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-541 | MISTAKE: mistake: assumed the reported crash was a |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-554 | MISTAKE: mistake: E-AUTO-UPDATE checked a guessed  |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-571 | config/env.js required Postgres vars whenever NODE |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-556 | three artifact schemas exist and all must be parse |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-534 | MISTAKE: mistake: treated D-120 as code work; corr |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-536 | serverless Worker handleAgentCheckin dropped firmw |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-528 | Serverless checkin dropped ALL bios/PBA creds → UE |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-566 | vitest/jest thresholds are enforced per provider:  |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-570 | tailnet path to that box is a one-way blackhole ab |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-538 | malformed firmware_audit (non-object/array) → null |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-555 | I3 only required a non-empty hardware_artifact_ref |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-546 | two evidence streams share the D-129 trip but not  |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-561 | MISTAKE: mistake: session blocks grew to 268 lines |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-533 | masking unsigned code is bootkit tradecraft; autho |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-568 | MISTAKE: mistake: chained make test-coverage throu |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-553 | MISTAKE: mistake: first E-TRACK-01 asserted 'no lo |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-542 | 8 of the 9 unit-test-only enforcement paths have N |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-543 | graph I3 only checks that hardware_artifact_ref is |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-551 | every graph enforcement path now has a harness tag |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-535 | hardware_uuid is a stable identifier not a secret  |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-572 | k6 load harness now executes end-to-end (k6 in doc |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-531 | dashboard cutover block was stale !serverless guar |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-548 | _StubServer (real ThreadingHTTPServer on 127.0.0.1 |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-540 | Docker prod was accidentally safe only because WOR |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-574 | MISTAKE: mistake: ran k6 attached to an ssh sessio |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-562 | baselines measured not guessed: server 68.18/64.06 |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-560 | MISTAKE: mistake: repeated a stale audit claim tha |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-575 | MISTAKE: mistake: NODE_ENV=production with SQLite  |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-559 | check staleness before proposing audit items: E2E  |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-549 | _patch_agent_state (repointing PENDING_ACK_FILE/DE |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-529 | Per-device installer = self-contained install.ps1  |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-557 | a demoted path may still cite its failed attempt a |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-552 | MISTAKE: mistake: assumed the pending-ACK retry pr |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-567 | MISTAKE: mistake: read the first dashboard coverag |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-569 | the box has NO TPM (empty /sys/class/tpm, no /dev/ |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-526 | Worker had no role model (single ADMIN_TOKEN); por |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-537 | NG-T5 partition-level FVE binding was ALREADY impl |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-550 | _Checks/_PhaseATest pattern: action() returns a ch |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-532 | MISTAKE: mistake: assumed repo code == deployed Wo |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
+| m-565 | pytest-cov decides on --cov-fail-under, NOT on cov |  | 0.50 | 2026-10-27 | 0.250 | 0 |  |
 | m-056 | MISTAKE: none this session |  | 0.60 | 2026-09-17 | 0.192 | 0 |  |
 | m-236 | MISTAKE: none |  | 0.55 | 2026-09-17 | 0.176 | 0 |  |
 | m-105 | MISTAKE: None — this was a verification session wi |  | 0.55 | 2026-09-15 | 0.172 | 0 |  |

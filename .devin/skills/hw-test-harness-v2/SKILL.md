@@ -15,14 +15,20 @@ description: Hardware-in-the-loop test harness v2.0. Use when running hardware t
 
 ## Overview
 
-The hardware test harness is at `agent/hw_test_harness.py` (v2.0, ~1600 lines).
+The hardware test harness is at `agent/hw_test_harness.py` (v2.0, ~2570 lines).
 It was redesigned from v1.0 with 12 patterns borrowed from established HIL
 frameworks (OpenHTF, bench-vv, f0_library, FleetDM, Windows-Red-Teaming,
 pytest-timeout, pytest-rerunfailures, Allure/JUnit/CTRF, macOSLab, GhostWall).
 
-The harness executes 12 enforcement path tests against real Windows/HP
+The harness executes 20 enforcement path tests against real Windows/HP
 hardware. On non-Windows or non-HP platforms, tests are gracefully skipped
 (not failed).
+
+**Every graph enforcement path (all 13) now has at least one test.** The last
+8 were added in D-129 Phase A (2026-10-27); before that, `--tag E-DECRYPT` and
+7 others exited 1 with "No tests match tags". The regression test is
+`tests/test_hw_harness.py::test_every_graph_enforcement_path_has_a_harness_tag`.
+See `docs/D-129-HARDWARE-RUNBOOK.md` for the per-path assertion map.
 
 ## The 12 patterns
 
@@ -35,15 +41,15 @@ hardware. On non-Windows or non-HP platforms, tests are gracefully skipped
 | 5 | VHD isolation | f0_library | Destructive tests target VHD/temp dirs, not real disk (tests use `tempfile.TemporaryDirectory`) |
 | 6 | Command lifecycle | FleetDM | E-INTEGRATION tests Pending -> Fetched -> Acked -> Error -> Canceled flow |
 | 7 | Timeout protection | pytest-timeout | `with_timeout()` decorator + threading.Timer, default 60s per test, `--timeout` flag |
-| 8 | Retry logic | pytest-rerunfailures | `with_retry()` decorator, retries on ERROR (not FAIL), `--retry` flag, only for `is_network=True` tests |
+| 8 | Retry logic | pytest-rerunfailures | `default_retries` per test, retries on ERROR (not FAIL); `--retry N` overrides, `--retry 0` (default) means "use the test's default"; only for `is_network=True` tests |
 | 9 | CTRF JSON format | CTRF standard | `build_ctrf_artifact()` — standardized report with summary, tests[], extra |
 | 10 | Tag-based filtering | custom | `--tag E-ENCRYPT,E-DURESS` — tests declare `tags` list, harness filters |
 | 11 | Evidence capture | macOSLab | `capture_state()` — before/after state snapshots with file listings, sizes, SHA-256 hashes |
 | 12 | Rollback | GhostWall | `RollbackContext` — capture prior state, restore after destructive test; `is_destructive=True` tests |
 
-## The 12 enforcement path tests
+## The 20 enforcement path tests
 
-All tests are registered in `ALL_TESTS` list at line ~1236 of
+All tests are registered in the `ALL_TESTS` list near the end of
 `agent/hw_test_harness.py`.
 
 | Test ID | Enforcement Path | Name | Platform | Services | Destructive | Network | Timeout |
@@ -60,6 +66,14 @@ All tests are registered in `ALL_TESTS` list at line ~1236 of
 | E-ENROLL-01 | E-ENROLL | Token enrollment flow | Any | server | No | Yes (2 retries) | 30s |
 | E-HWID-01 | E-HWID | Hardware ID collection | Any | — | No | No | 15s |
 | E-INTEGRATION-01 | E-INTEGRATION | Full cycle: enroll -> flag -> lockdown -> recover | Any | server | Yes | Yes (2 retries) | 120s |
+| E-DECRYPT-01 | E-DECRYPT | File decryption (wrong-key handling) | Any | — | No | No | 30s |
+| E-ACK-01 | E-ACK | Command ACK + pending-ACK retry | Any | — | No | Yes (2 retries) | 30s |
+| E-RECOVERY-01 | E-RECOVERY | Unlock recovery (key release + sentinel cleanup) | Any | — | No | Yes (2 retries) | 60s |
+| E-TRACK-01 | E-TRACK | Covert tracking location report | Any | — | No | Yes (2 retries) | 60s |
+| E-DEADMAN-01 | E-DEADMAN | Deadman switch (skew vs expiry) | Any | — | No | No | 60s |
+| E-EFFECTIVENESS-01 | E-EFFECTIVENESS | Lockdown effectiveness (critical_applied reporting) | Any | — | No | No | 120s |
+| E-OFFLINE-QUEUE-01 | E-OFFLINE-QUEUE | Offline queue (order, drain, corruption) | Any | — | No | Yes (2 retries) | 60s |
+| E-AUTO-UPDATE-01 | E-AUTO-UPDATE | Agent auto-update (signature refusal) | Any | — | No | Yes (2 retries) | 90s |
 
 ### Test details
 
@@ -216,6 +230,27 @@ If the upload fails, a WARNING is printed but the harness does not fail
 
 Tests use this environment dict to decide eligibility (precondition + service gating).
 
+## Phase-A helpers (use these for new tests)
+
+- `_StubServer(responses=..., get_bodies=..., statuses=...)` — a real HTTP
+  server on `127.0.0.1:0` that records every request (`posts_to(path)`,
+  `gets_to(path)`). Use it instead of mocking `requests`: HMAC signing, payload
+  shaping, retry, and fail-soft behaviour then run for real. `statuses` forces
+  a non-200 response for one path (e.g. a failing ACK).
+- `_agent_cfg(state_dir, server_url=...)` — a cfg dict rooted entirely in a temp
+  directory.
+- `_patch_agent_state(stack, agent, state_dir)` — repoints the agent's
+  module-level state files (`PENDING_ACK_FILE`, `DEADMAN_FILE`,
+  `OFFLINE_QUEUE_DB`, `UPDATE_*`) into the temp dir. **Mandatory** for any test
+  that touches agent state: without it the test writes to the live
+  `C:\ProgramData\LockdownSystem` state on the machine under test.
+- `_Checks` + `_PhaseATest` — collect assertions so a failure names itself in the
+  artifact (`FAILED 2/9 assertions: …`) instead of a bare `FAIL`. Subclass
+  `_PhaseATest` and return `checks.summary()` from `action()`.
+
+Name every stub in the class docstring. An artifact that cannot overclaim is
+worth more than one that passes loudly.
+
 ## How to add a new enforcement path test
 
 1. **Create a new test class** subclassing `HardwareTest`:
@@ -300,7 +335,8 @@ requiring real hardware. All tests are expected to SKIP on Linux CI.
 
 | File | Purpose |
 |------|---------|
-| `agent/hw_test_harness.py` | The harness itself (~1600 lines, v2.0) |
+| `agent/hw_test_harness.py` | The harness itself (~2570 lines, v2.0 + Phase A) |
+| `docs/D-129-HARDWARE-RUNBOOK.md` | Per-path assertion map, window-day order, artifact rules |
 | `agent/hw_test_artifact.json` | Default artifact output (CTRF format) |
 | `agent/hw_test_artifact_azure.json` | Real hardware artifact from Azure Windows 11 VM |
 | `agent/hw_test_artifact_azure_bitlocker.json` | Real hardware artifact with BitLocker verification |

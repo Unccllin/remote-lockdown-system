@@ -21,6 +21,11 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
+# Coverage gate (measured 2026-10-27: 61% statements, 3347/5465). Branch
+# coverage is not measured. ~2 points of slack for ordinary refactoring.
+# `--cov-fail-under` in the Makefile/CI uses the same number so pytest-cov and
+# a bare `coverage report` agree; raise both together when coverage improves.
+fail_under = 59
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",

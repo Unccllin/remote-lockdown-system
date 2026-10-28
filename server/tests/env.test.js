@@ -63,6 +63,8 @@ const ALL_ENV_KEYS = [
   'DB_USER',
   'DB_PASSWORD',
   'DB_SSL_VERIFY',
+  'USE_SQLITE',
+  'SQLITE_PATH',
   'LOCATION_RETENTION_DAYS',
   'ALLOW_NON_PROD',
 ];
@@ -172,5 +174,23 @@ describe('env.js — validateEnv', () => {
     process.env.DB_SSL_VERIFY = 'true';
     expect(() => validateEnv()).not.toThrow();
     expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  // Regression: USE_SQLITE=true + NODE_ENV=production used to demand Postgres
+  // credentials, so `docker-compose.test.yml` (production + SQLite, no DB vars)
+  // exited at boot with "DB_HOST is required...". SQLite serves every query
+  // from a file, so those vars are irrelevant in that mode.
+  test('USE_SQLITE=true in production does not require Postgres vars', () => {
+    delete process.env.DATABASE_URL;
+    process.env.USE_SQLITE = 'true';
+    expect(() => validateEnv()).not.toThrow();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  test('USE_SQLITE unset in production still requires Postgres vars', () => {
+    delete process.env.DATABASE_URL;
+    delete process.env.USE_SQLITE;
+    expect(() => validateEnv()).toThrow('process.exit called');
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });

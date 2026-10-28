@@ -10,6 +10,7 @@ Debt items covered:
   on top of the original I4/I5/I7 invariant checks.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -18,7 +19,9 @@ _GRAPH_DIR = Path(__file__).resolve().parent.parent.parent / ".devin" / "graph"
 sys.path.insert(0, str(_GRAPH_DIR))
 from graph_assert import (  # noqa: E402
     GraphViolationError,
+    artifact_supports_claim,
     assert_artifact_quality,
+    assert_enforcement_path_status,
     assert_rule_zero_quality,
     assert_session_end_quality,
 )
@@ -269,3 +272,163 @@ class TestI7ArtifactQuality:
         except GraphViolationError as e:
             assert "I7" in str(e)
             assert "phase-1" in str(e)
+
+
+class TestI3ArtifactClaim:
+    """I3 strengthened: an artifact reference must contain the claim.
+
+    Before this check existed, `hardware_artifact_ref` only had to be a
+    non-empty string. E-BCD was marked `verified-on-hardware` while citing an
+    artifact that recorded `E-BCD-01 FAIL` — the graph asserted a hardware
+    verification that the cited evidence contradicted.
+    """
+
+    def _write(self, tmp_path, name, payload):
+        path = tmp_path / name
+        path.write_text(json.dumps(payload) if not isinstance(payload, str) else payload)
+        return path
+
+    def _legacy(self, status):
+        return {"harness_version": "1.0", "results": [{"test_id": "E-BCD-01", "status": status}]}
+
+    def test_pass_in_legacy_schema_supports_claim(self, tmp_path):
+        art = self._write(tmp_path, "hw.json", self._legacy("PASS"))
+        ok, reason = artifact_supports_claim("E-BCD", str(art), tmp_path)
+        assert ok, reason
+
+    def test_fail_in_legacy_schema_refutes_claim(self, tmp_path):
+        art = self._write(tmp_path, "hw.json", self._legacy("FAIL"))
+        ok, reason = artifact_supports_claim("E-BCD", str(art), tmp_path)
+        assert not ok
+        assert "does not record a PASS" in reason
+        assert "FAIL" in reason
+
+    def test_skip_does_not_support_claim(self, tmp_path):
+        art = self._write(tmp_path, "hw.json", self._legacy("SKIP"))
+        ok, _ = artifact_supports_claim("E-BCD", str(art), tmp_path)
+        assert not ok
+
+    def test_missing_artifact_refutes_claim(self, tmp_path):
+        ok, reason = artifact_supports_claim("E-BCD", str(tmp_path / "nope.json"), tmp_path)
+        assert not ok
+        assert "does not exist" in reason
+
+    def test_ctrf_schema_supports_claim(self, tmp_path):
+        art = self._write(
+            tmp_path,
+            "ctrf.json",
+            {"results": {"tests": [{"name": "E-RECOVERY-01", "status": "passed"}]}},
+        )
+        ok, reason = artifact_supports_claim("E-RECOVERY", str(art), tmp_path)
+        assert ok, reason
+
+    def test_ctrf_failed_status_refutes_claim(self, tmp_path):
+        art = self._write(
+            tmp_path,
+            "ctrf.json",
+            {"results": {"tests": [{"name": "E-RECOVERY-01", "status": "failed"}]}},
+        )
+        ok, _ = artifact_supports_claim("E-RECOVERY", str(art), tmp_path)
+        assert not ok
+
+    def test_live_agent_schema_supports_claim(self, tmp_path):
+        art = self._write(
+            tmp_path,
+            "live.json",
+            {"harness_version": "live-agent-test", "enforcement_paths": {"E-ENCRYPT": "PASS"}},
+        )
+        ok, reason = artifact_supports_claim("E-ENCRYPT", str(art), tmp_path)
+        assert ok, reason
+
+    def test_fragment_names_the_result_inside_the_file(self, tmp_path):
+        art = self._write(
+            tmp_path,
+            "multi.json",
+            {
+                "results": [
+                    {"test_id": "E-ENCRYPT-01", "status": "PASS"},
+                    {"test_id": "E-BCD-01", "status": "FAIL"},
+                ]
+            },
+        )
+        ok, _ = artifact_supports_claim("E-BCD", f"{art}#E-BCD-01", tmp_path)
+        assert not ok
+        ok, reason = artifact_supports_claim("E-BCD", f"{art}#E-ENCRYPT-01", tmp_path)
+        assert ok, reason
+
+    def test_fragment_absent_from_artifact_refutes_claim(self, tmp_path):
+        art = self._write(tmp_path, "hw.json", self._legacy("PASS"))
+        ok, reason = artifact_supports_claim("E-BCD", f"{art}#E-DEADMAN-01", tmp_path)
+        assert not ok
+        assert "no 'E-DEADMAN-01' result" in reason
+
+    def test_artifact_with_no_result_for_this_path_refutes_claim(self, tmp_path):
+        art = self._write(tmp_path, "hw.json", self._legacy("PASS"))
+        ok, reason = artifact_supports_claim("E-DEADMAN", str(art), tmp_path)
+        assert not ok
+        assert "no result for E-DEADMAN" in reason
+
+    def test_non_json_evidence_requires_the_fragment(self, tmp_path):
+        log = tmp_path / "serial.log"
+        log.write_text("[OK] Verdict signature verified (ES256)\n")
+        ok, reason = artifact_supports_claim("E-ENCRYPT", f"{log}#E-ENCRYPT-01", tmp_path)
+        assert not ok
+        assert "no 'E-ENCRYPT-01' entry" in reason
+        ok, reason = artifact_supports_claim("E-ENCRYPT", str(log), tmp_path)
+        assert ok, reason
+
+    def test_unreadable_json_refutes_claim(self, tmp_path):
+        art = tmp_path / "broken.json"
+        art.write_text("{not json")
+        ok, reason = artifact_supports_claim("E-BCD", str(art), tmp_path)
+        assert not ok
+        assert "not readable JSON" in reason
+
+    def test_assert_enforcement_path_status_raises_on_contradicted_claim(self, tmp_path):
+        art = self._write(tmp_path, "hw.json", self._legacy("FAIL"))
+        graph = {
+            "enforcement_paths": [
+                {
+                    "id": "E-BCD",
+                    "status": "verified-on-hardware",
+                    "hardware_artifact_ref": str(art),
+                }
+            ],
+            "debt_items": [],
+        }
+        try:
+            assert_enforcement_path_status(graph)
+        except GraphViolationError as exc:
+            assert "hardware_artifact_must_support_claim" in str(exc)
+            assert "E-BCD" in str(exc)
+        else:  # pragma: no cover — the assertion must fire
+            raise AssertionError("contradicted hardware claim was accepted")
+
+    def test_assert_enforcement_path_status_accepts_supported_claim(self, tmp_path):
+        art = self._write(tmp_path, "hw.json", self._legacy("PASS"))
+        graph = {
+            "enforcement_paths": [
+                {
+                    "id": "E-BCD",
+                    "status": "verified-on-hardware",
+                    "hardware_artifact_ref": str(art),
+                }
+            ],
+            "debt_items": [],
+        }
+        assert_enforcement_path_status(graph)  # must not raise
+
+    def test_demoted_path_may_still_cite_its_failed_attempt(self, tmp_path):
+        """A demoted path keeps the ref as evidence-of-attempt; no PASS required."""
+        art = self._write(tmp_path, "hw.json", self._legacy("FAIL"))
+        graph = {
+            "enforcement_paths": [
+                {
+                    "id": "E-BCD",
+                    "status": "verified-in-unit-test",
+                    "hardware_artifact_ref": str(art),
+                }
+            ],
+            "debt_items": [],
+        }
+        assert_enforcement_path_status(graph)  # must not raise

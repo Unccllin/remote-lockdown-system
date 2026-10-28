@@ -265,10 +265,14 @@ async function stopSchedulerTracked(timeoutMs) {
   await _origStop(timeoutMs);
 }
 
-// FA5: Start the retention scheduler
-startSchedulerTracked();
-// Phase 13: Start the alert scheduler (stale-device + health-degradation checks)
-startAlertScheduler();
+// FA5 + Phase 13: the retention and alert schedulers are started AFTER
+// migrations complete (see the runMigrations().then() below). Starting them at
+// module load made their initial run hit a schema that did not exist yet on a
+// fresh database — every first boot logged
+//   [alerts] Initial check failed: SQLITE_ERROR: no such table: devices
+//   [retention] Initial purge failed: ... no such table: location_reports
+// Production hides it (migrations run at deploy time), but Electron and
+// docker-compose.test.yml migrate in-process, so they hit it on every new DB.
 
 // Run database migrations before starting the server.
 // In Electron mode, server-starter.js handles this separately (SQLite).
@@ -282,6 +286,9 @@ const migrationDialect = pool.driver === 'sqlite' ? 'sqlite' : 'pg';
 runMigrations(pool, { dialect: migrationDialect })
   .then(() => {
     logger.info('Migrations complete.');
+    // Schedulers start only once the schema they query exists.
+    startSchedulerTracked();
+    startAlertScheduler();
     startServer();
   })
   .catch((err) => {

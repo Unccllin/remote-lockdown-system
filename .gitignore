@@ -29,6 +29,13 @@ serverless/coverage/
 electron/coverage/
 agent/.coverage
 agent/coverage/
+
+# D-130 owner platform certificate, exported by the signing tooling. It is a
+# PUBLIC certificate (no private-key material), but it is an owner-custody
+# artifact, not source: the PFX that matters stays offline. If it should be
+# tracked deliberately, the home for it is firmware/PblPkg/ next to
+# pbl-test-signing.crt — not the repo root.
+*-RemoteLockdownPlatformKey.pem
 agent/htmlcov/
 # Playwright test output
 dashboard/test-results/

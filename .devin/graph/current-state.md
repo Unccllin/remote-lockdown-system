@@ -23,15 +23,16 @@
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
 | Debt items | 52 | 55 | ✗ |
-| Enforcement paths (on hardware) | 4 | 13 | ✗ |
+| Enforcement paths (on hardware) | 3 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 52 of 55 debt items are closed, but **9 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 52 of 55 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
-**The 9 enforcement paths that still need hardware verification:**
+**The 10 enforcement paths that still need hardware verification:**
 
 | ID | Name | Status | Blocker |
 |----|------|--------|---------|
 | E-DECRYPT | file-decryption | verified-in-unit-test | Wrong-key handling (InvalidToken) |
+| E-BCD | bcd-lockdown | verified-in-unit-test | D-008 CLOSED: BitLocker suspend/resume verified on Azure VM with BitLocker. B... |
 | E-HP-UEFI | hp-uefi-lockdown | verified-in-unit-test | D-009 model-aware names; D-010 Sure Admin detection; needs hardware verificat... |
 | E-ACK | command-ack | verified-in-unit-test | Network failure retries via pending ACK file |
 | E-RECOVERY | unlock-recovery | verified-in-unit-test | Key release security; sentinel cleanup |
@@ -41,178 +42,151 @@
 | E-OFFLINE-QUEUE | offline-queue | verified-in-unit-test | Queue growth on extended offline; SQLite corruption |
 | E-AUTO-UPDATE | agent-auto-update | verified-in-unit-test | Update server availability; signature verification on Windows |
 
-**The 4 already verified on hardware:**
+**The 3 already verified on hardware:**
 
 | ID | Name | Artifact |
 |----|------|----------|
 | E-ENCRYPT | file-encryption | agent/hw_test_artifact_azure.json |
 | E-LOCK-SCREEN | workstation-lock | agent/hw_test_artifact_azure.json |
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
-| E-BCD | bcd-lockdown | agent/hw_test_artifact_azure_bitlocker.json |
 
 ---
-## Latest session: 142 — 2026-10-27 (owned MeshCentral connector, read-only)
+## Latest session: 144 — 2026-10-28 (load testing executed for the first time; two real defects)
 
 ### RULE-ZERO
-- **Read**: `server/src/index.js` — route require/mount pattern (`app.use('/api/<x>', dashboardLimiter, xRoutes)`, line 132-141).
-- **Read**: `server/src/routes/health.js` — minimal router shape, logger usage, typed error returns.
-- **Read**: `server/src/middleware/auth.js` — `requireAuth` / `requireRole(minRole)` and ROLE_HIERARCHY.
-- **Read**: `docs/adr/INTEGRATION-OWNERSHIP.md` — the ownership rules this code must satisfy (connector not plugin, no hard dependency, authority never leaves our system).
-- **Read**: `server/tests/helpers.js` — `createApp`, `makeToken`, `mockPool` conventions for route tests.
-**Finding**: integration must be ours, so the connector lives in our server, exposes OUR route namespace and OUR normalized device shape, is off unless configured, and is read-only (inventory only — no lockdown/unlock is ever proxied to an upstream API; those stay in our command queue and audit log). No third-party client library: plain `fetch` with an abort timeout, credential never logged.
+- **Read**: `tests/load/k6-{baseline,lockdown-spike,mixed}.js`, `server/src/middleware/hmacAuth.js`
+  (signing scheme, per-device key requirement), `scripts/seed-loadtest-devices.js`,
+  `docker-compose.test.yml`, `server/src/config/env.js`, `server/src/index.js` boot order,
+  `docs/LOAD_TESTING.md`.
+- **Finding 1**: the tailnet path to the owner's ProLiant is one-way broken above ~800 B
+  (client→server), so nothing can be pushed; server→client moves 20 MB fine.
+- **Finding 2**: `docker-compose.test.yml` could never boot — `env.js` demanded Postgres vars
+  in production without checking `USE_SQLITE` (fixed this session, see S143).
+- **Finding 3**: the schedulers start before migrations, so every fresh DB logs two errors.
 
-### IMPLEMENT (S142)
-- `server/src/integrations/meshcentral.js` — READ-ONLY connector: plain `fetch` (no third-party client), 8s abort timeout, `ConnectorNotConfigured` vs `ConnectorUpstreamError`, and OUR normalized device shape (`source/id/name/online/lastSeenAt/platform/meshId`) rather than the upstream's.
-- `server/src/routes/integrations.js` — our namespace: `GET /api/integrations` (cheap status, no upstream call) and `GET /api/integrations/meshcentral/devices` (200 / 502 / 503 with machine-readable codes). Auth: `requireAuth` + `requireRole('operator')`.
-- `server/src/index.js` — mounted under `/api/integrations` behind the dashboard limiter.
-- `server/tests/integrations.routes.test.js` — 8 tests, including an invariant that the connector exports **no mutating operation** (read-only by construction, per the ADR).
-- `server/.env.example` — documents the optional vars and that the connector is off by default.
-- `docs/openapi.yaml` — both endpoints documented (paths 36 → 38).
+### IMPLEMENT
+- `docs/LOAD_TESTING.md` — measured baseline table, `K6_AGENT_KEY` trap, generator-placement
+  rule, path-requirements section with the measured byte-size table.
+- `server/src/index.js` — retention + alert schedulers moved into the post-`runMigrations()`
+  `.then()`; they were started at module load and hit a non-existent schema on every fresh DB.
+- `tests/load/results/k6-{baseline,lockdown-spike}-dl380p-20261028.json` — committed artifacts.
 
 ### VERIFY
-- Server suite: **39 suites / 646 tests pass** (638 + 8 new). `eslint src/ tests/ --max-warnings=0` exit 0.
-- Live smoke with no integration configured: `/api/integrations` → `{enabled:false, configured:false, mode:"read-only"}`; `/api/integrations/meshcentral/devices` → **503** `{"code":"NOT_CONFIGURED"}` — off by default, fails soft, no credential echoed.
+- **First executed load test in the project's history**, on the DL380p Gen8 (32 threads,
+  SQLite, `REQUIRE_HMAC=false`, 200 seeded devices), generator on the dev host:
+  - `k6-baseline.js` 200 VUs / 60 s → **10,225 req, 168 req/s, p95 355 ms, 0.00 % errors, exit 0**.
+  - `k6-lockdown-spike.js` 200 VUs / 60 s → **10,842 req, 178 req/s, p95 302 ms, 0.00 % errors,
+    exit 0**, and all 200 lockdown commands fetched + ACKed (`ack ok` 200/0).
+  - Server log: 2 errors, both startup (now fixed); no `SQLITE_BUSY`; 33 k warnings, all
+    `hmacAuth: unsigned request` — proof the k6 scripts still do not sign HMAC.
+- Fresh-DB boot after the scheduler fix: `Migrations complete.` → `Server running`, **zero**
+  `level:50` lines (was two).
+- Server suite **39 suites / 651 tests pass**; `eslint src/ tests/ --max-warnings=0` clean.
 
 ### Fog cleared
-- The connector can be built without any MeshCentral code or client library: their REST surface is two GET/POST calls, so ownership costs nothing in dependency terms.
-- A read-only invariant is testable (export-surface check), not just a comment.
+- The load harness executes end to end and its thresholds are enforced by exit code
+  (a failing run exits 99; the JSON export's `"thresholds": false` is a reporting quirk).
+- The two sudo commands the owner was asked for are **not needed** for this work: inverting
+  which side runs the server removes the dependency entirely.
+- Small-payload chunked upload over `ControlMaster` works (700 B chunks, 184 KB in 86 s,
+  md5-verified) — the only transfer that survives this path.
 
 ### Fog remaining
-- No live MeshCentral instance was available, so the UpstreamError path is only exercised by mocked tests — the real `/login` and `/api/nodes` payload shapes should be confirmed against a real server before relying on it.
-- `docs/openapi.yaml` still omits the 28 `/v1/*` PBL routes and 4 `/api` routes (sweep finding #3).
-- The Hippocratic-2.1 dependency decision (react-leaflet) is still open.
+- Real fleet-scale numbers (1000 VUs) are unmeasured; 200 VUs was chosen to keep the SUT
+  honest on SQLite.
+- k6 scripts still lack HMAC signing (now quantified: ~1 warning per request).
+- The box still cannot close D-129 (no TPM) or run the Windows paths (no Windows).
+- The owner's MTU fix would let the repo be rsynced whole and a self-hosted runner be
+  registered; neither is blocking anything I can do.
 
 ### Debt items closed
 - None.
 
 ### Debt items still open
-- D-120, D-129, D-130; 9 enforcement paths unit-test-only; sweep finding #3.
+- D-120, D-129, D-130; enforcement 3/13.
 
 ### Blockers
-- D-129 hardware window; Hippocratic licence decision; live MeshCentral instance for connector verification.
-
-### Session artifacts
-- Commits: `e9e96ff` (licensing gate), plus this session's connector commit.
-- `make check-licenses` exit 0 (964 packages, 0 copyleft); `--strict` fails on the react-leaflet decision.
+- D-129 hardware (TPM 2.0 + a Windows target); Azure tenant for Graph; owner decisions on
+  licence / react-leaflet.
 
 ### Next session opening
-Confirm the connector against a real MeshCentral instance (or document it as untested), then close sweep finding #3 by documenting the 28 `/v1/*` PBL routes in `openapi.yaml`.
+Replace react-leaflet + @react-leaflet/core (Hippocratic-2.1) with a wrapper over leaflet
+1.9.4 (BSD-2-Clause) so `make check-licenses-strict` can gate the build.
 
-### S142 addendum — real-MeshCentral verification: the transport premise was wrong
+### S144 continuation — the repo is on the box, and the load tests now sign HMAC
 
-Ran `scripts/verify-meshcentral-connector.sh` against a real
-`ghcr.io/ylianst/meshcentral` **1.3.1** instance (account created via the CLI in a
-one-off container, because the image ENTRYPOINT wraps commands and the server
-must be stopped during account creation).
+**Owner said the chunk commands were mine to run.** They were, so I ran them.
+`dd bs=700 | ssh` was tried first and failed (0 bytes in 2.5 min — ssh coalesces
+stdio writes into oversized packets), so per-invocation 700 B chunks over a
+`ControlMaster` remain the only transfer. 7,934,939 B / 11,336 chunks, **md5
+identical on both sides** (`9ca13a45…`), extracted to `~/repo`.
 
-Result: **3 real error paths verified, and the happy path disproved the design.**
+**IMPLEMENT — HMAC signing for the load scripts (the audit's open P2 item).**
+- `tests/load/lib/sign.js` — one secret derives per-device keys
+  (`base64(HMAC-SHA256(secret, "load-test-device-0000i"))`); each request gets a
+  fresh 32-hex nonce and signs `"{ts}:{nonce}:{sha256(body)}"`. `authHeaders()`
+  is the single entry point, so a script cannot send unsigned while a secret is
+  configured.
+- `scripts/seed-loadtest-devices.js --hmac-secret S` — stores
+  `api_key_hash` via the server's own `hashApiKey()`, so the pepper logic cannot
+  drift. No key file is shipped and no plaintext key is stored.
+- `k6-{baseline,lockdown-spike,mixed}.js` — headers now come from
+  `authHeaders()` per request (the spike previously hoisted a module-level
+  headers object, which cannot work once every request needs its own nonce and
+  body hash).
+- `tests/load/hmac-probe.js` — proves enforcement by holding the key constant and
+  breaking signature / timestamp / key / nonce replay one at a time.
 
-| Case | Outcome |
-|---|---|
-| not configured | `ConnectorNotConfigured` — PASS |
-| unreachable host | `ConnectorUpstreamError`, real socket failure — PASS |
-| upstream answers HTML/404 | `ConnectorUpstreamError`, actionable message — PASS |
-| real inventory read | **SKIP** — this build has no REST API |
+**VERIFY**
+- Local, against the server's own verifier: `api_key_hash accepted: true`,
+  signed request `{"ok":true}`, tampered body / wrong key / stale timestamp /
+  malformed nonce all rejected with the expected reasons.
+- `k6 inspect` parses all three scripts, so `./lib/sign.js` resolves.
+- **Signed load run, server enforcing (`REQUIRE_HMAC=true`):**
+  `k6-lockdown-spike.js` 200 VUs / 60 s → **10,138 req, 166 req/s, p95 337 ms,
+  0.00 % failures, k6 exit 0**; all 200 commands ACKed; ~10 k distinct nonces
+  accepted by the replay cache. Artifact
+  `tests/load/results/k6-hmac-signed-spike-dl380p-20261028.json`.
+- **Enforcement proven, not inferred** (`tests/load/hmac-probe.js`, 5/5):
+  correct → 200, corrupted signature → 401 *signature mismatch*, stale
+  timestamp → 401, unknown key → 401, replayed nonce → 200 then 401.
+- Full repo on the box boots in enforcing mode with **0 boot errors** (the
+  scheduler fix holds on a fresh DB in a clean extraction).
 
-**Finding:** MeshCentral 1.3.1 has no REST API. Every `/api/*` path returns 404
-HTML (the web-UI handler); `/api/` appears in the installed tree only inside
-`authenticode.js`; and `meshctrl.js`, their own CLI, authenticates over
-**WebSocket** (`wss://…/control.ashx`) with the `x-meshauth` header. The
-connector's first implementation POSTed JSON to `/login` and read `/api/nodes`
-— against the real server that produced `Unexpected token '<'`, then a 404.
+**Correction worth keeping.** A wrong `K6_HMAC_SECRET` yields 100 % failures for
+the *wrong* reason — an unknown `x-agent-key` is rejected by `agentAuth` before
+the signature is examined. Only the probe distinguishes "signature enforced" from
+"unknown key rejected".
 
-Kept (still correct): our route contract, our normalized shape, read-only by
-construction, fail-soft, feature-flagged off, and the `x-meshauth` credential
-handling (which is the real scheme, just used against a path that does not
-exist).
+**Fog remaining.** 1000-VU runs still unmeasured (200 was chosen so SQLite
+remains the honest SUT). `k6-mixed.js` admin-scenario paths are wired for signing
+but not exercised (need an admin token seeded).
 
-Changed: the connector now detects an HTML response and says so —
-"this deployment has no REST API at that path. MeshCentral 1.3.x is
-WebSocket-only" — instead of surfacing a JSON parse error. The harness relabels
-the credentials case honestly (it proves fail-soft, not auth rejection) and
-skips the inventory read while `MC_EXPECT_REST=0`.
+### S144 close-out — mixed load scenario, and what "admin token" actually means
 
-Recorded as a decision in `docs/adr/INTEGRATION-OWNERSHIP.md`: (1) implement the
-WebSocket protocol (needs `ws` or hand-rolled frames), (2) target a REST/Graph
-upstream instead (Tactical RMM, Intune), or (3) require a REST-capable
-MeshCentral build. Owner decision; connector stays off until then.
+**Owner asked which admin token was needed ("is it the ssh root or …").** It is
+**not** a system credential: `k6-mixed.js` sends `Authorization: Bearer
+<K6_ADMIN_TOKEN>` to `/api/devices` and `/api/audit`, so it needs an *application*
+JWT. Nothing about SSH, the ProLiant's user, or root is involved, and the owner
+had nothing to supply.
 
-Verified: server suite 39 suites / 646 tests, eslint clean, harness
-`ALL CHECKS PASSED`, container and volume removed.
+Minted it myself against a throwaway DB via the first-admin bootstrap:
+`POST /api/setup/create-admin` → 201 (super-admin; the route 403s permanently once
+any admin exists), then `POST /api/auth/login` → 252-char JWT. Token written to a
+0600 temp file, used, deleted.
 
-### S142 continuation — Graph transport, OpenAPI 76/76, history published
+**VERIFY — third and last scenario now executed (signed + admin traffic):**
+`k6-mixed.js`, 100 VUs / 60 s, server enforcing `REQUIRE_HMAC=true`:
+**5,357 requests, 88 req/s, p95 72 ms, 0.00 % failures, k6 exit 0**, and all 11
+checks green — `p(95)<800` ✓ 72.24 ms, `rate<0.02` ✓ 0.00 %, `GET /api/devices`
+200, `GET /api/audit` 200, `checkin status is 200`, `ack status is 200`.
+Artifact: `tests/load/results/k6-mixed-signed-dl380p-20261028.json`.
+Server on the box stopped afterwards; nothing left running.
 
-**#1 Connector transport swapped (commit `549ba0d`).** The S142 finding was that
-MeshCentral 1.3.x has no REST API, so the connector could never read inventory
-from it. Instead of implementing their WebSocket protocol, the transport the ADR
-pointed at is now in place:
-- `server/src/integrations/errors.js` — shared ConnectorNotConfigured /
-  ConnectorUpstreamError, so the route no longer imports a connector to catch
-  its errors.
-- `server/src/integrations/graph.js` — Microsoft Graph managedDevices, OAuth2
-  client credentials with a cached token, `@odata.nextLink` pagination capped at
-  20 pages, read-only by construction. Graph has no online flag, so `online`
-  derives from last sync within 15 minutes (our heuristic, documented; contract
-  unchanged).
-- `server/src/integrations/index.js` — registry with a load-time shape check.
-- `routes/integrations.js` — `GET /api/integrations/:id/devices` replaces the
-  upstream-specific path; unknown ids answer 404 UNKNOWN_CONNECTOR with the
-  available list. `/api/integrations/meshcentral/devices` still works.
-- 11 tests (649 server total). The read-only invariant now checks the public
-  surface only — my first version flagged `_resetTokenCache` because "reset"
-  contains "set", which is a test-seam, not a mutation.
-
-**#2 OpenAPI gap closed (commit `4432aaa`).** 42 of 76 routes were documented.
-- `scripts/check-openapi-routes.js` — mount-aware diff of the Express router
-  against `docs/openapi.yaml` (handles the `/v1` wrapper mount and `:param` →
-  `{param}`); exits 1 on any gap. Wired into `lint` and a CI job.
-- 34 path entries added (76/76, 62 paths), summaries taken from each handler's
-  own comment block (JSDoc and pbl.js's `// ---` banner style). Payload schemas
-  are deliberately not invented — each says the shape is defined by the handler.
-- Fixed two bugs of mine: the integration paths had been inserted after the
-  "# Components" banner (valid YAML, wrong section), and the checker's first
-  pass treated any column-0 line as the end of `paths`, hiding everything after
-  the first banner.
-
-**#3 History published.** `origin/master` was a strict ancestor, so this was a
-plain fast-forward, not the force-push earlier assumed:
-`b69c17d..4432aaa  master -> master` (231 commits). Both our own pre-push gate
-and `git merge-base --is-ancestor` were run *before* pushing.
-
-### VERIFY
-- Server **39 suites / 649 tests**; eslint `--max-warnings=0` clean.
-- `make check-openapi` → `registered 76 / documented 76 — every registered route is documented`.
-- `make pre-push-check` → fast-forward, no credential-shaped content in range.
-- Remote verified in sync: `origin/master == HEAD == 4432aaa`.
-- actionlint clean on all workflows (6 lint jobs now).
-
-### Fog cleared
-- MeshCentral cannot provide inventory over REST; Graph is the working transport.
-- The API spec now matches the router, and drift is mechanically impossible to
-  reintroduce silently.
-
-### Fog remaining
-- Graph's happy path is unit-tested against its documented response shape only —
-  no Azure tenant was available, so it has never spoken to live Graph.
-- **Password rotation is still blocked**: both 192.168.1.40 and 192.168.1.219
-  refuse port 22 from here.
-- The Hippocratic-2.1 dependency decision (react-leaflet) and the repository
-  licence choice remain owner decisions.
-
-### Debt items closed
-- None (sweep finding #3 closed, which was not a ledger item).
-
-### Debt items still open
-- D-120, D-129, D-130; 9 enforcement paths unit-test-only.
-
-### Blockers
-- D-129 hardware window (the dominant one); both SSH hosts offline; licence and
-  Hippocratic decisions.
-
-### Next session opening
-Prep the hardware session: turn `firmware/PblPkg/HARDWARE-TEST-PLAN.md` plus the
-harness into a step-by-step runbook with artifact capture, so the D-129 window
-converts the 9 unit-tested enforcement paths into hardware-verified ones.
+**All three load scenarios have now been executed** — baseline, lockdown spike,
+mixed — the first two unsigned and then the spike and mixed signed under
+enforcement. `docs/LOAD_TESTING.md` carries the measured tables plus the
+first-admin bootstrap recipe.
 
 ---
 

@@ -38,6 +38,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -533,13 +534,18 @@ def assert_enforcement_path_status(graph: dict) -> None:
     Checks:
     1. Every enforcement path has a valid status from the enum
     2. No path marked 'verified-on-hardware' without a hardware_artifact_ref
-    3. No blocked path (from open debt items) marked as 'verified-on-hardware'
+    3. The referenced artifact must actually support the claim: the file must
+       exist and record a passing result for *this* path's test id
+       (D-129 runbook §2 — the fragment `path.json#E-RECOVERY-01` names the
+       result inside the file)
+    4. No blocked path (from open debt items) marked as 'verified-on-hardware'
 
     Raises GraphViolationError on any violation.
     """
     paths = get_enforcement_paths(graph)
     blocked = get_blocked_enforcement_paths(graph)
     blocked_ids = {p["id"] for p in blocked}
+    project_root = Path(__file__).parent.parent.parent
 
     for path in paths:
         path_id = path["id"]
@@ -565,7 +571,23 @@ def assert_enforcement_path_status(graph: dict) -> None:
                     "the real hardware test that verified this path.",
                 )
 
-        # Check 3: blocked paths cannot be verified-on-hardware
+            # Check 3: the artifact must contain the claim, not just be named.
+            # A non-empty string is not evidence. E-BCD was marked
+            # verified-on-hardware while citing an artifact that recorded
+            # "E-BCD-01 FAIL", because this check only tested for a string.
+            ok, reason = artifact_supports_claim(path_id, artifact_ref, project_root)
+            if not ok:
+                raise GraphViolationError(
+                    "I3", "hardware_artifact_must_support_claim",
+                    f"Enforcement path {path_id} marked 'verified-on-hardware' "
+                    f"but {reason}",
+                    "Cite an artifact that records a PASS for this path's own "
+                    "test id (optionally as 'file.json#TEST-ID'), re-run the "
+                    "path on hardware, or demote the status to "
+                    "'verified-in-unit-test'.",
+                )
+
+        # Check 4: blocked paths cannot be verified-on-hardware
         if path_id in blocked_ids and status == "verified-on-hardware":
             raise GraphViolationError(
                 "I3", "blocked_path_cannot_be_hardware_verified",
@@ -574,6 +596,106 @@ def assert_enforcement_path_status(graph: dict) -> None:
                 "Resolve the blocking debt items before marking this path "
                 "as verified-on-hardware.",
             )
+
+
+def _artifact_result_map(artifact: dict) -> dict[str, str]:
+    """Extract {test_id: status} from any artifact schema we have produced.
+
+    Three schemas exist in this repo and all three must be readable:
+      - harness v1.0 legacy:  {"results": [{"test_id", "status"}]}
+      - harness v2.0 CTRF:    {"results": {"tests": [{"name", "status"}]}}
+      - live-agent test:      {"enforcement_paths": {ID: {"status", ...}}}
+    """
+    results: dict[str, str] = {}
+
+    entries = artifact.get("results")
+    if isinstance(entries, dict):
+        entries = entries.get("tests")
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            test_id = entry.get("test_id") or entry.get("name")
+            if test_id:
+                results[str(test_id)] = str(entry.get("status", ""))
+
+    paths = artifact.get("enforcement_paths")
+    if isinstance(paths, dict):
+        for path_id, value in paths.items():
+            if isinstance(value, dict):
+                results[str(path_id)] = str(value.get("status", ""))
+            else:
+                results[str(path_id)] = str(value)
+
+    return results
+
+
+def artifact_supports_claim(
+    path_id: str, artifact_ref: str, project_root: Path | None = None
+) -> tuple[bool, str]:
+    """Does the referenced artifact actually record a PASS for this path?
+
+    Returns (True, "") when the claim is supported, else (False, reason).
+    `artifact_ref` may carry a `#TEST-ID` fragment naming the exact result;
+    without a fragment, any passing entry whose id is the path id or starts
+    with `<path-id>-` counts.
+    """
+    root = project_root or Path(__file__).parent.parent.parent
+    file_part, _, fragment = artifact_ref.partition("#")
+    file_part = file_part.strip()
+    fragment = fragment.strip()
+
+    artifact_path = Path(file_part)
+    if not artifact_path.is_absolute():
+        artifact_path = root / artifact_path
+    if not artifact_path.exists():
+        return False, f"the referenced artifact does not exist ({file_part})"
+
+    if artifact_path.suffix.lower() != ".json":
+        # Non-JSON evidence (e.g. a firmware serial log): require the fragment
+        # to appear, or at minimum a non-empty file.
+        try:
+            text = artifact_path.read_text(errors="replace")
+        except OSError as exc:
+            return False, f"the referenced artifact is unreadable ({exc})"
+        if fragment:
+            if fragment not in text:
+                return False, f"the referenced artifact has no '{fragment}' entry"
+            return True, ""
+        if not text.strip():
+            return False, "the referenced artifact is empty"
+        return True, ""
+
+    try:
+        artifact = json.loads(artifact_path.read_text())
+    except (OSError, ValueError) as exc:
+        return False, f"the referenced artifact is not readable JSON ({exc})"
+    if not isinstance(artifact, dict):
+        return False, "the referenced artifact is not a JSON object"
+
+    results = _artifact_result_map(artifact)
+    passing = {tid for tid, st in results.items() if st.strip().lower() in {"pass", "passed"}}
+
+    if fragment:
+        if fragment in passing:
+            return True, ""
+        if fragment in results:
+            return False, (
+                f"the referenced artifact records {fragment} as "
+                f"'{results[fragment]}', not PASS"
+            )
+        return False, f"the referenced artifact has no '{fragment}' result"
+
+    matching = {tid for tid in results if tid == path_id or tid.startswith(f"{path_id}-")}
+    if not matching:
+        return False, (
+            f"the referenced artifact has no result for {path_id} "
+            f"(found: {', '.join(sorted(results)) or 'nothing'})"
+        )
+    if matching & passing:
+        return True, ""
+    statuses = ", ".join(f"{tid}={results[tid]}" for tid in sorted(matching))
+    return False, f"the referenced artifact does not record a PASS ({statuses})"
 
 
 # ---------------------------------------------------------------------------
