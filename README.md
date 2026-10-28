@@ -41,6 +41,10 @@ See [electron/README.md](electron/README.md) for build + sign instructions.
 ```bash
 cp .env.prod.example .env.prod
 # Edit .env.prod with your domain, DB password, JWT secret, etc.
+# Dev/test stack (SQLite-free server, Docker secrets):
+make dev-up          # generates ./secrets on first run, then starts the stack
+
+# Production stack (Postgres + Caddy):
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 ```
 

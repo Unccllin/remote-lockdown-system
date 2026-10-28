@@ -217,7 +217,24 @@ async function run() {
   );
   assert(enrollRes.status === 201, 'enroll returns 201', JSON.stringify(enrollRes.body));
   assert(!!enrollRes.body.api_key, 'per-device api_key returned (plaintext once)');
-  assert(!!enrollRes.body.api_key_hash, 'api_key_hash stored in DB row');
+  // 2a984ed stopped returning api_key_hash to clients (publicDevice() strips it,
+  // so an attacker cannot brute-force the key offline). This smoke test kept
+  // asserting the old shape, so the pg-smoke job failed from that commit onward.
+  // Assert the contract that actually matters: absent from the response, present
+  // in the database.
+  assert(
+    !enrollRes.body.api_key_hash,
+    'api_key_hash is NOT returned to clients',
+    JSON.stringify(enrollRes.body).slice(0, 120)
+  );
+  const hashRow = await pool.query('SELECT api_key_hash FROM devices WHERE id = $1', [
+    enrollRes.body.id,
+  ]);
+  assert(
+    !!(hashRow.rows[0] && hashRow.rows[0].api_key_hash),
+    'api_key_hash stored in the DB row',
+    JSON.stringify(hashRow.rows[0] || null)
+  );
   const deviceId = enrollRes.body.id;
   const apiKey = enrollRes.body.api_key;
   const hostname = enrollRes.body.hostname;

@@ -123,6 +123,26 @@ test-electron:
 
 # Real-PostgreSQL smoke test (S140). SQLite-only Jest runs cannot catch PG
 # dialect bugs, and this harness previously could not start at all.
+.PHONY: dev-secrets dev-up
+# dev secrets: docker-compose.yml mounts ./secrets/*.txt as Docker secrets, and
+# secrets/ is gitignored — so a fresh checkout has none and `docker compose up`
+# dies immediately with "no such file or directory". This generates them once
+# (the generator refuses to overwrite; use scripts/generate-secrets.sh --force).
+dev-secrets:
+	@mkdir -p secrets
+	@if [ ! -f secrets/jwt_secret.txt ] || [ ! -f secrets/agent_key_pepper.txt ] \
+	   || [ ! -f secrets/field_encryption_key.txt ] || [ ! -f secrets/location_field_key.txt ]; then \
+	  echo "[..] generating Docker secrets into ./secrets (gitignored)"; \
+	  scripts/generate-secrets.sh; \
+	else \
+	  echo "[OK] ./secrets already populated"; \
+	fi
+
+# dev stack: SQLite-free server + Postgres-free dev compose (Docker secrets).
+dev-up: dev-secrets
+	@docker compose up --build -d
+	@echo "[OK] dev stack up — http://localhost:3001/api/health"
+
 .PHONY: sast
 sast:
 	@# Code scanning without GitHub Code Security: Semgrep default ruleset,

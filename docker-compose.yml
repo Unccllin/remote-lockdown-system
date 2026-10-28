@@ -2,7 +2,8 @@
 # Scoped as dev/test infrastructure — NOT the production deploy path yet.
 #
 # Usage:
-#   docker compose up --build
+#   make dev-up            # generates ./secrets if missing, then compose up
+#   docker compose up --build   # fails unless ./secrets/*.txt exist (gitignored)
 #
 # Secret handling (CC12): Secrets are mounted as files via Docker secrets,
 # not passed as ENV vars (which are visible in `docker inspect`).
