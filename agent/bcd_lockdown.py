@@ -202,29 +202,42 @@ def _is_windows() -> bool:
 
 
 def _read_bcd_setting(setting: str) -> str | None:
-    """Read the current value of a BCD setting from {default} loader.
+    """Read a BCD element from the entry that owns it.
 
-    Returns the value string, or None if the read fails.
+    `bcdedit /query <entry> <element>` is not valid syntax — Windows answers
+    "An unknown command was specified" with RC=1, so every verification read
+    failed and every lockdown was rolled back. That is why E-BCD reported
+    critical_applied=0 on the Azure VM, on the HP laptop and on a Windows Server
+    2022 VM: the apply worked, the check never did. The supported form is
+    `bcdedit /enum <entry>` and locating the element line.
     """
-    rc, stdout, stderr = _run(["bcdedit", "/query", "{default}", setting])
+    entry = "{bootmgr}" if setting in BOOTMGR_SCOPED_SETTINGS else "{default}"
+    rc, stdout, stderr = _run(["bcdedit", "/enum", entry])
     if rc != 0:
-        log.debug("bcdedit /query %s failed: %s", setting, stderr)
+        log.debug("bcdedit /enum %s failed: %s", entry, stderr)
         return None
-    # Output format:
-    #   <setting>              <value>
-    # e.g.:
-    #   recoveryenabled              No
-    # Parse the last token (the value)
-    lines = stdout.strip().split("\n")
-    for line in lines:
-        parts = line.strip().split()
-        if len(parts) >= 2:
+    # Output lines look like "recoveryenabled         Yes"
+    for line in stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].lower() == setting.lower():
             return parts[-1]
     return None
 
 
+def _apply_bcd_setting(setting: str, value: str) -> bool:
+    """Set a BCD setting on whichever entry owns it, then verify.
+
+    `displaybootmenu` and `timeout` are boot manager elements; everything else in
+    the tables is a loader element. Getting this wrong is not cosmetic: the whole
+    lockdown aborts and rolls back.
+    """
+    if setting in BOOTMGR_SCOPED_SETTINGS:
+        return _set_bcd_setting_bootmgr(setting, value)
+    return _set_bcd_setting(setting, value)
+
+
 def _set_bcd_setting(setting: str, value: str) -> bool:
-    """Set a BCD setting and verify it took effect (Phase 4.5).
+    """Set a loader ({default}) BCD setting and verify it took effect (Phase 4.5).
 
     Returns True if the setting was applied AND verified, False otherwise.
     """
@@ -249,30 +262,20 @@ def _set_bcd_setting(setting: str, value: str) -> bool:
 
 
 def _set_bcd_setting_bootmgr(setting: str, value: str) -> bool:
-    """Set a BCD setting on {bootmgr} (not {default}) and verify it took effect.
+    """Set a {bootmgr} BCD setting and verify it took effect.
 
-    T4: Used for boot manager-level settings like timeout.
-    Returns True if the setting was applied AND verified, False otherwise.
+    Verification goes through _read_bcd_setting, which already dispatches to
+    {bootmgr} for boot-manager elements — one verification path for both scopes,
+    so the two cannot drift apart.
     """
     rc, _, stderr = _run(["bcdedit", "/set", "{bootmgr}", setting, value])
     if rc != 0:
         log.warning("bcdedit /set {bootmgr} %s %s failed: %s", setting, value, stderr)
         return False
 
-    # Verification re-read from {bootmgr}
-    rc2, stdout, stderr2 = _run(["bcdedit", "/query", "{bootmgr}", setting])
-    if rc2 != 0:
-        log.warning("Could not verify BCD {bootmgr} setting %s (read failed)", setting)
-        return False
-    lines = stdout.strip().split("\n")
-    current = None
-    for line in lines:
-        parts = line.strip().split()
-        if len(parts) >= 2:
-            current = parts[-1]
-            break
+    current = _read_bcd_setting(setting)
     if current is None:
-        log.warning("Could not verify BCD {bootmgr} setting %s (parse failed)", setting)
+        log.warning("Could not verify BCD {bootmgr} setting %s (read failed)", setting)
         return False
     if current.lower() != value.lower():
         log.warning(
@@ -314,11 +317,19 @@ def _clear_bootsequence() -> bool:
 # Critical settings: close direct bypass vectors.
 # If ANY of these fail, ALL changes are rolled back and no sentinel is written.
 # Each entry: (setting_name, lockdown_value, description)
+# BCD elements live on either the boot manager entry or the loader entry, and
+# applying one to the wrong entry fails with "The element data type specified is
+# not recognized" — which aborted the entire lockdown and rolled it back (seen on
+# Windows Server 2022: `bcdedit /set {default} displaybootmenu No` cannot work).
+# Every set/read goes through _apply_bcd_setting/_read_bcd_value, which dispatch
+# on this set.
+BOOTMGR_SCOPED_SETTINGS = {"displaybootmenu", "timeout"}
+
 BCD_CRITICAL_COMMANDS = [
     # Disable Windows Recovery Environment option
     # (closes WinRE -> command prompt bypass)
     ("recoveryenabled", "No", "Disable recovery menu"),
-    # Don't display the boot menu at all
+    # Don't display the boot menu at all — a {bootmgr} element
     # (closes multi-boot alternate OS bypass — CC19 promoted to critical)
     ("displaybootmenu", "No", "Hide boot menu"),
 ]
@@ -621,15 +632,13 @@ def _rollback_bcd(state: dict) -> bool:
     # Restore BCD settings to their original values
     saved_settings = state.get("settings", {})
     for setting, original_value in saved_settings.items():
-        rc, _, stderr = _run(["bcdedit", "/set", "{default}", setting, original_value])
-        if rc == 0:
+        if _apply_bcd_setting(setting, original_value):
             log.info("Rollback: %s -> %s (restored)", setting, original_value)
         else:
             log.error(
-                "Rollback: failed to restore %s to '%s': %s — non-fatal, continuing",
+                "Rollback: failed to restore %s to '%s' — non-fatal, continuing",
                 setting,
                 original_value,
-                stderr,
             )
             all_ok = False
 
@@ -726,7 +735,7 @@ def apply_bcd_lockdown() -> dict:
 
     # --- Critical BCD settings ---
     for setting, value, description in BCD_CRITICAL_COMMANDS:
-        if _set_bcd_setting(setting, value):  # includes verification re-read
+        if _apply_bcd_setting(setting, value):  # includes verification re-read
             critical_applied += 1
         else:
             critical_failed += 1
@@ -751,7 +760,7 @@ def apply_bcd_lockdown() -> dict:
     best_effort_applied = 0
     best_effort_failed = 0
     for setting, value, description in BCD_BEST_EFFORT_COMMANDS:
-        if _set_bcd_setting(setting, value):  # includes verification re-read
+        if _apply_bcd_setting(setting, value):  # includes verification re-read
             best_effort_applied += 1
         else:
             best_effort_failed += 1
@@ -826,13 +835,12 @@ def remove_bcd_lockdown() -> bool:
 
         # Restore BCD settings to their original values
         for setting, original_value in saved_settings.items():
-            rc, _, stderr = _run(["bcdedit", "/set", "{default}", setting, original_value])
-            if rc == 0:
+            if _apply_bcd_setting(setting, original_value):
                 restored += 1
                 log.info("BCD restored: %s -> %s", setting, original_value)
             else:
                 failed += 1
-                log.warning("BCD restore failed: %s -> %s: %s", setting, original_value, stderr)
+                log.warning("BCD restore failed: %s -> %s", setting, original_value)
 
         # Re-enable WinRE if it was enabled before lockdown
         if winre_was_enabled:
@@ -859,8 +867,8 @@ def remove_bcd_lockdown() -> bool:
         # No saved state — use safe defaults
         log.warning("No saved BCD state — restoring to safe defaults")
         for setting, value, description in BCD_RESTORE_COMMANDS:
-            rc, _, stderr = _run(["bcdedit", "/set", "{default}", setting, value])
-            if rc == 0:
+            ok = _apply_bcd_setting(setting, value)
+            if ok:
                 restored += 1
                 log.info("BCD restored: %s", description)
             else:

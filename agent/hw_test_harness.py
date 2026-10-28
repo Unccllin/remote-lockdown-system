@@ -937,14 +937,22 @@ class TestDuress(HardwareTest):
             if duress.check_hidden_trigger(state_dir):
                 return "Hidden trigger still present after consume"
 
-            # Test duress command detection
-            duress_cmd = {"action": "unlock", "duress": True}
+            # Test duress command detection. The contract is a truthy
+            # `duress_code` field on an unlock command (see duress.py and
+            # agent.py:2320) — NOT a boolean `duress` flag. Getting this wrong is
+            # what made this test fail the first time it ever executed, on
+            # Windows, where it is not skipped.
+            duress_cmd = {"action": "unlock", "duress_code": "4821"}
             if not duress.is_duress_unlock(duress_cmd):
                 return "Duress command not detected"
 
             normal_cmd = {"action": "unlock"}
             if duress.is_duress_unlock(normal_cmd):
                 return "Normal command incorrectly detected as duress"
+
+            empty_code_cmd = {"action": "unlock", "duress_code": ""}
+            if duress.is_duress_unlock(empty_code_cmd):
+                return "Empty duress_code treated as duress"
 
             return "Duress trigger + command detection verified"
 

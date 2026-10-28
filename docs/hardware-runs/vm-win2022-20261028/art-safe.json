@@ -1,0 +1,211 @@
+{
+  "results": {
+    "tool": {
+      "name": "hw-test-harness",
+      "version": "2.0"
+    },
+    "summary": {
+      "tests": 9,
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "start": "2026-10-28T09:04:36.928162+00:00",
+      "stop": "2026-10-28T09:04:36.928162+00:00"
+    },
+    "tests": [
+      {
+        "name": "E-HIDDEN-FILE-01",
+        "status": "passed",
+        "duration": 15,
+        "message": "Hidden file trigger create -> detect -> consume verified. Hidden file lifecycle verified",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-HIDDEN-FILE",
+          "tags": [
+            "E-HIDDEN-FILE",
+            "non-destructive"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-HWID-01",
+        "status": "passed",
+        "duration": 3468,
+        "message": "Hardware ID collected: hostname=NEWARKW-HTP3LNT, uuid=00000000..., mac=E1:1E:A8:07:0E:D0. Hardware ID fields verified",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-HWID",
+          "tags": [
+            "E-HWID",
+            "non-destructive"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-DECRYPT-01",
+        "status": "passed",
+        "duration": 62,
+        "message": "8/8 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-DECRYPT",
+          "tags": [
+            "E-DECRYPT",
+            "non-destructive"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-ACK-01",
+        "status": "passed",
+        "duration": 22250,
+        "message": "17/17 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-ACK",
+          "tags": [
+            "E-ACK",
+            "network"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-RECOVERY-01",
+        "status": "passed",
+        "duration": 6468,
+        "message": "14/14 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-RECOVERY",
+          "tags": [
+            "E-RECOVERY",
+            "network"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-TRACK-01",
+        "status": "passed",
+        "duration": 11437,
+        "message": "10/10 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-TRACK",
+          "tags": [
+            "E-TRACK",
+            "network"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-DEADMAN-01",
+        "status": "passed",
+        "duration": 171,
+        "message": "6/6 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-DEADMAN",
+          "tags": [
+            "E-DEADMAN",
+            "non-destructive"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-OFFLINE-QUEUE-01",
+        "status": "passed",
+        "duration": 593,
+        "message": "7/7 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-OFFLINE-QUEUE",
+          "tags": [
+            "E-OFFLINE-QUEUE",
+            "network"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-AUTO-UPDATE-01",
+        "status": "passed",
+        "duration": 2640,
+        "message": "12/12 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-AUTO-UPDATE",
+          "tags": [
+            "E-AUTO-UPDATE",
+            "network"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      }
+    ],
+    "extra": {
+      "environment": {
+        "platform": "Windows",
+        "is_hp": false,
+        "hp_model": null,
+        "is_admin": true,
+        "session_context": {
+          "is_session_zero": true,
+          "session_id": 0,
+          "console_session_id": 1,
+          "platform": "Windows"
+        },
+        "bitlocker_enabled": false,
+        "tpm_present": false,
+        "defender_exclusion": null,
+        "agent_binary_hash": "4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a",
+        "python_version": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+        "hostname": "NEWARKW-HTP3LNT"
+      },
+      "agent_binary_hash": "4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a"
+    }
+  }
+}

@@ -1420,23 +1420,50 @@ OFFLINE_QUEUE_DB = _STATE_DIR / ".offline_queue.db"
 
 
 def _get_queue_db() -> sqlite3.Connection:
-    """Get a connection to the offline queue database."""
+    """Get a connection to the offline queue database.
+
+    The connection is closed again if the schema initialisation fails: a corrupt
+    database file makes the CREATE TABLE throw, and a leaked handle there leaves
+    the file locked on Windows (WinError 32), so nothing can even delete it. The
+    callers cannot close it — they never receive it.
+    """
     conn = sqlite3.connect(str(OFFLINE_QUEUE_DB))
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS offline_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            endpoint TEXT NOT NULL,
-            payload TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            attempts INTEGER DEFAULT 0
-        )
-    """)
-    conn.commit()
-    return conn
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS offline_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                attempts INTEGER DEFAULT 0
+            )
+        """)
+        conn.commit()
+        return conn
+    except sqlite3.Error:
+        _close_quietly(conn)
+        raise
+
+
+def _close_quietly(conn) -> None:
+    """Close a SQLite connection without masking the original error.
+
+    Windows keeps the database file locked while a handle is open, so a leaked
+    connection makes the queue unusable for every later call (and for anything
+    else opening the file). Found by running the harness on Windows: an error
+    path that skipped close() surfaced as WinError 32 on the next write.
+    """
+    if conn is None:
+        return
+    try:
+        conn.close()
+    except (sqlite3.Error, OSError):
+        pass
 
 
 def queue_offline(endpoint: str, payload: dict) -> None:
     """Queue a request for later delivery when the server is unreachable."""
+    conn = None
     try:
         conn = _get_queue_db()
         conn.execute(
@@ -1444,22 +1471,25 @@ def queue_offline(endpoint: str, payload: dict) -> None:
             (endpoint, json.dumps(payload), time.time()),
         )
         conn.commit()
-        conn.close()
         log.debug("Queued offline: %s (%d items in queue)", endpoint, _queue_size())
     except (sqlite3.Error, TypeError, OSError) as e:
         log.warning("Failed to queue offline request: %s", e)
+    finally:
+        _close_quietly(conn)
 
 
 def _queue_size() -> int:
     """Return the number of items in the offline queue."""
+    conn = None
     try:
         conn = _get_queue_db()
         row = conn.execute("SELECT COUNT(*) FROM offline_queue").fetchone()
-        conn.close()
         return row[0] if row else 0
     except (sqlite3.Error, OSError) as e:
         log.warning("Could not query offline queue size: %s", e)
         return 0
+    finally:
+        _close_quietly(conn)
 
 
 def drain_offline_queue(cfg: dict) -> None:
@@ -1471,6 +1501,7 @@ def drain_offline_queue(cfg: dict) -> None:
     if _queue_size() == 0:
         return
 
+    conn = None
     try:
         conn = _get_queue_db()
         rows = conn.execute(
@@ -1505,11 +1536,14 @@ def drain_offline_queue(cfg: dict) -> None:
                 break  # Stop on first failure (server might be down again)
 
         conn.commit()
-        conn.close()
         if sent > 0:
             log.info("Drained %d offline queue items (%d remaining)", sent, _queue_size())
     except (sqlite3.Error, OSError) as e:
         log.warning("Failed to drain offline queue: %s", e)
+    finally:
+        # Release the handle before _queue_size() opens its own: on Windows the
+        # file stays locked otherwise and the count silently reports 0.
+        _close_quietly(conn)
 
 
 # ---------------------------------------------------------------------------

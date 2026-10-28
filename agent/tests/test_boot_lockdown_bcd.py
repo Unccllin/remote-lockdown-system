@@ -128,28 +128,26 @@ class TestBcdLockdown:
     def test_apply_bcd_lockdown_success(self, mock_read, mock_run, _, __, tmp_bcd_files):
         """All critical + best-effort settings succeed."""
 
-        # reagentc /disable succeeds, bcdedit /set succeeds
-        # T4: {bootmgr} query needs to return the value for verification
+        # reagentc /disable succeeds, bcdedit /set succeeds. Verification no
+        # longer parses /query output here; it goes through _read_bcd_setting.
         def run_side_effect(cmd, timeout=15):
-            cmd_str = " ".join(cmd)
-            if "/query" in cmd_str and "{bootmgr}" in cmd_str:
-                # Return the timeout value for bootmgr queries
-                for sname, sval, _ in bcd_lockdown.BCD_BOOTMGR_COMMANDS:
-                    if sname in cmd_str:
-                        return (0, f"{sname}              {sval}", "")
-                return (0, "", "")
             return (0, "", "")
 
         mock_run.side_effect = run_side_effect
 
-        # _read_bcd_setting returns the lockdown value (verification passes)
+        # _read_bcd_setting returns the lockdown value (verification passes).
+        # It is the single verification path for both scopes now, so bootmgr
+        # settings ({bootmgr} timeout) must be covered here too.
         def read_side_effect(setting):
-            for sname, sval, _ in bcd_lockdown.BCD_CRITICAL_COMMANDS:
-                if setting == sname:
-                    return sval
-            for sname, sval, _ in bcd_lockdown.BCD_BEST_EFFORT_COMMANDS:
-                if setting == sname:
-                    return sval
+            tables = (
+                bcd_lockdown.BCD_CRITICAL_COMMANDS,
+                bcd_lockdown.BCD_BEST_EFFORT_COMMANDS,
+                bcd_lockdown.BCD_BOOTMGR_COMMANDS,
+            )
+            for table in tables:
+                for sname, sval, _ in table:
+                    if setting == sname:
+                        return sval
             return None
 
         mock_read.side_effect = read_side_effect
@@ -649,3 +647,73 @@ class TestBcdLockdown:
         assert result["bitlocker_status"]["enabled"] is False
         # No suspend/resume when BitLocker is not enabled
         mock_suspend.assert_not_called()
+
+
+class TestReadBcdSetting:
+    """Tests for _read_bcd_setting against realistic `bcdedit /enum` output.
+
+    This function was mocked in every other test, which is how it kept using
+    `bcdedit /query <entry> <element>` — a syntax Windows rejects with
+    "An unknown command was specified". Every verification read therefore failed
+    and every lockdown rolled back, on Azure, on HP hardware and on a Windows
+    Server 2022 VM alike. These tests run it against real output shapes.
+    """
+
+    ENUM_LOADER = """Windows Boot Loader
+-------------------
+identifier              {default}
+device                  partition=C:
+path                    \\Windows\\system32\\winload.efi
+description             Windows Server
+recoveryenabled         Yes
+bootstatuspolicy        IgnoreAllFailures
+"""
+
+    ENUM_BOOTMGR = """Windows Boot Manager
+--------------------
+identifier              {bootmgr}
+displaybootmenu         No
+timeout                 0
+"""
+
+    @patch("bcd_lockdown._run")
+    def test_reads_a_loader_element(self, mock_run):
+        mock_run.return_value = (0, self.ENUM_LOADER, "")
+        assert bcd_lockdown._read_bcd_setting("recoveryenabled") == "Yes"
+
+    @patch("bcd_lockdown._run")
+    def test_uses_enum_not_query(self, mock_run):
+        """Regression: `/query <entry> <element>` is not a supported command."""
+        mock_run.return_value = (0, self.ENUM_LOADER, "")
+        bcd_lockdown._read_bcd_setting("recoveryenabled")
+        cmd = mock_run.call_args[0][0]
+        assert "/enum" in cmd
+        assert "/query" not in cmd
+
+    @patch("bcd_lockdown._run")
+    def test_reads_a_bootmgr_element_from_the_bootmgr_entry(self, mock_run):
+        mock_run.return_value = (0, self.ENUM_BOOTMGR, "")
+        assert bcd_lockdown._read_bcd_setting("displaybootmenu") == "No"
+        cmd = mock_run.call_args[0][0]
+        assert "{bootmgr}" in cmd
+
+    @patch("bcd_lockdown._run")
+    def test_returns_none_for_an_absent_element(self, mock_run):
+        """Must not return a junk token from the header lines."""
+        mock_run.return_value = (0, self.ENUM_LOADER, "")
+        assert bcd_lockdown._read_bcd_setting("nointegritychecks") is None
+
+    @patch("bcd_lockdown._run")
+    def test_returns_none_when_bcdedit_fails(self, mock_run):
+        mock_run.return_value = (1, "", "Access denied")
+        assert bcd_lockdown._read_bcd_setting("recoveryenabled") is None
+
+    @patch("bcd_lockdown._run")
+    def test_value_comes_from_the_element_line_not_a_header(self, mock_run):
+        """The old parser returned the last token of the first two-token line.
+
+        For real /enum output that line is the header ("Windows Boot Manager"), so
+        it answered "Manager" — or "Loader" — instead of the requested value.
+        """
+        mock_run.return_value = (0, self.ENUM_BOOTMGR, "")
+        assert bcd_lockdown._read_bcd_setting("displaybootmenu") == "No"

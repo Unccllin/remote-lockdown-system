@@ -493,3 +493,44 @@ Recorded so the window does not rediscover them. Status is per 2026-10-27.
 | `firmware/PblPkg/pack-persist-capsule.sh` | `--sign <signer.pem>` `--out <dir>` capsule packing |
 
 Make targets: `make hw-test-dry`, `make hw-test-check`, `make hw-test`.
+
+---
+
+## Outcome: Windows Server 2022 VM (2026-10-28)
+
+The Windows-bound half of Phase B was finally executed, on a **KVM/OVMF VM** (8 vCPU,
+8 GB, 64 GB) hosted on the ProLiant — not on hardware. Everything in §3 that needs
+Windows ran for the first time.
+
+**Result: 16 passed, 0 failed, 4 skipped** in one run (20 tests).
+Evidence: `docs/hardware-runs/vm-win2022-20261028/art-full-16passed.json`
+(`is_admin: true`, `bitlocker_enabled: false`, `tpm_present: false`, agent hash recorded).
+
+| Outcome | Tests |
+|---------|-------|
+| **passed** | E-ENCRYPT, E-LOCK-SCREEN, E-GUARDIAN, **E-BCD**, E-DURESS, E-HIDDEN-FILE, E-TAMPER, E-HWID, E-DECRYPT, E-ACK, E-RECOVERY, E-TRACK, E-DEADMAN, E-EFFECTIVENESS, E-OFFLINE-QUEUE, E-AUTO-UPDATE |
+| **skipped** | E-HP-UEFI (ProLiant has no HP *client* BIOS), E-TPM (no vTPM on this image), E-ENROLL and E-INTEGRATION (need a server on `localhost:3000`) |
+
+### Three real bugs the run found, all fixed
+
+1. **`bcdedit /query <entry> <element>` is not a valid command.** `_read_bcd_setting`
+   used it, so **every** verification read failed and **every** BCD lockdown rolled
+   back — which is why `E-BCD` reported `critical_applied=0` on the Azure VM, on real
+   HP hardware *and* here. The apply had always worked; the check never did. Now uses
+   `bcdedit /enum <entry>` and matches the element line.
+2. **`displaybootmenu` targets the wrong entry.** It is a `{bootmgr}` element; the
+   table applied it to `{default}`, which Windows rejects with *"The element data type
+   specified is not recognized"*. Set/read now dispatch on the entry that owns the
+   element, and the restore paths use the same dispatch.
+3. **Two-layer SQLite handle leak** in the offline queue (`WinError 32`). Callers
+   closed inside `try`, and `_get_queue_db()` leaked its connection when schema init
+   failed on a corrupt file — invisible on Linux, fatal on Windows.
+
+Also fixed: `E-DURESS` asserted a `duress` flag while the contract is a truthy
+`duress_code` field. That test is Windows-only, so the mistake had never been
+executed.
+
+**What this does not do:** the evidence is `emulated`, not `hardware`. It does not
+satisfy I3, so enforcement statuses stay as they are (`E-BCD` remains
+`verified-in-unit-test` in `GRAPH-SPEC.yaml` until it passes on real hardware).
+`E-HP-UEFI` cannot ever be settled by a ProLiant; it needs an HP client machine.

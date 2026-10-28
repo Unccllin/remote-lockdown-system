@@ -1,0 +1,59 @@
+{
+  "results": {
+    "tool": {
+      "name": "hw-test-harness",
+      "version": "2.0"
+    },
+    "summary": {
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "start": "2026-10-28T09:07:08.494633+00:00",
+      "stop": "2026-10-28T09:07:08.494633+00:00"
+    },
+    "tests": [
+      {
+        "name": "E-DURESS-01",
+        "status": "passed",
+        "duration": 15,
+        "message": "Duress trigger + command detection verified. Duress flow verified",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-DURESS",
+          "tags": [
+            "E-DURESS",
+            "non-destructive"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      }
+    ],
+    "extra": {
+      "environment": {
+        "platform": "Windows",
+        "is_hp": false,
+        "hp_model": null,
+        "is_admin": true,
+        "session_context": {
+          "is_session_zero": true,
+          "session_id": 0,
+          "console_session_id": 2,
+          "platform": "Windows"
+        },
+        "bitlocker_enabled": false,
+        "tpm_present": false,
+        "defender_exclusion": null,
+        "agent_binary_hash": "4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a",
+        "python_version": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+        "hostname": "NEWARKW-HTP3LNT"
+      },
+      "agent_binary_hash": "4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a"
+    }
+  }
+}
