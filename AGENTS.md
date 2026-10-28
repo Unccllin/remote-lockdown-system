@@ -109,6 +109,23 @@ The block must include:
 
 `current-state.md` is a GENERATED artifact — do NOT edit it by hand. It is
 derived from `trace.md` + `GRAPH-SPEC.yaml` by `scripts/graph_session.py`.
+
+**What current-state.md contains, and why it stays short.** The generator copies
+only the latest session's *state* sections — `Fog cleared`, `Fog remaining`,
+`Debt items closed`, `Debt items still open`, `Blockers`, `Session artifacts`,
+`Failure attribution`, `VERIFY`, `Next session opening`. RULE-ZERO reading lists
+and IMPLEMENT changelogs stay in `trace.md`, because they are history: a session
+block may now be as long as the work warrants without inflating this file.
+
+If even the state sections would breach the compactness limit (260 lines of body,
+300 for the file), the generator drops the optional ones first
+(`Session artifacts` → `Failure attribution` → `VERIFY`), then truncates, always
+leaving an explicit pointer to `trace.md` and naming what was dropped. So the I4
+compactness invariant can no longer be broken by authoring — and there is no
+reason to split a session block by hand to satisfy it. `scripts/test_graph_session.py`
+locks this behaviour (11 tests, auto-discovered: a hand-maintained call list was
+silently skipping new tests, the same failure mode as `test_memory.py` having no
+runner at all).
 Graph invariant I4 enforces that both files have the session-end status block,
 and the compactness invariant enforces that `current-state.md` has no
 "Previous session" blocks and stays under 300 lines.

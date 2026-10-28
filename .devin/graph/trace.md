@@ -1036,3 +1036,40 @@ sweep's real coverage recorded, with both harness bugs named.
 Replace react-leaflet and @react-leaflet/core (Hippocratic-2.1) with a small
 in-repo wrapper over leaflet 1.9.4 (BSD-2-Clause) so `make check-licenses-strict`
 can gate the build.
+
+### S146 — the compactness bug is fixed in the generator, not by hand-splitting
+
+**Root cause.** `generate_current_state()` copied the *entire* latest session
+block, so every `###` addendum grew `current-state.md` until it breached the
+300-line I4 limit. The fix was always to split the block by hand — which happened
+twice in one session. The invariant was catching a generator design flaw, not
+author sloppiness.
+
+**IMPLEMENT — `scripts/graph_session.py`.**
+- `_STATE_SECTIONS` whitelist (fog cleared/remaining, debt closed/open, blockers,
+  session artifacts, failure attribution, verify, next session). RULE-ZERO reading
+  lists and IMPLEMENT changelogs stay in `trace.md` — they are history, and the
+  file's stated purpose is status + open items + next opening.
+- `extract_state_sections()` returns only those `###` sections, in written order.
+- `fit_to_cap()` under pressure drops the optional sections first (Session
+  artifacts → Failure attribution → VERIFY), then truncates line-wise, always
+  emitting a marker naming `.devin/graph/trace.md` and listing what was dropped.
+- `generate_current_state()` budgets the body against what the fixed parts
+  (header, convergence, debt, footer) actually consume, so the file cannot exceed
+  the cap no matter how long the block is.
+
+**VERIFY**
+- `current-state.md` 160 → **117 lines** with no hand-editing, invariants pass,
+  every required section still present.
+- `scripts/test_graph_session.py`: 7 tests → **11** (40 checks, exit 0). New tests
+  cover transcript exclusion, the whitelist, optional-drop order, and a
+  pathological 400-line section that must still leave the file under the cap.
+- Found while writing them: the runner was a **hand-maintained call list**, so the
+  four new tests were silently skipped — the same failure mode as
+  `test_memory.py` having no runner at all. It now auto-discovers `test_*`.
+- Two of my own assertions were wrong first (bare-word matching, and a typo'd
+  heading `Failed attribution`); both fixed to assert on sections, not words.
+
+**AGENTS.md** documents the rule: a session block may be as long as the work
+warrants; `current-state.md` carries state only; hand-splitting to satisfy I4 is
+no longer a thing.

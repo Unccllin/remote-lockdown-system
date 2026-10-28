@@ -18,9 +18,12 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from graph_session import (
+    _MAX_LINES,
     archive_trace,
     close_session,
     extract_latest_session,
+    extract_state_sections,
+    fit_to_cap,
     generate_current_state,
     parse_trace_sessions,
 )
@@ -206,6 +209,98 @@ def test_generate_current_state():
          "GENERATED" in content)
 
 
+def _write_trace(trace_path, body):
+    trace_path.write_text(
+        "# trace.md\n\n---\n\n## Session 2026-08-02 — Only session\n\n" + body + "\n"
+    )
+
+
+def test_generate_current_state_excludes_transcript_sections():
+    """Implementation logs and RULE-ZERO reading lists must not reach current-state.
+
+    Regression: the generator copied the whole latest block, so every addendum
+    inflated the file until it broke the 300-line compactness invariant (twice in
+    one session). The file carries state, not a transcript.
+    """
+    _tmp, trace_path, graph_spec_path, current_state_path, _ = _make_test_env()
+    _write_trace(trace_path, textwrap.dedent("""        ### RULE-ZERO
+        - **Read**: `a.py`, `b.py` (a very long reading list that belongs in trace.md)
+        - **Finding**: something long.
+
+        ### IMPLEMENT
+        - Changed twelve files; this paragraph is deliberately verbose because it is
+          the kind of text that used to be copied into current-state.md verbatim.
+
+        ### Fog cleared
+        - Short and useful.
+
+        ### Next session opening
+        Do the next thing.
+        """))
+    generate_current_state(trace_path, graph_spec_path, current_state_path)
+    content = current_state_path.read_text()
+
+    # Assert on the sections, not the words: the file's own preamble explains
+    # that RULE-ZERO/IMPLEMENT stay in trace.md, so the bare words do appear.
+    check("RULE-ZERO section is excluded", "### RULE-ZERO" not in content)
+    check("IMPLEMENT section is excluded", "### IMPLEMENT" not in content)
+    check("state sections are kept", "Fog cleared" in content)
+    check("next session opening is kept", "Next session opening" in content)
+    check("file stays small", len(content.splitlines()) < 150,
+          f"got {len(content.splitlines())} lines")
+
+
+def test_extract_state_sections_whitelist():
+    """Only whitelisted headings are returned, in written order."""
+    body = textwrap.dedent("""        ### RULE-ZERO
+        x
+
+        ### Fog remaining
+        a
+
+        ### IMPLEMENT
+        y
+
+        ### Blockers
+        b
+        """)
+    sections = extract_state_sections(body)
+    headings = [h for h, _ in sections]
+    check("whitelist keeps only state headings", headings == ["Fog remaining", "Blockers"],
+          f"got {headings}")
+
+
+def test_fit_to_cap_drops_optional_sections_before_required():
+    """Session artifacts / failure attribution / verify go first under pressure."""
+    sections = [
+        ("Failure attribution", "### Failure attribution\n" + "x\n" * 40),
+        ("Verify", "### VERIFY\n" + "y\n" * 40),
+        ("Fog remaining", "### Fog remaining\n- short"),
+        ("Next session opening", "### Next session opening\n- next"),
+    ]
+    out = fit_to_cap(sections, budget=20)
+    # The marker names the dropped sections, so assert the sections themselves are
+    # gone rather than the words (which legitimately appear in the disclosure).
+    check("optional sections dropped first",
+          "### VERIFY" not in out and "### Failure attribution" not in out, out[:120])
+    check("required sections survive", "Fog remaining" in out and "Next session opening" in out)
+    check("a marker explains the drop", "trace.md" in out)
+
+
+def test_generate_current_state_never_breaches_the_compactness_cap():
+    """Even a pathological block cannot push the file past the invariant limit."""
+    _tmp, trace_path, graph_spec_path, current_state_path, _ = _make_test_env()
+    huge = "\n".join(f"- bullet {i} with some words to take space" for i in range(400))
+    _write_trace(trace_path, "### Fog remaining\n" + huge + "\n\n### Next session opening\n- x\n")
+    lines = generate_current_state(trace_path, graph_spec_path, current_state_path)
+    content = current_state_path.read_text()
+
+    check("authoring cannot breach the 300-line invariant", lines <= 300, f"got {lines}")
+    check("stays within the generator's own budget", lines <= _MAX_LINES + 40, f"got {lines}")
+    check("truncation is disclosed", "trace.md" in content)
+    check("the required sections still hold", "Fog remaining" in content)
+
+
 def test_archive_trace():
     """archive_trace should move old sessions to archive files."""
     _tmp, trace_path, _graph_spec_path, _current_state_path, graph_dir = _make_test_env()
@@ -315,15 +410,20 @@ def test_generate_current_state_missing_trace():
 
 
 if __name__ == "__main__":
+    # Auto-discover the test functions. The previous form was a hand-maintained
+    # call list, so a newly added test was silently skipped — a suite that reports
+    # all-green while not running everything is worse than no suite. (Same class
+    # of bug as scripts/test_memory.py, which had no runner at all.)
+    _tests = [
+        (name, fn)
+        for name, fn in sorted(globals().items())
+        if name.startswith("test_") and callable(fn)
+    ]
     print("=== test_graph_session.py ===")
+    print(f"    {len(_tests)} tests discovered")
     print()
-    test_parse_trace_sessions()
-    test_extract_latest_session()
-    test_generate_current_state()
-    test_archive_trace()
-    test_archive_trace_no_archival_needed()
-    test_close_session()
-    test_generate_current_state_missing_trace()
+    for _name, _fn in _tests:
+        _fn()
     print()
     print(f"  {_passed} passed, {_failed} failed")
     sys.exit(0 if _failed == 0 else 1)
