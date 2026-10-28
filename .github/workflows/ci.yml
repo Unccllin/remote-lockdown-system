@@ -398,11 +398,16 @@ jobs:
         # none of them.
         run: pip install pyyaml pytest
 
-      - name: Run graph_session tests
-        run: python3 scripts/test_graph_session.py
-
-      - name: Run memory tests
-        run: python3 scripts/test_memory.py
+      - name: Run script-level harness tests
+        # Auto-discovered: a hand-written list is how the memory suite (44 tests)
+        # "passed" without running, and how newly added graph-session tests were
+        # silently skipped.
+        run: |
+          set -e
+          for t in scripts/test_*.py; do
+            echo "=== $t ==="
+            python3 "$t"
+          done
 
   # ---------------------------------------------------------------------------
   # Hardware harness dry-run (verifies harness structure without hardware)

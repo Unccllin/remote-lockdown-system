@@ -1073,3 +1073,37 @@ author sloppiness.
 **AGENTS.md** documents the rule: a session block may be as long as the work
 warrants; `current-state.md` carries state only; hand-splitting to satisfy I4 is
 no longer a thing.
+
+### S147 — Tier 1 of the remaining tests: untested gates
+
+**IMPLEMENT.**
+- `agent/tests/test_graph_assertions.py` — three invariants had **zero** tests
+  while I3/I4/I5/I7 were covered:
+  - `TestI1PhaseDeps` (5): deps COMPLETE passes; IN_PROGRESS/PENDING fails with
+    the dependency named; unknown phase and unknown dependency both fail; a
+    dependency-free phase passes.
+  - `TestI2DebtCloseEvidence` (5): CLOSED with both refs passes; missing
+    commit_ref / missing artifact_ref / neither each fail and name the item;
+    OPEN needs no evidence (evidence is a close-time obligation).
+  - `TestI6OrchestratorPhases` (3): every phase known passes; a missing phase is
+    named with the expected count; a missing orchestrator fails.
+  Agent suite 689 → **702**; ruff check + format clean.
+- `scripts/test_prepush_secrets.py` (new, 10 tests / 19 checks) for a scanner that
+  is a CI gate with no tests and two incidents behind it: real secrets fail
+  without the value being echoed, fixture paths downgrade to advisory, a
+  placeholder is ignored, an allow-list entry downgrades exactly one rule for one
+  path, a *different* rule on an allow-listed path still fails, quoting the
+  pattern inside `.prepush-allow.txt` is a FAIL, and `--all` finds a leak that the
+  removal commit's range scan does not.
+- `Makefile` + `ci.yml` — both now **auto-discover** `scripts/test_*.py` instead of
+  listing them, for the same reason the two runners were fixed earlier.
+
+**VERIFY.** All pass. Teeth proven by mutation: making the scanner echo the
+matched value failed the two "never echoed" checks; skipping `.prepush-allow.txt`
+failed the two self-reference checks; restoring returned all-green.
+
+**Fog remaining on tests** (unchanged): server modules dragging coverage
+(`installer.js` 20.4 % of 367 stmts, `tpm.js` 23.5 %, `index.js` 0 % in-process,
+`meshcentral.js` 11.5 % and superseded), k6 scripts never executed in CI, Electron
+`main.js`/`preload.js` excluded from coverage, worker not tested against the real
+Workers runtime, and 3/13 enforcement paths verified on hardware.

@@ -357,6 +357,14 @@ artifact checks — it previously ran only three of the five while its own comme
 claimed "all 5 test suites". Current measured totals: server 663 (41 suites),
 agent 689, dashboard 197, worker 331, electron 30, API E2E 10, script harness 71.
 
+The script-level harness tests are **auto-discovered** (`scripts/test_*.py`, run
+by `make test-scripts` and the CI `script-tests` job): 11 graph-session tests
+(40 checks), 44 memory tests, 10 secret-scanner tests (19 checks).
+
+Invariant coverage is now complete: I1 (phase deps), I2 (no debt closed without
+commit + artifact), I4, I5, I6 (orchestrator knows every phase) and I7 all have
+tests in `agent/tests/test_graph_assertions.py`; I3 gained 15 earlier.
+
 Two harness bugs found while completing this (both fixed):
 1. `scripts/test_memory.py` had 44 pytest tests and **no `__main__` block**, so
    `python3 scripts/test_memory.py` imported them, ran none, and exited 0 — which

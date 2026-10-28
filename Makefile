@@ -103,13 +103,15 @@ test-dashboard:
 	@cd dashboard && npm test
 
 test-scripts:
-	@echo "=== Graph session lifecycle tests ==="
-	@python3 scripts/test_graph_session.py
-	@echo "=== Memory harness tests ==="
-	@# Prefer the venv interpreter: test_memory.py is a pytest suite and the
-	@# system Python may not have pytest. Mirrors scripts/run-agent-tests.sh.
+	@# Auto-discover the script-level harness tests. A hand-written list is exactly
+	@# how the memory suite silently stopped running, and how four graph-session
+	@# tests were skipped after being added. Prefer the venv interpreter: the
+	@# memory suite needs pytest and the system Python may not have it.
 	@PY=$$( [ -x agent/.venv/bin/python ] && echo agent/.venv/bin/python || echo python3 ); \
-	  "$$PY" scripts/test_memory.py
+	for t in scripts/test_*.py; do \
+	  echo "=== $$t ==="; \
+	  "$$PY" "$$t" || exit 1; \
+	done
 
 test-worker:
 	@cd serverless && npx vitest run

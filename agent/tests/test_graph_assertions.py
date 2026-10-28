@@ -21,7 +21,10 @@ from graph_assert import (  # noqa: E402
     GraphViolationError,
     artifact_supports_claim,
     assert_artifact_quality,
+    assert_debt_close_has_evidence,
     assert_enforcement_path_status,
+    assert_orchestrator_knows_all_phases,
+    assert_phase_deps_met,
     assert_rule_zero_quality,
     assert_session_end_quality,
 )
@@ -432,3 +435,143 @@ class TestI3ArtifactClaim:
             "debt_items": [],
         }
         assert_enforcement_path_status(graph)  # must not raise
+
+
+class TestI1PhaseDeps:
+    """I1: no phase runs before its dependencies are COMPLETE.
+
+    I1 gates the whole phase pipeline — a phase marked IN_PROGRESS whose
+    dependency is still PENDING means work started in the wrong order. It had no
+    test at all, while I3/I4/I5/I7 did.
+    """
+
+    def _graph(self, *phases):
+        return {"phase_nodes": list(phases)}
+
+    def test_passes_when_all_deps_complete(self):
+        graph = self._graph(
+            {"id": "P0", "status": "COMPLETE", "deps": []},
+            {"id": "P1", "status": "COMPLETE", "deps": ["P0"]},
+            {"id": "P2", "status": "IN_PROGRESS", "deps": ["P1"]},
+        )
+        assert_phase_deps_met(graph, "P2")  # must not raise
+
+    def test_passes_for_a_phase_with_no_deps(self):
+        assert_phase_deps_met(self._graph({"id": "P0", "status": "PENDING", "deps": []}), "P0")
+
+    def test_fails_when_a_dependency_is_not_complete(self):
+        graph = self._graph(
+            {"id": "P0", "status": "IN_PROGRESS", "deps": []},
+            {"id": "P1", "status": "PENDING", "deps": ["P0"]},
+        )
+        try:
+            assert_phase_deps_met(graph, "P1")
+            raise AssertionError("Should have raised")
+        except GraphViolationError as e:
+            assert "I1" in str(e)
+            assert "P0" in str(e)
+            assert "IN_PROGRESS" in str(e)
+
+    def test_fails_for_an_unknown_phase(self):
+        try:
+            graph = self._graph({"id": "P0", "status": "COMPLETE", "deps": []})
+            assert_phase_deps_met(graph, "P99")
+            raise AssertionError("Should have raised")
+        except GraphViolationError as e:
+            assert "I1" in str(e)
+            assert "P99" in str(e)
+
+    def test_fails_when_a_dependency_does_not_exist(self):
+        graph = self._graph({"id": "P1", "status": "PENDING", "deps": ["P404"]})
+        try:
+            assert_phase_deps_met(graph, "P1")
+            raise AssertionError("Should have raised")
+        except GraphViolationError as e:
+            assert "I1" in str(e)
+            assert "P404" in str(e)
+
+
+class TestI2DebtCloseEvidence:
+    """I2: a CLOSED debt item must carry commit_ref AND artifact_ref.
+
+    This is the rule that keeps the debt ledger from lying — "we fixed it" is not
+    a close; a commit and an artifact are. It had no test.
+    """
+
+    def test_closed_with_both_refs_passes(self):
+        assert_debt_close_has_evidence(
+            {"id": "D-1", "status": "CLOSED", "commit_ref": "abc1234", "artifact_ref": "docs/x.md"}
+        )
+
+    def test_closed_without_commit_ref_fails(self):
+        try:
+            assert_debt_close_has_evidence(
+                {"id": "D-2", "status": "CLOSED", "commit_ref": "", "artifact_ref": "docs/x.md"}
+            )
+            raise AssertionError("Should have raised")
+        except GraphViolationError as e:
+            assert "I2" in str(e)
+            assert "D-2" in str(e)
+            assert "commit_ref" in str(e)
+
+    def test_closed_without_artifact_ref_fails(self):
+        try:
+            assert_debt_close_has_evidence(
+                {"id": "D-3", "status": "CLOSED", "commit_ref": "abc1234", "artifact_ref": ""}
+            )
+            raise AssertionError("Should have raised")
+        except GraphViolationError as e:
+            assert "I2" in str(e)
+            assert "D-3" in str(e)
+            assert "artifact_ref" in str(e)
+
+    def test_closed_with_neither_ref_fails_on_commit_first(self):
+        try:
+            assert_debt_close_has_evidence({"id": "D-4", "status": "CLOSED"})
+            raise AssertionError("Should have raised")
+        except GraphViolationError as e:
+            assert "commit_ref" in str(e)
+
+    def test_open_item_needs_no_evidence(self):
+        """Evidence is required at close time, not while work is outstanding."""
+        assert_debt_close_has_evidence({"id": "D-5", "status": "OPEN"})
+        assert_debt_close_has_evidence(
+            {"id": "D-6", "status": "OPEN", "commit_ref": "", "artifact_ref": ""}
+        )
+
+
+class TestI6OrchestratorPhases:
+    """I6: the orchestrator must know every phase the graph defines.
+
+    D-001 was exactly this bug (the orchestrator knew phases 0-7 while the graph
+    had 17), so the check matters and had no test.
+    """
+
+    def _graph(self, *ids):
+        return {"phase_nodes": [{"id": i, "status": "PENDING", "deps": []} for i in ids]}
+
+    def test_passes_when_every_phase_is_known(self, tmp_path):
+        orch = tmp_path / "orchestrator.sh"
+        orch.write_text(
+            'PHASE_NAMES=([0]="setup" [1]="db")\ncase "$1" in\n  0) run;;\n  1) run;;\nesac\n'
+        )
+        assert_orchestrator_knows_all_phases(self._graph("P0", "P1"), orch)
+
+    def test_fails_when_a_phase_is_missing(self, tmp_path):
+        orch = tmp_path / "orchestrator.sh"
+        orch.write_text('PHASE_NAMES=([0]="setup")\n')
+        try:
+            assert_orchestrator_knows_all_phases(self._graph("P0", "P7"), orch)
+            raise AssertionError("Should have raised")
+        except GraphViolationError as e:
+            assert "I6" in str(e)
+            assert "P7" in str(e)
+            assert "all 2 phases" in str(e)
+
+    def test_fails_when_the_orchestrator_is_absent(self, tmp_path):
+        try:
+            assert_orchestrator_knows_all_phases(self._graph("P0"), tmp_path / "nope.sh")
+            raise AssertionError("Should have raised")
+        except GraphViolationError as e:
+            assert "I6" in str(e)
+            assert "not found" in str(e)
