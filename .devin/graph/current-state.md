@@ -53,50 +53,98 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 148 — 2026-10-28 (Windows Server 2022 VM: the Windows half finally runs)
+## Latest session: 150 — 2026-10-28 (all three gating workflows go green: four CI-only failures, none of them in the code)
 
 ### VERIFY
-- **Windows run: 16 passed, 0 failed, 4 skipped, 0 errors** in a single 20-test sweep.
-  Evidence `docs/hardware-runs/vm-win2022-20261028/art-full-16passed.json`
-  (`is_admin: true`, `bitlocker_enabled: false`, `tpm_present: false`, agent hash).
-- `E-BCD` now **applies**: "3 critical, 5 best-effort succeeded", every setting
-  verified — the first time it has ever worked, after failing on the Azure VM, on real
-  HP hardware and on this VM for two different reasons.
-- Skips are the expected four: E-HP-UEFI (no HP client BIOS), E-TPM (no vTPM),
-  E-ENROLL/E-INTEGRATION (no server on :3000).
-- Agent suite 702 → **708**; ruff clean.
+- `CI` **success** (run 40706733041), `Lint` **success** (40706732967),
+  `CodeQL` **success** (40706732980) on `a99002a`; before this session all three
+  were red on every push since `2a984ed`. `PBL CI` remains red (see below).
+- Agent-logic verification, all in CI-faithful conditions rather than the
+  author's tree: server in a copy with **no `agent/dist`, no `.env`, node 20,
+  fresh `npm ci`** → 713 passed, coverage 71.57/68.52/78.74/72.44 (floors
+  66/62/70/67). Dashboard → 197 passed, 70.59/63.37/64.8/72.02 (floors
+  68/61/62/70). Agent with **Python 3.12.14 + pinned pytest 8.2.0** and the
+  **bare** `pytest` → 708 passed, coverage 61.31 %, exit 0 (before the fix the
+  same command exited 4 at collection).
+- Teeth, not just green: reintroducing one `export X=$(date)` turns
+  `make lint-workflows` red (and restoring returns 0); a 150 ms-delayed health
+  mock reproduces CI's exact `Unable to find an element with the text: 10
+  devices` against the old dashboard pattern and passes against the new one
+  (temporary proof file deleted); the missing-binary server run reproduced the
+  5 failures before the fix.
+- `make test-scripts` (4 auto-discovered files) green, `make graph-check` green,
+  server ESLint / dashboard ESLint / ruff check + format all exit 0.
 
 ### Fog cleared
-- The Windows enforcement paths are no longer "written but never executed". 16 of 20
-  tests pass on a real Windows kernel with real `bcdedit`, `tsdiscon`, DPAPI and
-  service semantics.
-- BCD lockdown was broken by a *read* that never worked, not by anything
-  platform-specific — a class of bug only execution could expose.
-- A Windows-only SQLite handle leak existed in the offline queue; invisible on Linux.
+- **Why CI was red for days**: four environment-dependent defects, none in
+  product logic — a missing local linter tier (shellcheck), a test suite
+  depending on a gitignored build artifact, a test suite depending on the
+  pytest invocation form, and one real test race. Each passed locally for a
+  different reason, which is why a local clean sweep kept disagreeing with CI.
+- **How to read CI without credentials**: check-run annotations are public where
+  job logs are not, and `ci-annotate.py` now guarantees a failing test job says
+  why in one annotation.
+- **S149 was real work with a malformed trace block** (`### S149`): it produced
+  the public-repo scrub, the proprietary licence, the CodeQL un-gate, the stale
+  pg-smoke assertion fix and the `JWT_SECRET_FILE` consumer bug. Header
+  normalised to `## Session 149` so the generator can see it; its state is
+  carried forward here.
 
 ### Fog remaining
-- This is `emulated`, not `hardware`: I3 still refuses these statuses, so
-  `GRAPH-SPEC.yaml` keeps `E-BCD` demoted and the convergence number stays 3/13.
-- `E-HP-UEFI` needs an HP *client* machine (a ProLiant has no `root\hp\InstrumentedBIOS`).
-- `E-TPM` needs a vTPM (this image has none) or real hardware.
-- `E-ENROLL`/`E-INTEGRATION` need a server on `localhost:3000` in the guest.
-- The VM has no Secure Boot: Gen8-era QEMU/OVMF path used here, so the D-130
-  Secure Boot posture is untested by this run.
+- **`PBL CI` is still red** (pre-existing; red on 2026-10-27 and 2026-10-28 as
+  well). Three jobs: both "Install build dependencies" steps exit **100** (apt)
+  on `ubuntu-22.04`, and "Static analysis" fails a **real** finding — 3 TODOs in
+  `firmware/PblPkg/PblApp/*.c` (`CoseVerify.c:410`, `TlsVerify.c:108`,
+  `TpmClient.c:1119`) carry no C1–C5/REQ/STUB reference. No logs (admin-only),
+  and those steps do not tee/annotate yet, so the apt cause is not yet named.
+- 19 Dependabot alerts remain (8 high, 6 moderate, 5 low); the previous session
+  took 161 → 19.
+- 10 of 13 enforcement paths are still `verified-in-unit-test`, not
+  `verified-on-hardware` — unchanged this session, and the Windows VM run stays
+  `emulated`, which I3 correctly refuses.
+- A stale side worktree `/home/cllin/lockdown-installer-security` on branch
+  `task/installer-security` (based on an old master, 2 files staged) exists and
+  was not touched.
 
 ### Debt items closed
-- None (evidence level is emulated, not hardware).
+- None. Nothing in this session met D-120, D-129 or D-130 close criteria.
 
 ### Debt items still open
-- D-120, D-129, D-130; enforcement 3/13 on hardware.
+- D-120 (BitLocker detection), D-129 (real hardware validation for PBL),
+  D-130 (code signing for PblApp.efi). Enforcement paths 3/13 on hardware.
 
 ### Blockers
-- Real hardware with TPM 2.0 + Windows for hardware-grade evidence; owner decisions on
-  the repository licence and react-leaflet.
+- Job-log access: no `gh`, no token on this machine, so logs stay admin-only —
+  mitigated (not solved) by annotations.
+- Real hardware with TPM 2.0 + Windows for hardware-grade evidence (D-129/I3).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary). The harness had no gate
+  comparing the local verdict with CI's, so three divergences were invisible:
+  local lint ran without shellcheck (weaker), the server suite silently required
+  a local build artifact, and the agent suite silently required the `-m`
+  invocation. One real flaky test hid behind the same "passes locally" sign.
+  Harness change: `make lint-workflows` fails on missing tools instead of
+  linting less, `verify-environment.sh` §9 asserts the same, and the three test
+  jobs annotate their own failure output.
+- **Layer 5 — state management** (secondary). The previous session ended
+  mid-investigation and its trace block was malformed, so this session had to
+  re-derive the situation from git, transcripts and the API. Harness change is
+  only conventional: S149's header normalised; the annotation technique is
+  recorded above so the next session starts where this one stopped.
+
+### Session artifacts
+- Commits `2d03995` (four CI-only failures + annotations + shellcheck parity),
+  `a99002a` (agent collection fix).
+- New: `scripts/ci-annotate.py`, `scripts/test_ci_annotate.py`.
+- Green runs: CI / Lint / CodeQL on `a99002a`.
 
 ### Next session opening
-Wire the VM run into the harness story (document how to recreate the guest), then
-either take react-leaflet for the licence gate or add the missing vTPM to the VM so
-E-TPM can execute.
+Take `PBL CI`: add the tee+annotate pattern to its build and static-analysis
+jobs so the `apt-get` exit 100 names its own cause on the next run, and give the
+three TODO comments in `firmware/PblPkg/PblApp/` their contract references
+(CoseVerify's Ed25519 TODO is the interesting one — decide C1 vs C4 from
+PBL-C1-LockVerdict.md before writing it).
 
 ---
 

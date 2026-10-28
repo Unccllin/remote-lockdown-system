@@ -1251,7 +1251,7 @@ Wire the VM run into the harness story (document how to recreate the guest), the
 either take react-leaflet for the licence gate or add the missing vTPM to the VM so
 E-TPM can execute.
 
-### S149 — repo goes public: exposure scrub + the production program starts
+## Session 149 — repo goes public: exposure scrub + the production program starts
 
 **Decisions taken by the owner (this session):** repository licence = proprietary,
 all rights reserved; public-repo exposure = scrub topology and enable push
@@ -1277,3 +1277,158 @@ as proprietary (dropped provisional/pending language); the orchestrator then
 scrubbed the same identifiers from `docs/hardware-runs/vm-win2022-20261028/*.json`
 (4 files, outside W1's scope). Gate: topology grep 0 matches, secret scan exit 0,
 graph invariants pass.
+
+---
+
+## Session 150 — 2026-10-28 (all three gating workflows go green: four CI-only failures, none of them in the code)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md`, `.devin/PENDING-RULING.md`, `trace.md`
+  (S147–S149), `git log`/`git worktree list`, the previous session's pi transcript
+  (`~/.pi/agent/sessions/.../2026-10-27T10-51-24-958Z_*.jsonl`, last 14 records) to
+  find where it stopped; `.github/workflows/{ci,lint,pbl-ci}.yml`,
+  `server/jest.config.js`, `dashboard/vitest.config.js`, `agent/pyproject.toml`
+  (coverage floors), `server/src/config/paths.js`, `server/src/routes/agent.js`
+  (`/update` handler), `server/tests/agent.routes.test.js` (S0.6 group),
+  `dashboard/src/pages/HealthPage.jsx` + `dashboard/tests/HealthPage.test.jsx`,
+  `scripts/run-agent-tests.sh`, `agent/tests/conftest.py`, `Makefile` (lint/test
+  targets).
+- **Finding**: the previous session stopped with CI red on every push — Server,
+  Dashboard and Agent Tests plus Lint — and had established only that job logs
+  need admin (`403 Must have admin rights`) while the same commands passed
+  locally. Its last action was a container repro of the server job that hit a
+  glibc mismatch (`node:20` bookworm lacks 2.38) and told it nothing. Neither
+  session had used **check-run annotations**, which are readable anonymously on
+  this now-public repo and carry the actual error text.
+- **Finding**: `trace.md`'s S149 block uses `### S149` instead of the
+  `## Session ...` header that `scripts/graph_session.py` parses, so
+  `current-state.md` still advertised Session 148 as latest.
+- **Finding**: `make lint` had no workflow-lint target at all — the only
+  actionlint run in the project was inside `.github/workflows/lint.yml`.
+
+### IMPLEMENT
+- **Diagnosis path (reusable)**: `GET /repos/{o}/{r}/check-runs/{id}/annotations`
+  answers without a token on a public repo. That is where all four causes came
+  from. New `scripts/ci-annotate.py` emits one `::error::` annotation with the
+  tail of a failing job's output; wired into the server/dashboard/agent test
+  jobs in `ci.yml` (output teed to `$RUNNER_TEMP`, `if: failure()` step).
+  13 tests in `scripts/test_ci_annotate.py` (auto-discovered by `make
+  test-scripts`) cover escaping, truncation, and the never-mask-the-real-failure
+  exit code.
+- **Lint (actionlint)**: `.github/workflows/pbl-ci.yml` QEMU smoke step used
+  `export QEMU=$(which ...)` ×5 → SC2155. Assign-then-export, and `command -v`
+  over `which`. The reason it was invisible locally: CI's actionlint runs with
+  shellcheck bundled, this box had none, so actionlint silently skipped every
+  `run:` block. Closed the asymmetry: `make lint-workflows` (hard-fails when
+  actionlint **or** shellcheck is missing, added to `make lint`),
+  `verify-environment.sh` section 9 (`--workflows`), AGENTS.md note.
+- **Server Tests**: 5 failures in `S0.6: GET /api/agent/update` — the suite
+  depended on `agent/dist/lockdown-agent`, which is **gitignored**, so a fresh
+  checkout (CI) has no binary and the handler returns its
+  `no_binary_available` early return before hashing or signing. The suite now
+  owns a fixture through the existing `config/paths.js` seam (it is mocked the
+  same way `db/pool` already was), asserts hash **and** size against it, and a
+  new test pins the no-binary branch that CI was hitting by accident.
+- **Dashboard Tests**: a genuine race, not coverage. `HealthPage.test.jsx`
+  waited for the static card title and then asserted the *fetched* value
+  synchronously; the count reads `0 devices` until the payload lands. 'Healthy'
+  and 'flag_stolen' had the same shape. Now the fetched values are awaited.
+- **Agent Tests**: `pythonpath = ["."]` in `[tool.pytest.ini_options]`. The bare
+  `pytest` console script does not put the cwd on `sys.path`; `python -m pytest`
+  does. `conftest.py` does `import agent`, so the suite only worked through the
+  `-m` form — which is what `scripts/run-agent-tests.sh` and every documented
+  local command use. CI ran the bare script → conftest ImportError, reported by
+  pytest as a *usage* error: **exit code 4**.
+
+### VERIFY
+- `CI` **success** (run 40706733041), `Lint` **success** (40706732967),
+  `CodeQL` **success** (40706732980) on `a99002a`; before this session all three
+  were red on every push since `2a984ed`. `PBL CI` remains red (see below).
+- Agent-logic verification, all in CI-faithful conditions rather than the
+  author's tree: server in a copy with **no `agent/dist`, no `.env`, node 20,
+  fresh `npm ci`** → 713 passed, coverage 71.57/68.52/78.74/72.44 (floors
+  66/62/70/67). Dashboard → 197 passed, 70.59/63.37/64.8/72.02 (floors
+  68/61/62/70). Agent with **Python 3.12.14 + pinned pytest 8.2.0** and the
+  **bare** `pytest` → 708 passed, coverage 61.31 %, exit 0 (before the fix the
+  same command exited 4 at collection).
+- Teeth, not just green: reintroducing one `export X=$(date)` turns
+  `make lint-workflows` red (and restoring returns 0); a 150 ms-delayed health
+  mock reproduces CI's exact `Unable to find an element with the text: 10
+  devices` against the old dashboard pattern and passes against the new one
+  (temporary proof file deleted); the missing-binary server run reproduced the
+  5 failures before the fix.
+- `make test-scripts` (4 auto-discovered files) green, `make graph-check` green,
+  server ESLint / dashboard ESLint / ruff check + format all exit 0.
+
+### Fog cleared
+- **Why CI was red for days**: four environment-dependent defects, none in
+  product logic — a missing local linter tier (shellcheck), a test suite
+  depending on a gitignored build artifact, a test suite depending on the
+  pytest invocation form, and one real test race. Each passed locally for a
+  different reason, which is why a local clean sweep kept disagreeing with CI.
+- **How to read CI without credentials**: check-run annotations are public where
+  job logs are not, and `ci-annotate.py` now guarantees a failing test job says
+  why in one annotation.
+- **S149 was real work with a malformed trace block** (`### S149`): it produced
+  the public-repo scrub, the proprietary licence, the CodeQL un-gate, the stale
+  pg-smoke assertion fix and the `JWT_SECRET_FILE` consumer bug. Header
+  normalised to `## Session 149` so the generator can see it; its state is
+  carried forward here.
+
+### Fog remaining
+- **`PBL CI` is still red** (pre-existing; red on 2026-10-27 and 2026-10-28 as
+  well). Three jobs: both "Install build dependencies" steps exit **100** (apt)
+  on `ubuntu-22.04`, and "Static analysis" fails a **real** finding — 3 TODOs in
+  `firmware/PblPkg/PblApp/*.c` (`CoseVerify.c:410`, `TlsVerify.c:108`,
+  `TpmClient.c:1119`) carry no C1–C5/REQ/STUB reference. No logs (admin-only),
+  and those steps do not tee/annotate yet, so the apt cause is not yet named.
+- 19 Dependabot alerts remain (8 high, 6 moderate, 5 low); the previous session
+  took 161 → 19.
+- 10 of 13 enforcement paths are still `verified-in-unit-test`, not
+  `verified-on-hardware` — unchanged this session, and the Windows VM run stays
+  `emulated`, which I3 correctly refuses.
+- A stale side worktree `/home/cllin/lockdown-installer-security` on branch
+  `task/installer-security` (based on an old master, 2 files staged) exists and
+  was not touched.
+
+### Debt items closed
+- None. Nothing in this session met D-120, D-129 or D-130 close criteria.
+
+### Debt items still open
+- D-120 (BitLocker detection), D-129 (real hardware validation for PBL),
+  D-130 (code signing for PblApp.efi). Enforcement paths 3/13 on hardware.
+
+### Blockers
+- Job-log access: no `gh`, no token on this machine, so logs stay admin-only —
+  mitigated (not solved) by annotations.
+- Real hardware with TPM 2.0 + Windows for hardware-grade evidence (D-129/I3).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary). The harness had no gate
+  comparing the local verdict with CI's, so three divergences were invisible:
+  local lint ran without shellcheck (weaker), the server suite silently required
+  a local build artifact, and the agent suite silently required the `-m`
+  invocation. One real flaky test hid behind the same "passes locally" sign.
+  Harness change: `make lint-workflows` fails on missing tools instead of
+  linting less, `verify-environment.sh` §9 asserts the same, and the three test
+  jobs annotate their own failure output.
+- **Layer 5 — state management** (secondary). The previous session ended
+  mid-investigation and its trace block was malformed, so this session had to
+  re-derive the situation from git, transcripts and the API. Harness change is
+  only conventional: S149's header normalised; the annotation technique is
+  recorded above so the next session starts where this one stopped.
+
+### Session artifacts
+- Commits `2d03995` (four CI-only failures + annotations + shellcheck parity),
+  `a99002a` (agent collection fix).
+- New: `scripts/ci-annotate.py`, `scripts/test_ci_annotate.py`.
+- Green runs: CI / Lint / CodeQL on `a99002a`.
+
+### Next session opening
+Take `PBL CI`: add the tee+annotate pattern to its build and static-analysis
+jobs so the `apt-get` exit 100 names its own cause on the next run, and give the
+three TODO comments in `firmware/PblPkg/PblApp/` their contract references
+(CoseVerify's Ed25519 TODO is the interesting one — decide C1 vs C4 from
+PBL-C1-LockVerdict.md before writing it).
+
+---
