@@ -289,6 +289,15 @@ cd dashboard && npx eslint .                  # exit 0 = clean
 cd agent     && python3 -m ruff check .       # exit 0 = clean
 cd agent     && python3 -m ruff format --check .
 
+# Workflow lint — must match CI. CI runs actionlint v1.7.12 through
+# raven-actions/actionlint, which BUNDLES shellcheck, so CI also lints the shell
+# inside every `run:` block. A box without shellcheck makes actionlint skip
+# those checks and print green: that asymmetry let five SC2155 findings in
+# pbl-ci.yml sit in a red "Lint Workflows" job while `actionlint` was clean
+# locally (2026-10-28). `make lint-workflows` therefore fails when either tool
+# is missing instead of silently linting less than CI does.
+make lint-workflows                           # actionlint + shellcheck, exit 0 = clean
+
 # Build
 cd dashboard && npx vite build                # outputs dashboard/dist
 cd electron  && node --check main.js preload.js setup-preload.js setup-wizard.js server-starter.js config.js updater.js

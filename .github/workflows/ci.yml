@@ -75,7 +75,18 @@ jobs:
 
       # Coverage + gate: thresholds live in server/jest.config.js.
       # Same script as `make test-coverage`, so local and CI agree.
-      - run: npm run test:coverage
+      #
+      # Output is teed to a file and annotated on failure: job logs need admin
+      # rights on this repository, check-run annotations do not, so an
+      # annotated tail is the only way a failure is diagnosable off-runner
+      # (scripts/ci-annotate.py explains why).
+      - run: |
+          set -o pipefail
+          npm run test:coverage 2>&1 | tee "$RUNNER_TEMP/ci-output.log"
+
+      - name: Annotate server test output
+        if: failure()
+        run: python3 ../scripts/ci-annotate.py "$RUNNER_TEMP/ci-output.log" "server tests"
 
   # ---------------------------------------------------------------------------
   # Real PostgreSQL smoke test (S140)
@@ -169,7 +180,13 @@ jobs:
 
       # Coverage + gate: thresholds live in dashboard/vitest.config.js.
       # Same script as `make test-coverage`, so local and CI agree.
-      - run: npm run test:coverage
+      - run: |
+          set -o pipefail
+          npm run test:coverage 2>&1 | tee "$RUNNER_TEMP/ci-output.log"
+
+      - name: Annotate dashboard test output
+        if: failure()
+        run: python3 ../scripts/ci-annotate.py "$RUNNER_TEMP/ci-output.log" "dashboard tests"
 
   # ---------------------------------------------------------------------------
   # Agent tests (Python + pytest)
@@ -211,7 +228,14 @@ jobs:
 
       # Coverage + gate: fail_under in pyproject.toml, mirrored by the flag
       # here because pytest-cov decides on --cov-fail-under, not fail_under.
-      - run: pytest tests/ -v --cov=. --cov-report=term-missing --cov-fail-under=59
+      - run: |
+          set -o pipefail
+          pytest tests/ -v --cov=. --cov-report=term-missing --cov-fail-under=59 2>&1 \
+            | tee "$RUNNER_TEMP/ci-output.log"
+
+      - name: Annotate agent test output
+        if: failure()
+        run: python3 ../scripts/ci-annotate.py "$RUNNER_TEMP/ci-output.log" "agent tests"
 
   # ---------------------------------------------------------------------------
   # API E2E tests (Jest + Supertest, in-process Express + SQLite)

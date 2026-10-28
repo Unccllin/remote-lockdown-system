@@ -121,13 +121,17 @@ jobs:
           ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC
 
       - name: Run QEMU smoke test
+        # Assign and export separately: `export X=$(cmd)` masks the command's
+        # exit status (shellcheck SC2155) and actionlint escalates shellcheck
+        # findings, so that form fails the Lint workflow.
         run: |
           export EDK2_DIR="$HOME/.local/src/edk2"
-          export QEMU=$(which qemu-system-x86_64)
-          export MKFS=$(which mkfs.fat)
-          export MMD=$(which mmd)
-          export MCOPY=$(which mcopy)
-          export SGDISK=$(which sgdisk)
+          QEMU=$(command -v qemu-system-x86_64)
+          MKFS=$(command -v mkfs.fat)
+          MMD=$(command -v mmd)
+          MCOPY=$(command -v mcopy)
+          SGDISK=$(command -v sgdisk)
+          export QEMU MKFS MMD MCOPY SGDISK
           ./firmware/PblPkg/ci-harness.sh --timeout 30
 
   static-analysis:

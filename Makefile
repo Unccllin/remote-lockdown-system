@@ -175,10 +175,24 @@ docs-site:
 pre-push-check:
 	@bash scripts/pre-push-check.sh
 
-# Lint all components — server, dashboard, agent.
-.PHONY: lint lint-server lint-dashboard lint-agent
+# Lint all components — server, dashboard, agent, workflows.
+.PHONY: lint lint-server lint-dashboard lint-agent lint-workflows
 
-lint: lint-server lint-dashboard lint-agent typecheck-worker check-openapi
+lint: lint-server lint-dashboard lint-agent lint-workflows typecheck-worker check-openapi
+
+# Workflow lint. CI runs actionlint v1.7.12 through raven-actions/actionlint,
+# which bundles shellcheck — so CI also checks the shell inside every `run:`
+# block. On a box without shellcheck, actionlint silently skips those checks and
+# reports green, which is how five SC2155 findings in pbl-ci.yml reached a red
+# Lint workflow on 2026-10-28. Missing tools are a hard failure, not a skip:
+# a quietly weaker lint is worse than none.
+lint-workflows:
+	@command -v actionlint >/dev/null 2>&1 || { \
+		echo "lint-workflows: actionlint not installed (CI pins v1.7.12)"; exit 1; }
+	@command -v shellcheck >/dev/null 2>&1 || { \
+		echo "lint-workflows: shellcheck not installed — actionlint would skip the"; \
+		echo "  run: block checks that CI enforces (install shellcheck 0.10.x)."; exit 1; }
+	@actionlint
 
 lint-server:
 	@cd server && npx eslint src/ tests/ --max-warnings=0

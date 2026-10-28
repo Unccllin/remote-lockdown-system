@@ -16,6 +16,7 @@
 #   6. Docker live validation (if Docker daemon is available)
 #   7. Electron packaging (attempts build, reports result)
 #   8. Built binary smoke tests (--version, --help)
+#   9. Workflow lint parity (actionlint + shellcheck, as CI runs it)
 #
 # Usage:
 #   ./scripts/verify-environment.sh              # run all checks
@@ -26,6 +27,7 @@
 #   ./scripts/verify-environment.sh --electron   # only Electron build
 #   ./scripts/verify-environment.sh --installers # only platform installer syntax
 #   ./scripts/verify-environment.sh --secrets    # only secrets preflight
+#   ./scripts/verify-environment.sh --workflows  # only workflow lint parity
 #   ./scripts/verify-environment.sh --json       # output as JSON
 #   -h, --help                                   # show this help
 #
@@ -97,6 +99,7 @@ RUN_SIGNING=0
 RUN_ELECTRON=0
 RUN_INSTALLERS=0
 RUN_SECRETS=0
+RUN_WORKFLOWS=0
 JSON_OUTPUT=0
 ALL=1
 
@@ -109,6 +112,7 @@ while [[ $# -gt 0 ]]; do
     --electron)  RUN_ELECTRON=1; ALL=0; shift ;;
     --installers) RUN_INSTALLERS=1; ALL=0; shift ;;
     --secrets)   RUN_SECRETS=1; ALL=0; shift ;;
+    --workflows) RUN_WORKFLOWS=1; ALL=0; shift ;;
     --json)      JSON_OUTPUT=1; shift ;;
     -h|--help)   usage ;;
     *)           echo "Unknown: $1"; exit 1 ;;
@@ -117,7 +121,7 @@ done
 
 if [[ $ALL -eq 1 ]]; then
   RUN_AGENT=1; RUN_NSIS=1; RUN_DOCKER=1; RUN_SIGNING=1
-  RUN_ELECTRON=1; RUN_INSTALLERS=1; RUN_SECRETS=1
+  RUN_ELECTRON=1; RUN_INSTALLERS=1; RUN_SECRETS=1; RUN_WORKFLOWS=1
 fi
 
 # ===========================================================================
@@ -818,6 +822,43 @@ check_electron() {
 }
 
 # ===========================================================================
+# 9. Workflow lint parity (actionlint + shellcheck)
+# ===========================================================================
+# CI lints every workflow with actionlint v1.7.12 via raven-actions/actionlint,
+# and that action ships shellcheck — so CI also lints the shell inside every
+# `run:` block. Without shellcheck on the box, actionlint silently skips those
+# checks and reports green. That asymmetry is how five SC2155 findings in
+# pbl-ci.yml reached a red Lint workflow on 2026-10-28 while `actionlint` was
+# clean locally. This check makes the local verdict equivalent to CI's.
+check_workflows() {
+  printf "\n${CYAN}=== 9. Workflow Lint Parity (actionlint + shellcheck) ===${NC}\n"
+
+  if ! has actionlint; then
+    record_skip "workflow-lint-actionlint" "actionlint not installed (CI pins v1.7.12)"
+    return
+  fi
+  record_pass "workflow-lint-actionlint" "$(actionlint --version 2>/dev/null | head -1)"
+
+  if ! has shellcheck; then
+    record_fail "workflow-lint-shellcheck" \
+      "missing — actionlint would skip the run: block checks that CI enforces"
+    return
+  fi
+  record_pass "workflow-lint-shellcheck" "shellcheck $(shellcheck --version 2>/dev/null | awk '/version:/{print $2}')"
+
+  local empty value
+  empty=$(mktemp)
+  if ( cd "$PROJECT_ROOT" && actionlint >"$empty" 2>&1 ); then
+    record_pass "workflow-lint-clean" "actionlint clean with shellcheck enabled"
+  else
+    value=$(grep -c "shellcheck reported\|error" "$empty" 2>/dev/null || echo 0)
+    record_fail "workflow-lint-clean" "$value finding(s) — run 'make lint-workflows' in the repo root"
+    sed -n '1,3p' "$empty" | sed 's/^/    /'
+  fi
+  rm -f "$empty"
+}
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 print_summary() {
@@ -860,5 +901,6 @@ printf "\n"
 [[ $RUN_SIGNING -eq 1 ]] && check_signing
 [[ $RUN_DOCKER -eq 1 ]] && check_docker
 [[ $RUN_ELECTRON -eq 1 ]] && check_electron
+[[ $RUN_WORKFLOWS -eq 1 ]] && check_workflows
 
 print_summary

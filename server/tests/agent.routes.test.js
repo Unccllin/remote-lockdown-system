@@ -5,6 +5,26 @@ const jwt = require('jsonwebtoken');
 const { mockPool } = require('./helpers');
 jest.mock('../src/db/pool', () => mockPool);
 
+// The /update handler resolves the agent binary through config/paths.js.
+// That seam is mocked so this suite owns its fixture: `agent/dist/` is
+// gitignored, so a fresh checkout — which is what CI does — has no binary, and
+// the endpoint then takes its `no_binary_available` early return. Every
+// signature assertion in the S0.6 group below failed on CI for exactly that
+// reason (2026-10-28), while passing locally where a built binary happened to
+// exist. A fixture makes the suite hermetic and lets the no-binary branch be
+// tested deliberately instead of by accident.
+let mockBinariesDir = null;
+jest.mock('../src/config/paths', () => ({
+  getAgentBinariesDir: () => mockBinariesDir,
+  resolveAgentBinary: (name) => {
+    const path = require('path');
+    const fs = require('fs');
+    if (!mockBinariesDir) return null;
+    const full = path.join(mockBinariesDir, name);
+    return fs.existsSync(full) ? full : null;
+  },
+}));
+
 // We need to require the router AFTER the mock is set up
 const agentRoutes = require('../src/routes/agent');
 const { generateApiKey, hashApiKey } = require('../src/db/apiKey');
@@ -49,6 +69,7 @@ function provisionDevice(overrides = {}) {
 beforeEach(() => {
   mockPool.query.reset();
   setSharedKvStore(new Map());  // S1.2: reset shared PBL KV between tests
+  mockBinariesDir = null;      // no binary unless a test provides one
 });
 
 // ---------------------------------------------------------------------------
@@ -1248,6 +1269,26 @@ describe('S0.6: GET /api/agent/update — detached Ed25519 signature', () => {
   const pubPem = publicKey.export({ type: 'spki', format: 'pem' });
   const savedKey = process.env.UPDATE_SIGNING_KEY;
 
+  // Stand-in for the built agent binary: the hash contract is about binding the
+  // served bytes, so any content works and the suite no longer needs a real
+  // (gitignored) build artifact.
+  const FIXTURE_BYTES = 'fixture agent binary — not a real executable';
+  let fixtureDir;
+
+  beforeAll(() => {
+    fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bin-'));
+    fs.writeFileSync(path.join(fixtureDir, 'lockdown-agent'), FIXTURE_BYTES);
+    fs.writeFileSync(path.join(fixtureDir, 'lockdown-agent.exe'), FIXTURE_BYTES);
+  });
+
+  afterAll(() => {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    mockBinariesDir = fixtureDir;
+  });
+
   afterEach(() => {
     if (savedKey === undefined) {
       delete process.env.UPDATE_SIGNING_KEY;
@@ -1291,14 +1332,13 @@ describe('S0.6: GET /api/agent/update — detached Ed25519 signature', () => {
     const res = await agentUpdate(apiKey);
     expect(res.status).toBe(200);
 
-    const binPath = path.join(
-      __dirname, '..', '..', 'agent', 'dist', 'lockdown-agent'
-    );
+    const binPath = path.join(fixtureDir, 'lockdown-agent');
     const actual = crypto
       .createHash('sha256')
       .update(fs.readFileSync(binPath))
       .digest('hex');
     expect(res.body.sha256).toBe(actual);
+    expect(res.body.size).toBe(Buffer.byteLength(FIXTURE_BYTES));
   });
 
   test('accepts UPDATE_SIGNING_KEY as a filesystem path', async () => {
@@ -1337,5 +1377,22 @@ describe('S0.6: GET /api/agent/update — detached Ed25519 signature', () => {
     expect(res.status).toBe(200);
     expect(res.body.signature).toBeNull();
     expect(res.body.signature_alg).toBeNull();
+  });
+
+  test('no binary available (fresh checkout) → no update, nothing to verify', async () => {
+    // This is the branch CI used to hit by accident: agent/dist/ is gitignored,
+    // so a clean checkout has no binary and the endpoint short-circuits before
+    // hashing or signing. Pin that contract so the failure mode cannot come
+    // back as a pile of unexplained signature assertions.
+    const { apiKey } = provisionDevice();
+    process.env.UPDATE_SIGNING_KEY = privPem;
+    mockBinariesDir = null;
+
+    const res = await agentUpdate(apiKey);
+    expect(res.status).toBe(200);
+    expect(res.body.update_available).toBe(false);
+    expect(res.body.reason).toBe('no_binary_available');
+    expect(res.body.sha256).toBeUndefined();
+    expect(res.body.signature).toBeUndefined();
   });
 });

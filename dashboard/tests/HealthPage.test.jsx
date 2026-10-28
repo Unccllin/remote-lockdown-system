@@ -71,7 +71,11 @@ describe('HealthPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Server Status')).toBeInTheDocument();
     });
-    expect(screen.getByText('Healthy')).toBeInTheDocument();
+    // 'Healthy' is derived from the fetched payload (it reads 'Down' while
+    // `data` is still null), so it must be awaited separately. Waiting only
+    // for the static card title raced the response and failed on CI, where
+    // the promise resolved after the title had already painted.
+    expect(await screen.findByText('Healthy')).toBeInTheDocument();
   });
 
   it('shows Fleet Status card with device count', async () => {
@@ -80,7 +84,9 @@ describe('HealthPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Fleet Status')).toBeInTheDocument();
     });
-    expect(screen.getByText('10 devices')).toBeInTheDocument();
+    // The count renders as '0 devices' until the payload lands — assert the
+    // loaded value, not the placeholder.
+    expect(await screen.findByText('10 devices')).toBeInTheDocument();
   });
 
   it('shows Command Queue card with pending count', async () => {
@@ -110,7 +116,7 @@ describe('HealthPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Recent Alerts')).toBeInTheDocument();
     });
-    expect(screen.getByText('flag_stolen')).toBeInTheDocument();
+    expect(await screen.findByText('flag_stolen')).toBeInTheDocument();
   });
 
   it('shows no alerts message when recentAlerts is empty', async () => {
