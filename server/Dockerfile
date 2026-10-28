@@ -17,12 +17,28 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# Copy package files and install dependencies
+# Copy package files and install dependencies.
+# sqlite3's prebuilt binary is linked against a newer glibc than node:20-slim
+# (Debian bookworm, glibc 2.36) provides, so the container died on startup with
+#   Error: /lib/x86_64-linux-gnu/libm.so.6: version `GLIBC_2.38' not found
+# Building it from source avoids depending on the publisher's build host; the
+# toolchain is removed in the same layer so it does not ship.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev || npm install --omit=dev
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ \
+ && npm ci --omit=dev --build-from-source=sqlite3 \
+ && apt-get purge -y python3 make g++ \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
 
 # Copy source code
 COPY . .
+
+# Run as a non-root user (CWE-250). node:20-slim ships uid 1000 as `node`.
+# /data is the SQLite volume — an empty named volume inherits this ownership on
+# first use; a host bind mount must be chowned by the operator.
+RUN mkdir -p /data && chown -R node:node /app /data
+USER node
 
 # Expose the server port
 EXPOSE 3001

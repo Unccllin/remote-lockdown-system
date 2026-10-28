@@ -21,11 +21,13 @@
     "eslint:recommended",
     "plugin:react/recommended",
     "plugin:react/jsx-runtime",
-    "plugin:react-hooks/recommended"
+    "plugin:react-hooks/recommended",
+    "plugin:security/recommended-legacy"
   ],
   "plugins": [
     "react",
-    "react-hooks"
+    "react-hooks",
+    "security"
   ],
   "rules": {
     "no-unused-vars": [
@@ -36,7 +38,11 @@
       }
     ],
     "react/prop-types": "off",
-    "react/react-in-jsx-scope": "off"
+    "react/react-in-jsx-scope": "off",
+    "security/detect-object-injection": "off",
+    "security/detect-non-literal-regexp": "off",
+    "security/detect-unsafe-regex": "off",
+    "security/detect-non-literal-fs-filename": "off"
   },
   "ignorePatterns": [
     "node_modules/",

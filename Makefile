@@ -43,6 +43,7 @@ help:
 	@echo "  make full-verify          run everything: lint + test + e2e + verify-env + graph-check"
 	@echo "  make hw-test              run hardware test harness v2.0 (D-003, simulate mode)"
 	@echo "  make load-smoke           signed k6 load smoke against a throwaway server"
+	@echo "  make sast                 Semgrep static analysis (gates on ERROR)"
 	@echo "  make hw-test-dry          dry-run hardware test harness"
 	@echo "  make hw-test-check        check test eligibility (no execution)"
 	@echo ""
@@ -122,6 +123,14 @@ test-electron:
 
 # Real-PostgreSQL smoke test (S140). SQLite-only Jest runs cannot catch PG
 # dialect bugs, and this harness previously could not start at all.
+.PHONY: sast
+sast:
+	@# Code scanning without GitHub Code Security: Semgrep default ruleset,
+	@# gating on ERROR only (see scripts/sast-gate.py for why).
+	@command -v semgrep >/dev/null 2>&1 || { echo "semgrep not installed — pipx install semgrep"; exit 2; }
+	@semgrep scan --config=p/default --json-output=semgrep.json --quiet . || true
+	@python3 scripts/sast-gate.py semgrep.json
+
 .PHONY: load-smoke
 load-smoke:
 	@scripts/run-load-smoke.sh

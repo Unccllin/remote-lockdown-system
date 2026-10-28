@@ -212,3 +212,35 @@ jobs:
             exit $?
           fi
           python3 scripts/prepush_secrets.py --base "$BASE" --head HEAD
+
+  # ---------------------------------------------------------------------------
+  # Static analysis (Semgrep) — the code scanning we can actually run
+  # ---------------------------------------------------------------------------
+  # CodeQL needs GitHub Code Security on a private repository (SARIF upload 403),
+  # so codeql.yml is gated off. This covers the same ground without the licence:
+  # Semgrep's default ruleset over JS/TS/Python/Dockerfile. It fails only on
+  # ERROR-severity findings; WARNING/MEDIUM/INFO are summarised so the patterns
+  # stay visible without blocking on day one.
+  sast-semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Semgrep (pinned)
+        run: pip install semgrep==1.182.1
+
+      # Semgrep exits non-zero when it finds anything; the gate below decides
+      # what is blocking, so this step only records the report.
+      - name: Scan
+        run: semgrep scan --config=p/default --json-output=semgrep.json --quiet . || true
+
+      - name: Gate on ERROR-severity findings
+        run: python3 scripts/sast-gate.py semgrep.json

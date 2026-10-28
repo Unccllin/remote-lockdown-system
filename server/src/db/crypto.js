@@ -106,7 +106,7 @@ function encrypt(plaintext, key) {
  * @throws if auth tag verification fails (tampered ciphertext or wrong key)
  */
 function decrypt(ciphertextB64, nonce, key, tag) {
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(nonce));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(nonce), { authTagLength: 16 });
   decipher.setAuthTag(Buffer.from(tag));
   const pt = Buffer.concat([
     decipher.update(Buffer.from(ciphertextB64, 'base64')),

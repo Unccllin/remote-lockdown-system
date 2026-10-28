@@ -18,6 +18,15 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    # Code scanning on a PRIVATE repository requires GitHub Code Security
+    # (formerly GitHub Advanced Security). Without it the SARIF upload returns
+    #   403: GitHub Code Security or GitHub Advanced Security is not enabled
+    # so this job failed on every push and showed as a permanently red workflow,
+    # drowning real failures. It now skips (grey, not red) until the feature is
+    # actually available: enable Code Security for the repository, then set the
+    # repository variable CODE_SECURITY_ENABLED=true.
+    # https://docs.github.com/en/code-security/reference/code-scanning/troubleshoot-analysis-errors/advanced-security-must-be-enabled
+    if: vars.CODE_SECURITY_ENABLED == 'true'
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

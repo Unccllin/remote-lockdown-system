@@ -1,0 +1,16 @@
+# Docker reads .dockerignore from the BUILD CONTEXT root. docker-compose.yml
+# builds with context: ./server, so the repository-root .dockerignore never
+# applied here — `COPY . .` copied the host's 139 MB node_modules into the image,
+# overwriting the modules installed inside it. That is why the container died on
+# startup with "GLIBC_2.38 not found": the host's sqlite3 native binary (built for
+# a newer glibc) replaced the one built for node:20-slim.
+**/node_modules
+.env
+.env.*
+!.env.example
+coverage
+.sqlite-data
+*.db
+*.db-shm
+*.db-wal
+*.log

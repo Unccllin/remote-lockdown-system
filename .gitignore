@@ -122,3 +122,6 @@ firmware/PblPkg/compile_commands.json
 
 # Generated documentation site (scripts/build_docs_site.py)
 site/
+
+# Semgrep report (make sast / CI)
+semgrep.json

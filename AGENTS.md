@@ -265,6 +265,16 @@ make test-coverage
 cd server && npm audit --audit-level=high      # must exit 0
 cd dashboard && ../scripts/audit-with-exceptions.sh
 
+# Static analysis (Semgrep p/default; gates on ERROR severity only)
+make sast
+
+# Docker: both images run as the unprivileged `node` user. SQLite mode needs a
+# writable /data (an empty named volume inherits ownership from the image; a host
+# bind mount must be chowned). Each build context needs its OWN .dockerignore —
+# Docker only reads it from the context root, so the repo-root file does not apply
+# to `context: ./server`, and the host's node_modules leaked in and broke the
+# image with a glibc mismatch.
+
 # Load harness smoke: starts a throwaway server, seeds HMAC-keyed devices and runs
 # a small signed k6 scenario (needs k6 on PATH, or K6_BIN=/path/to/k6)
 make load-smoke
@@ -656,6 +666,16 @@ work — pick up here tomorrow.
 - These are documentation/convention artifacts, not test harnesses
 - Wayfinder tickets T1-T3 are CLOSED but Q1 (Goodhart) should be verified
 - Clean-state checklist exists but is not enforced by any tooling
+
+### Code scanning (verified 2026-10-28)
+
+`codeql.yml` cannot run here: code scanning on a **private** repository requires
+GitHub Code Security, and without it the SARIF upload returns
+`403: GitHub Code Security or GitHub Advanced Security is not enabled`. The job is
+therefore gated on the repository variable `CODE_SECURITY_ENABLED` so it skips
+instead of failing every push. The equivalent coverage comes from **Semgrep**
+(`sast-semgrep` job, `make sast`), plus the existing eslint-plugin-security
+(server + dashboard), ruff `S` rules (agent) and cppcheck (firmware).
 
 ### Cross-cutting themes (apply to ALL harnesses)
 1. ~~No coverage reporting anywhere~~ — **DONE 2026-10-27 for all 5 components**
