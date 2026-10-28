@@ -18,14 +18,18 @@ export default defineConfig({
       reporter: ['text', 'text-summary', 'lcov', 'json'],
       reportsDirectory: './coverage',
       exclude: ['node_modules/', 'e2e/', 'tests/setup.jsx', 'src/main.jsx'],
-      // Coverage gate (measured 2026-10-27: 60.74 stmts / 70.19 branches /
-      // 52.38 funcs / 60.74 lines). ~2 points of slack for ordinary refactors.
-      // Raise when coverage improves; never lower to make a build pass.
+      // Coverage gate. Measured 2026-10-28 on vite/vitest 4.1.12:
+      //   70.59 stmts / 63.37 branches / 64.80 funcs / 72.02 lines
+      // Re-baselined when the coverage provider moved from vitest 3.2 to 4.1:
+      // v8 instrumentation counts differently (statements rose ~10 points,
+      // branches fell ~7 on unchanged code), so the old floors described a
+      // different measurement, not more coverage. Floors stay ~2 points under
+      // the measurement; raise on real improvement, never lower to pass a build.
       thresholds: {
-        statements: 58,
-        branches: 68,
-        functions: 50,
-        lines: 58,
+        statements: 68,
+        branches: 61,
+        functions: 62,
+        lines: 70,
       },
     },
   },

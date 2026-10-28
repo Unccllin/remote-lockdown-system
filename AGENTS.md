@@ -259,6 +259,12 @@ cd serverless && npm test                     # 331 Vitest tests
 # Coverage gate (all 5 components; floors declared per component, dated 2026-10-27)
 make test-coverage
 
+# Dependency advisories: the CI audit gate (npm audit --audit-level=high) covers
+# server + dashboard; the agent is audited with pip-audit. vitest 4 requires the
+# dashboard/serverless configs to be ESM (serverless uses vitest.config.mts).
+cd server && npm audit --audit-level=high      # must exit 0
+cd dashboard && ../scripts/audit-with-exceptions.sh
+
 # Load harness smoke: starts a throwaway server, seeds HMAC-keyed devices and runs
 # a small signed k6 scenario (needs k6 on PATH, or K6_BIN=/path/to/k6)
 make load-smoke
