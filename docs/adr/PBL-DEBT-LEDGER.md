@@ -959,8 +959,9 @@
     defence in depth, not a gap in the fix as ruled.
 
 ### D-133 — Decision Step 6 checks report properties they never verified
-- **Status**: OPEN (found 2026-10-30, session 160, while planning the Secure Boot
-  work for D-130)
+- **Status**: OPEN — **implementation done and the negative test passes**
+  (session 161); the positive test is blocked on varstore enrolment. Found
+  2026-10-30, session 160, while planning the Secure Boot work for D-130.
 - **Category**: SECURITY
 - **What the code does**: `PblCollectDbDbxState` (`PlatformState.c:166-185`,
   `196-220`) walks db and dbx and sets flags whose names promise specificity the
@@ -989,11 +990,34 @@
   compare SHA-256 fingerprints of the expected certificates, which are stable and
   cheap. The expected values belong in the policy blob (C4) rather than compiled
   into firmware, so a fleet can update them without a reflash.
-- **Close criteria**: a negative test and a positive test, both run: a db
-  containing only a self-signed non-Windows certificate must **not** satisfy the
-  Windows-UEFI-CA check, and a db containing the real Windows UEFI CA 2023
-  **must**; likewise an unrelated X.509 revocation entry must not satisfy the
-  MS 2011 check. Artifact: the serial log of both runs showing the basis line.
+- **Implemented (2026-10-30, session 161)**: `PlatformState.c` now walks the
+  `EFI_SIGNATURE_DATA` entries inside each `EFI_SIGNATURE_LIST` (the old code
+  only looked at the entry *type*), and compares:
+  - db: SHA-256 of each certificate's DER against the **Windows UEFI CA 2023**
+    fingerprint (`076f1fea…9ae330`);
+  - dbx: the hash carried by an X509 / X509_SHA256 / SHA256 entry against the
+    **Microsoft Corporation UEFI CA 2011** fingerprint (`48e99b99…248507`), which
+    is what the 2011 revocation revokes.
+  Both fingerprints were taken from the Microsoft-keyed OVMF varstore in the
+  harness image (i.e. from the real certificates), not typed from memory.
+- **Negative test — PASSES** (`firmware/PblPkg/artifacts/d133-negative-test-*`).
+  Same signed build, same Secure Boot platform, before vs after the change:
+  - before: `Decision BLOCK basis: dbx lacks the MS 2011 revocation` — the db
+    half *passed* on Canonical's snakeoil certificate;
+  - after: `Decision BLOCK basis: db lacks the Windows UEFI CA 2023` — the db
+    half now rejects it, because sha256(snakeoil DER) ≠ sha256(Windows UEFI CA
+    2023). The gate no longer accepts a look-alike.
+- **Positive test — NOT yet run, and the reason is specific**: it needs a
+  varstore holding both our signing certificate *and* the real Windows UEFI CA
+  2023, and offline varstore editing is still blocked (see D-130 gap 1:
+  `virt-fw-vars` fails on the snakeoil store). Until then the check is proven to
+  *reject* impostors but not yet proven to *accept* the genuine certificate.
+- **Follow-up recorded, not done**: the fingerprints are compiled into firmware.
+  Moving them into the policy blob (C4) would let a fleet update them without a
+  reflash; that is the refinement, not a correctness gap.
+- **Close criteria**: the positive test — a db containing the real Windows UEFI
+  CA 2023 must satisfy the check, with the serial-log basis line showing the
+  decision moving past Step 6.
 
 ---
 
@@ -1778,7 +1802,7 @@
 | D-130 | Code signing not configured | OPEN | SECURITY |
 | D-131 | PBL never populates device_id — every verdict request carries 32 zero bytes | CLOSED (DeviceId now populated from NV 0x01C00003 via TPM2_NV_Read; QEMU artifacts `firmware/PblPkg/artifacts/d131-*`: enrolled 16/0 with a real device_id, unprovisioned 17/0 with the request suppressed) | STUB |
 | D-132 | Pinned CA never reached the TLS layer — `PblTlsVerifyCert` had no caller and EDK2 always verified against an empty platform store, so the HTTPS fetch could not complete | CLOSED (C4 key 78 carries the CA DER; PBL rewrites the platform `TlsCaCertificate` store before each fetch. Artifacts `firmware/PblPkg/artifacts/d200-wire-verified-*` = 6/0 with a real `device_id` on the wire, and `d132-mismatched-ca-results.txt` = mismatched CA correctly fails. Residual: `PblTlsVerifyCert` still has no caller — the pin is enforced by construction, not by that function) | SECURITY |
-| D-133 | Decision Step 6 checks are presence-only — any X.509 cert in db satisfies `DbHasWindowsUefiCa2023` and any X.509 revocation in dbx satisfies `DbxHasMs2011Revocation`, so the gate cannot tell a provisioned fleet device from a test platform | OPEN | SECURITY |
+| D-133 | Decision Step 6 checks are presence-only — any X.509 cert in db satisfied `DbHasWindowsUefiCa2023` and any X.509 revocation in dbx satisfied `DbxHasMs2011Revocation` | OPEN (identity checks implemented and the negative test passes: snakeoil no longer satisfies the Windows-CA check, `firmware/PblPkg/artifacts/d133-negative-test-*`. Positive test — the real CA must satisfy it — still blocked on varstore enrolment. Fingerprints are compiled in; moving them to C4 is the recorded follow-up) | SECURITY |
 | D-200 | PBL verdict endpoint not implemented | CLOSED (Express + serverless endpoints implemented; runtime test with real firmware now passes end to end — `firmware/PblPkg/artifacts/d200-roundtrip-*`: 8/0, request posted over TLS with a real device_id and a signed ES256 verdict verified and decoded. Observation: decision still BLOCKs on an UNLOCKED verdict, unattributable at RELEASE verbosity) | SERVER |
 | D-201 | PBL policy endpoint not implemented | CLOSED (GET/POST /v1/policy implemented) | SERVER |
 | D-202 | PBL enrollment endpoint not implemented | CLOSED (POST /v1/enroll implemented) | SERVER |

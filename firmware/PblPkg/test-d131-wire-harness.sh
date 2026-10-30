@@ -172,10 +172,14 @@ MACHINE_ARGS=(-machine q35)
 # guest reaches a TPM that has none of our provisioned indices — every NV read
 # comes back TPM_RC_HANDLE (0x18B / 0x9A2), which reads like "device
 # unprovisioned" but is an interface mismatch.
-TPM_DEVICE="tpm-tis"
+TPM_DEVICE="${PBL_TPM_DEVICE:-tpm-tis}"
 if [ "${PBL_SECURE_BOOT:-0}" = "1" ]; then
   MACHINE_ARGS=(-machine "q35,smm=on" -global "driver=cfi.pflash01,property=secure,value=on")
-  TPM_DEVICE="tpm-crb"
+  # Default to CRB, which is what the documented SMM recipe uses, but allow an
+  # override: CRB stalls with our swtpm startup while TIS boots and merely fails
+  # to reach the provisioned indices, and some checks (Decision Step 6) only
+  # need the boot to reach the decision engine.
+  TPM_DEVICE="${PBL_TPM_DEVICE:-tpm-crb}"
 fi
 
 timeout "${TIMEOUT}" qemu-system-x86_64 "${MACHINE_ARGS[@]}" \

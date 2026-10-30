@@ -144,6 +144,73 @@ PblCollectSecureBootState (
   }
 }
 
+// ---------------------------------------------------------------------------
+// D-133: the identities the Step 6 checks are *named after*.
+//
+// SHA-256 of the DER certificate in each case, taken from the Microsoft-keyed
+// OVMF varstore (the same values as Microsoft's published certificates):
+//   mWindowsUefiCa2023Sha256       — CN "Windows UEFI CA 2023"
+//   mMicrosoftUefiCa2011Sha256     — CN "Microsoft Corporation UEFI CA 2011",
+//                                    which is what the 2011 revocation revokes.
+//
+// These live in firmware for now. Moving them into the policy blob (C4) would
+// let a fleet update them without a reflash and is the recorded follow-up; the
+// point of this change is that the check compares identity instead of shape.
+// ---------------------------------------------------------------------------
+STATIC CONST UINT8  mWindowsUefiCa2023Sha256[32] = {
+  0x07, 0x6f, 0x1f, 0xea, 0x90, 0xac, 0x29, 0x15,
+  0x5e, 0xbf, 0x77, 0xc1, 0x76, 0x82, 0xf7, 0x5f,
+  0x1f, 0xdd, 0x1b, 0xe1, 0x96, 0xda, 0x30, 0x2d,
+  0xc8, 0x46, 0x1e, 0x35, 0x0a, 0x9a, 0xe3, 0x30
+};
+
+STATIC CONST UINT8  mMicrosoftUefiCa2011Sha256[32] = {
+  0x48, 0xe9, 0x9b, 0x99, 0x1f, 0x57, 0xfc, 0x52,
+  0xf7, 0x61, 0x49, 0x59, 0x9b, 0xff, 0x0a, 0x58,
+  0xc4, 0x71, 0x54, 0x22, 0x9b, 0x9f, 0x8d, 0x60,
+  0x3a, 0xc4, 0x0d, 0x35, 0x00, 0x24, 0x85, 0x07
+};
+
+/** D-133: locate the EFI_SIGNATURE_DATA entries inside one EFI_SIGNATURE_LIST.
+
+  A list is a header (28 bytes), an optional signature header, then N fixed-size
+  entries of { owner GUID, signature data }. The previous code never looked
+  inside an entry, which is why it could only test the entry's *type*.
+
+  @param[in]  SigList  The list, already bounds-checked by the caller.
+  @param[out] First    First entry, or NULL when the list holds none.
+
+  @return Number of entries.
+**/
+STATIC
+UINTN
+PblSigListEntries (
+  IN  CONST EFI_SIGNATURE_LIST   *SigList,
+  OUT CONST EFI_SIGNATURE_DATA  **First
+  )
+{
+  UINTN Available;
+
+  *First = NULL;
+  if (SigList->SignatureSize <= sizeof (EFI_GUID)) {
+    return 0;
+  }
+  if (SigList->SignatureListSize <
+      sizeof (EFI_SIGNATURE_LIST) + SigList->SignatureHeaderSize) {
+    return 0;
+  }
+  Available = SigList->SignatureListSize -
+              sizeof (EFI_SIGNATURE_LIST) - SigList->SignatureHeaderSize;
+  if (Available < SigList->SignatureSize) {
+    return 0;
+  }
+
+  *First = (CONST EFI_SIGNATURE_DATA *)(
+             (CONST UINT8 *)SigList + sizeof (EFI_SIGNATURE_LIST) +
+             SigList->SignatureHeaderSize);
+  return Available / SigList->SignatureSize;
+}
+
 /** REQ-02: Check db for Windows UEFI CA 2023, dbx for MS 2011 revocation + BootHole hashes. **/
 STATIC
 VOID
@@ -173,14 +240,28 @@ PblCollectDbDbxState (
               Ptr + SigList->SignatureListSize > End) {
             break;
           }
-          // Check for X.509 certificate type (certs in db are typically X.509)
+          // D-133: identify the certificate, do not merely notice one. Each
+          // entry in an X509 list carries one DER certificate; hash it and
+          // compare against the Windows UEFI CA 2023 fingerprint. The previous
+          // version set this flag for *any* X509 entry, so a self-signed
+          // development certificate satisfied a check named after Microsoft's
+          // CA and the gate could not tell a fleet device from a test platform.
           if (CompareGuid (&SigList->SignatureType, &gEfiCertX509Guid)) {
-            // db contains at least one X.509 cert — mark as having a CA
-            // Full identification of Windows UEFI CA 2023 requires parsing
-            // the DER certificate and checking the Subject/Issuer CN, which
-            // is beyond the scope of this implementation. For now, presence
-            // of any X.509 cert in db is a strong indicator.
-            State->DbHasWindowsUefiCa2023 = TRUE;
+            CONST EFI_SIGNATURE_DATA  *Entry = NULL;
+            UINTN                      Count = PblSigListEntries (SigList, &Entry);
+
+            for (UINTN i = 0; i < Count; i++) {
+              UINT8 Hash[32];
+              if (Sha256HashAll (
+                    (CONST UINT8 *)Entry[i].SignatureData,
+                    SigList->SignatureSize - sizeof (EFI_GUID),
+                    Hash
+                    ) &&
+                  CompareMem (Hash, mWindowsUefiCa2023Sha256, 32) == 0)
+              {
+                State->DbHasWindowsUefiCa2023 = TRUE;
+              }
+            }
           }
           Ptr += SigList->SignatureListSize;
         }
@@ -210,14 +291,49 @@ PblCollectDbDbxState (
           // - EFI_CERT_X509_GUID: revoked certificates
           // - EFI_CERT_SHA256_GUID: revoked hashes (e.g., BootHole)
           // - EFI_CERT_X509_SHA256_GUID: cert hash + revocation time
+          // D-133: the 2011 revocation is a specific entry, not any entry.
+          // dbx can carry a revoked certificate (X509), a revoked cert hash
+          // with a timestamp (X509_SHA256), or a plain SHA-256 hash.
           if (CompareGuid (&SigList->SignatureType, &gEfiCertX509Guid) ||
-              CompareGuid (&SigList->SignatureType, &gEfiCertX509Sha256Guid)) {
-            // X.509-based revocation present (MS 2011 UEFI CA revocation)
-            State->DbxHasMs2011Revocation = TRUE;
-          }
-          if (CompareGuid (&SigList->SignatureType, &gEfiCertSha256Guid)) {
-            // SHA-256 hash-based revocation present (BootHole hashes)
-            State->DbxHasBootHoleHashes = TRUE;
+              CompareGuid (&SigList->SignatureType, &gEfiCertX509Sha256Guid) ||
+              CompareGuid (&SigList->SignatureType, &gEfiCertSha256Guid)) {
+            CONST EFI_SIGNATURE_DATA  *Entry = NULL;
+            UINTN                      Count = PblSigListEntries (SigList, &Entry);
+
+            for (UINTN i = 0; i < Count; i++) {
+              UINTN        DataSize = SigList->SignatureSize - sizeof (EFI_GUID);
+              CONST UINT8 *Hash     = NULL;
+              UINT8        DerHash[32];
+
+              if (CompareGuid (&SigList->SignatureType, &gEfiCertX509Guid)) {
+                if (Sha256HashAll (
+                      (CONST UINT8 *)Entry[i].SignatureData, DataSize, DerHash
+                      ))
+                {
+                  Hash = DerHash;
+                }
+              } else if (CompareGuid (
+                           &SigList->SignatureType, &gEfiCertX509Sha256Guid
+                           ))
+              {
+                // EFI_CERT_X509_SHA256: ToBeRevoked(8) + RevocationTime(8) + Hash(32)
+                if (DataSize >= 16 + 32) {
+                  Hash = (CONST UINT8 *)Entry[i].SignatureData + 16;
+                }
+              } else if (DataSize >= 32) {
+                // EFI_CERT_SHA256: the payload *is* the hash
+                Hash = (CONST UINT8 *)Entry[i].SignatureData;
+              }
+
+              if (Hash != NULL &&
+                  CompareMem (Hash, mMicrosoftUefiCa2011Sha256, 32) == 0) {
+                State->DbxHasMs2011Revocation = TRUE;
+              }
+            }
+            if (CompareGuid (&SigList->SignatureType, &gEfiCertSha256Guid)) {
+              // Unchanged: any hash-based revocation counts as BootHole-era data.
+              State->DbxHasBootHoleHashes = TRUE;
+            }
           }
           Ptr += SigList->SignatureListSize;
         }

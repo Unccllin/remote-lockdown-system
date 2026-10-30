@@ -1,0 +1,21 @@
+# D-133 negative test — a look-alike certificate no longer satisfies the Windows-CA check
+# 2026-10-30T07:20:29Z
+# Firmware: PblApp.efi b03e2c33… (D-133 identity checks), signed with snakeoil,
+# booted under Secure Boot (q35,smm=on + secure pflash, TIS TPM).
+
+BEFORE (presence-only, session 159 build):
+  [INFO] Decision BLOCK basis: dbx lacks the MS 2011 revocation
+  -> the db half passed with Canonical's snakeoil certificate in db
+
+AFTER (identity check, D-133):
+  [INFO] Decision BLOCK basis: db lacks the Windows UEFI CA 2023
+[8/8] Decision: BLOCK — lock screen
+  -> the db half now REJECTS snakeoil: sha256(snakeoil DER) != sha256(Windows UEFI CA 2023)
+
+Fingerprints pinned in PlatformState.c (taken from the Microsoft-keyed OVMF varstore):
+  Windows UEFI CA 2023              = 076f1fea90ac29155ebf77c17682f75f1fdd1be196da302dc8461e350a9ae330
+  Microsoft Corporation UEFI CA 2011 = 48e99b991f57fc52f76149599bff0a58c47154229b9f8d603ac40d3500248507
+
+POSITIVE test (the real CA in db must satisfy the check) is NOT yet run: it needs a
+varstore holding both our signer and the Windows UEFI CA 2023, and offline editing is
+still blocked (virt-fw-vars fails on the snakeoil store).

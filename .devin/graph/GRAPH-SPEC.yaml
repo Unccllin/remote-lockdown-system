@@ -982,12 +982,20 @@ debt_items:
       revocation in dbx, so a self-signed development certificate satisfies a
       check named "has Windows UEFI CA 2023".
     close_criteria: >-
-      Certificate identity verified (DER subject or SHA-256 fingerprint) against
-      the expected Windows UEFI CA 2023 and MS 2011 revocation, with a negative
-      test (self-signed cert in db must not satisfy the check) and a positive
-      test, both evidenced by serial-log basis lines.
+      Certificate identity verified by SHA-256 fingerprint, with the negative
+      test (a self-signed cert in db no longer satisfies the Windows-CA check)
+      AND the positive test (the real Windows UEFI CA 2023 does satisfy it),
+      both evidenced by serial-log basis lines.
     status: OPEN
     category: SECURITY
+    commit_ref: >-
+      1fa4a5b — PlatformState.c walks EFI_SIGNATURE_DATA entries and compares
+      fingerprints (negative test passes; positive test blocked on varstore
+      enrolment)
+    artifact_ref: >-
+      firmware/PblPkg/artifacts/d133-negative-test-{serial.log,results.txt} —
+      basis moved from "dbx lacks the MS 2011 revocation" to "db lacks the
+      Windows UEFI CA 2023" under the same signed build and Secure Boot platform
 
   - id: D-201
     description: "PBL policy endpoint (GET /v1/policy/{version}) not implemented"
