@@ -1,0 +1,30 @@
+# D-200 verdict round trip — 2026-10-30T06:10:27Z
+# Harness: firmware/PblPkg/test-d131-wire-harness.sh (TLS + TPM + slirp + RNG)
+# Assets: d131-wire-capture.py --gen-assets (TLS CA+leaf, verdict CA+leaf+root; C4 keys 70,71,73,76,77,78)
+# Server: answers each request with a COSE_Sign1 LockVerdict signed ES256
+# TPM: AK Name provisioned via scripts/provision-qemu-tpm.sh
+
+  [PASS] policy blob loaded from ESP
+  [PASS] device_id derived from AK Name
+  [PASS] verdict request posted over TLS
+  [PASS] server received a request
+  [PASS] wire device_id matches AK Name
+  [PASS] verdict decoded by firmware
+  [PASS] verdict signature verified
+  [PASS] request body captured (1 file(s))
+=== Results: 8 PASS / 0 FAIL ===
+
+# Firmware side — request out, verdict in, verified and acted on:
+  [OK] device_id from AK Name: ABABABAB...ABAB
+  [OK] Pinned CA installed as TLS trust anchor (750 bytes)
+  [INFO] POSTing verdict request to https://10.0.2.2:8443/v1/verdict
+  [OK] Verdict response: 210 bytes
+  [OK] Cert chain validated
+  [OK] Verdict signature verified (ES256)
+  [OK] Verdict decoded: verdict=0 policy_version=1
+[8/8] Decision: BLOCK — lock screen
+
+# Server side — the request it received:
+[SERVER] listening on 127.0.0.1:8443 (TLS)
+[SERVER] /v1/verdict 149 bytes -> /test/build9/captured/request-1.bin
+[SERVER] device_id=abababababababababababababababababababababababababababababababab nonce=fbe7efa3...

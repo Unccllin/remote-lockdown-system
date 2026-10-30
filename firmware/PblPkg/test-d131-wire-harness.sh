@@ -206,6 +206,12 @@ check "verdict request posted over TLS"   "POSTing verdict request to https://${
 # The server's own record is the artifact: it parsed the request it received.
 check "server received a request"         "\\[SERVER\\] /v1/verdict [0-9]+ bytes" "${SERVER_LOG}"
 check "wire device_id matches AK Name"    "device_id=${EXPECTED_DEVICE_PREFIX}" "${SERVER_LOG}"
+
+# D-200 response half: the firmware must decode AND verify the verdict the server
+# signed, not fall back to its cache. These are the two lines that distinguish
+# "got bytes" from "accepted a verdict".
+check "verdict decoded by firmware"       "Verdict decoded: verdict="
+check "verdict signature verified"        "Verdict signature verified"
 # No separate "not all zero" assertion: matching the expected prefix already
 # proves it, and grep -E has no lookahead to express the negative cleanly.
 

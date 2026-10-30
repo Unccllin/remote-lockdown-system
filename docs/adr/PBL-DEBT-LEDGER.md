@@ -917,7 +917,8 @@
 > persistence), making it a natural fit for PBL.
 
 ### D-200 — PBL verdict endpoint not implemented
-- **Status**: OPEN (partial — serverless + Express equivalent implemented; runtime test pending)
+- **Status**: CLOSED (2026-10-30, session 156 — runtime test with real PBL firmware
+  completed end to end; see the update at the end of this entry)
 - **Category**: SERVER
 - **Progress**: `POST /v1/verdict` fully implemented in
   `serverless/pbl/routes/verdict.ts` (144 lines). Accepts CBOR request
@@ -958,7 +959,27 @@
     address (127.0.0.1 and 0.0.0.0 both receive nothing). So DHCP/networking is
     not the problem and the abort is not a certificate rejection — the request
     dies inside the OVMF HTTP/TLS stack before any TCP connection is made.
-  - **Runtime test now passes the request half (session 156)**: with D-132 fixed,
+  - **Runtime test passes BOTH halves (session 156)**:
+    `firmware/PblPkg/artifacts/d200-roundtrip-results.txt` — **8 PASS / 0 FAIL**.
+    The firmware derives `device_id`, installs the pinned CA, posts over TLS, and
+    then accepts a real signed verdict: `[OK] Verdict response: 210 bytes`,
+    `[OK] Cert chain validated`, `[OK] Verdict signature verified (ES256)`,
+    `[OK] Verdict decoded: verdict=0 policy_version=1`. The server side records
+    the request it received, including `device_id=abab…ab`. Signing material:
+    `d131-wire-capture.py` now emits an ES256 verdict key with a leaf + root
+    chain into C4 keys 71/76/77, and the mock endpoint answers each request with
+    a `COSE_Sign1` LockVerdict echoing `device_id` and `nonce`.
+  - **Observation, deliberately not resolved here**: the run ends
+    `[8/8] Decision: BLOCK — lock screen` even though the verdict was
+    `verdict=0` (UNLOCKED). Nothing between `[6/8]` and `[7/8]` is logged at
+    RELEASE verbosity, so the reason is not attributable from this artifact —
+    candidates are Decision.c's own gates (SecureBoot/db state under OVMF, or
+    the minimal policy being DEGRADED) rather than the verdict being ignored.
+    This does not affect this item's close criteria (the endpoint round trip),
+    but it means "the verdict arrives and verifies" has been proven while
+    "an UNLOCKED verdict releases the boot" has not. Worth a DEBUG-build run or
+    a Decision.c read before anyone claims the latter.
+  - **Runtime test passed the request half (session 156, earlier in the session)**: with D-132 fixed,
     the firmware completes a TLS handshake and posts a real verdict request that
     carries a real `device_id` (`firmware/PblPkg/artifacts/d200-wire-verified-*`,
     6 PASS / 0 FAIL). What is still missing is the *response* half: the harness's
@@ -1657,7 +1678,7 @@
 | D-130 | Code signing not configured | OPEN | SECURITY |
 | D-131 | PBL never populates device_id — every verdict request carries 32 zero bytes | CLOSED (DeviceId now populated from NV 0x01C00003 via TPM2_NV_Read; QEMU artifacts `firmware/PblPkg/artifacts/d131-*`: enrolled 16/0 with a real device_id, unprovisioned 17/0 with the request suppressed) | STUB |
 | D-132 | Pinned CA never reached the TLS layer — `PblTlsVerifyCert` had no caller and EDK2 always verified against an empty platform store, so the HTTPS fetch could not complete | CLOSED (C4 key 78 carries the CA DER; PBL rewrites the platform `TlsCaCertificate` store before each fetch. Artifacts `firmware/PblPkg/artifacts/d200-wire-verified-*` = 6/0 with a real `device_id` on the wire, and `d132-mismatched-ca-results.txt` = mismatched CA correctly fails. Residual: `PblTlsVerifyCert` still has no caller — the pin is enforced by construction, not by that function) | SECURITY |
-| D-200 | PBL verdict endpoint not implemented | CLOSED (POST /v1/verdict implemented) | SERVER |
+| D-200 | PBL verdict endpoint not implemented | CLOSED (Express + serverless endpoints implemented; runtime test with real firmware now passes end to end — `firmware/PblPkg/artifacts/d200-roundtrip-*`: 8/0, request posted over TLS with a real device_id and a signed ES256 verdict verified and decoded. Observation: decision still BLOCKs on an UNLOCKED verdict, unattributable at RELEASE verbosity) | SERVER |
 | D-201 | PBL policy endpoint not implemented | CLOSED (GET/POST /v1/policy implemented) | SERVER |
 | D-202 | PBL enrollment endpoint not implemented | CLOSED (POST /v1/enroll implemented) | SERVER |
 | D-203 | PBL attestation endpoint not implemented | CLOSED (POST /v1/attest implemented) | SERVER |

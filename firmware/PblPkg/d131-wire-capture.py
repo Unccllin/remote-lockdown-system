@@ -33,9 +33,14 @@ import argparse
 import contextlib
 import http.server
 import importlib
+import json
 import os
+import pathlib
 import ssl
+import subprocess
 import sys
+import tempfile
+import time
 
 VERDICT_PATH = "/v1/verdict"
 
@@ -133,6 +138,93 @@ class CborReader:
         if major == 4:
             return [self.read() for _ in range(self._length(info))]
         raise ValueError(f"unsupported CBOR major type {major}")
+
+
+# ============================================================================
+# Minimal CBOR writer + ECDSA signature reshaping
+#
+# The harness image has no cbor2 and no cryptography, so the server builds its
+# COSE_Sign1 by hand and signs with the openssl CLI. Only the shapes a
+# LockVerdict needs are implemented.
+# ============================================================================
+
+def cb_head(major: int, value: int) -> bytes:
+    if value < 24:
+        return bytes([(major << 5) | value])
+    if value < 0x100:
+        return bytes([(major << 5) | 24, value])
+    if value < 0x10000:
+        return bytes([(major << 5) | 25]) + value.to_bytes(2, "big")
+    if value < 0x100000000:
+        return bytes([(major << 5) | 26]) + value.to_bytes(4, "big")
+    return bytes([(major << 5) | 27]) + value.to_bytes(8, "big")
+
+
+def cb_uint(value: int) -> bytes:
+    return cb_head(0, value)
+
+
+def cb_nint(value: int) -> bytes:
+    """Negative integer n is encoded as -1 - n."""
+    return cb_head(1, -1 - value)
+
+
+def cb_int(value: int) -> bytes:
+    return cb_uint(value) if value >= 0 else cb_nint(value)
+
+
+def cb_bstr(data: bytes) -> bytes:
+    return cb_head(2, len(data)) + data
+
+
+def cb_tstr(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    return cb_head(3, len(raw)) + raw
+
+
+def cb_array(items) -> bytes:
+    return cb_head(4, len(items)) + b"".join(items)
+
+
+def cb_map(keyed_pairs) -> bytes:
+    out = cb_head(5, len(keyed_pairs))
+    for key, value in keyed_pairs:
+        out += key + value
+    return out
+
+
+def der_ecdsa_to_raw(der: bytes) -> bytes:
+    """Convert a DER-encoded ECDSA signature to COSE's fixed-width r || s.
+
+    openssl emits `SEQUENCE { INTEGER r, INTEGER s }` with minimal-length
+    integers; COSE (RFC 8152) wants the two scalars concatenated at the curve
+    size. Left-padding is required, not optional: either scalar is shorter than
+    32 bytes roughly half the time.
+    """
+    offset = 0
+
+    def read_length(index: int):
+        first = der[index]
+        if first < 0x80:
+            return first, index + 1
+        count = first & 0x7F
+        return int.from_bytes(der[index + 1:index + 1 + count], "big"), index + 1 + count
+
+    if der[offset] != 0x30:
+        raise ValueError("not a DER SEQUENCE")
+    _, offset = read_length(offset + 1)
+
+    def read_integer(index: int):
+        if der[index] != 0x02:
+            raise ValueError("not a DER INTEGER")
+        length, index = read_length(index + 1)
+        value = int.from_bytes(der[index:index + length], "big")
+        return value, index + length
+
+    r, offset = read_integer(offset)
+    s, offset = read_integer(offset)
+    return r.to_bytes(32, "big") + s.to_bytes(32, "big")
+
 
 
 def describe_request(body: bytes) -> str:
@@ -282,6 +374,78 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
         ),
     )
 
+    # --- Verdict signing material (C4 keys 71/76/77) --------------------------
+    # The firmware verifies the verdict's COSE_Sign1 against the leaf in key 77,
+    # with kid = key 71, and treats the LAST element of key 77 as the root it
+    # must chain to (CborDecode.c:924). A single-element array would therefore
+    # make leaf == root, so a real leaf plus a root is required.
+    # The verdict signing key is ALWAYS P-256, never _make_key(): the firmware
+    # only verifies ES256 here (CoseVerify.c returns EFI_UNSUPPORTED for
+    # Ed25519), and COSE alg -7 means ECDSA P-256 SHA-256. Reusing the TLS key
+    # type produced an RSA PKCS#1 signature, which is not a DER ECDSA sequence
+    # and cannot be reshaped into r || s.
+    verdict_ca_key = ec.generate_private_key(ec.SECP256R1())
+    verdict_ca_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "PBL Verdict Signing CA")]
+    )
+    verdict_ca = (
+        x509.CertificateBuilder()
+        .subject_name(verdict_ca_name)
+        .issuer_name(verdict_ca_name)
+        .public_key(verdict_ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=False, content_commitment=False,
+                key_encipherment=False, data_encipherment=False,
+                key_agreement=False, key_cert_sign=True, crl_sign=True,
+                encipher_only=False, decipher_only=False,
+            ),
+            critical=True,
+        )
+        .sign(verdict_ca_key, hashes.SHA256())
+    )
+    verdict_ca_der = verdict_ca.public_bytes(serialization.Encoding.DER)
+
+    verdict_key = ec.generate_private_key(ec.SECP256R1())
+    verdict_leaf = (
+        x509.CertificateBuilder()
+        .subject_name(
+            x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "PBL Verdict Signer")])
+        )
+        .issuer_name(verdict_ca_name)
+        .public_key(verdict_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .sign(verdict_ca_key, hashes.SHA256())
+    )
+    verdict_leaf_der = verdict_leaf.public_bytes(serialization.Encoding.DER)
+    verdict_spki = verdict_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    verdict_kid_digest = hashes.Hash(hashes.SHA256())
+    verdict_kid_digest.update(verdict_spki)
+    verdict_kid = verdict_kid_digest.finalize()
+
+    write_file(
+        os.path.join(out_dir, "verdict-key.pem"),
+        verdict_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        ),
+    )
+    write_file(
+        os.path.join(out_dir, "verdict-meta.json"),
+        json.dumps({"kid": verdict_kid.hex(), "alg": -7}).encode("utf-8"),
+    )
+
     uri = f"https://{host}:{port}{VERDICT_PATH}"
     # C4 keys: 1 version, 2 issued_at, 70 lock_service_uri, 73 tls_ca_pin,
     # 78 tls_ca_cert. Key 78 (D-132) is what makes the handshake possible at
@@ -295,6 +459,9 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
         2: 0,
         70: uri,
         78: ca_der,  # D-132: the CA itself, which EDK2 can consume
+        71: verdict_kid,                   # SHA-256 of the signing key's SPKI
+        76: verdict_spki,                  # signing key SPKI (C1 kid resolution)
+        77: [verdict_leaf_der, verdict_ca_der],  # leaf first, ROOT last
     }
     digest = hashes.Hash(hashes.SHA256())
     digest.update(ca_der)
@@ -314,12 +481,93 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
     print(f"  tls_ca_pin (sha256 of CA DER): {policy_map[73].hex()}")
     print(f"  tls_ca_cert (key 78): {len(ca_der)} bytes DER (the CA)")
     print(f"  server leaf: CN={host} with SAN, signed by the CA")
+    print(f"  verdict signer: kid {verdict_kid.hex()[:16]}..., chain [leaf, root]")
     return 0
 
 
 # ============================================================================
 # --serve (container side: stdlib only)
 # ============================================================================
+
+def _openssl_sign(data: bytes, keyfile: str) -> bytes:
+    """Detached SHA-256 ECDSA signature over *data*, DER-encoded (openssl output)."""
+    handle, path = tempfile.mkstemp()
+    try:
+        with os.fdopen(handle, "wb") as sink:
+            sink.write(data)
+        result = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-sign", keyfile, path],
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise SystemExit(
+                "ERROR: openssl sign failed: "
+                + result.stderr.decode("utf-8", "replace").strip()
+            )
+        return result.stdout
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+
+
+def build_signed_verdict(assets: str, request_body: bytes) -> bytes:
+    """Answer a verdict request with a COSE_Sign1 LockVerdict (C1 §2).
+
+    device_id and nonce are echoed from the request: PblVerifyVerdict rejects a
+    verdict whose device_id or nonce is not the ones this boot generated, which
+    is the replay protection C1 §7 steps 5-6 describe. Timestamps come from the
+    harness clock, which OVMF's RTC follows, and the grace window is generous so
+    the +60s skew guard cannot be tripped by container start-up time.
+    """
+    try:
+        request = CborReader(request_body).read()
+    except (ValueError, IndexError):
+        request = {}
+    if not isinstance(request, dict):
+        request = {}
+
+    device_id = request.get(1) if isinstance(request.get(1), bytes) else b"\x00" * 32
+    nonce = request.get(2) if isinstance(request.get(2), bytes) else b"\x00" * 32
+    policy_version = request.get(4) if isinstance(request.get(4), int) else 1
+    if isinstance(policy_version, bool) or not isinstance(policy_version, int):
+        policy_version = 1
+
+    meta = json.loads(
+        pathlib.Path(os.path.join(assets, "verdict-meta.json")).read_text(encoding="utf-8")
+    )
+    now = int(time.time())
+
+    payload = cb_map([
+        (cb_uint(1), cb_uint(1)),                 # version
+        (cb_uint(2), cb_bstr(device_id)),         # device_id (echo)
+        (cb_uint(3), cb_bstr(nonce)),             # nonce (echo)
+        (cb_uint(4), cb_uint(0)),                 # verdict: UNLOCKED
+        (cb_uint(5), cb_uint(policy_version)),    # policy_version
+        (cb_uint(6), cb_uint(now)),               # issued_at
+        (cb_uint(7), cb_uint(now + 604800)),      # grace_until (7 days)
+        (cb_uint(8), cb_tstr("wire-test")),       # reason
+    ])
+    protected = cb_map([
+        (cb_uint(1), cb_int(int(meta["alg"]))),   # alg -7 = ES256
+        (cb_uint(4), cb_bstr(bytes.fromhex(meta["kid"]))),
+    ])
+    sig_structure = cb_array([
+        cb_tstr("Signature1"),
+        cb_bstr(protected),
+        cb_bstr(b""),
+        cb_bstr(payload),
+    ])
+    der_signature = _openssl_sign(
+        sig_structure, os.path.join(assets, "verdict-key.pem")
+    )
+    return cb_array([
+        cb_bstr(protected),
+        cb_map([]),
+        cb_bstr(payload),
+        cb_bstr(der_ecdsa_to_raw(der_signature)),
+    ])
+
 
 def serve(assets: str, port: int, out_dir: str | None, bind: str) -> int:
     assets = os.path.abspath(assets)
@@ -352,13 +600,18 @@ def serve(assets: str, port: int, out_dir: str | None, bind: str) -> int:
             print(f"[SERVER] {self.path} {length} bytes -> {path}", flush=True)
             print(f"[SERVER] {describe_request(body)}", flush=True)
 
-            # The harness only needs the request to arrive. Answer with a body
-            # that is deliberately not a verdict, so the firmware takes its
-            # documented fallback path (C3 §6.1) instead of pretending to have
-            # a valid verdict it was never given.
-            payload = b"captured"
+            # Answer with a real signed verdict when the signing material is
+            # present (D-200 response half). Without it the body is
+            # deliberately not a verdict, so the firmware takes its documented
+            # C3 §6.1 fallback instead of pretending to have received one.
+            if os.path.exists(os.path.join(assets, "verdict-meta.json")):
+                payload = build_signed_verdict(assets, body)
+                content_type = "application/cose"
+            else:
+                payload = b"captured"
+                content_type = "application/octet-stream"
             self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
