@@ -53,104 +53,95 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 156 — 2026-10-30 (D-132 fixed: the verdict request now completes TLS and lands on the wire with a real device_id)
+## Latest session: 157 — 2026-10-30 (D-200 CLOSED: the firmware verifies a real signed verdict, 8 PASS / 0 FAIL)
 
 ### VERIFY
-- **Positive — 6 PASS / 0 FAIL** (`firmware/PblPkg/artifacts/d200-wire-verified-*`):
+- **8 PASS / 0 FAIL** (`firmware/PblPkg/artifacts/d200-roundtrip-*`):
   ```
   [PASS] policy blob loaded from ESP
   [PASS] device_id derived from AK Name
   [PASS] verdict request posted over TLS
   [PASS] server received a request
   [PASS] wire device_id matches AK Name
+  [PASS] verdict decoded by firmware
+  [PASS] verdict signature verified
   [PASS] request body captured (1 file(s))
   ```
-  The captured 149-byte body decodes (host-side `cbor2`, not the harness's own
-  reader) to `key 1 = bstr 32 = abab…ab` — the AK-Name-derived `device_id` —
-  with nonce, platform_state_digest, policy_version and boot_id alongside. Server
-  log: `device_id=abababab…`. Serial log: `[OK] Pinned CA installed as TLS trust
-  anchor (750 bytes)`.
-- **Negative — the check is load-bearing** (`d132-mismatched-ca-results.txt`):
-  identical firmware, provisioning and harness, only the server's leaf swapped to
-  one signed by a *second* CA while the policy pins the first → no request
-  arrives, fetch aborts, and `Pinned CA installed` still prints. So the failure
-  is the mismatch itself, not a failed or missing install.
-- Firmware build **0 errors**; `bash -n` and `shellcheck` clean on the harness
-  and `scripts/pcap-summary.py`; `make graph-check` all invariants pass;
-  convergence 53/57 → **54/57**.
-- Certificate chain verified independently on the host:
-  `openssl verify -CAfile ca-cert.pem server-cert.pem` → OK, with
-  `SAN: IP Address:10.0.2.2`.
+  Firmware side: `[OK] Verdict response: 210 bytes`, `[OK] Cert chain validated`,
+  `[OK] Verdict signature verified (ES256)`,
+  `[OK] Verdict decoded: verdict=0 policy_version=1`.
+- The signed verdict was also validated independently on the host before spending
+  a QEMU run: `cbor2` decoded the 210-byte structure, confirmed
+  `protected = {1: -7, 4: kid}`, a 64-byte `r || s` signature, and that
+  `device_id` and `nonce` are byte-equal to the captured request.
+- `make graph-check` all invariants pass; convergence holds at 54/57.
 
 ### Fog cleared
-- **Why the HTTPS path had never worked, in one sentence**: EDK2 only trusts DER
-  certificates, the policy only carried a hash, and nothing bridged the two — so
-  the handshake was always rejected by the client and no request ever left the
-  box.
-- **The pin is now enforced by construction**: PBL writes exactly the policy's CA
-  into the store before the fetch, so the only chain that can validate is one
-  under key 73's preimage.
-- **Two harness defects that had been lying**: a CBOR reader whose map parsing
-  was broken by Python's evaluation order, and a certificate shape `openssl`
-  accepts but EDK2 does not. Both were found by verifying independently rather
-  than trusting the harness's own verdict.
+- **The firmware↔verdict contract is proven end to end**: derive identity →
+  pin the CA → post over TLS → receive → validate chain → verify ES256 → decode.
+  Every link in that chain now has a run artifact rather than a unit test.
+- **Why the spec and the ledger disagreed about D-200**: the spec's close
+  criteria stopped at "endpoint implemented and unit-tested" (closed in an
+  earlier session), while the ledger kept it open for the runtime test. Both are
+  now CLOSED and the spec's evidence names the runtime artifact, so the two
+  records agree.
 
 ### Fog remaining
-- **`PblTlsVerifyCert` still has no caller.** The pin is enforced by
-  construction, not by that function; making it live needs the manual
-  `EFI_TLS_PROTOCOL` route. Recorded as defence-in-depth debt inside D-132
-  rather than quietly dropped.
-- **D-200's response half**: the harness answers with a deliberate non-verdict
-  body, so PBL logs `Verdict response: 8 bytes` and falls back on decode.
-  Closing D-200 needs a server that signs a COSE verdict with the key whose
-  certificate the policy carries in keys 71/76/77.
+- **An UNLOCKED verdict still ends in `[8/8] Decision: BLOCK — lock screen`.**
+  Nothing between `[6/8]` and `[7/8]` is logged at RELEASE verbosity, so the
+  cause is not attributable from the artifact. Candidates are Decision.c's own
+  gates (SecureBoot/db state under OVMF, or the deliberately minimal policy being
+  DEGRADED) — not the verdict being ignored. So "the verdict arrives and
+  verifies" is proven; **"an UNLOCKED verdict releases the boot" is not**, and
+  nobody should cite this artifact for that. Needs a DEBUG-build run or a
+  Decision.c read.
+- `PblTlsVerifyCert` still has no caller (the pin is enforced by construction).
+  Carried in D-132's residual.
 - Carried forward: 19 Dependabot alerts; 10 of 13 enforcement paths
-  `verified-in-unit-test`; D-120/D-129/D-130/D-200 open; no CI run observed for
-  S151–S156; the stale side worktree.
+  `verified-in-unit-test`; D-120/D-129/D-130 open; no CI run observed for
+  S151–S157; the stale side worktree.
 
 ### Debt items closed
-- **D-132 — CLOSED** (`commit_ref b760e30`), with the positive wire artifact and
-  the mismatched-CA negative artifact, both repo-committed.
+- **D-200 — CLOSED**, on its ledger criteria (runtime test with real firmware),
+  with the round-trip artifact committed. The spec entry keeps its earlier
+  commit_ref and gains the runtime evidence, so both records now cite the same
+  proof.
 
 ### Debt items still open
-- D-120, D-129, D-130, D-200 (request half done, response half outstanding).
+- D-120, D-129, D-130 (plus D-132's `PblTlsVerifyCert` residual).
 
 ### Blockers
-- None for D-132. D-200's remaining work is a server-side signing task, not a
-  firmware or environment blocker.
+- None. The next question (why UNLOCKED still BLOCKs) is a code read, not a
+  blocker.
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary, third recurrence in this
-  thread). Two harness defects produced *false* results — a CBOR reader that
-  mis-parsed every map, and a certificate `openssl` accepts but EDK2 rejects.
-  Both survived earlier runs because the harness was the only judge of its own
-  output. What caught them: decoding the captured bytes with an independent
-  implementation (`cbor2` on the host) and verifying the chain with `openssl`
-  instead of assuming the harness's verdict was the truth.
-- **Layer 2 — context provision** (secondary). The decisive facts were in EDK2's
-  source, not in this repository's contracts: `VERIFY_PEER` is hard-coded, the
-  TLS config protocol is per-instance, and chain validation wants DER. Reading
-  the dependency's code is what turned a guess-shaped fix into a correct one.
-- **Process note**: I introduced a compile error by adding `EFIAPI` to a
-  declaration that never had it (and to my new definition whose declaration
-  lacked it) — a reminder that matching the surrounding convention matters more
-  than matching the UEFI spec's usual shape.
+- **Layer 4 — verification feedback** (primary, and the pattern is stable now).
+  Two wrong assumptions were cheap to catch *because* they were checked
+  independently: the RSA verdict key was caught by running the signing path on
+  the host against the captured request, and the one-element chain was caught by
+  reading `CborDecode.c:924` instead of by a wasted QEMU cycle. The rule that
+  keeps earning its place: validate a new artifact with an independent
+  implementation before pointing the harness at it.
+- **Layer 2 — context provision** (secondary). "The last element of key 77 is
+  the root" is in the decoder, not in C4 — a contract reader alone would have
+  produced a chain the firmware silently rejects.
 
 ### Session artifacts
-- New: `firmware/PblPkg/artifacts/d200-wire-verified-{results.txt,serial.log,
-  request.bin}`, `firmware/PblPkg/artifacts/d132-mismatched-ca-results.txt`.
-- Changed: `firmware/PblPkg/PblApp/{PblApp.h,CborDecode.c,TlsVerify.c,PblApp.c,
-  PblApp.inf}`, `firmware/PblPkg/d131-wire-capture.py`,
-  `docs/adr/PBL-C4-Policy-Blob.md`, `docs/adr/PBL-DEBT-LEDGER.md`.
-- Commits: `b760e30` plus the graph record.
+- New: `firmware/PblPkg/artifacts/d200-roundtrip-{results.txt,serial.log,
+  request.bin}`.
+- Changed: `firmware/PblPkg/d131-wire-capture.py` (verdict material + signed
+  responses), `firmware/PblPkg/test-d131-wire-harness.sh` (two assertions),
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-200 closed), `.devin/graph/GRAPH-SPEC.yaml`
+  (D-200 evidence).
+- Commit `814f444` plus the graph record.
 
 ### Next session opening
-Close **D-200** by making the capture server return a real verdict: sign a
-COSE_Sign1 `LockVerdict` with the key whose certificate the policy carries (C4
-keys 71/76/77 — `firmware/PblPkg/test-d205.py` already knows how), set
-`lock_service_uri` to it, and capture a run in which PBL logs
-`Verdict decoded` and `Verdict signature verified` rather than falling back —
-that is the last unproven link between the firmware and the server.
+Explain the observed `[8/8] Decision: BLOCK` on an UNLOCKED verdict: build a
+DEBUG PblApp (`build-pbl.sh --debug`) so Decision.c's rationale prints, or read
+`Decision.c` on the OVMF platform state this harness produces (SecureBoot/db
+under OVMF, policy DEGRADED) — then either fix the gate or record why BLOCK is
+correct there, because at present nobody can say whether an UNLOCKED verdict is
+honoured.
 
 ---
 

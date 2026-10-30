@@ -959,11 +959,21 @@ debt_items:
 
   - id: D-200
     description: "PBL verdict endpoint (POST /v1/verdict) not implemented in serverless Worker"
-    close_criteria: "CBOR request parsed, device status looked up, COSE_Sign1 verdict signed and returned"
+    close_criteria: >-
+      CBOR request parsed, device status looked up, COSE_Sign1 verdict signed and
+      returned; and a runtime test with real PBL firmware (the ledger's stronger
+      wording — the spec previously closed this on the unit-tested endpoint
+      alone, which is why the spec and the ledger disagreed for several sessions).
     status: CLOSED
     category: SERVER
-    commit_ref: "684d7eb — serverless Worker + Express POST /v1/verdict"
-    artifact_ref: "579 server Jest + 305 serverless Vitest tests"
+    commit_ref: >-
+      684d7eb — serverless Worker + Express POST /v1/verdict; 814f444 — mock
+      endpoint signs ES256 verdicts and the firmware verifies one (C4 keys
+      71/76/77)
+    artifact_ref: >-
+      579 server Jest + 305 serverless Vitest tests; firmware/PblPkg/artifacts/
+      d200-roundtrip-{results.txt,serial.log} — 8 PASS/0 FAIL with
+      "[OK] Verdict signature verified (ES256)" and "Verdict decoded: verdict=0"
 
   - id: D-201
     description: "PBL policy endpoint (GET /v1/policy/{version}) not implemented"

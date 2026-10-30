@@ -2473,3 +2473,133 @@ keys 71/76/77 — `firmware/PblPkg/test-d205.py` already knows how), set
 that is the last unproven link between the firmware and the server.
 
 ---
+
+---
+
+## Session 157 — 2026-10-30 (D-200 CLOSED: the firmware verifies a real signed verdict, 8 PASS / 0 FAIL)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S156 block + opening),
+  `scripts/check-ruling.sh` (no open items → task mode),
+  `firmware/PblPkg/PblApp/PblApp.c` (the COSE verify chain, lines 600-680),
+  `firmware/PblPkg/PblApp/CborDecode.c` (keys 71/76/77, including line 924 where
+  the LAST chain element becomes the root), `firmware/PblPkg/PblApp/CoseVerify.c`
+  (ES256 supported, Ed25519 returns EFI_UNSUPPORTED),
+  `firmware/PblPkg/{test-d205.py,test-s07-dhcp-harness.sh}` for the existing
+  verdict-signing material, and `firmware/PblPkg/d131-wire-capture.py`.
+- **Finding (a one-element chain does not skip validation)**: `CborDecode.c:924`
+  sets `VerdictSigningRootCert = CertPtrs[NumCerts - 1]`, so a single-element
+  key 77 makes leaf == root and `PblVerifyCertChain` still runs. A real
+  leaf + root pair is required — my first assumption was wrong and was caught by
+  reading the decoder rather than by a failing run.
+- **Finding (COSE alg -7 is P-256 unconditionally)**: the verdict key was
+  generated through the same `_make_key()` helper as the TLS key, which honours
+  `--key-type rsa`. openssl then produced a PKCS#1 RSA signature, not a DER
+  ECDSA sequence, and the reshape to `r || s` failed with "not a DER SEQUENCE".
+  ES256 means P-256 whatever the transport key type is.
+- **Finding (what the image can actually do)**: the harness container has no
+  `cbor2` and no `cryptography`, but it does have `openssl 3.0.13`. So the
+  server builds COSE by hand (minimal CBOR writer), signs with the openssl CLI,
+  and reshapes DER ECDSA into fixed-width `r || s` in pure Python.
+
+### IMPLEMENT
+- **`d131-wire-capture.py --gen-assets`** now also emits an ES256 verdict key
+  with a leaf + root chain and writes the C4 material the firmware verifies
+  against: key 71 (`kid` = SHA-256 of the SPKI), 76 (SPKI), 77 (`[leaf, root]`),
+  alongside the existing 70/73/78 TLS keys.
+- **`--serve`** answers each request with a real `COSE_Sign1` LockVerdict:
+  echoes `device_id` and `nonce` from the request (C1 §7 steps 5-6), verdict 0
+  (UNLOCKED), the request's `policy_version`, `issued_at` = harness clock and a
+  7-day `grace_until` so the +60 s skew guard cannot be tripped.
+- **Harness** gained two assertions that distinguish "got bytes" from "accepted a
+  verdict": `Verdict decoded: verdict=` and `Verdict signature verified`.
+
+### VERIFY
+- **8 PASS / 0 FAIL** (`firmware/PblPkg/artifacts/d200-roundtrip-*`):
+  ```
+  [PASS] policy blob loaded from ESP
+  [PASS] device_id derived from AK Name
+  [PASS] verdict request posted over TLS
+  [PASS] server received a request
+  [PASS] wire device_id matches AK Name
+  [PASS] verdict decoded by firmware
+  [PASS] verdict signature verified
+  [PASS] request body captured (1 file(s))
+  ```
+  Firmware side: `[OK] Verdict response: 210 bytes`, `[OK] Cert chain validated`,
+  `[OK] Verdict signature verified (ES256)`,
+  `[OK] Verdict decoded: verdict=0 policy_version=1`.
+- The signed verdict was also validated independently on the host before spending
+  a QEMU run: `cbor2` decoded the 210-byte structure, confirmed
+  `protected = {1: -7, 4: kid}`, a 64-byte `r || s` signature, and that
+  `device_id` and `nonce` are byte-equal to the captured request.
+- `make graph-check` all invariants pass; convergence holds at 54/57.
+
+### Fog cleared
+- **The firmware↔verdict contract is proven end to end**: derive identity →
+  pin the CA → post over TLS → receive → validate chain → verify ES256 → decode.
+  Every link in that chain now has a run artifact rather than a unit test.
+- **Why the spec and the ledger disagreed about D-200**: the spec's close
+  criteria stopped at "endpoint implemented and unit-tested" (closed in an
+  earlier session), while the ledger kept it open for the runtime test. Both are
+  now CLOSED and the spec's evidence names the runtime artifact, so the two
+  records agree.
+
+### Fog remaining
+- **An UNLOCKED verdict still ends in `[8/8] Decision: BLOCK — lock screen`.**
+  Nothing between `[6/8]` and `[7/8]` is logged at RELEASE verbosity, so the
+  cause is not attributable from the artifact. Candidates are Decision.c's own
+  gates (SecureBoot/db state under OVMF, or the deliberately minimal policy being
+  DEGRADED) — not the verdict being ignored. So "the verdict arrives and
+  verifies" is proven; **"an UNLOCKED verdict releases the boot" is not**, and
+  nobody should cite this artifact for that. Needs a DEBUG-build run or a
+  Decision.c read.
+- `PblTlsVerifyCert` still has no caller (the pin is enforced by construction).
+  Carried in D-132's residual.
+- Carried forward: 19 Dependabot alerts; 10 of 13 enforcement paths
+  `verified-in-unit-test`; D-120/D-129/D-130 open; no CI run observed for
+  S151–S157; the stale side worktree.
+
+### Debt items closed
+- **D-200 — CLOSED**, on its ledger criteria (runtime test with real firmware),
+  with the round-trip artifact committed. The spec entry keeps its earlier
+  commit_ref and gains the runtime evidence, so both records now cite the same
+  proof.
+
+### Debt items still open
+- D-120, D-129, D-130 (plus D-132's `PblTlsVerifyCert` residual).
+
+### Blockers
+- None. The next question (why UNLOCKED still BLOCKs) is a code read, not a
+  blocker.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, and the pattern is stable now).
+  Two wrong assumptions were cheap to catch *because* they were checked
+  independently: the RSA verdict key was caught by running the signing path on
+  the host against the captured request, and the one-element chain was caught by
+  reading `CborDecode.c:924` instead of by a wasted QEMU cycle. The rule that
+  keeps earning its place: validate a new artifact with an independent
+  implementation before pointing the harness at it.
+- **Layer 2 — context provision** (secondary). "The last element of key 77 is
+  the root" is in the decoder, not in C4 — a contract reader alone would have
+  produced a chain the firmware silently rejects.
+
+### Session artifacts
+- New: `firmware/PblPkg/artifacts/d200-roundtrip-{results.txt,serial.log,
+  request.bin}`.
+- Changed: `firmware/PblPkg/d131-wire-capture.py` (verdict material + signed
+  responses), `firmware/PblPkg/test-d131-wire-harness.sh` (two assertions),
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-200 closed), `.devin/graph/GRAPH-SPEC.yaml`
+  (D-200 evidence).
+- Commit `814f444` plus the graph record.
+
+### Next session opening
+Explain the observed `[8/8] Decision: BLOCK` on an UNLOCKED verdict: build a
+DEBUG PblApp (`build-pbl.sh --debug`) so Decision.c's rationale prints, or read
+`Decision.c` on the OVMF platform state this harness produces (SecureBoot/db
+under OVMF, policy DEGRADED) — then either fix the gate or record why BLOCK is
+correct there, because at present nobody can say whether an UNLOCKED verdict is
+honoured.
+
+---

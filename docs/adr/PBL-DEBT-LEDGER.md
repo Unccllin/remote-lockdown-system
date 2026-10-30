@@ -887,7 +887,7 @@
     Because the store is rewritten from the policy on every boot, a T2 OS admin
     who writes `TlsCaCertificate` cannot leave a CA behind that PBL would trust.
   - Two bugs found in the *harness* while doing this, both fixed: the in-image
-    CBOR reader mis-parsed every map because Python evaluates the right-hand
+    CBOR reader misparsed every map because Python evaluates the right-hand
     side of `out[self.read()] = self.read()` before the subscript (so each value
     was consumed as its key, and the harness reported a false failure on correct
     firmware), and the generated certificate was a self-signed leaf used as its
