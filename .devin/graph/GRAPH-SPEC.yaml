@@ -907,6 +907,28 @@ debt_items:
     status: OPEN
     category: SECURITY
 
+  - id: D-131
+    description: >-
+      PBL never populated PBL_PLATFORM_STATE.DeviceId, so every verdict request
+      carried 32 zero bytes. PblTpmReadAkName also used NV_ReadPublic, whose
+      index name is template-derived, so the obvious fix would have given the
+      whole fleet one device_id.
+    close_criteria: >-
+      DeviceId derived from the AK Name stored at NV 0x01C00003 via
+      TPM2_NV_Read; unprovisioned behaviour ruled in C2 §1.3; QEMU harness able
+      to provision the index; a run artifact showing a non-zero device_id with
+      the unprovisioned branch suppressed.
+    status: CLOSED
+    category: STUB
+    commit_ref: >-
+      186cf7d — NV_Read AK-name read, DeviceId population, request suppression,
+      non-2xx StatusCode, harness provision step + provision-qemu-tpm.sh
+    artifact_ref: >-
+      firmware/PblPkg/artifacts/d131-enrolled-{serial.log,results.txt} — 16
+      PASS/0 FAIL with [OK] device_id from AK Name: ABABABAB...ABAB;
+      d131-unprovisioned-{serial.log,results.txt} — 17 PASS/0 FAIL with the
+      verdict request suppressed
+
   # -------------------------------------------------------------------------
   # Server-side PBL debt items (D-200 through D-210)
   # The serverless Worker has NO PBL endpoints. These items cover building

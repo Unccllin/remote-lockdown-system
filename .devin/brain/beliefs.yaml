@@ -723,3 +723,44 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-043
+  statement: 'PBL never populates PBL_PLATFORM_STATE.DeviceId: PblCollectPlatformState zeroes the struct
+    and fills ~20 fields without DeviceId, and PblTpmReadAkName has no caller. Every verdict request therefore
+    carries a 32-byte zero device_id, the server looks the device up under key 000...0 and serves the
+    unknown-device branch, and PblVerifyVerdict step 5 compares zeros to zeros so it passes silently.'
+  domain: firmware/identity
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'grep across firmware/PblPkg: DeviceId appears only as a struct field, a CBOR encode argument
+    and a verify argument; no assignment. PblTpmReadAkName declared+defined, zero call sites. PlatformState.c:1151-1200
+    fills every other field.'
+  source: session-151 code read
+  asserted: '2026-10-28'
+  last_verified: '2026-10-28'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Tracked as D-131. Fix blocked on a C2 ruling: what PBL does when PBL_AK_NAME is absent/all-zero
+    (unprovisioned). Verifying the fix needs a QEMU harness step that writes the NV index.'
+- id: B-044
+  statement: TPM2_NV_ReadPublic returns the NV index Name (SHA-256(nameAlg) || SHA-256(nvPublic template)),
+    not the 34 bytes the index stores. PblTpmReadAkName used it and treated that value as the AK Name,
+    so deriving device_id from it would have produced an identical device_id on every machine sharing
+    the NV template — worse than the zero id it replaced, because it looks valid. The stored value requires
+    TPM2_NV_Read. C2 §5.1 step 2 named the wrong command; C2 §1.3 defines the index as storing 34 bytes.
+  domain: firmware/identity
+  status: confirmed
+  evidence_level: spec-checked
+  provenance: C2 §1.3 (index stores 34-byte TPM2B_NAME body) against C2 §5.1 step 2 (said NV_ReadPublic);
+    TPM 2.0 NV index Name = nameAlg||H(nvPublic), which is template-derived and device-independent; PblTpmReadAkName
+    rewritten to NV_Read.
+  source: session-153 code read
+  asserted: '2026-10-29'
+  last_verified: '2026-10-29'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Code/spec read only - no probe ever returned device data, so this is NOT device-observed. The
+    enrolled-path QEMU artifact would confirm it. Tracked with D-131.

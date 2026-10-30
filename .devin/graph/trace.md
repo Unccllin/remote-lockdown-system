@@ -1432,3 +1432,722 @@ three TODO comments in `firmware/PblPkg/PblApp/` their contract references
 PBL-C1-LockVerdict.md before writing it).
 
 ---
+
+---
+
+## Session 151 — 2026-10-28 (PBL CI's apt failure named: a package that does not exist; three firmware TODOs given their contracts)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S150 block + next-session opening),
+  `.devin/PENDING-RULING.md` + `scripts/check-ruling.sh` (no open items →
+  task mode), `trace.md` tail (S150 RULE-ZERO/VERIFY), `memory.py retrieve`,
+  `brain.py retrieve`; `.github/workflows/pbl-ci.yml` (all 163 lines),
+  `scripts/ci-annotate.py` + `scripts/test_ci_annotate.py`, `Makefile`
+  (`test-scripts`, `lint-workflows`, `.PHONY` block);
+  `docs/adr/PBL-C1-LockVerdict.md` (§1.1 alg table, §4 device identity, §7),
+  `docs/adr/PBL-C2-TPM-Contract.md` (§1.3 PBL_AK_NAME, §4 PCR, §5.4 provisioning),
+  `docs/adr/PBL-C3-Network-Client.md` (§4 TLS/hostname verification),
+  `docs/adr/PBL-C4-Policy-Blob.md` (keys 71/76);
+  `firmware/PblPkg/PblApp/{CoseVerify.c,TlsVerify.c,TpmClient.c,PlatformState.c,PblApp.c,PblApp.h}`,
+  `serverless/pbl/routes/verdict.ts`, `docs/adr/PBL-DEBT-LEDGER.md` (D-129/D-130).
+- **Finding**: S150 stopped with `PBL CI` red for two independent reasons and
+  recorded only their symptoms. The apt cause was genuinely unknowable from the
+  repository — the step wrote to the console, job logs need admin, and nothing
+  teed output anywhere — so this session reproduced it instead of guessing.
+- **Finding (the apt cause)**: **`libuuid-dev` does not exist on Ubuntu 22.04.**
+  Reproduced in a bare `ubuntu:22.04` container with the job's exact command:
+  `E: Unable to locate package libuuid-dev`, `INSTALL_EXIT=100`. The jammy dev
+  package is `uuid-dev`. Both `build-x64` and `build-aarch64` named the
+  non-existent one. This was never transient — every run failed identically,
+  which is why it looked like an environment mystery rather than a typo.
+- **Finding (the three TODOs)**: each is a real, contract-sanctioned deferral,
+  not sloppiness — but none said so. C1 §1.1 names Ed25519 as *preferred* with
+  ES256 as the sanctioned fallback "if HSM lacks Ed25519", and BaseCryptLib here
+  has only Ed448 — so the Ed25519 case is *in the fallback term*, not missing
+  work, and returning `EFI_UNSUPPORTED` is required by C1 §7. TlsVerify's
+  CN-only check is fail-closed (C3 §4 wants "CN/SAN"), so the gap is that a
+  SAN-only certificate cannot be used, not that a bad one is accepted.
+- **Finding (the check itself was weak)**: the inline `grep -v "C1\|C2\|C3\|C4\|REQ\|STUB\|Agent"`
+  accepted **any** line containing those substrings — a hex literal `0xC1`, the
+  word "REQuest", or a filename — rejected nothing it should have accepted, and
+  never accepted **C5** although `docs/adr/PBL-C5-Covert-Tracking.md` exists. It
+  also only globbed `PblApp/*.c`, so `PblPersistDxe/` and every header escaped,
+  and the step name said "TODO/FIXME" while matching only uppercase `TODO`.
+- **Finding (harness recurrence)**: `scripts/test_ci_annotate.py` — added by
+  S150 — has **no `__main__` block**. `make test-scripts` runs each file
+  directly, so its 13 tests were imported, never executed, and exited 0. This is
+  the exact bug AGENTS.md records for `test_memory.py` (44 tests), recurring in
+  the very commit that documented it. The convention was prose; nothing enforced
+  it.
+- **Finding (new product defect, D-131)**: `PBL_PLATFORM_STATE.DeviceId` is
+  declared (`PblApp.h:362`, "C2 §1.3") and consumed in three places
+  (`PblApp.c:552` CBOR request, `PblApp.c:814` PCR-13 input, `PblApp.c:694`
+  `PblVerifyVerdict` self-id) but **is never written by any code**, and
+  `PblTpmReadAkName` (`TpmClient.c:1055`, reads NV `0x01C00003`) **has no
+  caller**. So every verdict request carries 32 zero bytes; the server looks the
+  device up under key `000…0` (`verdict.ts:87,104`), signs `req.device_id`
+  straight back (`verdict.ts:34,112,133`), and `PblVerifyVerdict` step 5 compares
+  zeros to zeros and passes. Silent in both directions — which is why neither
+  the unit tests nor the QEMU smoke harness caught it. The old comment's "for
+  now, caller handles this" was false: there is no caller.
+
+### IMPLEMENT
+- **`scripts/apt-install-retry.sh`** (new): bounded retry with backoff, `Acquire::Retries`,
+  full transcript to a log file for the annotate step, and cause classification —
+  lock contention vs mirror/network vs **a package that does not exist** (which
+  is not retried at all, because no number of attempts fixes a name). Runs `sudo`
+  itself so the log stays readable by the annotating user.
+- **`.github/workflows/pbl-ci.yml`**: every apt step now goes through that
+  helper, every build/smoke/static-analysis step tees to a log, and each job has
+  an `if: failure()` `ci-annotate.py` step — the same pattern `ci.yml` got in
+  S150, which PBL CI never received. `libuuid-dev` → `uuid-dev` in both build
+  jobs (the actual fix; EDK II BaseTools still needs uuid-dev, so it is renamed,
+  not dropped). Static-analysis reordered so the contract-reference gate runs
+  **before** the cppcheck install: while it ran last, an apt failure in the same
+  job turned the job red for apt and the three TODOs were never reported at all.
+  cppcheck's `--error-exitcode=1` was removed rather than left paired with
+  `|| true` (a flag that cannot fire asserts nothing) and its findings now
+  surface as a `::warning::` annotation instead of vanishing. Workflow `paths:`
+  now include the three scripts the job invokes, so fixing one of them re-runs
+  the job that uses it.
+- **`scripts/check-firmware-todos.py`** (new): the gate extracted from YAML into
+  a testable, local-runnable script. Anchored reference forms only — `C1-C5 §n`,
+  `C<n>.<n>`, `REQ-n`, `D-nnn`, `STUB`, `Agent X` — searched over the marker line
+  plus a 3-line window (a deferral is routinely spread over a comment block)
+  without letting an unrelated later comment launder it. Covers `FIXME`/`XXX`,
+  case-insensitively, across every `.c`/`.h` under `firmware/PblPkg`, and reports
+  `file:line` plus `--annotate` output.
+- **Three TODOs given their contracts** (comment-only, verified no code line
+  changed): CoseVerify → `C1 §1.1` + C4 keys 71/76; TlsVerify → `C3 §4`;
+  TpmClient → `C2 §1.3` + C1 §4, including the honest note that the function has
+  no caller.
+- **`scripts/ci-annotate.py`**: `--warning` level (so advisory output is visible
+  on the check run), and a non-numeric line count now returns a usage error
+  instead of a traceback that would have been the only thing the job showed.
+- **`scripts/script_test_runner.py`** (new): one shared `__main__` runner for the
+  script suites, imported dynamically (pytest is not on `scripts/`' path) and
+  failing loudly (exit 2) when pytest is absent. `test_ci_annotate.py` and
+  `test_check_firmware_todos.py` use it; a new test
+  (`test_every_script_test_suite_has_a_runner`) fails if any future
+  `scripts/test_*.py` forgets its runner — the convention is now enforced, not
+  documented.
+- **Ledger + brain**: D-131 opened with the full evidence chain and close
+  criteria; `brain.py assert` + `confirm --evidence-level code-read` B-043.
+- **`Makefile` / `AGENTS.md`**: `make check-firmware-todos` (added to `make lint`),
+  and the script-suite totals/runner rule updated.
+
+### VERIFY
+- **The apt cause, by execution not inference**: in a bare `ubuntu:22.04`
+  container, the job's original command exits **100** with
+  `E: Unable to locate package libuuid-dev`. Corrected full lists dry-run clean
+  (`DRYRUN_X64_EXIT=0`, `DRYRUN_AA_EXIT=0`); `libuuid-dev` alone still
+  `DRYRUN_OLD_EXIT=100`. Then the helper itself under real apt as root:
+  `libuuid-dev` → **exit 100 after exactly 1 attempt**, log naming
+  `E: Unable to locate package libuuid-dev` + `=== cause: a requested package
+  does not exist for this release; not retrying ===`; `uuid-dev` → **exit 0**,
+  one attempt, `Setting up uuid-dev:amd64 (2.37.2-4ubuntu3.6)`.
+- **Two bugs in my own helper, found only by running it** (both fixed): `SUDO=""`
+  passed an empty first argument, so every root run tried to execute `""`
+  (`line 83: : command not found`, status 127) — it is an array now; and
+  `status=$?` after a failed `if` compound returns **0** (an `if` with no
+  `else` is "successful"), so the script *reported success on a failed install*
+  — the status is captured in the `else` branch now. The first container run
+  showed `EXIT=0` on a failure, which is why this was caught.
+- **The gate has teeth, not just green**: stripping `(C3 §4)` from one TODO
+  makes `check-firmware-todos.py` exit **1** naming `TlsVerify.c:108`; restoring
+  it returns **0**. 30 tests in `scripts/test_check_firmware_todos.py`, including
+  the look-alikes the old grep accepted (bare `C1`, `0xC1`, `REQuest`, "agency")
+  and the ones it rejected (`C5 §3`).
+- **Harness hole closed and proven**: `make test-scripts` now reports
+  `30 passed` (firmware-TODO) and `18 passed` (ci-annotate) where the latter
+  previously printed nothing and exited 0. All five suites run:
+  30 + 18 + 40 graph-session checks + 44 memory + 10 secret-scanner.
+- `make lint-workflows` (actionlint 1.7.12 + shellcheck) **PASS**;
+  `shellcheck scripts/apt-install-retry.sh` clean; `bash -n scripts/*.sh` PASS;
+  `make check-firmware-todos` PASS; `make graph-check` **all invariants pass**.
+  `git diff firmware/` contains **only comment lines** — no code added or
+  removed, so the firmware changes carry no compile risk.
+
+### Fog cleared
+- **Why PBL CI was red for days**: not flakes, not the runner image — a package
+  name that has never existed on jammy. Both build jobs carried it. The exit
+  code was undiagnosable only because the step kept no transcript and job logs
+  need admin; the cause took one container run to name.
+- **What the three TODOs actually were**: contract-sanctioned deferrals whose
+  references had been lost, not unimplemented requirements. The Ed25519 one is
+  answered by C1 §1.1's own fallback clause — ES256 is the supported path and
+  the signing side must publish an ES256 key (C4 key 76).
+- **Why the TODO gate was green-ish while being wrong in both directions**: it
+  matched substrings rather than references and covered one directory. It is now
+  anchored, wider, and covered by 30 tests including negative controls.
+- **A real firmware defect nobody had recorded** (D-131): the device identity the
+  whole enrolment binding rests on is never computed, and every check that
+  should have compared it compared zeros.
+
+### Fog remaining
+- **`PBL CI` is still unobserved green.** The apt cause and the TODO gate are
+  fixed and verified in a real `ubuntu:22.04` container, and actionlint is
+  clean, but no workflow run has executed this diff — there is no `gh` and no
+  token here. The next push is the actual proof; if a job fails, its annotation
+  will now say why.
+- **The EDK II build itself was not run locally** (no clone of
+  `edk2-stable202408`, ~30 min). The package list is verified by dry-run plus a
+  real `uuid-dev` install, not by compiling. `build-pbl.sh` may need packages the
+  old list never had; that is now discoverable from the build annotation.
+- 19 Dependabot alerts remain (8 high, 6 moderate, 5 low) — unchanged.
+- 10 of 13 enforcement paths still `verified-in-unit-test`, not
+  `verified-on-hardware`; D-129 unchanged.
+- A stale side worktree `/home/cllin/lockdown-installer-security` on
+  `task/installer-security` (old master, 2 files staged) still exists, untouched.
+- `pyright` is not a CI gate but is the local checker; it reports 2
+  `reportMissingImports` for pytest in the **pre-existing**
+  `scripts/test_memory.py` (L24, L680). The new script-test files avoid the
+  pattern via the shared runner, so they add no findings.
+- `cppcheck --enable=all` remains advisory by design; nothing gates on its
+  output yet, and its findings are now at least visible as a warning annotation.
+
+### Debt items closed
+- None. D-131 was **opened**, not closed; no other item met its close criteria.
+
+### Debt items still open
+- D-120 (BitLocker real-media validation), D-129 (real hardware validation),
+  D-130 (PblApp.efi signing), **D-131 (device_id never populated — new)**.
+  Enforcement paths: 3/13 on hardware.
+
+### Blockers
+- Job-log access (no `gh`, no token): mitigated — every PBL CI job now
+  annotates its own failure tail, and the contract gate annotates `file:line`.
+- D-131 needs a **C2 ruling** before it can be fixed: what PBL should do when
+  `PBL_AK_NAME` is absent/all-zero (unprovisioned device). Fall back to zeros and
+  downgrade attestation, refuse to fetch, or enrol on first boot — the code
+  cannot pick one. It also needs a QEMU harness step that writes the NV index, or
+  the fix is unobservable in the only harness that runs.
+- Real hardware with TPM 2.0 + Windows for hardware-grade evidence (D-129/I3).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary). Two distinct failures: (a) a red
+  CI job that could not describe itself — no transcript, no annotation, and no
+  way to run the same check locally because the logic lived in a YAML `run:`
+  block; (b) a *green* harness that verified nothing — `test_ci_annotate.py` ran
+  zero of its 13 tests and exited 0, and the TODO gate's exclusion pattern was
+  satisfiable by a hex literal. Both are the same defect: a check whose output
+  cannot be distinguished from success. Harness changes: tee+annotate on every
+  PBL CI job, the gate moved into a tested script with negative controls, and
+  `test_every_script_test_suite_has_a_runner` so a suite without a runner fails
+  instead of passing.
+- **Layer 2 — context provision** (secondary). "Every `scripts/test_*.py` needs a
+  `__main__` block" was written in AGENTS.md and still recurred within one
+  session, because it was prose. Prose conventions do not survive; the runner is
+  now a shared module and the requirement is a test.
+- **Layer 3 — execution environment** (contributing). The `libuuid-dev` failure
+  was environment-specific in the sense that only the target image could prove
+  it, and the harness had no way to run the job's package list outside CI. A
+  throwaway container answered it in 16 seconds; that technique should be the
+  first move for any "works locally, fails in CI" install failure.
+
+### Session artifacts
+- New: `scripts/apt-install-retry.sh`, `scripts/check-firmware-todos.py`,
+  `scripts/script_test_runner.py`, `scripts/test_check_firmware_todos.py`.
+- Changed: `.github/workflows/pbl-ci.yml`, `scripts/ci-annotate.py`,
+  `scripts/test_ci_annotate.py`, `Makefile`, `AGENTS.md`,
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-131), three firmware comments.
+- Container evidence: `ubuntu:22.04` apt repro (exit 100 → named), corrected
+  dry-runs (`DRYRUN_X64_EXIT=0`, `DRYRUN_AA_EXIT=0`), helper behaviour under real
+  apt (fail-fast on a missing package; success on `uuid-dev`).
+
+### Next session opening
+Open **D-131**: decide in C2 what PBL does with an absent or all-zero
+`PBL_AK_NAME` (recommended: treat it as unprovisioned, send a zero device_id but
+mark the request attestation-downgraded, and never treat the round-tripped
+verdict as device-bound), then wire `PblTpmReadAkName` into
+`PblCollectPlatformState` and add a QEMU harness step that writes the NV index
+before boot — because a fix that cannot be observed in the only harness we run
+is not a fix.
+
+---
+
+---
+
+## Session 152 — 2026-10-29 (D-131 ruled A+A: unknown device no longer gets an unlock; server half landed and teeth-checked)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S151 block + opening), `trace.md` tail,
+  `docs/adr/PBL-C2-TPM-Contract.md` §1.3/§5.4, `docs/adr/PBL-C3-Network-Client.md`
+  §3.3/§6.1, `docs/adr/PBL-C1-LockVerdict.md` §2/§4,
+  `serverless/pbl/routes/verdict.ts`, `serverless/pbl/devices.ts`,
+  `server/src/routes/pbl.js` (verdict handler + `statusToVerdict`),
+  `serverless/pbl.test.ts` (verdict describe), `server/tests/pblVerdictPolicyEnroll.test.js`,
+  `firmware/PblPkg/PblApp/HttpsClient.c` (status-code handling),
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-131, D-200).
+- **Finding**: S151 closed with D-131 (firmware never populates
+  `PBL_PLATFORM_STATE.DeviceId`) and a stated blocker that the fix needs a C2
+  ruling. Re-reading the server side raised the severity: `getDevice`
+  (`serverless/pbl/devices.ts:22`) is an exact KV key read with no
+  normalization, enrolment stores the real AK-derived hex, so the lookup for
+  `000…0` always misses and the unknown-device branch returned **UNLOCKED**.
+  The online path could therefore never deliver `locked`, `tracking` or
+  `recovering` — a lockdown bypass, not merely weak attestation. D-131 was
+  updated with this before any code was touched.
+- **Finding**: the firmware never inspects the HTTP `StatusCode`
+  (`HttpsClient.c` sets `ResponseData.StatusCode` and no caller reads it), so a
+  server error status currently returns `EFI_SUCCESS` with the error body. That
+  makes C3 §6.1's "non-SUCCESS ⇒ cached verdict" fallback unreachable for HTTP
+  errors, and it is why the server half of the ruling needs a C3 row of its own.
+- **Finding**: `statusToVerdict` had `case 'active': default:` falling through to
+  UNLOCKED. `device.status` is read out of JSON, so the TS union is not a
+  runtime guarantee — the same fail-open shape as the unknown-device branch, in
+  the same switch.
+
+### IMPLEMENT
+- **Ruling opened and closed** (`.devin/PENDING-RULING.md`): Q1 = **refuse to
+  fetch** a verdict when `PBL_AK_NAME` is absent/all-zero; Q2 = **an unknown
+  `device_id` gets no verdict**. Both were answered by the owner in-session;
+  recorded with rationale, and `scripts/check-ruling.sh` returns to task mode.
+- **Server, both implementations** (Q2 implemented):
+  - `serverless/pbl/routes/verdict.ts` and `server/src/routes/pbl.js`: the
+    unknown-device branch returns `404 unknown_device` instead of a signed
+    UNLOCKED verdict, with the reasoning in a comment where the next reader will
+    meet it.
+  - Both `statusToVerdict` functions now return `null` for an unrecognised
+    status and the handler answers `500 invalid_device_record`, instead of
+    falling through to UNLOCKED.
+  - Dead code removed while touching these files (all four items pre-existing in
+    `HEAD`, verified with `git show`, not introduced here): the unused
+    `PblDevice` type import, an unused `VERDICT_WIPE_PENDING` constant (C1 §2
+    now documents the full enum in a comment instead), an unused `catch (e)`
+    binding, and an unused `let keys` in `pbl.test.ts`'s override/challenge
+    describe.
+- **Tests rewritten, not deleted.** The old serverless test `returns a signed
+  COSE_Sign1 verdict for unknown device` asserted 200 + UNLOCKED — that
+  assertion was the reason the bypass survived, so it became
+  `returns a signed COSE_Sign1 verdict for a known active device` (a real
+  enrolled device), and three new tests carry the new rule in both suites:
+  unknown ⇒ 404 with no COSE body, **the all-zero device_id the firmware
+  actually sends ⇒ 404** (the D-131 regression), and an unrecognised status ⇒
+  500. Same set added to the Express suite.
+- **Contracts updated**: C2 §1.3 gains the ruled unprovisioned behaviour and its
+  rationale; C3 §4's requirement table gains an "HTTP error status" row (a
+  non-2xx `StatusCode` must surface as non-SUCCESS); D-200's unknown-device
+  behaviour is marked superseded; D-131 gains the ruling outcome and an explicit
+  statement of what is still open.
+
+### VERIFY
+- **Teeth, not just green**: the old unknown-device branch was reintroduced
+  mechanically (the fix file was backed up first) and the suite went
+  `2 failed | 169 passed` — exactly the two new 404 tests. Restoring the file
+  returned `171 passed`, and the restore was confirmed by grepping for
+  `unknown_device` and `status: 404` in the file before trusting the green.
+- serverless full suite **334 passed** / 2 files; server pbl suites
+  (`pblVerdictPolicyEnroll`, `pbl.routes`, `pblExpressRoutes`) **108 passed**;
+  `make typecheck-worker` (`tsc --noEmit`) **exit 0**; eslint on
+  `server/src/routes/pbl.js` + the rewritten test **exit 0**.
+- `make graph-check` **all invariants pass**; `scripts/check-ruling.sh` clean;
+  `make check-firmware-todos` green with its own 30 tests.
+- Three "STOP" blockers were reported against pre-existing dead code and one
+  against a line that is a comment in the current file (`let keys` at
+  `pbl.test.ts:1973`, `import pytest` twice). Each was verified by
+  `git show HEAD:` and by grep before being touched, and the finished state was
+  confirmed by a fresh LSP probe (0 diagnostics) rather than by trusting either
+  the blocker or the fix.
+
+### Fog cleared
+- **D-131's real severity**: it is not an attestation weakness, it is why the
+  online lockdown path cannot work. The chain is now written down with line
+  references in the ledger.
+- **Which behaviour was load-bearing and untested**: the fail-open
+  unknown-device branch had exactly one test, and that test asserted the
+  fail-open behaviour. Nothing said "an unknown device must not be handed an
+  unlock", which is why a zero `device_id` could pass for correctness.
+- **Why the ledger said UNLOCKED was deliberate**: D-200 recorded the choice as
+  "PBL should enrol first, but we don't block boot" — sound reasoning that
+  became unsound once the firmware was found to be sending an id no device owns.
+
+### Fog remaining
+- **The firmware half of D-131 is not started.** `PblTpmReadAkName` is still
+  uncalled, `PBL_PLATFORM_STATE.DeviceId` is still never written, and
+  `HttpsClient.c` still ignores `StatusCode`. Consequence: the server's new 404
+  reaches PBL as `EFI_SUCCESS` with a JSON body and falls back to the cached
+  verdict only because COSE parsing fails — safe, but accidental. C3 §4's new
+  row states the requirement; nothing implements it yet.
+- **D-131 is not closeable yet**: its close criteria require a QEMU artifact
+  showing a real (non-zero) `device_id` in a verdict request, and that needs a
+  harness step that writes NV `0x01C00003` before boot. `pbl-qemu:latest` is
+  present locally, so the build and boot are runnable here.
+- No CI run has observed session 151's PBL CI changes either — still no `gh` and
+  no token on this machine; the next push is the proof.
+- Carried forward unchanged: 19 Dependabot alerts; 10 of 13 enforcement paths
+  still `verified-in-unit-test`; D-129 hardware validation; the stale side
+  worktree `/home/cllin/lockdown-installer-security`.
+
+### Debt items closed
+- None. **D-131 stays OPEN and its scope is now smaller and better defined**:
+  the server half is done and verified, the firmware half is untouched.
+
+### Debt items still open
+- D-120, D-129, D-130, D-131 (server half done; firmware half open).
+  Enforcement paths: 3/13 on hardware.
+
+### Blockers
+- D-131's remaining work needs a QEMU harness provision step (write NV
+  `0x01C00003` before boot) — without it the firmware fix cannot be observed,
+  and this repo does not accept a firmware change it cannot see run.
+- Job-log access unchanged (no `gh`/token): mitigated by annotations.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, and it recurred a third time).
+  The fail-open branch was covered by a test that asserted the fail-open
+  behaviour, so the suite was green and wrong in the same direction as the code.
+  The lesson generalises to every "should never happen" branch: a test that
+  asserts the current shape of a fallback cannot detect that the fallback is the
+  vulnerability. Harness note: for each new fail-closed rule, add the negative
+  test *for the input the system actually produces* (here, the all-zero
+  `device_id`), because that is the input that made the rule necessary.
+- **Layer 5 — state management** (secondary). The single most useful thing this
+  session did was read the *server* before writing firmware: D-131 had been
+  recorded as an attestation gap, and the ledger said so in terms that would have
+  under-funded the fix. Cross-layer items need the consequence stated on every
+  layer's side, not just the layer where the defect was found.
+- **Harness noise worth naming**: four "STOP" blockers this session were stale or
+  misattributed (two `import pytest`, one `let keys` pointed at a comment line,
+  one red test that reproduces green). Each cost a verification detour. The
+  working practice that resolved all four: confirm the claim independently
+  (`git show HEAD:`, `grep`, direct re-run) before editing, then confirm the
+  finished state independently again.
+
+### Session artifacts
+- Changed: `serverless/pbl/routes/verdict.ts`, `server/src/routes/pbl.js`,
+  `serverless/pbl.test.ts`, `server/tests/pblVerdictPolicyEnroll.test.js`,
+  `docs/adr/PBL-C2-TPM-Contract.md`, `docs/adr/PBL-C3-Network-Client.md`,
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-131, D-200), `.devin/PENDING-RULING.md`.
+- Evidence: serverless 334 passed, server pbl 108 passed, tsc 0, eslint 0,
+  teeth run `2 failed | 169 passed` → `171 passed` after restore.
+
+### Next session opening
+Implement the firmware half of D-131 in this order: (1) add `StatusCode`
+handling to `PblHttpsPost` so a non-2xx becomes a non-SUCCESS return per the new
+C3 §4 row; (2) call `PblTpmReadAkName` from `PblCollectPlatformState`, copying
+the Name's last 32 bytes into `DeviceId` and treating an all-zero Name as
+unprovisioned per C2 §1.3; (3) skip the verdict fetch entirely when
+unprovisioned and go to the cached-verdict path; then (4) add a provision step to
+a QEMU harness (`pbl-qemu:latest` is local) that writes NV `0x01C00003`, and
+capture the serial log showing a real device_id and a denied-boot on the
+unprovisioned path — that artifact is what closes D-131.
+
+---
+
+---
+
+## Session 153 — 2026-10-29 (D-131 firmware half: NV_ReadPublic was the wrong call; unprovisioned path proven in QEMU 17/17)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S152 block + opening), `trace.md`,
+  `scripts/check-ruling.sh` (no open items → task mode),
+  `docs/adr/PBL-C2-TPM-Contract.md` §1/§1.3/§5.1/§5.4,
+  `docs/adr/PBL-C3-Network-Client.md` §4/§6.1, `docs/adr/PBL-C1-LockVerdict.md` §4,
+  `firmware/PblPkg/PblApp/{PblApp.c,PblApp.h,TpmClient.c,PlatformState.c,HttpsClient.c}`,
+  `firmware/PblPkg/{ci-harness.sh,ci-harness-docker.sh,build-pbl.sh}`,
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-131), `.github/workflows/pbl-ci.yml`.
+- **Finding (the plan was wrong)**: S152's stated next step was "call
+  `PblTpmReadAkName` and copy the Name's last 32 bytes into `DeviceId`". That
+  function issued **`TPM2_NV_ReadPublic`**, whose `TPM2B_NAME` is the NV *index*
+  name — `SHA-256(nameAlg) || SHA-256(nvPublic template)`. It depends on the
+  index template, not the device, so the plan would have given the entire fleet
+  one `device_id`. C2 §1.3 describes the index as *storing* 34 bytes (a
+  TPM2B_NAME body), and §1's size column says the same, so the value requires
+  **`TPM2_NV_Read`**. §5.1 step 2 contradicted §1.3 by naming `NV_ReadPublic`;
+  the implementation had followed §5.1 and the contract was wrong there too.
+- **Finding (a second PBL CI failure was queued behind the apt one)**: both
+  harnesses did `TIMEOUT="${1:-30}"` while `pbl-ci.yml` passes `--timeout 30`, so
+  `TIMEOUT` became the string `--timeout`. `ci-harness.sh` then ran
+  `timeout --timeout qemu-system-x86_64`; `ci-harness-docker.sh` emitted
+  `if elapsed > --timeout:` into its embedded Python. Unreachable while the apt
+  step failed first (S151), so it had never been seen.
+- **Finding (harness had no provisioning)**: nothing ever wrote NV
+  `0x01C00003` before boot, so the enrolled path was not observable at all — and
+  a run that could not provision was indistinguishable from one that did.
+
+### IMPLEMENT
+- **`HttpsClient.c`** (C3 §4 row added in S152): a non-2xx `StatusCode` is no
+  longer a verdict. Only 2xx returns the body; 404 → `EFI_NOT_FOUND`, other
+  non-2xx → `EFI_DEVICE_ERROR`, no retry (the server answered). `StatusCode === 0`
+  (driver never filled it) also fails closed. This makes the server's 404 reach
+  C3 §6.1 **by design** instead of by accident through a COSE parse failure.
+- **`TpmClient.c`**: `PblTpmReadAkName` rewritten to `TPM2_NV_Read(0x01C00003,
+  size=34, offset=0)` using `PblTpmBeginCommandWithSessionAuth` with handles
+  `{hierarchy, nvIndex}` — password auth on the platform hierarchy (per the
+  PPREAD attribute in §1.3), tracked by the same `PcdPblTpmUsePlatformHierarchy`
+  as `NV_DefineSpace`. `TPM_RC_NV_UNINITIALIZED` (0x14A) → `EFI_NOT_FOUND`, which
+  is the ruled "unprovisioned" case. Documented that it must run before
+  `PblTpmStartHmacSession()` (that session is bound to the lock-state auth).
+- **`PblApp.h`**: `PBL_AK_NAME_SIZE 34`, with a comment on why it is 34 and not
+  36 (the TPM2B size prefix is not stored).
+- **`PlatformState.c`**: `PblCollectPlatformState` reads the AK Name and copies
+  bytes [2..34) into `DeviceId`; absent/uninitialised/zero-filled all leave it
+  zeroed and log which. Placed before the HMAC session starts.
+- **`PblApp.c`**: `DeviceIdProvisioned = !IsZeroBuffer(DeviceId, 32)`; the verdict
+  request is **suppressed entirely** when false (ruling Q1), with the reasoning
+  in the comment, and the flow falls through to the cached-verdict path.
+- **Contracts**: C2 §5.1 step 2 corrected to `NV_Read` with the reason and the
+  auth note.
+- **Harnesses**: `--timeout N` / `--timeout=N` / bare `N` accepted and a
+  non-numeric timeout rejected with exit 2 (both scripts); the docker harness
+  gains a guarded provision step (`PBL_AK_NAME_HEX`, `PROVISION_AK_NAME`) and
+  **branch-specific assertions** — enrolled runs assert the derived device_id,
+  unprovisioned runs assert `device is unprovisioned` + `Verdict request
+  suppressed`, and neither can pass for the other.
+
+### VERIFY
+- **Build**: `build-pbl.sh --arch X64 --toolchain GCC` → **0 errors**, new
+  `PblApp.efi` SHA-256 `76e7d0a4fff37e34…`.
+- **Artifact — unprovisioned branch, real QEMU + swtpm boot of that binary**:
+  `=== Results: 17 PASS / 0 FAIL ===` including
+  `[PASS] unprovisioned detected`, `[PASS] verdict request suppressed`,
+  `[PASS] Verdict fetch step` (the step marker still prints, so the suppression
+  is inside the flow and not a skipped stage), and
+  `[PASS] Self-image hash matches PblApp.efi (76e7d0a4fff37e34…)` — the firmware
+  that ran is the firmware that compiled.
+- **Baseline before the changes**: `15 PASS / 0 FAIL` — so the two new checks are
+  additive, and the run was green before and after for the right reasons.
+- **Arg-parse teeth**: `--timeout notanumber` → `ERROR: timeout must be an integer
+  number of seconds` exit 2; `--bogus 5` → `ERROR: unknown argument` exit 2;
+  `--timeout 40` → runs. Before the fix the same invocation produced the
+  `timeout --timeout` failure / `NameError: name 'timeout' is not defined`.
+- `make check-firmware-todos` green (the D-131 TODO in `TpmClient.c` is gone
+  because the work is done); no new shellcheck findings vs `HEAD` in either
+  harness (1 pre-existing SC2086 in `ci-harness.sh`, unchanged);
+  `bash -n` both; `make graph-check` all invariants pass.
+
+### Fog cleared
+- **The device_id derivation had a second bug, and it was the worse one.**
+  `NV_ReadPublic` would have produced a fleet-constant device_id that *looks*
+  valid — worse than zeros, because zeros at least looked like absence. Found by
+  reading C2 §1.3 against §5.1 before writing the naive fix S152 planned.
+- **PBL CI's qemu job had two independent failures.** The harness argument
+  parsing was the second. Both are fixed and the parse fix is verified by
+  execution, so the next push reaches the QEMU step for the first time.
+- **How to make a harness test the branch it means to test.** "Unprovisioned" and
+  "provisioning silently failed" were indistinguishable; they are now asserted
+  separately, which is the same lesson as S152's "assert the input the system
+  actually produces".
+
+### Fog remaining
+- **No artifact with a non-zero device_id yet**, so D-131 stays OPEN. There is no
+  working host-side path to write NV `0x01C00003` on the swtpm instance QEMU
+  drives. Established by probe, not assumption: `libtss2-tcti-swtpm0` **is**
+  installed on jammy (3.2.0-1ubuntu1.1; 14 tcti libs), but tss2 3.2's swtpm TCTI
+  rejects both `swtpm:path=<ctrl sock>` and `swtpm:host=…,port=…` with
+  `Could not load tcti` — its `path=` means a state directory for an in-process
+  libtpms TPM, not a socket. Options recorded in D-131: tss2 ≥ 4.x, an EFI
+  helper that writes the index from inside the guest, or a tpm2-tools whose
+  libtpms TCTI can share swtpm's state file.
+- **My claim about NV_ReadPublic is code/spec-read, not device-observed** — no
+  probe ever returned device data, so it is recorded at `code-read` in the brain
+  rather than claimed higher. The enrolled artifact would confirm it.
+- Still unobserved: any CI run of S151/S152's workflow changes (no `gh`/token).
+- Carried forward: 19 Dependabot alerts; 10 of 13 enforcement paths
+  `verified-in-unit-test`; D-120/D-129/D-130; the stale side worktree.
+
+### Debt items closed
+- None. D-131 is narrower: firmware implemented and the unprovisioned branch
+  demonstrated; the enrolled branch still needs its artifact.
+
+### Debt items still open
+- D-120, D-129, D-130, D-131. Enforcement paths: 3/13 on hardware.
+
+### Blockers
+- D-131's last mile is a TPM provisioning channel (above). Everything else is
+  written and green.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary). Two green-but-blind checks:
+  the harness had no provisioning, so a run that could not reach the enrolled
+  path reported success; and `TIMEOUT="${1:-30}"` turned a wrong argument into a
+  *different* failure mode (`timeout --timeout`) that was never reached because
+  an earlier step failed first. Harness changes: branch-specific assertions, and
+  argument validation that rejects garbage with a named error instead of
+  producing nonsense downstream.
+- **Layer 2 — context provision** (secondary). C2 §1.3 and §5.1 disagreed about
+  how to read the AK Name, and the implementation followed the wrong one. The
+  contract now states the requirement once, in the section that defines the
+  index, with the reason.
+- **Process mistake, recorded because it cost a detour**: I edited
+  `ci-harness-docker.sh` while a container was still executing it; bash re-read
+  the file mid-run and reported `syntax error near unexpected token ')'` at a
+  line that is inside a heredoc. The file was valid (`bash -n` passed) — never
+  edit a script that a running process is reading.
+- **Process mistake 2**: I reported `libtss2-tcti-swtpm` as absent on jammy on
+  the strength of a `head`-truncated `ls`. It is present; the real fault was the
+  TCTI config form. Truncating a listing is not evidence.
+
+### Session artifacts
+- Changed: `HttpsClient.c`, `TpmClient.c`, `PblApp.h`, `PlatformState.c`,
+  `PblApp.c`, `ci-harness.sh`, `ci-harness-docker.sh`,
+  `docs/adr/PBL-C2-TPM-Contract.md`, `docs/adr/PBL-DEBT-LEDGER.md` (D-131).
+- Build: 0 errors, `PblApp.efi` SHA-256 `76e7d0a4fff37e34…`.
+- Run: unprovisioned branch **17 PASS / 0 FAIL**, self-image hash matched.
+- Reverted `firmware/PblPkg/PblPersistDxe.efi` — the build rewrote that tracked
+  binary although the module is untouched; committing an unexplained binary
+  change would be worse than reverting it.
+
+### Next session opening
+Close D-131 by getting one enrolled-path artifact: obtain a host-side NV write
+for `0x01C00003` — try tss2 ≥ 4.x first (its swtpm TCTI does speak the control
+protocol, which is the only missing capability), and if the distro pin forbids
+that, write a minimal EFI helper that defines and writes the index from inside
+the guest — then run the docker harness with the provision step succeeding and
+capture the serial log showing `device_id from AK Name: abab…` and a verdict
+request actually sent.
+
+---
+
+---
+
+## Session 154 — 2026-10-29 (D-131 CLOSED: device_id derived from the AK Name, both branches demonstrated in QEMU)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S153 block + opening),
+  `scripts/check-ruling.sh` (no open items → task mode),
+  `docs/adr/PBL-C2-TPM-Contract.md` §1/§1.3/§5.1/§5.4,
+  `docs/adr/PBL-C3-Network-Client.md` §4/§6.1, `docs/adr/PBL-C1-LockVerdict.md` §4,
+  `firmware/PblPkg/PblApp/{PblApp.c,PblApp.h,TpmClient.c,PlatformState.c,HttpsClient.c}`,
+  `firmware/PblPkg/{ci-harness.sh,ci-harness-docker.sh,build-pbl.sh}`,
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-131), `.devin/graph/GRAPH-SPEC.yaml` (debt section).
+- **Finding (the S153 plan was still wrong)**: `PblTpmReadAkName` issued
+  `TPM2_NV_ReadPublic`, whose `TPM2B_NAME` is the NV *index* name — derived from
+  the public template, not the device. Deriving device_id from it would have
+  given every machine in the fleet one identity: worse than the zeros it
+  replaced, because it looks valid. The 34 stored bytes need `TPM2_NV_Read`.
+- **Finding (no working provisioning path existed)**: on a fresh swtpm, NV
+  `0x01C00003` never exists, so every harness run took the unprovisioned branch
+  and the enrolled path was never executed. The harness's own provision step
+  could not work: it used a TCTI form that no image in this project accepts.
+- **Finding (ordering)**: because the read happens during step-1 platform
+  collection, before `PblTpmProvisionNvIndices` in step 3, a never-enrolled
+  device answers `RC=0x28B` = `TPM_RC_HANDLE` + parameter 2 ("the NV index in
+  handle 2 does not exist") rather than `0x14A` (defined-but-unwritten). Both map
+  to "unprovisioned" in the new code, so the outcome is right either way — and
+  the boot that showed `NV_Read(LOCK_STATE) RC=0x14A` alongside it confirms the
+  constants are being interpreted correctly.
+
+### IMPLEMENT
+- **Harness restructured** (`ci-harness-docker.sh`): provisioning now runs
+  *before* the QEMU-facing swtpm, because the two need different transports —
+  tpm2-tools needs a TCP data socket, QEMU must own the data channel via
+  `CMD_SET_DATAFD`. `PBL_SWTPM_DIR` lets a caller supply an already-provisioned
+  state, and the state is only wiped when the harness created it.
+- **Working provisioning recipe** (five earlier attempts were wrong; the
+  constraints are now written down, not remembered):
+  - TCTI must target swtpm's **data** port (`swtpm:host=…,port=<data>`); the
+    `path=` form is rejected by tss2 3.2 *and* 5.7, and `host/port` aimed at the
+    control port fails identically;
+  - `tpm2_startup -c` is mandatory — swtpm runs `--flags not-need-init`, so
+    without it every command answers `0x100 TPM_RC_INITIALIZE`;
+  - attributes must be the numeric dword **`0x420D000D`** (PBL's own platform
+    set); the pipe-separated names are rejected;
+  - the provisioning swtpm must be stopped before QEMU's starts, or the second
+    fails with `Could not lock access to lockfile`.
+- **`scripts/provision-qemu-tpm.sh`** (new): the same recipe as a reusable tool —
+  runs natively when the tools are present, otherwise delegates to a container,
+  and proves its own write by reading the index back before claiming success.
+- **Branch-specific assertions** already added in S153 now actually exercise both
+  paths: enrolled runs assert the derived device_id, unprovisioned runs assert
+  suppression and that no device_id exists.
+- **Assertion bug fixed**: the device_id check matched lower-case `abab`, but
+  EDK2's `Print` renders `%x` upper-case (`ABABABAB…ABAB`). The check was wrong,
+  not the firmware — pinned to upper case with a comment saying why.
+- **Artifacts committed to the repo** (`firmware/PblPkg/artifacts/`): both serial
+  logs and both results files, because "a run artifact" that lives in `/tmp` is
+  not one.
+
+### VERIFY
+- **Enrolled branch**: `=== Results: 16 PASS / 0 FAIL ===`, including
+  `[PASS] device_id derived from AK Name` and
+  `[PASS] Self-image hash matches PblApp.efi (76e7d0a4fff37e34…)`. Serial log:
+  `[OK] device_id from AK Name: ABABABAB...ABAB` for AK Name `000b…abab`.
+- **Unprovisioned branch (regression)**: `=== Results: 17 PASS / 0 FAIL ===`
+  with `[PASS] unprovisioned detected` and `[PASS] verdict request suppressed`.
+- Firmware build: **0 errors**; the binary that ran is the binary that built
+  (self-image hash matched in both runs).
+- `bash -n` clean on both harnesses and the new script; `shellcheck` **0**
+  findings on `ci-harness-docker.sh` and `scripts/provision-qemu-tpm.sh`
+  (`ci-harness.sh` keeps its 1 pre-existing SC2086); `make check-firmware-todos`
+  green; `make graph-check` all invariants pass.
+- Honest scope check — what the artifact does **not** prove: the QEMU ESP has no
+  `policy.cose`, so PBL logs `No lock_service_uri in policy — skipping online
+  fetch` and fails closed to denied-boot-with-local-unlock. The id reaching the
+  network needs a policy with a URI and a TLS endpoint with the pinned CA, which
+  is D-200's long-standing blocker. Recorded in the ledger rather than glossed.
+
+### Fog cleared
+- **How to write NV into the TPM the QEMU harness boots on**, in a project whose
+  images ship no working TCTI socket mode. Five wrong guesses produced the
+  answer; the constraints are now in two places in the repo.
+- **Why the enrolled path had never run**: not a firmware problem at all — the
+  harness had no way to create the index, and its own attempt silently degraded
+  to the unprovisioned branch, where the assertions obligingly passed.
+- **The device_id defect is genuinely fixed, not merely wired**: the value is
+  device-specific (derived from the stored AK Name), which the
+  `NV_ReadPublic` variant would never have been.
+
+### Fog remaining
+- **D-200** still owns the wire-level proof: no runtime test with real firmware
+  because the QEMU image has no policy blob carrying `lock_service_uri`.
+- **D-131's artifact is QEMU + swtpm, i.e. `emulated`** — real-media/hardware
+  evidence is D-129's, and I3 correctly refuses anything higher today.
+- Carried forward unchanged: 19 Dependabot alerts; 10 of 13 enforcement paths
+  `verified-in-unit-test`; D-120/D-129/D-130; the stale side worktree
+  `/home/cllin/lockdown-installer-security`; no CI run observed for S151–S154
+  (no `gh`, no token).
+- The whole working tree (S151–S154) is still **uncommitted**.
+
+### Debt items closed
+- **D-131 — CLOSED.** Criteria restated in the ledger at the moment of closing,
+  with each one shown met, and the one thing not claimed (the id on the wire)
+  cross-referenced to D-200. Artifact refs point at repo-committed files, not
+  `/tmp`.
+
+### Debt items still open
+- D-120, D-129, D-130 (+ D-200 server-side runtime test). Enforcement paths:
+  3/13 on hardware.
+
+### Blockers
+- Nothing blocking. D-131's path is done; the remaining PBL gaps are hardware
+  (D-129), signing (D-130), real-media BitLocker (D-120) and the on-wire
+  runtime test (D-200).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, and the same shape as S152).
+  A harness whose provisioning silently fails looks exactly like one that never
+  tried, and the unprovisioned assertions then pass. It took explicit
+  branch-specific assertions to make that visible. The general rule this session
+  adds: *a negative-path assertion is only meaningful if you can distinguish "the
+  condition was absent" from "the setup failed."*
+- **Layer 2 — context provision** (secondary). Five failed probes were spent
+  guessing a TCTI config string. The right first move was to read the TCTI's own
+  documentation/help instead of enumerating plausible syntaxes; the eventual
+  answer (data port, not control port) was documented behaviour, not a discovery.
+- **Process mistakes recorded, not buried**: (1) I asserted lower-case hex
+  against EDK2's upper-case `%x` output and reported a firmware failure that was
+  my assertion's; (2) I previously reported `libtss2-tcti-swtpm` missing on the
+  strength of a `head`-truncated listing; (3) in S153 I edited a harness while a
+  container was executing it. All three cost detours and each was caught only by
+  re-verifying rather than trusting the first result.
+
+### Session artifacts
+- New: `scripts/provision-qemu-tpm.sh`,
+  `firmware/PblPkg/artifacts/d131-enrolled-{serial.log,results.txt}`,
+  `firmware/PblPkg/artifacts/d131-unprovisioned-{serial.log,results.txt}`.
+- Changed: `firmware/PblPkg/ci-harness-docker.sh` (provision restructure,
+  `PBL_SWTPM_DIR`, branch assertions, case fix),
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-131 closed + criteria restated).
+- Evidence: enrolled **16/0**, unprovisioned **17/0**, build 0 errors, self-image
+  hash matched, graph invariants pass.
+
+### Next session opening
+Take **D-200's** remaining half — the on-wire proof that a verdict request
+carries the derived `device_id`: put a `policy.cose` on the QEMU ESP with a
+`lock_service_uri`, stand up a local TLS endpoint pinned by `tls_ca_pin`, and
+capture a POST body whose `device_id` equals the AK-Name-derived value, reusing
+the provisioning recipe now in `scripts/provision-qemu-tpm.sh`.
+
+---

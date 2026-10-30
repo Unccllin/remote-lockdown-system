@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-09-20 09:29:43 — 42 beliefs
+Generated: 2026-10-29 17:41:14 — 44 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -50,6 +50,13 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-033 | confirmed | emulated | Boot#### loader paths are classified: MEDIA_FILEPATH_DP nodes are walked and basename-matched against 'shell' — hits set ShellEntryMask (BootOrder position bits) + PBL_BPF_SHELL_IN_BOOT_ENTRY; ESP volumes are scanned for *shell* files → PBL_BPF_SHELL_ON_ESP; both feed the platform-state digest |
 | B-034 | confirmed | emulated | BootNext is read and its target classified (BootNextOption field + PBL_BPF_BOOTNEXT_SET/SHELL_AS_BOOTNEXT); BUT EDK2 BDS deletes BootNext at BdsEntry.c:1075 before dispatch, so a live BootNext is unobservable to any booted app — detection is best-effort for non-spec firmware |
 | B-035 | confirmed | emulated | On this OVMF build, an unordered Boot#### (exists but not in BootOrder) — or BootNext targeting an existent Boot#### — wedges the VM silently before console init (zero serial output) — emulated anomaly, likely OVMF/QEMU fw_cfg interaction, not confirmed on other firmware |
+
+## firmware/identity
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-043 | confirmed | code-read | PBL never populates PBL_PLATFORM_STATE.DeviceId: PblCollectPlatformState zeroes the struct and fills ~20 fields without DeviceId, and PblTpmReadAkName has no caller. Every verdict request therefore carries a 32-byte zero device_id, the server looks the device up under key 000...0 and serves the unknown-device branch, and PblVerifyVerdict step 5 compares zeros to zeros so it passes silently. |
+| B-044 | confirmed | spec-checked | TPM2_NV_ReadPublic returns the NV index Name (SHA-256(nameAlg) \|\| SHA-256(nvPublic template)), not the 34 bytes the index stores. PblTpmReadAkName used it and treated that value as the AK Name, so deriving device_id from it would have produced an identical device_id on every machine sharing the NV template — worse than the zero id it replaced, because it looks valid. The stored value requires TPM2_NV_Read. C2 §5.1 step 2 named the wrong command; C2 §1.3 defines the index as storing 34 bytes. |
 
 ## firmware/mor
 

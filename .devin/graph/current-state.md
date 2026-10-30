@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 52 | 55 | ✗ |
+| Debt items | 53 | 56 | ✗ |
 | Enforcement paths (on hardware) | 3 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 52 of 55 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 53 of 56 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 10 enforcement paths that still need hardware verification:**
 
@@ -53,98 +53,98 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 150 — 2026-10-28 (all three gating workflows go green: four CI-only failures, none of them in the code)
+## Latest session: 154 — 2026-10-29 (D-131 CLOSED: device_id derived from the AK Name, both branches demonstrated in QEMU)
 
 ### VERIFY
-- `CI` **success** (run 40706733041), `Lint` **success** (40706732967),
-  `CodeQL` **success** (40706732980) on `a99002a`; before this session all three
-  were red on every push since `2a984ed`. `PBL CI` remains red (see below).
-- Agent-logic verification, all in CI-faithful conditions rather than the
-  author's tree: server in a copy with **no `agent/dist`, no `.env`, node 20,
-  fresh `npm ci`** → 713 passed, coverage 71.57/68.52/78.74/72.44 (floors
-  66/62/70/67). Dashboard → 197 passed, 70.59/63.37/64.8/72.02 (floors
-  68/61/62/70). Agent with **Python 3.12.14 + pinned pytest 8.2.0** and the
-  **bare** `pytest` → 708 passed, coverage 61.31 %, exit 0 (before the fix the
-  same command exited 4 at collection).
-- Teeth, not just green: reintroducing one `export X=$(date)` turns
-  `make lint-workflows` red (and restoring returns 0); a 150 ms-delayed health
-  mock reproduces CI's exact `Unable to find an element with the text: 10
-  devices` against the old dashboard pattern and passes against the new one
-  (temporary proof file deleted); the missing-binary server run reproduced the
-  5 failures before the fix.
-- `make test-scripts` (4 auto-discovered files) green, `make graph-check` green,
-  server ESLint / dashboard ESLint / ruff check + format all exit 0.
+- **Enrolled branch**: `=== Results: 16 PASS / 0 FAIL ===`, including
+  `[PASS] device_id derived from AK Name` and
+  `[PASS] Self-image hash matches PblApp.efi (76e7d0a4fff37e34…)`. Serial log:
+  `[OK] device_id from AK Name: ABABABAB...ABAB` for AK Name `000b…abab`.
+- **Unprovisioned branch (regression)**: `=== Results: 17 PASS / 0 FAIL ===`
+  with `[PASS] unprovisioned detected` and `[PASS] verdict request suppressed`.
+- Firmware build: **0 errors**; the binary that ran is the binary that built
+  (self-image hash matched in both runs).
+- `bash -n` clean on both harnesses and the new script; `shellcheck` **0**
+  findings on `ci-harness-docker.sh` and `scripts/provision-qemu-tpm.sh`
+  (`ci-harness.sh` keeps its 1 pre-existing SC2086); `make check-firmware-todos`
+  green; `make graph-check` all invariants pass.
+- Honest scope check — what the artifact does **not** prove: the QEMU ESP has no
+  `policy.cose`, so PBL logs `No lock_service_uri in policy — skipping online
+  fetch` and fails closed to denied-boot-with-local-unlock. The id reaching the
+  network needs a policy with a URI and a TLS endpoint with the pinned CA, which
+  is D-200's long-standing blocker. Recorded in the ledger rather than glossed.
 
 ### Fog cleared
-- **Why CI was red for days**: four environment-dependent defects, none in
-  product logic — a missing local linter tier (shellcheck), a test suite
-  depending on a gitignored build artifact, a test suite depending on the
-  pytest invocation form, and one real test race. Each passed locally for a
-  different reason, which is why a local clean sweep kept disagreeing with CI.
-- **How to read CI without credentials**: check-run annotations are public where
-  job logs are not, and `ci-annotate.py` now guarantees a failing test job says
-  why in one annotation.
-- **S149 was real work with a malformed trace block** (`### S149`): it produced
-  the public-repo scrub, the proprietary licence, the CodeQL un-gate, the stale
-  pg-smoke assertion fix and the `JWT_SECRET_FILE` consumer bug. Header
-  normalised to `## Session 149` so the generator can see it; its state is
-  carried forward here.
+- **How to write NV into the TPM the QEMU harness boots on**, in a project whose
+  images ship no working TCTI socket mode. Five wrong guesses produced the
+  answer; the constraints are now in two places in the repo.
+- **Why the enrolled path had never run**: not a firmware problem at all — the
+  harness had no way to create the index, and its own attempt silently degraded
+  to the unprovisioned branch, where the assertions obligingly passed.
+- **The device_id defect is genuinely fixed, not merely wired**: the value is
+  device-specific (derived from the stored AK Name), which the
+  `NV_ReadPublic` variant would never have been.
 
 ### Fog remaining
-- **`PBL CI` is still red** (pre-existing; red on 2026-10-27 and 2026-10-28 as
-  well). Three jobs: both "Install build dependencies" steps exit **100** (apt)
-  on `ubuntu-22.04`, and "Static analysis" fails a **real** finding — 3 TODOs in
-  `firmware/PblPkg/PblApp/*.c` (`CoseVerify.c:410`, `TlsVerify.c:108`,
-  `TpmClient.c:1119`) carry no C1–C5/REQ/STUB reference. No logs (admin-only),
-  and those steps do not tee/annotate yet, so the apt cause is not yet named.
-- 19 Dependabot alerts remain (8 high, 6 moderate, 5 low); the previous session
-  took 161 → 19.
-- 10 of 13 enforcement paths are still `verified-in-unit-test`, not
-  `verified-on-hardware` — unchanged this session, and the Windows VM run stays
-  `emulated`, which I3 correctly refuses.
-- A stale side worktree `/home/cllin/lockdown-installer-security` on branch
-  `task/installer-security` (based on an old master, 2 files staged) exists and
-  was not touched.
+- **D-200** still owns the wire-level proof: no runtime test with real firmware
+  because the QEMU image has no policy blob carrying `lock_service_uri`.
+- **D-131's artifact is QEMU + swtpm, i.e. `emulated`** — real-media/hardware
+  evidence is D-129's, and I3 correctly refuses anything higher today.
+- Carried forward unchanged: 19 Dependabot alerts; 10 of 13 enforcement paths
+  `verified-in-unit-test`; D-120/D-129/D-130; the stale side worktree
+  `/home/cllin/lockdown-installer-security`; no CI run observed for S151–S154
+  (no `gh`, no token).
+- The whole working tree (S151–S154) is still **uncommitted**.
 
 ### Debt items closed
-- None. Nothing in this session met D-120, D-129 or D-130 close criteria.
+- **D-131 — CLOSED.** Criteria restated in the ledger at the moment of closing,
+  with each one shown met, and the one thing not claimed (the id on the wire)
+  cross-referenced to D-200. Artifact refs point at repo-committed files, not
+  `/tmp`.
 
 ### Debt items still open
-- D-120 (BitLocker detection), D-129 (real hardware validation for PBL),
-  D-130 (code signing for PblApp.efi). Enforcement paths 3/13 on hardware.
+- D-120, D-129, D-130 (+ D-200 server-side runtime test). Enforcement paths:
+  3/13 on hardware.
 
 ### Blockers
-- Job-log access: no `gh`, no token on this machine, so logs stay admin-only —
-  mitigated (not solved) by annotations.
-- Real hardware with TPM 2.0 + Windows for hardware-grade evidence (D-129/I3).
+- Nothing blocking. D-131's path is done; the remaining PBL gaps are hardware
+  (D-129), signing (D-130), real-media BitLocker (D-120) and the on-wire
+  runtime test (D-200).
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary). The harness had no gate
-  comparing the local verdict with CI's, so three divergences were invisible:
-  local lint ran without shellcheck (weaker), the server suite silently required
-  a local build artifact, and the agent suite silently required the `-m`
-  invocation. One real flaky test hid behind the same "passes locally" sign.
-  Harness change: `make lint-workflows` fails on missing tools instead of
-  linting less, `verify-environment.sh` §9 asserts the same, and the three test
-  jobs annotate their own failure output.
-- **Layer 5 — state management** (secondary). The previous session ended
-  mid-investigation and its trace block was malformed, so this session had to
-  re-derive the situation from git, transcripts and the API. Harness change is
-  only conventional: S149's header normalised; the annotation technique is
-  recorded above so the next session starts where this one stopped.
+- **Layer 4 — verification feedback** (primary, and the same shape as S152).
+  A harness whose provisioning silently fails looks exactly like one that never
+  tried, and the unprovisioned assertions then pass. It took explicit
+  branch-specific assertions to make that visible. The general rule this session
+  adds: *a negative-path assertion is only meaningful if you can distinguish "the
+  condition was absent" from "the setup failed."*
+- **Layer 2 — context provision** (secondary). Five failed probes were spent
+  guessing a TCTI config string. The right first move was to read the TCTI's own
+  documentation/help instead of enumerating plausible syntaxes; the eventual
+  answer (data port, not control port) was documented behaviour, not a discovery.
+- **Process mistakes recorded, not buried**: (1) I asserted lower-case hex
+  against EDK2's upper-case `%x` output and reported a firmware failure that was
+  my assertion's; (2) I previously reported `libtss2-tcti-swtpm` missing on the
+  strength of a `head`-truncated listing; (3) in S153 I edited a harness while a
+  container was executing it. All three cost detours and each was caught only by
+  re-verifying rather than trusting the first result.
 
 ### Session artifacts
-- Commits `2d03995` (four CI-only failures + annotations + shellcheck parity),
-  `a99002a` (agent collection fix).
-- New: `scripts/ci-annotate.py`, `scripts/test_ci_annotate.py`.
-- Green runs: CI / Lint / CodeQL on `a99002a`.
+- New: `scripts/provision-qemu-tpm.sh`,
+  `firmware/PblPkg/artifacts/d131-enrolled-{serial.log,results.txt}`,
+  `firmware/PblPkg/artifacts/d131-unprovisioned-{serial.log,results.txt}`.
+- Changed: `firmware/PblPkg/ci-harness-docker.sh` (provision restructure,
+  `PBL_SWTPM_DIR`, branch assertions, case fix),
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-131 closed + criteria restated).
+- Evidence: enrolled **16/0**, unprovisioned **17/0**, build 0 errors, self-image
+  hash matched, graph invariants pass.
 
 ### Next session opening
-Take `PBL CI`: add the tee+annotate pattern to its build and static-analysis
-jobs so the `apt-get` exit 100 names its own cause on the next run, and give the
-three TODO comments in `firmware/PblPkg/PblApp/` their contract references
-(CoseVerify's Ed25519 TODO is the interesting one — decide C1 vs C4 from
-PBL-C1-LockVerdict.md before writing it).
+Take **D-200's** remaining half — the on-wire proof that a verdict request
+carries the derived `device_id`: put a `policy.cose` on the QEMU ESP with a
+`lock_service_uri`, stand up a local TLS endpoint pinned by `tls_ca_pin`, and
+capture a POST body whose `device_id` equals the AK-Name-derived value, reusing
+the provisioning recipe now in `scripts/provision-qemu-tpm.sh`.
 
 ---
 
