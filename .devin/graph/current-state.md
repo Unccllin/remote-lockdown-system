@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 54 | 57 | ✗ |
+| Debt items | 54 | 58 | ✗ |
 | Enforcement paths (on hardware) | 3 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 54 of 57 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 54 of 58 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 10 enforcement paths that still need hardware verification:**
 
@@ -53,80 +53,82 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 159 — 2026-10-30 (D-130 signing proven: the signed PblApp loads under Secure Boot and Decision Step 5 passes)
+## Latest session: 160 — 2026-10-30 (D-133 filed: the Step 6 gates check shapes, not identities; SMM TPM gap diagnosed; a harness trap removed)
 
 ### VERIFY
-- `sbsign … && sbverify …` → **SIGN=0**, "Signature verification OK".
-- Secure Boot boot of the signed binary: `BdsDxe: starting Boot0001 …`,
-  `PBL — Pre-Boot Lock v0`, and
-  `[INFO] Decision BLOCK basis: dbx lacks the MS 2011 revocation` — proof that
-  Step 5 (Secure Boot enabled, not SetupMode) **passed**, since an earlier run
-  without Secure Boot reported `Secure Boot basis: Secure Boot disabled`.
-- `bash -n` clean and `shellcheck` **0** findings on the harness after the change.
-- Artifact: `firmware/PblPkg/artifacts/d130-secureboot-{serial.log,results.txt}`.
+- The new guard: `ERROR: /ovmf is mounted but /ovmf/OVMF_VARS.fd is missing`,
+  exit 1, no boot — run against `ovmf-sb2/`, which contains only `OVMF_CODE.fd`.
+- The D2 diagnostic: `tpm5` (Secure Boot run) holds `0x01C00003` with
+  `00 0b ab ab …`; `tpm2` (non-SB run) holds all four indices. Provisioning
+  intact, traffic not arriving.
+- `bash -n` clean, `shellcheck` **0** findings, `make graph-check` passes.
+- D3 **blocked**, recorded rather than papered over: `virt-fw-vars` fails on the
+  snakeoil varstore with `ValueError: year 22945 is out of range` and writes no
+  file — and my command piped through `tail`, so `VFW=0` was tail's status and the
+  failure was invisible until the run reported "Secure Boot disabled" again.
 
 ### Fog cleared
-- **Signing works and a signed PblApp really does load under Secure Boot.** That
-  is the claim D-130 is named after, and it is now demonstrated rather than
-  assumed.
-- **The Secure Boot path's remaining obstacle is not signing.** It is (a) db/dbx
-  *content* — Microsoft's CA and revocation list — and (b) the TPM interface
-  under SMM.
+- **What Step 6 actually checks**: presence, not identity. The gate cannot
+  distinguish a provisioned fleet device from a test platform.
+- **Where the SMM TPM problem is**: not provisioning, not the state — the
+  interface/device pairing between QEMU's SMM build and our swtpm startup.
+- **Why a varstore edit produced no varstore**: `virt-fw-vars` cannot parse the
+  snakeoil store; the failure had been masked by a pipeline.
 
 ### Fog remaining
-- **db/dbx content**: the policy wants the MS Windows UEFI CA 2023 in db and the
-  MS 2011 revocation in dbx. Snakeoil has neither. Needs an enrollment mechanism
-  or a varstore built with both our cert and Microsoft's — a provisioning
-  problem of the same shape as putting NV into the TPM.
-- **TPM under SMM**: `-device tpm-tis` reaches a TPM holding none of our
-  provisioned indices (`TPM_RC_HANDLE` 0x18B/0x9A2 — which *reads* like "device
-  unprovisioned" but is an interface mismatch); `-device tpm-crb` stalls the boot
-  with no output. Until resolved, a Secure Boot run cannot derive `device_id`, so
-  every wire check fails for a reason unrelated to signing.
+- **D-133's fix** — fingerprint or DER-subject verification against the real
+  Windows UEFI CA 2023 and MS 2011 revocation, with the expected values coming
+  from policy (C4) rather than firmware. Needs those certificates pinned once.
+- **dbx enrolment route** — `virt-fw-vars` against the *empty* `OVMF_VARS_4M.fd`,
+  or a from-scratch store built in SetupMode by an EFI helper (db/dbx are
+  writable unauthenticated there; PK enrolment is what flips SetupMode off).
+- **TPM under SMM** — the documented Secure Boot recipe pairs SMM with
+  `tpm-crb`, which stalls with our swtpm startup sequence; `tpm-tis` is not
+  SMM-capable. Next: try swtpm started plainly (no `not-need-init` / `ioctl -i`)
+  for the CRB case.
 - Carried forward: 19 Dependabot alerts; 10 of 13 enforcement paths
-  `verified-in-unit-test`; D-120/D-129/D-130 open; D-132's `PblTlsVerifyCert`
-  residual; no CI run observed for S151–S159; the stale side worktree.
+  `verified-in-unit-test`; D-120/D-129/D-130/D-133 open; D-132's
+  `PblTlsVerifyCert` residual; no CI run observed for S151–S160.
 
 ### Debt items closed
-- None. **D-130 stays OPEN**, but its scope is now precise: signing is proven;
-  the two remaining items are provisioning, not signing.
+- None. **D-133 opened** (2 items closed this session: none).
 
 ### Debt items still open
-- D-120, D-129, D-130 (+ D-132's residual).
+- D-120, D-129, D-130, D-133 (+ D-132's residual).
 
 ### Blockers
-- Two, both named above. Neither is a design question.
+- All three remaining items have a named next step; none is a design question.
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary, fifth recurrence in this thread).
-  Twice the harness produced a *plausible but wrong* result and I nearly recorded
-  it: a dangling symlink silently disabled Secure Boot while the run looked
-  normal, and `TPM_RC_HANDLE` reads like "device unprovisioned" when the real
-  cause is an interface mismatch. Both were caught only by decoding the RC and by
-  noticing the file was a symlink — not by the harness's own verdict.
-- **Layer 3 — execution environment** (secondary). Every one of the three
-  harness requirements (SMM, symlink, passphrase) is environment knowledge that
-  lived outside the repo. They are now written down where the next run will need
-  them.
-- **Process note**: I asserted `[ -f ]` on a path I had just populated via
-  `docker cp` instead of checking it was a regular file, and I ran the harness
-  without `/firmware` mounted once (exit 127). Both were cheap but avoidable —
-  assert the artefact, not the intention.
+- **Layer 4 — verification feedback** (primary, sixth occurrence in this thread).
+  Three separate cases in one session of a *plausible but wrong* result: a
+  presence-only check that reads like an identity check, a TPM error that reads
+  like "unprovisioned" when it is a routing fault, and a missing varstore that
+  read like "Secure Boot disabled". In each case the harness's own verdict was
+  believable and wrong; only reading the implementation, the state directory, or
+  the actual RC distinguished them.
+- **Layer 1 — task specification** (mine). I wrote a four-item plan (D1–D5) and
+  the very first read invalidated its largest premise. The plan should have begun
+  with "read what the gate checks" instead of assuming the check matched its name
+  — the same error as S157's "build a DEBUG build so the rationale prints".
+- **Process note**: piping a command through `tail` and reading its exit status
+  cost a whole run — `VFW=0` was `tail`'s. Same class as the earlier
+  `head`-truncated `ls` and the `git add` with a bad path: the success signal
+  came from the wrong process.
 
 ### Session artifacts
-- New: `firmware/PblPkg/artifacts/d130-secureboot-{serial.log,results.txt}`.
-- Changed: `firmware/PblPkg/test-d131-wire-harness.sh` (Secure Boot mode),
-  `docs/adr/PBL-DEBT-LEDGER.md` (D-130).
-- Commit `3c1d45b` plus the graph record.
+- Changed: `firmware/PblPkg/test-d131-wire-harness.sh` (hard failure for an
+  incomplete `/ovmf`), `docs/adr/PBL-DEBT-LEDGER.md` (D-133 + D-130 corrections),
+  `.devin/graph/GRAPH-SPEC.yaml` (D-133).
+- Commit `5d81c7e` plus the graph record.
 
 ### Next session opening
-Close D-130's two provisioning gaps: (1) build a varstore whose db holds both the
-snakeoil cert and the Microsoft Windows UEFI CA 2023, and whose dbx holds the MS
-2011 revocation list — `virt-fw-vars` or an EFI enrollment helper are the two
-realistic routes, and both need the Microsoft data fetched first; (2) fix the TPM
-under SMM so a Secure Boot run can also derive `device_id` — start by checking
-whether swtpm's chardev supports the CRB protocol the SMM build expects, since
-`tpm-tis` demonstrably reaches a different TPM and `tpm-crb` stalls the boot.
+Take **D-133**: make Decision Step 6 check identity instead of shape — obtain the
+real Windows UEFI CA 2023 certificate and the MS 2011 revocation payload once,
+pin their SHA-256 fingerprints in policy (C4), and verify the db/dbx entries
+against them, with the negative test (a self-signed cert in db must NOT satisfy
+the Windows-CA check) as the evidence. That is also what makes the D-130 PASS
+path meaningful, rather than merely reachable.
 
 ---
 
@@ -137,6 +139,7 @@ whether swtpm's chardev supports the CRB protocol the SMM build expects, since
 | D-120 | BitLocker detection not implemented | OPEN | — |
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
+| D-133 | Decision Step 6 flags report presence, not identity: DbHasWi | OPEN | — |
 
 See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130) for close criteria.
 

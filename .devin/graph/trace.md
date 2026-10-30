@@ -2826,3 +2826,120 @@ whether swtpm's chardev supports the CRB protocol the SMM build expects, since
 `tpm-tis` demonstrably reaches a different TPM and `tpm-crb` stalls the boot.
 
 ---
+
+---
+
+## Session 160 — 2026-10-30 (D-133 filed: the Step 6 gates check shapes, not identities; SMM TPM gap diagnosed; a harness trap removed)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S159 block + opening),
+  `scripts/check-ruling.sh` (no open items → task mode),
+  `firmware/PblPkg/PblApp/PlatformState.c` (db/dbx collection),
+  `firmware/PblPkg/PblApp/Decision.c` (Step 6),
+  `firmware/PblPkg/test-d131-wire-harness.sh`, and the tooling landscape for
+  offline varstore editing.
+- **Finding (the plan I had just written was wrong, and it matters)**: S159 said
+  closing D-130's first gap required enrolling Microsoft's Windows UEFI CA 2023
+  and MS 2011 revocation. Reading the implementation shows both flags are
+  presence-only — `DbHasWindowsUefiCa2023` is TRUE for any X.509 certificate in
+  db (the code comment says the DER is never parsed), `DbxHasMs2011Revocation`
+  for any X.509/X509_SHA256 entry in dbx. So the gate already passes on the
+  snakeoil certificate, and nothing from Microsoft is needed to satisfy it.
+  That is not a reprieve, it is the defect: filed as **D-133**.
+- **Finding (SMM TPM gap diagnosed)**: after a Secure Boot run, index
+  `0x01C00003` is still present in the state directory with the correct AK Name,
+  and a non-Secure-Boot run on the same directory has all four indices. Nothing
+  was wiped; the SMM guest's TPM traffic simply never reaches the swtpm instance
+  the harness started. Provisioning is ruled out.
+- **Finding (a trap that produced a near-wrong conclusion)**: with `/ovmf`
+  mounted but `OVMF_VARS.fd` missing, the harness silently fell back to the stock
+  non-Secure-Boot OVMF, so the run looked normal and reported
+  `Secure Boot disabled`. This is the second time that fallback produced a
+  plausible-but-wrong result.
+
+### IMPLEMENT
+- **D-133** filed in the ledger and `GRAPH-SPEC.yaml` (OPEN, SECURITY) with the
+  code references, the impact, and close criteria that demand both a negative
+  and a positive test.
+- **Harness**: a mounted `/ovmf` is now treated as a statement of intent — an
+  incomplete one fails hard instead of falling back. **The guard was verified
+  against the exact broken mount that fooled it.**
+- Attempted D3 (offline dbx enrolment) with `virt-fw-vars` from Debian trixie,
+  the tool that also carries Microsoft's KEK data.
+
+### VERIFY
+- The new guard: `ERROR: /ovmf is mounted but /ovmf/OVMF_VARS.fd is missing`,
+  exit 1, no boot — run against `ovmf-sb2/`, which contains only `OVMF_CODE.fd`.
+- The D2 diagnostic: `tpm5` (Secure Boot run) holds `0x01C00003` with
+  `00 0b ab ab …`; `tpm2` (non-SB run) holds all four indices. Provisioning
+  intact, traffic not arriving.
+- `bash -n` clean, `shellcheck` **0** findings, `make graph-check` passes.
+- D3 **blocked**, recorded rather than papered over: `virt-fw-vars` fails on the
+  snakeoil varstore with `ValueError: year 22945 is out of range` and writes no
+  file — and my command piped through `tail`, so `VFW=0` was tail's status and the
+  failure was invisible until the run reported "Secure Boot disabled" again.
+
+### Fog cleared
+- **What Step 6 actually checks**: presence, not identity. The gate cannot
+  distinguish a provisioned fleet device from a test platform.
+- **Where the SMM TPM problem is**: not provisioning, not the state — the
+  interface/device pairing between QEMU's SMM build and our swtpm startup.
+- **Why a varstore edit produced no varstore**: `virt-fw-vars` cannot parse the
+  snakeoil store; the failure had been masked by a pipeline.
+
+### Fog remaining
+- **D-133's fix** — fingerprint or DER-subject verification against the real
+  Windows UEFI CA 2023 and MS 2011 revocation, with the expected values coming
+  from policy (C4) rather than firmware. Needs those certificates pinned once.
+- **dbx enrolment route** — `virt-fw-vars` against the *empty* `OVMF_VARS_4M.fd`,
+  or a from-scratch store built in SetupMode by an EFI helper (db/dbx are
+  writable unauthenticated there; PK enrolment is what flips SetupMode off).
+- **TPM under SMM** — the documented Secure Boot recipe pairs SMM with
+  `tpm-crb`, which stalls with our swtpm startup sequence; `tpm-tis` is not
+  SMM-capable. Next: try swtpm started plainly (no `not-need-init` / `ioctl -i`)
+  for the CRB case.
+- Carried forward: 19 Dependabot alerts; 10 of 13 enforcement paths
+  `verified-in-unit-test`; D-120/D-129/D-130/D-133 open; D-132's
+  `PblTlsVerifyCert` residual; no CI run observed for S151–S160.
+
+### Debt items closed
+- None. **D-133 opened** (2 items closed this session: none).
+
+### Debt items still open
+- D-120, D-129, D-130, D-133 (+ D-132's residual).
+
+### Blockers
+- All three remaining items have a named next step; none is a design question.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, sixth occurrence in this thread).
+  Three separate cases in one session of a *plausible but wrong* result: a
+  presence-only check that reads like an identity check, a TPM error that reads
+  like "unprovisioned" when it is a routing fault, and a missing varstore that
+  read like "Secure Boot disabled". In each case the harness's own verdict was
+  believable and wrong; only reading the implementation, the state directory, or
+  the actual RC distinguished them.
+- **Layer 1 — task specification** (mine). I wrote a four-item plan (D1–D5) and
+  the very first read invalidated its largest premise. The plan should have begun
+  with "read what the gate checks" instead of assuming the check matched its name
+  — the same error as S157's "build a DEBUG build so the rationale prints".
+- **Process note**: piping a command through `tail` and reading its exit status
+  cost a whole run — `VFW=0` was `tail`'s. Same class as the earlier
+  `head`-truncated `ls` and the `git add` with a bad path: the success signal
+  came from the wrong process.
+
+### Session artifacts
+- Changed: `firmware/PblPkg/test-d131-wire-harness.sh` (hard failure for an
+  incomplete `/ovmf`), `docs/adr/PBL-DEBT-LEDGER.md` (D-133 + D-130 corrections),
+  `.devin/graph/GRAPH-SPEC.yaml` (D-133).
+- Commit `5d81c7e` plus the graph record.
+
+### Next session opening
+Take **D-133**: make Decision Step 6 check identity instead of shape — obtain the
+real Windows UEFI CA 2023 certificate and the MS 2011 revocation payload once,
+pin their SHA-256 fingerprints in policy (C4), and verify the db/dbx entries
+against them, with the negative test (a self-signed cert in db must NOT satisfy
+the Windows-CA check) as the evidence. That is also what makes the D-130 PASS
+path meaningful, rather than merely reachable.
+
+---
