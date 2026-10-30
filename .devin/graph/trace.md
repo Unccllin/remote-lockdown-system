@@ -3062,3 +3062,118 @@ signer and the real Windows UEFI CA 2023 — attempt `virt-fw-vars` against the
 fabricated hash in this session before it reached a commit.
 
 ---
+
+---
+
+## Session 162 — 2026-10-30 (invariant I2 verifies evidence existence; the graph's green now means something)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S161 block + opening),
+  `scripts/check-ruling.sh` (no open items → task mode),
+  `.devin/graph/graph_assert.py` (I2 and its caller),
+  `agent/tests/test_graph_assertions.py` (the I2 class), `AGENTS.md` (invariants),
+  and the spec's debt entries.
+- **Finding (the hole, measured before fixing)**: I2 only required `commit_ref`
+  and `artifact_ref` to be non-empty strings. Measuring what a real check would
+  say: **43 citations of 14 unique hashes across the then-54 CLOSED items do not
+  resolve in this repository.** Cause is in the project's own trace — session 149
+  ran `git filter-repo` to scrub a leaked credential and rewrote all history, so
+  every hash cited before it is orphaned; S149 recorded "all SHAs are
+  post-rewrite" but nothing noticed the *graph* still pointed at the old history.
+- **Finding (the I2 tests encoded the weak contract)**: they passed `"abc1234"`
+  as a commit and `"docs/x.md"` as an artifact — neither exists. The tests were
+  asserting the shape of the rule, not its purpose.
+- **Finding (a false positive to avoid)**: naive token extraction would treat
+  `0x420D000D` and `d131-wire-capture.py` as commit hashes, and brace-expanded
+  artifact refs as single files.
+
+### IMPLEMENT
+- **`graph_assert.py`, I2** now verifies rather than pattern-matches:
+  - commit tokens (lowercase hex, 7–40 chars, not part of a longer word) must
+    resolve via `git rev-parse --verify <hash>^{commit}`; `git` being absent is
+    treated as "cannot verify", not as "missing" (the same reasoning that makes
+    `make lint-workflows` fail loudly instead of linting less);
+  - plain repository paths in `artifact_ref` must exist on disk; globs and
+    brace-expanded families are skipped because they name many files;
+  - violations name the offending hash or path and say what to do.
+- **`.devin/graph/orphaned-commit-refs.txt`** (new): a shrink-only baseline of
+  the 14 hashes orphaned by the rewrite, with the cause and the regeneration
+  command in its header. It records debt; it does not hide it.
+- **`agent/tests/test_graph_assertions.py`**: the I2 class rewritten against real
+  values and extended with five cases (nonexistent commit, prose that is not a
+  commit, baselined orphan, nonexistent artifact path, glob/brace refs).
+- **`AGENTS.md`**: the I2 line now states that both refs must *resolve*, and
+  names the baseline.
+
+### VERIFY
+- **Teeth, both directions, demonstrated twice**:
+  - unit level — `1fa4a5b` (the exact session-161 mistake) rejected; real hash,
+    baselined orphan and committed artifact path accepted; nonexistent artifact
+    path rejected;
+  - **end to end** — a fabricated CLOSED item injected into the spec made
+    `make graph-check` print
+    `[I2] debt_close_requires_evidence: Debt item D-999 cites commit 1fa4a5b,
+    which does not exist in this repository` and fail; restoring the spec
+    returned green.
+- `agent/.venv/bin/python -m pytest agent/tests/test_graph_assertions.py` → **48
+  passed**. `make graph-check` passes. `make test-scripts` → 5 suites pass.
+
+### Fog cleared
+- **What the graph's green meant before**: that two fields had text in them.
+  Forty-three of the closed items were citing commits that had not existed since
+  the S149 rewrite, and the enforcement layer could not tell.
+- **Why the hole survived**: it was invisible from the inside — every local check
+  passed, and only resolving the strings against git exposed it. The same shape
+  as the other six findings in this thread: a plausible artefact that no one had
+  compared against reality.
+
+### Fog remaining
+- **The 14 orphaned hashes are recorded, not repaired.** Any of those items can
+  still be re-verified against the real commit that closed it — the pre-rewrite
+  bundle at `~/rls-pre-scrub-20261027-110852.bundle` holds the old history if
+  anyone wants to map them; otherwise the items stand on their artifacts.
+- Unchanged: D-120/D-129/D-130/D-133 open; TPM-under-SMM and varstore enrolment
+  still block the Secure Boot items; `PblTlsVerifyCert` residual; 19 Dependabot
+  alerts; 10/13 enforcement paths unit-test only; no CI run observed for
+  S151–S162.
+
+### Debt items closed
+- None. This session hardened the enforcement layer rather than closing product
+  debt.
+
+### Debt items still open
+- D-120, D-129, D-130, D-133 (+ D-132 residual).
+
+### Blockers
+- None for this item.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, seventh occurrence). The graph is
+  this project's verification layer, and its evidence check could not detect
+  fabricated or orphaned evidence — so *every* "CLOSED" in the ledger inherited
+  that weakness. Adding a check that resolves strings against reality is the same
+  move that fixed the wire harness (decode the captured bytes independently) and
+  the CI diagnosis (capture the traffic): make the artefact prove itself.
+- **Layer 5 — state management** (secondary). The history rewrite in S149 was
+  correct and well-documented, but its consequence — that every cited hash became
+  unverifiable — was recorded nowhere the graph could see. A rewrite is a
+  state-management event, and its dependents need updating at the same time.
+- **Process note**: I measured before implementing (43 citations, 14 unique),
+  which is what turned a vague "make it stricter" into a ratchet with a baseline.
+  Had I implemented first, the graph would have gone red across 54 items and I
+  would have weakened the rule to make it pass.
+
+### Session artifacts
+- New: `.devin/graph/orphaned-commit-refs.txt`.
+- Changed: `.devin/graph/graph_assert.py`,
+  `agent/tests/test_graph_assertions.py`, `AGENTS.md`.
+- Commit `bec4f12` plus the graph record.
+
+### Next session opening
+Take the varstore-enrolment capability (the second deliverable): try
+`virt-fw-vars` against the *empty* `OVMF_VARS_4M.fd` — only the snakeoil store
+broke it — and if that works, build a store holding our signer plus the real
+Windows UEFI CA 2023 and a dbx entry, which yields D-133's positive test and
+D-130's Step 6 clearance in one run.
+
+---
