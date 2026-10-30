@@ -1,0 +1,64 @@
+[2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;042;160t[2J[001;001H[2J[001;001H[8;056;240t[2J[001;001HBdsDxe: loading Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+
+========================================
+  PBL — Pre-Boot Lock v0
+  Contracts: C1-C4 (frozen 2026-09-05)
+========================================
+
+[1/8] Collecting platform state...
+  [OK] device_id from AK Name: ABABABAB...ABAB
+  [INFO] Loaded images: 109 (digest 5819AE75C85CA10E...)
+  [INFO] Boot path: flags=0x00 shell-mask=0x0000 bootnext=0xFFFF
+  [INFO] Boot-ID: reset=3 restart=0 safe=1
+[2/8] Parsing policy blob...
+  [INFO] policy.cose: 185 bytes
+  [INFO] Policy sig verify skipped — root of trust not provisioned (dev mode)
+[3/8] Reading TPM NV state...
+  [OK] NV indices provisioned
+  [OK] HMAC session established (bound to lock-state NV)
+  [WARN] NV_Read(counter 0x1C00004) RC=0x9A2
+[4/8] Fetching verdict...
+  [INFO] POSTing verdict request to https://10.0.2.2:8443/v1/verdict
+[INFO] IPv4: 1 Ip4Config2 instance(s), DHCP started on 1
+[INFO] IPv4: DHCP lease obtained
+  [INFO] Online fetch failed: Aborted — falling back to cache
+  [INFO] Using cached verdict: 1 (grace_until=0)
+[5/8] Verifying verdict...
+  [INFO] Skipping verification for cached verdict
+  [WARN] NV_Increment(0x1C00004) RC=0x9A2
+  [OK] Lock state cached to TPM NV
+[6/8] Evaluating decision...
+[7/8] Extending PCR 12/13...
+  [OK] PCR HMAC session established
+  Self-image SHA-256: 76E7D0A4FFF37E34ECBBB1C9EBEED5BEF4A6FB8C8D73942B518156C40865B3E9
+  [OK] PCR 13 (self-image) extended
+  [OK] PCR 13 (inputs) extended
+  [OK] PCR 12 (decision) extended
+[8/8] Decision: BLOCK — lock screen
+  [MOR] SetVariable failed: Write Protected
+  [MOR] Lock not supported: Write Protected
+[2J[001;001H[0m[37m[44m
+
+
+                    ========================================
+                              THIS DEVICE IS LOCKED
+                    ========================================
+
+
+                                   Device ID:
+  abababab6317e9be591071175ab6c7ee6a2d1185741fbff6ca41ef88120d3e48
+
+                                    Reason:
+  ￤ￂﾷ
+
+                 This device has been administratively locked.
+                      Do not attempt to bypass this lock.
+
+
+
+--- Override Challenge ---
+Challenge code: 34b91f00000000010000000000000068
+
+Enter the override response code:
+> qemu-system-x86_64: terminating on signal 15 from pid 36 (timeout)

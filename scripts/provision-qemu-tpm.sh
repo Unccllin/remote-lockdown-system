@@ -150,6 +150,8 @@ else
       kill \"\$(cat /prov/st/.provision.pid)\" 2>/dev/null || true
       sleep 2
       rm -f /prov/st/.provision.pid /prov/st/.ak-name.bin
+      # Make the state usable by the unprivileged user the QEMU harness runs as.
+      chmod -R a+rwX /prov/st
     "
 fi
 

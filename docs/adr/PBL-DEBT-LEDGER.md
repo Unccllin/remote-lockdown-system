@@ -857,6 +857,34 @@
 - **Blocker**: No runtime test with PBL firmware (PblHttpsPost still a
   stub). No real signing key persisted in production KV (test/dev keys only).
 - **Close criteria**: Runtime test with PBL firmware via QEMU/swtpm.
+- **Update (2026-10-30, session 155) — the runtime test now exists and gets
+  3 of 6 checks; the remaining gap is the guest→host HTTP path.**
+  - New `firmware/PblPkg/test-d131-wire-harness.sh` boots the real firmware with
+    TPM + NIC (slirp) + RNG, an ESP carrying `\EFI\PBL\policy.cose`, and a TLS
+    server that records the request it receives. New
+    `firmware/PblPkg/d131-wire-capture.py` generates the TLS leaf (CN must equal
+    the URI host — PblTlsVerifyCert compares the CN, not a SAN) and a C4 policy
+    carrying key 70 (`lock_service_uri`) and key 73 (`tls_ca_pin` = SHA-256 of
+    that leaf). The dev build has no policy root of trust, so
+    `PblVerifyPolicySignature` returns `EFI_UNSUPPORTED` and accepts the blob.
+  - **Passing (3):** policy blob loaded from the ESP, `device_id` derived from
+    the provisioned AK Name, and the firmware attempting
+    `POST https://10.0.2.2:8443/v1/verdict`.
+  - **Not passing (3):** the server receives no connection, so no request body
+    is captured and the wire `device_id` cannot be asserted.
+  - **Narrowed symptom** (`firmware/PblPkg/artifacts/d200-wire-attempt-*`):
+    `DHCP started` + `DHCP lease obtained` both succeed, then
+    `Online fetch failed: Aborted — falling back to cache` with **no connection
+    reaching the listener at all**. Ruled out by test, not assumed: the server
+    certificate algorithm (EC and RSA both fail identically) and the bind
+    address (127.0.0.1 and 0.0.0.0 both receive nothing). So DHCP/networking is
+    not the problem and the abort is not a certificate rejection — the request
+    dies inside the OVMF HTTP/TLS stack before any TCP connection is made.
+  - **Next step for whoever picks this up**: add `-object filter-dump` to the
+    QEMU line (the S0.7 DHCP harness already uses one) and check whether SYNs
+    leave the guest at all. That distinguishes "OVMF never transmits" from
+    "slirp drops guest→10.0.2.2 traffic", which is the fork the current evidence
+    cannot resolve.
   Persist production signing key.
 
 ### D-201 — PBL policy endpoint not implemented

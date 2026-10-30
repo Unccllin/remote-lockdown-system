@@ -1,0 +1,22 @@
+# D-200 wire-proof attempt — 2026-10-30T05:28:29Z
+# Harness: firmware/PblPkg/test-d131-wire-harness.sh (new, see D-200)
+# Assets: d131-wire-capture.py --gen-assets (TLS leaf CN=10.0.2.2, policy 70/73)
+# TPM: provisioned AK Name 000b+ab*32 via scripts/provision-qemu-tpm.sh
+# Result: 3 of 6 checks pass — the POST is attempted, the guest never reaches the server.
+
+  [PASS] policy blob loaded from ESP
+  [PASS] device_id derived from AK Name
+  [PASS] verdict request posted over TLS
+  [FAIL] server received a request
+  [FAIL] wire device_id matches AK Name
+  [FAIL] request body captured
+=== Results: 3 PASS / 3 FAIL ===
+
+# Server saw no connection at all (only its own startup line):
+[SERVER] listening on 0.0.0.0:8443 (TLS)
+
+# Firmware: reached the network and attempted the POST, then aborted:
+  [INFO] POSTing verdict request to https://10.0.2.2:8443/v1/verdict
+[INFO] IPv4: 1 Ip4Config2 instance(s), DHCP started on 1
+[INFO] IPv4: DHCP lease obtained
+  [INFO] Online fetch failed: Aborted — falling back to cache
