@@ -1,0 +1,32 @@
+# Commit hashes cited by CLOSED debt items that no longer exist in this repository.
+#
+# Cause: session 149 ran `git filter-repo` to scrub a leaked credential from the
+# public repository. That rewrote every commit, so every hash cited before the
+# rewrite is orphaned — 43 of them across 54 closed items. Session 149 recorded
+# "all SHAs are post-rewrite" in its own trace, but nothing noticed that the
+# *graph* still pointed at the old history, because invariant I2 only checked that
+# commit_ref was a non-empty string.
+#
+# This file exists so I2 can enforce existence for new evidence without failing on
+# evidence that was genuine when written. It may only SHRINK: removing a line
+# means the ref was corrected to a real commit. Adding a line needs the same
+# scrutiny as the original claim, because a hash in here is a claim the graph
+# cannot verify.
+#
+# Regenerate the candidate list with:
+#   git rev-parse --verify --quiet <hash>^{commit}
+
+1511288
+47a2ca4
+4e4b6e6
+4ed2f48
+56c579c
+60c0a78
+684d7eb
+6898dce
+690abdd
+83bd5d299708b9b8307e2b6efabfab843d1d4c37
+9612fbb
+985f059
+d111ada
+ee311de

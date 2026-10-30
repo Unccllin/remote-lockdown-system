@@ -68,7 +68,14 @@ SESSION-START → RULE-ZERO → IMPLEMENT → VERIFY → ARTIFACT → CLOSE-DEBT
 **Graph invariants (enforced by graph_assert.py):**
 
 - I1: No phase runs before its dependencies are COMPLETE
-- I2: No debt item CLOSED without commit_ref + artifact_ref
+- I2: No debt item CLOSED without commit_ref + artifact_ref — and both must
+  *resolve*. Every cited hash is verified with `git rev-parse --verify` and every
+  plain repo path in `artifact_ref` must exist on disk. A hash that cannot resolve
+  is a violation unless it is listed in `.devin/graph/orphaned-commit-refs.txt`
+  (the shrink-only baseline of refs orphaned by the S149 history rewrite: 43
+  citations of 14 unique hashes across the then-54 closed items). Before this, I2
+  only checked the fields were non-empty, so a hash written down before the commit
+  existed passed — which happened in session 161.
 - I3: No enforcement path marked "verified-on-hardware" without real hardware artifact
 - I4: No session close without trace.md status block update
 - I5: No code changes before RULE-ZERO is complete

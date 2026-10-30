@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -118,26 +119,125 @@ def assert_phase_deps_met(graph: dict, phase_id: str) -> None:
             )
 
 
-def assert_debt_close_has_evidence(debt_item: dict) -> None:
-    """I2: No debt item can be CLOSED without commit_ref and artifact_ref.
+# A cited hash looks like a git abbreviation: lowercase hex, 7+ characters, not
+# part of a longer word. Deliberately strict — "0x420D000D" and "d131-wire" must
+# not be mistaken for commits.
+_COMMIT_TOKEN = re.compile(r"(?<![0-9a-zA-Z])[0-9a-f]{7,40}(?![0-9a-zA-Z])")
 
-    Raises GraphViolationError if a CLOSED debt item lacks evidence.
+# Repository-relative paths named by an artifact_ref. Globs and brace-expanded
+# forms are skipped by _artifact_paths() because they are not single files.
+_ARTIFACT_PATH = re.compile(
+    r"\b((?:firmware|agent|scripts|docs|server|serverless|dashboard|electron)"
+    r"/[A-Za-z0-9_./-]+)"
+)
+
+_ORPHAN_BASELINE = ".devin/graph/orphaned-commit-refs.txt"
+
+
+def _repo_root() -> Path:
+    """Repository root — graph_assert.py lives at .devin/graph/."""
+    return Path(__file__).resolve().parents[2]
+
+
+def load_orphan_baseline() -> set[str]:
+    """Hashes recorded as orphaned by a history rewrite.
+
+    S149 ran `git filter-repo` to scrub a leaked credential and rewrote every
+    commit; debt refs written before that point can never resolve again. The
+    baseline keeps I2 honest for *new* entries without failing on evidence that
+    was real when it was written. It may only shrink.
     """
-    if debt_item.get("status") == "CLOSED":
-        commit_ref = debt_item.get("commit_ref", "")
-        artifact_ref = debt_item.get("artifact_ref", "")
-        if not commit_ref:
-            raise GraphViolationError(
-                "I2", "debt_close_requires_evidence",
-                f"Debt item {debt_item['id']} is CLOSED but has no commit_ref",
-                f"Description: {debt_item.get('description', '—')}",
-            )
-        if not artifact_ref:
-            raise GraphViolationError(
-                "I2", "debt_close_requires_evidence",
-                f"Debt item {debt_item['id']} is CLOSED but has no artifact_ref",
-                f"Description: {debt_item.get('description', '—')}",
-            )
+    path = _repo_root() / _ORPHAN_BASELINE
+    if not path.is_file():
+        return set()
+    hashes: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            hashes.add(line)
+    return hashes
+
+
+def _commit_exists(commit_hash: str) -> bool:
+    """True when the hash resolves to a commit in this repository.
+
+    Returns True when git is unavailable: a missing tool must not be reported as
+    a missing commit, the same reasoning that makes `make lint-workflows` fail
+    loudly rather than silently linting less.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{commit_hash}^{{commit}}"],
+            cwd=_repo_root(),
+            capture_output=True,
+        )
+    except OSError:
+        return True
+    return result.returncode == 0
+
+
+def _artifact_paths(artifact_ref: str) -> list[str]:
+    """Repository-relative paths named in an artifact_ref, minus globs/braces."""
+    out = []
+    for path in _ARTIFACT_PATH.findall(artifact_ref):
+        if any(ch in path for ch in "*{},?"):
+            continue
+        if path.endswith("/") or path.endswith("-"):
+            continue
+        out.append(path)
+    return out
+
+
+def assert_debt_close_has_evidence(debt_item: dict) -> None:
+    """I2: No debt item can be CLOSED without evidence that actually exists.
+
+    Previously this only required the two fields to be non-empty, so a CLOSED
+    item could cite a commit that was never created — demonstrated in session 161,
+    when a predicted hash was accepted by the graph. Now every cited commit must
+    resolve in git (or be recorded in the orphan baseline) and every plain
+    repository path in artifact_ref must exist on disk.
+
+    Raises GraphViolationError if a CLOSED debt item lacks or miscites evidence.
+    """
+    if debt_item.get("status") != "CLOSED":
+        return
+
+    commit_ref = debt_item.get("commit_ref", "")
+    artifact_ref = debt_item.get("artifact_ref", "")
+    if not commit_ref:
+        raise GraphViolationError(
+            "I2", "debt_close_requires_evidence",
+            f"Debt item {debt_item['id']} is CLOSED but has no commit_ref",
+            f"Description: {debt_item.get('description', '—')}",
+        )
+    if not artifact_ref:
+        raise GraphViolationError(
+            "I2", "debt_close_requires_evidence",
+            f"Debt item {debt_item['id']} is CLOSED but has no artifact_ref",
+            f"Description: {debt_item.get('description', '—')}",
+        )
+
+    orphans = load_orphan_baseline()
+    for token in _COMMIT_TOKEN.findall(commit_ref):
+        if token in orphans or _commit_exists(token):
+            continue
+        raise GraphViolationError(
+            "I2", "debt_close_requires_evidence",
+            f"Debt item {debt_item['id']} cites commit {token}, which does not "
+            f"exist in this repository",
+            "Either cite the real commit or record the hash in "
+            f"{_ORPHAN_BASELINE} with a justification.",
+        )
+
+    root = _repo_root()
+    for path in _artifact_paths(artifact_ref):
+        if (root / path).exists():
+            continue
+        raise GraphViolationError(
+            "I2", "debt_close_requires_evidence",
+            f"Debt item {debt_item['id']} names artifact {path}, which does not exist",
+            "Cite a path that is committed (a run artifact in /tmp is not evidence).",
+        )
 
 
 def assert_rule_zero_complete(trace_path: Path) -> None:

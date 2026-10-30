@@ -492,15 +492,106 @@ class TestI1PhaseDeps:
 
 
 class TestI2DebtCloseEvidence:
-    """I2: a CLOSED debt item must carry commit_ref AND artifact_ref.
+    """I2: a CLOSED debt item must carry evidence that actually exists.
 
     This is the rule that keeps the debt ledger from lying — "we fixed it" is not
-    a close; a commit and an artifact are. It had no test.
+    a close; a commit and an artifact are. Session 161 showed why "non-empty" was
+    not enough: a hash was written down before the commit existed, and the graph
+    accepted it because nothing ever resolved the string.
     """
 
-    def test_closed_with_both_refs_passes(self):
+    @staticmethod
+    def _real_commit() -> str:
+        import subprocess
+
+        return subprocess.run(
+            ["git", "rev-list", "-1", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    @staticmethod
+    def _baselined_orphan() -> str:
+        from graph_assert import load_orphan_baseline
+
+        orphans = load_orphan_baseline()
+        assert orphans, "the orphan baseline should not be empty while history is rewritten"
+        return sorted(orphans)[0]
+
+    def test_closed_with_real_commit_and_artifact_passes(self):
         assert_debt_close_has_evidence(
-            {"id": "D-1", "status": "CLOSED", "commit_ref": "abc1234", "artifact_ref": "docs/x.md"}
+            {
+                "id": "D-1",
+                "status": "CLOSED",
+                "commit_ref": f"{self._real_commit()} — real",
+                "artifact_ref": "firmware/PblPkg/artifacts/d200-roundtrip-results.txt",
+            }
+        )
+
+    def test_nonexistent_commit_is_rejected(self):
+        """The exact shape of the session-161 mistake: a plausible hash that is not a commit."""
+        try:
+            assert_debt_close_has_evidence(
+                {
+                    "id": "D-1b",
+                    "status": "CLOSED",
+                    "commit_ref": "1fa4a5b — invented before committing",
+                    "artifact_ref": "firmware/PblPkg/artifacts/d200-roundtrip-results.txt",
+                }
+            )
+            raise AssertionError("Should have raised")
+        except GraphViolationError as e:
+            assert "1fa4a5b" in str(e)
+            assert "does not exist" in str(e)
+
+    def test_prose_that_is_not_a_commit_is_ignored(self):
+        """Hex literals and filenames must not be mistaken for commit hashes."""
+        assert_debt_close_has_evidence(
+            {
+                "id": "D-1c",
+                "status": "CLOSED",
+                "commit_ref": f"{self._real_commit()} — attr 0x420D000D, d131-wire-capture.py",
+                "artifact_ref": "firmware/PblPkg/artifacts/d200-roundtrip-results.txt",
+            }
+        )
+
+    def test_pre_rewrite_orphan_in_baseline_passes(self):
+        """Evidence cited before the history rewrite stays valid; it just cannot resolve."""
+        assert_debt_close_has_evidence(
+            {
+                "id": "D-1d",
+                "status": "CLOSED",
+                "commit_ref": f"{self._baselined_orphan()} — pre-rewrite",
+                "artifact_ref": "firmware/PblPkg/artifacts/d200-roundtrip-results.txt",
+            }
+        )
+
+    def test_nonexistent_artifact_path_is_rejected(self):
+        try:
+            assert_debt_close_has_evidence(
+                {
+                    "id": "D-1e",
+                    "status": "CLOSED",
+                    "commit_ref": f"{self._real_commit()}",
+                    "artifact_ref": "firmware/PblPkg/artifacts/never-written.txt",
+                }
+            )
+            raise AssertionError("Should have raised")
+        except GraphViolationError as e:
+            assert "never-written.txt" in str(e)
+            assert "does not exist" in str(e)
+
+    def test_glob_and_brace_artifact_refs_are_skipped(self):
+        """A brace-expanded or glob path names a family of files, not one file."""
+        assert_debt_close_has_evidence(
+            {
+                "id": "D-1f",
+                "status": "CLOSED",
+                "commit_ref": f"{self._real_commit()}",
+                "artifact_ref": "firmware/PblPkg/artifacts/d131-{enrolled,unprovisioned}-*.log",
+            }
         )
 
     def test_closed_without_commit_ref_fails(self):
