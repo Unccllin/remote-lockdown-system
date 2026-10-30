@@ -53,98 +53,93 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 154 — 2026-10-29 (D-131 CLOSED: device_id derived from the AK Name, both branches demonstrated in QEMU)
+## Latest session: 155 — 2026-10-30 (on-wire verdict-request harness: 3 of 6 checks; the guest never reaches the server)
 
 ### VERIFY
-- **Enrolled branch**: `=== Results: 16 PASS / 0 FAIL ===`, including
-  `[PASS] device_id derived from AK Name` and
-  `[PASS] Self-image hash matches PblApp.efi (76e7d0a4fff37e34…)`. Serial log:
-  `[OK] device_id from AK Name: ABABABAB...ABAB` for AK Name `000b…abab`.
-- **Unprovisioned branch (regression)**: `=== Results: 17 PASS / 0 FAIL ===`
-  with `[PASS] unprovisioned detected` and `[PASS] verdict request suppressed`.
-- Firmware build: **0 errors**; the binary that ran is the binary that built
-  (self-image hash matched in both runs).
-- `bash -n` clean on both harnesses and the new script; `shellcheck` **0**
-  findings on `ci-harness-docker.sh` and `scripts/provision-qemu-tpm.sh`
-  (`ci-harness.sh` keeps its 1 pre-existing SC2086); `make check-firmware-todos`
-  green; `make graph-check` all invariants pass.
-- Honest scope check — what the artifact does **not** prove: the QEMU ESP has no
-  `policy.cose`, so PBL logs `No lock_service_uri in policy — skipping online
-  fetch` and fails closed to denied-boot-with-local-unlock. The id reaching the
-  network needs a policy with a URI and a TLS endpoint with the pinned CA, which
-  is D-200's long-standing blocker. Recorded in the ledger rather than glossed.
+- **3 of 6 checks pass**, and they are the three that show the firmware did its
+  part: `[PASS] policy blob loaded from ESP`, `[PASS] device_id derived from AK
+  Name`, `[PASS] verdict request posted over TLS`.
+- **3 do not**: `[FAIL] server received a request`, `[FAIL] wire device_id
+  matches AK Name`, `[FAIL] request body captured`.
+- **Narrowed by test, not by reasoning** — each of these was run, not assumed:
+  - DHCP works (`DHCP started` and `DHCP lease obtained` in the serial log), so
+    networking is not the cause;
+  - the server certificate algorithm is not the cause — EC and RSA fail
+    identically;
+  - the bind address is not the cause — `127.0.0.1` and `0.0.0.0` both receive
+    nothing at all;
+  - the abort is `EFI_ABORTED` from the HTTP layer with **no TCP connection ever
+    reaching the listener**, i.e. inside the OVMF HTTP/TLS stack.
+- `bash -n` clean and `shellcheck` **0** findings on both new/changed scripts
+  (the one SC2317/SC2329 note on `cleanup` is a documented `trap` false positive
+  and carries a disable comment); `make check-firmware-todos` green;
+  `make graph-check` all invariants pass.
+- Artifact committed: `firmware/PblPkg/artifacts/d200-wire-attempt-{serial.log,
+  results.txt}`, labelled as an attempt with 3 of 6 passing — not as a success.
 
 ### Fog cleared
-- **How to write NV into the TPM the QEMU harness boots on**, in a project whose
-  images ship no working TCTI socket mode. Five wrong guesses produced the
-  answer; the constraints are now in two places in the repo.
-- **Why the enrolled path had never run**: not a firmware problem at all — the
-  harness had no way to create the index, and its own attempt silently degraded
-  to the unprovisioned branch, where the assertions obligingly passed.
-- **The device_id defect is genuinely fixed, not merely wired**: the value is
-  device-specific (derived from the stored AK Name), which the
-  `NV_ReadPublic` variant would never have been.
+- **What PBL needs before it will post**: a policy blob on the ESP whose key 70
+  is an `https://` URI and whose key 73 is the SHA-256 of a leaf certificate
+  whose **CN** equals that URI's host. No verdict-signing material is needed to
+  capture the request. That recipe is now executable in two files instead of
+  being tribal knowledge.
+- **The on-wire gap is not the TLS pin and not DHCP** — both were the obvious
+  suspects and both are demonstrably not it.
 
 ### Fog remaining
-- **D-200** still owns the wire-level proof: no runtime test with real firmware
-  because the QEMU image has no policy blob carrying `lock_service_uri`.
-- **D-131's artifact is QEMU + swtpm, i.e. `emulated`** — real-media/hardware
-  evidence is D-129's, and I3 correctly refuses anything higher today.
-- Carried forward unchanged: 19 Dependabot alerts; 10 of 13 enforcement paths
-  `verified-in-unit-test`; D-120/D-129/D-130; the stale side worktree
-  `/home/cllin/lockdown-installer-security`; no CI run observed for S151–S154
-  (no `gh`, no token).
-- The whole working tree (S151–S154) is still **uncommitted**.
+- **The request dies in the OVMF HTTP/TLS stack before TCP connect.** The fork
+  the evidence cannot resolve: does OVMF never transmit, or does slirp drop the
+  guest→10.0.2.2 flow? One `-object filter-dump` run answers it, and that is
+  written into D-200 as the next step. D-200 therefore stays **OPEN**.
+- The S0.7 DHCP harness asserts `Verdict fetched over DHCP` against an `http://`
+  mock while the firmware rejects `http://` — that assertion looks unreachable
+  today and should be checked rather than trusted.
+- Not observed: any CI run of S151–S155 (no `gh`/token). Carried forward: 19
+  Dependabot alerts; 10 of 13 enforcement paths `verified-in-unit-test`;
+  D-120/D-129/D-130/D-200 open; the stale side worktree.
 
 ### Debt items closed
-- **D-131 — CLOSED.** Criteria restated in the ledger at the moment of closing,
-  with each one shown met, and the one thing not claimed (the id on the wire)
-  cross-referenced to D-200. Artifact refs point at repo-committed files, not
-  `/tmp`.
+- None. D-131 stays closed (S154) — nothing this session changed its evidence.
 
 ### Debt items still open
-- D-120, D-129, D-130 (+ D-200 server-side runtime test). Enforcement paths:
-  3/13 on hardware.
+- D-120, D-129, D-130, D-200 (narrowed, with a harness and a one-line next step).
 
 ### Blockers
-- Nothing blocking. D-131's path is done; the remaining PBL gaps are hardware
-  (D-129), signing (D-130), real-media BitLocker (D-120) and the on-wire
-  runtime test (D-200).
+- D-200's last mile is now a single diagnostic question (SYN vs drop), not a
+  design question.
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary, and the same shape as S152).
-  A harness whose provisioning silently fails looks exactly like one that never
-  tried, and the unprovisioned assertions then pass. It took explicit
-  branch-specific assertions to make that visible. The general rule this session
-  adds: *a negative-path assertion is only meaningful if you can distinguish "the
-  condition was absent" from "the setup failed."*
-- **Layer 2 — context provision** (secondary). Five failed probes were spent
-  guessing a TCTI config string. The right first move was to read the TCTI's own
-  documentation/help instead of enumerating plausible syntaxes; the eventual
-  answer (data port, not control port) was documented behaviour, not a discovery.
-- **Process mistakes recorded, not buried**: (1) I asserted lower-case hex
-  against EDK2's upper-case `%x` output and reported a firmware failure that was
-  my assertion's; (2) I previously reported `libtss2-tcti-swtpm` missing on the
-  strength of a `head`-truncated listing; (3) in S153 I edited a harness while a
-  container was executing it. All three cost detours and each was caught only by
-  re-verifying rather than trusting the first result.
+- **Layer 4 — verification feedback** (primary). The harness was right to fail,
+  but I spent two iterations on guesses — certificate algorithm, then bind
+  address — where one `filter-dump` would have split the hypothesis space in a
+  single run. The instrument-first rule is the same one S154 learned about
+  branch assertions: capture evidence that *discriminates*, instead of
+  enumerating plausible causes and testing them one at a time.
+- **Layer 3 — execution environment** (contributing). A provisioner that runs as
+  root and a harness that runs unprivileged is a defect that only appears when
+  the two are combined; it cost a run and produced a misleading
+  `Could not lock access to lockfile` that looks like a leftover process.
+- **Process mistake recorded**: I told the user "this is my last iteration" and
+  then ran two more. The intent was to stop guessing; the right way to say it
+  would have been "one more run *to instrument*". Better to name the exit
+  condition precisely than to announce an iteration budget and exceed it.
 
 ### Session artifacts
-- New: `scripts/provision-qemu-tpm.sh`,
-  `firmware/PblPkg/artifacts/d131-enrolled-{serial.log,results.txt}`,
-  `firmware/PblPkg/artifacts/d131-unprovisioned-{serial.log,results.txt}`.
-- Changed: `firmware/PblPkg/ci-harness-docker.sh` (provision restructure,
-  `PBL_SWTPM_DIR`, branch assertions, case fix),
-  `docs/adr/PBL-DEBT-LEDGER.md` (D-131 closed + criteria restated).
-- Evidence: enrolled **16/0**, unprovisioned **17/0**, build 0 errors, self-image
-  hash matched, graph invariants pass.
+- New: `firmware/PblPkg/test-d131-wire-harness.sh`,
+  `firmware/PblPkg/d131-wire-capture.py`,
+  `firmware/PblPkg/artifacts/d200-wire-attempt-{serial.log,results.txt}`.
+- Changed: `scripts/provision-qemu-tpm.sh` (state handed over `a+rwX`),
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-200 update with the narrowed symptom and the
+  filter-dump next step).
+- Commit `5dabf9b`.
 
 ### Next session opening
-Take **D-200's** remaining half — the on-wire proof that a verdict request
-carries the derived `device_id`: put a `policy.cose` on the QEMU ESP with a
-`lock_service_uri`, stand up a local TLS endpoint pinned by `tls_ca_pin`, and
-capture a POST body whose `device_id` equals the AK-Name-derived value, reusing
-the provisioning recipe now in `scripts/provision-qemu-tpm.sh`.
+Add `-object filter-dump,id=dump0,netdev=net0,file=/test/d200-wire.pcap` to the
+QEMU line in `test-d131-wire-harness.sh`, run it once, and read the pcap: if no
+SYN to 10.0.2.2:8443 ever leaves the guest the problem is OVMF's HTTP/TLS
+configuration; if SYNs leave and nothing answers, it is slirp's guest→host
+mapping in this container topology. Either answer converts D-200 from "runtime
+test missing" into a specific, fixable defect.
 
 ---
 
