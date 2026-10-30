@@ -78,7 +78,14 @@ for tool in mkfs.fat mmd mcopy sgdisk; do
   command -v "${tool}" >/dev/null 2>&1 || fail "${tool} not installed (mtools/dosfstools/gdisk)"
 done
 
-if [ -f /ovmf/OVMF_CODE.fd ] && [ -f /ovmf/OVMF_VARS.fd ]; then
+# A mounted /ovmf directory is a deliberate statement of intent, so an incomplete
+# one is a hard failure. Previously a missing OVMF_VARS.fd (e.g. a varstore edit
+# that silently produced nothing) fell through to the stock non-Secure-Boot OVMF
+# and the run reported "Secure Boot disabled" while looking entirely normal —
+# which cost two runs and nearly produced a wrong conclusion.
+if [ -d /ovmf ] && [ -n "$(ls -A /ovmf 2>/dev/null)" ]; then
+  [ -f /ovmf/OVMF_CODE.fd ] || fail "/ovmf is mounted but /ovmf/OVMF_CODE.fd is missing"
+  [ -f /ovmf/OVMF_VARS.fd ] || fail "/ovmf is mounted but /ovmf/OVMF_VARS.fd is missing"
   OVMF_CODE="/ovmf/OVMF_CODE.fd"
   OVMF_VARS_SRC="/ovmf/OVMF_VARS.fd"
 else

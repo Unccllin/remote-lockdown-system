@@ -687,17 +687,40 @@
     it to `dbx lacks the MS 2011 revocation`. So the signing half of this item —
     what its title is about — works end to end in QEMU.
   - **Remaining, named**:
-    1. **db/dbx content.** The policy requires the MS Windows UEFI CA 2023 in db
-       and the MS 2011 revocation in dbx; the snakeoil store has neither. That is
-       enrollment of Microsoft's data, not signing — the same class of problem as
-       provisioning NV into the TPM, and it needs an enrollment mechanism or a
-       varstore built with both our cert and Microsoft's.
+    1. **db/dbx content.** ~~The policy requires the MS Windows UEFI CA 2023 in db
+       and the MS 2011 revocation in dbx~~ — **corrected (session 160)**: it does
+       not. `PlatformState.c:166-185, 196-220` sets `DbHasWindowsUefiCa2023` for
+       *any* X.509 certificate in db (the code comment admits the DER is never
+       parsed) and `DbxHasMs2011Revocation` for *any* X.509/X509_SHA256 entry in
+       dbx. So db is already satisfied by the snakeoil certificate, and only dbx
+       needs an entry — any entry. That the check is presence-only is now filed
+       as **D-133**; making it mean what its name says is the real work.
+       Enrolling that entry offline was attempted: `virt-fw-vars` (Debian trixie,
+       the tool that also carries Microsoft's KEK data) **fails on the snakeoil
+       varstore** with `ValueError: year 22945 is out of range`, producing no
+       output file. Next routes: try it against the *empty* `OVMF_VARS_4M.fd`, or
+       build the store from empty in SetupMode with an EFI enrollment helper
+       (db/dbx are writable unauthenticated there, and PK enrollment is what
+       flips SetupMode off).
     2. **TPM under SMM.** With `-device tpm-tis` the guest reaches a TPM that
        holds none of our provisioned indices — `TPM_RC_HANDLE` (0x18B / 0x9A2),
        which *reads* like "device unprovisioned" but is an interface mismatch;
-       with `-device tpm-crb` the boot stalls with no serial output at all. Until
-       that is resolved, a Secure Boot run cannot derive `device_id`, so every
-       wire check fails for a reason unrelated to signing.
+       with `-device tpm-crb` the boot stalls with no serial output at all.
+       **Diagnosed (session 160)**: the provisioned state is *intact* — inspecting
+       the same state directory afterwards shows `0x1C00003` present with the
+       correct AK Name, and a non-Secure-Boot run on the same directory shows all
+       four indices. So nothing was wiped and nothing was misprovisioned: the SMM
+       guest's TPM traffic does not reach the swtpm instance the harness started.
+       That rules out provisioning and points at the device/interface pairing
+       (`tpm-tis` is not SMM-capable; the documented OVMF Secure Boot recipe pairs
+       SMM with `tpm-crb`, which stalls with our swtpm startup sequence).
+  - **Harness trap removed (session 160)**: a mounted `/ovmf` with a missing
+    file used to fall through to the stock non-Secure-Boot OVMF, so a varstore
+    edit that silently produced nothing looked like a normal run reporting
+    "Secure Boot disabled". That cost two runs and nearly a wrong conclusion.
+    A mounted `/ovmf` is now a statement of intent: an incomplete one fails hard
+    (`ERROR: /ovmf is mounted but /ovmf/OVMF_VARS.fd is missing`, exit 1) and the
+    guard was verified against the exact broken mount that fooled it.
   - **Harness requirements discovered** (now encoded, and each cost a wasted
     run): Secure Boot needs `-machine q35,smm=on` plus
     `-global driver=cfi.pflash01,property=secure,value=on`; the snakeoil CODE
@@ -934,6 +957,43 @@
     would compare a peer certificate against the pin still has no caller. Making
     it live requires the manual `EFI_TLS_PROTOCOL` route recorded below; that is
     defence in depth, not a gap in the fix as ruled.
+
+### D-133 — Decision Step 6 checks report properties they never verified
+- **Status**: OPEN (found 2026-10-30, session 160, while planning the Secure Boot
+  work for D-130)
+- **Category**: SECURITY
+- **What the code does**: `PblCollectDbDbxState` (`PlatformState.c:166-185`,
+  `196-220`) walks db and dbx and sets flags whose names promise specificity the
+  implementation does not have:
+  - `DbHasWindowsUefiCa2023` is set TRUE for **any** `EFI_CERT_X509_GUID` entry
+    in db. The comment admits it: "Full identification of Windows UEFI CA 2023
+    requires parsing the DER certificate and checking the Subject/Issuer CN,
+    which is beyond the scope of this implementation. For now, presence of any
+    X.509 cert in db is a strong indicator."
+  - `DbxHasMs2011Revocation` is set TRUE for **any** `EFI_CERT_X509_GUID` or
+    `EFI_CERT_X509_SHA256_GUID` entry in dbx — no check that it is the Microsoft
+    2011 revocation.
+- **Why it matters**: `Decision.c` Step 6 BLOCKs on these flags, so they are a
+  security gate, and a security gate that reports a property it never verified is
+  worse than one that admits ignorance. A machine with a single self-signed
+  development certificate in db satisfies a check named "has Windows UEFI CA
+  2023"; any unrelated revocation entry satisfies "has MS 2011 revocation". The
+  gate cannot distinguish a properly provisioned fleet device from a test
+  platform, which is precisely the distinction it exists to make.
+- **Impact seen in practice**: the QEMU Secure Boot run (D-130) passes the db
+  half of Step 6 with Canonical's *snakeoil* test certificate in db, and blocks
+  only on dbx being empty — evidence that the check is presence-based in a way
+  that would also pass on a misprovisioned device.
+- **Fix direction**: compare against known-good identities rather than shapes —
+  either parse the certificate DER and match the Subject CN (and issuer), or
+  compare SHA-256 fingerprints of the expected certificates, which are stable and
+  cheap. The expected values belong in the policy blob (C4) rather than compiled
+  into firmware, so a fleet can update them without a reflash.
+- **Close criteria**: a negative test and a positive test, both run: a db
+  containing only a self-signed non-Windows certificate must **not** satisfy the
+  Windows-UEFI-CA check, and a db containing the real Windows UEFI CA 2023
+  **must**; likewise an unrelated X.509 revocation entry must not satisfy the
+  MS 2011 check. Artifact: the serial log of both runs showing the basis line.
 
 ---
 
@@ -1718,6 +1778,7 @@
 | D-130 | Code signing not configured | OPEN | SECURITY |
 | D-131 | PBL never populates device_id — every verdict request carries 32 zero bytes | CLOSED (DeviceId now populated from NV 0x01C00003 via TPM2_NV_Read; QEMU artifacts `firmware/PblPkg/artifacts/d131-*`: enrolled 16/0 with a real device_id, unprovisioned 17/0 with the request suppressed) | STUB |
 | D-132 | Pinned CA never reached the TLS layer — `PblTlsVerifyCert` had no caller and EDK2 always verified against an empty platform store, so the HTTPS fetch could not complete | CLOSED (C4 key 78 carries the CA DER; PBL rewrites the platform `TlsCaCertificate` store before each fetch. Artifacts `firmware/PblPkg/artifacts/d200-wire-verified-*` = 6/0 with a real `device_id` on the wire, and `d132-mismatched-ca-results.txt` = mismatched CA correctly fails. Residual: `PblTlsVerifyCert` still has no caller — the pin is enforced by construction, not by that function) | SECURITY |
+| D-133 | Decision Step 6 checks are presence-only — any X.509 cert in db satisfies `DbHasWindowsUefiCa2023` and any X.509 revocation in dbx satisfies `DbxHasMs2011Revocation`, so the gate cannot tell a provisioned fleet device from a test platform | OPEN | SECURITY |
 | D-200 | PBL verdict endpoint not implemented | CLOSED (Express + serverless endpoints implemented; runtime test with real firmware now passes end to end — `firmware/PblPkg/artifacts/d200-roundtrip-*`: 8/0, request posted over TLS with a real device_id and a signed ES256 verdict verified and decoded. Observation: decision still BLOCKs on an UNLOCKED verdict, unattributable at RELEASE verbosity) | SERVER |
 | D-201 | PBL policy endpoint not implemented | CLOSED (GET/POST /v1/policy implemented) | SERVER |
 | D-202 | PBL enrollment endpoint not implemented | CLOSED (POST /v1/enroll implemented) | SERVER |

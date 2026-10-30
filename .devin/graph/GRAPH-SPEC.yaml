@@ -975,6 +975,20 @@ debt_items:
       d200-roundtrip-{results.txt,serial.log} — 8 PASS/0 FAIL with
       "[OK] Verdict signature verified (ES256)" and "Verdict decoded: verdict=0"
 
+  - id: D-133
+    description: >-
+      Decision Step 6 flags report presence, not identity: DbHasWindowsUefiCa2023
+      is set for any X.509 cert in db and DbxHasMs2011Revocation for any X.509
+      revocation in dbx, so a self-signed development certificate satisfies a
+      check named "has Windows UEFI CA 2023".
+    close_criteria: >-
+      Certificate identity verified (DER subject or SHA-256 fingerprint) against
+      the expected Windows UEFI CA 2023 and MS 2011 revocation, with a negative
+      test (self-signed cert in db must not satisfy the check) and a positive
+      test, both evidenced by serial-log basis lines.
+    status: OPEN
+    category: SECURITY
+
   - id: D-201
     description: "PBL policy endpoint (GET /v1/policy/{version}) not implemented"
     close_criteria: "COSE_Sign1 policy blob served from KV with correct Content-Type"
