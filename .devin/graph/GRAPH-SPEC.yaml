@@ -989,7 +989,7 @@ debt_items:
     status: OPEN
     category: SECURITY
     commit_ref: >-
-      1fa4a5b — PlatformState.c walks EFI_SIGNATURE_DATA entries and compares
+      6cff1ff — PlatformState.c walks EFI_SIGNATURE_DATA entries and compares
       fingerprints (negative test passes; positive test blocked on varstore
       enrolment)
     artifact_ref: >-
