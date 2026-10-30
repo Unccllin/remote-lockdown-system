@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 53 | 56 | ✗ |
+| Debt items | 53 | 57 | ✗ |
 | Enforcement paths (on hardware) | 3 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 53 of 56 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 53 of 57 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 10 enforcement paths that still need hardware verification:**
 
@@ -134,12 +134,12 @@
 - Commit `5dabf9b`.
 
 ### Next session opening
-Add `-object filter-dump,id=dump0,netdev=net0,file=/test/d200-wire.pcap` to the
-QEMU line in `test-d131-wire-harness.sh`, run it once, and read the pcap: if no
-SYN to 10.0.2.2:8443 ever leaves the guest the problem is OVMF's HTTP/TLS
-configuration; if SYNs leave and nothing answers, it is slirp's guest→host
-mapping in this container topology. Either answer converts D-200 from "runtime
-test missing" into a specific, fixable defect.
+Take **D-132**: replace `EFI_HTTP_PROTOCOL` with `EFI_TLS_PROTOCOL` in the
+verdict fetch — verify method none, handshake, obtain the peer certificate, then
+call the existing `PblTlsVerifyCert` against the C4 pin and the URI host. The
+harness to prove it already exists (`test-d131-wire-harness.sh`, 3 of 6 checks,
+with `scripts/pcap-summary.py` for the wire view); success is all 6 passing plus a
+deliberately wrong pin failing to fetch.
 
 ---
 
@@ -150,6 +150,7 @@ test missing" into a specific, fixable defect.
 | D-120 | BitLocker detection not implemented | OPEN | — |
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
+| D-132 | The C4-pinned CA never reaches the TLS layer: PblTlsVerifyCe | OPEN | — |
 
 See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130) for close criteria.
 

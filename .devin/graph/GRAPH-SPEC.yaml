@@ -929,6 +929,21 @@ debt_items:
       d131-unprovisioned-{serial.log,results.txt} — 17 PASS/0 FAIL with the
       verdict request suppressed
 
+  - id: D-132
+    description: >-
+      The C4-pinned CA never reaches the TLS layer: PblTlsVerifyCert has no
+      caller, and EDK2's EFI_HTTP_PROTOCOL hard-codes EFI_TLS_VERIFY_PEER
+      against a platform TlsCaCertificate store PBL never populates (and cannot
+      populate from a SHA-256 pin). The HTTPS verdict fetch therefore resets the
+      connection after TCP is established.
+    close_criteria: >-
+      Verdict fetch over TLS completed with the pin check in the data path —
+      EFI_TLS_PROTOCOL used directly with PblTlsVerifyCert applied to the peer
+      certificate, evidenced by a wire-harness run that captures a request body
+      and by a wrong-pin run that fails.
+    status: OPEN
+    category: SECURITY
+
   # -------------------------------------------------------------------------
   # Server-side PBL debt items (D-200 through D-210)
   # The serverless Worker has NO PBL endpoints. These items cover building

@@ -821,6 +821,53 @@
     attempts provisioning, says so when it cannot, and asserts whichever branch
     actually ran, so the two can never be confused.
 
+### D-132 — The pinned CA never reaches the TLS layer, so the HTTPS verdict fetch cannot complete
+- **Status**: OPEN (found 2026-10-30, session 155, by running the D-200 wire
+  harness and reading the packet capture)
+- **Category**: SECURITY
+- **What happens**: the firmware reaches the network (`DHCP started` +
+  `DHCP lease obtained`), opens a TCP connection to the verdict endpoint
+  (captured: `SYN`, `SYN+ACK`, `ACK` — the connection is **established**), and
+  then **resets it**: `RST` from the guest. `PblHttpsPost` returns
+  `EFI_ABORTED` and PBL falls back to the cached verdict.
+- **Why (two defects, one consequence)**:
+  1. **`PblTlsVerifyCert` has no caller.** The function that implements the C4
+     key-73 pin is declared (`PblApp.h:846`) and defined (`TlsVerify.c:46`) and
+     called from nowhere. The pin is therefore dead configuration: nothing in
+     the boot path ever compares a server certificate against it.
+  2. **EDK2's `EFI_HTTP_PROTOCOL` cannot be told to skip chain validation.**
+     `NetworkPkg/HttpDxe/HttpsSupport.c:660` hard-codes
+     `VerifyMethod = EFI_TLS_VERIFY_PEER`, and `TlsConfigCertificate()` reads
+     the platform `TlsCaCertificate` variable; when it is absent it returns
+     `EFI_NOT_FOUND` and HttpDxe **deliberately continues** (line 730-741,
+     "the failure is pushed back to TLS DXE driver"), so the handshake fails
+     later with nothing PBL can influence.
+  - PBL never writes `TlsCaCertificate` — and **cannot**: C4 key 73 is a
+    SHA-256 *hash*, while the platform store takes DER certificates. So C3
+    §4.1's design ("only the C4 pin is trusted", "the platform store is
+    ignored") is not implementable through `EFI_HTTP_PROTOCOL` at all: with an
+    empty store every self-signed or private-CA certificate is rejected, and
+    with a populated store the trust decision moves out of PBL's control.
+- **Impact**: the online verdict path cannot succeed on any device. Every boot
+  falls back to the cached verdict, so a device that has never been locked can
+  never be told to lock while online. This is why D-200 has never had a runtime
+  test, and it undermines every enforcement path that depends on a fresh
+  verdict rather than a cached one.
+- **Fix direction**: use `EFI_TLS_PROTOCOL` directly instead of
+  `EFI_HTTP_PROTOCOL` for the verdict fetch — set the verify method to none,
+  complete the handshake, obtain the peer certificate, and call the existing
+  `PblTlsVerifyCert` against the C4 pin (and the CN against the URI host). That
+  is precisely the design C3 §4.1 describes, and it makes the already-written
+  pin check live. Alternatives: extend C4 to carry the CA's DER so PBL can
+  provision the platform store (weakens §4.1 — the store is then only as
+  trustworthy as the policy blob), or accept a store-enrolled CA as an
+  out-of-band provisioning step (still leaves `PblTlsVerifyCert` dead).
+- **Close criteria**: a QEMU run in which the wire harness captures a request
+  body whose `device_id` equals the AK-Name-derived value, with the pin check
+  demonstrably in the path (e.g. a run with a deliberately wrong pin failing to
+  fetch). Artifacts: `firmware/PblPkg/artifacts/d200-wire-attempt-*` show the
+  current failure; the harness is `firmware/PblPkg/test-d131-wire-harness.sh`.
+
 ---
 
 ## Server-Side PBL Debt Items (D-200 through D-210)
@@ -880,11 +927,13 @@
     address (127.0.0.1 and 0.0.0.0 both receive nothing). So DHCP/networking is
     not the problem and the abort is not a certificate rejection — the request
     dies inside the OVMF HTTP/TLS stack before any TCP connection is made.
-  - **Next step for whoever picks this up**: add `-object filter-dump` to the
-    QEMU line (the S0.7 DHCP harness already uses one) and check whether SYNs
-    leave the guest at all. That distinguishes "OVMF never transmits" from
-    "slirp drops guest→10.0.2.2 traffic", which is the fork the current evidence
-    cannot resolve.
+  - **Answered (session 155, later the same session)**: the fork is resolved —
+    the guest *does* transmit and the connection *is* established. The pcap
+    (`-object filter-dump`, summarised by `scripts/pcap-summary.py`) shows
+    `SYN → SYN+ACK → ACK → RST` from the guest. The connection is then reset by
+    the client because the TLS handshake cannot validate the server certificate.
+    That is **D-132**, which is the root cause of this item needing a runtime
+    test it could never pass.
   Persist production signing key.
 
 ### D-201 — PBL policy endpoint not implemented
@@ -1568,6 +1617,7 @@
 | D-129 | No real hardware validation | OPEN | ENV |
 | D-130 | Code signing not configured | OPEN | SECURITY |
 | D-131 | PBL never populates device_id — every verdict request carries 32 zero bytes | CLOSED (DeviceId now populated from NV 0x01C00003 via TPM2_NV_Read; QEMU artifacts `firmware/PblPkg/artifacts/d131-*`: enrolled 16/0 with a real device_id, unprovisioned 17/0 with the request suppressed) | STUB |
+| D-132 | Pinned CA never reaches the TLS layer — `PblTlsVerifyCert` has no caller and EDK2's HTTP stack always verifies against an empty platform store, so the HTTPS verdict fetch cannot complete (tree: SYN/SYN-ACK/ACK/RST) | OPEN | SECURITY |
 | D-200 | PBL verdict endpoint not implemented | CLOSED (POST /v1/verdict implemented) | SERVER |
 | D-201 | PBL policy endpoint not implemented | CLOSED (GET/POST /v1/policy implemented) | SERVER |
 | D-202 | PBL enrollment endpoint not implemented | CLOSED (POST /v1/enroll implemented) | SERVER |
@@ -1587,7 +1637,7 @@
 |---|-------------|--------|----------|
 | D-212 | Self-image hash into PCR 12 (RE-hardening #4) — REVERTED | CLOSED (reverted: PBL PE has ImageBase=0, so DIR64 relocations make in-memory hash non-deterministic across boots. Secure Boot already provides PE integrity. Commit 6c4b294 + this commit) | SECURITY |
 | D-213 | Loaded EFI image enumeration (RE-hardening #3) — weak signal | CLOSED (PBL_PLATFORM_STATE.LoadedImageDigest[32] added: SHA-256 over sorted per-image hashes of DevicePath(DeviceHandle) \|\| FilePath — order-independent, distinguishes "same count, different set". Serial: "Loaded images: 93 (digest 32FB22F4…)", deterministic across boots, differs across disk layouts. Harness check added; ci-harness-docker.sh 15/0, persistence 16/0. Commit pending) | SECURITY |
-|| D-214 | Chain-load hash verification (RE-hardening #2) — tested | CLOSED (test-chainload-harness.sh runs QEMU+swtpm PASS and mismatch scenarios against real Windows 11 23H2 bootx64.efi; 7/7 PASS checks, 3/3 mismatch checks. Commit 5123efc; artifact /tmp/pbl-chainload-ci/pbl-serial-{pass,mismatch}.log) | TEST |
+| D-214 | Chain-load hash verification (RE-hardening #2) — tested | CLOSED (test-chainload-harness.sh runs QEMU+swtpm PASS and mismatch scenarios against real Windows 11 23H2 bootx64.efi; 7/7 PASS checks, 3/3 mismatch checks. Commit 5123efc; artifact /tmp/pbl-chainload-ci/pbl-serial-{pass,mismatch}.log) | TEST |
 | D-215 | Policy signature BLOCK path (RE-hardening #1) — untested | CLOSED (gen-policy-rot.py provisions SPKI+kid+X.509 cert into PolicyRootOfTrust.generated.h via __has_include; test-d215-harness.sh boots QEMU+swtpm with valid/wrong-key/tampered/wrong-kid policy.cose — all three invalid variants fail-closed with [BLOCK] before step [3/8], no lock screen. 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 | D-216 | Verdict cache anti-replay (RE-hardening #5) — REVERTED | CLOSED (reverted: NV index lacks TPMA_NV_WRITE_STCLEAR so NV_WriteLock fails; even with the attribute, TPM2_Startup(CLEAR) clears it every boot. Need a monotonic counter or PCR-based approach. Commit 6c4b294) | SECURITY |
 
@@ -1596,7 +1646,7 @@
 | # | Description | Status | Category |
 |---|-------------|--------|----------|
 | D-217 | All in-binary hardening bypassable if PblApp.efi is modified | CLOSED (both criteria met: (a) PblHashSelfImage hashes the on-disk PE via LoadedImage->FilePath — deterministic vs reverted D-212 — and extends it into PCR 13 before the inputs extend, so tamper OR removal changes PCR 13 (attestation/sealing detection); harness verifies logged hash == sha256sum(PblApp.efi), 14 PASS / 0 FAIL. (b) PBL-SECURE-BOOT-DEPLOYMENT.md documents the preventive layer. Prevention additionally proven in emulation: test-sb-harness.sh boots SECURE_BOOT_ENABLE OVMF with PblApp authenticode hash enrolled in db — tampered binary rejected with 'Access Denied -- rejected probably by Secure Boot', 8 PASS / 0 FAIL. Commits 5a59aa2 + this commit; artifacts /tmp/pbl-ci/pbl-serial.log, /tmp/pbl-sb-ci/pbl-sb-result.txt) | SECURITY |
-|| D-218 | Chain-load hash check with policy-provided hash | CLOSED (test-chainload-harness.sh generates policy with C4 key 58 set to real bootx64.efi SHA-256 and a mismatched variant; mismatch log shows [ChainLoad] BLOCK — bootmgfw.efi hash mismatch. Commit 5123efc; artifact /tmp/pbl-chainload-ci/pbl-serial-{pass,mismatch}.log) | TEST |
+| D-218 | Chain-load hash check with policy-provided hash | CLOSED (test-chainload-harness.sh generates policy with C4 key 58 set to real bootx64.efi SHA-256 and a mismatched variant; mismatch log shows [ChainLoad] BLOCK — bootmgfw.efi hash mismatch. Commit 5123efc; artifact /tmp/pbl-chainload-ci/pbl-serial-{pass,mismatch}.log) | TEST |
 | D-219 | Policy signature BLOCK path untested | CLOSED (same scenario as D-215 — test-d215-harness.sh + gen-policy-rot.py; 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 | D-220 | BLOCK-intent returns propagate error to BDS (BootOrder advance bypass) | CLOSED (`PblApp.c` policy-sig-fail and anti-rollback paths returned `EFI_SECURITY_VIOLATION` — per Boot#### semantics a non-success return advances BDS to the next boot option (Windows boots). Fixed via `PblBlockHalt()` — lock screen + MOR + ResetSystem + CpuDeadLoop, never returns; chain-load return checked at all 3 call sites, fail-closed on error. Note: D-219's harness passed the buggy code — it checked serial lines, not post-BLOCK behavior. QEMU+swtpm: fve 16/0, docker 15/0, persistence 16/0. Commit this session; artifacts /tmp/pbl-fve-ci/, /tmp/pbl-ci-persist/) | SECURITY |
 

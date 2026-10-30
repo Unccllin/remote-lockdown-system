@@ -2281,12 +2281,43 @@ the provisioning recipe now in `scripts/provision-qemu-tpm.sh`.
   filter-dump next step).
 - Commit `5dabf9b`.
 
+### Addendum (same session, after instrumenting)
+The three failing checks were then diagnosed with a packet capture instead of
+more guessing.
+
+- `scripts/pcap-summary.py` (new) reads classic pcap with no dependencies
+  (tcpdump/tshark/scapy/dpkt are all absent from the harness image). Self-test
+  caught a real bug in it before it was ever pointed at evidence: `">HH"` needs
+  4 bytes and I passed 8 to the UDP unpack.
+- **The capture overturns the serial log's implication.** The guest *does*
+  transmit and the connection *is* established:
+  `SYN 10.0.2.15:1777 → 10.0.2.2:8443`, `SYN+ACK`, `ACK`, then **`RST` from the
+  guest**. So DHCP, slirp and the harness topology are all fine; the client
+  resets because the TLS handshake cannot validate the server certificate.
+- **Root cause, and it is a firmware defect, not a harness one** (filed as
+  **D-132**):
+  1. `PblTlsVerifyCert` — the function implementing the C4 key-73 pin — is
+     declared and defined and **never called**. The pin is dead configuration.
+  2. EDK2's `EFI_HTTP_PROTOCOL` hard-codes `VerifyMethod = EFI_TLS_VERIFY_PEER`
+     (`HttpDxe/HttpsSupport.c:660`) and validates against the platform
+     `TlsCaCertificate` variable; when that variable is absent HttpDxe
+     deliberately continues (`HttpsSupport.c:730-741`) and the failure surfaces
+     in the TLS driver at handshake time.
+  3. PBL cannot populate that store even in principle: C4 key 73 is a SHA-256
+     hash, while the store takes DER certificates. C3 §4.1's "only the C4 pin is
+     trusted, the platform store is ignored" is therefore not implementable
+     through `EFI_HTTP_PROTOCOL`.
+- **Consequence**: the online verdict path cannot succeed on any device; every
+  boot falls back to the cached verdict. That is why D-200 has never had a
+  runtime test, and it means the wire verification this session set out to
+  perform is blocked on a code change rather than on test plumbing.
+
 ### Next session opening
-Add `-object filter-dump,id=dump0,netdev=net0,file=/test/d200-wire.pcap` to the
-QEMU line in `test-d131-wire-harness.sh`, run it once, and read the pcap: if no
-SYN to 10.0.2.2:8443 ever leaves the guest the problem is OVMF's HTTP/TLS
-configuration; if SYNs leave and nothing answers, it is slirp's guest→host
-mapping in this container topology. Either answer converts D-200 from "runtime
-test missing" into a specific, fixable defect.
+Take **D-132**: replace `EFI_HTTP_PROTOCOL` with `EFI_TLS_PROTOCOL` in the
+verdict fetch — verify method none, handshake, obtain the peer certificate, then
+call the existing `PblTlsVerifyCert` against the C4 pin and the URI host. The
+harness to prove it already exists (`test-d131-wire-harness.sh`, 3 of 6 checks,
+with `scripts/pcap-summary.py` for the wire view); success is all 6 passing plus a
+deliberately wrong pin failing to fetch.
 
 ---

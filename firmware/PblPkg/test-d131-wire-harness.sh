@@ -163,6 +163,7 @@ timeout "${TIMEOUT}" qemu-system-x86_64 -machine q35 \
   -nographic -m 512M \
   -device virtio-net-pci,netdev=net0,romfile= \
   -netdev user,id=net0 \
+  -object filter-dump,id=dump0,netdev=net0,file="${BUILD_DIR}/wire.pcap" \
   -object rng-random,id=rng0,filename=/dev/urandom \
   -device virtio-rng-pci,rng=rng0 \
   -chardev socket,id=chrtpm,path="${BUILD_DIR}/swtpm-ctrl.sock" \
@@ -172,6 +173,15 @@ timeout "${TIMEOUT}" qemu-system-x86_64 -machine q35 \
 
 echo "  serial log: $(wc -c < "${SERIAL_LOG}") bytes"
 echo "  server log: $(wc -c < "${SERVER_LOG}") bytes"
+# The pcap answers the one question the serial log cannot: did the guest put a
+# single packet on the wire toward the server? "No SYN" and "SYN unanswered"
+# are different defects, and guessing between them already cost this harness two
+# runs (certificate algorithm, bind address).
+if [ -f "${BUILD_DIR}/wire.pcap" ]; then
+  echo "  pcap: $(wc -c < "${BUILD_DIR}/wire.pcap") bytes -> ${BUILD_DIR}/wire.pcap"
+else
+  echo "  pcap: NOT WRITTEN"
+fi
 
 # === Checks ===
 PASS=0
