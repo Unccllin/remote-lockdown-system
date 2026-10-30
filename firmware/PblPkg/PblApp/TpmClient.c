@@ -1051,6 +1051,31 @@ PblTpmParsePcrSessionResponse (
 // C2 §5.1 step 2: Read AK Name (device_id derivation)
 // ============================================================================
 
+/** Read the PBL_AK_NAME_SIZE-byte AK Name stored at 0x01C00003.
+
+  C2 §1.3 defines the index as *storing* a TPM2B_NAME body:
+  SHA-256(alg)(2 bytes) || SHA-256(AK public Area)(32 bytes). The device_id
+  that C1 §4 requires is the 32 bytes after the algorithm prefix.
+
+  D-131: this function used to issue TPM2_NV_ReadPublic and return the
+  TPM2B_NAME from that response. That value is the NV *index* name —
+  SHA-256(nameAlg) || SHA-256(nvPublic template) — not the AK's name. It does
+  not depend on anything device-specific, so every machine sharing the PBL
+  image and NV template would have derived an identical device_id. The stored
+  bytes require TPM2_NV_Read.
+
+  Must be called before PblTpmStartHmacSession(): the HMAC session is bound to
+  the lock-state index auth value, which is not this index's auth.
+
+  @param[out] AkName      Buffer receiving PBL_AK_NAME_SIZE bytes.
+  @param[in]  AkNameSize  Size of AkName; must be >= PBL_AK_NAME_SIZE.
+
+  @retval EFI_SUCCESS            AK Name copied.
+  @retval EFI_INVALID_PARAMETER  AkName is NULL or too small.
+  @retval EFI_NOT_FOUND          No TPM, or the index is absent/uninitialised —
+                                 the unprovisioned case C2 §1.3 rules on.
+  @retval EFI_DEVICE_ERROR       Malformed response or TPM error.
+**/
 EFI_STATUS
 PblTpmReadAkName (
   OUT UINT8  *AkName,
@@ -1059,11 +1084,13 @@ PblTpmReadAkName (
 {
   EFI_TCG2_PROTOCOL *Tcg2;
   EFI_STATUS         Status;
-  UINT8              CmdBuf[256];
-  UINT8              RespBuf[512];
+  UINT8              CmdBuf[128];
+  UINT8              RespBuf[256];
   UINT32             RespSize;
+  UINT32             AuthHierarchy;
+  UINT32             Handles[2];
 
-  if (AkName == NULL || AkNameSize < 34) {
+  if (AkName == NULL || AkNameSize < PBL_AK_NAME_SIZE) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -1072,52 +1099,63 @@ PblTpmReadAkName (
     return EFI_NOT_FOUND;
   }
 
-  // TPM2_NV_ReadPublic(0x01C00003)
-  // Command: tag(2) + size(4) + cc(4) + nvIndex(4) = 14 bytes
-  UINT8 *Ptr = PblTpmBeginCommand (CmdBuf, sizeof (CmdBuf), TPM_CC_NV_ReadPublic);
-  *(UINT32 *)Ptr = SwapBytes32 (PBL_NV_AK_NAME);  // NV index (big-endian)
-  Ptr += 4;
+  // C2 §1.3 gives this index TPMA_NV_PPREAD, so the read is authorised by the
+  // platform hierarchy. Track the same PCD as NV_DefineSpace so a dev/swtpm
+  // build (owner hierarchy) and a production build stay consistent.
+  AuthHierarchy = FixedPcdGetBool (PcdPblTpmUsePlatformHierarchy)
+                    ? (UINT32)TPM_RH_PLATFORM
+                    : (UINT32)TPM_RH_OWNER;
+
+  Handles[0] = AuthHierarchy;
+  Handles[1] = PBL_NV_AK_NAME;
+
+  // NV_Read has two handles: authHandle + nvIndex. With no HMAC session active
+  // this emits a TPM_RS_PW session with an empty password, which is what the
+  // empty platform/owner auth in dev/swtpm requires (same assumption as
+  // PblTpmNvDefineSpace).
+  UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (
+                 CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read, 2, Handles);
+
+  // NV_Read_In wire order: size (UINT16) then offset (UINT16).
+  *(UINT16 *)Ptr = SwapBytes16 (PBL_AK_NAME_SIZE);
+  Ptr += 2;
+  *(UINT16 *)Ptr = SwapBytes16 (0);
+  Ptr += 2;
 
   PblTpmFinalizeCommand (CmdBuf, (UINT32)(Ptr - CmdBuf));
 
   Status = PblTpmSubmitCommand (Tcg2, CmdBuf, (UINT32)(Ptr - CmdBuf),
                                 RespBuf, sizeof (RespBuf), &RespSize);
   if (EFI_ERROR (Status)) {
+    if (RespSize >= 10) {
+      UINT32 Rc = SwapBytes32 (*(UINT32 *)(RespBuf + 6));
+      Print (L"  [INFO] NV_Read(AK_NAME) RC=0x%x\n", Rc);
+      // TPM_RC_NV_UNINITIALIZED (0x14A): the index exists but enrolment never
+      // wrote it. C2 §1.3 rules that this is "unprovisioned", not an error.
+      if (Rc == 0x14A) {
+        return EFI_NOT_FOUND;
+      }
+    }
     return Status;
   }
 
-  // Response: header(10) + nvPublic(TPM2B_NV_PUBLIC) + nvName(TPM2B_NAME)
-  // TPM2B_NV_PUBLIC: 2-byte size + NV_PUBLIC structure
-  // TPM2B_NAME: 2-byte size + name bytes
-  // For now, extract the name from the response
-  // The name is the last TPM2B in the response
-  if (RespSize < 14) {
+  // Response: header(10) + parameterSize(4) + TPM2B_MAX_NV_BUFFER(2 + data) +
+  // auth area.
+  UINT32 ParamSize;
+  UINT8 *RespPtr = PblTpmParseSessionResponse (
+                     RespBuf, RespSize, TPM_CC_NV_Read, &ParamSize);
+  if (RespPtr == NULL || ParamSize < 2) {
     return EFI_DEVICE_ERROR;
   }
 
-  // Skip response header (10 bytes) + TPM2B_NV_PUBLIC (2 + N bytes)
-  UINT8 *RespPtr = RespBuf + 10;
-  UINT16 NvPublicSize = SwapBytes16 (*(UINT16 *)RespPtr);
-  RespPtr += 2 + NvPublicSize;
-
-  // Read TPM2B_NAME
-  if ((RespPtr - RespBuf) + 2 > (INTN)RespSize) {
-    return EFI_DEVICE_ERROR;
-  }
-  UINT16 NameSize = SwapBytes16 (*(UINT16 *)RespPtr);
+  UINT16 DataSize = SwapBytes16 (*(UINT16 *)RespPtr);
   RespPtr += 2;
-
-  if (NameSize > AkNameSize || (RespPtr - RespBuf) + NameSize > (INTN)RespSize) {
-    return EFI_BUFFER_TOO_SMALL;
+  if (DataSize < PBL_AK_NAME_SIZE ||
+      (UINTN)(RespPtr - RespBuf) + PBL_AK_NAME_SIZE > (UINTN)RespSize) {
+    return EFI_DEVICE_ERROR;
   }
 
-  CopyMem (AkName, RespPtr, NameSize);
-
-  // Also compute device_id = SHA-256(AK public Area) from the NV public data
-  // The name is SHA-256(alg) || SHA-256(publicArea), so the last 32 bytes
-  // of the name ARE the device_id
-  // TODO: Extract device_id from name — for now, caller handles this
-
+  CopyMem (AkName, RespPtr, PBL_AK_NAME_SIZE);
   return EFI_SUCCESS;
 }
 

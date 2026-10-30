@@ -699,6 +699,32 @@ PblHttpsPost (
       break;
     }
 
+    // C3 §4 (row added 2026-10-28 with D-131 ruling Q2): an HTTP error status
+    // is not a verdict.
+    //
+    // Before this check, PblHttpsPost reported EFI_SUCCESS for *any* completed
+    // response, so the body of a 404 or 500 was handed to Verdict.c and failed
+    // COSE parsing. That happened to be safe, but only by luck: C3 §6.1's
+    // "fall back to the cached verdict" was reached because a JSON error body
+    // does not parse as COSE, not because the transport said so. Now the
+    // server's `404 unknown_device` (an unenrolled device) is surfaced as a
+    // failure the caller is designed to handle.
+    //
+    // Only 2xx carries a verdict. HTTP_STATUS_UNSUPPORTED_STATUS is 0, so a
+    // driver that never filled the field also fails closed. No retry: the
+    // server answered, so repeating the request cannot change the answer.
+    if (ResponseData.StatusCode < HTTP_STATUS_200_OK ||
+        ResponseData.StatusCode >= HTTP_STATUS_300_MULTIPLE_CHOICES) {
+      Print (
+        L"  [WARN] verdict endpoint returned HTTP status %d — no verdict\n",
+        (UINTN)ResponseData.StatusCode
+        );
+      Status = (ResponseData.StatusCode == HTTP_STATUS_404_NOT_FOUND)
+                 ? EFI_NOT_FOUND
+                 : EFI_DEVICE_ERROR;
+      break;
+    }
+
     // Success — return the response body
     *Resp = RespBuffer;
     *RespLen = ResponseMessage.BodyLength;

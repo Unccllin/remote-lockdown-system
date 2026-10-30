@@ -56,3 +56,46 @@ Microsoft portal dropped; SPI clip = per-unit fallback. Implementation:
 sign PblApp.efi + persist capsule with owner cert, enroll owner db during
 the per-machine provisioning step.
 
+## D-131 device_id ruling (opened 2026-10-28, session 152)
+
+D-131 says `PBL_PLATFORM_STATE.DeviceId` is never written, so every verdict
+request carries 32 zero bytes. Sharpened on reopening: `getDevice`
+(`serverless/pbl/devices.ts:22`) is an exact KV key read, and enrolment stores
+the real AK-derived hex, so the lookup for `000…0` always misses and the
+unknown-device branch returns **UNLOCKED** (`verdict.ts:105-125`). The online
+path can therefore never deliver `locked`, `tracking` or `recovering` — a
+lockdown bypass, not only an attestation gap.
+
+Two coupled decisions. Neither can be made from source alone.
+
+### Q1 — what does PBL do when `PBL_AK_NAME` is absent or all-zero?
+
+The NV index is zero-filled until enrolment writes it (C2 §5.4 step 8), and
+`PblTpmNvDefineSpace` creates it before any agent runs.
+
+- [x] Q1 — unprovisioned behaviour → **(A) refuse to fetch** — recommended
+option accepted. An all-zero `PBL_AK_NAME` means unprovisioned: PBL sends no
+verdict request and goes to the cached-verdict → denied-boot-with-local-unlock
+path per C3 §6.1. No C1 wire change, no server-side guessing.
+
+- [x] Q2 — unknown-device verdict → **(A) unknown ⇒ not UNLOCKED** — recommended
+option accepted. The unknown-device branch stops returning `VERDICT_UNLOCKED`;
+it falls to the cached-verdict / denied-boot-with-local-unlock path. This
+supersedes D-200's 'UNLOCKED + enrolment reason' choice, which was made before
+D-131 showed the firmware was presenting a zero device_id.
+
+**Ruling closed 2026-10-28, session 152** — (A) + (A). Implementation:
+firmware populates `PBL_PLATFORM_STATE.DeviceId` from NV `0x01C00003` and skips
+the online fetch when it is unprovisioned; the server's unknown-device branch
+turns fail-closed. D-131 closes on a QEMU run showing a real device_id and a
+non-UNLOCKED unknown-device verdict, not on the code landing.
+
+### Q2 — what does the server do for a `device_id` it does not know?
+
+Independent of Q1, and on its own enough to remove the bypass: today an
+unknown id yields UNLOCKED. Any cleared TPM, rogue machine, or imaged-but-not-
+enrolled unit obtains an unlock verdict by presenting an id the server does not
+know. D-200 documents UNLOCKED as a deliberate choice.
+
+- [x] Q2 — unknown-device verdict → **(A) stop returning UNLOCKED**.
+

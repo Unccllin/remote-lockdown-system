@@ -139,6 +139,7 @@ separation of concerns: C3 is transport, C1 is verdict semantics.
 | Hostname verification | Required | Reject if CN/SAN does not match uri hostname |
 | Plaintext fallback | **Never** | `http://` URIs rejected with `EFI_INVALID_PARAMETER` |
 | Verification failure | Fail to cached verdict | Return `EFI_SECURITY_VIOLATION`, never `EFI_SUCCESS` with UNLOCKED |
+| HTTP error status | Fail to cached verdict | A non-2xx `StatusCode` must be surfaced as a non-SUCCESS return (404 from an unenrolled device → cached verdict, then denied-boot-with-local-unlock). PblHttpsPost must not report `EFI_SUCCESS` for an error response body. Added 2026-10-28 with D-131 ruling Q2. |
 | Cipher suites | TLS 1.2: ECDHE-ECDSA-AES256-GCM-SHA384, ECDHE-RSA-AES256-GCM-SHA384. TLS 1.3: TLS_AES_256_GCM_SHA384 | Reject NULL/anon/export ciphers |
 
 ### 4.1 Certificate pinning detail

@@ -1210,6 +1210,42 @@ PblCollectPlatformState (
   // REQ-06: TPM firmware version (for floor check in Decision.c step 10)
   PblTpmGetFirmwareVersion (&State->TpmFirmwareVersion);
 
+  // D-131 (C2 §1.3, C1 §4): device_id = SHA-256(AK public Area).
+  //
+  // The AK Name is stored at PBL_AK_NAME by enrolment (C2 §5.4 step 8) and is
+  // read here so it lands in the platform_state_digest like every other field.
+  // An absent or never-written index leaves DeviceId all-zero, and that zero is
+  // the "unprovisioned" signal PblApp.c checks before it sends a verdict
+  // request: a zero id names no device, so a verdict signed for it would be a
+  // verdict for every device.
+  //
+  // Must stay before PblTpmStartHmacSession() in PblApp.c — the AK-name read
+  // uses password auth on the platform/owner hierarchy, while the HMAC session
+  // is bound to the lock-state index auth value.
+  {
+    UINT8 AkName[PBL_AK_NAME_SIZE];
+
+    ZeroMem (AkName, sizeof (AkName));
+    Status = PblTpmReadAkName (AkName, sizeof (AkName));
+    if (EFI_ERROR (Status)) {
+      // Not an error to shout about: a device that has never been enrolled has
+      // no AK Name yet, and that is exactly what the caller must be able to
+      // tell apart from a real identity.
+      Print (L"  [INFO] AK Name not available: %r (device unprovisioned)\n", Status);
+    } else if (IsZeroBuffer (AkName + 2, 32)) {
+      Print (L"  [INFO] AK Name is zero-filled (device unprovisioned)\n");
+    } else {
+      // AkName = SHA-256(alg)(2) || SHA-256(AK public Area)(32).
+      CopyMem (State->DeviceId, AkName + 2, 32);
+      Print (
+        L"  [OK] device_id from AK Name: %02x%02x%02x%02x...%02x%02x\n",
+        State->DeviceId[0], State->DeviceId[1],
+        State->DeviceId[2], State->DeviceId[3],
+        State->DeviceId[30], State->DeviceId[31]
+        );
+    }
+  }
+
   // S1.1: TPM reset-counter boot-ID (keystone anchor). Reads
   // TPM2_ReadClock → resetCount into State->BootId; included in the
   // platform-state digest and emitted as boot_id in the verdict request

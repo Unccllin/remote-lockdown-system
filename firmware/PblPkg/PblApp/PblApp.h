@@ -67,6 +67,12 @@
 #define PBL_LOCK_STATE_SIZE    64
 #define PBL_LOCK_STATE_MAGIC   0x50  // 'P'
 
+// C2 §1.3: PBL_AK_NAME stores a TPM2B_NAME body — SHA-256(alg)(2 bytes) ||
+// SHA-256(AK public Area)(32 bytes). The device_id (C1 §4) is the last 32
+// bytes. 34 rather than 36 because the TPM2B size prefix is not stored: the
+// index size in C2 §1 is the data length.
+#define PBL_AK_NAME_SIZE       34
+
 // C1 §2 + C5: Verdict values
 #define PBL_VERDICT_UNLOCKED     0
 #define PBL_VERDICT_LOCKED       1

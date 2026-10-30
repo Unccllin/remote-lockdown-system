@@ -104,6 +104,16 @@ Offset  Size  Field
 PBL reads this at boot to compute `device_id = SHA-256(AK public Area)` for
 verdict verification (C1 §4).
 
+**Unprovisioned behaviour (ruled 2026-10-28, D-131 Q1).** The index is
+zero-filled from `NV_DefineSpace` until enrolment writes it (step 8 of §5.4).
+An all-zero Name means the device is not enrolled, and PBL must then **send no
+verdict request at all** — it goes straight to the cached-verdict path, and with
+no cache to denied-boot-with-local-unlock (C3 §6.1). It must never substitute a
+zero `device_id` and fetch. Rationale: a zero id identifies no device, so any
+verdict issued for it would be a verdict for every device; and because the
+server answers an unknown id with no verdict (D-131 Q2), fetching would only
+waste the boot budget on a request that cannot succeed.
+
 ---
 
 ## 2. Authorization policy (TPM2_PolicyAuthorize)
@@ -304,7 +314,15 @@ BitLocker.
 
 ```
 1. TPM2_StartAuthSession (HMAC, AES-256-CFB, bound to 0x01C00001)
-2. TPM2_NV_ReadPublic(0x01C00003) → AK Name → compute device_id
+2. TPM2_NV_Read(0x01C00003, size=34, offset=0) → AK Name → compute device_id
+   (Corrected 2026-10-28 with D-131. This step previously read
+   `TPM2_NV_ReadPublic`, which returns the NV *index* name —
+   SHA-256(nameAlg) || SHA-256(nvPublic template) — not the AK Name the index
+   stores. That value does not vary per device, so deriving device_id from it
+   would give an entire fleet one identity. The 34 stored bytes require NV_Read,
+   which is authorised by the platform hierarchy per the PPREAD attribute in
+   §1.3. Step 2 therefore runs before the HMAC session is established, or with
+   password auth on that hierarchy.)
 3. TPM2_PolicyAuthorize + TPM2_PolicyPCR(12) + TPM2_PolicyAuthValue
 4. TPM2_NV_Read(0x01C00001, offset=0, size=64) → lock state cache
 5. TPM2_NV_Read(0x01C00002, offset=0, size=8) → policy version counter

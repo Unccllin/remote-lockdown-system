@@ -48,22 +48,46 @@ def tail(text: str, lines: int = DEFAULT_LINES) -> str:
     return "\n".join(text.splitlines()[-lines:])
 
 
-def build_annotation(log_text: str, title: str, lines: int = DEFAULT_LINES) -> str:
-    """Build the `::error::` workflow command for a log tail."""
+def build_annotation(
+    log_text: str, title: str, lines: int = DEFAULT_LINES, level: str = "error"
+) -> str:
+    """Build the `::<level>::` workflow command for a log tail.
+
+    ``level`` is ``error`` or ``warning``. The default stays ``error`` because
+    the tool's original purpose is to explain a job that failed; ``warning``
+    exists so a step that is deliberately advisory but still produces output
+    (cppcheck in PBL CI) can surface its findings on the check run instead of
+    writing them to a log nobody can read without admin rights.
+    """
     body = tail(log_text, lines)
     if len(body) > MAX_MESSAGE:
         body = body[-MAX_MESSAGE:]
-    return f"::error title={title}::{escape(body)}"
+    return f"::{level} title={title}::{escape(body)}"
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
-        print("usage: ci-annotate.py <logfile> [title] [lines]", file=sys.stderr)
+    level = "error"
+    args = list(argv[1:])
+    if args and args[0] == "--warning":
+        level = "warning"
+        args = args[1:]
+
+    if len(args) < 1:
+        print(
+            "usage: ci-annotate.py [--warning] <logfile> [title] [lines]",
+            file=sys.stderr,
+        )
         return 2
 
-    path = argv[1]
-    title = argv[2] if len(argv) > 2 else os.path.basename(path)
-    lines = int(argv[3]) if len(argv) > 3 else DEFAULT_LINES
+    path = args[0]
+    title = args[1] if len(args) > 1 else os.path.basename(path)
+    try:
+        lines = int(args[2]) if len(args) > 2 else DEFAULT_LINES
+    except ValueError:
+        # A malformed line count must not produce a traceback: the tool's own
+        # failure would then be the only thing the check run shows.
+        print(f"usage: invalid line count: {args[2]}", file=sys.stderr)
+        return 2
 
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
@@ -72,7 +96,7 @@ def main(argv: list[str]) -> int:
         print(f"::error title=ci-annotate::cannot read {path}: {exc}")
         return 0  # never mask the real failure with a diagnostics failure
 
-    print(build_annotation(text, title, lines))
+    print(build_annotation(text, title, lines, level))
     return 0
 
 

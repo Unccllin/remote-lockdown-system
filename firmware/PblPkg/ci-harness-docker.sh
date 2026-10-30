@@ -23,7 +23,24 @@
 
 set -eo pipefail
 
-TIMEOUT="${1:-30}"
+# Timeout in seconds. Accepts `40`, `--timeout 40` and `--timeout=40`.
+# See ci-harness.sh for why: the old `TIMEOUT="${1:-30}"` took the flag as the
+# value, and the embedded Python then emitted `if elapsed > --timeout:` — a
+# NameError that surfaced as a traceback with no hint about the argument.
+TIMEOUT=30
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --timeout)   TIMEOUT="${2:-30}"; shift 2 || shift ;;
+    --timeout=*) TIMEOUT="${1#*=}"; shift ;;
+    [0-9]*)      TIMEOUT="$1"; shift ;;
+    *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: timeout must be an integer number of seconds, got '${TIMEOUT}'" >&2
+  exit 2
+fi
+
 FIRMWARE_DIR="${FIRMWARE_DIR:-/firmware}"
 BUILD_DIR="/tmp/pbl-ci"
 
@@ -65,9 +82,87 @@ fi
 # already set and CMD_SET_DATAFD fails with TPM_RC_BAD_PARAMETER (0x1F).
 # By omitting --server, QEMU can establish the data channel itself.
 echo "=== Starting swtpm (TPM 2.0 simulator) ==="
-SWTPM_DIR="${BUILD_DIR}/swtpm-state"
-rm -rf "${SWTPM_DIR}"
+# PBL_SWTPM_DIR lets a caller supply an already-provisioned TPM state directory
+# (e.g. one a sidecar container wrote NV 0x01C00003 into — see the provision step
+# below). When it is set the state is *reused*; when it is not, a fresh state is
+# created exactly as before, so the default behaviour is unchanged.
+SWTPM_DIR="${PBL_SWTPM_DIR:-${BUILD_DIR}/swtpm-state}"
+if [ -z "${PBL_SWTPM_DIR:-}" ]; then
+  rm -rf "${SWTPM_DIR}"
+fi
 mkdir -p "${SWTPM_DIR}"
+
+# === D-131: provision PBL_AK_NAME BEFORE the QEMU-facing swtpm starts ===
+#
+# PBL derives device_id from the 34-byte AK Name stored at NV 0x01C00003
+# (C2 §1.3). On a fresh swtpm that index has never been written, so PBL
+# correctly reports "unprovisioned" and suppresses the verdict request — a
+# harness that only ever runs that way can never show the enrolled path.
+#
+# Recipe established 2026-10-29 by probe, after several wrong turns worth
+# recording so they are not repeated:
+#   * the TCTI must point at swtpm's DATA port (`swtpm:host=..,port=<data>`);
+#     the `path=` form is rejected by tss2 3.2 (jammy) AND tss2 5.7 (trixie)
+#     with "Could not load tcti", and pointing `host/port` at the *ctrl* port
+#     fails the same way;
+#   * `tpm2_startup -c` is required, because swtpm runs with --flags
+#     not-need-init — without it every command answers RC 0x100 INITIALIZE;
+#   * attributes must be the numeric dword 0x420D000D (PBL's own platform
+#     attribute set: PPWRITE|AUTHWRITE|POLICYWRITE|PPREAD|AUTHREAD|POLICYREAD|
+#     NO_DA|PLATFORMCREATE). The pipe-separated names are rejected.
+#
+# This runs before the QEMU swtpm because the two need different transports:
+# tpm2-tools needs a TCP data socket, while QEMU must own the data channel via
+# CMD_SET_DATAFD (see the note above the swtpm start). The state survives the
+# restart — proven by the enrolled artifact, not assumed.
+AK_NAME_HEX="${PBL_AK_NAME_HEX:-000b$(printf 'ab%.0s' $(seq 1 32))}"
+AK_BIN="${BUILD_DIR}/ak-name.bin"
+AK_NAME_PROVISIONED=0
+
+if [ -n "${PBL_SWTPM_DIR:-}" ] && [ -f "${SWTPM_DIR}/tpm2-00.permall" ]; then
+  # A caller supplied an already-provisioned state directory.
+  AK_NAME_PROVISIONED=1
+  echo "  [INFO] reusing provisioned TPM state: ${SWTPM_DIR}"
+elif [ "${PROVISION_AK_NAME:-1}" = "1" ] && command -v tpm2_nvdefine >/dev/null 2>&1 \
+     && command -v tpm2_startup >/dev/null 2>&1; then
+  PROVIDE_DATA_PORT="${PBL_PROV_DATA_PORT:-2431}"
+  PROVIDE_CTRL_PORT="${PBL_PROV_CTRL_PORT:-2432}"
+  PROV_PID="${BUILD_DIR}/swtpm-prov.pid"
+  swtpm socket --tpmstate dir="${SWTPM_DIR}" \
+    --ctrl "type=tcp,port=${PROVIDE_CTRL_PORT}" \
+    --server "type=tcp,port=${PROVIDE_DATA_PORT}" \
+    --tpm2 --daemon --flags not-need-init --pid "file=${PROV_PID}"
+  for _ in $(seq 1 50); do [ -s "${PROV_PID}" ] && break; sleep 0.1; done
+  sleep 1
+
+  # python3 rather than xxd: xxd is absent from the harness image.
+  python3 -c "import sys; sys.stdout.buffer.write(bytes.fromhex('${AK_NAME_HEX}'))" > "${AK_BIN}"
+  export TPM2TOOLS_TCTI="swtpm:host=127.0.0.1,port=${PROVIDE_DATA_PORT}"
+  tpm2_startup -c >/dev/null 2>&1 || true
+  if tpm2_nvdefine 0x01C00003 -C p -s 34 -a 0x420D000D >/dev/null 2>&1 \
+     && tpm2_nvwrite 0x01C00003 -C p -i "${AK_BIN}" >/dev/null 2>&1; then
+    AK_NAME_PROVISIONED=1
+    echo "  AK Name provisioned: ${AK_NAME_HEX}"
+  else
+    echo "  [WARN] provisioning failed — running the unprovisioned path"
+  fi
+  unset TPM2TOOLS_TCTI
+
+  # Stop the provisioning instance and wait for it to release the state lock;
+  # starting the QEMU swtpm while it still holds the lock fails with
+  # "Could not lock access to lockfile".
+  if [ -s "${PROV_PID}" ]; then
+    kill "$(cat "${PROV_PID}")" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      kill -0 "$(cat "${PROV_PID}" 2>/dev/null)" 2>/dev/null || break
+      sleep 0.1
+    done
+  fi
+  sleep 1
+else
+  echo "  [INFO] tpm2-tools absent or PROVISION_AK_NAME=0 — unprovisioned path"
+fi
+
 
 SWTPM_ARGS=""
 if [ "${USE_SWTPM:-1}" = "1" ] && command -v swtpm >/dev/null 2>&1; then
@@ -251,6 +346,26 @@ check "HMAC session established" "\[OK\] HMAC session established \(bound to loc
 check "Self-image measured (D-217)" "PCR 13 \(self-image\) extended"
 check "Loaded image digest computed (D-213)" "Loaded images: [0-9]+ \(digest [0-9A-Fa-f]"
 check "Lock screen displayed" "THIS DEVICE IS LOCKED"
+
+# D-131: assert the branch that actually ran. Neither assertion can pass for the
+# other case, so a run that silently failed to provision cannot be reported as
+# if it had.
+if [ "${AK_NAME_PROVISIONED}" = "1" ]; then
+  # AK Name = SHA-256(alg)(2 bytes) || device_id(32 bytes), so the device_id
+  # starts at hex offset 4. Asserting those four hex characters is enough to
+  # prove PBL sent the provisioned bytes and not a zero id. (No lookahead
+  # assertions: grep -E does not support them.)
+  #
+  # Upper-cased deliberately: EDK2's Print renders %x as upper-case, so PBL
+  # logs `device_id from AK Name: ABABABAB...ABAB`. Matching lower-case here
+  # made this check fail on correct firmware — the assertion was wrong, not
+  # the code, which is exactly why it is worth pinning the expected casing.
+  AK_NAME_DEVICE_PREFIX="$(printf '%s' "${AK_NAME_HEX:4:4}" | tr 'a-f' 'A-F')"
+  check "device_id derived from AK Name" "device_id from AK Name: ${AK_NAME_DEVICE_PREFIX}"
+else
+  check "unprovisioned detected" "device is unprovisioned"
+  check "verdict request suppressed" "Verdict request suppressed: no device_id"
+fi
 
 # D-217: The self-image hash printed in the serial log must equal the
 # SHA-256 of the PblApp.efi that was copied to the ESP — proves the

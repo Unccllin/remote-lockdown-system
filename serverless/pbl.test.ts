@@ -823,8 +823,16 @@ describe('POST /v1/verdict', () => {
     };
   });
 
-  it('returns a signed COSE_Sign1 verdict for unknown device', async () => {
+  it('returns a signed COSE_Sign1 verdict for a known active device', async () => {
     const deviceId = new Uint8Array(32).fill(0xaa);
+    const deviceIdHex = Array.from(deviceId)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    await putDevice(kv as unknown as KVNamespace, {
+      device_id: deviceIdHex,
+      status: 'active',
+      enrolled_at: new Date().toISOString(),
+    });
     const nonce = new Uint8Array(32).fill(0xbb);
     const digest = new Uint8Array(32).fill(0xcc);
 
@@ -860,9 +868,87 @@ describe('POST /v1/verdict', () => {
     const gotNonce = new CborDecoder(map.get(3)!).readBstr();
     expect(Array.from(gotNonce)).toEqual(Array.from(nonce));
 
-    // key 4 = verdict (should be UNLOCKED=0 for unknown device)
+    // key 4 = verdict (UNLOCKED=0 for an enrolled active device)
     const gotVerdict = new CborDecoder(map.get(4)!).readUint();
     expect(gotVerdict).toBe(0);
+  });
+
+  // D-131 ruling Q2 (2026-10-28). These two tests replace the previous
+  // 'returns a signed COSE_Sign1 verdict for unknown device' test, which
+  // asserted the old fail-open behaviour (200 + UNLOCKED). That assertion was
+  // the whole reason the bypass survived: no test said "an unknown device must
+  // not be handed an unlock".
+  it('returns 404 and NO verdict for an unknown device', async () => {
+    const deviceId = new Uint8Array(32).fill(0xcc);
+    const reqBody = encodeMap([
+      [encodeUint(1), encodeBstr(deviceId)],
+      [encodeUint(2), encodeBstr(new Uint8Array(32).fill(0xbb))],
+      [encodeUint(3), encodeBstr(new Uint8Array(32).fill(0xaa))],
+      [encodeUint(4), encodeUint(1)],
+    ]);
+
+    const response = await handleVerdict(
+      new Request('https://example.com/v1/verdict', { method: 'POST', body: reqBody }),
+      env,
+      keys,
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('Content-Type')).toContain('application/json');
+    const body = await response.json() as { error: string };
+    expect(body.error).toBe('unknown_device');
+    // The point of the ruling: no COSE verdict exists to be signed at all, so
+    // there is nothing an UNLOCKED verdict could hide in.
+    expect(response.headers.get('Content-Type')).not.toContain('application/cose');
+  });
+
+  it('returns 404 for the all-zero device_id the firmware used to send (D-131)', async () => {
+    // The exact request the firmware produced before D-131 was filed: a
+    // 32-byte zero device_id. It must not be answered with an unlock verdict.
+    const reqBody = encodeMap([
+      [encodeUint(1), encodeBstr(new Uint8Array(32))],
+      [encodeUint(2), encodeBstr(new Uint8Array(32).fill(0x01))],
+      [encodeUint(3), encodeBstr(new Uint8Array(32).fill(0x02))],
+      [encodeUint(4), encodeUint(1)],
+    ]);
+
+    const response = await handleVerdict(
+      new Request('https://example.com/v1/verdict', { method: 'POST', body: reqBody }),
+      env,
+      keys,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it('fails closed on an unrecognised device status (no verdict)', async () => {
+    const deviceId = new Uint8Array(32).fill(0x99);
+    const deviceIdHex = Array.from(deviceId)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    // A KV record is JSON, so the status union is not a runtime guarantee.
+    await putDevice(kv as unknown as KVNamespace, {
+      device_id: deviceIdHex,
+      status: 'retired' as unknown as PblDevice['status'],
+      enrolled_at: new Date().toISOString(),
+    });
+
+    const reqBody = encodeMap([
+      [encodeUint(1), encodeBstr(deviceId)],
+      [encodeUint(2), encodeBstr(new Uint8Array(32).fill(0x03))],
+      [encodeUint(3), encodeBstr(new Uint8Array(32).fill(0x04))],
+      [encodeUint(4), encodeUint(1)],
+    ]);
+
+    const response = await handleVerdict(
+      new Request('https://example.com/v1/verdict', { method: 'POST', body: reqBody }),
+      env,
+      keys,
+    );
+
+    expect(response.status).toBe(500);
+    const body = await response.json() as { error: string };
+    expect(body.error).toBe('invalid_device_record');
   });
 
   it('returns LOCKED verdict for locked device', async () => {
@@ -1884,12 +1970,12 @@ describe('POST /v1/attest', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /v1/override/challenge', () => {
-  let keys: Awaited<ReturnType<typeof generateSigningKey>>;
+  // No `keys` here: the override endpoints sign nothing themselves, and the
+  // unused declaration made every future reader look for the signing it implied.
   let kv: MockKV;
   let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: KVNamespace; PBL_SIGNING_KEY?: string };
 
   beforeAll(async () => {
-    keys = await generateSigningKey();
     kv = new MockKV();
     env = {
       ADMIN_TOKEN: 'test-token',

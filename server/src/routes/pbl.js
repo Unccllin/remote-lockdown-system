@@ -238,8 +238,12 @@ function statusToVerdict(status) {
     case 'locked': return { verdict: VERDICT_LOCKED, reason: 'admin_lock' };
     case 'tracking': return { verdict: VERDICT_TRACKING, reason: 'reported_stolen' };
     case 'recovering': return { verdict: VERDICT_UNLOCKED, reason: 'recovered' };
-    case 'active':
-    default: return { verdict: VERDICT_UNLOCKED, reason: 'enrolment' };
+    case 'active': return { verdict: VERDICT_UNLOCKED, reason: 'enrolment' };
+    // Unrecognised status must not release the machine. `device.status` is read
+    // out of JSON, so the union type on the way in is not a runtime guarantee,
+    // and a `default:` that fell through to UNLOCKED was a fail-open branch of
+    // exactly the shape D-131 was about. D-131 ruling Q2 (2026-10-28).
+    default: return null;
   }
 }
 
@@ -341,6 +345,26 @@ router.post('/verdict', async (req, res) => {
     const deviceData = await env.LOCKDOWN_KV.get(`pbl_devices:${deviceIdHex}`, 'text');
     const device = deviceData ? safeJsonParse(deviceData) : null;
 
+    // D-131 ruling Q2 (2026-10-28): an unknown device_id gets NO verdict.
+    //
+    // This used to sign UNLOCKED with reason 'enrolment', reasoning that PBL
+    // should enrol first but boot should not be blocked. D-131 showed that
+    // depended on an assumption which did not hold — the firmware sent a
+    // 32-byte zero device_id, so every enrolled device landed in that branch
+    // and could never be sent `locked`, `tracking` or `recovering`. A cleared
+    // TPM or an imaged-but-unenrolled unit got the same answer.
+    //
+    // No verdict means PblHttpsPost surfaces a non-SUCCESS and PBL falls back
+    // to its cached verdict — and with no cache, to
+    // denied-boot-with-local-unlock (C3 §6.1). Not bricked (local unlock
+    // remains), but data is not released on the server's behalf.
+    if (!device) {
+      return res.status(404).json({
+        error: 'unknown_device',
+        detail: 'device_id is not enrolled; no verdict will be issued',
+      });
+    }
+
     // S1.2: Record the PBL boot event. A verdict request IS the firmware's
     // boot report — every verdict fetch means PBL ran this boot. Persist the
     // boot counter + wall-clock time so the agent /checkin handler can tell
@@ -365,12 +389,15 @@ router.post('/verdict', async (req, res) => {
 
     let verdict, reason, graceUntil;
     let challengeSeed = null;
-    if (!device) {
-      verdict = VERDICT_UNLOCKED;
-      reason = 'enrolment';
-      graceUntil = now + 900; // 15 min
-    } else {
+    {
       const result = statusToVerdict(device.status);
+      if (result === null) {
+        // Fail closed rather than guess at an unexpected KV record.
+        return res.status(500).json({
+          error: 'invalid_device_record',
+          detail: `unknown device status: ${device.status}`,
+        });
+      }
       verdict = result.verdict;
       reason = result.reason;
       graceUntil = now + 604800; // 7 days

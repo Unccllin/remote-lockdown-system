@@ -685,6 +685,142 @@
   testing, or production cert for release). Sign PblApp.efi with
   `sbsign` or equivalent. Verify signature loads under Secure Boot in QEMU.
 
+### D-131 — PBL never populates device_id, so every verdict request carries 32 zero bytes
+- **Status**: CLOSED (2026-10-29, session 154). Firmware fixed, and both branches
+  demonstrated on a real QEMU + swtpm boot of the built binary.
+- **Category**: STUB (found session 151 while giving the PblApp TODOs their
+  contract references; not previously known)
+- **Progress**: `PBL_PLATFORM_STATE.DeviceId` is declared
+  (`PblApp.h:362`, commented "C2 §1.3: device_id") and is consumed in three
+  places — `PblCborEncodeVerdictRequest(PlatformState.DeviceId, …)`
+  (`PblApp.c:552`), the PCR-13 extend input (`PblApp.c:814`) and
+  `PblVerifyVerdict(&Verdict, Nonce, PlatformState.DeviceId, …)`
+  (`PblApp.c:694`) — but **no code ever writes it**. `PblCollectPlatformState`
+  (`PlatformState.c:1151`) zeroes the struct and fills ~20 other fields
+  without ever touching `DeviceId`, and `PblTpmReadAkName`
+  (`TpmClient.c:1055`), the function that reads NV `0x01C00003`, has **no
+  caller anywhere in the firmware**.
+- **Why it matters**: C1 §4 requires that "PBL computes its own `device_id`
+  from the AK public Area at boot and rejects any verdict whose `device_id`
+  does not match", and C2 §1.3 says PBL reads `PBL_AK_NAME` at boot for
+  exactly this. With the field zeroed:
+  - **The online lockdown path is inert.** `getDevice` (`serverless/pbl/devices.ts:22`)
+    is an exact KV key read — `pbl_devices:{hex}` — with no normalization, and
+    enrolment stores the device under its real AK-derived hex (C2 §5.4 step 10).
+    PBL asks for `000…0`, which no enrolled device can own, so the lookup misses
+    and the unknown-device branch returns **UNLOCKED** with reason `enrolment`
+    (`verdict.ts:105-125`). A device an admin has set to `locked` can therefore
+    never be sent `locked` over the online path, and the same applies to
+    `tracking` (C5) and `recovering`. This is a lockdown bypass, not merely an
+    attestation weakness — the severest consequence of this item.
+  - `PblVerifyVerdict` step 5 cannot catch it: the server signs `req.device_id`
+    straight back (`verdict.ts:34,112,133`), so the firmware compares zeros to
+    zeros and passes. Silent in both directions, which is why neither the unit
+    tests nor the QEMU smoke harness caught it.
+  - The per-device verdict rate limiter is keyed on the same hex, so all
+    devices share one bucket.
+  - The PCR-13 extend input contains a zero device_id, so the attestation
+    digest cannot bind a verdict request to a device.
+- **Blocker**: Wiring `PblTpmReadAkName` in is not a one-line change. The NV
+  index is zero-filled until enrolment writes it (Agent D, OS-side, per C2
+  §5.4), and the AK Name's last 32 bytes are then the device_id — but nothing
+  says what PBL should do when the value is absent or all-zero. That is a
+  contract decision (fall back to zeros and downgrade attestation? refuse to
+  fetch a verdict? enrol-on-first-boot?), not an implementation detail. It
+  also needs a QEMU harness step that writes `PBL_AK_NAME` before boot, or the
+  fix is unobservable in the only harness that runs.
+- **Close criteria** (*restated 2026-10-29 when closing, so the record says what
+  was actually required rather than what it is convenient to have done*):
+  1. the unprovisioned-AK-name behaviour agreed in C2 — **met** (§1.3, ruled
+     Q1);
+  2. `PBL_PLATFORM_STATE.DeviceId` populated from the AK Name — **met**;
+  3. a QEMU harness provision step — **met** (in-harness via the TCP/TCTI
+     recipe, plus `scripts/provision-qemu-tpm.sh` for a sidecar or CI);
+  4. a run artifact showing a **non-zero `device_id`** derived from the
+     provisioned NV index — **met**:
+     `firmware/PblPkg/artifacts/d131-enrolled-serial.log` contains
+     `[OK] device_id from AK Name: ABABABAB...ABAB` for AK Name
+     `000b…abab`, with `d131-enrolled-results.txt` showing **16 PASS / 0 FAIL**
+     and the self-image hash matching the built binary, and
+     `d131-unprovisioned-serial.log` / `-results.txt` showing the opposite
+     branch (**17 PASS / 0 FAIL**: `unprovisioned detected` + `verdict request
+     suppressed`).
+
+  Deliberately **not** claimed: that the id reached the network. The QEMU
+  harness has no `policy.cose` on the ESP, so PBL logs
+  `No lock_service_uri in policy — skipping online fetch` and fails closed to
+  denied-boot-with-local-unlock. Proving the bytes on the wire needs a policy
+  blob with a URI plus a TLS endpoint with the pinned CA — which is exactly
+  D-200's recorded blocker ("No runtime test with PBL firmware"). This item was
+  "device_id is never populated"; that defect is fixed and observed.
+- **Artifact note**: the TCTI recipe needed to reproduce this was wrong in five
+  successive attempts; the working constraints are recorded in
+  `scripts/provision-qemu-tpm.sh` and in the harness comment rather than in
+  anyone's memory — data port (not ctrl), `tpm2_startup -c`, numeric attributes
+  `0x420D000D`, and stopping the provisioning swtpm before QEMU's starts.
+- **Pending (do not forget)**: this item has **no `GRAPH-SPEC.yaml` entry yet**, so
+  `current-state.md`'s convergence table still reports 52/55 with D-131 absent.
+  Closing it in the spec needs a `commit_ref`, and the S151–S154 working tree is
+  uncommitted — invariant I2 only asserts that the field is *non-empty*, so a
+  placeholder would turn the graph green while asserting nothing. The entry and
+  its real commit hash land when this work is committed.
+- **Update (2026-10-28, session 152) — ruling closed, server half landed.**
+  Both questions were ruled: Q1 = **refuse to fetch** when `PBL_AK_NAME` is
+  absent/all-zero (denied-boot-with-local-unlock per C3 §6.1, no C1 wire
+  change); Q2 = **an unknown `device_id` gets no verdict**. Q2 is implemented
+  and verified in both server implementations: the unknown-device branch returns
+  `404 unknown_device` instead of a signed UNLOCKED
+  (`serverless/pbl/routes/verdict.ts`, `server/src/routes/pbl.js`), and an
+  unrecognised `device.status` in a KV record now returns
+  `500 invalid_device_record` rather than falling through to UNLOCKED — the same
+  fail-open shape, in the same switch. Tests: serverless 334 pass, server pbl
+  suites 108 pass, `tsc --noEmit` and eslint clean. The new tests were proven to
+  have teeth by reintroducing the old branch: both fail, then pass again once
+  restored. Two of them are D-131 regression tests — one of which sends exactly
+  the all-zero `device_id` the firmware produces today.
+- **Still open on this item**: ~~the firmware half~~ — implemented 2026-10-29
+  (session 153), see below. The residual is the *enrolled-path artifact*.
+
+- **Update (2026-10-29, session 153) — firmware half implemented; unprovisioned
+  path demonstrated on real firmware.**
+  - **A second defect was found while implementing it, and it would have been
+    fleet-fatal.** `PblTpmReadAkName` issued `TPM2_NV_ReadPublic` and returned
+    the `TPM2B_NAME` from that response. That value is the NV *index* name —
+    `SHA-256(nameAlg) || SHA-256(nvPublic template)` — not the AK Name the index
+    stores. It varies with the index template and not with the device, so
+    "populate `DeviceId` from the Name" (this item's original plan) would have
+    given **every machine in the fleet the same device_id**. The 34 stored bytes
+    require `TPM2_NV_Read`. `PblTpmReadAkName` now issues NV_Read with password
+    auth on the platform/owner hierarchy (per the PPREAD attribute in §1.3), maps
+    TPM_RC_NV_UNINITIALIZED (0x14A) to `EFI_NOT_FOUND` (the unprovisioned case),
+    and returns the stored bytes. C2 §5.1 step 2 was itself wrong in saying
+    `NV_ReadPublic` and is corrected.
+  - `PblCollectPlatformState` now reads that index and copies bytes [2..34) into
+    `PBL_PLATFORM_STATE.DeviceId`, leaving it zeroed when the index is absent or
+    uninitialised. `PblApp.c` computes `DeviceIdProvisioned` from that and
+    suppresses the verdict request entirely when it is false (ruling Q1);
+    `HttpsClient.c` maps a non-2xx `StatusCode` to a non-SUCCESS return so the
+    server's 404 reaches C3 §6.1 by design (C3 §4 row added).
+  - **Artifact (unprovisioned branch, real QEMU + swtpm boot of the built
+    binary)**: `scripts`-reproducible via
+    `docker run --rm -v $PWD/firmware:/firmware:ro -v <ovmf>:/ovmf:ro pbl-qemu
+    /firmware/PblPkg/ci-harness-docker.sh --timeout 40` →
+    **17 PASS / 0 FAIL**, including `[PASS] unprovisioned detected`,
+    `[PASS] verdict request suppressed`, and
+    `[PASS] Self-image hash matches PblApp.efi (76e7d0a4fff37e34…)` against the
+    binary this session built (0 compile errors).
+  - **Residual (what still blocks closing this item)**: no run artifact yet with
+    a *non-zero* device_id, because there is no working host-side path to write
+    NV `0x01C00003` on the swtpm instance QEMU drives. Verified, not assumed:
+    `libtss2-tcti-swtpm0` **is** installed on jammy (3.2.0-1ubuntu1.1, 14 tcti
+    libs), but tss2 3.2's swtpm TCTI rejects both the unix-socket form and the
+    TCP form with `Could not load tcti` — its `path=` argument means a state
+    directory for an in-process libtpms TPM, not a socket. Needs one of: tss2
+    >= 4.x, an EFI helper that writes the index from inside the guest, or a
+    tpm2-tools whose libtpms TCTI can share swtpm's state. The harness now
+    attempts provisioning, says so when it cannot, and asserts whichever branch
+    actually ran, so the two can never be confused.
+
 ---
 
 ## Server-Side PBL Debt Items (D-200 through D-210)
@@ -709,7 +845,9 @@
   `serverless/pbl/routes/verdict.ts` (144 lines). Accepts CBOR request
   body, decodes device_id/nonce/platform_state_digest/policy_version,
   looks up device status in KV, signs COSE_Sign1 verdict with ES256.
-  Handles unknown devices (UNLOCKED + enrolment reason), locked devices
+  Handles unknown devices (superseded 2026-10-28 by D-131 ruling Q2: an
+  unknown device_id now gets `404 unknown_device` and no verdict, not an
+  UNLOCKED one — see D-131), locked devices
   (LOCKED), tracking devices (TRACKING), recovering devices (UNLOCKED).
   6 tests in pbl.test.ts. Route wired into worker.ts handlePblRoute.
   D-200 Express equivalent: `server/src/routes/pbl.js` POST /v1/verdict
@@ -1401,6 +1539,7 @@
 | D-128 | SBAT variable check not implemented | CLOSED | TODO |
 | D-129 | No real hardware validation | OPEN | ENV |
 | D-130 | Code signing not configured | OPEN | SECURITY |
+| D-131 | PBL never populates device_id — every verdict request carries 32 zero bytes | CLOSED (DeviceId now populated from NV 0x01C00003 via TPM2_NV_Read; QEMU artifacts `firmware/PblPkg/artifacts/d131-*`: enrolled 16/0 with a real device_id, unprovisioned 17/0 with the request suppressed) | STUB |
 | D-200 | PBL verdict endpoint not implemented | CLOSED (POST /v1/verdict implemented) | SERVER |
 | D-201 | PBL policy endpoint not implemented | CLOSED (GET/POST /v1/policy implemented) | SERVER |
 | D-202 | PBL enrollment endpoint not implemented | CLOSED (POST /v1/enroll implemented) | SERVER |

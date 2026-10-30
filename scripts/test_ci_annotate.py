@@ -68,6 +68,16 @@ class TestBuildAnnotation:
         payload = out.split("::", 2)[2]
         assert len(payload) <= mod.MAX_MESSAGE
 
+    def test_defaults_to_error_level(self):
+        assert mod.build_annotation("boom", "t").startswith("::error title=t::")
+
+    def test_warning_level_is_selectable(self):
+        # PBL CI surfaces advisory cppcheck output this way: the findings have
+        # to be visible on the check run, but they must not fail the job.
+        out = mod.build_annotation("style: unused var", "cpp", level="warning")
+        assert out.startswith("::warning title=cpp::")
+        assert "style: unused var" in out
+
 
 class TestCli:
     def test_writes_annotation_for_file(self, tmp_path):
@@ -98,9 +108,54 @@ class TestCli:
         assert result.returncode == 2
         assert "usage:" in result.stderr
 
+    def test_warning_flag_emits_warning_command(self, tmp_path):
+        log = tmp_path / "cpp.log"
+        log.write_text("App.c:12: style: unused variable\n")
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--warning", str(log), "cppcheck"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.startswith("::warning title=cppcheck::")
+        assert "unused variable" in result.stdout
+
+    def test_warning_flag_still_keeps_positional_order(self, tmp_path):
+        log = tmp_path / "cpp.log"
+        log.write_text("one\ntwo\nthree\n")
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--warning", str(log), "t", "2"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "two%0Athree" in result.stdout
+        assert "one" not in result.stdout
+
+    def test_non_numeric_line_count_is_a_usage_error(self, tmp_path):
+        log = tmp_path / "log.txt"
+        log.write_text("x\n")
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), str(log), "t", "not-a-number"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 2
+        assert "invalid line count" in result.stderr
+
 
 def test_script_is_executable():
     # The workflow calls it through `python3`, but every other script in
     # scripts/ is executable; keep the convention.
     mode = SCRIPT.stat().st_mode
     assert mode & 0o111, f"{SCRIPT} is not executable"
+
+
+if __name__ == "__main__":
+    # `make test-scripts` runs each scripts/test_*.py directly. Without this
+    # block the module imports the tests, runs none of them, and exits 0 — the
+    # exact failure AGENTS.md records for test_memory.py. It had recurred here:
+    # all 13 tests below were unreachable from `make test-scripts`.
+    from script_test_runner import run
+
+    raise SystemExit(run(__file__))

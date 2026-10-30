@@ -1,0 +1,24 @@
+# D-131 enrolled-path artifact — 2026-10-29T15:03:42Z
+# Command: docker run --rm -v $PWD/firmware:/firmware:ro -v <ovmf>:/ovmf:ro \
+#            -v <art>:/tmp/pbl-ci pbl-qemu:d131 /firmware/PblPkg/ci-harness-docker.sh --timeout 40
+# Firmware: PblApp.efi sha256 76e7d0a4fff37e34...
+
+  AK Name provisioned: 000babababababababababababababababababababababababababababababababab
+  QEMU exited with code 124
+  [PASS] PBL banner appears
+  [PASS] Platform state step
+  [PASS] Policy parse step
+  [PASS] TPM NV read step
+  [PASS] Verdict fetch step
+  [PASS] Verdict verify step
+  [PASS] Decision step
+  [PASS] PCR extend step
+  [PASS] Decision action step
+  [PASS] NV indices provisioned
+  [PASS] HMAC session established
+  [PASS] Self-image measured (D-217)
+  [PASS] Loaded image digest computed (D-213)
+  [PASS] Lock screen displayed
+  [PASS] device_id derived from AK Name
+  [PASS] Self-image hash matches PblApp.efi (76e7d0a4fff37e34...)
+=== Results: 16 PASS / 0 FAIL ===

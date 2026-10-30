@@ -4,10 +4,20 @@ on:
   push:
     paths:
       - 'firmware/PblPkg/**'
+      # This workflow now invokes these scripts, so a change to one of them must
+      # re-run the job that uses it. Without these entries a fix to the TODO gate
+      # or the apt helper would only be exercised by the next firmware commit —
+      # the job would stay green on stale assumptions.
+      - 'scripts/check-firmware-todos.py'
+      - 'scripts/apt-install-retry.sh'
+      - 'scripts/ci-annotate.py'
       - '.github/workflows/pbl-ci.yml'
   pull_request:
     paths:
       - 'firmware/PblPkg/**'
+      - 'scripts/check-firmware-todos.py'
+      - 'scripts/apt-install-retry.sh'
+      - 'scripts/ci-annotate.py'
       - '.github/workflows/pbl-ci.yml'
 
 permissions:
@@ -24,14 +34,26 @@ jobs:
           persist-credentials: false
 
       - name: Install build dependencies
+        # PBL CI's apt steps exited 100 on every run and the cause could not be
+        # named: job logs need admin rights on this repository, and the step
+        # logged straight to the console, so a failure left nothing to inspect.
+        # scripts/apt-install-retry.sh retries the transient causes (apt lock
+        # held by image setup, mirror fetch failures) and keeps a transcript;
+        # the next step annotates it, so the failing check run explains itself
+        # without a log download. See scripts/ci-annotate.py.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          ./scripts/apt-install-retry.sh /tmp/pbl-apt-build-x64.log \
             build-essential gcc g++ nasm python3 python3-pip \
             mtools dosfstools gdisk \
-            libuuid-dev \
+            uuid-dev \
             qemu-system-x86 \
             swtpm
+
+      - name: Annotate dependency install failure
+        if: failure()
+        run: |
+          python3 scripts/ci-annotate.py /tmp/pbl-apt-build-x64.log \
+            "PBL CI: apt install (Build X64)"
 
       - name: Clone EDK II
         run: |
@@ -43,8 +65,16 @@ jobs:
 
       - name: Build PblApp
         run: |
+          set -o pipefail
           export EDK2_DIR="$HOME/.local/src/edk2"
-          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC
+          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC 2>&1 \
+            | tee /tmp/pbl-build-x64.log
+
+      - name: Annotate build failure
+        if: failure()
+        run: |
+          python3 scripts/ci-annotate.py /tmp/pbl-build-x64.log \
+            "PBL CI: PblApp build (X64)"
 
       - name: Upload PblApp.efi artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -62,12 +92,22 @@ jobs:
           persist-credentials: false
 
       - name: Install build dependencies + AARCH64 cross-compiler
+        # `libuuid-dev` was here and does not exist on jammy — the dev package is
+        # `uuid-dev`. That single wrong name is what made this step exit 100 on
+        # every run (reproduced in a bare ubuntu:22.04 container: "E: Unable to
+        # locate package libuuid-dev"). EDK II BaseTools still needs uuid-dev,
+        # so the package is renamed, not dropped.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          ./scripts/apt-install-retry.sh /tmp/pbl-apt-build-aarch64.log \
             build-essential nasm python3 \
             gcc-aarch64-linux-gnu \
-            libuuid-dev
+            uuid-dev
+
+      - name: Annotate dependency install failure
+        if: failure()
+        run: |
+          python3 scripts/ci-annotate.py /tmp/pbl-apt-build-aarch64.log \
+            "PBL CI: apt install (Build AARCH64)"
 
       - name: Clone EDK II
         run: |
@@ -79,9 +119,17 @@ jobs:
 
       - name: Build PblApp
         run: |
+          set -o pipefail
           export EDK2_DIR="$HOME/.local/src/edk2"
           export GCC_AARCH64_PREFIX=aarch64-linux-gnu-
-          ./firmware/PblPkg/build-pbl.sh --arch AARCH64 --toolchain GCC
+          ./firmware/PblPkg/build-pbl.sh --arch AARCH64 --toolchain GCC 2>&1 \
+            | tee /tmp/pbl-build-aarch64.log
+
+      - name: Annotate build failure
+        if: failure()
+        run: |
+          python3 scripts/ci-annotate.py /tmp/pbl-build-aarch64.log \
+            "PBL CI: PblApp build (AARCH64)"
 
       - name: Upload PblApp.efi artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -101,11 +149,16 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          ./scripts/apt-install-retry.sh /tmp/pbl-apt-qemu.log \
             qemu-system-x86 \
             swtpm \
             mtools dosfstools gdisk
+
+      - name: Annotate dependency install failure
+        if: failure()
+        run: |
+          python3 scripts/ci-annotate.py /tmp/pbl-apt-qemu.log \
+            "PBL CI: apt install (QEMU smoke)"
 
       - name: Clone EDK II + build OVMF
         run: |
@@ -117,14 +170,23 @@ jobs:
 
       - name: Build PblApp + OVMF
         run: |
+          set -o pipefail
           export EDK2_DIR="$HOME/.local/src/edk2"
-          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC
+          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC 2>&1 \
+            | tee /tmp/pbl-build-qemu.log
+
+      - name: Annotate build failure
+        if: failure()
+        run: |
+          python3 scripts/ci-annotate.py /tmp/pbl-build-qemu.log \
+            "PBL CI: PblApp + OVMF build (QEMU smoke)"
 
       - name: Run QEMU smoke test
         # Assign and export separately: `export X=$(cmd)` masks the command's
         # exit status (shellcheck SC2155) and actionlint escalates shellcheck
         # findings, so that form fails the Lint workflow.
         run: |
+          set -o pipefail
           export EDK2_DIR="$HOME/.local/src/edk2"
           QEMU=$(command -v qemu-system-x86_64)
           MKFS=$(command -v mkfs.fat)
@@ -132,10 +194,17 @@ jobs:
           MCOPY=$(command -v mcopy)
           SGDISK=$(command -v sgdisk)
           export QEMU MKFS MMD MCOPY SGDISK
-          ./firmware/PblPkg/ci-harness.sh --timeout 30
+          ./firmware/PblPkg/ci-harness.sh --timeout 30 2>&1 \
+            | tee /tmp/pbl-qemu.log
+
+      - name: Annotate smoke test failure
+        if: failure()
+        run: |
+          python3 scripts/ci-annotate.py /tmp/pbl-qemu.log \
+            "PBL CI: QEMU smoke test" 120
 
   static-analysis:
-    name: Static analysis (cppcheck + spell check)
+    name: Static analysis (contract references + cppcheck)
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
@@ -143,21 +212,47 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check TODO/FIXME markers carry a contract reference
+        # Deliberately first, and deliberately before the cppcheck install.
+        # While this check sat at the end of the job it could be masked: an apt
+        # failure in the same job turned the job red for apt, and the three
+        # untraceable TODOs were never reported at all. This gate needs no
+        # packages — only python3, which the runner image already has — so no
+        # install failure upstream of it can hide its verdict.
+        #
+        # The check itself moved out of an inline `grep` pipeline into
+        # scripts/check-firmware-todos.py, for four reasons: it can now be run
+        # and tested locally, it says which file and line failed instead of just
+        # making the job red, it accepts a real reference (C1-C5 §n, REQ-n,
+        # D-nnn, STUB, Agent X) rather than any line containing the substring
+        # "C1" (a hex literal used to pass), and it covers every firmware source
+        # and header instead of only PblApp/*.c.
+        run: python3 scripts/check-firmware-todos.py --annotate
+
       - name: Install cppcheck
-        run: sudo apt-get install -y cppcheck
+        run: ./scripts/apt-install-retry.sh /tmp/pbl-apt-cppcheck.log cppcheck
+
+      - name: Annotate dependency install failure
+        if: failure()
+        run: |
+          python3 scripts/ci-annotate.py /tmp/pbl-apt-cppcheck.log \
+            "PBL CI: apt install (cppcheck)"
 
       - name: Run cppcheck on PblApp
+        # Advisory, not a gate. PblApp still contains deliberate stubs, so
+        # cppcheck --enable=all reports style-level noise that would make the
+        # job red for reasons unrelated to correctness — which is exactly why
+        # this step previously ended in `|| true` and was invisible.
+        # --error-exitcode was removed rather than left in place: paired with
+        # `|| true` it asserted nothing, and a flag that cannot fire is worse
+        # than no flag. The findings are now surfaced as a warning annotation
+        # instead, so they are visible on the check run without failing it.
         run: |
-          cppcheck --enable=all --error-exitcode=1 \
+          cppcheck --enable=all \
             --suppress=missingIncludeSystem \
-            firmware/PblPkg/PblApp/ 2>&1 || true
-          # Non-fatal for now — stubs have no real logic to check
+            firmware/PblPkg/PblApp/ > /tmp/pbl-cppcheck.log 2>&1 || true
 
-      - name: Check for TODO/FIXME without contract reference
+      - name: Surface cppcheck findings (advisory)
         run: |
-          # Every TODO must reference a contract (C1/C2/C3/C4) or REQ
-          ! grep -rn "TODO" firmware/PblPkg/PblApp/*.c | \
-            grep -v "C1\|C2\|C3\|C4\|REQ\|STUB\|Agent" || {
-            echo "ERROR: TODOs must reference a contract or agent"
-            exit 1
-          }
+          python3 scripts/ci-annotate.py --warning /tmp/pbl-cppcheck.log \
+            "PBL CI: cppcheck (advisory)" 40

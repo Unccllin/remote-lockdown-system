@@ -340,6 +340,7 @@ PblAppEntryPoint (
   UINTN                   RequestBodySize = 0;
   UINT8                   PlatformStateDigest[32];
   BOOLEAN                 OnlineFetchOk = FALSE;
+  BOOLEAN                 DeviceIdProvisioned = FALSE;
   CHAR8                   Hostname[256];    // D-116: parsed from LockServiceUri for TLS pin
 
   // Suppress unused-variable warnings for scaffold stubs
@@ -364,6 +365,15 @@ PblAppEntryPoint (
   if (EFI_ERROR (Status)) {
     Print (L"  [WARN] Platform state collection: %r\n", Status);
     // Continue — missing state is DEGRADED, not fatal
+  }
+
+  // D-131 (C2 §1.3, ruled 2026-10-28): a zero DeviceId means PBL_AK_NAME was
+  // absent or never written, i.e. this device is not enrolled. PblCollectPlatformState
+  // sets DeviceId from the stored AK Name and leaves it zeroed otherwise, so
+  // this one test distinguishes "real identity" from "none".
+  DeviceIdProvisioned = !IsZeroBuffer (PlatformState.DeviceId, 32);
+  if (!DeviceIdProvisioned) {
+    Print (L"  [INFO] No device_id — device is unprovisioned (C2 §1.3)\n");
   }
   // D-213: log the loaded-image enumeration result (count + aggregate digest)
   Print (L"  [INFO] Loaded images: %u (digest %02x%02x%02x%02x%02x%02x%02x%02x...)\n",
@@ -566,7 +576,17 @@ PblAppEntryPoint (
     // Step 5d: POST to /v1/verdict (C3, HttpsClient.c)
     // The verdict URI comes from the policy blob (C4 §2.8 key 70).
     // If the policy has no URI, skip online fetch.
-    if (Policy.LockServiceUri[0] != '\0') {
+    if (!DeviceIdProvisioned) {
+      // D-131 ruling Q1 (2026-10-28), C2 §1.3: an unprovisioned device sends no
+      // verdict request at all.
+      //
+      // A zero device_id names no device, so any verdict the server signed for
+      // it would be valid for every device — and since Q2 made an unknown id a
+      // 404, the request could not succeed anyway. Going straight to the cached
+      // verdict means the boot costs no network round trip and the outcome does
+      // not depend on what the server happens to answer.
+      Print (L"  [WARN] Verdict request suppressed: no device_id (C2 §1.3)\n");
+    } else if (Policy.LockServiceUri[0] != '\0') {
       // D-116: Parse hostname from LockServiceUri for TLS pin verification
       ZeroMem (Hostname, sizeof (Hostname));
       PblParseUriHostname (Policy.LockServiceUri, Hostname, sizeof (Hostname));

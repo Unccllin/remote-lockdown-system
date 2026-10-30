@@ -176,9 +176,9 @@ pre-push-check:
 	@bash scripts/pre-push-check.sh
 
 # Lint all components — server, dashboard, agent, workflows.
-.PHONY: lint lint-server lint-dashboard lint-agent lint-workflows
+.PHONY: lint lint-server lint-dashboard lint-agent lint-workflows check-firmware-todos
 
-lint: lint-server lint-dashboard lint-agent lint-workflows typecheck-worker check-openapi
+lint: lint-server lint-dashboard lint-agent lint-workflows check-firmware-todos typecheck-worker check-openapi
 
 # Workflow lint. CI runs actionlint v1.7.12 through raven-actions/actionlint,
 # which bundles shellcheck — so CI also checks the shell inside every `run:`
@@ -196,6 +196,17 @@ lint-workflows:
 
 lint-server:
 	@cd server && npx eslint src/ tests/ --max-warnings=0
+
+# Firmware deferrals must name their source so the debt is findable from either
+# direction. This ran as an inline `grep` pipeline inside pbl-ci.yml until
+# session 151: it could not be reproduced locally, it named no file or line, it
+# accepted any line containing the substring "C1" (so a hex literal passed) and
+# it never accepted C5. scripts/check-firmware-todos.py replaces it and is
+# covered by scripts/test_check_firmware_todos.py, whose last test asserts this
+# real tree is clean — so a new untraceable deferral fails locally, not only in
+# CI.
+check-firmware-todos:
+	@python3 scripts/check-firmware-todos.py
 
 # The Worker had no tsconfig and no Workers types, so it was never type-checked;
 # the first `tsc --noEmit` run found 18 real errors (S141). Keep it in `lint`.

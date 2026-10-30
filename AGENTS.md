@@ -298,6 +298,13 @@ cd agent     && python3 -m ruff format --check .
 # is missing instead of silently linting less than CI does.
 make lint-workflows                           # actionlint + shellcheck, exit 0 = clean
 
+# Firmware deferrals must name their source (C1-C5 §n, REQ-n, D-nnn, STUB,
+# Agent X). This gate runs in PBL CI's static-analysis job *and* locally; the
+# same logic lives in scripts/check-firmware-todos.py so a red job can be
+# reproduced without the Actions UI. Covered by scripts/test_check_firmware_todos.py
+# (30 tests, the last of which asserts this tree is clean).
+make check-firmware-todos                      # exit 0 = clean, 1 = untraceable TODO
+
 # Build
 cd dashboard && npx vite build                # outputs dashboard/dist
 cd electron  && node --check main.js preload.js setup-preload.js setup-wizard.js server-starter.js config.js updater.js
@@ -387,8 +394,17 @@ claimed "all 5 test suites". Current measured totals: server 663 (41 suites),
 agent 689, dashboard 197, worker 331, electron 30, API E2E 10, script harness 71.
 
 The script-level harness tests are **auto-discovered** (`scripts/test_*.py`, run
-by `make test-scripts` and the CI `script-tests` job): 11 graph-session tests
-(40 checks), 44 memory tests, 10 secret-scanner tests (19 checks).
+by `make test-scripts` and the CI `script-tests` job): 30 firmware-TODO tests,
+18 ci-annotate tests, 11 graph-session tests (40 checks), 44 memory tests, and
+10 secret-scanner tests (19 checks).
+
+**Every `scripts/test_*.py` must have a `__main__` runner** — the Makefile
+executes each file directly, so a suite without one imports its tests, runs
+none, and exits 0. That silently cost 44 memory tests once, and then 13
+ci-annotate tests (session 150, found in 151). The runner now lives in one place
+(`scripts/script_test_runner.py`, which fails loudly when pytest is absent) and
+`test_check_firmware_todos.py::test_every_script_test_suite_has_a_runner` fails
+if a new suite forgets it.
 
 Invariant coverage is now complete: I1 (phase deps), I2 (no debt closed without
 commit + artifact), I4, I5, I6 (orchestrator knows every phase) and I7 all have

@@ -407,8 +407,17 @@ PblVerifyCoseSign1 (
     case COSE_ALG_ED25519: {
       // Ed25519: EdDSA with Ed25519
       // BaseCryptLib only supports Ed448 (CRYPTO_NID_ED448), not Ed25519.
-      // TODO: Implement Ed25519 verification when BaseCryptLib adds support
-      //       or use a third-party Ed25519 library.
+      //
+      // TODO (C1 §1.1): Implement Ed25519 verification. BaseCryptLib has no
+      //       Ed25519 primitive, so this needs upstream support or a
+      //       third-party implementation. C1 §1.1 names alg -8 (Ed25519) as
+      //       the preferred algorithm with alg -7 (ES256) as the sanctioned
+      //       fallback "if HSM lacks Ed25519" — this firmware image is in
+      //       that fallback term, so the signing side must publish an ES256
+      //       verdict key (C4 key 76 verdict_signing_key_spki, kid per C4
+      //       key 71). Returning EFI_UNSUPPORTED rather than EFI_SUCCESS is
+      //       required by C1 §7: an unverifiable verdict must fail to the
+      //       cached verdict, never unlock. See D-205 for the ES256 path.
       FreePool (SigStructure);
       return EFI_UNSUPPORTED;
     }

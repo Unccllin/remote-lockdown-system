@@ -81,11 +81,19 @@ beforeEach(() => {
 });
 
 describe('D-200: POST /v1/verdict', () => {
-  it('returns a COSE_Sign1 verdict for an unknown device', async () => {
+  it('returns a COSE_Sign1 verdict for a known active device', async () => {
     const env = createEnv();
     const app = createApp(env);
     const deviceId = Buffer.alloc(32, 0xab);
     const nonce = Buffer.alloc(32, 0xcd);
+    // The device must exist: D-131 ruling Q2 made an unknown device a 404.
+    setSharedKvStore(new Map([
+      [`pbl_devices:${deviceId.toString('hex')}`, JSON.stringify({
+        device_id: deviceId.toString('hex'),
+        status: 'active',
+        enrolled_at: new Date().toISOString(),
+      })],
+    ]));
     const body = buildVerdictRequest(deviceId, nonce);
 
     const resp = await request(app)
@@ -96,6 +104,65 @@ describe('D-200: POST /v1/verdict', () => {
     expect(resp.status).toBe(200);
     expect(resp.headers['content-type']).toContain('application/cose');
     expect(parseInt(resp.headers['content-length'] || '0', 10)).toBeGreaterThan(100);
+  });
+
+  // D-131 ruling Q2 (2026-10-28). This replaces the previous
+  // 'returns a COSE_Sign1 verdict for an unknown device' test, which asserted
+  // 200 + a COSE body for a device the server had no record of — the fail-open
+  // behaviour that made the firmware's zero device_id a lockdown bypass.
+  it('returns 404 and NO verdict for an unknown device', async () => {
+    const env = createEnv();
+    const app = createApp(env);
+    const deviceId = Buffer.alloc(32, 0x7e);
+    const nonce = Buffer.alloc(32, 0x4f);
+    const body = buildVerdictRequest(deviceId, nonce);
+
+    const resp = await request(app)
+      .post('/v1/verdict')
+      .set('Content-Type', 'application/cbor')
+      .send(body);
+
+    expect(resp.status).toBe(404);
+    expect(resp.body.error).toBe('unknown_device');
+    expect(resp.headers['content-type']).toContain('application/json');
+    expect(resp.headers['content-type']).not.toContain('application/cose');
+  });
+
+  it('returns 404 for the all-zero device_id the firmware used to send (D-131)', async () => {
+    const env = createEnv();
+    const app = createApp(env);
+    const body = buildVerdictRequest(Buffer.alloc(32), Buffer.alloc(32, 0x11));
+
+    const resp = await request(app)
+      .post('/v1/verdict')
+      .set('Content-Type', 'application/cbor')
+      .send(body);
+
+    expect(resp.status).toBe(404);
+  });
+
+  it('fails closed on an unrecognised device status', async () => {
+    const env = createEnv();
+    const app = createApp(env);
+    const deviceId = Buffer.alloc(32, 0x5a);
+    // A KV record is parsed JSON, so the status union is not a runtime
+    // guarantee; an unexpected status must not fall through to UNLOCKED.
+    setSharedKvStore(new Map([
+      [`pbl_devices:${deviceId.toString('hex')}`, JSON.stringify({
+        device_id: deviceId.toString('hex'),
+        status: 'retired',
+        enrolled_at: new Date().toISOString(),
+      })],
+    ]));
+    const body = buildVerdictRequest(deviceId, Buffer.alloc(32, 0x22));
+
+    const resp = await request(app)
+      .post('/v1/verdict')
+      .set('Content-Type', 'application/cbor')
+      .send(body);
+
+    expect(resp.status).toBe(500);
+    expect(resp.body.error).toBe('invalid_device_record');
   });
 
   it('returns a LOCKED verdict for a locked device', async () => {

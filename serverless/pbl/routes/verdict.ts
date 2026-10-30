@@ -8,15 +8,20 @@
 
 import { decodeVerdictRequest, encodeMap, encodeUint, encodeBstr, encodeTstr } from '../cbor';
 import { encodeCoseSign1 } from '../cose';
-import { getDevice, type PblDevice } from '../devices';
+import { getDevice } from '../devices';
 import { checkDeviceRateLimit, rateLimitResponse, DEVICE_RATE_LIMITS } from '../rateLimit';
 import type { SigningKeyPair } from '../signing';
 import type { Env } from '../env';
 
-/** C1 + C5 verdict values. */
+/** C1 + C5 verdict values.
+ *
+ * C1 §2 key 4 defines the full enum: 0 UNLOCKED, 1 LOCKED, 2 WIPE_PENDING,
+ * 3 TRACKING (C5). This server never emits WIPE_PENDING — wiping is an
+ * agent/OS-side action, not a boot verdict — so there is deliberately no
+ * constant for it here rather than a dead declaration claiming otherwise.
+ */
 const VERDICT_UNLOCKED = 0;
 const VERDICT_LOCKED = 1;
-const VERDICT_WIPE_PENDING = 2;
 const VERDICT_TRACKING = 3;
 
 /** Build the verdict payload CBOR map (C1 §2). */
@@ -41,8 +46,15 @@ function buildVerdictPayload(
   ]);
 }
 
-/** Map device status to verdict value. */
-function statusToVerdict(status: string): { verdict: number; reason: string } {
+/** Map device status to verdict value.
+ *
+ * Returns `null` for a status this server does not recognise. A `default:`
+ * branch that fell through to UNLOCKED would mean a malformed or unexpected KV
+ * record releases the machine — the same fail-open shape as the unknown-device
+ * branch below, and `device.status` comes out of JSON, so the union type is not
+ * a runtime guarantee. D-131 ruling Q2 (2026-10-28).
+ */
+function statusToVerdict(status: string): { verdict: number; reason: string } | null {
   switch (status) {
     case 'locked':
       return { verdict: VERDICT_LOCKED, reason: 'admin_lock' };
@@ -52,8 +64,9 @@ function statusToVerdict(status: string): { verdict: number; reason: string } {
     case 'recovering':
       return { verdict: VERDICT_UNLOCKED, reason: 'recovered' };
     case 'active':
-    default:
       return { verdict: VERDICT_UNLOCKED, reason: 'enrolment' };
+    default:
+      return null;
   }
 }
 
@@ -68,7 +81,7 @@ export async function handleVerdict(
   let req;
   try {
     req = decodeVerdictRequest(body);
-  } catch (e) {
+  } catch {
     return new Response(
       JSON.stringify({ error: 'invalid CBOR request' }),
       { status: 400, headers: { 'Content-Type': 'application/json' } },
@@ -104,28 +117,43 @@ export async function handleVerdict(
   const device = await getDevice(env.LOCKDOWN_KV, deviceIdHex);
 
   if (!device) {
-    // Unknown device — return UNLOCKED with "enrolment" reason
-    // (PBL should enroll first, but we don't block boot)
-    const now = Math.floor(Date.now() / 1000);
-    const graceUntil = now + 900; // 15 min
-    const payload = buildVerdictPayload(
-      req.device_id,
-      req.nonce,
-      VERDICT_UNLOCKED,
-      req.policy_version,
-      now,
-      graceUntil,
-      'enrolment',
+    // Unknown device — NO verdict.
+    //
+    // This branch used to return UNLOCKED with reason 'enrolment', on the
+    // reasoning that PBL should enrol first but boot should not be blocked.
+    // D-131 showed that reasoning was load-bearing on an assumption that did
+    // not hold: the firmware sent a 32-byte zero device_id, so *every* enrolled
+    // device landed here and could never be sent `locked`, `tracking` or
+    // `recovering`. A cleared TPM, a rogue machine, or an imaged-but-unenrolled
+    // unit got the same answer.
+    //
+    // D-131 ruling Q2 (2026-10-28): an unknown device_id gets no verdict, so
+    // PBLHttpsPost surfaces a non-SUCCESS and PBL falls back to its cached
+    // verdict — and with no cache, to denied-boot-with-local-unlock (C3 §6.1).
+    // The machine is not bricked (local unlock remains) but data is not
+    // released on the server's behalf.
+    return new Response(
+      JSON.stringify({
+        error: 'unknown_device',
+        detail: 'device_id is not enrolled; no verdict will be issued',
+      }),
+      { status: 404, headers: { 'Content-Type': 'application/json' } },
     );
-    const cose = await encodeCoseSign1(payload, keys);
-    return new Response(cose, {
-      status: 200,
-      headers: { 'Content-Type': 'application/cose' },
-    });
   }
 
   // Build verdict based on device status
-  const { verdict, reason } = statusToVerdict(device.status);
+  const resolved = statusToVerdict(device.status);
+  if (resolved === null) {
+    // Unrecognised status in the KV record: fail closed rather than guess.
+    return new Response(
+      JSON.stringify({
+        error: 'invalid_device_record',
+        detail: `unknown device status: ${device.status}`,
+      }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
+  const { verdict, reason } = resolved;
   const now = Math.floor(Date.now() / 1000);
   const graceUntil = now + 604800; // 7 days
 

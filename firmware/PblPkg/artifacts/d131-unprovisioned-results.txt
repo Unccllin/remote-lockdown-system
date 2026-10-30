@@ -1,0 +1,23 @@
+# D-131 unprovisioned-path artifact (regression) — 2026-10-29T15:03:42Z
+# Same command with -e PROVISION_AK_NAME=0 on pbl-qemu (no tpm2-tools)
+
+  [INFO] tpm2-tools absent or PROVISION_AK_NAME=0 — unprovisioned path
+  QEMU exited with code 124
+  [PASS] PBL banner appears
+  [PASS] Platform state step
+  [PASS] Policy parse step
+  [PASS] TPM NV read step
+  [PASS] Verdict fetch step
+  [PASS] Verdict verify step
+  [PASS] Decision step
+  [PASS] PCR extend step
+  [PASS] Decision action step
+  [PASS] NV indices provisioned
+  [PASS] HMAC session established
+  [PASS] Self-image measured (D-217)
+  [PASS] Loaded image digest computed (D-213)
+  [PASS] Lock screen displayed
+  [PASS] unprovisioned detected
+  [PASS] verdict request suppressed
+  [PASS] Self-image hash matches PblApp.efi (76e7d0a4fff37e34...)
+=== Results: 17 PASS / 0 FAIL ===

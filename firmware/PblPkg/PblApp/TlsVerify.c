@@ -105,10 +105,14 @@ PblTlsVerifyCert (
 
   //
   // Step 5: Compare the CN against the expected hostname.
-  // TODO: Also check Subject Alternative Names (SAN) for wildcard
+  // TODO (C3 §4): Also check Subject Alternative Names (SAN) for wildcard
   //       or multi-hostname support. BaseCryptLib does not expose
   //       SAN extraction directly — would need X509GetExtensionData
-  //       with the SAN OID (2.5.29.17).
+  //       with the SAN OID (2.5.29.17). C3 §4 requires rejecting a
+  //       certificate whose "CN/SAN" does not match the uri hostname. With
+  //       CN-only the check stays fail-closed (a SAN-only identity is
+  //       rejected, never accepted), but a certificate that carries its
+  //       names in the SAN cannot be used at all.
   //
   if (AsciiStrCmp (CommonName, ExpectedHostname) != 0) {
     //

@@ -14,7 +14,28 @@
 
 set -eo pipefail
 
-TIMEOUT="${1:-30}"
+# Timeout in seconds. Accepts the documented bare form (`ci-harness.sh 40`),
+# the form PBL CI actually uses (`--timeout 30`), and `--timeout=30`.
+#
+# This used to be `TIMEOUT="${1:-30}"`, which silently took the *flag* as the
+# value: CI passes `--timeout 30`, so TIMEOUT became the string "--timeout" and
+# the second argument was dropped, producing `timeout --timeout qemu-system...`
+# — an immediate "invalid time interval" failure. It sat behind the apt failure
+# in the same job, so it had never been reached until that one was fixed.
+TIMEOUT=30
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --timeout)   TIMEOUT="${2:-30}"; shift 2 || shift ;;
+    --timeout=*) TIMEOUT="${1#*=}"; shift ;;
+    [0-9]*)      TIMEOUT="$1"; shift ;;
+    *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: timeout must be an integer number of seconds, got '${TIMEOUT}'" >&2
+  exit 2
+fi
+
 FIRMWARE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 EDK2_DIR="${EDK2_DIR:-/home/cllin/.local/src/edk2}"
 BUILD_DIR="/tmp/pbl-ci"
