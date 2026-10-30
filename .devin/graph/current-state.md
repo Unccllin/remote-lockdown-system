@@ -53,95 +53,81 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 157 — 2026-10-30 (D-200 CLOSED: the firmware verifies a real signed verdict, 8 PASS / 0 FAIL)
+## Latest session: 158 — 2026-10-30 (the decision engine now says why it blocked: "Secure Boot disabled", so the BLOCK was never about the verdict)
 
 ### VERIFY
-- **8 PASS / 0 FAIL** (`firmware/PblPkg/artifacts/d200-roundtrip-*`):
+- **Build 0 errors** (`91d9dca8…`); all 15 neighbouring modules compiled — the
+  authoritative check for a header-local change like this.
+- **Run: 8 PASS / 0 FAIL, unchanged**, with the new line:
   ```
-  [PASS] policy blob loaded from ESP
-  [PASS] device_id derived from AK Name
-  [PASS] verdict request posted over TLS
-  [PASS] server received a request
-  [PASS] wire device_id matches AK Name
-  [PASS] verdict decoded by firmware
-  [PASS] verdict signature verified
-  [PASS] request body captured (1 file(s))
+  [6/8] Evaluating decision...
+    [INFO] Decision BLOCK basis: Secure Boot disabled
+  [8/8] Decision: BLOCK — lock screen
   ```
-  Firmware side: `[OK] Verdict response: 210 bytes`, `[OK] Cert chain validated`,
-  `[OK] Verdict signature verified (ES256)`,
-  `[OK] Verdict decoded: verdict=0 policy_version=1`.
-- The signed verdict was also validated independently on the host before spending
-  a QEMU run: `cbor2` decoded the 210-byte structure, confirmed
-  `protected = {1: -7, 4: kid}`, a 64-byte `r || s` signature, and that
-  `device_id` and `nonce` are byte-equal to the captured request.
-- `make graph-check` all invariants pass; convergence holds at 54/57.
+  Artifact: `firmware/PblPkg/artifacts/d200-decision-basis-{serial.log,results.txt}`.
+- D-200's unattributed observation is now **resolved in the ledger** (correct
+  behaviour + the D-130 dependency recorded), and D-130 gained the note that
+  signing is a prerequisite for demonstrating PASS.
 
 ### Fog cleared
-- **The firmware↔verdict contract is proven end to end**: derive identity →
-  pin the CA → post over TLS → receive → validate chain → verify ES256 → decode.
-  Every link in that chain now has a run artifact rather than a unit test.
-- **Why the spec and the ledger disagreed about D-200**: the spec's close
-  criteria stopped at "endpoint implemented and unit-tested" (closed in an
-  earlier session), while the ledger kept it open for the runtime test. Both are
-  now CLOSED and the spec's evidence names the runtime artifact, so the two
-  records agree.
+- **Why the boot BLOCKed**: Secure Boot disabled, Step 5. Not the verdict.
+- **Why that was previously unknowable**: the engine had no diagnostics at any
+  verbosity. It does now, and the reason is printed on the path that actually
+  matters (the refusal path).
+- **What the verdict work actually proved**: the firmware derives a real
+  device_id, posts it over TLS, validates the chain, verifies ES256 and decodes
+  the verdict. Whether it *acts* on UNLOCKED is decided later by 18 policy gates
+  — S157 recorded the right caveat and this session closed it.
 
 ### Fog remaining
-- **An UNLOCKED verdict still ends in `[8/8] Decision: BLOCK — lock screen`.**
-  Nothing between `[6/8]` and `[7/8]` is logged at RELEASE verbosity, so the
-  cause is not attributable from the artifact. Candidates are Decision.c's own
-  gates (SecureBoot/db state under OVMF, or the deliberately minimal policy being
-  DEGRADED) — not the verdict being ignored. So "the verdict arrives and
-  verifies" is proven; **"an UNLOCKED verdict releases the boot" is not**, and
-  nobody should cite this artifact for that. Needs a DEBUG-build run or a
-  Decision.c read.
-- `PblTlsVerifyCert` still has no caller (the pin is enforced by construction).
-  Carried in D-132's residual.
+- **The PASS path is unproven and blocked on D-130.** With Secure Boot off, every
+  QEMU run blocks at Step 5 regardless of the verdict, so "an UNLOCKED verdict
+  releases the boot" cannot be demonstrated until PblApp is signed and keys are
+  enrolled. This is a dependency, not a defect.
+- `PblTlsVerifyCert` still has no caller (D-132 residual: the pin is enforced by
+  construction).
 - Carried forward: 19 Dependabot alerts; 10 of 13 enforcement paths
   `verified-in-unit-test`; D-120/D-129/D-130 open; no CI run observed for
-  S151–S157; the stale side worktree.
+  S151–S158; the stale side worktree.
 
 ### Debt items closed
-- **D-200 — CLOSED**, on its ledger criteria (runtime test with real firmware),
-  with the round-trip artifact committed. The spec entry keeps its earlier
-  commit_ref and gains the runtime evidence, so both records now cite the same
-  proof.
+- None. D-200 stays closed (S157); this session strengthened its evidence and
+  resolved its open observation. D-132's residual unchanged.
 
 ### Debt items still open
-- D-120, D-129, D-130 (plus D-132's `PblTlsVerifyCert` residual).
+- D-120, D-129, D-130 (+ D-132's `PblTlsVerifyCert` residual).
 
 ### Blockers
-- None. The next question (why UNLOCKED still BLOCKs) is a code read, not a
-  blocker.
+- D-130 (code signing) now blocks two things rather than one: release hygiene for
+  Secure Boot, and the ability to demonstrate the PASS path at all.
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary, and the pattern is stable now).
-  Two wrong assumptions were cheap to catch *because* they were checked
-  independently: the RSA verdict key was caught by running the signing path on
-  the host against the captured request, and the one-element chain was caught by
-  reading `CborDecode.c:924` instead of by a wasted QEMU cycle. The rule that
-  keeps earning its place: validate a new artifact with an independent
-  implementation before pointing the harness at it.
-- **Layer 2 — context provision** (secondary). "The last element of key 77 is
-  the root" is in the decoder, not in C4 — a contract reader alone would have
-  produced a chain the firmware silently rejects.
+- **Layer 4 — verification feedback** (primary, and this is the same pattern for
+  the fourth time in this thread). A decision engine that can refuse to boot
+  while emitting nothing is a verification gap by construction: there is no
+  artefact that could answer "why". The fix was to make the refusal explain
+  itself, on the refusal path, unconditionally.
+- **Layer 1 — task specification** (secondary, mine). S157's next-step said
+  "build a DEBUG PblApp so Decision.c's rationale prints", which presumed the
+  prints existed. They did not. Writing a plan against a presumed capability is
+  the same error as asserting a value you have not read.
+- **Process note**: my first insertion of the diagnostics block split
+  `STATIC` / `EFI_STATUS` from `PblGetUnixTime`'s name, and I read the cascade
+  warning as inconclusive when the build had already failed. The build log, not
+  the linter, is the authority for C changes — check it first.
 
 ### Session artifacts
-- New: `firmware/PblPkg/artifacts/d200-roundtrip-{results.txt,serial.log,
-  request.bin}`.
-- Changed: `firmware/PblPkg/d131-wire-capture.py` (verdict material + signed
-  responses), `firmware/PblPkg/test-d131-wire-harness.sh` (two assertions),
-  `docs/adr/PBL-DEBT-LEDGER.md` (D-200 closed), `.devin/graph/GRAPH-SPEC.yaml`
-  (D-200 evidence).
-- Commit `814f444` plus the graph record.
+- New: `firmware/PblPkg/artifacts/d200-decision-basis-{serial.log,results.txt}`.
+- Changed: `firmware/PblPkg/PblApp/Decision.c`,
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-200 observation resolved, D-130 dependency).
+- Commit `38a5123` plus the graph record.
 
 ### Next session opening
-Explain the observed `[8/8] Decision: BLOCK` on an UNLOCKED verdict: build a
-DEBUG PblApp (`build-pbl.sh --debug`) so Decision.c's rationale prints, or read
-`Decision.c` on the OVMF platform state this harness produces (SecureBoot/db
-under OVMF, policy DEGRADED) — then either fix the gate or record why BLOCK is
-correct there, because at present nobody can say whether an UNLOCKED verdict is
-honoured.
+Take **D-130** — sign PblApp with the owner cert (the ruling already chose
+owner-cert + provisioning-time db enrollment) and enroll the keys in
+`OVMF_VARS` for the harness, because until Secure Boot is on, every QEMU run
+blocks at Decision Step 5 and the PASS path stays unobservable. That converts
+D-130 from a release-hygiene item into the gate on the last unproven behaviour.
 
 ---
 

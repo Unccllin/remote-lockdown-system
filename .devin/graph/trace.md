@@ -2603,3 +2603,112 @@ correct there, because at present nobody can say whether an UNLOCKED verdict is
 honoured.
 
 ---
+
+---
+
+## Session 158 — 2026-10-30 (the decision engine now says why it blocked: "Secure Boot disabled", so the BLOCK was never about the verdict)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S157 block + opening),
+  `scripts/check-ruling.sh` (no open items → task mode),
+  `firmware/PblPkg/PblApp/Decision.c` (all 18 steps),
+  `firmware/PblPkg/artifacts/d200-roundtrip-serial.log` (what the release build
+  actually prints), `docs/adr/PBL-DEBT-LEDGER.md` (D-200's observation, D-130).
+- **Finding (the question could not be answered from the artifact, and that is
+  the defect)**: S157 ended with `[8/8] Decision: BLOCK` on an UNLOCKED verdict
+  and no way to attribute it. The serial log shows nothing between `[6/8]` and
+  `[7/8]`, and `Decision.c` contains **zero** `PBL_DEBUG` prints — so the
+  session-157 plan ("build a DEBUG PblApp so Decision.c's rationale prints")
+  would not have worked. A machine that refuses to boot with no stated reason is
+  a real operational defect in a security product, independent of why it blocked.
+- **Finding (after instrumenting)**: the first gate to fire is **Step 5 (REQ-01),
+  Secure Boot disabled**. The verdict was verified as ES256 and decoded as
+  UNLOCKED; the policy then blocked because the platform is not in a locked-down
+  state. That is correct behaviour, not a verdict-handling bug — and it means the
+  *PASS* path is gated on D-130 (signing + enrolled keys), not on anything in the
+  verdict flow.
+
+### IMPLEMENT
+- **`Decision.c` diagnostics**: two file-scope reason trackers and
+  `PBL_BLOCK(reason)` / `PBL_DEGRADE(reason)` macros; all **12** BLOCK gates and
+  **6** DEGRADED gates annotated with distinct strings; trackers reset at entry;
+  the basis printed unconditionally before returning (not under DEBUG, because
+  DEBUG output does not exist on a locked machine).
+- Server-verdict paths (LOCKED / WIPE_PENDING) report
+  `"server verdict (LOCKED/WIPE_PENDING)"` when no policy gate fired first.
+
+### VERIFY
+- **Build 0 errors** (`91d9dca8…`); all 15 neighbouring modules compiled — the
+  authoritative check for a header-local change like this.
+- **Run: 8 PASS / 0 FAIL, unchanged**, with the new line:
+  ```
+  [6/8] Evaluating decision...
+    [INFO] Decision BLOCK basis: Secure Boot disabled
+  [8/8] Decision: BLOCK — lock screen
+  ```
+  Artifact: `firmware/PblPkg/artifacts/d200-decision-basis-{serial.log,results.txt}`.
+- D-200's unattributed observation is now **resolved in the ledger** (correct
+  behaviour + the D-130 dependency recorded), and D-130 gained the note that
+  signing is a prerequisite for demonstrating PASS.
+
+### Fog cleared
+- **Why the boot BLOCKed**: Secure Boot disabled, Step 5. Not the verdict.
+- **Why that was previously unknowable**: the engine had no diagnostics at any
+  verbosity. It does now, and the reason is printed on the path that actually
+  matters (the refusal path).
+- **What the verdict work actually proved**: the firmware derives a real
+  device_id, posts it over TLS, validates the chain, verifies ES256 and decodes
+  the verdict. Whether it *acts* on UNLOCKED is decided later by 18 policy gates
+  — S157 recorded the right caveat and this session closed it.
+
+### Fog remaining
+- **The PASS path is unproven and blocked on D-130.** With Secure Boot off, every
+  QEMU run blocks at Step 5 regardless of the verdict, so "an UNLOCKED verdict
+  releases the boot" cannot be demonstrated until PblApp is signed and keys are
+  enrolled. This is a dependency, not a defect.
+- `PblTlsVerifyCert` still has no caller (D-132 residual: the pin is enforced by
+  construction).
+- Carried forward: 19 Dependabot alerts; 10 of 13 enforcement paths
+  `verified-in-unit-test`; D-120/D-129/D-130 open; no CI run observed for
+  S151–S158; the stale side worktree.
+
+### Debt items closed
+- None. D-200 stays closed (S157); this session strengthened its evidence and
+  resolved its open observation. D-132's residual unchanged.
+
+### Debt items still open
+- D-120, D-129, D-130 (+ D-132's `PblTlsVerifyCert` residual).
+
+### Blockers
+- D-130 (code signing) now blocks two things rather than one: release hygiene for
+  Secure Boot, and the ability to demonstrate the PASS path at all.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, and this is the same pattern for
+  the fourth time in this thread). A decision engine that can refuse to boot
+  while emitting nothing is a verification gap by construction: there is no
+  artefact that could answer "why". The fix was to make the refusal explain
+  itself, on the refusal path, unconditionally.
+- **Layer 1 — task specification** (secondary, mine). S157's next-step said
+  "build a DEBUG PblApp so Decision.c's rationale prints", which presumed the
+  prints existed. They did not. Writing a plan against a presumed capability is
+  the same error as asserting a value you have not read.
+- **Process note**: my first insertion of the diagnostics block split
+  `STATIC` / `EFI_STATUS` from `PblGetUnixTime`'s name, and I read the cascade
+  warning as inconclusive when the build had already failed. The build log, not
+  the linter, is the authority for C changes — check it first.
+
+### Session artifacts
+- New: `firmware/PblPkg/artifacts/d200-decision-basis-{serial.log,results.txt}`.
+- Changed: `firmware/PblPkg/PblApp/Decision.c`,
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-200 observation resolved, D-130 dependency).
+- Commit `38a5123` plus the graph record.
+
+### Next session opening
+Take **D-130** — sign PblApp with the owner cert (the ruling already chose
+owner-cert + provisioning-time db enrollment) and enroll the keys in
+`OVMF_VARS` for the harness, because until Secure Boot is on, every QEMU run
+blocks at Decision Step 5 and the PASS path stays unobservable. That converts
+D-130 from a release-hygiene item into the gate on the last unproven behaviour.
+
+---
