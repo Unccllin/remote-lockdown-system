@@ -676,6 +676,13 @@
   boot flow. Record as hardware artifact.
 
 ### D-130 — Code signing not configured
+- **Update (2026-10-30, session 158)**: this now also blocks *demonstrating the
+  PASS path*. With Secure Boot disabled, the decision engine correctly returns
+  BLOCK at Step 5 (REQ-01) on every QEMU run, whatever the verdict says
+  (`firmware/PblPkg/artifacts/d200-decision-basis-results.txt`). So "an UNLOCKED
+  verdict releases the boot" cannot be shown until PblApp is signed and keys are
+  enrolled — the signing work is a prerequisite for that evidence, not only a
+  release concern.
 - **Status**: OPEN
 - **Category**: SECURITY
 - **Blocker**: PblApp.efi is not signed. Secure Boot will not load an
@@ -969,16 +976,20 @@
     `d131-wire-capture.py` now emits an ES256 verdict key with a leaf + root
     chain into C4 keys 71/76/77, and the mock endpoint answers each request with
     a `COSE_Sign1` LockVerdict echoing `device_id` and `nonce`.
-  - **Observation, deliberately not resolved here**: the run ends
-    `[8/8] Decision: BLOCK — lock screen` even though the verdict was
-    `verdict=0` (UNLOCKED). Nothing between `[6/8]` and `[7/8]` is logged at
-    RELEASE verbosity, so the reason is not attributable from this artifact —
-    candidates are Decision.c's own gates (SecureBoot/db state under OVMF, or
-    the minimal policy being DEGRADED) rather than the verdict being ignored.
-    This does not affect this item's close criteria (the endpoint round trip),
-    but it means "the verdict arrives and verifies" has been proven while
-    "an UNLOCKED verdict releases the boot" has not. Worth a DEBUG-build run or
-    a Decision.c read before anyone claims the latter.
+  - **Observation, resolved (session 158)**: the run ended
+    `[8/8] Decision: BLOCK — lock screen` on an UNLOCKED verdict, and the reason
+    was unattributable because `Decision.c` printed nothing at any verbosity —
+    it carried no `PBL_DEBUG` prints at all, so a DEBUG build would not have
+    helped either. That was itself a defect: a security decision that refuses to
+    boot must say why, and the serial log is the only channel a locked machine
+    offers. Each gate now records the first reason it escalated and the result
+    prints it (`firmware/PblPkg/artifacts/d200-decision-basis-*`):
+    `[INFO] Decision BLOCK basis: Secure Boot disabled`.
+    So the BLOCK is **Step 5 (REQ-01)** on this QEMU platform, not the verdict
+    being ignored — correct behaviour, since a machine without Secure Boot cannot
+    reach PASS. The residual is not a defect but a dependency: demonstrating the
+    *PASS* path requires Secure Boot enabled, i.e. signed PBL plus enrolled keys
+    (D-130).
   - **Runtime test passed the request half (session 156, earlier in the session)**: with D-132 fixed,
     the firmware completes a TLS handshake and posts a real verdict request that
     carries a real `device_id` (`firmware/PblPkg/artifacts/d200-wire-verified-*`,

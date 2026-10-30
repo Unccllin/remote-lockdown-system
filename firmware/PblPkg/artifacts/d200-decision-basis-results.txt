@@ -1,0 +1,17 @@
+# Decision basis on an UNLOCKED verdict — 2026-10-30T06:21:10Z
+# Same harness/assets as d200-roundtrip-*, with Decision.c instrumented to
+# record and print the gate that escalated the result.
+
+=== Results: 8 PASS / 0 FAIL ===
+
+# Firmware: verdict accepted, then the policy gate blocks:
+  [OK] Verdict signature verified (ES256)
+  [OK] Verdict decoded: verdict=0 policy_version=1
+[6/8] Evaluating decision...
+  [INFO] Decision BLOCK basis: Secure Boot disabled
+[8/8] Decision: BLOCK — lock screen
+
+# Conclusion: the BLOCK is Step 5 (REQ-01) — Secure Boot disabled on this
+# QEMU platform — not the verdict being ignored. Correct behaviour: a machine
+# without Secure Boot cannot reach PASS. Proving the PASS path therefore needs
+# Secure Boot enabled, i.e. signed PBL + enrolled keys (D-130).

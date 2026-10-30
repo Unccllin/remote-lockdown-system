@@ -37,6 +37,36 @@
 
 #include "PblApp.h"
 
+// ---------------------------------------------------------------------------
+// Decision diagnostics
+//
+// Before this, the engine could return BLOCK with nothing in the serial log to
+// say which gate fired — and on a locked-down machine the serial log is the only
+// diagnostic channel there is. (Decision.c carried no PBL_DEBUG prints at all,
+// so a DEBUG build would not have helped either.) Each gate records the first
+// reason it escalated, and the reason is printed before the result is returned.
+// ---------------------------------------------------------------------------
+STATIC CONST CHAR8  *mFirstBlockReason   = NULL;
+STATIC CONST CHAR8  *mFirstDegradeReason = NULL;
+
+#define PBL_BLOCK(reason)                        \
+  do {                                           \
+    PolicyResult = PblResultBlock;               \
+    if (mFirstBlockReason == NULL) {             \
+      mFirstBlockReason = (reason);              \
+    }                                            \
+  } while (FALSE)
+
+#define PBL_DEGRADE(reason)                      \
+  do {                                           \
+    if (PolicyResult != PblResultBlock) {        \
+      PolicyResult = PblResultDegraded;          \
+      if (mFirstDegradeReason == NULL) {         \
+        mFirstDegradeReason = (reason);          \
+      }                                          \
+    }                                            \
+  } while (FALSE)
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -129,6 +159,9 @@ PblEvaluateDecision (
   PolicyResult = PblResultPass;
 
   // Get current time for expiry checks
+  mFirstBlockReason   = NULL;
+  mFirstDegradeReason = NULL;
+
   Status = PblGetUnixTime (&Now);
   if (EFI_ERROR (Status)) {
     // Can't tell time — degrade but don't block
@@ -140,7 +173,7 @@ PblEvaluateDecision (
   // Step 3: Check policy.expires_at > now → DEGRADED if expired
   // ------------------------------------------------------------------
   if (Policy->Meta.ExpiresAt > 0 && Now > 0 && Now >= Policy->Meta.ExpiresAt) {
-    PolicyResult = PblResultDegraded;
+    PBL_DEGRADE ("policy expired");
   }
 
   // ------------------------------------------------------------------
@@ -148,7 +181,7 @@ PblEvaluateDecision (
   // ------------------------------------------------------------------
   if (Policy->Meta.MinPblVersion > 0 &&
       Policy->Meta.MinPblVersion > PBL_VERSION) {
-    PolicyResult = PblResultDegraded;
+    PBL_DEGRADE ("policy requires a newer PBL version");
   }
 
   // ------------------------------------------------------------------
@@ -156,11 +189,11 @@ PblEvaluateDecision (
   // ------------------------------------------------------------------
   if (!State->SecureBootEnabled) {
     // Secure Boot disabled is a critical security failure
-    PolicyResult = PblResultBlock;
+    PBL_BLOCK ("Secure Boot disabled");
   }
   if (State->SetupMode) {
     // Setup Mode = PK not enrolled = anyone can install keys
-    PolicyResult = PblResultBlock;
+    PBL_BLOCK ("Setup Mode (no PK enrolled)");
   }
 
   // ------------------------------------------------------------------
@@ -170,10 +203,10 @@ PblEvaluateDecision (
   // and dbx has the MS 2011 revocation (BootHole mitigation).
   // If these are missing, the platform is vulnerable.
   if (!State->DbHasWindowsUefiCa2023) {
-    PolicyResult = PblResultBlock;
+    PBL_BLOCK ("db lacks the Windows UEFI CA 2023");
   }
   if (!State->DbxHasMs2011Revocation) {
-    PolicyResult = PblResultBlock;
+    PBL_BLOCK ("dbx lacks the MS 2011 revocation");
   }
 
   // ------------------------------------------------------------------
@@ -181,13 +214,11 @@ PblEvaluateDecision (
   // ------------------------------------------------------------------
   if (!State->SpiProtectionsKnown) {
     // Can't determine SPI protection state — degrade
-    if (PolicyResult != PblResultBlock) {
-      PolicyResult = PblResultDegraded;
-    }
+    PBL_DEGRADE ("SPI protection state unknown");
   } else {
     // SPI protections known — check critical bits
     if (!State->Bioswe || !State->Ble || !State->SmmBwp) {
-      PolicyResult = PblResultBlock;
+      PBL_BLOCK ("SPI protections incomplete (BIOSWE/BLE/SMM_BWP)");
     }
   }
 
@@ -197,14 +228,10 @@ PblEvaluateDecision (
   // AMT provisioned on a consumer device is suspicious — degrade.
   // USB DCI enabled allows direct USB debugging — degrade.
   if (State->AmtProvisioned) {
-    if (PolicyResult != PblResultBlock) {
-      PolicyResult = PblResultDegraded;
-    }
+    PBL_DEGRADE ("AMT provisioned on the device");
   }
   if (State->UsbDciEnabled) {
-    if (PolicyResult != PblResultBlock) {
-      PolicyResult = PblResultDegraded;
-    }
+    PBL_DEGRADE ("USB DCI debugging enabled");
   }
 
   // ------------------------------------------------------------------
@@ -220,7 +247,7 @@ PblEvaluateDecision (
       Policy->TpmSessionReq.BoundRequired) {
     // D-102: PBL currently uses no-session TPM commands. If the policy
     // requires sessions, we must BLOCK until session support is added.
-    PolicyResult = PblResultBlock;
+    PBL_BLOCK ("policy requires TPM sessions");
   }
 
   // ------------------------------------------------------------------
@@ -231,13 +258,13 @@ PblEvaluateDecision (
       State->TpmFirmwareVersion > 0 &&
       State->TpmFirmwareVersion < Policy->TpmFirmwareFloor) {
     // TPM firmware is below the minimum required version
-    PolicyResult = PblResultBlock;
+    PBL_BLOCK ("TPM firmware below policy floor");
   }
   // PIN policy "required" — we can't enforce PIN in pre-boot without
   // a user input mechanism. If the policy requires PIN, BLOCK.
   if (Policy->TpmPinPolicy == 1) {
     // PIN required but PBL has no PIN entry UI in this flow
-    PolicyResult = PblResultBlock;
+    PBL_BLOCK ("policy requires a TPM PIN");
   }
 
   // ------------------------------------------------------------------
@@ -247,11 +274,11 @@ PblEvaluateDecision (
   // Kernel DMA protection should be enabled.
   if (State->S3Enabled && !State->MorRequested) {
     // S3 without MOR is a DMA attack vector
-    PolicyResult = PblResultBlock;
+    PBL_BLOCK ("S3 enabled without MOR");
   }
   if (!State->KernelDmaProtection) {
     // No Kernel DMA protection — external DMA attacks possible
-    PolicyResult = PblResultBlock;
+    PBL_BLOCK ("no kernel DMA protection");
   }
 
   // ------------------------------------------------------------------
@@ -260,7 +287,7 @@ PblEvaluateDecision (
   // Network boot entries should not be present in a locked-down device.
   // They allow PXE boot which bypasses the local disk.
   if (State->NetworkBootEntriesPresent) {
-    PolicyResult = PblResultBlock;
+    PBL_BLOCK ("network boot entries present");
   }
 
   // ------------------------------------------------------------------
@@ -268,7 +295,7 @@ PblEvaluateDecision (
   // ------------------------------------------------------------------
   // BitLocker should be enabled on a locked-down device.
   if (!State->BitLockerEnabled) {
-    PolicyResult = PblResultBlock;
+    PBL_BLOCK ("BitLocker not enabled");
   }
   // BCD and winre.wim hashes are collected but not yet compared against
   // policy expectations (no policy fields for them yet). Skip.
@@ -280,9 +307,7 @@ PblEvaluateDecision (
   if (State->FirmwareRecovery == 2) {
     // No firmware recovery — degrade (not block, since it's a resilience
     // issue, not a security hole)
-    if (PolicyResult != PblResultBlock) {
-      PolicyResult = PblResultDegraded;
-    }
+    PBL_DEGRADE ("no firmware recovery capability");
   }
 
   // ------------------------------------------------------------------
@@ -323,6 +348,17 @@ PblEvaluateDecision (
         FinalResult = PblResultBlock;
         break;
     }
+  }
+
+  // Always report the basis, not only under DEBUG: this is the only diagnostic
+  // channel available on a machine that has just refused to boot.
+  if (FinalResult == PblResultBlock) {
+    Print (
+      L"  [INFO] Decision BLOCK basis: %a\n",
+      (mFirstBlockReason != NULL) ? mFirstBlockReason : "server verdict (LOCKED/WIPE_PENDING)"
+      );
+  } else if (FinalResult == PblResultDegraded && mFirstDegradeReason != NULL) {
+    Print (L"  [INFO] Decision DEGRADED basis: %a\n", mFirstDegradeReason);
   }
 
   return FinalResult;
