@@ -2321,3 +2321,155 @@ with `scripts/pcap-summary.py` for the wire view); success is all 6 passing plus
 deliberately wrong pin failing to fetch.
 
 ---
+
+---
+
+## Session 156 — 2026-10-30 (D-132 fixed: the verdict request now completes TLS and lands on the wire with a real device_id)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S155 block + addendum),
+  `scripts/check-ruling.sh` (no open items → task mode),
+  `docs/adr/PBL-C4-Policy-Blob.md` (key table), `docs/adr/PBL-C3-Network-Client.md`
+  §4/§4.1/§6.1, `firmware/PblPkg/PblApp/{PblApp.h,CborDecode.c,TlsVerify.c,
+  PblApp.c,HttpsClient.c,PblApp.inf}`, `firmware/PblPkg/d131-wire-capture.py`,
+  `firmware/PblPkg/test-d131-wire-harness.sh`, and — decisively — EDK2's own
+  `NetworkPkg/HttpDxe/HttpsSupport.c` and `NetworkPkg/TlsDxe/TlsConfigProtocol.c`.
+- **Finding (why the fix had to be CA-DER, not the pin)**: EDK2's HTTP client
+  hard-codes `VerifyMethod = EFI_TLS_VERIFY_PEER` (`HttpsSupport.c:660`) and
+  validates the server chain against **DER certificates** in the platform
+  `TlsCaCertificate` variable. C4 gave PBL only a SHA-256 hash (key 73), and no
+  DER-accepting API takes a hash, so the pin could never satisfy it — which is
+  why `PblTlsVerifyCert` was never called. `EfiTlsConfigDataTypeCACertificate`
+  is not an escape hatch either: it applies to that instance's `TlsConn`
+  (`TlsConfigProtocol.c:61`), so an application setting it cannot influence the
+  session HttpDxe creates for itself.
+- **Finding (ruling)**: the owner chose the cheap, sound route — C4 key 78
+  carries the pinned CA's DER and PBL replaces the platform store's contents with
+  it immediately before each fetch. Because `SetVariable` replaces outright, the
+  store is exactly the policy's CA on every boot, so a T2 OS admin who writes
+  `TlsCaCertificate` cannot leave a CA behind that PBL would trust. That keeps
+  C3 §4.1's threat model intact while using the transport EDK2 will actually
+  honour.
+- **Finding (two harness bugs that had been producing false results)**:
+  1. the in-image CBOR reader mis-parsed *every* map: in
+     `out[self.read()] = self.read()` Python evaluates the right-hand side
+     before the subscript, so each value was consumed as its key and every key
+     shifted one element. That made correct firmware report
+     `[FAIL] wire device_id matches AK Name`.
+  2. the generated certificate was a self-signed leaf used as its own trust
+     anchor. `openssl verify` accepted it locally, but EDK2 needs a real CA
+     (`keyUsage keyCertSign`) plus a leaf it signs carrying a SAN.
+
+### IMPLEMENT
+- **Firmware**: `PBL_POLICY` gains `TlsCaCert`/`TlsCaCertSize` (C4 key 78),
+  parsed in `CborDecode.c`; `PblInstallTlsCaCertificate` (`TlsVerify.c`) builds
+  one `EFI_SIGNATURE_LIST` of type `EFI_CERT_X509_GUID` around that DER and
+  `SetVariable`s it over `TlsCaCertificate`; `PblApp.c` installs it just before
+  the request and logs the outcome either way; `PblApp.inf` gains
+  `gEfiTlsCaCertificateGuid`.
+- **Contract**: C4 key 78 documented, with the reason a hash cannot work and why
+  rewriting the store preserves §4.1.
+- **Harness**: `d131-wire-capture.py` now emits a real CA + leaf (SAN, KeyUsage,
+  BasicConstraints) and writes `ca-cert.pem` so the chain can be verified with
+  `openssl` independently of the firmware; policy key 78 = CA DER, key 73 =
+  SHA-256 of the CA. `scripts/pcap-summary.py` added in S155's addendum is what
+  located the failure in the first place.
+
+### VERIFY
+- **Positive — 6 PASS / 0 FAIL** (`firmware/PblPkg/artifacts/d200-wire-verified-*`):
+  ```
+  [PASS] policy blob loaded from ESP
+  [PASS] device_id derived from AK Name
+  [PASS] verdict request posted over TLS
+  [PASS] server received a request
+  [PASS] wire device_id matches AK Name
+  [PASS] request body captured (1 file(s))
+  ```
+  The captured 149-byte body decodes (host-side `cbor2`, not the harness's own
+  reader) to `key 1 = bstr 32 = abab…ab` — the AK-Name-derived `device_id` —
+  with nonce, platform_state_digest, policy_version and boot_id alongside. Server
+  log: `device_id=abababab…`. Serial log: `[OK] Pinned CA installed as TLS trust
+  anchor (750 bytes)`.
+- **Negative — the check is load-bearing** (`d132-mismatched-ca-results.txt`):
+  identical firmware, provisioning and harness, only the server's leaf swapped to
+  one signed by a *second* CA while the policy pins the first → no request
+  arrives, fetch aborts, and `Pinned CA installed` still prints. So the failure
+  is the mismatch itself, not a failed or missing install.
+- Firmware build **0 errors**; `bash -n` and `shellcheck` clean on the harness
+  and `scripts/pcap-summary.py`; `make graph-check` all invariants pass;
+  convergence 53/57 → **54/57**.
+- Certificate chain verified independently on the host:
+  `openssl verify -CAfile ca-cert.pem server-cert.pem` → OK, with
+  `SAN: IP Address:10.0.2.2`.
+
+### Fog cleared
+- **Why the HTTPS path had never worked, in one sentence**: EDK2 only trusts DER
+  certificates, the policy only carried a hash, and nothing bridged the two — so
+  the handshake was always rejected by the client and no request ever left the
+  box.
+- **The pin is now enforced by construction**: PBL writes exactly the policy's CA
+  into the store before the fetch, so the only chain that can validate is one
+  under key 73's preimage.
+- **Two harness defects that had been lying**: a CBOR reader whose map parsing
+  was broken by Python's evaluation order, and a certificate shape `openssl`
+  accepts but EDK2 does not. Both were found by verifying independently rather
+  than trusting the harness's own verdict.
+
+### Fog remaining
+- **`PblTlsVerifyCert` still has no caller.** The pin is enforced by
+  construction, not by that function; making it live needs the manual
+  `EFI_TLS_PROTOCOL` route. Recorded as defence-in-depth debt inside D-132
+  rather than quietly dropped.
+- **D-200's response half**: the harness answers with a deliberate non-verdict
+  body, so PBL logs `Verdict response: 8 bytes` and falls back on decode.
+  Closing D-200 needs a server that signs a COSE verdict with the key whose
+  certificate the policy carries in keys 71/76/77.
+- Carried forward: 19 Dependabot alerts; 10 of 13 enforcement paths
+  `verified-in-unit-test`; D-120/D-129/D-130/D-200 open; no CI run observed for
+  S151–S156; the stale side worktree.
+
+### Debt items closed
+- **D-132 — CLOSED** (`commit_ref b760e30`), with the positive wire artifact and
+  the mismatched-CA negative artifact, both repo-committed.
+
+### Debt items still open
+- D-120, D-129, D-130, D-200 (request half done, response half outstanding).
+
+### Blockers
+- None for D-132. D-200's remaining work is a server-side signing task, not a
+  firmware or environment blocker.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, third recurrence in this
+  thread). Two harness defects produced *false* results — a CBOR reader that
+  mis-parsed every map, and a certificate `openssl` accepts but EDK2 rejects.
+  Both survived earlier runs because the harness was the only judge of its own
+  output. What caught them: decoding the captured bytes with an independent
+  implementation (`cbor2` on the host) and verifying the chain with `openssl`
+  instead of assuming the harness's verdict was the truth.
+- **Layer 2 — context provision** (secondary). The decisive facts were in EDK2's
+  source, not in this repository's contracts: `VERIFY_PEER` is hard-coded, the
+  TLS config protocol is per-instance, and chain validation wants DER. Reading
+  the dependency's code is what turned a guess-shaped fix into a correct one.
+- **Process note**: I introduced a compile error by adding `EFIAPI` to a
+  declaration that never had it (and to my new definition whose declaration
+  lacked it) — a reminder that matching the surrounding convention matters more
+  than matching the UEFI spec's usual shape.
+
+### Session artifacts
+- New: `firmware/PblPkg/artifacts/d200-wire-verified-{results.txt,serial.log,
+  request.bin}`, `firmware/PblPkg/artifacts/d132-mismatched-ca-results.txt`.
+- Changed: `firmware/PblPkg/PblApp/{PblApp.h,CborDecode.c,TlsVerify.c,PblApp.c,
+  PblApp.inf}`, `firmware/PblPkg/d131-wire-capture.py`,
+  `docs/adr/PBL-C4-Policy-Blob.md`, `docs/adr/PBL-DEBT-LEDGER.md`.
+- Commits: `b760e30` plus the graph record.
+
+### Next session opening
+Close **D-200** by making the capture server return a real verdict: sign a
+COSE_Sign1 `LockVerdict` with the key whose certificate the policy carries (C4
+keys 71/76/77 — `firmware/PblPkg/test-d205.py` already knows how), set
+`lock_service_uri` to it, and capture a run in which PBL logs
+`Verdict decoded` and `Verdict signature verified` rather than falling back —
+that is the last unproven link between the firmware and the server.
+
+---

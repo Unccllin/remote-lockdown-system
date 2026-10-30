@@ -937,12 +937,19 @@ debt_items:
       populate from a SHA-256 pin). The HTTPS verdict fetch therefore resets the
       connection after TCP is established.
     close_criteria: >-
-      Verdict fetch over TLS completed with the pin check in the data path —
-      EFI_TLS_PROTOCOL used directly with PblTlsVerifyCert applied to the peer
-      certificate, evidenced by a wire-harness run that captures a request body
-      and by a wrong-pin run that fails.
-    status: OPEN
+      Verdict fetch over TLS completed: a wire-harness run that captures a
+      request body carrying the AK-Name-derived device_id, plus a run with a
+      mismatched CA that fails to fetch.
+    status: CLOSED
     category: SECURITY
+    commit_ref: >-
+      b760e30 — C4 key 78 (CA DER), PblInstallTlsCaCertificate rewrites the
+      platform TlsCaCertificate store before each fetch
+    artifact_ref: >-
+      firmware/PblPkg/artifacts/d200-wire-verified-{results.txt,request.bin} —
+      6 PASS/0 FAIL with key 1 = abab…ab on the wire;
+      d132-mismatched-ca-results.txt — mismatched CA correctly receives nothing
+      while the CA still installs
 
   # -------------------------------------------------------------------------
   # Server-side PBL debt items (D-200 through D-210)
