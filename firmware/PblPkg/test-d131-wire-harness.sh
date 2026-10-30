@@ -156,7 +156,22 @@ cp "${OVMF_VARS_SRC}" "${BUILD_DIR}/vars.fd"
 
 # === Boot: TPM + NIC (DHCP) + RNG ===
 echo "=== Booting PblApp (QEMU: slirp network, TPM, RNG; timeout ${TIMEOUT}s) ==="
-timeout "${TIMEOUT}" qemu-system-x86_64 -machine q35 \
+# OVMF's Secure Boot build requires SMM: without -machine q35,smm=on and the
+# secure pflash global the firmware stalls with no serial output at all (which is
+# exactly what happened the first time this was tried). Opt-in so the existing
+# non-Secure-Boot runs are unchanged.
+MACHINE_ARGS=(-machine q35)
+# OVMF's SMM build drives the TPM over CRB, not TIS. With tpm-tis under SMM the
+# guest reaches a TPM that has none of our provisioned indices — every NV read
+# comes back TPM_RC_HANDLE (0x18B / 0x9A2), which reads like "device
+# unprovisioned" but is an interface mismatch.
+TPM_DEVICE="tpm-tis"
+if [ "${PBL_SECURE_BOOT:-0}" = "1" ]; then
+  MACHINE_ARGS=(-machine "q35,smm=on" -global "driver=cfi.pflash01,property=secure,value=on")
+  TPM_DEVICE="tpm-crb"
+fi
+
+timeout "${TIMEOUT}" qemu-system-x86_64 "${MACHINE_ARGS[@]}" \
   -drive if=pflash,format=raw,readonly=on,file="${OVMF_CODE}" \
   -drive if=pflash,format=raw,file="${BUILD_DIR}/vars.fd" \
   -drive format=raw,file="${DISK_IMG}" \
@@ -168,7 +183,7 @@ timeout "${TIMEOUT}" qemu-system-x86_64 -machine q35 \
   -device virtio-rng-pci,rng=rng0 \
   -chardev socket,id=chrtpm,path="${BUILD_DIR}/swtpm-ctrl.sock" \
   -tpmdev emulator,id=tpm0,chardev=chrtpm \
-  -device tpm-tis,tpmdev=tpm0 \
+  -device "${TPM_DEVICE}",tpmdev=tpm0 \
   > "${SERIAL_LOG}" 2>&1 || true
 
 echo "  serial log: $(wc -c < "${SERIAL_LOG}") bytes"

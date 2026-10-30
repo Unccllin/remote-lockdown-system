@@ -1,0 +1,25 @@
+# D-130 Secure Boot attempt — 2026-10-30T06:46:51Z
+# What worked: PblApp signed with Ubuntu's snakeoil key (sbsign + sbverify OK),
+# booted on the matched OVMF secboot CODE + snakeoil VARS with
+# -machine q35,smm=on and the secure pflash global. OVMF loaded it:
+#   BdsDxe: starting Boot0001 ... / PBL — Pre-Boot Lock v0
+# and Decision Step 5 (Secure Boot enabled / not SetupMode) PASSED — the
+# basis moved past it to the next gate.
+
+# Decision basis under Secure Boot:
+[8/8] Decision: BLOCK — lock screen
+
+# Still failing in this configuration (all wire checks, because the firmware
+# could not read its provisioned NV indices):
+  [INFO] NV_Read(AK_NAME) RC=0x9A2
+  [INFO] No device_id — device is unprovisioned (C2 §1.3)
+  [WARN] NV_Read(LOCK_STATE) RC=0x18B
+  [WARN] Verdict request suppressed: no device_id (C2 §1.3)
+
+# Two unresolved items, both named:
+#  1. db/dbx content — the policy wants the MS Windows UEFI CA 2023 in db and
+#     the MS 2011 revocation in dbx; snakeoil contains neither. That is a
+#     provisioning concern (enrolling Microsoft's data), not signing.
+#  2. TPM under SMM — with tpm-tis the guest reaches a TPM holding none of our
+#     indices (TPM_RC_HANDLE 0x18B/0x9A2, which reads like "unprovisioned" but
+#     is an interface mismatch); with tpm-crb the boot stalls with no output.

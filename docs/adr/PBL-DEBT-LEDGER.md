@@ -676,6 +676,35 @@
   boot flow. Record as hardware artifact.
 
 ### D-130 — Code signing not configured
+- **Update (2026-10-30, session 159) — signing is proven; two provisioning items
+  remain.** Artifact: `firmware/PblPkg/artifacts/d130-secureboot-*`.
+  - **Proven**: `PblApp.efi` signs with `sbsign` and verifies (`sbverify`), and
+    the signed binary **loads and runs under Secure Boot** — OVMF's secboot
+    build, booted with `-machine q35,smm=on` and the secure pflash global on the
+    matched snakeoil CODE/VARS pair, reaches
+    `BdsDxe: starting Boot0001 …` then `PBL — Pre-Boot Lock v0`. Decision
+    **Step 5 passes** (Secure Boot enabled, not SetupMode): the basis moved past
+    it to `dbx lacks the MS 2011 revocation`. So the signing half of this item —
+    what its title is about — works end to end in QEMU.
+  - **Remaining, named**:
+    1. **db/dbx content.** The policy requires the MS Windows UEFI CA 2023 in db
+       and the MS 2011 revocation in dbx; the snakeoil store has neither. That is
+       enrollment of Microsoft's data, not signing — the same class of problem as
+       provisioning NV into the TPM, and it needs an enrollment mechanism or a
+       varstore built with both our cert and Microsoft's.
+    2. **TPM under SMM.** With `-device tpm-tis` the guest reaches a TPM that
+       holds none of our provisioned indices — `TPM_RC_HANDLE` (0x18B / 0x9A2),
+       which *reads* like "device unprovisioned" but is an interface mismatch;
+       with `-device tpm-crb` the boot stalls with no serial output at all. Until
+       that is resolved, a Secure Boot run cannot derive `device_id`, so every
+       wire check fails for a reason unrelated to signing.
+  - **Harness requirements discovered** (now encoded, and each cost a wasted
+    run): Secure Boot needs `-machine q35,smm=on` plus
+    `-global driver=cfi.pflash01,property=secure,value=on`; the snakeoil CODE
+    file is a **symlink**, so copying it with `docker cp` yields a dangling link
+    and the harness silently falls back to the non-Secure-Boot OVMF (the silent
+    fallback is the real hazard — the run looks normal and reports
+    "Secure Boot disabled"); and the snakeoil key's passphrase is `snakeoil`.
 - **Update (2026-10-30, session 158)**: this now also blocks *demonstrating the
   PASS path*. With Secure Boot disabled, the decision engine correctly returns
   BLOCK at Step 5 (REQ-01) on every QEMU run, whatever the verdict says
