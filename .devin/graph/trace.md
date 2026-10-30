@@ -3177,3 +3177,102 @@ Windows UEFI CA 2023 and a dbx entry, which yields D-133's positive test and
 D-130's Step 6 clearance in one run.
 
 ---
+
+---
+
+## Session 163 — 2026-10-30 (varstore enrolment reduced to one blocked operation: dbx needs a signed blob)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S162 block + opening),
+  `scripts/check-ruling.sh` (no open items → task mode),
+  `docs/adr/PBL-DEBT-LEDGER.md` (D-130 gap 1, D-133), and — because guessing had
+  already failed twice — `virt-fw-vars`' own source.
+- **Finding (`--add-db` works, `--set-dbx` cannot)**: adding our snakeoil signer
+  to the Microsoft-keyed store's db produces a valid varstore. `--set-dbx`
+  assigns the file to `authdata` (`vars.py:279-280`), i.e. an
+  `EFI_VARIABLE_AUTHENTICATION_2` blob — timestamp, PKCS#7 signature, then the
+  ESL. A bare ESL is therefore parsed as an auth header and its first bytes read
+  as an `EFI_TIME`.
+- **Finding (how the assumption was identified)**: the failure reported
+  `ValueError: year 22945 is out of range` for an `X509` ESL and
+  `year 42130` for an `X509_SHA256` one. Two different garbage years from the
+  same shape is the signature of a misread header, not a corrupt input — that is
+  what turned "the tool is broken" into "the tool wants a signed blob".
+- **Finding (verification that cost nothing)**: the Microsoft Corporation UEFI
+  CA 2011 certificate extracted from `OVMF_VARS_4M.ms.fd` hashes to
+  `48e99b99…248507`, exactly the fingerprint compiled into firmware in S161 — an
+  independent confirmation of that constant.
+- **Finding (why the empty-store path does not help)**: writing dbx unsigned is
+  only legal in SetupMode, but `virt-fw-vars` routes dbx through the
+  authenticated writer regardless, so starting from the empty varstore does not
+  avoid the requirement.
+
+### IMPLEMENT
+- No product or harness code this session: the work was establishing whether the
+  offline route exists and, when it did not, naming exactly which operation is
+  missing and why. Both ledger entries (D-130 gap 1, D-133 positive test) now
+  carry the evidence and the remaining route.
+
+### VERIFY
+- `virt-fw-vars --add-db` on `OVMF_VARS_4M.ms.fd` → 540672-byte varstore written
+  (works).
+- plain rewrite of both the ms and the empty stores → both write successfully, so
+  the tool is not generally broken.
+- `--set-dbx` with an `X509` ESL → `year 22945`; with an `X509_SHA256` ESL →
+  `year 42130`; no output file either way.
+- The 2011 CA hash cross-check above, and `make graph-check` passes.
+
+### Fog cleared
+- **Which single capability is missing**: an unsigned dbx write. Everything else
+  in the enrolment chain works offline (`--add-db`, PK/KEK handling, writing the
+  store), so the remaining work is one `SetVariable` from inside the guest rather
+  than a whole tool.
+- **Why three earlier attempts failed**: they all fed a bare ESL to an option that
+  expects a signed update — a specification mismatch, not a broken tool.
+
+### Fog remaining
+- **D-133's positive test and D-130's Step 6** both wait on that one write. The
+  route is now explicit: an EFI enrolment helper that stages Microsoft's dbx data
+  and our signer on the ESP, calls `SetVariable("dbx", …)` in SetupMode, then
+  enrols PK to leave SetupMode.
+- Unchanged: TPM-under-SMM (D-130 gap 2), `PblTlsVerifyCert` residual, 19
+  Dependabot alerts, 10/13 enforcement paths unit-test only, no CI run observed
+  for S151–S163.
+
+### Debt items closed
+- None. Nothing this session reached a close criterion.
+
+### Debt items still open
+- D-120, D-129, D-130, D-133 (+ D-132 residual).
+
+### Blockers
+- One capability (unsigned dbx write via an in-guest helper) blocks both
+  remaining Secure Boot items.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary). Two of my earlier attempts
+  produced the same error text and I nearly recorded "virt-fw-vars is broken".
+  Reading the source and noticing that the garbage *year changed with the input
+  shape* is what identified the real requirement. The lesson is the one this
+  thread keeps teaching: an error message is a symptom; the dependency's code is
+  the specification.
+- **Layer 1 — task specification** (mine, again). My plan said "try virt-fw-vars
+  against the empty varstore" without first checking what the tool's write options
+  require. Ten minutes of reading `vars.py` would have replaced three runs.
+- **Process note**: this session produced no code and closed nothing. That is the
+  honest outcome of a capability investigation, and the value is that the next
+  session starts from "one SetVariable" instead of "maybe the tool is broken".
+
+### Session artifacts
+- Changed: `docs/adr/PBL-DEBT-LEDGER.md` (D-130 gap 1, D-133 positive test).
+- Commit `ed2b19b` plus the graph record.
+
+### Next session opening
+Write the EFI enrolment helper: a small EDK2 application added to `PblPkg.dsc`
+that reads a dbx ESL and our signer's certificate from the ESP, calls
+`SetVariable("dbx"/"db", …)` while the platform is in SetupMode, enrols PK last to
+leave SetupMode, then reboots into the signed PblApp — which yields D-133's
+positive test (the real Windows UEFI CA 2023 must satisfy the check) and clears
+Decision Step 6 for D-130.
+
+---
