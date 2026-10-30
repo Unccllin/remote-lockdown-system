@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-10-30 09:03:43
-Active memories: 646 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-10-30 10:02:45
+Active memories: 673 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -32,11 +32,15 @@ Active memories: 646 | Superseded: 0 | Decayed: 20
 | m-040 | The EFI_HTTP_PROTOCOL uses token-based async API ( |  | 0.60 | 2026-08-18 | 0.267 | 0 |  |
 | m-016 | MISTAKE: Used wrong MSS1 signature byte order (0x4 |  | 0.60 | 2026-08-18 | 0.267 | 0 |  |
 | m-001 | EDK2 GenerateCapsule --signer-private-cert needs a |  | 0.60 | 2026-08-18 | 0.267 | 0 |  |
+| m-687 | MISTAKE: Took several runs to notice that a TPM_RC |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-662 | EDK2 needs a real CA (keyUsage keyCertSign, BasicC |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-652 | PblTlsVerifyCert compares the CN against the host  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-632 | MISTAKE: Trusted four stale/misattributed STOP blo |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-633 | MISTAKE: Nearly left the working tree holding the  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-623 | MISTAKE: Both of those bugs only appeared when the |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-679 | MISTAKE: My first insertion of the diagnostics blo |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-689 | The SMM TPM failure is not provisioning: the state |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-668 | COSE alg -7 (ES256) always means ECDSA P-256, inde | 1 | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-648 | MISTAKE: Wrote an assertion matching lower-case he |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-654 | Result so far: 3 of 6 checks pass (policy loaded,  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-618 | Moving a gate out of YAML into scripts/ is what ma |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
@@ -44,38 +48,59 @@ Active memories: 646 | Superseded: 0 | Decayed: 20
 | m-643 | swtpm state survives a restart (NV checkpoints int |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-627 | For every new fail-closed rule, add the negative t |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-665 | MISTAKE: Spliced the generator with string indices |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-678 | A security decision engine that can refuse to boot |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-639 | MISTAKE: Declared libtss2-tcti-swtpm absent on jam |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-691 | MISTAKE: Piped virt-fw-vars through tail and read  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-683 | Result: a signed PblApp loads and runs under Secur |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-675 | Decision.c had zero PBL_DEBUG prints, so 'build a  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-661 | Working fix: C4 key 78 carries the CA DER; PBL bui |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-622 | MISTAKE: Captured '$?' after a failed 'if' compoun |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-634 | TPM2_NV_ReadPublic returns the NV index Name (dige |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-658 | MISTAKE: Forgot chmod +x on a new script and read  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-686 | MISTAKE: Ran the harness without mounting /firmwar |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-630 | pbl-qemu:latest exists locally, so firmware build  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-638 | MISTAKE: Edited ci-harness-docker.sh while a conta |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-693 | MISTAKE: My four-item plan's largest premise (that |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-631 | MISTAKE: Let a copy-paste from the Express test (c |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-649 | MISTAKE: Built artifact result files but left the  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-657 | MISTAKE: Announced 'this is my last iteration on t |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-692 | MISTAKE: The harness silently fell back to non-Sec |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-663 | Python evaluates the RIGHT-hand side of `out[key]  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-682 | OVMF's Secure Boot build requires -machine q35,smm |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-629 | HttpsClient.c never inspects ResponseData.StatusCo |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-641 | MISTAKE: Background run failed instantly because a |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-620 | PBL never populates PBL_PLATFORM_STATE.DeviceId an |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-635 | C2 §1.3 and §5.1 disagreed (stores 34 bytes vs rea |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-690 | virt-fw-vars (Debian trixie, has --microsoft-kek a |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-685 | MISTAKE: Passed an OVMF CODE file through docker c |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-619 | Job ordering is a correctness property: the contra |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-680 | MISTAKE: Read an inconclusive cascade warning whil |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-653 | PBL rejects http:// with EFI_INVALID_PARAMETER, so |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-688 | Decision Step 6's DbHasWindowsUefiCa2023 and DbxHa |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-647 | MISTAKE: Spent five probe iterations guessing a TC |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-684 | TPM under SMM: tpm-tis reaches a TPM holding none  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-666 | MISTAKE: Trusted the harness's own reader for seve |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-671 | Verdict round trip now 8 PASS / 0 FAIL: request ov |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-636 | PBL CI's qemu job had a second failure behind the  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-645 | On a never-enrolled device the AK-name read happen |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-655 | A provisioner container running as root and a harn |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-650 | MISTAKE: A shared host dir reused across docker ru |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-673 | MISTAKE: Generated the verdict signing key with th |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-616 | A 'works locally, fails in CI' apt failure is answ |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-660 | EfiTlsConfigDataTypeCACertificate is not an escape |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-651 | PBL needs exactly this to post: policy.cose on \EF |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-646 | A negative-path assertion is only meaningful if yo |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-637 | A harness that cannot provision cannot test the pr |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-677 | Consequence: the PASS path cannot be demonstrated  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-670 | PBL echoes-verifies device_id and nonce (C1 7 step |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-672 | MISTAKE: Assumed a single-element cert chain would |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-642 | Working swtpm provisioning recipe (5 wrong attempt |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-664 | MISTAKE: Added EFIAPI to a declaration that never  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-626 | A test that asserts the current shape of a fallbac |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-669 | The harness image has no cbor2 and no cryptography |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-681 | The pbl-qemu image ships OVMF_VARS_4M.snakeoil.fd  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-659 | EDK2's HTTP client hard-codes VerifyMethod = EFI_T |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-676 | The BLOCK on an UNLOCKED verdict is Decision Step  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-624 | MISTAKE: Left 'scripts/test_ci_annotate.py' (added |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-617 | The three PblApp TODOs were contract-sanctioned de |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-628 | Cross-layer defects need the consequence stated on |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
@@ -83,6 +108,8 @@ Active memories: 646 | Superseded: 0 | Decayed: 20
 | m-615 | PBL CI was red on every run because 'libuuid-dev'  |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-644 | EDK2 Print renders %x UPPER-case, so assertions ag |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-621 | MISTAKE: Wrote 'SUDO=""' then 'run "$SUDO" apt ... |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-667 | CborDecode treats the LAST element of C4 key 77 as |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
+| m-674 | MISTAKE: Forgot that an MD typo flag can be a fals |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-625 | D-131 is a lockdown bypass, not just an attestatio |  | 0.50 | 2026-10-30 | 0.250 | 0 |  |
 | m-594 | k6-mixed measured signed: 100 VUs/60s = 5,357 req, |  | 0.50 | 2026-10-28 | 0.245 | 0 |  |
 | m-609 | server tests depended on agent/dist/lockdown-agent |  | 0.50 | 2026-10-28 | 0.245 | 0 |  |
