@@ -2903,7 +2903,7 @@ whether swtpm's chardev supports the CRB protocol the SMM build expects, since
   `PblTlsVerifyCert` residual; no CI run observed for S151–S160.
 
 ### Debt items closed
-- None. **D-133 opened** (2 items closed this session: none).
+- None closed. **D-133 opened** (OPEN, SECURITY).
 
 ### Debt items still open
 - D-120, D-129, D-130, D-133 (+ D-132's residual).
