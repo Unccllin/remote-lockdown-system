@@ -590,6 +590,29 @@ PblAppEntryPoint (
       // D-116: Parse hostname from LockServiceUri for TLS pin verification
       ZeroMem (Hostname, sizeof (Hostname));
       PblParseUriHostname (Policy.LockServiceUri, Hostname, sizeof (Hostname));
+
+      // D-132: make the policy-pinned CA the platform TLS trust anchor before
+      // the handshake. EDK2's HTTP client always verifies the server chain
+      // against this store and offers no way to disable it, so without this the
+      // handshake is rejected no matter what C4 pins — which is exactly what the
+      // packet capture showed (TCP established, then RST from the guest).
+      if (Policy.TlsCaCert != NULL && Policy.TlsCaCertSize > 0) {
+        EFI_STATUS CaStatus = PblInstallTlsCaCertificate (
+                                Policy.TlsCaCert,
+                                Policy.TlsCaCertSize
+                                );
+        if (EFI_ERROR (CaStatus)) {
+          Print (L"  [WARN] Pinned CA install failed (%r) — TLS will not validate\n", CaStatus);
+        } else {
+          Print (
+            L"  [OK] Pinned CA installed as TLS trust anchor (%d bytes)\n",
+            (UINT32)Policy.TlsCaCertSize
+            );
+        }
+      } else {
+        Print (L"  [WARN] No tls_ca_cert in policy (C4 key 78) — TLS cannot validate\n");
+      }
+
       Print (L"  [INFO] POSTing verdict request to %a\n", Policy.LockServiceUri);
       Status = PblHttpsPost (
         Policy.LockServiceUri,

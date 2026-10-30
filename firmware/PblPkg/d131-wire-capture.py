@@ -121,7 +121,14 @@ class CborReader:
         if major == 5:
             out = {}
             for _ in range(self._length(info)):
-                out[self.read()] = self.read()
+                # Read into locals first: in `out[self.read()] = self.read()`
+                # Python evaluates the RIGHT-hand side before the subscript, so
+                # the value would be consumed as the key and every key shifted
+                # one element — which is exactly what a captured request showed
+                # (keys were the device_id bytes and the real keys became values).
+                key = self.read()
+                value = self.read()
+                out[key] = value
             return out
         if major == 4:
             return [self.read() for _ in range(self._length(info))]
@@ -157,6 +164,7 @@ def describe_request(body: bytes) -> str:
 
 def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") -> int:
     import datetime
+    import ipaddress
 
     # Loaded dynamically: cbor2 and cryptography exist on the development host
     # (this mode's only supported environment) but not in the QEMU harness
@@ -173,34 +181,93 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
     NameOID = importlib.import_module("cryptography.x509.oid").NameOID
 
     out_dir = make_dir(out_dir)
-
-    # RSA is selectable because OVMF's TLS stack did not complete a handshake
-    # against an ECDSA server certificate in this harness: PBL reached
-    # "POSTing verdict request" and then failed the fetch with EFI_ABORTED, with
-    # no server-side connection at all. C3 §4 lists both ECDHE-ECDSA and
-    # ECDHE-RSA cipher suites as acceptable, so the key type here is a harness
-    # detail, not a contract deviation.
-    if key_type == "rsa":
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    else:
-        key = ec.generate_private_key(ec.SECP256R1())
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)])
     now = datetime.datetime.now(datetime.timezone.utc)
+
+    def _make_key():
+        if key_type == "rsa":
+            return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        return ec.generate_private_key(ec.SECP256R1())
+
+    # A real CA and a leaf it signs, rather than one self-signed certificate
+    # wearing both hats. The single-certificate version is rejected by EDK2's
+    # chain validation: a certificate used as a trust anchor needs
+    # keyUsage keyCertSign, and hostname verification wants a SAN (the CN is
+    # only a legacy fallback). Both were missing from the first attempt, whose
+    # handshake was reset with no usable diagnostic from the release OVMF build.
+    ca_key = _make_key()
+    ca_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "PBL Wire Test CA")]
+    )
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=False,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+    ca_der = ca_cert.public_bytes(serialization.Encoding.DER)
+    # Also written as PEM: lets the chain be verified with openssl independently
+    # of the firmware, so a harness failure can be attributed to the certificate
+    # or to the firmware rather than guessed at.
+    write_file(
+        os.path.join(out_dir, "ca-cert.pem"),
+        ca_cert.public_bytes(serialization.Encoding.PEM),
+    )
+
+    key = _make_key()
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)])
+    try:
+        san = x509.SubjectAlternativeName(
+            [x509.IPAddress(ipaddress.ip_address(host))]
+        )
+    except ValueError:
+        san = x509.SubjectAlternativeName([x509.DNSName(host)])
+
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
-        .issuer_name(subject)
+        .issuer_name(ca_name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - datetime.timedelta(days=1))
         .not_valid_after(now + datetime.timedelta(days=30))
-        # PblTlsVerifyCert reads the Common Name and compares it with the host
-        # parsed out of lock_service_uri (C3 §4), so the CN must be that host
-        # literally. A SAN would be ignored by this firmware.
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .sign(key, hashes.SHA256())
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(san, critical=False)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                # RSA key exchange needs keyEncipherment; ECDSA does not.
+                key_encipherment=(key_type == "rsa"),
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .sign(ca_key, hashes.SHA256())
     )
-    cert_der = cert.public_bytes(serialization.Encoding.DER)
 
     write_file(
         os.path.join(out_dir, "server-cert.pem"),
@@ -216,19 +283,22 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
     )
 
     uri = f"https://{host}:{port}{VERDICT_PATH}"
-    # C4 keys: 1 version, 2 issued_at, 70 lock_service_uri, 73 tls_ca_pin.
-    # Nothing else is needed to make the POST happen: verdict signature
-    # verification only runs after a response is decoded, and this harness is
-    # interested in the request.
+    # C4 keys: 1 version, 2 issued_at, 70 lock_service_uri, 73 tls_ca_pin,
+    # 78 tls_ca_cert. Key 78 (D-132) is what makes the handshake possible at
+    # all: EDK2's HTTP client validates the server chain against DER
+    # certificates in the platform TlsCaCertificate store, and the 32-byte hash
+    # in key 73 cannot satisfy that. Nothing else is needed to make the POST
+    # happen — verdict signature verification only runs after a response is
+    # decoded, and this harness is interested in the request.
     policy_map = {
         1: 1,
         2: 0,
         70: uri,
-        73: hashes.Hash(hashes.SHA256()),
+        78: ca_der,  # D-132: the CA itself, which EDK2 can consume
     }
     digest = hashes.Hash(hashes.SHA256())
-    digest.update(cert_der)
-    policy_map[73] = digest.finalize()
+    digest.update(ca_der)
+    policy_map[73] = digest.finalize()  # pin the CA, not the leaf
     policy_payload = cbor2.dumps(policy_map)
 
     # Dev-build firmware has no policy root of trust pinned, so
@@ -241,7 +311,9 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
 
     print(f"[OK] assets in {out_dir}")
     print(f"  lock_service_uri: {uri}")
-    print(f"  tls_ca_pin (sha256 of leaf DER): {policy_map[73].hex()}")
+    print(f"  tls_ca_pin (sha256 of CA DER): {policy_map[73].hex()}")
+    print(f"  tls_ca_cert (key 78): {len(ca_der)} bytes DER (the CA)")
+    print(f"  server leaf: CN={host} with SAN, signed by the CA")
     return 0
 
 

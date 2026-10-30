@@ -184,7 +184,13 @@ typedef struct {
   // Pins (C1/C3) — parsed on demand
   CHAR8                     LockServiceUri[256]; // C4 §2.8 key 70
   UINT8                     LockServiceCertPin[32]; // C4 key 71
-  UINT8                     TlsCaPin[32];          // C4 key 73
+  UINT8                     TlsCaPin[32];          // C4 key 73 (SHA-256 of CA DER)
+  // D-132: the CA certificate itself (C4 key 78, DER). EDK2's HTTP stack can
+  // only validate a chain against DER certificates — never a hash — so the pin
+  // alone can never satisfy it. Pointer into RawCbor; valid while the policy
+  // buffer is alive.
+  CONST UINT8               *TlsCaCert;            // C4 key 78
+  UINTN                     TlsCaCertSize;
   // D-205: Verdict signing key SPKI (full DER, not just SHA-256 fingerprint).
   // kid (LockServiceCertPin) = SHA-256 of this SPKI.
   // Pointer into RawCbor — valid as long as the policy buffer is alive.
@@ -842,6 +848,12 @@ PblHttpsPost (
   );
 
 // TlsVerify.c — C3 §4
+EFI_STATUS
+PblInstallTlsCaCertificate (
+  IN CONST UINT8  *CertDer,
+  IN UINTN         CertDerSize
+  );
+
 EFI_STATUS
 PblTlsVerifyCert (
   IN CONST UINT8  *CertDer,

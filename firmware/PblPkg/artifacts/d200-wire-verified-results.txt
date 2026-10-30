@@ -1,0 +1,35 @@
+# D-200/D-132 wire proof — 2026-10-30T06:00:36Z
+# Harness: firmware/PblPkg/test-d131-wire-harness.sh
+# Assets: d131-wire-capture.py --gen-assets --host 10.0.2.2 --port 8443 --key-type rsa
+#   (real CA + leaf, leaf SAN=IP:10.0.2.2; policy key 78 = CA DER, key 73 = SHA-256 of CA)
+# TPM: provisioned AK Name 000b+ab*32 via scripts/provision-qemu-tpm.sh
+# Firmware: PblApp.efi built with D-132's PblInstallTlsCaCertificate
+
+  [PASS] policy blob loaded from ESP
+  [PASS] device_id derived from AK Name
+  [PASS] verdict request posted over TLS
+  [PASS] server received a request
+  [PASS] wire device_id matches AK Name
+  [PASS] request body captured (1 file(s))
+=== Results: 6 PASS / 0 FAIL ===
+
+# Server log — the request arrived over TLS and carried a real device_id:
+[SERVER] listening on 127.0.0.1:8443 (TLS)
+[SERVER] /v1/verdict 149 bytes -> /test/build7/captured/request-1.bin
+[SERVER] device_id=abababababababababababababababababababababababababababababababab nonce=2bdc0110...
+
+# Serial log — firmware side:
+  [OK] device_id from AK Name: ABABABAB...ABAB
+  [OK] Pinned CA installed as TLS trust anchor (750 bytes)
+  [INFO] POSTing verdict request to https://10.0.2.2:8443/v1/verdict
+  [OK] Verdict response: 8 bytes
+
+# Decoded request body (d200-wire-verified-request.bin, 149 bytes):
+  key 1: bstr 32 = abababababababababababababababababababababababababababababababab
+  key 2: bstr 32 = 2bdc011056e6810fdea6e85dbd9348eae59221e9210e246e13aaa347ceceac15
+  key 3: bstr 32 = 978103ae864ca0f445935a5357c4efc9eb5961c50967e9a0fb36ba41d05351f2
+  key 4: 1
+  key 5: 7
+  key 6: 0
+  key 7: bstr 32 = 6e1af5669ea440689999d550339ec483d87c443a928444d205557a792cc13472
+  key 8: 0

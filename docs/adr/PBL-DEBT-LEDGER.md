@@ -822,8 +822,9 @@
     actually ran, so the two can never be confused.
 
 ### D-132 — The pinned CA never reaches the TLS layer, so the HTTPS verdict fetch cannot complete
-- **Status**: OPEN (found 2026-10-30, session 155, by running the D-200 wire
-  harness and reading the packet capture)
+- **Status**: CLOSED (2026-10-30, session 156). Fixed by ruling: C4 key 78
+  carries the pinned CA's DER and PBL replaces the platform store's contents
+  with it before each fetch.
 - **Category**: SECURITY
 - **What happens**: the firmware reaches the network (`DHCP started` +
   `DHCP lease obtained`), opens a TCP connection to the verdict endpoint
@@ -863,10 +864,40 @@
   trustworthy as the policy blob), or accept a store-enrolled CA as an
   out-of-band provisioning step (still leaves `PblTlsVerifyCert` dead).
 - **Close criteria**: a QEMU run in which the wire harness captures a request
-  body whose `device_id` equals the AK-Name-derived value, with the pin check
-  demonstrably in the path (e.g. a run with a deliberately wrong pin failing to
-  fetch). Artifacts: `firmware/PblPkg/artifacts/d200-wire-attempt-*` show the
-  current failure; the harness is `firmware/PblPkg/test-d131-wire-harness.sh`.
+  body whose `device_id` equals the AK-Name-derived value, with the check
+  demonstrably in the path (a run with a deliberately mismatched CA failing to
+  fetch).
+- **Closed 2026-10-30 (session 156)**, both halves shown:
+  - **Positive** — `firmware/PblPkg/artifacts/d200-wire-verified-results.txt`
+    (`6 PASS / 0 FAIL`): the request arrives over TLS and the captured body
+    (`d200-wire-verified-request.bin`, 149 bytes) decodes to
+    `key 1 = bstr 32 = abab…ab`, the AK-Name-derived `device_id`, with nonce,
+    platform_state_digest, policy_version and boot_id alongside it. The server
+    log names it: `device_id=abababab…`.
+  - **Negative** — `firmware/PblPkg/artifacts/d132-mismatched-ca-results.txt`:
+    identical firmware, provisioning and harness, with only the server's leaf
+    swapped to one signed by a *second* CA while the policy pins the first. No
+    request reaches the server and the fetch aborts, while
+    `[OK] Pinned CA installed …` still prints — so the failure is the mismatch
+    itself, not a failed or missing install.
+  - Implementation: `PblInstallTlsCaCertificate` (`TlsVerify.c`) builds an
+    `EFI_SIGNATURE_LIST` of type `EFI_CERT_X509_GUID` around the policy's CA and
+    writes it over the platform `TlsCaCertificate` variable immediately before
+    the fetch; C4 key 78 parsed in `CborDecode.c`; call site in `PblApp.c`.
+    Because the store is rewritten from the policy on every boot, a T2 OS admin
+    who writes `TlsCaCertificate` cannot leave a CA behind that PBL would trust.
+  - Two bugs found in the *harness* while doing this, both fixed: the in-image
+    CBOR reader mis-parsed every map because Python evaluates the right-hand
+    side of `out[self.read()] = self.read()` before the subscript (so each value
+    was consumed as its key, and the harness reported a false failure on correct
+    firmware), and the generated certificate was a self-signed leaf used as its
+    own trust anchor — a real CA plus a signed leaf with a SAN is required.
+  - **Residual, deliberately not claimed**: `PblTlsVerifyCert` is still not on
+    the data path. The pin is now enforced *by construction* (PBL installs
+    exactly the policy's CA, which is key 73's preimage), but the function that
+    would compare a peer certificate against the pin still has no caller. Making
+    it live requires the manual `EFI_TLS_PROTOCOL` route recorded below; that is
+    defence in depth, not a gap in the fix as ruled.
 
 ---
 
@@ -927,6 +958,14 @@
     address (127.0.0.1 and 0.0.0.0 both receive nothing). So DHCP/networking is
     not the problem and the abort is not a certificate rejection — the request
     dies inside the OVMF HTTP/TLS stack before any TCP connection is made.
+  - **Runtime test now passes the request half (session 156)**: with D-132 fixed,
+    the firmware completes a TLS handshake and posts a real verdict request that
+    carries a real `device_id` (`firmware/PblPkg/artifacts/d200-wire-verified-*`,
+    6 PASS / 0 FAIL). What is still missing is the *response* half: the harness's
+    capture server answers with a deliberate non-verdict body, so PBL logs
+    `Verdict response: 8 bytes` and falls back after decode. Closing this item
+    needs a server that signs a COSE verdict with the key whose certificate the
+    policy carries in keys 71/76/77.
   - **Answered (session 155, later the same session)**: the fork is resolved —
     the guest *does* transmit and the connection *is* established. The pcap
     (`-object filter-dump`, summarised by `scripts/pcap-summary.py`) shows
@@ -1617,7 +1656,7 @@
 | D-129 | No real hardware validation | OPEN | ENV |
 | D-130 | Code signing not configured | OPEN | SECURITY |
 | D-131 | PBL never populates device_id — every verdict request carries 32 zero bytes | CLOSED (DeviceId now populated from NV 0x01C00003 via TPM2_NV_Read; QEMU artifacts `firmware/PblPkg/artifacts/d131-*`: enrolled 16/0 with a real device_id, unprovisioned 17/0 with the request suppressed) | STUB |
-| D-132 | Pinned CA never reaches the TLS layer — `PblTlsVerifyCert` has no caller and EDK2's HTTP stack always verifies against an empty platform store, so the HTTPS verdict fetch cannot complete (tree: SYN/SYN-ACK/ACK/RST) | OPEN | SECURITY |
+| D-132 | Pinned CA never reached the TLS layer — `PblTlsVerifyCert` had no caller and EDK2 always verified against an empty platform store, so the HTTPS fetch could not complete | CLOSED (C4 key 78 carries the CA DER; PBL rewrites the platform `TlsCaCertificate` store before each fetch. Artifacts `firmware/PblPkg/artifacts/d200-wire-verified-*` = 6/0 with a real `device_id` on the wire, and `d132-mismatched-ca-results.txt` = mismatched CA correctly fails. Residual: `PblTlsVerifyCert` still has no caller — the pin is enforced by construction, not by that function) | SECURITY |
 | D-200 | PBL verdict endpoint not implemented | CLOSED (POST /v1/verdict implemented) | SERVER |
 | D-201 | PBL policy endpoint not implemented | CLOSED (GET/POST /v1/policy implemented) | SERVER |
 | D-202 | PBL enrollment endpoint not implemented | CLOSED (POST /v1/enroll implemented) | SERVER |

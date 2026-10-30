@@ -853,6 +853,23 @@ PblCborDecodePolicy (
         break;
       }
 
+      case 78: {  // tls_ca_cert (bstr, DER) — D-132
+        // The CA certificate, not just its hash. EDK2's TLS client verifies the
+        // peer chain against DER certificates held in the platform
+        // TlsCaCertificate variable, so a 32-byte pin (key 73) cannot be used
+        // to satisfy it. PBL installs this certificate into that store right
+        // before fetching, which keeps the policy in control of what is trusted.
+        CONST UINT8 *CaDer;
+        UINTN        CaDerLen;
+        Status = PblCborReadBstr (&Cursor, &CaDer, &CaDerLen);
+        if (EFI_ERROR (Status)) return Status;
+        if (CaDerLen > 0) {
+          Policy->TlsCaCert     = CaDer;
+          Policy->TlsCaCertSize = CaDerLen;
+        }
+        break;
+      }
+
       case 76: {  // verdict_signing_key_spki (bstr, variable length)
         // D-205: Full SPKI DER of the verdict signing key.
         // Pointer into RawCbor — valid as long as the policy buffer is alive.

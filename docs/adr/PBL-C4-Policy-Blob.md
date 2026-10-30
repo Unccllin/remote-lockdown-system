@@ -122,6 +122,7 @@ CBOR map, canonical encoding. Fields grouped by purpose:
 | 71 | lock_service_cert_pin | bstr(32) | yes | C1 §5: SHA-256 of the verdict signing cert. PBL resolves COSE kid → this. |
 | 72 | lock_service_cert_pin_history | array of bstr(32) | yes | C1 §5: previous signing cert fingerprints, for grace-period overlap during key rotation. |
 | 73 | tls_ca_pin | bstr(32) | yes | C3 §4: SHA-256 of the lock-service TLS CA cert. |
+| 78 | tls_ca_cert | bstr | no | D-132: DER of the CA pinned by key 73. EDK2's HTTP stack validates the server chain only against DER certificates in the platform TlsCaCertificate store, so the hash alone can never satisfy it. PBL replaces that store's contents with this certificate before every verdict fetch, which keeps the policy in control of what is trusted (a T2 OS admin cannot leave a CA behind that PBL would accept). |
 | 74 | attestation_uri | tstr | yes | C1 §6: `POST /v1/attest` endpoint for TPM quote upload. |
 | 75 | policy_uri | tstr | yes | C1 §6: `GET /v1/policy/{version}` endpoint for policy fetch. |
 | 76 | verdict_signing_key_spki | bstr | yes | D-205: Full SPKI DER of the verdict signing key. PBL uses this with `EcDsaVerify` to verify verdict COSE_Sign1 signatures. `kid` (key 71) = SHA-256 of this SPKI. |

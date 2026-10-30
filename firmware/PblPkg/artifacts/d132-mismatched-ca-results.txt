@@ -1,0 +1,21 @@
+# D-132 negative test — mismatched CA — 2026-10-30T06:01:59Z
+# Same firmware, provisioning and harness as d200-wire-verified-*; the ONLY
+# difference is that the server presents a leaf signed by a second CA while
+# the policy pins the first. Expected: no request reaches the server.
+
+  [PASS] policy blob loaded from ESP
+  [PASS] device_id derived from AK Name
+  [PASS] verdict request posted over TLS
+  [FAIL] server received a request
+  [FAIL] wire device_id matches AK Name
+  [FAIL] request body captured
+=== Results: 3 PASS / 3 FAIL ===
+
+# Server: only its startup line — nothing arrived
+[SERVER] listening on 127.0.0.1:8443 (TLS)
+
+# Firmware: the CA was still installed, so the abort is the mismatch itself,
+# not a missing or failed install
+  [OK] Pinned CA installed as TLS trust anchor (750 bytes)
+  [INFO] POSTing verdict request to https://10.0.2.2:8443/v1/verdict
+  [INFO] Online fetch failed: Aborted — falling back to cache

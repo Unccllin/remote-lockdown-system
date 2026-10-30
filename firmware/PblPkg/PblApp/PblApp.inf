@@ -125,6 +125,9 @@
   gPblEventGuid
   gEfiImageSecurityDatabaseGuid
   gEfiCertX509Guid
+  ## D-132: platform TLS trust store — PBL replaces its contents with the
+  ## policy-pinned CA before every verdict fetch.
+  gEfiTlsCaCertificateGuid
   gEfiCertSha256Guid
   gEfiCertX509Sha256Guid
   gEfiRngAlgorithmRaw
