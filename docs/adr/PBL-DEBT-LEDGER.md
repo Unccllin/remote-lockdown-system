@@ -695,13 +695,11 @@
        dbx. So db is already satisfied by the snakeoil certificate, and only dbx
        needs an entry — any entry. That the check is presence-only is now filed
        as **D-133**; making it mean what its name says is the real work.
-       Enrolling that entry offline was attempted: `virt-fw-vars` (Debian trixie,
-       the tool that also carries Microsoft's KEK data) **fails on the snakeoil
-       varstore** with `ValueError: year 22945 is out of range`, producing no
-       output file. Next routes: try it against the *empty* `OVMF_VARS_4M.fd`, or
-       build the store from empty in SetupMode with an EFI enrollment helper
-       (db/dbx are writable unauthenticated there, and PK enrollment is what
-       flips SetupMode off).
+       Enrolling that entry offline was attempted and reduced to one blocked
+       operation (session 163): `--add-db` works, but `--set-dbx` requires a
+       signed `EFI_VARIABLE_AUTHENTICATION_2` blob rather than a bare ESL (see
+       D-133 for the evidence). The route that remains is an EFI enrolment helper
+       writing dbx from inside the guest in SetupMode, then enrolling PK.
     2. **TPM under SMM.** With `-device tpm-tis` the guest reaches a TPM that
        holds none of our provisioned indices — `TPM_RC_HANDLE` (0x18B / 0x9A2),
        which *reads* like "device unprovisioned" but is an interface mismatch;
@@ -1007,11 +1005,29 @@
   - after: `Decision BLOCK basis: db lacks the Windows UEFI CA 2023` — the db
     half now rejects it, because sha256(snakeoil DER) ≠ sha256(Windows UEFI CA
     2023). The gate no longer accepts a look-alike.
-- **Positive test — NOT yet run, and the reason is specific**: it needs a
-  varstore holding both our signing certificate *and* the real Windows UEFI CA
-  2023, and offline varstore editing is still blocked (see D-130 gap 1:
-  `virt-fw-vars` fails on the snakeoil store). Until then the check is proven to
-  *reject* impostors but not yet proven to *accept* the genuine certificate.
+- **Positive test — NOT yet run, and the blocker is now precisely identified**
+  (session 163). Offline varstore editing gets most of the way and then stops at
+  one specific operation:
+  - `virt-fw-vars --add-db GUID cert.pem` **works** — adding our signer to the
+    Microsoft-keyed store's db succeeds and produces a valid varstore.
+  - `virt-fw-vars --set-dbx FILE` **cannot work with a bare ESL**. Its source
+    (`vars.py:279-280`) passes the file as `authdata`, i.e. an
+    `EFI_VARIABLE_AUTHENTICATION_2` blob — timestamp, PKCS#7 signature, then the
+    ESL. Feeding it a plain ESL makes it parse the first bytes as an `EFI_TIME`
+    and crash (`ValueError: year 22945 is out of range`, then `year 42130` on a
+    different input). Both an `X509` and an `X509_SHA256` ESL fail the same way,
+    which is what identified the auth-header assumption.
+  - Writing dbx *unsigned* is only permitted in SetupMode, and even then
+    `virt-fw-vars` routes it through the authenticated writer. So the remaining
+    route is an **EFI enrolment helper** that calls `SetVariable("dbx", …)` from
+    inside the guest while the platform is in SetupMode, then enrols PK to leave
+    SetupMode. Microsoft's own dbx data and our signer can both be staged on the
+    ESP for it.
+  - Supporting facts worth keeping: the real Windows UEFI CA 2023 and Microsoft
+    Corporation UEFI CA 2011 certificates are available locally from
+    `OVMF_VARS_4M.ms.fd` via `virt-fw-vars --extract-certs`, and the 2011 CA's
+    SHA-256 (`48e99b99…248507`) matches the fingerprint compiled into firmware —
+    an independent cross-check of the constant.
 - **Follow-up recorded, not done**: the fingerprints are compiled into firmware.
   Moving them into the policy blob (C4) would let a fleet update them without a
   reflash; that is the refinement, not a correctness gap.
