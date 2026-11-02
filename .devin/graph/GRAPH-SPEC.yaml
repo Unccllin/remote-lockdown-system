@@ -519,7 +519,12 @@ enforcement_paths:
     entry_function: "agent.handle_track"
     verified_by: [V-AGENT]
     status: verified-in-unit-test
-    risk_notes: "Platform-specific wifi scanning; geolocation API rate limits"
+    risk_notes: >-
+      Platform-specific wifi scanning; geolocation API rate limits. Mutation
+      audited (session 171, scripts/audit_test_teeth.py): the parser tests added
+      in agent/tests/test_wifi_parsing.py are what fail when the scan returns
+      nothing; before them every test patched scan_wifi_networks out, so a
+      netsh/nmcli format change would have read as "no neighbours"
 
   - id: E-DEADMAN
     name: deadman-switch
@@ -547,7 +552,11 @@ enforcement_paths:
     entry_function: "agent.queue_offline / agent.drain_offline_queue"
     verified_by: [V-AGENT]
     status: verified-in-unit-test
-    risk_notes: "Queue growth on extended offline; SQLite corruption"
+    risk_notes: >-
+      Queue growth on extended offline; SQLite corruption. Mutation audited
+      (session 171, scripts/audit_test_teeth.py): turning queue_offline into a
+      no-op left the ENTIRE agent suite green, because no test referenced this
+      code at all. agent/tests/test_offline_queue.py now fails on that mutation
 
   - id: E-AUTO-UPDATE
     name: agent-auto-update
