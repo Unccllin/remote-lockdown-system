@@ -261,6 +261,33 @@ MUTATIONS: list[dict] = [
         "new": "  const pendingCmds = commands\n    .filter((c) => c.device_id === device.id)  // MUTATION: any status\n    .sort((a, b) => a.created_at.localeCompare(b.created_at));",
         "why": "an executed command is re-delivered, so a recovered device re-locks",
     },
+    {
+        "path": "worker/ping",
+        "label": "WRK/ping-device-filter",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  const pendingCmd = commands.find(\n    (c) => c.device_id === device.id && c.status === 'pending',\n  );",
+        "new": "  const pendingCmd = commands.find(\n    (c) => c.status === 'pending',  // MUTATION: no device filter\n  );",
+        "why": "the ping path hands a device ANOTHER device's pending command",
+    },
+    {
+        "path": "worker/uninstall-authz",
+        "label": "WRK/uninstall-authz",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "async function handleUninstallAuth(request: Request, env: Env): Promise<Response> {\n  // Accept either admin bearer auth or agent API key auth\n  const authHeader = request.headers.get('Authorization') || '';\n  const apiKey = request.headers.get('X-API-Key') || '';\n  const token = authHeader.replace(/^Bearer\\s+/i, '');\n\n  let authorized = false;\n  if (apiKey) {\n    const devices = await listDevices(env);\n    const apiKeyHash = await sha256(apiKey);\n    authorized = devices.some((d) => d.api_key_hash === apiKeyHash);\n  }",
+        "new": "async function handleUninstallAuth(request: Request, env: Env): Promise<Response> {\n  // Accept either admin bearer auth or agent API key auth\n  const authHeader = request.headers.get('Authorization') || '';\n  const apiKey = request.headers.get('X-API-Key') || '';\n  const token = authHeader.replace(/^Bearer\\s+/i, '');\n\n  let authorized = true;  // MUTATION: any caller may request an uninstall token\n  if (apiKey) {\n    const devices = await listDevices(env);\n    const apiKeyHash = await sha256(apiKey);\n    authorized = devices.some((d) => d.api_key_hash === apiKeyHash);\n  }",
+        "why": "any caller obtains an uninstall token, i.e. a device can authorise its own removal",
+    },
+    {
+        "path": "worker/uninstall-verify",
+        "label": "WRK/uninstall-verify",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "    if (providedToken === expectedToken) {",
+        "new": "    if (true) {  // MUTATION: any token verifies",
+        "why": "the verify endpoint accepts any uninstall token",
+    },
 ]
 
 

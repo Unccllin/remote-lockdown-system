@@ -3393,4 +3393,117 @@ describe('D-210: PBL route integration', () => {
       expect(getData.provisioned).toBe(false);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Uninstall authorisation. Session 180: neither endpoint had a single test —
+  // `grep -c uninstall` in this file was 0 — so a mutation letting any caller
+  // obtain an uninstall token, or letting any token verify, passed the suite.
+  // These endpoints decide whether the agent may be removed, which is the thing
+  // an attacker holding the machine most wants.
+  // -------------------------------------------------------------------------
+  describe('POST /api/agent/uninstall-auth', () => {
+    it('rejects a request with no credentials', async () => {
+      const resp = await worker.fetch(makeRequest('POST', '/api/agent/uninstall-auth'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('rejects an unknown API key', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/uninstall-auth', undefined, {
+          'X-API-Key': 'definitely-not-an-enrolled-key',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(401);
+    });
+
+    it('issues a short-lived token to an enrolled device', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'UNINSTALL-001');
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/uninstall-auth', undefined, { 'X-API-Key': apiKey }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const data: any = await parseResponse(resp);
+      expect(typeof data.uninstall_token).toBe('string');
+      expect(data.uninstall_token.length).toBeGreaterThan(0);
+      expect(data.expires_in).toBe(300);
+    });
+  });
+
+  describe('POST /api/agent/uninstall-auth/verify', () => {
+    it('accepts the token its issuer just returned', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'UNINSTALL-002');
+      const issueResp = await worker.fetch(
+        makeRequest('POST', '/api/agent/uninstall-auth', undefined, { 'X-API-Key': apiKey }),
+        env,
+      );
+      const issued: any = await parseResponse(issueResp);
+
+      const verifyResp = await worker.fetch(
+        makeRequest(
+          'POST',
+          '/api/agent/uninstall-auth/verify',
+          { uninstall_token: issued.uninstall_token },
+          { 'X-API-Key': apiKey },
+        ),
+        env,
+      );
+      const verified: any = await parseResponse(verifyResp);
+      expect(verified.authorized).toBe(true);
+      expect(verified.verified).toBe(true);
+    });
+
+    it('rejects a wrong token', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'UNINSTALL-003');
+      const verifyResp = await worker.fetch(
+        makeRequest(
+          'POST',
+          '/api/agent/uninstall-auth/verify',
+          { uninstall_token: 'not-the-token' },
+          { 'X-API-Key': apiKey },
+        ),
+        env,
+      );
+      const verified: any = await parseResponse(verifyResp);
+      expect(verified.authorized).toBe(false);
+      expect(verified.verified).toBe(false);
+    });
+  });
+
+  describe('POST /api/ping', () => {
+    it("a ping only returns its own device's pending command", async () => {
+      // The ping path is a second command-delivery route; it had no test at all,
+      // so dropping its device filter would have handed one machine another
+      // machine's pending lockdown with nothing to notice.
+      const victim = await enrollDevice(worker, env, 'PING-VICTIM-001');
+      const bystander = await enrollDevice(worker, env, 'PING-BYSTANDER-001');
+
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${victim.device.id}/flag-stolen`,
+          { hostname_confirm: 'PING-VICTIM-001' },
+          { Authorization: 'Bearer test-admin-token' },
+        ),
+        env,
+      );
+
+      const bystanderBody = JSON.stringify({ hostname: 'PING-BYSTANDER-001' });
+      const bystanderResp = await worker.fetch(
+        makeRequest('POST', '/api/ping', bystanderBody, signRequest(bystanderBody, bystander.apiKey)),
+        env,
+      );
+      const bystanderData: any = await parseResponse(bystanderResp);
+      expect(bystanderData.command ?? null).toBe(null);
+
+      const victimBody = JSON.stringify({ hostname: 'PING-VICTIM-001' });
+      const victimResp = await worker.fetch(
+        makeRequest('POST', '/api/ping', victimBody, signRequest(victimBody, victim.apiKey)),
+        env,
+      );
+      const victimData: any = await parseResponse(victimResp);
+      expect(victimData.command?.command_type).toBe('lockdown');
+    });
+  });
 });
