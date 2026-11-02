@@ -764,3 +764,38 @@ beliefs:
   dependents: []
   notes: Code/spec read only - no probe ever returned device data, so this is NOT device-observed. The
     enrolled-path QEMU artifact would confirm it. Tracked with D-131.
+- id: B-045
+  statement: PK and KEK live under gEfiGlobalVariableGuid while db/dbx/dbt live under gEfiImageSecurityDatabaseGuid;
+    writing PK or KEK under the image-security GUID fails with EFI_INVALID_PARAMETER because the variable
+    driver does not recognise it as an authenticated variable.
+  domain: firmware/secureboot
+  status: confirmed
+  evidence_level: spec-checked
+  provenance: 'AuthService.c CheckSignatureListFormat name/GUID pairing; QEMU run: dbx/db/KEK OK on image
+    GUID, PK Invalid Parameter, all OK after fix'
+  source: 'session 164; QEMU: dbx/db/KEK OK then PK ''Invalid Parameter'' on the image GUID, all four
+    OK on the correct GUIDs'
+  asserted: '2026-11-02'
+  last_verified: '2026-11-02'
+  commit_ref: 086987a
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-046
+  statement: PK/KEK/db/dbx writes are rejected with EFI_INVALID_PARAMETER unless the attribute set includes
+    EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS and the data begins with an EFI_VARIABLE_AUTHENTICATION_2
+    header — even while the platform is in SetupMode; the payload is then taken from Data + AUTHINFO2_SIZE(Data).
+  domain: firmware/secureboot
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'AuthService.c ProcessVarWithPk + OvmfPkg/EnrollDefaultKeys; QEMU: four writes failed with
+    Invalid Parameter before the AUTH2 header, four succeeded after'
+  source: 'session 164; QEMU: dbx/db/KEK/PK all failed before the header was added, all succeeded after'
+  asserted: '2026-11-02'
+  last_verified: '2026-11-02'
+  commit_ref: 086987a
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

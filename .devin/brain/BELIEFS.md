@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-10-29 17:41:14 — 44 beliefs
+Generated: 2026-11-02 10:29:27 — 46 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -87,6 +87,13 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-009 | confirmed | code-read | On S3 resume PBL never runs — the platform-state digest has no resume-vs-cold-boot provenance; Decision.c checks S3 capability only. |
+
+## firmware/secureboot
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-045 | confirmed | spec-checked | PK and KEK live under gEfiGlobalVariableGuid while db/dbx/dbt live under gEfiImageSecurityDatabaseGuid; writing PK or KEK under the image-security GUID fails with EFI_INVALID_PARAMETER because the variable driver does not recognise it as an authenticated variable. |
+| B-046 | confirmed | emulated | PK/KEK/db/dbx writes are rejected with EFI_INVALID_PARAMETER unless the attribute set includes EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS and the data begins with an EFI_VARIABLE_AUTHENTICATION_2 header — even while the platform is in SetupMode; the payload is then taken from Data + AUTHINFO2_SIZE(Data). |
 
 ## firmware/variables
 
