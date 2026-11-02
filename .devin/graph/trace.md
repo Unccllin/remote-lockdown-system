@@ -5052,3 +5052,103 @@ it suppresses a duplicate), and a check-in must consume the command it hands out
 a second check-in cannot re-deliver an executed lockdown.
 
 ---
+
+---
+
+## Session 179 — 2026-11-02 (cross-device command delivery was untested; my prediction was wrong)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S178 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `serverless/worker.ts` — the check-in delivery filter
+  (871-878), the second occurrence of the same shape at 701 (`commands.find(...)`),
+  `command_uuid` uses (68, 943, 1074-1075), and the CORS emission sites
+  (192, 2358, 2554) — plus the recovery/ack tests in `serverless/worker.test.ts`.
+- **Finding (`WRK/checkin-pending-filter` KILLED — by a test added last session)**:
+  removing `c.status === 'pending'` from the delivery filter is caught by
+  `a normal recovery is not marked as duress`, which acks the lockdown, recovers,
+  and checks in expecting the *unlock*. Re-delivery of the executed lockdown breaks
+  it. An incidental guard, but a real one.
+- **Finding (`WRK/checkin-device-filter` SURVIVED — my prediction was wrong)**:
+  I predicted this one was covered; it was not. Dropping `c.device_id === device.id`
+  from the delivery filter leaves the suite green, so **nothing asserted that a
+  device receives only its own commands**. With that term gone, one machine's
+  check-in can return another machine's pending lockdown — the worst cross-device
+  failure this product has, and it would look like a normal check-in in the logs.
+- **Finding (a second, still-unmutated site of the same shape)**: `worker.ts:701`
+  has `commands.find((c) => c.device_id === device.id && c.status === 'pending')`
+  inside a different handler. Same shape as the one that had no test.
+- **Finding (linter cluster resolved, not suppressed)**: seven assertions pinned
+  `Access-Control-Allow-Origin: '*'` as a bare literal. The Worker is a
+  bearer-token API with no cookie sessions, so a wildcard origin does not expose
+  credentials — the behaviour is right, but the *decision* was invisible. It is now
+  a named `TOKEN_API_CORS_ORIGIN` constant with the reasoning written above it, and
+  the seven assertions reference it. Three string concatenations became template
+  literals.
+
+### IMPLEMENT
+- `serverless/worker.test.ts`:
+  - `a check-in only receives its own device's commands` — victim enrolled and
+    flagged, a **bystander checks in and must get `command: null`**, then the victim
+    checks in and must get the `lockdown` (positive control, so an always-null
+    response cannot pass);
+  - `TOKEN_API_CORS_ORIGIN` constant documenting the wildcard decision;
+  - three template literals.
+- `scripts/audit_test_teeth.py`: two rows, `WRK/checkin-device-filter` and
+  `WRK/checkin-pending-filter`, using a three-line anchor because the bare filter
+  line occurs twice in `worker.ts` (the tool would have skipped an ambiguous one).
+
+### VERIFY
+- `worker.test.ts`: **341 passed** (340 + 1).
+- Coverage: see run below; floors are 82 / 75 / 86 / 82.
+- `WRK/checkin-device-filter` → **KILLED**, caught by `a check-in only receives its
+  own device's commands`.
+- `WRK/checkin-pending-filter` → KILLED (by the session-177 duress test).
+- Table now holds **26 mutations** across three components (agent 13, server 3,
+  worker 10).
+
+### Fog cleared
+- **Whether a device can be handed another device's command**: it could not, and
+  now that is asserted with a positive control on both sides.
+- **Whether an executed command can be re-delivered**: no, and the guard is now
+  known to be exercised.
+
+### Fog remaining
+- **`worker.ts:701` still has the unmutated device filter** — the same shape that
+  had no test at 875. It deserves a row before it is trusted.
+- **Uninstall-auth, location, deadman-report, rearm, track/locate** handlers: no
+  mutations yet.
+- **Dashboard/electron**: unaudited (needs a fourth runner).
+- Unchanged: Docker path verified except Caddy TLS; Worker publish needs
+  `wrangler login` + 4 secrets; D-120/D-129/D-130/D-134 resource-blocked;
+  `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None — sixth missing-test gap closed rather than a defect fixed.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), real domain (Caddy TLS).
+
+### Failure attribution
+- **Layer 4 — verification feedback, in the good direction**: I predicted this
+  mutation would be killed and it survived. That is the argument for running the
+  audit rather than reasoning about it: my mental model of the test suite was
+  wrong, and only the mutation said so. Five sessions of this audit have produced
+  six gaps, and every single one was a behaviour that *looked* covered because the
+  line was executed by some test — just never asserted.
+
+### Session artifacts
+- Changed: `serverless/worker.test.ts` (1 test, CORS constant, 3 template
+  literals), `scripts/audit_test_teeth.py` (2 rows).
+
+### Next session opening
+Mutate `worker.ts:701`'s device filter (the second occurrence of the shape that had
+no test at 875), then the uninstall-auth pair — `handleUninstallAuth` and
+`handleUninstallAuthVerify` are the last auth-bearing handlers with no mutation,
+and a device that can authorise its own uninstall is the failure that matters most
+after lockdown itself.
+
+---

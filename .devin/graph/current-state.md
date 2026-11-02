@@ -53,30 +53,27 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 178 — 2026-11-02 (the command lifecycle had no integrity assertions: escrow ownership, terminal status, command_uuid)
+## Latest session: 179 — 2026-11-02 (cross-device command delivery was untested; my prediction was wrong)
 
 ### VERIFY
-- `worker.test.ts`: **340 passed** (337 before + 3).
-- Coverage: 84.09 stmts / 78.12 branch / 88 funcs / 85.77 lines — above the
-  82/75/86/82 floors.
-- Re-running the three mutations after the tests: **all KILLED**, each naming the
-  new test that caught it.
-- Table now holds **24 mutations** across three components (agent 13, server 3,
-  worker 8).
+- `worker.test.ts`: **341 passed** (340 + 1).
+- Coverage: see run below; floors are 82 / 75 / 86 / 82.
+- `WRK/checkin-device-filter` → **KILLED**, caught by `a check-in only receives its
+  own device's commands`.
+- `WRK/checkin-pending-filter` → KILLED (by the session-177 duress test).
+- Table now holds **26 mutations** across three components (agent 13, server 3,
+  worker 10).
 
 ### Fog cleared
-- **Whether a device can escrow against another device's command**: it could not,
-  and now that is asserted with a positive control (the owner still can).
-- **Whether command status is terminal once executed**: yes, and the assertion
-  checks both the response contract and the stored value.
-- **Whether the retry-idempotency key is persisted**: yes.
+- **Whether a device can be handed another device's command**: it could not, and
+  now that is asserted with a positive control on both sides.
+- **Whether an executed command can be re-delivered**: no, and the guard is now
+  known to be exercised.
 
 ### Fog remaining
-- **Command delivery marking** (does a check-in consume the command, can it be
-  re-delivered?) and **duplicate `command_uuid` suppression on the agent side** are
-  still unmutated — the uuid is now stored, but nothing proves two ACKs with the
-  same uuid are treated as one.
-- **Uninstall-auth, location, deadman-report, rearm, track** handlers: no
+- **`worker.ts:701` still has the unmutated device filter** — the same shape that
+  had no test at 875. It deserves a row before it is trusted.
+- **Uninstall-auth, location, deadman-report, rearm, track/locate** handlers: no
   mutations yet.
 - **Dashboard/electron**: unaudited (needs a fourth runner).
 - Unchanged: Docker path verified except Caddy TLS; Worker publish needs
@@ -84,7 +81,7 @@
   `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
 
 ### Debt items closed
-- None — again, missing tests rather than product defects.
+- None — sixth missing-test gap closed rather than a defect fixed.
 
 ### Debt items still open
 - D-120, D-129, D-130, D-134 — all resource-blocked.
@@ -94,27 +91,23 @@
   credentials (Worker publish), real domain (Caddy TLS).
 
 ### Failure attribution
-- **Layer 4 — verification feedback would have caught it, and did**: while
-  cleaning the unused declarations I replaced the *first* `checkin2Data`
-  occurrence with `str.replace(..., 1)`, which was the one the recover test
-  actually uses, and broke a pre-existing test. Running the suite is what found
-  it; the fix was to target by line and assert the expected text at each site.
-  The lesson is small and old: a blind first-occurrence replace is a guess about
-  which occurrence you mean.
-- **Pre-existing lint, deliberately not "fixed"**: the same run flagged
-  `Access-Control-Allow-Origin: '*'` assertions across the Worker tests. Those
-  assert real product behaviour for a bearer-token API, and changing CORS
-  semantics is a design decision — not something to slip in while adding tests.
+- **Layer 4 — verification feedback, in the good direction**: I predicted this
+  mutation would be killed and it survived. That is the argument for running the
+  audit rather than reasoning about it: my mental model of the test suite was
+  wrong, and only the mutation said so. Five sessions of this audit have produced
+  six gaps, and every single one was a behaviour that *looked* covered because the
+  line was executed by some test — just never asserted.
 
 ### Session artifacts
-- Changed: `serverless/worker.test.ts` (3 tests + 3 declaration cleanups),
-  `scripts/audit_test_teeth.py` (3 rows).
+- Changed: `serverless/worker.test.ts` (1 test, CORS constant, 3 template
+  literals), `scripts/audit_test_teeth.py` (2 rows).
 
 ### Next session opening
-Test the lifecycle where the replay risk actually lives: two ACKs carrying the
-same `command_uuid` must be treated as one (the uuid is stored now, nothing proves
-it suppresses a duplicate), and a check-in must consume the command it hands out so
-a second check-in cannot re-deliver an executed lockdown.
+Mutate `worker.ts:701`'s device filter (the second occurrence of the shape that had
+no test at 875), then the uninstall-auth pair — `handleUninstallAuth` and
+`handleUninstallAuthVerify` are the last auth-bearing handlers with no mutation,
+and a device that can authorise its own uninstall is the failure that matters most
+after lockdown itself.
 
 ---
 
