@@ -1,0 +1,23 @@
+# D-133 Step 6 identity check — positive test + controlled negatives
+# generated 2026-11-02T07:16:18Z by test-d133-enroll-harness.sh
+#
+# Firmware: PblApp.efi b03e2c33… signed with the test signer
+# Helper:   EnrollKeys.efi 418d7d8c…
+# Platform: PBL OVMF build (PcdRequireSelfSignedPk=FALSE), default machine + TIS TPM, no SMM
+#
+# Fingerprints compared by PlatformState.c:
+#   Windows UEFI CA 2023              076f1fea90ac29155ebf77c17682f75f1fdd1be196da302dc8461e350a9ae330
+#   Microsoft Corporation UEFI CA 2011 48e99b991f57fc52f76149599bff0a58c47154229b9f8d603ac40d3500248507
+
+## positive-db-and-dbx   (db={signer,WinCA2023} dbx={MS2011 hash})
+   expected: Step 6 PASSES
+   observed: [INFO] Decision BLOCK basis: S3 enabled without MOR
+
+## negative-db-noca   (db={signer} dbx={MS2011 hash})
+   expected: BLOCK db lacks the Windows UEFI CA 2023
+   observed: [INFO] Decision BLOCK basis: db lacks the Windows UEFI CA 2023
+
+## negative-dbx-dummy   (db={signer,WinCA2023} dbx={sha256("")})
+   expected: BLOCK dbx lacks the MS 2011 revocation
+   observed: [INFO] Decision BLOCK basis: dbx lacks the MS 2011 revocation
+

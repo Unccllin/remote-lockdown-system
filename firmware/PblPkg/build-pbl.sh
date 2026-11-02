@@ -99,6 +99,7 @@ build -p PblPkg/PblPkg.dsc -a "${ARCH}" -t "${TOOLCHAIN}" -b "${BUILD_TYPE}"
 
 PBL_APP="${EDK2_DIR}/Build/PblPkg/${BUILD_TYPE}_${TOOLCHAIN}/${ARCH}/PblApp.efi"
 PBL_PERSIST="${EDK2_DIR}/Build/PblPkg/${BUILD_TYPE}_${TOOLCHAIN}/${ARCH}/PblPersistDxe.efi"
+PBL_ENROLL="${EDK2_DIR}/Build/PblPkg/${BUILD_TYPE}_${TOOLCHAIN}/${ARCH}/EnrollKeys.efi"
 
 if [ -f "${PBL_APP}" ]; then
   echo ""
@@ -122,4 +123,19 @@ if [ -f "${PBL_PERSIST}" ]; then
   echo "  SHA-256: $(sha256sum "${PBL_PERSIST}" | cut -d' ' -f1)"
 else
   echo "  (PblPersistDxe.efi not built — skipping persistence module)"
+fi
+
+# Secure Boot key enrolment helper — a provisioning tool, not part of the boot
+# path. Copied alongside the other artifacts so a harness can mount it. Kept out
+# of the persistence branch above: an app-only build still produces it.
+#
+# The path used to be "${BUILD_DIR}/X64/EnrollKeys.efi" with BUILD_DIR never
+# defined, so the copy silently matched nothing and the repo copy stayed stale —
+# the harness then booted an old binary that disagreed with the source.
+if [ -f "${PBL_ENROLL}" ]; then
+  cp "${PBL_ENROLL}" "${FIRMWARE_DIR}/PblPkg/EnrollKeys.efi"
+  echo "  Copied to: ${FIRMWARE_DIR}/PblPkg/EnrollKeys.efi"
+  echo "  SHA-256: $(sha256sum "${PBL_ENROLL}" | cut -d' ' -f1)"
+else
+  echo "  (EnrollKeys.efi not built — skipping enrolment helper)"
 fi

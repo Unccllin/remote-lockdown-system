@@ -82,3 +82,8 @@
   # Test-only loader (QEMU) — boots as BOOTX64.EFI, LoadImage+StartImage's the
   # DXE driver so its ReadyToBoot callback registers, then returns to BDS.
   PblPkg/PblPersistDxe/PblPersistLoader.inf
+
+  # Secure Boot key enrolment helper (provisioning/test only). Unsigned db/dbx
+  # writes are legal only in Setup Mode, and no Linux-side tool can build the
+  # authenticated blobs required outside it — see EnrollKeys.c.
+  PblPkg/EnrollKeys/EnrollKeys.inf

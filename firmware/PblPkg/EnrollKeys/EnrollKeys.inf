@@ -1,0 +1,47 @@
+## @file
+# EnrollKeys.inf — Secure Boot key enrolment helper (provisioning/test only).
+#
+# Not part of the product boot path. Exists because unsigned db/dbx writes are
+# legal only while the platform is in Setup Mode, and no Linux-side tool can
+# produce the authenticated blobs needed outside it. See EnrollKeys.c.
+#
+# Copyright (c) 2026 Remote Lockdown System. All rights reserved.
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = EnrollKeys
+  FILE_GUID                      = 4E1A7C22-9B3D-4F58-8A61-C2D5E7F90134
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1.0
+  ENTRY_POINT                    = EnrollKeysEntryPoint
+  UEFI_SPECIFICATION_VERSION     = 2.70
+
+[Sources]
+  EnrollKeys.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  PblPkg/PblPkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  UefiLib
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  PrintLib
+  DebugLib
+
+[Guids]
+  gEfiImageSecurityDatabaseGuid
+  gEfiFileInfoGuid
+  gEfiGlobalVariableGuid
+  gEfiCertPkcs7Guid
+
+[Protocols]
+  gEfiSimpleFileSystemProtocolGuid
+
+[BuildOptions]
+  GCC:*_*_*_CC_FLAGS = -Wno-unused-but-set-variable
