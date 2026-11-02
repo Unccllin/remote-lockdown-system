@@ -53,83 +53,80 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 165 — 2026-11-02 (D-130 gap 2 was never SMM: stock firmware takes the platform hierarchy away)
+## Latest session: 166 — 2026-11-02 (the owner-hierarchy fallback cannot read what it defines; D-134 needs a ruling)
 
 ### VERIFY
-- Matrix artifact `firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt`:
-  `pbl-nosmm-tis`, `pbl-smmon-tis`, `pbl-smmon-crb` → `device_id from AK Name:
-  ABABABAB`; `ubu-nosmm-tis`, `ubu-nosmm-crb`, `ubu-smmon-tis` →
-  `NV_Read(AK_NAME) RC=0x9A2` + `NV_DefineSpace(0x1C00001) RC=0x9A2`.
-- Harness exit 0 with all six assertions satisfied; serial logs filed alongside.
-- `bash -n` on both harnesses **and** on their embedded container scripts
-  (extracted and syntax-checked, because a heredoc can hide a breakage).
-- `make graph-check` passes with D-134 present (I2 unaffected: D-134 is OPEN).
+- `test-d134-nv-auth-matrix.sh` exits 0 with all five assertions satisfied;
+  matrix reproduced twice (the first run needed the RC regex fixed — it expected
+  9 hex digits where tpm2-tools prints 8).
+- Exploratory arms: FALSE+provisioned+stock OVMF → `RC=0x149`; TRUE+provisioned
+  +stock OVMF → `RC=0x9A2` (S165); both PCD variants on a fresh TPM → `0x28B`.
+- `bash -n` on the new harness; embedded container script syntax-checked.
+- `make graph-check` passes; `scripts/check-ruling.sh` now exits 1 **by design**
+  (the ruling is open).
 
 ### Fog cleared
-- **What "TPM under SMM" actually was**: a platform-hierarchy authorization
-  failure, reproducible without SMM at all, and absent on our own OVMF build.
-- **Whether CRB works**: yes — identical to TIS on the PBL build. The old "stall
-  with no output" was the swtpm startup sequence that session 101 already fixed;
-  the note outlived the fix.
-- **Whether the SMM guest's TPM traffic reaches swtpm**: yes, 1900+ commands per
-  run, with the emulator answering.
-- **Whether target machines need WSL**: no, for both supported install paths.
+- **Whether flipping the PCD is a fix**: no. It trades `0x9A2` for `0x149`
+  because the owner path authorizes with a handle its own attributes do not
+  permit. The minimum correct pair is `OWNERREAD` + `TPM_RH_OWNER`, or index-handle
+  authorization with `AUTHREAD`.
+- **Whether a machine can be migrated between hierarchies later**: no —
+  `PLATFORMCREATE` blocks the owner hierarchy from deleting the index, so the
+  choice has to be made at enrolment.
+- **What the empty-TPM results mean**: nothing about hierarchy; they are the
+  unenrolled-device path.
 
 ### Fog remaining
-- **Whether HP firmware randomizes/disables `platformAuth`** is still unknown, and
-  it is the whole of D-134. QEMU cannot answer it. Files checked:
-  `TpmClient.c`, `PblPkg.dec`, the edk2 hierarchy library, the PBL OVMF patch, the
-  D-129 runbook, `docs/RESEARCH-HP-HARDWARE.md` (BIOS setting names only — nothing
-  about platformAuth).
-- **Whether the owner-hierarchy fallback survives `TPM2_Clear(RH_OWNER)`** (the
-  stated reason the code prefers the platform hierarchy) is untested. Files
-  checked: `TpmClient.c:1263-1330`, D-102/D-206 notes in the ledger.
+- **Whether Windows sets `ownerAuth`** (Q3) is the one fact that can invalidate
+  the recommended option. Files checked: `docs/RESEARCH-TPM-KEY-STORAGE.md`
+  (says the OS manages the owner hierarchy, does not say whether auth is set),
+  `TpmClient.c` comments (assume empty), `docs/RESEARCH-UEFI-VARS-TPM.md:213`.
+  Needs a Windows-provisioned TPM, which this host does not have.
+- **Whether the HP firmware disables or randomizes `platformAuth`** (D-134's
+  other half) still needs the D-129 window.
 - Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, 10/13
-  enforcement paths unit-test only, no CI run observed for S151–S165.
+  enforcement paths unit-test only, no CI run observed for S151–S166.
 
 ### Debt items closed
-- None. This session produced a diagnosis and a new item, not a close.
+- None.
 
 ### Debt items still open
-- D-120, D-129, D-130 (gap 2 now understood; gap 1 closed in S164), **D-134 (new)**.
+- D-120, D-129, D-130, D-134 (now with a ruling attached).
 
 ### Blockers
-- D-134 needs the real machine. Until then the production default
-  (`PcdPblTpmUsePlatformHierarchy=TRUE`) is a *guess* with a demonstrated failure
-  mode on firmware that manages platformAuth correctly.
+- D-134 is blocked on the ruling (Q1) and on Q3's Windows check; the hardware
+  half is blocked on D-129's window.
 
 ### Failure attribution
-- **Layer 5 — state management** (primary). The correct explanation was already in
-  the ledger (session 113, distro OVMF randomizes platformAuth → `0x9A2`), written
-  by an earlier session that fixed one harness and did not generalise the lesson.
-  A finding recorded in a session block is not knowledge until it is reachable from
-  the symptom — which is why D-134 now exists as an item with a symptom table, and
-  the runbook carries the check at the point of use.
-- **Layer 4 — verification feedback** (mine): the first sweep kept its logs inside
-  the container's `/tmp`, so the evidence evaporated and I had to rebuild the
-  harness before I could quote a line. Persisting artifacts is part of the harness,
-  not an afterthought.
-- **Layer 2 — context provision**: my own harness printed `--- name ...` through
-  `printf`, which treats the leading `---` as an option and aborted the run before
-  any QEMU started. Nothing was lost but a cycle; the fix is `printf --` or `echo`.
+- **Layer 1 — task specification** (primary). D-134 was written with the close
+  criteria \"flip the PCD or verify on hardware\", which presumed the fallback
+  worked. Nobody had ever run it. The criteria were the bug.
+- **Layer 4 — verification feedback** (mine, twice): the first matrix harness
+  asserted an RC format tpm2-tools does not print (9 hex digits vs 8), so it
+  failed on a parsing detail after the physics was already right; and my first
+  attempt reused one TPM across cases, which `PLATFORMCREATE` turned into a
+  cascade of misleading `define FAIL` lines — the failure was in the harness,
+  not the TPM.
+- **Process note**: the exploratory arms cost ~5 minutes and moved D-134 from
+  \"hardware question\" to \"design question with measured options\". The lesson
+  is not \"run more experiments\" but \"a fallback path that has never been
+  executed is a hypothesis, not a fallback\".
 
 ### Session artifacts
-- New: `firmware/PblPkg/test-d130-tpm-hierarchy-harness.sh`,
-  `firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt`,
-  `firmware/PblPkg/artifacts/d130-tpm-{pbl-nosmm-tis,pbl-smmon-tis,pbl-smmon-crb,ubu-nosmm-tis,ubu-nosmm-crb,ubu-smmon-tis}-serial.log`.
-- Changed: `docs/adr/PBL-DEBT-LEDGER.md` (D-130 gap 2, new D-134),
-  `.devin/graph/GRAPH-SPEC.yaml` (D-134 node),
-  `docs/D-129-HARDWARE-RUNBOOK.md` (pre-registered check), `README.md`
-  (Windows target requirements), both harnesses (uid/gid + chown).
-- Beliefs: B-047 (Windows target needs no WSL/Python/NSSM), confirmed `code-read`.
+- New: `firmware/PblPkg/test-d134-nv-auth-matrix.sh`,
+  `firmware/PblPkg/artifacts/d134-nv-auth-matrix-results.txt`,
+  `firmware/PblPkg/artifacts/d134-nv-auth-matrix-raw.csv`.
+- Changed: `docs/adr/PBL-DEBT-LEDGER.md` (D-134),
+  `.devin/PENDING-RULING.md` (D-134 hierarchy ruling).
+- Untouched on purpose: `firmware/PblPkg/PblApp/TpmClient.c`, `PblPkg.dec`
+  (production default), `firmware/PblPkg/PblApp.efi`.
 
 ### Next session opening
-Settle D-134's question without the hardware if possible: build the same PblApp
-twice, `PcdPblTpmUsePlatformHierarchy` TRUE and FALSE, and run both through
-`test-d130-tpm-hierarchy-harness.sh`'s stock-OVMF arm — the owner-hierarchy build
-should read the AK Name on a platform-auth-managed firmware, which turns D-134's
-close criteria into a two-artifact comparison and leaves only the HP confirmation
-for the D-129 window.
+Wait for the D-134 ruling. The moment Q1 is answered, the change is small and
+already located: the attribute constant in `PblTpmNvDefineSpace` plus the
+`AuthHierarchy` choice in `PblTpmReadAkName`/`PblTpmProvisionNvIndices` — then
+re-run `test-d134-nv-auth-matrix.sh` (TPM rules unchanged) and the FALSE-build arm
+of the exploratory set to show `0x149` becoming `READ-OK`.
 
 ---
 
