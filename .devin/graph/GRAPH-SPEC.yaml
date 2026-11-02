@@ -1132,11 +1132,37 @@ debt_items:
       DeviceId is never populated, and PBL silently follows the unprovisioned
       path.
     close_criteria: >-
-      On real hardware, one configuration is shown to reach NV and the choice
-      recorded with an artifact: the platform-hierarchy config reads the AK
-      Name on the target machine, or the PCD is flipped to the owner hierarchy
-      and the AK Name is read there - plus, if flipped, a TPM2_Clear(RH_OWNER)
-      is shown not to lose the lock state or to be handled explicitly.
+      The HP machine in the D-129 window boots the owner-hierarchy build and its
+      serial log shows device_id from AK Name, with a TPM2_Clear afterwards
+      treated as unenrolled rather than silently unlocking. QEMU cannot answer
+      the firmware half, but the fixed build no longer depends on the target's
+      platformAuth policy for reading, which is the point of the ruling.
+    status: OPEN
+    category: SECURITY
+    commit_ref: >-
+      613b11bb - PblTpmReadAkName authorizes NV_Read with the index handle;
+      owner attributes are AUTHWRITE|AUTHREAD|NO_DA|OWNERREAD and
+      PcdPblTpmUsePlatformHierarchy defaults to FALSE; provisioning scripts
+      (provision-qemu-tpm.sh, ci-harness-docker.sh) create the AK Name index in
+      the owner hierarchy so enrolment and firmware agree
+    artifact_ref: >-
+      firmware/PblPkg/artifacts/d134-owner-hierarchy-results.txt - three arms
+      (owner+stock, owner+PBL, platform+stock) all read the AK Name on PblApp
+      613b11bb; d134-nv-auth-matrix-results.txt - the TPM's authorization rules;
+      d130-tpm-hierarchy-results.txt - the pre-fix failure (0x9A2) it replaces
+
+  - id: D-135
+    description: >-
+      The lock-epoch counter at NV 0x1C00004 never increments: every boot prints
+      NV_Increment RC=0x9A2 even though the index is defined and provisioning
+      reports OK. NG-T7 compares the cached epoch against NV to detect a
+      rolled-back lock state, so the check is inert. Not an authorization
+      problem - PblTpmNvIncrementCounter already authorizes with the index
+      handle, and the same index increments correctly from tpm2-tools.
+    close_criteria: >-
+      A boot where the epoch counter increments (read-back advances across
+      boots) and NG-T7's rollback comparison is shown to fire on a deliberately
+      rolled-back lock state.
     status: OPEN
     category: SECURITY
 

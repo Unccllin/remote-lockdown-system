@@ -67,7 +67,12 @@ command -v docker >/dev/null || { err "docker not found"; exit 1; }
 W="$(mktemp -d /tmp/pbl-d130-XXXXXX)"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
-trap 'rm -rf "$W"' EXIT
+cleanup() {
+  rm -rf "$W" 2>/dev/null && return 0
+  docker run --rm -v "$(dirname "$W")":/p alpine \
+    rm -rf "/p/$(basename "$W")" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
 cp "$PBL_CODE" "$W/OVMF_CODE_custom.fd"
 cp "$PBL_VARS" "$W/OVMF_VARS_custom.fd"

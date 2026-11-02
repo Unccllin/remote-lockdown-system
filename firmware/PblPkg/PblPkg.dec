@@ -59,17 +59,21 @@
   ## Lock screen display timeout in seconds (for DEGRADED notice)
   gPblPkgTokenSpaceGuid.PcdDegradedNoticeSeconds|10|UINT8|0x00000008
 
-  ## C2 §5.4: Bind PBL NV indices to the platform hierarchy.
-  # When TRUE, PblTpmNvDefineSpace uses TPM_RH_PLATFORM and sets
-  # TPMA_NV_PPWRITE/PPREAD/POLICYWRITE/POLICYREAD/AUTHWRITE/AUTHREAD/
-  # PLATFORMCREATE/NO_DA. PLATFORMCREATE is required by the TPM for a
-  # platform-created index and prevents deletion by the owner hierarchy.
-  # When FALSE, it falls back to TPM_RH_OWNER with AUTHREAD/AUTHWRITE/NO_DA.
-  # FALSE is for dev/swtpm environments where OVMF randomizes platform auth.
-  # TRUE is the default for PBL: platform hierarchy is required for a
-  # hardware-rooted lock state. Custom OVMF with the null platform-hierarchy
-  # library leaves platform auth empty, so this works under swtpm.
-  gPblPkgTokenSpaceGuid.PcdPblTpmUsePlatformHierarchy|TRUE|BOOLEAN|0x00000009
+  ## D-134 ruling (2026-11-02): PBL NV indices live in the OWNER hierarchy.
+  # When FALSE (now the default), PblTpmNvDefineSpace uses TPM_RH_OWNER with
+  # AUTHWRITE|AUTHREAD|NO_DA|OWNERREAD, and NV_Read is authorized by the index
+  # handle. That works irrespective of what the firmware did to platformAuth or
+  # the OS did to ownerAuth — both break a hierarchy-authorized read
+  # (RC 0x149 TPM_RC_NV_AUTHORIZATION, or 0x9A2 TPM_RC_HANDLE).
+  #
+  # When TRUE, indices are created under TPM_RH_PLATFORM with
+  # PLATFORMCREATE|PPREAD|PPWRITE|..., which only works on firmware that leaves
+  # platformAuth empty (stock OVMF randomizes or disables it). It is kept so the
+  # failure mode stays reproducible: see artifacts/d130-tpm-hierarchy-results.txt
+  # and artifacts/d134-nv-auth-matrix-results.txt.
+  # The choice is not migratable in place — PLATFORMCREATE makes a
+  # platform-created index undeletable by the owner hierarchy.
+  gPblPkgTokenSpaceGuid.PcdPblTpmUsePlatformHierarchy|FALSE|BOOLEAN|0x00000009
 
   ## C2 REQ-05: AES-256-CFB parameter encryption for HMAC sessions.
   ## When TRUE, the first TPM2B command parameter (decrypt attr) and the

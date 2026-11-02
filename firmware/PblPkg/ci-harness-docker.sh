@@ -139,7 +139,7 @@ elif [ "${PROVISION_AK_NAME:-1}" = "1" ] && command -v tpm2_nvdefine >/dev/null 
   python3 -c "import sys; sys.stdout.buffer.write(bytes.fromhex('${AK_NAME_HEX}'))" > "${AK_BIN}"
   export TPM2TOOLS_TCTI="swtpm:host=127.0.0.1,port=${PROVIDE_DATA_PORT}"
   tpm2_startup -c >/dev/null 2>&1 || true
-  if tpm2_nvdefine 0x01C00003 -C p -s 34 -a 0x420D000D >/dev/null 2>&1 \
+  if tpm2_nvdefine 0x01C00003 -C o -s 34 -a 0x02060004 >/dev/null 2>&1 \
      && tpm2_nvwrite 0x01C00003 -C p -i "${AK_BIN}" >/dev/null 2>&1; then
     AK_NAME_PROVISIONED=1
     echo "  AK Name provisioned: ${AK_NAME_HEX}"

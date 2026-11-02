@@ -1,0 +1,12 @@
+# D-134 — owner-hierarchy default verified in QEMU
+# generated 2026-11-02T08:44:50Z by test-d134-owner-hierarchy-harness.sh
+#
+# PblApp      613b11bb…  (PcdPblTpmUsePlatformHierarchy=FALSE, index-handle auth)
+# stock OVMF  949bfa53…  (randomizes/disables platformAuth —
+#             the same behaviour that made the old build report 0x9A2)
+# PBL OVMF    ed72baa1…  (patched to PeiDxeTpmPlatformHierarchyLibNull)
+
+arm             provisioned under   OVMF    result
+owner-stock      owner               stock   device_id from AK Name: ABABABAB...ABAB
+owner-pbl        owner               PBL     device_id from AK Name: ABABABAB...ABAB
+platform-stock   platform            stock   device_id from AK Name: ABABABAB...ABAB

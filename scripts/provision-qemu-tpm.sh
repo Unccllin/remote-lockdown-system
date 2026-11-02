@@ -107,7 +107,8 @@ provision_body() {
   export TPM2TOOLS_TCTI="swtpm:host=127.0.0.1,port=${data_port}"
 
   tpm2_startup -c >/dev/null 2>&1 || true
-  tpm2_nvdefine 0x01C00003 -C p -s 34 -a 0x420D000D
+  # D-134 ruling: owner hierarchy + OWNERREAD, matching what PBL reads.
+tpm2_nvdefine 0x01C00003 -C o -s 34 -a 0x02060004
   tpm2_nvwrite 0x01C00003 -C p -i "$bin"
 
   # Prove the write before claiming it.
@@ -143,7 +144,8 @@ else
       python3 -c \"import sys; sys.stdout.buffer.write(bytes.fromhex('${AK_NAME_HEX}'))\" > /prov/st/.ak-name.bin
       export TPM2TOOLS_TCTI=swtpm:host=127.0.0.1,port=${DATA_PORT}
       tpm2_startup -c >/dev/null 2>&1 || true
-      tpm2_nvdefine 0x01C00003 -C p -s 34 -a 0x420D000D
+      # D-134 ruling: owner hierarchy + OWNERREAD, matching what PBL reads.
+tpm2_nvdefine 0x01C00003 -C o -s 34 -a 0x02060004
       tpm2_nvwrite 0x01C00003 -C p -i /prov/st/.ak-name.bin
       readback=\$(tpm2_nvread 0x01C00003 -C p -s 34 | od -An -tx1 | tr -d ' \n')
       echo \"  AK Name verified in NV 0x01C00003: \${readback}\"

@@ -1087,7 +1087,6 @@ PblTpmReadAkName (
   UINT8              CmdBuf[128];
   UINT8              RespBuf[256];
   UINT32             RespSize;
-  UINT32             AuthHierarchy;
   UINT32             Handles[2];
 
   if (AkName == NULL || AkNameSize < PBL_AK_NAME_SIZE) {
@@ -1099,20 +1098,20 @@ PblTpmReadAkName (
     return EFI_NOT_FOUND;
   }
 
-  // C2 §1.3 gives this index TPMA_NV_PPREAD, so the read is authorised by the
-  // platform hierarchy. Track the same PCD as NV_DefineSpace so a dev/swtpm
-  // build (owner hierarchy) and a production build stay consistent.
-  AuthHierarchy = FixedPcdGetBool (PcdPblTpmUsePlatformHierarchy)
-                    ? (UINT32)TPM_RH_PLATFORM
-                    : (UINT32)TPM_RH_OWNER;
-
-  Handles[0] = AuthHierarchy;
+  // D-134 ruling (2026-11-02): authorize with the INDEX handle, not a
+  // hierarchy. TPM 2.0 permits NV_Read by the index when TPMA_NV_AUTHREAD is
+  // set and the index auth value is supplied (empty for PBL), which works
+  // whatever the firmware did to platformAuth or the OS did to ownerAuth —
+  // both of which make a hierarchy-authorized read fail with
+  // TPM_RC_NV_AUTHORIZATION (0x149) or TPM_RC_HANDLE (0x9A2).
+  // Evidence: firmware/PblPkg/artifacts/d134-nv-auth-matrix-results.txt and
+  // d130-tpm-hierarchy-results.txt.
+  Handles[0] = PBL_NV_AK_NAME;
   Handles[1] = PBL_NV_AK_NAME;
 
   // NV_Read has two handles: authHandle + nvIndex. With no HMAC session active
   // this emits a TPM_RS_PW session with an empty password, which is what the
-  // empty platform/owner auth in dev/swtpm requires (same assumption as
-  // PblTpmNvDefineSpace).
+  // empty index auth value requires (same assumption as PblTpmNvDefineSpace).
   UINT8 *Ptr = PblTpmBeginCommandWithSessionAuth (
                  CmdBuf, sizeof (CmdBuf), TPM_CC_NV_Read, 2, Handles);
 
@@ -1252,18 +1251,24 @@ PblTpmNvDefineSpace (
   Ptr += 2;
 
   // C2 §5.4: TPMA_NV attributes depend on the chosen hierarchy.
-  // Production (platform) attributes: PPWRITE|AUTHWRITE|POLICYWRITE|
-  //                                    PPREAD |AUTHREAD |POLICYREAD |
-  //                                    NO_DA | PLATFORMCREATE
-  // The PLATFORMCREATE bit is required by the TPM when authHandle is
-  // TPM_RH_PLATFORM. It prevents the owner hierarchy from deleting the index.
-  // Dev/swtpm (owner) attributes:     AUTHWRITE|AUTHREAD|NO_DA
+  // Owner-hierarchy attributes (the D-134 ruling default):
+  //   AUTHWRITE|OWNERWRITE|AUTHREAD|OWNERREAD|NO_DA
+  // OWNERREAD is deliberately included alongside AUTHREAD so an owner-auth read
+  // also works; the firmware itself authorizes with the index handle, which
+  // needs only AUTHREAD and does not depend on ownerAuth being empty.
+  //
+  // Platform-hierarchy attributes, kept for the PCD=TRUE builds used to
+  // demonstrate the failure mode on patched OVMF:
+  //   PPWRITE|AUTHWRITE|POLICYWRITE|PPREAD|AUTHREAD|POLICYREAD|NO_DA|
+  //   PLATFORMCREATE (PLATFORMCREATE is required by the TPM when the auth
+  //   handle is TPM_RH_PLATFORM, and it makes the index undeletable by the
+  //   owner hierarchy — which is why the choice cannot be migrated in place).
   // TPM_NT=COUNTER is set for the policy-version counter.
   UINT32 Attr;
   if (FixedPcdGetBool (PcdPblTpmUsePlatformHierarchy)) {
     Attr = 0x420D000D;  // PPWRITE|AUTHWRITE|POLICYWRITE|PPREAD|AUTHREAD|POLICYREAD|NO_DA|PLATFORMCREATE
   } else {
-    Attr = 0x02040004;  // AUTHWRITE|AUTHREAD|NO_DA (owner-dev fallback)
+    Attr = 0x02060004;  // AUTHWRITE|AUTHREAD|NO_DA|OWNERREAD
   }
   if (IsCounter) {
     Attr |= (1 << 4);  // TPM_NT_COUNTER = 1 (bits 4-7)
@@ -1318,16 +1323,16 @@ PblTpmProvisionNvIndices (
 {
   EFI_STATUS Status;
 
-  // C2 §5.4: Use the platform hierarchy to define NV indices when
-  // PcdPblTpmUsePlatformHierarchy is TRUE. This binds the lock state to the
-  // hardware root (PH) and survives TPM2_Clear(RH_OWNER). Dev builds may fall
-  // back to owner hierarchy if the firmware randomizes platform auth.
+  // D-134 ruling (2026-11-02): the owner hierarchy is the default, so the
+  // indices are owned by the same hierarchy that can actually be reached from
+  // firmware on a real machine. The platform hierarchy remains available for
+  // the PCD=TRUE builds that reproduce the stock-firmware failure.
   UINT32 NvAttr;
   if (FixedPcdGetBool (PcdPblTpmUsePlatformHierarchy)) {
     // PPWRITE|AUTHWRITE|POLICYWRITE|PPREAD|AUTHREAD|POLICYREAD|NO_DA|PLATFORMCREATE
     NvAttr = 0x420D000D;
   } else {
-    NvAttr = 0x02040004;  // AUTHWRITE|AUTHREAD|NO_DA
+    NvAttr = 0x02060004;  // AUTHWRITE|AUTHREAD|NO_DA|OWNERREAD
   }
 
   // Lock state: 64 bytes, regular NV

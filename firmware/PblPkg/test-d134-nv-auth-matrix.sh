@@ -47,7 +47,12 @@ err()  { printf '[ERROR] %s\n' "$*" >&2; }
 command -v docker >/dev/null || { err "docker not found"; exit 1; }
 W="$(mktemp -d /tmp/pbl-d134-XXXXXX)"
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
-trap 'rm -rf "$W"' EXIT
+cleanup() {
+  rm -rf "$W" 2>/dev/null && return 0
+  docker run --rm -v "$(dirname "$W")":/p alpine \
+    rm -rf "/p/$(basename "$W")" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
 cat > "$W/matrix.sh" <<'RSCRIPT'
 #!/bin/bash
@@ -69,7 +74,7 @@ try() { # label attrs define-auth read-auth
     --pid "file=$B/pid"
   sleep 0.7
   export TPM2TOOLS_TCTI="swtpm:host=127.0.0.1,port=$dport"
-  tpm2_startup -c >/dev/null 2>&1
+  tpm2_startup -c >/dev/null 2>&1 || true
 
   local verdict
   if ! tpm2_nvdefine 0x01C00003 -C "$dauth" -s 34 -a "$attrs" >/dev/null 2>"$B/e"; then

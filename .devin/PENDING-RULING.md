@@ -130,18 +130,22 @@ Artifacts: `firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt`,
 
 ### Q1 — which hierarchy owns the enrolled AK Name index?
 
-- [ ] Q1 — hierarchy → **(A) owner hierarchy + `OWNERREAD`, with enrolment and
-      firmware agreeing** (recommended). The index is created once at
+- [x] Q1 — hierarchy → **(A2) owner hierarchy + index-handle auth**. Accepted
+      with the refinement the matrix forced: authorize the read with the *index
+      handle*, not `TPM_RH_OWNER`, so `ownerAuth` and `platformAuth` both drop out
+      of the failure surface. Enrolment and firmware must agree on the hierarchy.
+      ~~(A) owner hierarchy + `OWNERREAD` with `TPM_RH_OWNER` auth~~ was the
+      original recommendation; superseded because it still depends on `ownerAuth`. The index is created once at
       provisioning with `AUTHREAD|OWNERREAD`, PBL reads it with `TPM_RH_OWNER`
       (empty owner auth), and `PCD` defaults to FALSE everywhere so there is one
       code path. Cost: the lock state no longer survives `TPM2_Clear(RH_OWNER)`
       — which is the stated reason the platform hierarchy was chosen — so Q2
       must be answered.
-- [ ] Q1 — other options: **(B)** keep the platform hierarchy and require
-      firmware that leaves `platformAuth` empty (document it as a fleet
-      requirement and test it on the HP machine first); **(C)** keep the platform
-      hierarchy for the lock state but move **only the AK Name index** to the
-      owner hierarchy, so `device_id` survives even when the lock state does not.
+- [x] Q1 — other options rejected: **(B)** keep the platform hierarchy and
+      require firmware that leaves `platformAuth` empty — fails closed and silently
+      on any machine whose firmware does the standard thing; **(C)** split
+      hierarchies (AK Name owner, lock state platform) — two provisioning schemes
+      and after a clear `device_id` and lock state can disagree.
 
 ### Q2 — if the owner hierarchy is chosen, what happens on `TPM2_Clear`?
 
@@ -152,10 +156,10 @@ lockdown persistence); seal a copy of the lock state to the platform hierarchy a
 well (two indices, belt and braces); or accept the loss and re-lock on next
 contact.
 
-- [ ] Q2 — clear behaviour → **(A) fail-closed: a cleared TPM is an unenrolled
-      device** (recommended, consistent with the D-131 Q1 ruling that an absent
-      AK Name means "refuse to fetch"). Re-lock requires a fresh enrolment, which
-      is also the only way to restore `device_id`.
+- [x] Q2 — clear behaviour → **(A) fail-closed: a cleared TPM is an unenrolled
+      device**. Missing index = unprovisioned = refuse to fetch, consistent with
+      the D-131 Q1 ruling. Re-lock requires a fresh enrolment, which is also the
+      only way to restore `device_id`.
 
 ### Q3 — is the owner-hierarchy read safe against a non-empty `ownerAuth`?
 
@@ -163,8 +167,13 @@ If Windows sets `ownerAuth`, a `TPM_RH_OWNER`-authorized read from firmware fail
 exactly as it does today on stock OVMF, and option (A) would be no better than
 (B). This needs a check on a Windows-provisioned TPM before (A) is implemented.
 
-- [ ] Q3 — verify on a Windows machine → run `tpm2_nvread` (or the equivalent)
-      against an index created with `OWNERREAD` on a TPM that Windows has
-      already provisioned; record the result. If `ownerAuth` is non-empty,
-      fall back to index-handle authorization (`AUTHREAD` only), which the
-      matrix shows works without any hierarchy auth.
+- [x] Q3 — moot under Q1(A2): index-handle authorization never touches
+      `ownerAuth`, so there is nothing left to verify. No Windows check needed;
+      the hardware window stays focused on D-129/D-134's firmware question.
+
+**Ruling closed 2026-11-02, session 166** — Q1 (A2) + Q2 (A) + Q3 (moot).
+Implementation: owner-hierarchy NV indices with `OWNERREAD`, `NV_Read`
+authorized by the index handle, `PcdPblTpmUsePlatformHierarchy` default FALSE,
+and provisioning scripts moved to the owner hierarchy so enrolment and firmware
+agree. D-134 closes on a QEMU run showing a real `device_id` on a fresh owner-
+provisioned TPM, plus the HP confirmation in the D-129 window.

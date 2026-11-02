@@ -1202,18 +1202,75 @@
   machine?* The standard answer is no (BitLocker and other OS-visible status live in
   the owner hierarchy); the counter-argument in the code is that
   `TPM2_Clear(RH_OWNER)` would erase the lock state.
-- **Close criteria**: on real hardware in the D-129 window, one of the two
-  configurations is shown to reach NV and the choice is recorded with an artifact:
-  (a) production `PcdPblTpmUsePlatformHierarchy=TRUE` reads the AK Name on the HP
-  machine, or (b) it is flipped to FALSE **and the `OWNERREAD`/index-auth defect
-  above is fixed**, and the AK Name is read via the owner hierarchy — and, if (b),
-  a `TPM2_Clear(RH_OWNER)` is shown either not to lose the lock state or to be
-  handled explicitly, and enrolment is shown to create the index with attributes
-  the chosen read path can authorize.
-- **Blocker**: needs the real machine (D-129 window) *and* a ruling on which
-  hierarchy the enrolled AK Name index belongs to — see `.devin/PENDING-RULING.md`
-  (D-134 hierarchy ruling, opened session 166). QEMU cannot answer the firmware
-  half, because the answer depends on the *target firmware's* platformAuth policy.
+- **Ruling and implementation (2026-11-02, session 166)** — Q1 **(A2) owner
+  hierarchy + index-handle authorization**, Q2 **(A) a cleared TPM is an
+  unenrolled device**, Q3 **moot** (index-handle auth never touches `ownerAuth`).
+  Code: `PblTpmReadAkName` authorizes `NV_Read` with the **index handle**
+  (`Handles[0] = PBL_NV_AK_NAME`); owner attribute set is now
+  `0x02060004` = `AUTHWRITE|AUTHREAD|NO_DA|OWNERREAD` in both
+  `PblTpmNvDefineSpace` and `PblTpmProvisionNvIndices`;
+  `PcdPblTpmUsePlatformHierarchy` default flipped TRUE→FALSE (`PblPkg.dec`).
+  Provisioning aligned so enrolment and firmware agree:
+  `scripts/provision-qemu-tpm.sh` and `firmware/PblPkg/ci-harness-docker.sh` now
+  define NV `0x01C00003` with `-C o -a 0x02060004` instead of `-C p -a 0x420D000D`.
+  Q2 needs no new code: a missing index already reads as "unprovisioned", so the
+  D-131 Q1 path (no `device_id` → refuse to fetch → denied-boot-with-local-unlock)
+  is the fail-closed behaviour.
+- **QEMU verification — PASSES** (`firmware/PblPkg/artifacts/d134-owner-hierarchy-results.txt`,
+  `PblApp.efi` `613b11bb…`, three arms):
+
+  | arm | provisioned under | OVMF | result |
+  |-----|-------------------|------|--------|
+  | owner-stock | owner | stock | `device_id from AK Name: ABABABAB…` |
+  | owner-pbl | owner | PBL | `device_id from AK Name: ABABABAB…` |
+  | platform-stock | **platform** | stock | `device_id from AK Name: ABABABAB…` |
+
+  The first row is the fix: the same stock OVMF that produced `0x9A2` in session
+  165 now reads the AK Name. The third row is a bonus worth keeping — index-handle
+  authorization does not care which hierarchy created the index (`AUTHREAD` is set
+  in both schemes), so **units enrolled under the old platform-hierarchy scheme
+  keep working after the firmware upgrade**; no in-place migration is needed for
+  reading. New defines still use the owner hierarchy, and the two schemes cannot
+  be converted into each other (PLATFORMCREATE), so the state is "read both,
+  write owner".
+  Reproduce with `firmware/PblPkg/test-d134-owner-hierarchy-harness.sh`.
+- **Close criteria**: the HP machine in the D-129 window boots the owner-hierarchy
+  build and the serial log shows `device_id from AK Name`, with a `TPM2_Clear`
+  afterwards treated as unenrolled (Q2) rather than silently unlocking. QEMU
+  cannot answer the firmware half because it depends on the *target firmware's*
+  platformAuth policy — but note the fixed build no longer depends on that policy
+  for reading, which is the whole point of the ruling.
+- **Blocker**: needs the real machine (D-129 window). The design question is
+  closed (`.devin/PENDING-RULING.md`, D-134 ruling, closed session 166).
+
+### D-135 — The lock-epoch counter never increments, so NG-T7 rollback detection is inert
+- **Status**: OPEN (found 2026-11-02, session 166, while verifying D-134)
+- **Category**: SECURITY
+- **What happens**: every boot, on every build and every OVMF, prints
+  `[WARN] NV_Increment(0x1C00004) RC=0x9A2` — including the fixed owner-hierarchy
+  build (`artifacts/d134q-owner-stock-serial.log`, `d130-tpm-*-serial.log`). The
+  lock-epoch counter is defined and `[OK] NV indices provisioned` is printed, so
+  the index exists; the increment is what fails. NG-T7 compares the cached epoch
+  against NV to detect a rolled-back lock state, so with the counter frozen that
+  check can never fire.
+- **What it is NOT**: not the D-134 authorization class. `PblTpmNvIncrementCounter`
+  already authorizes with the **index handle** (`IncHandles[] = { NvIndex, NvIndex }`,
+  `TpmClient.c:1746`), and an identical index answers correctly when the same
+  command comes from tpm2-tools:
+  - counter index, attributes `0x02060014`
+    (`AUTHWRITE|AUTHREAD|NO_DA|OWNERREAD|COUNTER`), `-C 0x01C00004` → succeeds,
+    read-back `0000000000000001`;
+  - a non-counter index refuses with `0x282` (`TPM_RC_ATTRIBUTES`, handle 2), as
+    the spec requires.
+  So the TPM, the attributes and the authorization are all fine — the defect is in
+  PBL's command construction for `TPM_CC_NV_Increment` (session/HMAC or handle
+  ordering), not in policy.
+- **Why it matters**: silently degrading a rollback-detection feature is worse than
+  not having it — the log reads like a warning on an otherwise healthy boot.
+- **Next step**: capture the exact 10-byte response for the increment (the log only
+  prints the mapped RC) and diff PBL's command bytes against the tpm2-tools one
+  that works; `PblTpmSubmitCommand` is the only layer between them.
+- **Blocker**: none — this is a code defect with a reproduction.
 
 ---
 
