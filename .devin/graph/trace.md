@@ -4362,7 +4362,16 @@ one killed mutation per path only proves that one line is guarded.
   their `verified-in-unit-test` status no longer rests on a single guarded line.
 
 ### Fog cleared
-- **Whether the three paths were only single-line-guarded**: no. Encryption,
+- **A password-equivalent file was landing in the source tree, unignored**: after a
+  mutation run the tree was dirty with `agent/.bios_pw_backup` —
+  `hp_uefi_lockdown.BIOS_PASSWORD_BACKUP_FILE`, XOR'd with the *hostname* (the
+  module's own comment calls this "not cryptographically strong") and written next
+  to the module. It was not in `.gitignore`, so a `git add -A` would have committed
+  a device's BIOS and power-on passwords. The normal suite does not write it; only
+  the mutated runs reached that line, which is exactly how such an artifact slips
+  through review. Now ignored, with the reason recorded where the other agent state
+  files are ignored.
+
   BCD rollback and post-set verification each have a second defect that the suite
   catches, so the earlier session's caution ("one killed mutation only proves that
   one line bites") does not apply to these three any more.
@@ -4402,7 +4411,8 @@ one killed mutation per path only proves that one line is guarded.
   it should have said.
 
 ### Session artifacts
-- Changed: `scripts/audit_test_teeth.py` (three rows + label field).
+- Changed: `scripts/audit_test_teeth.py` (three rows + label field),
+  `.gitignore` (`agent/.bios_pw_backup`).
 
 ### Next session opening
 Move the method to the server: write a Jest-side mutation runner (the pytest one is

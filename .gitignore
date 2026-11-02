@@ -12,6 +12,11 @@ agent/.heartbeat
 agent/.locked
 agent/.boot_state
 agent/.bcd_locked
+# BIOS/power-on password backup (hp_uefi_lockdown.BIOS_PASSWORD_BACKUP_FILE).
+# XOR-with-hostname, i.e. password-equivalent, written next to the module at
+# runtime. Session 172: a mutation run wrote it into the tree and it was NOT
+# ignored, so a `git add -A` would have committed a device password.
+agent/.bios_pw_backup
 agent/.update_pending
 agent/.update_downloaded
 agent/.update_downloaded.tmp
