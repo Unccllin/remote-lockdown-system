@@ -3410,7 +3410,7 @@ describe('D-210: PBL route integration', () => {
     it('rejects an unknown API key', async () => {
       const resp = await worker.fetch(
         makeRequest('POST', '/api/agent/uninstall-auth', undefined, {
-          'X-API-Key': 'definitely-not-an-enrolled-key',
+          'X-API-Key': 'fake-api-key-not-enrolled',
         }),
         env,
       );
