@@ -53,81 +53,66 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 169 — 2026-11-02 (D-135 closed: three authorization defects and one AES-CFB bug behind a frozen counter)
+## Latest session: 170 — 2026-11-02 (all remaining debt is resource-blocked; and an assertion that would have proved nothing)
 
 ### VERIFY
-- `build-pbl.sh` clean under `-Werror` (PblApp `3906065d…`).
-- `test-d135-epoch-harness.sh` **exit 0, five checks green**
-  (`artifacts/d135-epoch-results.txt`):
-  - counter `boot 1 -> 1`, `boot 2 -> 2`, two out-of-band increments to `4`,
-    `boot 3 -> 5` — the counter counts on every boot, warm boots included;
-  - `boot 2: NG-T7: cache epoch=1 live=1 (read=Success)` — sane, no false positive;
-  - `boot 3: NG-T7: cache epoch=2 live=4 (read=Success)` then
-    `[WARN] lock-state epoch stale (cache=2 live=4) — rolled back?`.
-- `make graph-check` passes; `make check-firmware-todos` clean; `bash -n` on every
+- Harness run with the field assertions: exit 0, seven checks green, printed
+  `boot 1: counter 1, Epoch field 1` and `boot 2: counter 2, Epoch field 2`.
+- Harness run with the decrypt guard added: exit 0, all checks green (the
+  assertion text was first validated against the serial log produced by the same
+  code path, then exercised by a full run rather than assumed).
+- `make graph-check` passes; spec has no over-length lines; `bash -n` clean on the
   harness and its embedded container script.
 
 ### Fog cleared
-- **Why the epoch counter never moved**: three authorization defects, each a
-  locally assumed value that did not match what was provisioned — cache size,
-  refresh list, RS_PW password. Each was individually sufficient to break it.
-- **Why NG-T7 never fired even after the counter worked**: the cached epoch was
-  garbage, because encrypted responses past byte 16 were mis-decrypted (D-136).
-- **What `0x9A2` actually means**: `session(1): authorization failure without DA
-  implications` — an HMAC/RS_PW failure, never an NV policy error.
+- **How much of D-136 could still be hiding**: none. The audit shows one consumer
+  over one block, and it is now guarded on the firmware side.
+- **What "the tests were green" meant for D-136**: that the parts of the lock state
+  in block 0 were correct. Everything the firmware read past byte 16 was noise in
+  every boot ever recorded, and no assertion in the repo looked there.
 
 ### Fog remaining
-- **D-134** still needs the HP machine (D-129 window) to confirm the owner-hierarchy
-  read on real firmware. QEMU half is green.
-- **D-120, D-129, D-130** unchanged.
-- Not investigated: whether any *other* consumer of an encrypted response longer
-  than 16 bytes exists and was silently corrupt before D-136 (the lock state was
-  the only one observed; a verdict/policy blob path would be the next place to
-  look). Files checked: `PblTpmDecryptResponseParams` call sites (3: lock state,
-  policy version, epoch read).
+- **D-129 / D-134**: the HP machine in the D-129 window.
+- **D-120**: real BitLocker-encrypted media (synthetic image only here).
+- **D-130**: a provisioned signing PFX, and the fleet-custody process around it.
+- Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, 10/13
+  enforcement paths unit-test only, no CI run observed for S151–S170.
 
 ### Debt items closed
-- **D-135** — lock-epoch counter / NG-T7. Commits `e14bcd0`, `399dc8d`, `1d5a23f`;
-  artifacts `d135-epoch-results.txt`, `d135-boot-{1,2,3}-serial.log`,
-  `d135-nv-name-vs-tpm.txt`.
-- **D-136** — AES-CFB response decryption broke after block 0. Commit `1d5a23f`.
-- Convergence: 55/60 → **57/61** (D-135 closed, D-136 found and closed).
+- None. D-135 and D-136 closed in session 169; this session tightened their
+  regression coverage and corrected two stale descriptions.
 
 ### Debt items still open
-- D-120, D-129, D-130, D-134.
+- D-120, D-129, D-130, D-134 — all resource-blocked.
 
 ### Blockers
-- D-134: hardware window (D-129). Nothing else is blocked.
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130).
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary). This defect chain survived
-  sessions 166–168 because every harness read a field in block 0 of an encrypted
-  response: the magic byte validated, the verdict decoded, the counter read
-  returned "Success". The fields that were noise — `DeviceId`, `Epoch` — were
-  never asserted on. A one-line diagnostic printing the compared values is what
-  ended three sessions of guessing.
-- **Layer 2 — context provision** (mine, repeatedly): I wrote D-135's first close
-  criteria from the symptom ("flip the PCD"), then guessed "command construction"
-  in S167, then "HMAC/empty-auth" in S168. Each guess was plausible and each cost
-  a verification cycle. The pattern that actually worked was *printing the value
-  being compared*, not reasoning about the code above it.
-- **Layer 4 again, tooling side**: three verification failures were my own
-  (`-P` vs `-p`, a NUL that bash cannot hold, `strings` missing from the image,
-  `grep -c` returning 1 under `pipefail`). Each looked like "the firmware denies
-  access", which is precisely the misreading that would have kept D-135 open.
+- **Layer 4 — verification feedback** (primary, and it is mine): I wrote a
+  regression assertion that passes whether or not the bug returns, because it
+  reads data through a path the bug never touched. I caught it only by asking the
+  question a regression test must answer — *"would this have failed before the
+  fix?"* — and the answer was no. The lesson is to ask that question **before**
+  writing the assertion, not after.
+- **Layer 2 — context provision**: D-134's stale description would have told the
+  next session that the platform hierarchy is still the production default, which
+  is now the opposite of the truth. Descriptions are read as instructions, so
+  staleness there is not cosmetic.
+- **Process note**: the only genuinely valuable output of this session is the
+  negative result — that four items cannot progress here, and that one of my tests
+  was theatre. Both are worth more than a green summary would have been.
 
 ### Session artifacts
-- New: `firmware/PblPkg/artifacts/d135-epoch-results.txt`.
-- Changed: `firmware/PblPkg/PblApp/TpmSession.c`,
-  `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/PblApp/PblApp.h`,
-  `firmware/PblPkg/test-d135-epoch-harness.sh`, `docs/adr/PBL-DEBT-LEDGER.md`,
-  `.devin/graph/GRAPH-SPEC.yaml`, `d135-boot-*-serial.log`.
+- Changed: `firmware/PblPkg/test-d135-epoch-harness.sh`,
+  `.devin/graph/GRAPH-SPEC.yaml`, `docs/adr/PBL-DEBT-LEDGER.md`.
 
 ### Next session opening
-D-134's hardware confirmation is the only thing left in the Secure Boot/TPM
-thread: run the D-129 window's Step 3 with the owner-hierarchy build and record
-whether `[OK] device_id from AK Name` appears on the HP machine, then flip D-134
-on the result.
+Do not start another code thread: the four open items need the hardware window,
+real media, or a signing PFX. Until one of those exists, the highest-value work is
+hardening what is already closed — pick the next `verified-in-unit-test`
+enforcement path (10 of 13) and check whether its unit test would fail if the
+feature regressed, the same question that exposed this session's bad assertion.
 
 ---
 
@@ -138,7 +123,7 @@ on the result.
 | D-120 | BitLocker detection not implemented | OPEN | — |
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
-| D-134 | PBL's TPM NV indices are created under the platform hierarch | OPEN | — |
+| D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
 
 See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130) for close criteria.
 

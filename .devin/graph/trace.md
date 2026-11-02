@@ -4093,3 +4093,115 @@ whether `[OK] device_id from AK Name` appears on the HP machine, then flip D-134
 on the result.
 
 ---
+
+---
+
+## Session 170 — 2026-11-02 (all remaining debt is resource-blocked; and an assertion that would have proved nothing)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S169 opening),
+  `scripts/check-ruling.sh` (clean → task mode), the four open debt nodes in
+  `.devin/graph/GRAPH-SPEC.yaml`, `docs/adr/PBL-DEBT-LEDGER.md` D-120 (full entry
+  and its residuals), `firmware/PblPkg/PblApp/Fve.c` (478 lines) and the
+  `PblCheckFve` call sites, `firmware/PblPkg/test-fve-harness.sh`,
+  `firmware/PblPkg/PblApp/TpmClient.c` around all three
+  `PblTpmDecryptResponseParams` call sites, and
+  `firmware/PblPkg/test-d135-epoch-harness.sh`.
+- **Finding (nothing left is code-blocked)**: every open item waits on a resource
+  this host does not have. D-129 and D-134 need the HP machine; D-120's own
+  residual is "real-media validation + VMK lock-state proof", i.e. a real
+  BitLocker-encrypted disk (the harness image is synthetic); D-130 needs a
+  provisioned fleet signing PFX. That is worth stating plainly, because it means
+  "proceed" cannot mean "close the remaining items" until the hardware window.
+- **Finding (D-136's blast radius is exactly one consumer)**: of the three
+  `PblTpmDecryptResponseParams` call sites, only the lock state is larger than one
+  AES block — 64 bytes. The policy-version and epoch-counter reads are ~10 bytes
+  each (TPM2B header + 8), entirely inside block 0, so they were never corrupt.
+  Within the lock state, everything at offset ≥ 16 was.
+- **Finding (D-134's spec description was stale)**: it still described
+  `PcdPblTpmUsePlatformHierarchy=TRUE` as the default, which the session-166
+  ruling changed to FALSE. Exact class of staleness AGENTS.md warns about.
+- **Finding (my own assertion would not have caught D-136)**: the obvious
+  regression test — read the lock-state `Epoch` field and compare it to the
+  counter — reads the **stored** bytes through `tpm2-tools`, which never uses the
+  session and therefore always saw correct data (verified in S169: the raw dump
+  showed `02` while the firmware printed `18020293802152137203`). D-136's
+  corruption lived entirely in the firmware's decrypt path, so that assertion
+  passes for a reason unrelated to the bug. The guard that does work is the
+  firmware's own decoded value in the serial log.
+
+### IMPLEMENT
+- `test-d135-epoch-harness.sh`:
+  - `lockstate_epoch()` reads the `Epoch` field at offset 48 through the owner
+    hierarchy and asserts it equals the counter after boots 1 and 2 — useful as a
+    provisioning check, explicitly *not* the D-136 guard;
+  - the real guard asserts the firmware **decoded** value:
+    `NG-T7: cache epoch=1 live=1 (read=Success)` in boot 2's serial log, which
+    carried noise before the CFB fix;
+  - the artifact now lists counter and stored field per boot.
+- `.devin/graph/GRAPH-SPEC.yaml`: D-134's description rewritten to say the
+  platform hierarchy was the *old* default and that the item is open only for the
+  hardware confirmation.
+- `docs/adr/PBL-DEBT-LEDGER.md`: D-136's impact paragraph records the audited
+  blast radius (one consumer, fields ≥ 16).
+
+### VERIFY
+- Harness run with the field assertions: exit 0, seven checks green, printed
+  `boot 1: counter 1, Epoch field 1` and `boot 2: counter 2, Epoch field 2`.
+- Harness run with the decrypt guard added: exit 0, all checks green (the
+  assertion text was first validated against the serial log produced by the same
+  code path, then exercised by a full run rather than assumed).
+- `make graph-check` passes; spec has no over-length lines; `bash -n` clean on the
+  harness and its embedded container script.
+
+### Fog cleared
+- **How much of D-136 could still be hiding**: none. The audit shows one consumer
+  over one block, and it is now guarded on the firmware side.
+- **What "the tests were green" meant for D-136**: that the parts of the lock state
+  in block 0 were correct. Everything the firmware read past byte 16 was noise in
+  every boot ever recorded, and no assertion in the repo looked there.
+
+### Fog remaining
+- **D-129 / D-134**: the HP machine in the D-129 window.
+- **D-120**: real BitLocker-encrypted media (synthetic image only here).
+- **D-130**: a provisioned signing PFX, and the fleet-custody process around it.
+- Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, 10/13
+  enforcement paths unit-test only, no CI run observed for S151–S170.
+
+### Debt items closed
+- None. D-135 and D-136 closed in session 169; this session tightened their
+  regression coverage and corrected two stale descriptions.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, and it is mine): I wrote a
+  regression assertion that passes whether or not the bug returns, because it
+  reads data through a path the bug never touched. I caught it only by asking the
+  question a regression test must answer — *"would this have failed before the
+  fix?"* — and the answer was no. The lesson is to ask that question **before**
+  writing the assertion, not after.
+- **Layer 2 — context provision**: D-134's stale description would have told the
+  next session that the platform hierarchy is still the production default, which
+  is now the opposite of the truth. Descriptions are read as instructions, so
+  staleness there is not cosmetic.
+- **Process note**: the only genuinely valuable output of this session is the
+  negative result — that four items cannot progress here, and that one of my tests
+  was theatre. Both are worth more than a green summary would have been.
+
+### Session artifacts
+- Changed: `firmware/PblPkg/test-d135-epoch-harness.sh`,
+  `.devin/graph/GRAPH-SPEC.yaml`, `docs/adr/PBL-DEBT-LEDGER.md`.
+
+### Next session opening
+Do not start another code thread: the four open items need the hardware window,
+real media, or a signing PFX. Until one of those exists, the highest-value work is
+hardening what is already closed — pick the next `verified-in-unit-test`
+enforcement path (10 of 13) and check whether its unit test would fail if the
+feature regressed, the same question that exposed this session's bad assertion.
+
+---
