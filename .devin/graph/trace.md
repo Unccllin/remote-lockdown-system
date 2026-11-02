@@ -4205,3 +4205,124 @@ enforcement path (10 of 13) and check whether its unit test would fail if the
 feature regressed, the same question that exposed this session's bad assertion.
 
 ---
+
+---
+
+## Session 171 — 2026-11-02 (mutation audit: two paths had no teeth, and my audit tool had none either)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S170 opening), `scripts/check-ruling.sh`
+  (clean → task mode), the 13 `enforcement_paths` in `.devin/graph/GRAPH-SPEC.yaml`,
+  `agent/agent.py` (offline queue 1419-1545, wifi scan 946-1025, `handle_unlock`
+  2207-2290, `verify_update_signature` 3348), `agent/bcd_lockdown.py`
+  (`_apply_bcd_setting`), `agent/hp_uefi_lockdown.py` (admin fail-fast),
+  `agent/tests/conftest.py`, `scripts/run-agent-tests.sh`, and the Makefile's
+  `test-scripts` discovery rule.
+- **Finding (the question is answerable)**: "verified-in-unit-test" means a test
+  exists and passes. Whether it would fail on a regression can be settled by
+  reintroducing the regression — so I built `scripts/audit_test_teeth.py`, one
+  semantic mutation per path (skip the decryption, claim every BCD setting
+  applied, never evaluate the deadman switch, accept any update signature).
+- **Finding (E-OFFLINE-QUEUE had no tests at all)**: no test in the tree
+  referenced `queue_offline`, `_queue_size`, `OFFLINE_QUEUE_DB`, `_get_queue_db`
+  or `drain_offline_queue`. The only "offline" tests covered
+  `offline_recovery.py` — a different feature (E-RECOVERY). With `queue_offline`
+  turned into a no-op, the **entire** agent suite stayed green.
+- **Finding (E-TRACK's parsers were patched out)**: every test did
+  `patch.object(agent, "scan_wifi_networks")`, so the netsh/nmcli parsing code —
+  where a format change turns into "no neighbours", indistinguishable from a
+  device that is alone — was never executed. Its mutation survived too.
+- **Finding (my own two false positives)**: the first runs reported
+  E-EFFECTIVENESS and E-RECOVERY as survivors. Both were mapping artefacts —
+  E-EFFECTIVENESS mutates the aggregator in `agent.py` but I pointed it at the BCD
+  module's tests, and E-RECOVERY is covered by
+  `test_agent_config.py:94 test_handle_unlock_decrypts_and_removes_sentinel`.
+  Running each mutation against the whole suite (not a chosen file) removed the
+  error class, and both came back KILLED.
+- **Finding (the audit tool itself was theatre)**: its first run printed
+  "all 10 mutations killed" while every line read
+  `ERROR: file or directory not found` — `run-agent-tests.sh` does `cd agent` and
+  always passes `tests/`, so repo-relative paths never resolved, and pytest's
+  non-zero exit for a *collection* error was indistinguishable from a failing
+  test. The second version then mis-read `-x` output ("stopping after 1 failures"
+  with no summary count) and marked a genuine kill as INVALID. Both are the exact
+  failure mode the audit exists to find, one level up.
+
+### IMPLEMENT
+- `scripts/audit_test_teeth.py`: 10-row mutation table, whole-suite runs, and a
+  validity gate keyed on **pytest's exit code** (0 passed / 1 failed / 4 usage /
+  5 none collected) rather than on output text. An invalid run is reported as
+  INVALID and fails the audit; it can never be counted as a kill. Paths are
+  resolved and refused outside the repo. Deliberately **not** named `test_*.py`,
+  so `make test-scripts` does not pick up a tool that mutates source.
+- `agent/tests/test_offline_queue.py` (8 tests): queueing, ordering,
+  drain-on-success, retry with attempt count, drop after 10 attempts,
+  no-op-when-empty, `created_at`, and the corrupt-database fail-safe.
+- `agent/tests/test_wifi_parsing.py` (6 tests): netsh parsing, nmcli parsing with
+  its escaped colons, signal attaching to the right network, and the three
+  failure paths (missing tool, timeout, unknown platform).
+- `GRAPH-SPEC.yaml`: E-TRACK and E-OFFLINE-QUEUE `risk_notes` now record the audit
+  and name the tests that fail on regression — the status is earned, not assumed.
+
+### VERIFY
+- Final audit: **10 of 10 mutations killed** with the two new test files in place
+  (E-TRACK and E-OFFLINE-QUEUE flipped from SURVIVED to KILLED by those tests
+  specifically; before/after demonstrated by moving the files aside and re-running).
+- `agent/tests/test_offline_queue.py`: 8 passed. `agent/tests/test_wifi_parsing.py`:
+  6 passed.
+- `make graph-check` passes; spec has no over-length lines; YAML parses.
+
+### Fog cleared
+- **Which "verified-in-unit-test" paths were unearned**: two, and only two —
+  E-OFFLINE-QUEUE (no reference at all) and E-TRACK (parser never executed). The
+  other eight fail when their behaviour regresses.
+- **Why the ledger's 10/13 figure was not the problem it looked like**: the status
+  label was honest about *unit* verification; what it did not say was that for two
+  paths no unit test touched the code. That distinction is now written down.
+
+### Fog remaining
+- **Mutation coverage is one mutation per path.** A surviving mutation proves a
+  gap; a killed one only proves *that* defect is caught. E-DECRYPT's encryption
+  side, E-BCD's rollback path and E-HP-UEFI's verification re-reads deserve their
+  own mutations before the status means much more than "at least one assertion
+  bites".
+- Unchanged: D-120/D-129/D-130/D-134 are resource-blocked; `PblTlsVerifyCert`
+  residual (D-132); 19 Dependabot alerts; no CI run observed for S151–S171.
+
+### Debt items closed
+- None. Two enforcement paths had their `verified-in-unit-test` status earned.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, twice over). My audit tool
+  reported "all 10 killed" without running a single test, and would have been
+  believed. It is the same failure as session 169's assertion that passed for the
+  wrong reason: a green result whose mechanism was never checked. The fix in both
+  cases is the same — make the tool prove it did the thing, not just that it
+  exited successfully.
+- **Layer 1 — task specification** (mine): mapping one suite per path produced two
+  false gaps that I nearly wrote into the ledger as findings. Running the whole
+  suite per mutation is both simpler and correct; the per-path mapping was an
+  optimisation that bought nothing but error.
+- **Process note**: the audit found the *status label* was unearned for 2 of 10
+  paths, but the more useful output was the tool's own two failures — a harness
+  that cannot tell "the test failed" from "the test did not run" is worse than no
+  harness, because it manufactures confidence.
+
+### Session artifacts
+- New: `scripts/audit_test_teeth.py`, `agent/tests/test_offline_queue.py`,
+  `agent/tests/test_wifi_parsing.py`.
+- Changed: `.devin/graph/GRAPH-SPEC.yaml` (E-TRACK, E-OFFLINE-QUEUE risk_notes).
+
+### Next session opening
+Extend the mutation table rather than widening it: add the second and third
+mutation for the paths where only one defect is covered — E-BCD's rollback path,
+E-HP-UEFI's post-set verification re-read, and E-DECRYPT's encrypt side — because
+one killed mutation per path only proves that one line is guarded.
+
+---

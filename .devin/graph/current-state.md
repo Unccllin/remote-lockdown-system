@@ -38,10 +38,10 @@
 | E-HP-UEFI | hp-uefi-lockdown | verified-in-unit-test | D-009 model-aware names; D-010 Sure Admin detection; needs hardware verificat... |
 | E-ACK | command-ack | verified-in-unit-test | Network failure retries via pending ACK file |
 | E-RECOVERY | unlock-recovery | verified-in-unit-test | Key release security; sentinel cleanup |
-| E-TRACK | covert-tracking | verified-in-unit-test | Platform-specific wifi scanning; geolocation API rate limits |
+| E-TRACK | covert-tracking | verified-in-unit-test | Platform-specific wifi scanning; geolocation API rate limits. Mutation audite... |
 | E-DEADMAN | deadman-switch | verified-in-unit-test | Clock skew; false trigger on network outage |
 | E-EFFECTIVENESS | lockdown-effectiveness | verified-in-unit-test | Closes the dangerous gap where critical_applied=0 was reported as success |
-| E-OFFLINE-QUEUE | offline-queue | verified-in-unit-test | Queue growth on extended offline; SQLite corruption |
+| E-OFFLINE-QUEUE | offline-queue | verified-in-unit-test | Queue growth on extended offline; SQLite corruption. Mutation audited (sessio... |
 | E-AUTO-UPDATE | agent-auto-update | verified-in-unit-test | Update server availability; signature verification on Windows |
 
 **The 3 already verified on hardware:**
@@ -53,34 +53,35 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 170 — 2026-11-02 (all remaining debt is resource-blocked; and an assertion that would have proved nothing)
+## Latest session: 171 — 2026-11-02 (mutation audit: two paths had no teeth, and my audit tool had none either)
 
 ### VERIFY
-- Harness run with the field assertions: exit 0, seven checks green, printed
-  `boot 1: counter 1, Epoch field 1` and `boot 2: counter 2, Epoch field 2`.
-- Harness run with the decrypt guard added: exit 0, all checks green (the
-  assertion text was first validated against the serial log produced by the same
-  code path, then exercised by a full run rather than assumed).
-- `make graph-check` passes; spec has no over-length lines; `bash -n` clean on the
-  harness and its embedded container script.
+- Final audit: **10 of 10 mutations killed** with the two new test files in place
+  (E-TRACK and E-OFFLINE-QUEUE flipped from SURVIVED to KILLED by those tests
+  specifically; before/after demonstrated by moving the files aside and re-running).
+- `agent/tests/test_offline_queue.py`: 8 passed. `agent/tests/test_wifi_parsing.py`:
+  6 passed.
+- `make graph-check` passes; spec has no over-length lines; YAML parses.
 
 ### Fog cleared
-- **How much of D-136 could still be hiding**: none. The audit shows one consumer
-  over one block, and it is now guarded on the firmware side.
-- **What "the tests were green" meant for D-136**: that the parts of the lock state
-  in block 0 were correct. Everything the firmware read past byte 16 was noise in
-  every boot ever recorded, and no assertion in the repo looked there.
+- **Which "verified-in-unit-test" paths were unearned**: two, and only two —
+  E-OFFLINE-QUEUE (no reference at all) and E-TRACK (parser never executed). The
+  other eight fail when their behaviour regresses.
+- **Why the ledger's 10/13 figure was not the problem it looked like**: the status
+  label was honest about *unit* verification; what it did not say was that for two
+  paths no unit test touched the code. That distinction is now written down.
 
 ### Fog remaining
-- **D-129 / D-134**: the HP machine in the D-129 window.
-- **D-120**: real BitLocker-encrypted media (synthetic image only here).
-- **D-130**: a provisioned signing PFX, and the fleet-custody process around it.
-- Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, 10/13
-  enforcement paths unit-test only, no CI run observed for S151–S170.
+- **Mutation coverage is one mutation per path.** A surviving mutation proves a
+  gap; a killed one only proves *that* defect is caught. E-DECRYPT's encryption
+  side, E-BCD's rollback path and E-HP-UEFI's verification re-reads deserve their
+  own mutations before the status means much more than "at least one assertion
+  bites".
+- Unchanged: D-120/D-129/D-130/D-134 are resource-blocked; `PblTlsVerifyCert`
+  residual (D-132); 19 Dependabot alerts; no CI run observed for S151–S171.
 
 ### Debt items closed
-- None. D-135 and D-136 closed in session 169; this session tightened their
-  regression coverage and corrected two stale descriptions.
+- None. Two enforcement paths had their `verified-in-unit-test` status earned.
 
 ### Debt items still open
 - D-120, D-129, D-130, D-134 — all resource-blocked.
@@ -89,30 +90,31 @@
 - Hardware (D-129/D-134), real media (D-120), signing PFX (D-130).
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary, and it is mine): I wrote a
-  regression assertion that passes whether or not the bug returns, because it
-  reads data through a path the bug never touched. I caught it only by asking the
-  question a regression test must answer — *"would this have failed before the
-  fix?"* — and the answer was no. The lesson is to ask that question **before**
-  writing the assertion, not after.
-- **Layer 2 — context provision**: D-134's stale description would have told the
-  next session that the platform hierarchy is still the production default, which
-  is now the opposite of the truth. Descriptions are read as instructions, so
-  staleness there is not cosmetic.
-- **Process note**: the only genuinely valuable output of this session is the
-  negative result — that four items cannot progress here, and that one of my tests
-  was theatre. Both are worth more than a green summary would have been.
+- **Layer 4 — verification feedback** (primary, twice over). My audit tool
+  reported "all 10 killed" without running a single test, and would have been
+  believed. It is the same failure as session 169's assertion that passed for the
+  wrong reason: a green result whose mechanism was never checked. The fix in both
+  cases is the same — make the tool prove it did the thing, not just that it
+  exited successfully.
+- **Layer 1 — task specification** (mine): mapping one suite per path produced two
+  false gaps that I nearly wrote into the ledger as findings. Running the whole
+  suite per mutation is both simpler and correct; the per-path mapping was an
+  optimisation that bought nothing but error.
+- **Process note**: the audit found the *status label* was unearned for 2 of 10
+  paths, but the more useful output was the tool's own two failures — a harness
+  that cannot tell "the test failed" from "the test did not run" is worse than no
+  harness, because it manufactures confidence.
 
 ### Session artifacts
-- Changed: `firmware/PblPkg/test-d135-epoch-harness.sh`,
-  `.devin/graph/GRAPH-SPEC.yaml`, `docs/adr/PBL-DEBT-LEDGER.md`.
+- New: `scripts/audit_test_teeth.py`, `agent/tests/test_offline_queue.py`,
+  `agent/tests/test_wifi_parsing.py`.
+- Changed: `.devin/graph/GRAPH-SPEC.yaml` (E-TRACK, E-OFFLINE-QUEUE risk_notes).
 
 ### Next session opening
-Do not start another code thread: the four open items need the hardware window,
-real media, or a signing PFX. Until one of those exists, the highest-value work is
-hardening what is already closed — pick the next `verified-in-unit-test`
-enforcement path (10 of 13) and check whether its unit test would fail if the
-feature regressed, the same question that exposed this session's bad assertion.
+Extend the mutation table rather than widening it: add the second and third
+mutation for the paths where only one defect is covered — E-BCD's rollback path,
+E-HP-UEFI's post-set verification re-read, and E-DECRYPT's encrypt side — because
+one killed mutation per path only proves that one line is guarded.
 
 ---
 
