@@ -1124,13 +1124,14 @@ debt_items:
 
   - id: D-134
     description: >-
-      PBL's TPM NV indices are created under the platform hierarchy
-      (PcdPblTpmUsePlatformHierarchy=TRUE by default, TpmClient.c NV
-      define/read with TPM_RH_PLATFORM and PLATFORMCREATE), but stock firmware
-      randomizes platformAuth or disables the hierarchy at EndOfDxe. The
-      indices then become unreachable (NV_Read 0x9A2, NV_DefineSpace 0x18B),
-      DeviceId is never populated, and PBL silently follows the unprovisioned
-      path.
+      PBL's TPM NV indices were created under the platform hierarchy (the old
+      PcdPblTpmUsePlatformHierarchy=TRUE default, TPM_RH_PLATFORM +
+      PLATFORMCREATE), but stock firmware randomizes platformAuth or disables
+      the hierarchy at EndOfDxe. The indices then became unreachable (NV_Read
+      0x9A2, NV_DefineSpace 0x18B), DeviceId was never populated, and PBL
+      silently followed the unprovisioned path. Fixed by the session-166 ruling:
+      owner hierarchy, index-handle authorization, PCD default FALSE. The item
+      stays open only for the real-hardware confirmation.
     close_criteria: >-
       The HP machine in the D-129 window boots the owner-hierarchy build and its
       serial log shows device_id from AK Name, with a TPM2_Clear afterwards

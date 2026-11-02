@@ -10,9 +10,9 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
   [INFO] NV_Read(AK_NAME) RC=0x14A
   [INFO] AK Name not available: Not Found (device unprovisioned)
   [INFO] No device_id — device is unprovisioned (C2 §1.3)
-  [INFO] Loaded images: 93 (digest 15C40EDFEB598CC6...)
+  [INFO] Loaded images: 93 (digest 0FCFDDD3E1817A56...)
   [INFO] Boot path: flags=0x00 shell-mask=0x0000 bootnext=0xFFFF
-  [INFO] Boot-ID: reset=6 restart=0 safe=1
+  [INFO] Boot-ID: reset=8 restart=0 safe=1
 [2/8] Parsing policy blob...
   [INFO] No policy.cose on ESP: Not Found — using DEGRADED
   [WARN] Policy parse: Not Found — using DEGRADED
@@ -65,4 +65,4 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 Challenge code: 3ab80f0000000000c0670d00000000b0
 
 Enter the override response code:
-> qemu-system-x86_64: terminating on signal 15 from pid 101 (timeout)
+> qemu-system-x86_64: terminating on signal 15 from pid 129 (timeout)

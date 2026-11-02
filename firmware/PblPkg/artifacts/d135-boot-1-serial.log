@@ -10,7 +10,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
   [INFO] NV_Read(AK_NAME) RC=0x18B
   [INFO] AK Name not available: Device Error (device unprovisioned)
   [INFO] No device_id — device is unprovisioned (C2 §1.3)
-  [INFO] Loaded images: 93 (digest 15C40EDFEB598CC6...)
+  [INFO] Loaded images: 93 (digest 0FCFDDD3E1817A56...)
   [INFO] Boot path: flags=0x00 shell-mask=0x0000 bootnext=0xFFFF
   [INFO] Boot-ID: reset=1 restart=0 safe=1
 [2/8] Parsing policy blob...
@@ -51,6 +51,9 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 
                                    Device ID:
   0000000000000000000000000000000000000000000000000000000000000000
+
+                                    Reason:
+  :ﾸ
 
                  This device has been administratively locked.
                       Do not attempt to bypass this lock.

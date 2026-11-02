@@ -1358,7 +1358,11 @@
   session) showed the stored bytes were correct, which isolated the fault to the
   in-firmware decryption rather than to the data.
 - **Impact**: any parameter-encrypted response longer than 16 bytes was corrupt
-  from byte 16 on. For `PBL_LOCK_STATE_CACHE` (64 bytes) that means `DeviceId`
+  from byte 16 on — and there is exactly **one** such consumer in the firmware
+  (audited session 170): `PblTpmDecryptResponseParams` has three call sites, the
+  64-byte lock-state read plus the policy-version and epoch-counter reads, which
+  are ~10 bytes each and therefore entirely inside block 0. So the blast radius
+  is the lock-state cache only, and within it every field at offset ≥ 16. For `PBL_LOCK_STATE_CACHE` (64 bytes) that means `DeviceId`
   (offset 12) and `Epoch` (offset 48) were garbage; `Magic`, `Verdict`,
   `IssuedAt` survived because they sit in block 0. NG-T7 consequently compared a
   garbage epoch against the live counter and never detected a rollback — which is

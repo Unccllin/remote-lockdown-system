@@ -115,6 +115,26 @@ boot() { # n
   stop_tpm
 }
 
+lockstate_epoch() { # read the Epoch FIELD at offset 48 of the 64-byte lock state
+  # This is a field past byte 16, which is exactly what D-136 corrupted: AES-CFB
+  # decrypt took feedback from the output buffer, so block 0 (Magic/Verdict/
+  # IssuedAt) was right and everything after it was noise. Nothing asserted on
+  # these bytes, so a broken cache read looked healthy for several sessions.
+  local attempt hex v i
+  for attempt in 1 2 3; do
+    start_tpm tcp 2802
+    hex=$(tpm2_nvread 0x01C00001 -C o -s 64 2>/dev/null | od -An -tx1 -j48 -N8 | tr -d ' \n')
+    stop_tpm
+    if [ -n "$hex" ] && [ ${#hex} -eq 16 ]; then
+      v=0
+      for ((i = 7; i >= 0; i--)); do v=$(( (v << 8) + 16#${hex:$((i * 2)):2} )); done
+      echo "$v"; return 0
+    fi
+    sleep 1
+  done
+  echo "READ-FAILED"; return 1
+}
+
 counter() { # read LOCK_EPOCH (0x1C00004) as the owner hierarchy (OWNERREAD)
   local hex v attempt
   for attempt in 1 2 3; do
@@ -135,11 +155,15 @@ counter() { # read LOCK_EPOCH (0x1C00004) as the owner hierarchy (OWNERREAD)
 
 echo "=== boot 1 (fresh TPM: PBL provisions all four indices) ==="
 boot 1
-echo "  epoch counter after boot 1: $(counter || echo READ-FAILED)"
+C1=$(counter || echo READ-FAILED); E1=$(lockstate_epoch || echo READ-FAILED)
+echo "  epoch counter after boot 1: $C1   (lock-state Epoch field: $E1)"
+echo "boot 1 $C1 $E1" >> "$W/d135-epoch-field.txt"
 
 echo "=== boot 2 (same TPM state) ==="
 boot 2
-echo "  epoch counter after boot 2: $(counter || echo READ-FAILED)"
+C2=$(counter || echo READ-FAILED); E2=$(lockstate_epoch || echo READ-FAILED)
+echo "  epoch counter after boot 2: $C2   (lock-state Epoch field: $E2)"
+echo "boot 2 $C2 $E2" >> "$W/d135-epoch-field.txt"
 
 echo "=== simulate a rolled-back lock state: push the live counter to 4 ==="
 # PcdPblTpmNvAuthValue is the index auth (non-empty by default). It is compiled
@@ -174,6 +198,7 @@ docker run --rm -e TIMEOUT="$TIMEOUT" -e HOST_UID="$(id -u)" -e HOST_GID="$(id -
   | grep -vE "^(ERROR|WARNING)" | tail -20
 
 cp "$W"/d135-boot-*-serial.log "$OUT"/ 2>/dev/null || true
+cp "$W/d135-epoch-field.txt" "$OUT"/ 2>/dev/null || true
 
 FAILED=0
 check() { if eval "$2"; then ok "$3"; else err "$3"; FAILED=1; fi; }
@@ -186,6 +211,18 @@ check incr "[ '$INCR_FAILS' = '0' ]" "no NV_Increment failure in any boot (found
 check b1  "grep -aq 'NV indices provisioned' '$OUT/d135-boot-1-serial.log'" "boot 1 provisioned the indices"
 check b2  "grep -aq 'Lock state cached to TPM NV' '$OUT/d135-boot-2-serial.log'" "boot 2 wrote the lock state"
 check rb  "grep -aq 'lock-state epoch stale' '$OUT/d135-boot-3-serial.log'" "boot 3 detected the stale epoch (NG-T7 fired)"
+# D-136 regression: the Epoch FIELD (offset 48) must decode correctly too. Before
+# the CFB fix it was noise while the magic byte in block 0 looked perfect, so this
+# is the assertion that would have caught it.
+field() { awk -v b="$1" '$1=="boot" && $2==b {print $4}' "$OUT/d135-epoch-field.txt" 2>/dev/null; }
+check f1  "[ \"$(field 1)\" = '1' ]" "boot 1: lock-state Epoch field = 1 (a field past byte 16 decodes correctly)"
+check f2  "[ \"$(field 2)\" = '2' ]" "boot 2: lock-state Epoch field = 2 (matches the counter)"
+# The real D-136 guard: the STORED bytes were always correct (tpm2-tools reads them
+# without a session), so the field assertions above cannot see a broken decrypt.
+# What can is the firmware's own decoded value in the serial log — with the CFB bug
+# this line carried noise (18020293802152137203) instead of 1.
+check ng2 "grep -aFq 'NG-T7: cache epoch=1 live=1 (read=Success)' '$OUT/d135-boot-2-serial.log'" \
+          "boot 2: firmware DECODED the cache epoch as 1 (D-136 guard — would fail on a broken decrypt)"
 
 {
   echo "# D-135 — lock-epoch counter advances and NG-T7 detects a rolled-back state"
@@ -196,12 +233,18 @@ check rb  "grep -aq 'lock-state epoch stale' '$OUT/d135-boot-3-serial.log'" "boo
   echo "# One persistent swtpm state across three boots; the counter is read with"
   echo "# tpm2-tools between boots (the TPM is the independent witness, not the log)."
   echo
-  echo "boot  NV_Increment failures   counter after boot   notable line"
+  echo "# Counter and the lock-state Epoch FIELD (offset 48), read through the"
+  echo "# owner hierarchy:"
+  while read -r _ b c e; do
+    printf 'boot %-2s counter=%-12s lock-state Epoch field=%s\n' "$b" "$c" "$e"
+  done < "$OUT/d135-epoch-field.txt"
+  echo
+  echo "boot  NV_Increment failures   notable line"
   for n in 1 2 3; do
     f="$OUT/d135-boot-$n-serial.log"
     fails=$(grep -ac "NV_Increment(0x1c00004) RC=0x9a2" "$f" 2>/dev/null || true)
     note=$(grep -aoE "NG-T7: cache epoch=[0-9]+ live=[0-9]+ \(read=[^)]*\)|lock-state epoch stale \(cache=[0-9]+ live=[0-9]+\)|Lock state cached to TPM NV" "$f" 2>/dev/null | head -1)
-    printf '%-5s %-22s %-20s %s\n' "$n" "${fails:-0}" "$(grep -aoE 'epoch counter after boot [0-9]+: [0-9]+' /dev/null 2>/dev/null || echo -)" "$note"
+    printf '%-5s %-22s %s\n' "$n" "${fails:-0}" "$note"
   done
   echo
   echo "# Counter progression (from the harness run, read with tpm2_nvread):"
