@@ -3835,3 +3835,129 @@ construction — then a two-boot run showing the epoch advancing and NG-T7's
 rollback comparison firing on a rolled-back lock state.
 
 ---
+
+---
+
+## Session 168 — 2026-11-02 (D-135 root-caused in two layers: a 3-slot cache for 4 indices, then names that are not the TPM's)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S167 opening),
+  `scripts/check-ruling.sh` (clean → task mode),
+  `firmware/PblPkg/PblApp/TpmClient.c:425-440` (name-cache struct and size),
+  `490-520` (`PblTpmCacheNvName`), `520-600` (`PblTpmGetHandleName` fallback),
+  `1690-1760` (`PblTpmNvIncrementCounter`), `1545-1570` (NG-T7 freshness check),
+  `1370-1400` (`PblTpmProvisionNvIndices` tail), `firmware/PblPkg/PblApp/PblApp.h:56-72`
+  (index defines), `PblApp.c:480-530` (policy anti-rollback + session start),
+  `MdePkg/Include/IndustryStandard/Tpm20.h` (RC macros).
+- **Finding (the RC, decoded rather than guessed)**: `0x9A2` is not an NV error at
+  all — `tpm2_rc_decode` renders it `tpm:session(1):authorization failure without
+  DA implications`. It is an **HMAC/session** failure, which is why the NV
+  authorization matrix from S166 never explained it.
+- **Finding (layer 1 — the cache was too small)**: `mNvNameCache[3]` while
+  `PblApp.h` defines **four** indices. `PblTpmCacheNvName` claims slots in
+  definition order, so LOCK_EPOCH never got one; `PblTpmGetHandleName` then fell
+  back to the 4-byte handle name, the cpHash was computed over the wrong authName,
+  and the TPM rejected it. The overflow was silent — a `void` function with no
+  error path.
+- **Finding (layer 2 — cached names are not the TPM's names)**: with the size
+  fixed, a *cold* boot is clean but a *warm* boot still fails, because
+  `PblTpmProvisionNvIndices` re-derives every name from the define template while
+  the live indices carry `TPMA_NV_WRITTEN`. `TPMS_NV_PUBLIC` is part of the name,
+  so a name computed without `WRITTEN` can never match. Recorded with
+  `tpm2_nvreadpublic` (the TPM as witness, not the log): LOCK_STATE `0x22060004`
+  and LOCK_EPOCH `0x22060014` are written; POLICY_VERSION `0x02060014` and
+  AK_NAME `0x02060004` are not — and the warm-boot log fails exactly on AK_NAME,
+  the counter read and the increment, while POLICY_VERSION reads fine.
+
+### IMPLEMENT
+- `PblApp.h`: `PBL_NV_INDEX_COUNT 4` next to the index defines, with a comment
+  recording what the mismatch cost.
+- `TpmClient.c`: cache is `mNvNameCache[PBL_NV_INDEX_COUNT]` plus a `STATIC_ASSERT`
+  tying it to that constant, so a fifth index is a compile error rather than a
+  silent runtime failure; the cache-full path now prints
+  `[WARN] NV name cache full …` instead of returning silently.
+- New reproduction harness `firmware/PblPkg/test-d135-epoch-harness.sh` (three
+  boots on one persistent TPM state, counter read with tpm2-tools between boots),
+  committed **failing by design** with a header explaining what it reproduces.
+- `docs/adr/PBL-DEBT-LEDGER.md`: D-135 rewritten around the two layers, with the
+  `NV_ReadPublic` dump as evidence and a named fix direction.
+
+### VERIFY
+- `build-pbl.sh` clean under `-Werror` (PblApp `01c904eb…`).
+- Cold boot (fresh TPM): **no** `NV_Increment` warning —
+  `artifacts/d135-boot-1-cold-serial.log`. Before this session the warning appeared
+  on every boot including the first.
+- Warm boot (same TPM state): `NV_Read(AK_NAME) RC=0x9A2`,
+  `NV_Read(counter 0x1C00004) RC=0x9A2`, `NV_Increment(0x1C00004) RC=0x9A2` —
+  `artifacts/d135-boot-2-warm-serial.log`.
+- TPM's authoritative view: `artifacts/d135-nv-name-vs-tpm.txt`.
+- `bash -n` on the new harness and its embedded container script.
+
+### Fog cleared
+- **What `0x9A2` means**: session/HMAC authorization, not NV authorization — so
+  S166's matrix was never going to explain it, and the "PBL's command construction"
+  guess in the S167 write-up was half right (the *cpHash input* was wrong, the
+  command layout is fine).
+- **Why the epoch counter is the only visible symptom**: it is the only command
+  aimed at the fourth index. LOCK_STATE/POLICY_VERSION/AK_NAME reads happen to
+  work because they are either not written yet (template name matches) or are
+  cached before the miss.
+- **Why the failure looked harmless**: the cache-full path had no error handling,
+  so a fourth index silently authorized with a 4-byte name.
+
+### Fog remaining
+- **Layer 2's fix is not implemented**: names must come from `TPM2_NV_ReadPublic`
+  rather than being computed. That needs a new TPM command path
+  (`NV_ReadPublic`), response parsing, and a cache that stores the returned name
+  instead of attributes. Files checked: `TpmClient.c` (whole NV section),
+  `PblTpmComputeNvName`, `PblTpmNvMarkWritten`, `PBL_NV_NAME_ENTRY`.
+- **The harness's `counter()` helper returned `unknown`** in this session's run, so
+  the harness summary is not yet trustworthy; the boot logs and the
+  `tpm2_nvreadpublic` dump are. Likely cause: the TCP-control swtpm restart
+  sequence inside the harness, not the firmware.
+- Unchanged: D-134's HP confirmation, `PblTlsVerifyCert` residual (D-132), 19
+  Dependabot alerts, 10/13 enforcement paths unit-test only.
+
+### Debt items closed
+- None. D-135 moved from "unexplained warning" to "two named layers, one fixed",
+  and stays OPEN because its close criteria are not met.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134, D-135.
+
+### Blockers
+- D-135: none technical — a bounded change with a reproduction. D-134: hardware
+  window.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary). The first fix looked successful
+  because I checked boot 1 only. The harness's own three-boot design is what
+  exposed layer 2 — and the *reason* it caught it is that it asserts on a warm
+  boot, which is the case a single-boot test cannot see. Recording that here
+  because "the test passed" and "the feature works" diverged on exactly the second
+  boot.
+- **Layer 1 — task specification** (mine, again): S167's write-up said the defect
+  was "PBL's command construction (session/HMAC or handle ordering)". The real
+  cause was the *input* to the HMAC (a wrong name), which a note phrased that
+  loosely would have sent the next session looking in the wrong function.
+- **Layer 2 — context provision**: the harness's `counter()` silently produced
+  `unknown`, so for a while the only trustworthy evidence was in logs the harness
+  does not summarise. A helper that returns a sentinel instead of failing loudly is
+  the same class of bug as the cache-full path.
+
+### Session artifacts
+- New: `firmware/PblPkg/test-d135-epoch-harness.sh`,
+  `firmware/PblPkg/artifacts/d135-boot-1-cold-serial.log`,
+  `d135-boot-2-warm-serial.log`, `d135-nv-name-vs-tpm.txt`,
+  `d135-boot-{1,2,3}-serial.log`.
+- Changed: `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/PblApp/PblApp.h`,
+  `docs/adr/PBL-DEBT-LEDGER.md`.
+
+### Next session opening
+Implement D-135 layer 2: add a `TPM2_NV_ReadPublic` path and cache the name the
+TPM returns (call it lazily from `PblTpmGetHandleName` on an NV-index cache miss,
+and after each define/`ALREADY_STARTED`), then make
+`test-d135-epoch-harness.sh` pass — three boots, counter advancing 1→2→5, and
+`lock-state epoch stale (cache=2 live=4)` on the third.
+
+---

@@ -53,84 +53,85 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 167 — 2026-11-02 (D-134 ruled and fixed: NV reads work on stock firmware; the epoch counter never increments)
+## Latest session: 168 — 2026-11-02 (D-135 root-caused in two layers: a 3-slot cache for 4 indices, then names that are not the TPM's)
 
 ### VERIFY
-- `build-pbl.sh` clean under `-Werror` (PblApp `613b11bb…`; the tracked
-  `PblApp.efi` is gitignored, so the product change is source-only).
-- `test-d134-owner-hierarchy-harness.sh` exit 0, three arms all reading the AK
-  Name (`artifacts/d134-owner-hierarchy-results.txt`):
-  owner+stock (the firmware that produced `0x9A2` before), owner+PBL, and
-  **platform-provisioned+stock** — index-handle auth does not care which
-  hierarchy created the index, so units enrolled under the old scheme keep
-  working after the upgrade (`AUTHREAD` is set in both schemes).
-- `test-d134-nv-auth-matrix.sh` exit 0 (TPM rules unchanged by our firmware).
-- `bash -n` on every harness plus their embedded container scripts.
-- `make graph-check` passes; `scripts/check-ruling.sh` exits 0 (ruling closed).
-- `make check-firmware-todos` clean.
+- `build-pbl.sh` clean under `-Werror` (PblApp `01c904eb…`).
+- Cold boot (fresh TPM): **no** `NV_Increment` warning —
+  `artifacts/d135-boot-1-cold-serial.log`. Before this session the warning appeared
+  on every boot including the first.
+- Warm boot (same TPM state): `NV_Read(AK_NAME) RC=0x9A2`,
+  `NV_Read(counter 0x1C00004) RC=0x9A2`, `NV_Increment(0x1C00004) RC=0x9A2` —
+  `artifacts/d135-boot-2-warm-serial.log`.
+- TPM's authoritative view: `artifacts/d135-nv-name-vs-tpm.txt`.
+- `bash -n` on the new harness and its embedded container script.
 
 ### Fog cleared
-- **Does the ruling's fix work on firmware that manages platformAuth?** Yes — the
-  stock-OVMF arm reads the AK Name where the previous build reported `0x9A2`.
-- **Must old enrolments be re-provisioned?** No for reading: index-handle auth
-  works on platform-created indices too. New indices are created under the owner
-  hierarchy, so the state is "read both, write owner".
-- **Is Q2 code needed?** No: a missing index already reads as unprovisioned, and
-  the D-131 Q1 path (no `device_id` → refuse to fetch → denied-boot-with-local-
-  unlock) is the fail-closed behaviour the ruling chose.
+- **What `0x9A2` means**: session/HMAC authorization, not NV authorization — so
+  S166's matrix was never going to explain it, and the "PBL's command construction"
+  guess in the S167 write-up was half right (the *cpHash input* was wrong, the
+  command layout is fine).
+- **Why the epoch counter is the only visible symptom**: it is the only command
+  aimed at the fourth index. LOCK_STATE/POLICY_VERSION/AK_NAME reads happen to
+  work because they are either not written yet (template name matches) or are
+  cached before the miss.
+- **Why the failure looked harmless**: the cache-full path had no error handling,
+  so a fourth index silently authorized with a 4-byte name.
 
 ### Fog remaining
-- **D-135 (epoch counter)**: why `NV_Increment` fails from PBL but not from
-  tpm2-tools on the same index. Files checked: `TpmClient.c:1690-1760`
-  (`PblTpmNvIncrementCounter`), `180-260` (session attribute selection),
-  `PblTpmSubmitCommand`. Next step is the raw 10-byte response, which the log
-  does not print.
-- **The HP confirmation** for D-134 (D-129 window) — QEMU cannot answer what the
-  target firmware does, although the fixed build no longer depends on it for
-  reads.
-- Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, 10/13
-  enforcement paths unit-test only, no CI run observed for S151–S167.
+- **Layer 2's fix is not implemented**: names must come from `TPM2_NV_ReadPublic`
+  rather than being computed. That needs a new TPM command path
+  (`NV_ReadPublic`), response parsing, and a cache that stores the returned name
+  instead of attributes. Files checked: `TpmClient.c` (whole NV section),
+  `PblTpmComputeNvName`, `PblTpmNvMarkWritten`, `PBL_NV_NAME_ENTRY`.
+- **The harness's `counter()` helper returned `unknown`** in this session's run, so
+  the harness summary is not yet trustworthy; the boot logs and the
+  `tpm2_nvreadpublic` dump are. Likely cause: the TCP-control swtpm restart
+  sequence inside the harness, not the firmware.
+- Unchanged: D-134's HP confirmation, `PblTlsVerifyCert` residual (D-132), 19
+  Dependabot alerts, 10/13 enforcement paths unit-test only.
 
 ### Debt items closed
-- None closed. D-134's design question is resolved and verified in QEMU; the item
-  stays OPEN until the HP machine confirms it, per its close criteria.
+- None. D-135 moved from "unexplained warning" to "two named layers, one fixed",
+  and stays OPEN because its close criteria are not met.
 
 ### Debt items still open
-- D-120, D-129, D-130, D-134, **D-135 (new)**.
+- D-120, D-129, D-130, D-134, D-135.
 
 ### Blockers
-- D-134: hardware window. D-135: none — it has a reproduction and a narrowed
-  search space.
+- D-135: none technical — a bounded change with a reproduction. D-134: hardware
+  window.
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary, and it earned its keep twice): the
-  harness aborted before any boot because `tpm2_startup` returned non-zero under
-  `set -e`, and the port arithmetic put the control socket where the TCTI does not
-  look. Both produced empty output that looked like a container problem. The fix
-  in both cases was to make the harness *say* what failed rather than abort
-  silently.
-- **Layer 1 — task specification** (mine): the first close criteria for D-134
-  said "flip the PCD", which the S166 matrix then disproved. Writing the criteria
-  from the symptom instead of from the mechanism is what made them wrong.
-- **Process note**: D-135 was found only because the D-134 verification read the
-  whole `[3/8]` block instead of grepping for the line it wanted. The epoch
-  warning had been in every log for several sessions.
+- **Layer 4 — verification feedback** (primary). The first fix looked successful
+  because I checked boot 1 only. The harness's own three-boot design is what
+  exposed layer 2 — and the *reason* it caught it is that it asserts on a warm
+  boot, which is the case a single-boot test cannot see. Recording that here
+  because "the test passed" and "the feature works" diverged on exactly the second
+  boot.
+- **Layer 1 — task specification** (mine, again): S167's write-up said the defect
+  was "PBL's command construction (session/HMAC or handle ordering)". The real
+  cause was the *input* to the HMAC (a wrong name), which a note phrased that
+  loosely would have sent the next session looking in the wrong function.
+- **Layer 2 — context provision**: the harness's `counter()` silently produced
+  `unknown`, so for a while the only trustworthy evidence was in logs the harness
+  does not summarise. A helper that returns a sentinel instead of failing loudly is
+  the same class of bug as the cache-full path.
 
 ### Session artifacts
-- New: `firmware/PblPkg/test-d134-owner-hierarchy-harness.sh`,
-  `firmware/PblPkg/artifacts/d134-owner-hierarchy-results.txt`,
-  `firmware/PblPkg/artifacts/d134q-{owner-stock,owner-pbl,platform-stock}-serial.log`.
-- Changed: `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/PblPkg.dec`,
-  `scripts/provision-qemu-tpm.sh`, `firmware/PblPkg/ci-harness-docker.sh`,
-  `docs/adr/PBL-DEBT-LEDGER.md`, `.devin/graph/GRAPH-SPEC.yaml`,
-  `.devin/PENDING-RULING.md`, `test-d130-tpm-hierarchy-harness.sh`,
-  `test-d134-nv-auth-matrix.sh` (harness robustness).
+- New: `firmware/PblPkg/test-d135-epoch-harness.sh`,
+  `firmware/PblPkg/artifacts/d135-boot-1-cold-serial.log`,
+  `d135-boot-2-warm-serial.log`, `d135-nv-name-vs-tpm.txt`,
+  `d135-boot-{1,2,3}-serial.log`.
+- Changed: `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/PblApp/PblApp.h`,
+  `docs/adr/PBL-DEBT-LEDGER.md`.
 
 ### Next session opening
-Take D-135: print the raw 10-byte response for `NV_Increment(0x1C00004)` (or dump
-PBL's command bytes next to the tpm2-tools one that works) and fix the command
-construction — then a two-boot run showing the epoch advancing and NG-T7's
-rollback comparison firing on a rolled-back lock state.
+Implement D-135 layer 2: add a `TPM2_NV_ReadPublic` path and cache the name the
+TPM returns (call it lazily from `PblTpmGetHandleName` on an NV-index cache miss,
+and after each define/`ALREADY_STARTED`), then make
+`test-d135-epoch-harness.sh` pass — three boots, counter advancing 1→2→5, and
+`lock-state epoch stale (cache=2 live=4)` on the third.
 
 ---
 
