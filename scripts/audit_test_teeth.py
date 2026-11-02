@@ -32,7 +32,6 @@ that could discard unrelated work.
 from __future__ import annotations
 
 import argparse
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -143,6 +142,34 @@ MUTATIONS: list[dict] = [
         "new": '    return True  # MUTATION: claim every setting verified\n    current = _read_setting(name)\n    if current is None:\n        log.warning("Could not verify BIOS setting \'%s\' (read failed)", name)',
         "why": "post-set verification (Phase 4.5 / D-013) never reads the value back",
     },
+    # --- server (jest): the class where a toothless test costs the most ------
+    {
+        "path": "server/auth",
+        "label": "SVC/requireAuth",
+        "runner": "jest",
+        "file": "server/src/middleware/auth.js",
+        "old": "    req.admin = jwt.verify(token, process.env.JWT_SECRET, { algorithms: JWT_ALGORITHMS });",
+        "new": "    req.admin = { role: 'super-admin', username: 'forged' };  // MUTATION",
+        "why": "requireAuth accepts a forged token and grants super-admin",
+    },
+    {
+        "path": "server/auth",
+        "label": "SVC/requireRole",
+        "runner": "jest",
+        "file": "server/src/middleware/auth.js",
+        "old": "    if (userLevel < requiredLevel) {",
+        "new": "    if (false) {  // MUTATION: ignore the role hierarchy",
+        "why": "requireRole lets a viewer reach operator/super-admin endpoints",
+    },
+    {
+        "path": "server/hmac",
+        "label": "SVC/hmacAuth",
+        "runner": "jest",
+        "file": "server/src/middleware/hmacAuth.js",
+        "old": "  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {",
+        "new": "  if (false) {  // MUTATION: accept any signature",
+        "why": "HMAC verification accepts a wrong signature",
+    },
 ]
 
 
@@ -159,46 +186,97 @@ def repo_path(rel: str) -> Path:
     return target
 
 
-def run_suite(suite: str = "tests/") -> tuple[bool | None, str]:
-    """Run the suite. Returns (passed, summary); None means the run was invalid.
+NODE = Path("/home/cllin/.local/node/bin/node")
+
+
+def _jest_failures(lines: list[str]) -> set[str]:
+    """Failing case names, as `describe › test`."""
+    return {
+        ln.strip().lstrip("● ").strip()
+        for ln in lines
+        if ln.strip().startswith("●") and "›" in ln
+    }
+
+
+def _pytest_failures(lines: list[str]) -> set[str]:
+    """Failing case ids, as pytest prints them under `-q`."""
+    out = set()
+    for ln in lines:
+        if ln.startswith("FAILED ") or ln.startswith("ERROR "):
+            out.add(ln.split(" - ")[0].strip())
+    return out
+
+
+def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
+    """Run a component suite. Returns (passed, summary); None means invalid.
 
     Two traps this guards against, both found the hard way in session 171:
       * `scripts/run-agent-tests.sh` does `cd agent` and always passes `tests/`,
         so a repo-relative path never resolves — the first version of this audit
         reported ten "KILLED" that were all collection errors;
-      * pytest exits non-zero when it cannot find a file, so "the command failed"
-        is not evidence that a test failed. A run only counts when the summary
-        line shows tests were actually executed.
+      * a non-zero exit for a *collection* failure is indistinguishable from a
+        failing test, so "the command failed" is not evidence that a test failed
+        (and with `-x` there is no summary line to inspect either).
+
+    Validity therefore comes from the exit code — 0 passed, 1 failed — with text
+    markers only for the ways a runner says "I ran nothing".
     """
+    if runner == "jest":
+        node = str(NODE) if NODE.exists() else "node"
+        # Same flags as server/package.json's test script. Without
+        # --experimental-vm-modules the suite crashes partway through
+        # (ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG from pglite), which looks
+        # exactly like "tests failed" — session 173 nearly reported three security
+        # mutations as caught on the strength of a crash.
+        proc = subprocess.run(
+            [node, "--experimental-vm-modules", "node_modules/jest/bin/jest.js",
+             "--forceExit", "--silent"],
+            cwd=REPO / "server", capture_output=True, text=True, timeout=900,
+        )
+        out = proc.stdout + proc.stderr
+        lines = [ln for ln in out.strip().splitlines() if ln.strip()]
+        summary = lines[-1][:90] if lines else "(no output)"
+        # Jest always prints its own tallies. Without them the run did not finish,
+        # whatever the exit code says.
+        finished = any(ln.startswith("Tests:") or ln.startswith("Test Suites:") for ln in lines)
+        crashed = "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG" in out or "Node.js v" in out
+        if not finished or crashed:
+            return None, summary, set()
+        if any(m in out for m in ("No tests found", "Cannot find module")):
+            return None, summary, set()
+        if proc.returncode in (0, 1):
+            return proc.returncode == 0, summary, _jest_failures(lines)
+        return None, summary, set()
+
     agent_dir = REPO / "agent"
     venv_py = agent_dir / ".venv" / "bin" / "python"
     py = str(venv_py) if venv_py.exists() else "python3"
     proc = subprocess.run(
-        [py, "-m", "pytest", suite, "-x", "-q"],
+        [py, "-m", "pytest", "tests/", "-x", "-q"],
         cwd=agent_dir, capture_output=True, text=True, timeout=900,
     )
     out = proc.stdout + proc.stderr
     lines = [ln for ln in out.strip().splitlines() if ln.strip()]
     summary = lines[-1][:90] if lines else "(no output)"
 
-    # Use pytest's exit code, not the summary text: with `-x` a genuine failure
-    # prints "stopping after 1 failures" and no "N failed" line, so text matching
-    # read a caught mutation as an invalid run (session 171, twice).
     #   0 passed | 1 tests failed | 2 interrupted | 3 internal | 4 usage | 5 none collected
     if "file or directory not found" in out or "errors during collection" in out:
-        return None, summary
+        return None, summary, set()
     if proc.returncode in (0, 1):
-        return proc.returncode == 0, summary
-    return None, summary
+        return proc.returncode == 0, summary, _pytest_failures(lines)
+    return None, summary, set()
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--path", help="only this enforcement path")
     ap.add_argument("--list", action="store_true", help="print the mutation table and exit")
+    ap.add_argument("--label", help="only rows whose label contains this")
     args = ap.parse_args()
 
     table = [m for m in MUTATIONS if not args.path or m["path"] == args.path]
+    if args.label:
+        table = [m for m in table if args.label in m.get("label", m["path"])]
     if not table:
         print(f"no mutation for {args.path!r}", file=sys.stderr)
         return 2
@@ -207,6 +285,25 @@ def main() -> int:
         for m in table:
             print(f"{m.get('label', m['path']):22} {m['file']:28} {m['why']}")
         return 0
+
+    # A mutation verdict is only meaningful against a green baseline, and only for
+    # failures the mutation NEWLY causes. Session 173 learned both the hard way: a
+    # crashed run and an intermittently flaky admins test each looked like a kill.
+    baseline: dict[str, set[str]] = {}
+    for runner in {m.get("runner", "pytest") for m in table}:
+        passed, summary, failures = run_suite(runner)
+        if passed is None:
+            print(f"BASELINE for {runner} could not run ({summary}) — aborting",
+                  file=sys.stderr)
+            return 1
+        if not passed:
+            print(f"BASELINE for {runner} is RED ({summary}) — a mutation verdict "
+                  f"would be meaningless. Fix the suite first.", file=sys.stderr)
+            for f in sorted(failures)[:5]:
+                print(f"  {f}", file=sys.stderr)
+            return 1
+        baseline[runner] = failures
+        print(f"baseline {runner}: green ({summary})")
 
     survivors = []
     invalid = []
@@ -219,18 +316,21 @@ def main() -> int:
             continue
         try:
             target.write_text(original.replace(m["old"], m["new"], 1))
-            passed, summary = run_suite()
+            runner = m.get("runner", "pytest")
+            passed, summary, failures = run_suite(runner)
         finally:
             target.write_text(original)
 
+        new_failures = (failures - baseline.get(runner, set())) if failures else set()
         if passed is None:
             invalid.append(m)
             verdict = "INVALID"
-        elif passed:
+        elif passed or not new_failures:
             survivors.append(m)
             verdict = "SURVIVED"
         else:
             verdict = "KILLED"
+            summary = "caught by: " + sorted(new_failures)[0][:70]
         print(f"{m.get('label', m['path']):22} {verdict:9} {summary}")
 
     print()
