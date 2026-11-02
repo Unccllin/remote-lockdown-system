@@ -428,7 +428,16 @@ typedef struct {
   BOOLEAN  Valid;
 } PBL_NV_NAME_ENTRY;
 
-STATIC PBL_NV_NAME_ENTRY mNvNameCache[3] = { 0 };
+STATIC PBL_NV_NAME_ENTRY mNvNameCache[PBL_NV_INDEX_COUNT] = { 0 };
+
+// D-135: the cache must hold one entry per NV index. It was hard-coded at 3 while
+// four indices existed, so LOCK_EPOCH silently missed out and NV_Increment failed
+// every boot. This assertion makes adding a fifth index a compile error rather
+// than a runtime warning about a counter that quietly stopped counting.
+STATIC_ASSERT (
+  ARRAY_SIZE (mNvNameCache) == PBL_NV_INDEX_COUNT,
+  "mNvNameCache must have one slot per PBL NV index"
+  );
 
 /** D-206: Compute the TPM NAME for an NV index.
 
@@ -512,6 +521,16 @@ PblTpmCacheNvName (
       return;
     }
   }
+
+  // D-135: falling off the end used to be silent, and the consequence is not
+  // local — the index then authorizes with a 4-byte handle name, so every
+  // command against it fails HMAC verification with 0x9A2. Say so loudly.
+  Print (
+    L"  [WARN] NV name cache full (%d slots) — index 0x%x will authorize with a "
+    L"handle name and its commands will fail HMAC (D-135)\n",
+    (UINT32)ARRAY_SIZE (mNvNameCache),
+    NvIndex
+    );
 }
 
 /** D-206: Mark an NV index written (sets TPMA_NV_WRITTEN in cached attributes).

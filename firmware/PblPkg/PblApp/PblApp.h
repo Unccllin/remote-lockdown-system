@@ -63,6 +63,14 @@
 // stale state) and must not be trusted.
 #define PBL_NV_LOCK_EPOCH      (FixedPcdGet32(PcdNvIndexBase) + 0x04)  // 0x01C00004
 
+// D-135: every index above needs a slot in TpmClient.c's NV name cache, because
+// the HMAC session authorizes with the index NAME (34 bytes), not its handle.
+// The cache was sized 3 while four indices existed, so LOCK_EPOCH was never
+// cached: PblTpmGetHandleName() fell back to the 4-byte handle name, the cpHash
+// came out wrong, and NV_Increment failed with 0x9A2 (session authorization
+// failure) on every boot. Keep this count and the cache size in step.
+#define PBL_NV_INDEX_COUNT     4
+
 // C2 §1.1: Lock state cache structure (64 bytes)
 #define PBL_LOCK_STATE_SIZE    64
 #define PBL_LOCK_STATE_MAGIC   0x50  // 'P'

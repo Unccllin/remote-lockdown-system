@@ -1165,6 +1165,15 @@ debt_items:
       rolled-back lock state.
     status: OPEN
     category: SECURITY
+    artifact_ref: >-
+      firmware/PblPkg/artifacts/d135-nv-name-vs-tpm.txt - tpm2_nvreadpublic
+      shows LOCK_STATE 0x22060004 and LOCK_EPOCH 0x22060014 carry
+      TPMA_NV_WRITTEN while POLICY_VERSION 0x02060014 and AK_NAME 0x02060004 do
+      not, so names derived from the define template cannot match the live
+      indices;
+      d135-boot-1-cold-serial.log (clean after the cache-size fix) versus
+      d135-boot-2-warm-serial.log (NV_Read AK_NAME / counter / NV_Increment all
+      RC=0x9A2, which tpm2_rc_decode renders session(1) authorization failure)
 
   - id: D-201
     description: "PBL policy endpoint (GET /v1/policy/{version}) not \

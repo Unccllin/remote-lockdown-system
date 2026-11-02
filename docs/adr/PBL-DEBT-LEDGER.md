@@ -1267,10 +1267,46 @@
   ordering), not in policy.
 - **Why it matters**: silently degrading a rollback-detection feature is worse than
   not having it — the log reads like a warning on an otherwise healthy boot.
-- **Next step**: capture the exact 10-byte response for the increment (the log only
-  prints the mapped RC) and diff PBL's command bytes against the tpm2-tools one
-  that works; `PblTpmSubmitCommand` is the only layer between them.
-- **Blocker**: none — this is a code defect with a reproduction.
+- **Root cause found (session 168, in two layers)**:
+  1. **The name cache was too small.** `mNvNameCache[3]` while PBL defines **four**
+     indices (LOCK_STATE, POLICY_VERSION, AK_NAME, LOCK_EPOCH), and
+     `PblTpmCacheNvName` claimed slots in definition order — so LOCK_EPOCH never
+     got one. `PblTpmGetHandleName` then fell back to the 4-byte handle as the
+     entity name, the cpHash came out wrong, and the TPM answered `0x9A2` =
+     *session(1): authorization failure without DA implications*. The overflow was
+     silent: a `void` function with no error path. **Fixed** — the cache is now
+     `PBL_NV_INDEX_COUNT` entries with a `STATIC_ASSERT`, and the full-cache path
+     prints a warning instead of failing quietly. Cold boot now increments with no
+     warning (`artifacts/d135-boot-1-cold-serial.log`).
+  2. **Cached names are not the TPM's names on a warm boot.** With the size fixed,
+     boot 1 is clean but boots 2+ fail again, because `PblTpmProvisionNvIndices`
+     re-derives every name from the *define template* while the live indices have
+     `TPMA_NV_WRITTEN` set. The TPM's own names
+     (`artifacts/d135-nv-name-vs-tpm.txt`, recorded with `tpm2_nvreadpublic`) show
+     it plainly:
+     - `0x1C00001` LOCK_STATE: `0x22060004` (**written**)
+     - `0x1C00002` POLICY_VERSION: `0x02060014` (not written)
+     - `0x1C00003` AK_NAME: `0x02060004` (not written)
+     - `0x1C00004` LOCK_EPOCH: `0x22060014` (**written**)
+
+     `TPMS_NV_PUBLIC` is part of the name, so a name computed without `WRITTEN`
+     can never match once the index has been written. Warm boot therefore logs
+     `NV_Read(AK_NAME) RC=0x9A2`, `NV_Read(counter 0x1C00004) RC=0x9A2` and
+     `NV_Increment RC=0x9A2`, while `POLICY_VERSION` (never written) reads fine —
+     see `artifacts/d135-boot-2-warm-serial.log`.
+- **Fix direction for the remaining layer**: stop deriving names locally. Ask the
+  TPM with `TPM2_NV_ReadPublic` and cache the returned name verbatim; the command
+  needs no authorization, and the TPM is the only authority on an index name.
+  Call it lazily from `PblTpmGetHandleName` on a cache miss, and after each
+  `NV_DefineSpace` / `ALREADY_STARTED` in `PblTpmProvisionNvIndices`.
+- **Status of the artefact**: `firmware/PblPkg/test-d135-epoch-harness.sh` is the
+  reproduction (three boots on one TPM state, counter read between boots). It
+  currently **fails by design** — it asserts the close criteria, and the warm-boot
+  layer above is what still breaks them. Its `counter()` helper also needs repair
+  (it reported `unknown` in the session-168 run, so the harness run itself is not
+  yet a trustworthy artifact; the two boot logs and the `NV_ReadPublic` dump are).
+- **Blocker**: none — the remaining work is a bounded change with a reproduction
+  and a named mechanism.
 
 ---
 

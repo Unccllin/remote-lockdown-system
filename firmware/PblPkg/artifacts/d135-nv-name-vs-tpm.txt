@@ -1,0 +1,5 @@
+=== NV public info after boot 2 (TPM is the witness) ===
+0x01C00001: 0x1c00001:   name: 000b9077b0d7bbacc119f8db927656ab0a6a85fcb600c738cb3c46ff03cdbf8f1cc0   hash algorithm:     friendly: sha256     value: 0xB   attributes:     friendly: authwrite|ownerread|authread|no_da|written     value: 0x22060004   size: 64  
+0x01C00002: 0x1c00002:   name: 000b73a4070b0592a0ad8d43a767c6d8a2fe256f6c1b20934bafd159756d644c858a   hash algorithm:     friendly: sha256     value: 0xB   attributes:     friendly: authwrite|nt=0x1|ownerread|authread|no_da     value: 0x2060014   size: 8  
+0x01C00003: 0x1c00003:   name: 000b543044c30d3d409e94b2ef43e91076af99f44d8b43d1e386356c6ba378b09905   hash algorithm:     friendly: sha256     value: 0xB   attributes:     friendly: authwrite|ownerread|authread|no_da     value: 0x2060004   size: 34  
+0x01C00004: 0x1c00004:   name: 000badacee577f8845d706c15d622e32b0bb5713f8f02df8d75223dc3964b7401f95   hash algorithm:     friendly: sha256     value: 0xB   attributes:     friendly: authwrite|nt=0x1|ownerread|authread|no_da|written     value: 0x22060014   size: 8  
