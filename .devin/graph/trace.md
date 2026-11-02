@@ -4524,3 +4524,123 @@ timestamp/replay window so an old signature is accepted. Both are logic-heavy, b
 were impossible to audit until this session's scoring was fixed.
 
 ---
+
+---
+
+## Session 174 — 2026-11-02 (deploy finalised for the Docker stack: the container path was never executed, and now is)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S173 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `docker-compose.prod.yml` (postgres/server/caddy/backup/
+  prometheus/grafana), `Dockerfile.server`, `scripts/validate-docker.sh`
+  (`check_live`), `scripts/verify-environment.sh` (docker-live expectation),
+  `server/src/index.js` (route mounting + static dashboard), `server/src/routes/`
+  (`setup.js` first-admin guard, `agent.js` `x-agent-key`, `auth.js` login),
+  `tests/e2e/setup.js` (in-process SQLite bootstrap), `server/src/middleware/
+  hmacAuth.js` (transition regime), `.env.prod`, `serverless/wrangler.toml`,
+  `electron/package.json`.
+- **Finding (the deploy path had never been executed)**: `tests/e2e/` boots Express
+  **in-process on SQLite via supertest**, and `validate-docker.sh` checks files
+  *structurally*. Nothing anywhere ran the shipped image against PostgreSQL 16,
+  served the built dashboard from the container, or drove the agent ingress through
+  the container. "Tests pass" and "the deployment works" were separate claims and
+  only the first had evidence.
+- **Finding (`make full-verify` was red, for a host reason)**: exactly one check
+  failed — `docker-live` — with the message `docker compose up failed` and no
+  cause, because `check_live` discarded compose output (`>/dev/null 2>&1`).
+  Reproducing by hand showed the real error: `failed to bind host port 0.0.0.0:443`
+  — **Tailscale listens on :443 on this host**. Since `up` starts the stack
+  atomically, Caddy's bind failure took postgres and the server down with it.
+- **Finding (two of my own smoke assumptions were wrong, not the deployment)**:
+  1. `POST /api/setup/create-admin` returns `{"success":true}` and **no token** —
+     it is a bootstrap endpoint, not a login. The smoke now signs in through
+     `POST /api/auth/login`, which also proves `JWT_SECRET` reached the container.
+  2. The device key travels in the **`x-agent-key` header**, not the body
+     (`routes/agent.js:34`). HMAC headers are optional because `REQUIRE_HMAC` is
+     unset — the transition regime this deployment ships in.
+
+### IMPLEMENT
+- **`scripts/verify-docker-stack.sh`** (new): builds the production image, starts
+  `postgres` + `server` under its own compose project (`pbl-verify`) with a
+  loopback-only port override, waits for the DB-backed readiness probe, then drives
+  the public API. Caddy is deliberately excluded — it cannot obtain a certificate
+  for a placeholder domain and it is the one component that needs a real host.
+  Ten checks: health; `/api/health/ready`; 401 without a token; dashboard served as
+  `text/html` from the image; first-admin creation; login → JWT; authenticated
+  device list; device enrolment → agent key; agent check-in **with** the key → 200
+  and **with a bogus key** → 401; second `create-admin` → 403.
+- **`scripts/validate-docker.sh`**: `check_live` now delegates to that script and
+  prints the log tail on failure instead of hiding it, with the port-conflict
+  reason documented in place. The old whole-stack path remains as a fallback, also
+  no longer silent.
+- **`Makefile`**: `make verify-deploy` (delegates, per the repo's no-duplicate-logic
+  rule).
+- **`docs/DEPLOYMENT.md`**: "Verify the stack locally before you deploy it" (what
+  the script proves and why the E2E suite is not that), plus the `:443`
+  port-conflict diagnosis with two concrete remedies (free the port, or move Caddy
+  to 8080/8443 via an override).
+
+### VERIFY
+- `./scripts/verify-docker-stack.sh` → **PASSED, ten checks green**, against the
+  production image and real PostgreSQL 16, torn down cleanly afterwards.
+- `make verify-env` → **63 PASS / 0 FAIL / 2 SKIP**, including
+  `docker-live — live validation passed` via the delegating check. The 2 skips are
+  the documented `installer-windows-execpolicy` by-design skip.
+- `make check-artifacts` → all artifacts present and non-empty (dashboard dist,
+  agent binaries, electron output). This gate had never been reached before,
+  because `full-verify` stops at the first failure and `verify-env` was failing.
+- Everything else in `make full-verify` had already passed in this session: graph
+  invariants, lint, all five component suites, API E2E, and artifact checks. The
+  only red was `docker-live`.
+
+### Fog cleared
+- **Whether the production stack runs**: yes — image builds, migrations apply on
+  PostgreSQL 16, the dashboard is served same-origin from the container, JWT auth
+  works, enrolment writes commit, and the agent ingress verifies device keys and
+  rejects bogus ones.
+- **Why the env gate was red**: a local port conflict, not a defect. Fixed by
+  testing the stack the way it can be tested locally, and by never discarding the
+  error again.
+
+### Fog remaining
+- **Caddy/TLS is unverified locally** and cannot be: it needs a real domain and a
+  reachable ACME endpoint. That is the one component the local gate cannot cover.
+- **Deployment blockers that are credentials or hardware, not code**: no Cloudflare
+  credentials (Worker deploy), no Windows/macOS signing certificates (Electron and
+  agent releases), and the four resource-blocked debt items (D-120 real BitLocker
+  media, D-129/D-134 HP hardware, D-130 signing PFX).
+- Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, no CI run
+  observed for S151–S174.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker), real domain (Caddy TLS).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary). The deployment gate existed but
+  could not tell "the stack is broken" from "Caddy could not bind a port", because
+  it threw the evidence away. That is the same class as sessions 171–173: the
+  harness, not the code, was the thing under test.
+- **Layer 2 — context provision** (mine): I wrote two smoke assertions from
+  assumption rather than from the route contracts (token from create-admin, key in
+  the body). Both failed, both were my error, and both cost a full stack restart.
+  Reading `routes/setup.js` and `routes/agent.js` first would have removed them —
+  which is exactly what RULE-ZERO says to do before writing the check.
+
+### Session artifacts
+- New: `scripts/verify-docker-stack.sh`.
+- Changed: `scripts/validate-docker.sh`, `Makefile`, `docs/DEPLOYMENT.md`.
+
+### Next session opening
+Nothing in the Docker path is left to verify locally. The next deployable surface
+is the Cloudflare Worker: it has a KV binding but no credentials on this host, so
+write a `wrangler deploy --dry-run` + `wrangler dev` smoke that proves the built
+worker bundles and serves the PBL routes, leaving only the real publish for you.
+
+---
