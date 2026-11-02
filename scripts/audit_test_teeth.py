@@ -170,6 +170,25 @@ MUTATIONS: list[dict] = [
         "new": "  if (false) {  // MUTATION: accept any signature",
         "why": "HMAC verification accepts a wrong signature",
     },
+    # --- serverless Worker (vitest): the product's worst failure --------------
+    {
+        "path": "worker/verdict",
+        "label": "WRK/verdict-locked",
+        "runner": "vitest",
+        "file": "serverless/pbl/routes/verdict.ts",
+        "old": "    case 'locked':\n      return { verdict: VERDICT_LOCKED, reason: 'admin_lock' };",
+        "new": "    case 'locked':\n      return { verdict: VERDICT_UNLOCKED, reason: 'admin_lock' };  // MUTATION",
+        "why": "a LOCKED device is handed an UNLOCKED verdict — it boots",
+    },
+    {
+        "path": "worker/release",
+        "label": "WRK/release-guard",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  if (['locked', 'stolen', 'recovering'].includes(device.status)) {",
+        "new": "  if (false) {  // MUTATION: allow releasing a locked/stolen device",
+        "why": "an admin release unlocks a device that is locked or stolen",
+    },
 ]
 
 
@@ -198,11 +217,23 @@ def _jest_failures(lines: list[str]) -> set[str]:
     }
 
 
+def _vitest_failures(lines: list[str]) -> set[str]:
+    """Failing case names, as vitest prints them (`FAIL  file > describe > test`)."""
+    out = set()
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("FAIL "):
+            out.add(s[5:].strip())
+        elif s.startswith(("×", "✗")):
+            out.add(s.lstrip("×✗ ").strip())
+    return out
+
+
 def _pytest_failures(lines: list[str]) -> set[str]:
     """Failing case ids, as pytest prints them under `-q`."""
     out = set()
     for ln in lines:
-        if ln.startswith("FAILED ") or ln.startswith("ERROR "):
+        if ln.startswith(("FAILED ", "ERROR ")):
             out.add(ln.split(" - ")[0].strip())
     return out
 
@@ -221,6 +252,24 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
     Validity therefore comes from the exit code — 0 passed, 1 failed — with text
     markers only for the ways a runner says "I ran nothing".
     """
+    if runner == "vitest":
+        node = str(NODE) if NODE.exists() else "node"
+        proc = subprocess.run(
+            [node, "node_modules/vitest/vitest.mjs", "run"],
+            cwd=REPO / "serverless", capture_output=True, text=True, timeout=900,
+        )
+        out = proc.stdout + proc.stderr
+        lines = [ln for ln in out.strip().splitlines() if ln.strip()]
+        summary = lines[-1][:90] if lines else "(no output)"
+        # vitest prints a "Tests  N passed" tally; without it the run did not
+        # finish (same validity rule as jest).
+        finished = any(ln.strip().startswith("Tests") for ln in lines)
+        if not finished or "Error: Cannot find module" in out:
+            return None, summary, set()
+        if proc.returncode in (0, 1):
+            return proc.returncode == 0, summary, _vitest_failures(lines)
+        return None, summary, set()
+
     if runner == "jest":
         node = str(NODE) if NODE.exists() else "node"
         # Same flags as server/package.json's test script. Without
@@ -238,7 +287,7 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
         summary = lines[-1][:90] if lines else "(no output)"
         # Jest always prints its own tallies. Without them the run did not finish,
         # whatever the exit code says.
-        finished = any(ln.startswith("Tests:") or ln.startswith("Test Suites:") for ln in lines)
+        finished = any(ln.startswith(("Tests:", "Test Suites:")) for ln in lines)
         crashed = "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG" in out or "Node.js v" in out
         if not finished or crashed:
             return None, summary, set()
