@@ -53,41 +53,38 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 177 — 2026-11-02 (two real gaps found: command ACK ownership and duress were both untested)
+## Latest session: 178 — 2026-11-02 (the command lifecycle had no integrity assertions: escrow ownership, terminal status, command_uuid)
 
 ### VERIFY
-- `worker.test.ts`: **337 passed** (334 before + 3), 2 files green.
-- Coverage gate (the one CI uses): 83.93 stmts / 77.91 branch / 88 funcs /
-  85.59 lines — above the 82 / 75 / 86 / 82 floors.
-- Re-running the two survivors after adding the tests:
-  `WRK/duress` → **KILLED**, caught by `marks a duress recovery on the queued
-  unlock command`; `WRK/ack-ownership` → **KILLED**, caught by `a device cannot
-  ACK another device's command`.
-- Table now holds 21 mutations across three components (agent 13, server 3,
-  worker 5).
+- `worker.test.ts`: **340 passed** (337 before + 3).
+- Coverage: 84.09 stmts / 78.12 branch / 88 funcs / 85.77 lines — above the
+  82/75/86/82 floors.
+- Re-running the three mutations after the tests: **all KILLED**, each naming the
+  new test that caught it.
+- Table now holds **24 mutations** across three components (agent 13, server 3,
+  worker 8).
 
 ### Fog cleared
-- **Whether a device can forge another device's command state**: it could not, and
-  now that is asserted rather than assumed.
-- **Whether a duress recovery stays fake**: yes, and the assertion now names the
-  flag that makes it fake.
-- **Why `handleCommandAck`'s ownership check looked safe**: the equivalent check in
-  `handleEscrowKey` (line 1177) and the presence of `enrollDevice` in every test
-  made it *look* covered. Only removing the line showed nothing tested it.
+- **Whether a device can escrow against another device's command**: it could not,
+  and now that is asserted with a positive control (the owner still can).
+- **Whether command status is terminal once executed**: yes, and the assertion
+  checks both the response contract and the stored value.
+- **Whether the retry-idempotency key is persisted**: yes.
 
 ### Fog remaining
-- **`handleEscrowKey`'s ownership check (line 1177) is still unmutated** — same
-  shape as the one just fixed, so it deserves its own row before it is trusted.
-- **Command lifecycle beyond ACK ownership** — delivery marking, duplicate ACKs,
-  the `executed`-is-terminal guard, `command_uuid` idempotency — none mutated.
-- **Dashboard, electron, and the remaining Worker handlers** are unaudited for
-  teeth (the tool supports pytest/jest/vitest; the dashboard needs a fourth runner).
+- **Command delivery marking** (does a check-in consume the command, can it be
+  re-delivered?) and **duplicate `command_uuid` suppression on the agent side** are
+  still unmutated — the uuid is now stored, but nothing proves two ACKs with the
+  same uuid are treated as one.
+- **Uninstall-auth, location, deadman-report, rearm, track** handlers: no
+  mutations yet.
+- **Dashboard/electron**: unaudited (needs a fourth runner).
 - Unchanged: Docker path verified except Caddy TLS; Worker publish needs
   `wrangler login` + 4 secrets; D-120/D-129/D-130/D-134 resource-blocked;
   `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
 
 ### Debt items closed
-- None — both findings were missing tests, not product defects.
+- None — again, missing tests rather than product defects.
 
 ### Debt items still open
 - D-120, D-129, D-130, D-134 — all resource-blocked.
@@ -97,28 +94,27 @@
   credentials (Worker publish), real domain (Caddy TLS).
 
 ### Failure attribution
-- **Layer 2 — context provision** (mine): my first two duress tests failed with
-  `expected 'lockdown' to be 'unlock'` because I flagged the device, recovered, and
-  checked in — but the check-in hands out the **oldest** pending command, so the
-  lockdown queued by `flag-stolen` came first. The existing recover test (which I
-  had read) acknowledges it before recovering; I read the file but did not follow
-  its sequence. Two failing assertions, both mine, both fixed by mirroring the
-  established flow.
-- **Layer 4 — verification feedback** (working): the mutation audit is what turned
-  "the suite is green" into "two behaviours are untested". Neither gap was findable
-  by reading coverage — both lines were *executed* by the existing tests, just never
-  asserted.
+- **Layer 4 — verification feedback would have caught it, and did**: while
+  cleaning the unused declarations I replaced the *first* `checkin2Data`
+  occurrence with `str.replace(..., 1)`, which was the one the recover test
+  actually uses, and broke a pre-existing test. Running the suite is what found
+  it; the fix was to target by line and assert the expected text at each site.
+  The lesson is small and old: a blind first-occurrence replace is a guess about
+  which occurrence you mean.
+- **Pre-existing lint, deliberately not "fixed"**: the same run flagged
+  `Access-Control-Allow-Origin: '*'` assertions across the Worker tests. Those
+  assert real product behaviour for a bearer-token API, and changing CORS
+  semantics is a design decision — not something to slip in while adding tests.
 
 ### Session artifacts
-- Changed: `serverless/worker.test.ts` (3 tests),
-  `scripts/audit_test_teeth.py` (3 Worker rows).
+- Changed: `serverless/worker.test.ts` (3 tests + 3 declaration cleanups),
+  `scripts/audit_test_teeth.py` (3 rows).
 
 ### Next session opening
-Mutate `handleEscrowKey`'s ownership check (worker.ts:1177) — it is the same shape
-as the ACK check that had no test, and a device reading another device's escrowed
-key would be worse. Then the command lifecycle: the `executed`-is-terminal guard
-and `command_uuid` idempotency, which are the states a compromised agent would
-replay.
+Test the lifecycle where the replay risk actually lives: two ACKs carrying the
+same `command_uuid` must be treated as one (the uuid is stored now, nothing proves
+it suppresses a duplicate), and a check-in must consume the command it hands out so
+a second check-in cannot re-deliver an executed lockdown.
 
 ---
 

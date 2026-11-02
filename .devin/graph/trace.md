@@ -4953,3 +4953,102 @@ and `command_uuid` idempotency, which are the states a compromised agent would
 replay.
 
 ---
+
+---
+
+## Session 178 — 2026-11-02 (the command lifecycle had no integrity assertions: escrow ownership, terminal status, command_uuid)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S177 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `serverless/worker.ts` — `handleEscrowKey` (1158-1200,
+  ownership check at 1177, idempotency via `(device_id, command_id)`),
+  `handleCommandAck` (1034-1090, terminal guard at 1068, `command_uuid` write at
+  1074), `COMMANDS_KEY`/`KEYS_KEY` (469-470), `listCommands`/`saveCommands`
+  (533-540) — and the escrow describe block in `serverless/worker.test.ts`.
+- **Finding (three survivors in one area — the command lifecycle)**:
+  - `WRK/escrow-ownership` **SURVIVED**: deleting `&& c.device_id === device.id`
+    from `handleEscrowKey` leaves the suite green, so nothing asserted that a
+    command id is bound to its owning device.
+  - `WRK/ack-terminal` **SURVIVED**: removing the `status === 'executed'`
+    dedup early-return lets an already-executed command be flipped to `failed` —
+    i.e. a replay or a compromised agent can rewrite command history. The suite
+    never mentioned `deduplicated`.
+  - `WRK/ack-uuid` **SURVIVED**: dropping the `command_uuid` write leaves nothing
+    asserting that the retry-idempotency key is stored.
+  All three were predicted before the run, which is what makes the result
+  interpretable rather than post-hoc.
+
+### IMPLEMENT
+- `serverless/worker.test.ts`, three tests using the file-local helpers:
+  1. `a device cannot escrow a key against another device's command` — owner
+     escrows its own command → 200; another enrolled device posts the same
+     `command_id` → **404**;
+  2. `an executed command cannot be rewritten by a later ACK` — second ACK must
+     return `deduplicated: true` **and** the stored status must still be
+     `executed` (read straight from `LOCKDOWN_KV.get('commands')`);
+  3. `persists command_uuid so a retried ACK can be deduplicated` — asserts the
+     uuid lands on the stored command.
+- Cleaned three pre-existing unused declarations (`vi`, `oldKey`, `checkin2Data`).
+
+### VERIFY
+- `worker.test.ts`: **340 passed** (337 before + 3).
+- Coverage: 84.09 stmts / 78.12 branch / 88 funcs / 85.77 lines — above the
+  82/75/86/82 floors.
+- Re-running the three mutations after the tests: **all KILLED**, each naming the
+  new test that caught it.
+- Table now holds **24 mutations** across three components (agent 13, server 3,
+  worker 8).
+
+### Fog cleared
+- **Whether a device can escrow against another device's command**: it could not,
+  and now that is asserted with a positive control (the owner still can).
+- **Whether command status is terminal once executed**: yes, and the assertion
+  checks both the response contract and the stored value.
+- **Whether the retry-idempotency key is persisted**: yes.
+
+### Fog remaining
+- **Command delivery marking** (does a check-in consume the command, can it be
+  re-delivered?) and **duplicate `command_uuid` suppression on the agent side** are
+  still unmutated — the uuid is now stored, but nothing proves two ACKs with the
+  same uuid are treated as one.
+- **Uninstall-auth, location, deadman-report, rearm, track** handlers: no
+  mutations yet.
+- **Dashboard/electron**: unaudited (needs a fourth runner).
+- Unchanged: Docker path verified except Caddy TLS; Worker publish needs
+  `wrangler login` + 4 secrets; D-120/D-129/D-130/D-134 resource-blocked;
+  `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None — again, missing tests rather than product defects.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), real domain (Caddy TLS).
+
+### Failure attribution
+- **Layer 4 — verification feedback would have caught it, and did**: while
+  cleaning the unused declarations I replaced the *first* `checkin2Data`
+  occurrence with `str.replace(..., 1)`, which was the one the recover test
+  actually uses, and broke a pre-existing test. Running the suite is what found
+  it; the fix was to target by line and assert the expected text at each site.
+  The lesson is small and old: a blind first-occurrence replace is a guess about
+  which occurrence you mean.
+- **Pre-existing lint, deliberately not "fixed"**: the same run flagged
+  `Access-Control-Allow-Origin: '*'` assertions across the Worker tests. Those
+  assert real product behaviour for a bearer-token API, and changing CORS
+  semantics is a design decision — not something to slip in while adding tests.
+
+### Session artifacts
+- Changed: `serverless/worker.test.ts` (3 tests + 3 declaration cleanups),
+  `scripts/audit_test_teeth.py` (3 rows).
+
+### Next session opening
+Test the lifecycle where the replay risk actually lives: two ACKs carrying the
+same `command_uuid` must be treated as one (the uuid is stored now, nothing proves
+it suppresses a duplicate), and a check-in must consume the command it hands out so
+a second check-in cannot re-deliver an executed lockdown.
+
+---
