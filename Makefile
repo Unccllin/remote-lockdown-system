@@ -282,6 +282,14 @@ full-verify: graph-check lint test test-e2e verify-env check-artifacts
 verify-deploy:
 	./scripts/verify-docker-stack.sh
 
+# Serverless Worker verification — bundles the Worker with esbuild, boots workerd
+# locally, and checks the routes over HTTP. No Cloudflare account needed (local
+# mode); publishing still needs `wrangler login`. Wraps scripts/verify-worker.sh.
+.PHONY: verify-worker
+
+verify-worker:
+	./scripts/verify-worker.sh
+
 # Hardware test harness v2.0 (D-003) — runs 12 enforcement path tests against
 # real Windows/HP hardware. On non-Windows/non-HP, tests are skipped.
 # Modes: simulate (real actions), dry-run (skip), check (eligibility only).

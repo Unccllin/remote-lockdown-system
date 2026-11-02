@@ -183,6 +183,14 @@ curl -X POST https://lockdown.example.com/api/setup/create-admin \
 
 ---
 
+## Alternative backend: the serverless Worker
+
+The Docker stack is one of two backends. `serverless/` is a Cloudflare Worker
+implementation of the same wire contract (agent ingress, admin API, downloads, and
+the PBL `/v1/*` CBOR routes), with all state in KV. See
+[serverless/README.md](../serverless/README.md) for bindings, secrets, local
+verification (`make verify-worker`) and the publish step.
+
 ## Verify the stack locally before you deploy it
 
 The API E2E suite (`tests/e2e/`) boots Express **in-process on SQLite** via
