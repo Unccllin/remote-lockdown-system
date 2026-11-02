@@ -4749,3 +4749,95 @@ LOCKED device reported UNLOCKED is the product's worst failure), which has never
 been tested for teeth.
 
 ---
+
+---
+
+## Session 176 — 2026-11-02 (mutation audit reaches the Worker: the worst-failure path is guarded)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S175 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `serverless/pbl/routes/verdict.ts` (`statusToVerdict`,
+  line 57-70), `serverless/worker.ts` (`handleRelease` guard at 1985,
+  `handleRecover` guard at 1716, the `status` union at line 49),
+  `serverless/vitest.config.mts` (coverage floors), `serverless/pbl.test.ts`
+  (verdict assertions, incl. line 954), `serverless/worker.test.ts`
+  (release/pba-credentials cases).
+- **Finding (the worst-failure point is a three-line switch)**:
+  `statusToVerdict` maps `'locked'` → `VERDICT_LOCKED`. That single case decides
+  whether a stolen, admin-locked device boots. It was covered only by a unit test
+  calling `worker.fetch()` directly — never by a mutation.
+- **Finding (my first two vitest attempts were wrong, and the tool refused to
+  pretend otherwise)**: `--reporter=basic` does not exist in vitest 4, so the run
+  died with `Failed to load custom Reporter from basic`. The audit's baseline gate
+  reported `BASELINE for vitest could not run — aborting` and scored nothing. That
+  is exactly the behaviour added in session 173 after three false-verdict sessions;
+  it turned a would-be "0 of 2 survived" into an honest "I could not run this".
+
+### IMPLEMENT
+- `scripts/audit_test_teeth.py`: a **vitest** runner (third component type, after
+  pytest and jest), with the same rules — the runner's own `Tests` tally is
+  required for a valid run, failures are compared against a green baseline, and the
+  verdict names the catching test.
+- Two Worker rows, chosen for consequence rather than coverage:
+  `WRK/verdict-locked` (`'locked'` → `VERDICT_UNLOCKED`, i.e. a locked device
+  boots) and `WRK/release-guard` (`handleRelease` no longer refuses a
+  locked/stolen/recovering device).
+
+### VERIFY
+- vitest baseline: **green**, `Test Files 2 passed`, `Tests 334 passed`.
+- `WRK/verdict-locked` → **KILLED**, caught by
+  `pbl.test.ts > POST /v1/verdict > returns LOCKED verdict for locked device`.
+- `WRK/release-guard` → **KILLED**, caught by
+  `pba-credentials requires super-admin; release rejects a locked device`.
+- Table now holds 18 mutations across three components (agent 13, server 3,
+  worker 2).
+
+### Fog cleared
+- **Whether a locked device can be handed an UNLOCKED verdict by a regression**:
+  no — the test that exists is the test that should exist, and it fails when the
+  mapping is inverted.
+- **Whether an admin `release` can unlock a locked/stolen device**: no — the
+  release guard is asserted.
+
+### Fog remaining
+- **One mutation per Worker path only.** The other state transitions
+  (`handleFlagStolen`, `handleRecover`'s status change, the command-queue
+  lifecycle, escrow release, uninstall-auth) have never been mutated.
+- **The dashboard, serverless binary-download paths, and electron remain
+  unaudited.** The tool supports pytest/jest/vitest; adding the dashboard means a
+  fourth runner and a Node-only path.
+- Unchanged: Docker path verified except Caddy TLS (needs a real domain); Worker
+  publish needs `wrangler login` + 4 secrets; D-120/D-129/D-130/D-134
+  resource-blocked; `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), real domain (Caddy TLS).
+
+### Failure attribution
+- **Layer 1 — task specification** (mine): I wrote `--reporter=basic` from memory.
+  It is not a vitest 4 reporter, and the failure message ("Failed to load custom
+  Reporter from basic") is clear enough that a human would have read it first —
+  but the tool called the runner before I did.
+- **Layer 4 — verification feedback** (the fix working): the baseline gate refused
+  to score an unrunnable suite. Three sessions ago the same situation produced
+  "all mutations killed" from zero executed tests. The gate is the only reason this
+  session's numbers mean anything.
+
+### Session artifacts
+- Changed: `scripts/audit_test_teeth.py` (vitest runner, 2 worker rows).
+
+### Next session opening
+Keep widening by consequence, not by count: mutate `handleRecover`'s status change
+(a locked device stuck in `recovering`, or recovered without the unlock command) and
+the command-queue lifecycle (a `locked` command acknowledged as `failed` while the
+device stays usable) — both are state-machine defects the current tests may pin only
+by happy path.
+
+---

@@ -53,35 +53,34 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 175 — 2026-11-02 (Worker deployment verified locally: bundle + serve + routes, publishing left to the operator)
+## Latest session: 176 — 2026-11-02 (mutation audit reaches the Worker: the worst-failure path is guarded)
 
 ### VERIFY
-- `scripts/verify-worker.sh` → **PASSED**, all checks green:
-  bundle 164K with all four route strings present; `workerd serving`;
-  `GET /api/setup/status` 200; `GET /api/devices` 401 without a token, **200 with
-  `ADMIN_TOKEN`**, 401 with a bogus token; unknown path 404;
-  `POST /v1/verdict` junk body → **400** (routed and validated, not a 5xx);
-  `GET /v1/policy/1` → 200 (built-in default); `GET /api/download/agent` → 404.
-- `shellcheck` + `bash -n` clean on the new script; `make -n verify-worker` resolves.
+- vitest baseline: **green**, `Test Files 2 passed`, `Tests 334 passed`.
+- `WRK/verdict-locked` → **KILLED**, caught by
+  `pbl.test.ts > POST /v1/verdict > returns LOCKED verdict for locked device`.
+- `WRK/release-guard` → **KILLED**, caught by
+  `pba-credentials requires super-admin; release rejects a locked device`.
+- Table now holds 18 mutations across three components (agent 13, server 3,
+  worker 2).
 
 ### Fog cleared
-- **Whether the Worker bundles and serves**: yes — esbuild output keeps the route
-  table, workerd serves it, and both the admin auth paths (break-glass and bogus
-  token) and the PBL `/v1` routes answer correctly.
-- **What publishing actually requires**: `wrangler login`, the KV namespace id
-  already in `wrangler.toml`, and four secrets (`ADMIN_TOKEN`, `JWT_SECRET`,
-  `PBL_SIGNING_KEY`, `PBL_POLICY_SIGNING_KEY`) — now written down.
+- **Whether a locked device can be handed an UNLOCKED verdict by a regression**:
+  no — the test that exists is the test that should exist, and it fails when the
+  mapping is inverted.
+- **Whether an admin `release` can unlock a locked/stolen device**: no — the
+  release guard is asserted.
 
 ### Fog remaining
-- **Publishing is unverified** and cannot be from here: no Cloudflare credentials on
-  this host (`~/.wrangler` absent, no `CLOUDFLARE_*` env vars).
-- **Real KV behaviour** (eventual consistency, size limits, cold reads) is not
-  exercised — local mode is SQLite-backed.
-- **Scheduled/cron handlers** are not triggered by the script; noted in the README
-  with `--test-scheduled` / `__scheduled`.
-- Unchanged: Docker path complete except Caddy TLS (needs a real domain); D-120/
-  D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual (D-132); 19
-  Dependabot alerts.
+- **One mutation per Worker path only.** The other state transitions
+  (`handleFlagStolen`, `handleRecover`'s status change, the command-queue
+  lifecycle, escrow release, uninstall-auth) have never been mutated.
+- **The dashboard, serverless binary-download paths, and electron remain
+  unaudited.** The tool supports pytest/jest/vitest; adding the dashboard means a
+  fourth runner and a Node-only path.
+- Unchanged: Docker path verified except Caddy TLS (needs a real domain); Worker
+  publish needs `wrangler login` + 4 secrets; D-120/D-129/D-130/D-134
+  resource-blocked; `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
 
 ### Debt items closed
 - None.
@@ -94,26 +93,24 @@
   credentials (Worker publish), real domain (Caddy TLS).
 
 ### Failure attribution
-- No failure this session. The notable near-miss: the first run's `/v1/policy/1`
-  expectation ("404 with empty KV") was wrong while the check still passed —
-  because the case pattern accepted 200 *or* 404. A check that accepts two outcomes
-  for different reasons is weaker than it looks; the message now says which
-  happened and why.
-- **Layer 2 — context provision** (avoided): reading `wrangler --help` before
-  writing the invocation gave `--var`/`--persist-to`/`--dry-run` directly, instead
-  of the trial-and-error that the Docker session needed for the same shape of work.
+- **Layer 1 — task specification** (mine): I wrote `--reporter=basic` from memory.
+  It is not a vitest 4 reporter, and the failure message ("Failed to load custom
+  Reporter from basic") is clear enough that a human would have read it first —
+  but the tool called the runner before I did.
+- **Layer 4 — verification feedback** (the fix working): the baseline gate refused
+  to score an unrunnable suite. Three sessions ago the same situation produced
+  "all mutations killed" from zero executed tests. The gate is the only reason this
+  session's numbers mean anything.
 
 ### Session artifacts
-- New: `scripts/verify-worker.sh`, `serverless/README.md`.
-- Changed: `Makefile` (`verify-worker`), `docs/DEPLOYMENT.md` (cross-link).
+- Changed: `scripts/audit_test_teeth.py` (vitest runner, 2 worker rows).
 
 ### Next session opening
-Both backends now verify locally. The remaining deploy work is credentialed, not
-technical: signing certificates (electron/agent), `wrangler login`, and a real
-domain for Caddy. Until one of those exists, the highest-value code work is back in
-the mutation audit — mutate the device-lock state transition in `worker.ts` (a
-LOCKED device reported UNLOCKED is the product's worst failure), which has never
-been tested for teeth.
+Keep widening by consequence, not by count: mutate `handleRecover`'s status change
+(a locked device stuck in `recovering`, or recovered without the unlock command) and
+the command-queue lifecycle (a `locked` command acknowledged as `failed` while the
+device stays usable) — both are state-machine defects the current tests may pin only
+by happy path.
 
 ---
 
