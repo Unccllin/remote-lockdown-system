@@ -53,39 +53,35 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 174 — 2026-11-02 (deploy finalised for the Docker stack: the container path was never executed, and now is)
+## Latest session: 175 — 2026-11-02 (Worker deployment verified locally: bundle + serve + routes, publishing left to the operator)
 
 ### VERIFY
-- `./scripts/verify-docker-stack.sh` → **PASSED, ten checks green**, against the
-  production image and real PostgreSQL 16, torn down cleanly afterwards.
-- `make verify-env` → **63 PASS / 0 FAIL / 2 SKIP**, including
-  `docker-live — live validation passed` via the delegating check. The 2 skips are
-  the documented `installer-windows-execpolicy` by-design skip.
-- `make check-artifacts` → all artifacts present and non-empty (dashboard dist,
-  agent binaries, electron output). This gate had never been reached before,
-  because `full-verify` stops at the first failure and `verify-env` was failing.
-- Everything else in `make full-verify` had already passed in this session: graph
-  invariants, lint, all five component suites, API E2E, and artifact checks. The
-  only red was `docker-live`.
+- `scripts/verify-worker.sh` → **PASSED**, all checks green:
+  bundle 164K with all four route strings present; `workerd serving`;
+  `GET /api/setup/status` 200; `GET /api/devices` 401 without a token, **200 with
+  `ADMIN_TOKEN`**, 401 with a bogus token; unknown path 404;
+  `POST /v1/verdict` junk body → **400** (routed and validated, not a 5xx);
+  `GET /v1/policy/1` → 200 (built-in default); `GET /api/download/agent` → 404.
+- `shellcheck` + `bash -n` clean on the new script; `make -n verify-worker` resolves.
 
 ### Fog cleared
-- **Whether the production stack runs**: yes — image builds, migrations apply on
-  PostgreSQL 16, the dashboard is served same-origin from the container, JWT auth
-  works, enrolment writes commit, and the agent ingress verifies device keys and
-  rejects bogus ones.
-- **Why the env gate was red**: a local port conflict, not a defect. Fixed by
-  testing the stack the way it can be tested locally, and by never discarding the
-  error again.
+- **Whether the Worker bundles and serves**: yes — esbuild output keeps the route
+  table, workerd serves it, and both the admin auth paths (break-glass and bogus
+  token) and the PBL `/v1` routes answer correctly.
+- **What publishing actually requires**: `wrangler login`, the KV namespace id
+  already in `wrangler.toml`, and four secrets (`ADMIN_TOKEN`, `JWT_SECRET`,
+  `PBL_SIGNING_KEY`, `PBL_POLICY_SIGNING_KEY`) — now written down.
 
 ### Fog remaining
-- **Caddy/TLS is unverified locally** and cannot be: it needs a real domain and a
-  reachable ACME endpoint. That is the one component the local gate cannot cover.
-- **Deployment blockers that are credentials or hardware, not code**: no Cloudflare
-  credentials (Worker deploy), no Windows/macOS signing certificates (Electron and
-  agent releases), and the four resource-blocked debt items (D-120 real BitLocker
-  media, D-129/D-134 HP hardware, D-130 signing PFX).
-- Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, no CI run
-  observed for S151–S174.
+- **Publishing is unverified** and cannot be from here: no Cloudflare credentials on
+  this host (`~/.wrangler` absent, no `CLOUDFLARE_*` env vars).
+- **Real KV behaviour** (eventual consistency, size limits, cold reads) is not
+  exercised — local mode is SQLite-backed.
+- **Scheduled/cron handlers** are not triggered by the script; noted in the README
+  with `--test-scheduled` / `__scheduled`.
+- Unchanged: Docker path complete except Caddy TLS (needs a real domain); D-120/
+  D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual (D-132); 19
+  Dependabot alerts.
 
 ### Debt items closed
 - None.
@@ -95,28 +91,29 @@
 
 ### Blockers
 - Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
-  credentials (Worker), real domain (Caddy TLS).
+  credentials (Worker publish), real domain (Caddy TLS).
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary). The deployment gate existed but
-  could not tell "the stack is broken" from "Caddy could not bind a port", because
-  it threw the evidence away. That is the same class as sessions 171–173: the
-  harness, not the code, was the thing under test.
-- **Layer 2 — context provision** (mine): I wrote two smoke assertions from
-  assumption rather than from the route contracts (token from create-admin, key in
-  the body). Both failed, both were my error, and both cost a full stack restart.
-  Reading `routes/setup.js` and `routes/agent.js` first would have removed them —
-  which is exactly what RULE-ZERO says to do before writing the check.
+- No failure this session. The notable near-miss: the first run's `/v1/policy/1`
+  expectation ("404 with empty KV") was wrong while the check still passed —
+  because the case pattern accepted 200 *or* 404. A check that accepts two outcomes
+  for different reasons is weaker than it looks; the message now says which
+  happened and why.
+- **Layer 2 — context provision** (avoided): reading `wrangler --help` before
+  writing the invocation gave `--var`/`--persist-to`/`--dry-run` directly, instead
+  of the trial-and-error that the Docker session needed for the same shape of work.
 
 ### Session artifacts
-- New: `scripts/verify-docker-stack.sh`.
-- Changed: `scripts/validate-docker.sh`, `Makefile`, `docs/DEPLOYMENT.md`.
+- New: `scripts/verify-worker.sh`, `serverless/README.md`.
+- Changed: `Makefile` (`verify-worker`), `docs/DEPLOYMENT.md` (cross-link).
 
 ### Next session opening
-Nothing in the Docker path is left to verify locally. The next deployable surface
-is the Cloudflare Worker: it has a KV binding but no credentials on this host, so
-write a `wrangler deploy --dry-run` + `wrangler dev` smoke that proves the built
-worker bundles and serves the PBL routes, leaving only the real publish for you.
+Both backends now verify locally. The remaining deploy work is credentialed, not
+technical: signing certificates (electron/agent), `wrangler login`, and a real
+domain for Caddy. Until one of those exists, the highest-value code work is back in
+the mutation audit — mutate the device-lock state transition in `worker.ts` (a
+LOCKED device reported UNLOCKED is the product's worst failure), which has never
+been tested for teeth.
 
 ---
 

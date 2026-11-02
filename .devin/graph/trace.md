@@ -4644,3 +4644,108 @@ write a `wrangler deploy --dry-run` + `wrangler dev` smoke that proves the built
 worker bundles and serves the PBL routes, leaving only the real publish for you.
 
 ---
+
+---
+
+## Session 175 — 2026-11-02 (Worker deployment verified locally: bundle + serve + routes, publishing left to the operator)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S174 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `serverless/worker.ts` (route table in `fetch`, the
+  `handlePblRoute` dispatch for `/v1/*`, `ADMIN_TOKEN` break-glass at line 272,
+  `JWT_SECRET` fallbacks), `serverless/wrangler.toml`, `serverless/package.json`,
+  `wrangler dev --help` / `wrangler deploy --help` (for `--var`, `--persist-to`,
+  `--dry-run`), and `serverless/worker.test.ts` + `pbl.test.ts`.
+- **Finding (the Worker had no deployment verification and no docs)**: the Vitest
+  suites call `worker.fetch()` directly, so nothing ran the code through esbuild
+  or booted workerd. There was also **no serverless documentation at all** — no
+  bindings list, no secret list, no publish instructions.
+- **Finding (which secret is which)**: `env.` usage across `worker.ts` is
+  `LOCKDOWN_KV` (50 uses), `ADMIN_TOKEN` (9), `JWT_SECRET` (2),
+  `PBL_SIGNING_KEY` (1), `PBL_POLICY_SIGNING_KEY` (1). Line 272 maps `ADMIN_TOKEN`
+  to a synthetic super-admin, so the doc calls it a root credential rather than an
+  "admin key".
+- **Finding (a route that answers 200 with an empty KV)**: `GET /v1/policy/1`
+  returned 200 rather than 404 in local mode, so a policy blob comes from the
+  built-in default when KV is empty. The script's message was corrected to say
+  that instead of asserting a 404 that did not happen.
+
+### IMPLEMENT
+- **`scripts/verify-worker.sh`** (new): bundles with
+  `wrangler deploy --dry-run --outdir`, asserts the bundle exists **and** contains
+  `/v1/verdict`, `/api/agent/checkin`, `/api/enroll`, `/api/download/agent` (a
+  valid JS file that lost its router to tree-shaking would otherwise pass), then
+  boots `wrangler dev` on loopback with local KV (`--persist-to`), the break-glass
+  `--var ADMIN_TOKEN`, and an explicit `--var JWT_SECRET`, and drives the routes
+  over HTTP. Process-group kill on exit so workerd does not hold the port.
+- **`serverless/README.md`** (new): what the Worker is, the binding/secret table
+  with `wrangler kv namespace create` and `wrangler secret put` commands, the local
+  verification table, the publish steps, post-deploy smoke commands, and an
+  explicit "what local verification cannot cover" section (real KV consistency,
+  account bindings, cron handlers).
+- **`Makefile`**: `make verify-worker`.
+- **`docs/DEPLOYMENT.md`**: a short "Alternative backend: the serverless Worker"
+  section cross-linking the new README, so the second backend is discoverable from
+  the operator guide rather than only from the code.
+
+### VERIFY
+- `scripts/verify-worker.sh` → **PASSED**, all checks green:
+  bundle 164K with all four route strings present; `workerd serving`;
+  `GET /api/setup/status` 200; `GET /api/devices` 401 without a token, **200 with
+  `ADMIN_TOKEN`**, 401 with a bogus token; unknown path 404;
+  `POST /v1/verdict` junk body → **400** (routed and validated, not a 5xx);
+  `GET /v1/policy/1` → 200 (built-in default); `GET /api/download/agent` → 404.
+- `shellcheck` + `bash -n` clean on the new script; `make -n verify-worker` resolves.
+
+### Fog cleared
+- **Whether the Worker bundles and serves**: yes — esbuild output keeps the route
+  table, workerd serves it, and both the admin auth paths (break-glass and bogus
+  token) and the PBL `/v1` routes answer correctly.
+- **What publishing actually requires**: `wrangler login`, the KV namespace id
+  already in `wrangler.toml`, and four secrets (`ADMIN_TOKEN`, `JWT_SECRET`,
+  `PBL_SIGNING_KEY`, `PBL_POLICY_SIGNING_KEY`) — now written down.
+
+### Fog remaining
+- **Publishing is unverified** and cannot be from here: no Cloudflare credentials on
+  this host (`~/.wrangler` absent, no `CLOUDFLARE_*` env vars).
+- **Real KV behaviour** (eventual consistency, size limits, cold reads) is not
+  exercised — local mode is SQLite-backed.
+- **Scheduled/cron handlers** are not triggered by the script; noted in the README
+  with `--test-scheduled` / `__scheduled`.
+- Unchanged: Docker path complete except Caddy TLS (needs a real domain); D-120/
+  D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual (D-132); 19
+  Dependabot alerts.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), real domain (Caddy TLS).
+
+### Failure attribution
+- No failure this session. The notable near-miss: the first run's `/v1/policy/1`
+  expectation ("404 with empty KV") was wrong while the check still passed —
+  because the case pattern accepted 200 *or* 404. A check that accepts two outcomes
+  for different reasons is weaker than it looks; the message now says which
+  happened and why.
+- **Layer 2 — context provision** (avoided): reading `wrangler --help` before
+  writing the invocation gave `--var`/`--persist-to`/`--dry-run` directly, instead
+  of the trial-and-error that the Docker session needed for the same shape of work.
+
+### Session artifacts
+- New: `scripts/verify-worker.sh`, `serverless/README.md`.
+- Changed: `Makefile` (`verify-worker`), `docs/DEPLOYMENT.md` (cross-link).
+
+### Next session opening
+Both backends now verify locally. The remaining deploy work is credentialed, not
+technical: signing certificates (electron/agent), `wrangler login`, and a real
+domain for Caddy. Until one of those exists, the highest-value code work is back in
+the mutation audit — mutate the device-lock state transition in `worker.ts` (a
+LOCKED device reported UNLOCKED is the product's worst failure), which has never
+been tested for teeth.
+
+---
