@@ -53,35 +53,39 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 179 — 2026-11-02 (cross-device command delivery was untested; my prediction was wrong)
+## Latest session: 180 — 2026-11-02 (the uninstall-authorisation pair and the ping delivery path had no tests at all)
 
 ### VERIFY
-- `worker.test.ts`: **341 passed** (340 + 1).
-- Coverage: see run below; floors are 82 / 75 / 86 / 82.
-- `WRK/checkin-device-filter` → **KILLED**, caught by `a check-in only receives its
-  own device's commands`.
-- `WRK/checkin-pending-filter` → KILLED (by the session-177 duress test).
-- Table now holds **26 mutations** across three components (agent 13, server 3,
-  worker 10).
+- `worker.test.ts`: **347 passed** (341 + 6).
+- Coverage: **89 stmts / 82.8 branch / 92.66 funcs / 90.88 lines** (was 84.09 /
+  78.12 / 88 / 85.77) — floors 82 / 75 / 86 / 82.
+- All three mutations now **KILLED**, each naming its new test:
+  `a ping only returns its own device's pending command`,
+  `rejects a request with no credentials`, `rejects a wrong token`.
+- Table now holds **29 mutations** across three components (agent 13, server 3,
+  worker 13).
 
 ### Fog cleared
-- **Whether a device can be handed another device's command**: it could not, and
-  now that is asserted with a positive control on both sides.
-- **Whether an executed command can be re-delivered**: no, and the guard is now
-  known to be exercised.
+- **Whether a device can obtain an uninstall token**: not without a valid
+  credential, and not with a wrong token — both directions asserted.
+- **Whether the ping route can leak another device's command**: it cannot, and the
+  check is now exercised with a positive control.
+- **Why this survived nine sessions of "the suite is green"**: the endpoints were
+  never *executed* by any test, so no assertion could be missing — the coverage
+  gap and the assertion gap were the same gap here.
 
 ### Fog remaining
-- **`worker.ts:701` still has the unmutated device filter** — the same shape that
-  had no test at 875. It deserves a row before it is trusted.
-- **Uninstall-auth, location, deadman-report, rearm, track/locate** handlers: no
-  mutations yet.
-- **Dashboard/electron**: unaudited (needs a fourth runner).
+- **`handleUninstallAuth`'s admin-token branch** (`token === (env.ADMIN_TOKEN || '')`)
+  is asserted only through the agent-key path; the break-glass path has no test.
+- **Remaining Worker handlers without mutations**: location, deadman-report, rearm,
+  track/locate, efs-cert, device-by-hardware, admins CRUD.
+- **Dashboard/electron** remain unaudited (the tool needs a fourth runner).
 - Unchanged: Docker path verified except Caddy TLS; Worker publish needs
   `wrangler login` + 4 secrets; D-120/D-129/D-130/D-134 resource-blocked;
   `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
 
 ### Debt items closed
-- None — sixth missing-test gap closed rather than a defect fixed.
+- None — seventh, eighth and ninth missing-test gaps closed.
 
 ### Debt items still open
 - D-120, D-129, D-130, D-134 — all resource-blocked.
@@ -91,23 +95,28 @@
   credentials (Worker publish), real domain (Caddy TLS).
 
 ### Failure attribution
-- **Layer 4 — verification feedback, in the good direction**: I predicted this
-  mutation would be killed and it survived. That is the argument for running the
-  audit rather than reasoning about it: my mental model of the test suite was
-  wrong, and only the mutation said so. Five sessions of this audit have produced
-  six gaps, and every single one was a behaviour that *looked* covered because the
-  line was executed by some test — just never asserted.
+- No failure this session; the predictions were right this time, which is the
+  less interesting outcome. What is worth recording is the *pattern* across ten
+  sessions: every gap found has been a behaviour that no test asserted, and in this
+  case no test even reached the code. Mutation testing and coverage disagreed
+  nowhere — where coverage was low, mutation survived; where both were high, the
+  assertions bit. Two sessions ago I claimed the E2E suite "covered" deployment and
+  was wrong in the same way: the code ran, nobody looked at the result.
+- **Layer 2 — context provision** (small): my first insertion attempt asserted a
+  blank line before the file's final `});` that does not exist, and my second
+  assumed `split("\n")[-1]` was the close rather than the trailing newline. Both
+  were caught by the assertions themselves before writing — a cheap way to be
+  wrong.
 
 ### Session artifacts
-- Changed: `serverless/worker.test.ts` (1 test, CORS constant, 3 template
-  literals), `scripts/audit_test_teeth.py` (2 rows).
+- Changed: `serverless/worker.test.ts` (6 tests), `scripts/audit_test_teeth.py`
+  (3 rows).
 
 ### Next session opening
-Mutate `worker.ts:701`'s device filter (the second occurrence of the shape that had
-no test at 875), then the uninstall-auth pair — `handleUninstallAuth` and
-`handleUninstallAuthVerify` are the last auth-bearing handlers with no mutation,
-and a device that can authorise its own uninstall is the failure that matters most
-after lockdown itself.
+The break-glass branch of `handleUninstallAuth` (admin token instead of a device
+key) is the only unasserted path left in that pair. After that, the Worker handlers
+with no mutation at all — location, deadman-report, rearm — are the honest next
+targets, since rearm in particular reverses a lockdown.
 
 ---
 

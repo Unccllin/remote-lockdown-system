@@ -5152,3 +5152,111 @@ and a device that can authorise its own uninstall is the failure that matters mo
 after lockdown itself.
 
 ---
+
+---
+
+## Session 180 — 2026-11-02 (the uninstall-authorisation pair and the ping delivery path had no tests at all)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S179 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `serverless/worker.ts` — the pending-command `find` inside
+  `handlePing` (696-701), `handleUninstallAuth` (737-770, issuer),
+  `handleUninstallAuthVerify` (773-818, verifier) — and the test file's helper
+  contracts (`makeRequest(method, path, body?, headers?)`, `signRequest`,
+  `enrollDevice`).
+- **Finding (`WRK/ping-device-filter` SURVIVED — predicted)**: the ping path is a
+  **second** command-delivery route, and `grep '/api/ping'` in the tests returned
+  **0**. Dropping `c.device_id === device.id` from its pending-command lookup
+  hands a device another device's pending lockdown — the same cross-device failure
+  closed at the check-in path in session 179, still open one function away.
+- **Finding (`WRK/uninstall-authz` and `WRK/uninstall-verify` SURVIVED —
+  predicted)**: `grep -c uninstall` in `worker.test.ts` was **0**. Neither the
+  issuer nor the verifier had a single test, so:
+  - making the issuer authorise any caller (`let authorized = true`) left the suite
+    green — i.e. any device could obtain an uninstall token;
+  - making the verifier accept any token (`if (true)`) also left it green.
+  These two endpoints decide whether the agent may be **removed**, which is what
+  someone holding a stolen machine most wants to do.
+- **Finding (the coverage number corroborates it)**: adding those tests moved the
+  Worker file from 84.09% to **89% statements** and 78.12% to **82.8% branches** —
+  the handlers were not merely unasserted, they were unexecuted.
+
+### IMPLEMENT
+- `serverless/worker.test.ts`, six tests in two new describe blocks plus one:
+  - `POST /api/agent/uninstall-auth`: no credentials → **401**; unknown API key →
+    **401**; enrolled device → 200 with a non-empty `uninstall_token` and
+    `expires_in: 300`;
+  - `POST /api/agent/uninstall-auth/verify`: the token its issuer just returned →
+    `authorized: true`; a wrong token → `authorized: false` (both halves, so an
+    accept-everything verifier fails);
+  - `POST /api/ping`: a bystander's ping returns no command while the flagged
+    victim's returns the `lockdown` (positive control).
+- `scripts/audit_test_teeth.py`: three rows (`WRK/ping-device-filter`,
+  `WRK/uninstall-authz`, `WRK/uninstall-verify`), the issuer anchored on its
+  function signature because the same authorisation block appears twice
+  verbatim in `worker.ts`.
+
+### VERIFY
+- `worker.test.ts`: **347 passed** (341 + 6).
+- Coverage: **89 stmts / 82.8 branch / 92.66 funcs / 90.88 lines** (was 84.09 /
+  78.12 / 88 / 85.77) — floors 82 / 75 / 86 / 82.
+- All three mutations now **KILLED**, each naming its new test:
+  `a ping only returns its own device's pending command`,
+  `rejects a request with no credentials`, `rejects a wrong token`.
+- Table now holds **29 mutations** across three components (agent 13, server 3,
+  worker 13).
+
+### Fog cleared
+- **Whether a device can obtain an uninstall token**: not without a valid
+  credential, and not with a wrong token — both directions asserted.
+- **Whether the ping route can leak another device's command**: it cannot, and the
+  check is now exercised with a positive control.
+- **Why this survived nine sessions of "the suite is green"**: the endpoints were
+  never *executed* by any test, so no assertion could be missing — the coverage
+  gap and the assertion gap were the same gap here.
+
+### Fog remaining
+- **`handleUninstallAuth`'s admin-token branch** (`token === (env.ADMIN_TOKEN || '')`)
+  is asserted only through the agent-key path; the break-glass path has no test.
+- **Remaining Worker handlers without mutations**: location, deadman-report, rearm,
+  track/locate, efs-cert, device-by-hardware, admins CRUD.
+- **Dashboard/electron** remain unaudited (the tool needs a fourth runner).
+- Unchanged: Docker path verified except Caddy TLS; Worker publish needs
+  `wrangler login` + 4 secrets; D-120/D-129/D-130/D-134 resource-blocked;
+  `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None — seventh, eighth and ninth missing-test gaps closed.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), real domain (Caddy TLS).
+
+### Failure attribution
+- No failure this session; the predictions were right this time, which is the
+  less interesting outcome. What is worth recording is the *pattern* across ten
+  sessions: every gap found has been a behaviour that no test asserted, and in this
+  case no test even reached the code. Mutation testing and coverage disagreed
+  nowhere — where coverage was low, mutation survived; where both were high, the
+  assertions bit. Two sessions ago I claimed the E2E suite "covered" deployment and
+  was wrong in the same way: the code ran, nobody looked at the result.
+- **Layer 2 — context provision** (small): my first insertion attempt asserted a
+  blank line before the file's final `});` that does not exist, and my second
+  assumed `split("\n")[-1]` was the close rather than the trailing newline. Both
+  were caught by the assertions themselves before writing — a cheap way to be
+  wrong.
+
+### Session artifacts
+- Changed: `serverless/worker.test.ts` (6 tests), `scripts/audit_test_teeth.py`
+  (3 rows).
+
+### Next session opening
+The break-glass branch of `handleUninstallAuth` (admin token instead of a device
+key) is the only unasserted path left in that pair. After that, the Worker handlers
+with no mutation at all — location, deadman-report, rearm — are the honest next
+targets, since rearm in particular reverses a lockdown.
+
+---
