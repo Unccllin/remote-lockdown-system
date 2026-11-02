@@ -1294,19 +1294,54 @@
      `NV_Read(AK_NAME) RC=0x9A2`, `NV_Read(counter 0x1C00004) RC=0x9A2` and
      `NV_Increment RC=0x9A2`, while `POLICY_VERSION` (never written) reads fine —
      see `artifacts/d135-boot-2-warm-serial.log`.
-- **Fix direction for the remaining layer**: stop deriving names locally. Ask the
-  TPM with `TPM2_NV_ReadPublic` and cache the returned name verbatim; the command
-  needs no authorization, and the TPM is the only authority on an index name.
-  Call it lazily from `PblTpmGetHandleName` on a cache miss, and after each
-  `NV_DefineSpace` / `ALREADY_STARTED` in `PblTpmProvisionNvIndices`.
-- **Status of the artefact**: `firmware/PblPkg/test-d135-epoch-harness.sh` is the
-  reproduction (three boots on one TPM state, counter read between boots). It
-  currently **fails by design** — it asserts the close criteria, and the warm-boot
-  layer above is what still breaks them. Its `counter()` helper also needs repair
-  (it reported `unknown` in the session-168 run, so the harness run itself is not
-  yet a trustworthy artifact; the two boot logs and the `NV_ReadPublic` dump are).
-- **Blocker**: none — the remaining work is a bounded change with a reproduction
-  and a named mechanism.
+- **Fixed (2026-11-02, session 169)** — two more instances of the same class, both
+  the "locally assumed value does not match what was provisioned" pattern:
+  1. **The refresh list named three of four indices.** `PblTpmProvisionNvIndices`
+     called `PblTpmNvRefreshName` for LOCK_STATE, POLICY_VERSION and AK_NAME and
+     never for LOCK_EPOCH — the same omission as the cache size, in a second
+     hand-maintained list. Both lists are now driven by
+     `mPblNvIndices[PBL_NV_INDEX_COUNT]` with a `STATIC_ASSERT`, so adding a fifth
+     index is a compile error in one place and impossible to half-do.
+  2. **The RS_PW fallback sent an empty password.** `PcdPblTpmNvAuthValue` is
+     non-empty by default (`PBL_DEV_NV_AUTH_KEY_32B_LONG!!`), so every command
+     issued before the HMAC session starts authorized with an empty password
+     against a non-empty index auth. The AK Name read is exactly that case, which
+     is why `NV_Read(AK_NAME) RC=0x9A2` survived the first two fixes. The fallback
+     now sends the NV index auth for NV handles and stays empty for hierarchy
+     handles.
+     Also: `PblTpmGetHandleName` no longer falls back to the 4-byte handle name for
+     an uncached NV index — it asks the TPM with `TPM2_NV_ReadPublic` (no
+     authorization needed) and caches the real name.
+- **Half verified, half still inert (session 169).** Three boots on one persistent
+  TPM state, with the counter read through the owner hierarchy — an independent
+  witness, not our own log:
+  - `boot 1 -> 1`, `boot 2 -> 2`, then two out-of-band increments to `4`,
+    `boot 3 -> 5`. **The counter counts on every boot, warm boots included**, and
+    no `NV_Increment` warning appears anywhere. That was this item's actual defect
+    and it is fixed.
+  - The cache carries the epoch too: a raw `NV_Read(LOCK_STATE)` dump shows the
+    `Epoch` field at offset 48 holding `01…` after boot 1 and `02…` after boot 2,
+    matching the counter exactly.
+  - **NG-T7 still does not fire.** With the cache at epoch 2 and the live counter
+    at 4, boot 3 stayed silent and did not report a stale cache. The comparison
+    is written to fail OPEN (`if (!EFI_ERROR (EpochStatus) && Cache->Epoch <
+    LiveEpoch)`), so a failed counter read silently trusts a stale cache with no
+    trace in the log.
+- **Leading hypothesis for the remaining half**: `PblTpmFillCommandHmac` returns
+  early with a **zero-length HMAC** whenever `PblTpmGetSessionKeySize() == 0`, on
+  the stated assumption that "the session key is empty (unbound, no salt) and the
+  entity auth is empty". `PcdPblTpmNvAuthValue` is **not** empty by default
+  (`PBL_DEV_NV_AUTH_KEY_32B_LONG!!`), so the TPM expects a real HMAC for
+  `NV_Read(counter)` while PBL sends none — a `0x9A2` the comparison then swallows.
+  The same shortcut would explain why commands sent on the session work for the
+  bound index and fail for the others.
+- **Diagnostic in place**: the NG-T7 block now prints
+  `[INFO] NG-T7: cache epoch=%lu live=%lu (read=%r)` on every boot that has a
+  cached epoch, so the next run names the cause instead of requiring another
+  guess. `firmware/PblPkg/test-d135-epoch-harness.sh` records that line in its
+  artifact.
+- **Blocker**: none — the counter half is done; the comparison needs the
+  HMAC-vs-empty-auth decision.
 
 ---
 

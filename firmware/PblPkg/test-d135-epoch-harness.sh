@@ -115,32 +115,50 @@ boot() { # n
   stop_tpm
 }
 
-counter() { # read LOCK_EPOCH (0x1C00004) via tpm2-tools
-  start_tpm tcp 2800
-  local v
-  v=$(tpm2_nvread 0x01C00004 -C 0x01C00004 -s 8 2>/dev/null | od -An -tu8 | tr -d ' \n')
-  stop_tpm
-  echo "${v:-unknown}"
+counter() { # read LOCK_EPOCH (0x1C00004) as the owner hierarchy (OWNERREAD)
+  local hex v attempt
+  for attempt in 1 2 3; do
+    start_tpm tcp 2800
+    hex=$(tpm2_nvread 0x01C00004 -C o -s 8 2>"$B/nvread.err" | od -An -tx1 | tr -d ' \n')
+    stop_tpm
+    if [ -n "$hex" ]; then
+      v=$((16#$hex))
+      echo "$v"
+      return 0
+    fi
+    echo "    (counter read attempt $attempt failed: $(head -c 100 "$B/nvread.err"))" >&2
+    sleep 1
+  done
+  echo "READ-FAILED"
+  return 1
 }
 
 echo "=== boot 1 (fresh TPM: PBL provisions all four indices) ==="
 boot 1
-echo "  epoch counter after boot 1: $(counter)"
+echo "  epoch counter after boot 1: $(counter || echo READ-FAILED)"
 
 echo "=== boot 2 (same TPM state) ==="
 boot 2
-echo "  epoch counter after boot 2: $(counter)"
+echo "  epoch counter after boot 2: $(counter || echo READ-FAILED)"
 
 echo "=== simulate a rolled-back lock state: push the live counter to 4 ==="
+# PcdPblTpmNvAuthValue is the index auth (non-empty by default). It is compiled
+# into the binary, so take it from there rather than duplicating it here.
+# grep -a, not strings: the harness image has no binutils (strings was missing,
+# which made the auth file empty and the bump fail with a misleading "denied").
+NV_AUTH=$(grep -ao 'PBL_DEV_NV_AUTH_KEY[A-Z0-9_!]*' "$W/PblApp.efi" | head -1 || true)
+printf '%s' "$NV_AUTH" > "$B/nvauth.bin"
 start_tpm tcp 2800
-tpm2_nvincrement 0x01C00004 -C 0x01C00004 >/dev/null 2>&1 || true
-tpm2_nvincrement 0x01C00004 -C 0x01C00004 >/dev/null 2>&1 || true
-echo "  epoch counter now: $(tpm2_nvread 0x01C00004 -C 0x01C00004 -s 8 2>/dev/null | od -An -tu8 | tr -d ' \n')"
+for _ in 1 2; do
+  tpm2_nvincrement 0x01C00004 -C 0x01C00004 -P "file:$B/nvauth.bin" >/dev/null 2>&1 \
+    || echo "    (manual increment failed — auth value from the binary may not match)"
+done
+echo "  epoch counter now: $(tpm2_nvread 0x01C00004 -C o -s 8 2>/dev/null | od -An -tx1 | tr -d ' \n')"
 stop_tpm
 
 echo "=== boot 3 (cache holds epoch 2, live counter is 4) ==="
 boot 3
-echo "  epoch counter after boot 3: $(counter)"
+echo "  epoch counter after boot 3: $(counter || echo READ-FAILED)"
 
 chown -R "${HOST_UID:-0}:${HOST_GID:-0}" "$W" 2>/dev/null || true
 RSCRIPT
@@ -160,7 +178,10 @@ cp "$W"/d135-boot-*-serial.log "$OUT"/ 2>/dev/null || true
 FAILED=0
 check() { if eval "$2"; then ok "$3"; else err "$3"; FAILED=1; fi; }
 
-INCR_FAILS=$(grep -ac "NV_Increment(0x1c00004) RC=0x9a2" "$OUT"/d135-boot-*-serial.log 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
+# grep exits 1 when it counts zero, and `set -o pipefail` turned that into an
+# abort before any assertion ran (session 169: the harness died silently after the
+# boots, which looked like the firmware failing).
+INCR_FAILS=$(grep -ac "NV_Increment(0x1c00004) RC=0x9a2" "$OUT"/d135-boot-*-serial.log 2>/dev/null | awk -F: '{s+=$2} END {print s+0}' || true)
 check incr "[ '$INCR_FAILS' = '0' ]" "no NV_Increment failure in any boot (found $INCR_FAILS)"
 check b1  "grep -aq 'NV indices provisioned' '$OUT/d135-boot-1-serial.log'" "boot 1 provisioned the indices"
 check b2  "grep -aq 'Lock state cached to TPM NV' '$OUT/d135-boot-2-serial.log'" "boot 2 wrote the lock state"
@@ -179,7 +200,7 @@ check rb  "grep -aq 'lock-state epoch stale' '$OUT/d135-boot-3-serial.log'" "boo
   for n in 1 2 3; do
     f="$OUT/d135-boot-$n-serial.log"
     fails=$(grep -ac "NV_Increment(0x1c00004) RC=0x9a2" "$f" 2>/dev/null || true)
-    note=$(grep -aoE "lock-state epoch stale \(cache=[0-9]+ live=[0-9]+\)|Lock state cached to TPM NV|NV indices provisioned" "$f" 2>/dev/null | head -1)
+    note=$(grep -aoE "NG-T7: cache epoch=[0-9]+ live=[0-9]+ \(read=[^)]*\)|lock-state epoch stale \(cache=[0-9]+ live=[0-9]+\)|Lock state cached to TPM NV" "$f" 2>/dev/null | head -1)
     printf '%-5s %-22s %-20s %s\n' "$n" "${fails:-0}" "$(grep -aoE 'epoch counter after boot [0-9]+: [0-9]+' /dev/null 2>/dev/null || echo -)" "$note"
   done
   echo

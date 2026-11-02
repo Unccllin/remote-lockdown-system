@@ -375,8 +375,27 @@ PblTpmBeginCommandWithSessionAuth (
       Ptr += HmacSize;
     }
   } else {
-    // Fallback: TPM_RS_PW password auth (empty password)
-    *(UINT32 *)Ptr = SwapBytes32 (9);
+    // Fallback: TPM_RS_PW password auth.
+    //
+    // D-135: the password must be the AUTHORIZED ENTITY's auth value. For an NV
+    // index that is PcdPblTpmNvAuthValue (which is non-empty by default); for a
+    // hierarchy handle it is the hierarchy auth (empty). This used to send an
+    // empty password unconditionally, which fails against the very indices PBL
+    // creates — the AK Name read happens before the HMAC session starts, so it
+    // took this path on every boot and returned 0x9A2 (session authorization
+    // failure) even though the index was present and readable.
+    CONST UINT8  *Password = NULL;
+    UINT16        PasswordSize = 0;
+
+    if ((HandleCount > 0) && ((Handles[0] & 0xFF000000) == 0x01000000)) {
+      Password = (CONST UINT8 *)FixedPcdGetPtr (PcdPblTpmNvAuthValue);
+      PasswordSize = (UINT16)FixedPcdGetSize (PcdPblTpmNvAuthValue);
+      if (PasswordSize > 64) {
+        PasswordSize = 64;
+      }
+    }
+
+    *(UINT32 *)Ptr = SwapBytes32 ((UINT32)(9 + PasswordSize));
     Ptr += 4;
 
     *(UINT32 *)Ptr = SwapBytes32 ((UINT32)TPM_RS_PW);
@@ -388,8 +407,13 @@ PblTpmBeginCommandWithSessionAuth (
     *Ptr = 0;
     Ptr += 1;
 
-    *(UINT16 *)Ptr = SwapBytes16 (0);
+    *(UINT16 *)Ptr = SwapBytes16 (PasswordSize);
     Ptr += 2;
+
+    if ((PasswordSize > 0) && (Password != NULL)) {
+      CopyMem (Ptr, Password, PasswordSize);
+      Ptr += PasswordSize;
+    }
   }
 
   return Ptr;
@@ -437,6 +461,24 @@ STATIC PBL_NV_NAME_ENTRY mNvNameCache[PBL_NV_INDEX_COUNT] = { 0 };
 STATIC_ASSERT (
   ARRAY_SIZE (mNvNameCache) == PBL_NV_INDEX_COUNT,
   "mNvNameCache must have one slot per PBL NV index"
+  );
+
+// D-135: every index must also be refreshed from the TPM, because a cached name
+// built from the define template does not match a live index that carries
+// TPMA_NV_WRITTEN (TPMS_NV_PUBLIC is part of the name). The refresh list used to
+// name three indices by hand and LOCK_EPOCH was never added, so on any warm boot
+// every command against it failed HMAC with 0x9A2. Table + assertion so a fifth
+// index cannot be forgotten in one place and remembered in the other.
+STATIC CONST UINT32 mPblNvIndices[PBL_NV_INDEX_COUNT] = {
+  PBL_NV_LOCK_STATE,
+  PBL_NV_POLICY_VERSION,
+  PBL_NV_AK_NAME,
+  PBL_NV_LOCK_EPOCH
+};
+
+STATIC_ASSERT (
+  ARRAY_SIZE (mPblNvIndices) == PBL_NV_INDEX_COUNT,
+  "mPblNvIndices must list every PBL NV index"
   );
 
 /** D-206: Compute the TPM NAME for an NV index.
@@ -581,6 +623,22 @@ PblTpmGetHandleName (
     if (mNvNameCache[i].Valid && mNvNameCache[i].NvIndex == Handle) {
       return PblTpmComputeNvName (Handle, mNvNameCache[i].Attributes,
                                   mNvNameCache[i].DataSize, Name, NameSize);
+    }
+  }
+
+  // D-135: an NV index with no cache entry yet must NOT authorize with the 4-byte
+  // handle name — the resulting cpHash is wrong and the TPM answers 0x9A2
+  // (session authorization failure). AK_NAME is read before
+  // PblTpmProvisionNvIndices populates the cache, so this path is the normal
+  // cold-start case, not an edge case. NV_ReadPublic needs no authorization.
+  if ((Handle & 0xFF000000) == 0x01000000) {
+    if (!EFI_ERROR (PblTpmNvRefreshName (Handle))) {
+      for (i = 0; i < ARRAY_SIZE (mNvNameCache); i++) {
+        if (mNvNameCache[i].Valid && mNvNameCache[i].NvIndex == Handle) {
+          return PblTpmComputeNvName (Handle, mNvNameCache[i].Attributes,
+                                      mNvNameCache[i].DataSize, Name, NameSize);
+        }
+      }
     }
   }
 
@@ -1388,13 +1446,17 @@ PblTpmProvisionNvIndices (
   }
   PblTpmCacheNvName (PBL_NV_LOCK_EPOCH, NvAttr | (1 << 4), 8);
 
-  // D-206: Refresh the cached names from NV_ReadPublic so the attributes
+  // D-135: refresh the cached names from NV_ReadPublic so the attributes
   // reflect the actual index state — in particular TPMA_NV_WRITTEN on an
   // index that persisted from a previous boot. The Name feeds both cpHash
   // and the bound-session includeAuth decision.
-  PblTpmNvRefreshName (PBL_NV_LOCK_STATE);
-  PblTpmNvRefreshName (PBL_NV_POLICY_VERSION);
-  PblTpmNvRefreshName (PBL_NV_AK_NAME);
+  //
+  // Every index, driven off mPblNvIndices. This loop previously named three
+  // indices by hand and LOCK_EPOCH had never been added, which is why the epoch
+  // counter could not be read or incremented on a warm boot.
+  for (UINTN i = 0; i < ARRAY_SIZE (mPblNvIndices); i++) {
+    PblTpmNvRefreshName (mPblNvIndices[i]);
+  }
 
   return EFI_SUCCESS;
 }
@@ -1557,6 +1619,11 @@ PblTpmReadLockState (
   if (Cache->Epoch != 0) {
     UINT64 LiveEpoch = 0;
     EFI_STATUS EpochStatus = PblTpmNvReadCounter (PBL_NV_LOCK_EPOCH, &LiveEpoch);
+    // D-135 (session 169): the comparison silently fails OPEN when the counter
+    // read errors, so a stale cache is trusted with no trace in the log. Report
+    // the read's status and both values so the next boot says which it was.
+    Print (L"  [INFO] NG-T7: cache epoch=%lu live=%lu (read=%r)\n",
+           Cache->Epoch, LiveEpoch, EpochStatus);
     if (!EFI_ERROR (EpochStatus) && Cache->Epoch < LiveEpoch) {
       Print (L"  [WARN] lock-state epoch stale (cache=%lu live=%lu) — rolled back?\n",
              Cache->Epoch, LiveEpoch);
