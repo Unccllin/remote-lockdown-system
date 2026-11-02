@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-02 15:41:15
-Active memories: 785 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-02 16:58:00
+Active memories: 815 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -42,48 +42,66 @@ Active memories: 785 | Superseded: 0 | Decayed: 20
 | m-720 | MISTAKE: mistake: an earlier attempt in this sessi |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-742 | Index-handle auth also reads platform-created indi |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-772 | A regression assertion on the STORED lock-state Ep |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-833 | Six tests added: uninstall-auth (no creds 401, unk |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-783 | MISTAKE: mistake: the second version used summary- |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-701 | Fix shape: verify commit tokens with git rev-parse |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-710 | Remaining route: an EFI helper that SetVariable's  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-735 | PLATFORMCREATE makes a platform-created index unde |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-813 | WRK/duress SURVIVED (predicted): grep -c duress wa |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-743 | Owner attribute set for PBL is now 0x02060004 = AU |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-781 | With -x, pytest prints 'stopping after 1 failures' |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-728 | Target machines have no WSL: one-click NSIS uses c |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-829 | CORS: the Worker is a bearer-token API with no coo |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-823 | Worker KV keys: COMMANDS_KEY='commands', KEYS_KEY= |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-805 | MISTAKE: mistake: the first run asserted /v1/polic |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-820 | Consequence profile: a device could escrow a key a |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-732 | Flipping PcdPblTpmUsePlatformHierarchy to FALSE do |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-824 | MISTAKE: mistake: while cleaning an unused declara |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-713 | PK/KEK/db/dbx are time-based authenticated variabl | 7 | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-748 | MISTAKE: mistake: harness aborted before any boot  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-761 | D-135 had three authorization defects, each suffic |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-760 | 0x9A2 = tpm2_rc_decode 'session(1): authorization  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-727 | Production risk filed as D-134: the production PCD |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-731 | MISTAKE: mistake: accepted a recorded diagnosis (S |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-810 | The audit tool now covers three runners (pytest, j |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-803 | Worker env usage: LOCKDOWN_KV (50), ADMIN_TOKEN (9 |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-695 | virt-fw-vars: use --extract-certs to dump certs (t |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-736 | A fresh/empty TPM gives 0x28B (TPM_RC_HANDLE on th |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-755 | Fix direction: names must come from TPM2_NV_ReadPu |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-753 | Layer 1: mNvNameCache was [3] while PblApp.h defin |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-694 | The Windows UEFI CA 2023 fingerprint is 076f1fea90 |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-828 | worker.ts has TWO occurrences of the device+pendin |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-770 | Every remaining open item is resource-blocked, not |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-776 | MISTAKE: mistake: nearly reported a green harness  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-819 | All three mutations SURVIVED on the first run (pre |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-766 | Counter verified: 1 -> 2 -> out-of-band 4 -> 5 acr |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-714 | PK and KEK live under gEfiGlobalVariableGuid; db/d |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-734 | Measured matrix (pure tpm2-tools + swtpm, fresh TP |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-762 | Fix pattern that removes the recurrence: drive bot |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-712 | MISTAKE: Nearly recorded 'the tool is broken' from |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-808 | vitest 4 has no --reporter=basic (removed); the ru |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-756 | The epoch counter is the only visible symptom beca |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-818 | MISTAKE: mistake: my first duress tests asserted c |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-807 | serverless/worker.ts handleRelease refuses locked/ |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-768 | MISTAKE: mistake: my verification failed three tim |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-790 | 'The run was red' is not the question. Correct mut |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-759 | MISTAKE: mistake: the harness's counter() helper r |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-779 | E-EFFECTIVENESS and E-RECOVERY first looked like s |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-787 | The audit table now carries an optional 'label' pe |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-788 | The other seven paths still have exactly one mutat |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-822 | All three mutations now KILLED, naming the new tes |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-726 | The same failure was already recorded in session 1 |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-826 | WRK/checkin-pending-filter KILLED, incidentally by |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-744 | A cleared TPM needs no new code for fail-closed be |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-811 | MISTAKE: mistake: wrote --reporter=basic from memo |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-749 | MISTAKE: mistake: port arithmetic put the swtpm co |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-707 | Two different garbage years from the same input sh |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-830 | MISTAKE: mistake: I predicted WRK/checkin-device-f |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-816 | Worker check-in hands out the OLDEST pending comma |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-804 | wrangler dev spawns workerd as a child, so kill th |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-792 | Across sessions 171-173 four of my harnesses could |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-696 | EFI_SIGNATURE_LIST layout: 28-byte header (GUID, L |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-814 | WRK/recover-unlock KILLED: dropping commands.push( |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-746 | tpm2-tools swtpm TCTI derives the control port as  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-708 | Writing dbx unsigned is only legal in SetupMode, b |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-705 | MISTAKE: Implement first would have failed the who |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
@@ -95,37 +113,48 @@ Active memories: 785 | Superseded: 0 | Decayed: 20
 | m-739 | MISTAKE: mistake: first matrix harness asserted an |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-711 | MISTAKE: Plannned 'try virt-fw-vars against the em |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-733 | Why: PblTpmReadAkName authorizes NV_Read with TPM_ |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-812 | WRK/ack-ownership SURVIVED: removing '&& c.device_ |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-747 | tpm2_startup must be best-effort (|| true): it can |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-771 | D-136 blast radius is exactly one consumer: PblTpm |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-752 | 0x9A2 decodes with tpm2_rc_decode as 'tpm:session( |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-794 | MISTAKE: mistake: attributed a kill to the first f |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-809 | Vitest invocation that works: cd serverless && nod |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-740 | MISTAKE: mistake: first micro-test reused one TPM  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-765 | Verification tooling gotchas: tpm2_nvread takes th |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-774 | D-134's GRAPH-SPEC description was stale (claimed  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-799 | Caddy/TLS cannot be verified locally (needs a real |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-821 | Three tests added to serverless/worker.test.ts (fi |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-767 | MISTAKE: mistake: S167 described the defect as 'PB |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-697 | EFI_CERT_X509_SHA256 payload is ToBeRevoked(8) + R |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-827 | Fix: a test where a bystander checks in and must g |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-725 | swtpm logs show 1900+ command lines in the SMM arm |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-769 | MISTAKE: mistake: the harness aborted silently on  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-738 | MISTAKE: mistake: my close criteria for D-134 said |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-729 | MISTAKE: mistake: kept the first sweep's serial lo |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-791 | Server baseline is green: 43 suites, 716 tests. Wi |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-700 | I2 only checked non-empty strings. Measuring first |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-806 | serverless/pbl/routes/verdict.ts statusToVerdict m |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-750 | MISTAKE: mistake: wrote D-134's original close cri |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-831 | Consequences: any caller could obtain an uninstall |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-717 | virt-fw-vars --add-dbx-hash/--add-dbx-cert skip au |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-757 | MISTAKE: mistake: checked only boot 1 after the ca |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-751 | MISTAKE: mistake: several sessions grepped logs fo |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-835 | MISTAKE: mistake: my first insertion asserted a bl |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-737 | RC mapping: 0x14A = TPM_RC_NV_UNINITIALIZED (firmw |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-699 | MISTAKE: Grepped for 'Decision basis' when the fir |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-764 | Why it hid for sessions: every harness asserted on |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-815 | Fixes are tests, not code: three added to worker.t |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-773 | General rule learned here: before accepting any re |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-800 | serverless/worker.test.ts and pbl.test.ts call wor |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-777 | Built scripts/audit_test_teeth.py: one semantic mu |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-754 | Layer 2 (still open): on a warm boot PblTpmProvisi |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-793 | MISTAKE: mistake: copied the jest invocation from  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-832 | Coverage corroborated it: adding those tests moved |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-785 | Added E-DECRYPT/encrypt (stores plaintext as ciphe |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-709 | The Microsoft Corporation UEFI CA 2011 cert extrac |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-758 | MISTAKE: mistake: S167's write-up described the de |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-834 | worker.ts contains the uninstall authorization blo |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-825 | WRK/checkin-device-filter SURVIVED despite my pred |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-801 | scripts/verify-worker.sh covers both halves: wrang |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-715 | Ubuntu OVMF_CODE_4M.secboot.fd is built with PcdRe |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-763 | D-136: PblAesCfb256Process ran in place for both d |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
@@ -137,6 +166,7 @@ Active memories: 785 | Superseded: 0 | Decayed: 20
 | m-797 | make full-verify's only red was docker-live, and i |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-706 | virt-fw-vars: --add-db GUID cert.pem works fine; - | 7 | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-703 | Teeth demonstrated end to end by injecting a fabri |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-817 | worker.test.ts helpers (makeRequest/signRequest/en |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-718 | Even after PK enrolment at boot-services time the  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-704 | MISTAKE: The existing I2 tests encoded the weak co |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-802 | Route behaviour proven over HTTP: /api/setup/statu |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
