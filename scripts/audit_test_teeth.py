@@ -119,6 +119,30 @@ MUTATIONS: list[dict] = [
         "new": "    if True:  # MUTATION: accept any update\n        return True",
         "why": "any update is accepted without a signature",
     },
+    {
+        "path": "E-DECRYPT",
+        "label": "E-DECRYPT/encrypt",
+        "file": "agent/agent.py",
+        "old": "                    encrypted = fernet.encrypt(data)",
+        "new": "                    encrypted = data  # MUTATION: store plaintext as ciphertext",
+        "why": "encryption is a no-op: the .enc file holds the plaintext",
+    },
+    {
+        "path": "E-BCD",
+        "label": "E-BCD/rollback",
+        "file": "agent/bcd_lockdown.py",
+        "old": '    log.warning("Rolling back BCD changes due to critical failure...")',
+        "new": '    log.warning("Rolling back BCD changes due to critical failure...")\n    return True  # MUTATION: pretend the rollback restored everything',
+        "why": "a critical failure leaves the BCD altered, reported as rolled back",
+    },
+    {
+        "path": "E-HP-UEFI",
+        "label": "E-HP-UEFI/verify",
+        "file": "agent/hp_uefi_lockdown.py",
+        "old": '    current = _read_setting(name)\n    if current is None:\n        log.warning("Could not verify BIOS setting \'%s\' (read failed)", name)',
+        "new": '    return True  # MUTATION: claim every setting verified\n    current = _read_setting(name)\n    if current is None:\n        log.warning("Could not verify BIOS setting \'%s\' (read failed)", name)',
+        "why": "post-set verification (Phase 4.5 / D-013) never reads the value back",
+    },
 ]
 
 
@@ -181,7 +205,7 @@ def main() -> int:
 
     if args.list:
         for m in table:
-            print(f"{m['path']:16} {m['file']:32} {m['why']}")
+            print(f"{m.get('label', m['path']):22} {m['file']:28} {m['why']}")
         return 0
 
     survivors = []
@@ -207,7 +231,7 @@ def main() -> int:
             verdict = "SURVIVED"
         else:
             verdict = "KILLED"
-        print(f"{m['path']:16} {verdict:9} {summary}")
+        print(f"{m.get('label', m['path']):22} {verdict:9} {summary}")
 
     print()
     if invalid:
@@ -220,7 +244,7 @@ def main() -> int:
         print(f"{len(survivors)} of {len(table)} mutations SURVIVED — these suites do not "
               f"test the behaviour they are credited with:")
         for m in survivors:
-            print(f"  {m['path']}: {m['why']}")
+            print(f"  {m.get('label', m['path'])}: {m['why']}")
         print("\n  the full agent suite passed with these defects reintroduced:")
         return 1
     if invalid:
