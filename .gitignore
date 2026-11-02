@@ -21,6 +21,13 @@ agent/.update_pending
 agent/.update_downloaded
 agent/.update_downloaded.tmp
 agent/.offline_queue.db
+# SQLite sidecars. The main DB was ignored but not its -journal/-wal/-shm
+# companions, so a test run left agent/.offline_queue.db-journal untracked
+# (session 174) — the same shape as the bios_pw_backup gap: generated state
+# that looks like source.
+agent/.offline_queue.db-journal
+agent/.offline_queue.db-wal
+agent/.offline_queue.db-shm
 agent/logs/
 agent/.pytest_cache/
 # PyInstaller build artifacts
