@@ -4841,3 +4841,115 @@ device stays usable) — both are state-machine defects the current tests may pi
 by happy path.
 
 ---
+
+---
+
+## Session 177 — 2026-11-02 (two real gaps found: command ACK ownership and duress were both untested)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S176 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `serverless/worker.ts` — `handleRecover` (1725-1775, key
+  release + queued unlock + `duress_code`), `handleFlagStolen` (1663+, queues
+  `lockdown`), `handleCommandAck` (1034-1075, ownership check at 1061),
+  `handleEscrowKey` (1172-1180, the same check at 1177), check-in command
+  serialization (940-960, `duress_code` surfaced at 952) — plus
+  `serverless/worker.test.ts` (helpers `makeRequest`/`signRequest`/`enrollDevice`/
+  `parseResponse`, all inline, none exported) and `vitest.config.mts` floors.
+- **Finding (`WRK/ack-ownership` SURVIVED — real test gap)**: deleting
+  `&& c.device_id === device.id` from `handleCommandAck` left the whole 334-test
+  suite green. The code is correct; nothing asserted it. Without that check any
+  enrolled device can mark another device's lockdown command `executed` or
+  `failed`, i.e. the fleet's command state is forgeable by a single compromised
+  agent.
+- **Finding (`WRK/duress` SURVIVED — predicted, real test gap)**: `grep -c duress`
+  was **0** in both `worker.test.ts` and `pbl.test.ts`. Replacing
+  `duress_code: payload.duress_code === true ? true : null` with `null` means a
+  coerced recovery performs a **real** unlock, and every existing test stays green
+  because they only exercise the normal path. This is the safety feature working
+  in reverse — the one failure it exists to prevent.
+- **Finding (`WRK/recover-unlock` KILLED)**: removing `commands.push(cmd)` from
+  `handleRecover` (device marked recovering, key released, never told to unlock) is
+  caught — that part was covered.
+
+### IMPLEMENT
+- `serverless/worker.test.ts`, three tests added inside the existing check-in
+  describe block (the helpers are file-local, so a separate file would have had to
+  duplicate or import them from a test module):
+  1. `marks a duress recovery on the queued unlock command` — asserts
+     `command.duress_code === true` on the check-in payload after a duress recover;
+  2. `a normal recovery is not marked as duress` — the negative half, so a
+     always-true flag would fail too;
+  3. `a device cannot ACK another device's command` — victim enrolled, flagged, and
+     hands out its lockdown command; an attacker signs its own request against that
+     `command_id` and must get **404**; the rightful owner then ACKs it and gets
+     **200**, so the check is proven to discriminate rather than to reject
+     everything.
+- `scripts/audit_test_teeth.py`: three Worker rows (`WRK/ack-ownership`,
+  `WRK/duress`, `WRK/recover-unlock`).
+
+### VERIFY
+- `worker.test.ts`: **337 passed** (334 before + 3), 2 files green.
+- Coverage gate (the one CI uses): 83.93 stmts / 77.91 branch / 88 funcs /
+  85.59 lines — above the 82 / 75 / 86 / 82 floors.
+- Re-running the two survivors after adding the tests:
+  `WRK/duress` → **KILLED**, caught by `marks a duress recovery on the queued
+  unlock command`; `WRK/ack-ownership` → **KILLED**, caught by `a device cannot
+  ACK another device's command`.
+- Table now holds 21 mutations across three components (agent 13, server 3,
+  worker 5).
+
+### Fog cleared
+- **Whether a device can forge another device's command state**: it could not, and
+  now that is asserted rather than assumed.
+- **Whether a duress recovery stays fake**: yes, and the assertion now names the
+  flag that makes it fake.
+- **Why `handleCommandAck`'s ownership check looked safe**: the equivalent check in
+  `handleEscrowKey` (line 1177) and the presence of `enrollDevice` in every test
+  made it *look* covered. Only removing the line showed nothing tested it.
+
+### Fog remaining
+- **`handleEscrowKey`'s ownership check (line 1177) is still unmutated** — same
+  shape as the one just fixed, so it deserves its own row before it is trusted.
+- **Command lifecycle beyond ACK ownership** — delivery marking, duplicate ACKs,
+  the `executed`-is-terminal guard, `command_uuid` idempotency — none mutated.
+- **Dashboard, electron, and the remaining Worker handlers** are unaudited for
+  teeth (the tool supports pytest/jest/vitest; the dashboard needs a fourth runner).
+- Unchanged: Docker path verified except Caddy TLS; Worker publish needs
+  `wrangler login` + 4 secrets; D-120/D-129/D-130/D-134 resource-blocked;
+  `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None — both findings were missing tests, not product defects.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), real domain (Caddy TLS).
+
+### Failure attribution
+- **Layer 2 — context provision** (mine): my first two duress tests failed with
+  `expected 'lockdown' to be 'unlock'` because I flagged the device, recovered, and
+  checked in — but the check-in hands out the **oldest** pending command, so the
+  lockdown queued by `flag-stolen` came first. The existing recover test (which I
+  had read) acknowledges it before recovering; I read the file but did not follow
+  its sequence. Two failing assertions, both mine, both fixed by mirroring the
+  established flow.
+- **Layer 4 — verification feedback** (working): the mutation audit is what turned
+  "the suite is green" into "two behaviours are untested". Neither gap was findable
+  by reading coverage — both lines were *executed* by the existing tests, just never
+  asserted.
+
+### Session artifacts
+- Changed: `serverless/worker.test.ts` (3 tests),
+  `scripts/audit_test_teeth.py` (3 Worker rows).
+
+### Next session opening
+Mutate `handleEscrowKey`'s ownership check (worker.ts:1177) — it is the same shape
+as the ACK check that had no test, and a device reading another device's escrowed
+key would be worse. Then the command lifecycle: the `executed`-is-terminal guard
+and `command_uuid` idempotency, which are the states a compromised agent would
+replay.
+
+---
