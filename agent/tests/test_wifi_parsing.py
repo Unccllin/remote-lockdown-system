@@ -43,8 +43,7 @@ SSID 2 : Cafe-Guest
 # nmcli -t escapes the colons inside a BSSID, so a split on ":" yields the BSSID
 # as several escaped fields followed by SSID/SIGNAL/FREQ.
 NMCLI_OUTPUT = (
-    "AA\\:BB\\:CC\\:DD\\:EE\\:FF:HomeNet:82:2412\n"
-    "11\\:22\\:33\\:44\\:55\\:66:Cafe-Guest:40:2437\n"
+    "AA\\:BB\\:CC\\:DD\\:EE\\:FF:HomeNet:82:2412\n11\\:22\\:33\\:44\\:55\\:66:Cafe-Guest:40:2437\n"
 )
 
 
