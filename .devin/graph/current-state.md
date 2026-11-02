@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 54 | 58 | ✗ |
+| Debt items | 55 | 58 | ✗ |
 | Enforcement paths (on hardware) | 3 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 54 of 58 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 55 of 58 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 10 enforcement paths that still need hardware verification:**
 
@@ -53,69 +53,112 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 163 — 2026-10-30 (varstore enrolment reduced to one blocked operation: dbx needs a signed blob)
+## Latest session: 164 — 2026-11-02 (EnrollKeys writes the Secure Boot stores: D-133's positive test passes)
 
 ### VERIFY
-- `virt-fw-vars --add-db` on `OVMF_VARS_4M.ms.fd` → 540672-byte varstore written
-  (works).
-- plain rewrite of both the ms and the empty stores → both write successfully, so
-  the tool is not generally broken.
-- `--set-dbx` with an `X509` ESL → `year 22945`; with an `X509_SHA256` ESL →
-  `year 42130`; no output file either way.
-- The 2011 CA hash cross-check above, and `make graph-check` passes.
+- Enrolment on the PBL OVMF build: `dbx 76 B`, `db 2389 B`, `KEK 2407 B`,
+  `PK 901 B` all `[OK]`, then `after: SecureBoot=1 SetupMode=0`,
+  `enrolment complete`.
+- Varstore re-read after the run (`virt-fw-vars -p`): `PK`, `KEK`, `db 2389`,
+  `dbx 76`, `SecureBootEnable ON` — the writes are in NVRAM, not just in the log.
+- Three boots of the same signed `PblApp.efi` (`b03e2c33…`), one variable pair
+  different each time:
+  `db={signer,Windows UEFI CA 2023} dbx={MS 2011 hash}` → Step 6 passes, basis
+  `S3 enabled without MOR`; `db={signer}` → `db lacks the Windows UEFI CA 2023`;
+  `dbx={sha256("")}` → `dbx lacks the MS 2011 revocation`.
+- `OVMF` loaded the signed image under Secure Boot in all three runs
+  (`BdsDxe: starting`), so the enrolment store verifies our signer too.
+- `bash -n test-d133-enroll-harness.sh`, full harness run exit 0,
+  and the fingerprint cross-check in the harness (`WinCA2023` = `076f1fea…9ae330`)
+  hard-fails if the extracted certificate ever stops matching `PlatformState.c`.
 
 ### Fog cleared
-- **Which single capability is missing**: an unsigned dbx write. Everything else
-  in the enrolment chain works offline (`--add-db`, PK/KEK handling, writing the
-  store), so the remaining work is one `SetVariable` from inside the guest rather
-  than a whole tool.
-- **Why three earlier attempts failed**: they all fed a bare ESL to an option that
-  expects a signed update — a specification mismatch, not a broken tool.
+- **How to write a Secure Boot variable from inside the guest**: one
+  `SetVariable` per variable with an auth-header stub and the authenticated
+  attribute — specified by `AuthService.c:690-700`, demonstrated by
+  `OvmfPkg/EnrollDefaultKeys`, and now exercised end to end on our own build.
+- **Why the earlier attempts failed, precisely**: not one cause but three —
+  missing auth-header shape, wrong vendor GUID for PK/KEK, and (earlier) a stale
+  binary copied by a script branch that never ran.
+- **What D-133's positive test needs**: a db holding the real Windows UEFI CA
+  2023 plus our signer and a dbx holding the 2011 CA hash. Both are now produced
+  by the helper, so the "cannot be tested without offline varstore editing"
+  premise from S163 is retired.
+- **The offline route has a second, untested branch**: `virt-fw-vars
+  --add-dbx-hash`/`--add-dbx-cert` call `sigdb_add_hash`/`sigdb_add_cert`
+  (`efi/siglist.py:173`) and never touch `authdata`, unlike `--set-dbx`
+  (`vars.py:322-327`). S163's finding is correct for `--set-dbx` only.
 
 ### Fog remaining
-- **D-133's positive test and D-130's Step 6** both wait on that one write. The
-  route is now explicit: an EFI enrolment helper that stages Microsoft's dbx data
-  and our signer on the ESP, calls `SetVariable("dbx", …)` in SetupMode, then
-  enrols PK to leave SetupMode.
-- Unchanged: TPM-under-SMM (D-130 gap 2), `PblTlsVerifyCert` residual, 19
-  Dependabot alerts, 10/13 enforcement paths unit-test only, no CI run observed
-  for S151–S163.
+- **Whether `--add-dbx-hash` actually survives an OVMF boot in UserMode** is
+  untested. It would only matter as a convenience for test stores; the fleet path
+  is the in-guest helper.
+- **How a distro OVMF platform is meant to take a PK** (a properly PKCS#7-signed
+  auth blob, i.e. what `Set-SecureBootUEFI`/`efi-updatevar` produce) is not
+  implemented here. Files checked: `AuthService.c` (the
+  `VerifyTimeBasedPayloadAndUpdate` path), `OvmfPkg/OvmfPkgX64.dsc`,
+  `scripts/gen-secureboot-keys.sh` (it emits unsigned `.auth` files and documents
+  Setup-Mode-only validity).
+- **D-130 gap 2 (TPM under SMM)** is untouched: `tpm-tis` reaches an unprovisioned
+  TPM, `tpm-crb` stalls. Files checked: `PblPkg/ci-harness-docker.sh`,
+  `test-mor-harness.sh`, `PBL-DEBT-LEDGER.md` D-130.
+- Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, 10/13
+  enforcement paths unit-test only, no CI run observed for S151–S164.
+- **Pre-existing style debt noticed, deliberately not touched**: `GRAPH-SPEC.yaml`
+  has 135 lines over 80 columns in `HEAD` as well (verified: identical count
+  before and after this session's edit; my edit adds none). Fixing them means
+  refolding scalars such as `files_owned: "a,b,c"`, which changes parsed values —
+  a separate change, not a ride-along.
 
 ### Debt items closed
-- None. Nothing this session reached a close criterion.
+- **D-133** — Step 6 checks report identities, not shapes. Negative test passed in
+  S161; positive test passes now. Commit `6cff1ff` + `086987a`; artifacts
+  `firmware/PblPkg/artifacts/d133-step6-results.txt`,
+  `d133-{positive-db-and-dbx,negative-db-noca,negative-dbx-dummy}-serial.log`,
+  `d133-enroll-serial.log`.
+- Convergence moves 54/58 → 55/58.
 
 ### Debt items still open
-- D-120, D-129, D-130, D-133 (+ D-132 residual).
+- D-120, D-129, D-130 (gap 1 now closed end to end; gap 2 + fleet PFX remain).
 
 ### Blockers
-- One capability (unsigned dbx write via an in-guest helper) blocks both
-  remaining Secure Boot items.
+- None for the Secure Boot key database. D-130 stays open on gap 2 (TPM under
+  SMM) and on the absence of a provisioned fleet signing PFX; D-129 still needs
+  real hardware.
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary). Two of my earlier attempts
-  produced the same error text and I nearly recorded "virt-fw-vars is broken".
-  Reading the source and noticing that the garbage *year changed with the input
-  shape* is what identified the real requirement. The lesson is the one this
-  thread keeps teaching: an error message is a symptom; the dependency's code is
-  the specification.
-- **Layer 1 — task specification** (mine, again). My plan said "try virt-fw-vars
-  against the empty varstore" without first checking what the tool's write options
-  require. Ten minutes of reading `vars.py` would have replaced three runs.
-- **Process note**: this session produced no code and closed nothing. That is the
-  honest outcome of a capability investigation, and the value is that the next
-  session starts from "one SetVariable" instead of "maybe the tool is broken".
+- **Layer 4 — verification feedback** (primary, and this time it worked as
+  intended): three consecutive runs each printed one precise firmware status
+  (`Invalid Parameter`, then `Invalid Parameter` on a *different* variable, then
+  `Security Violation` on the last one). Because the helper reports every write
+  instead of aborting silently, the failing operation was always the object of
+  study. The lesson worth keeping: a helper that says "half-enrolled is worse
+  than un-enrolled" also produces the diagnosis.
+- **Layer 5 — state management**: an entire session of work (files, a built
+  binary, a DSC change) was left uncommitted and untraced by S163's dangling run.
+  `build-pbl.sh`'s silent `-f` skip made it worse: the repo copy was stale, so a
+  harness could have booted a binary that disagreed with its source. The copy is
+  now derived from the real build path and prints a hash.
+- **Layer 1 — task specification** (minor): the harness first claimed
+  "q35 + TIS TPM" while running the non-SMM PBL build. Corrected in the generated
+  artifact rather than left as a plausible-looking wrong detail.
 
 ### Session artifacts
-- Changed: `docs/adr/PBL-DEBT-LEDGER.md` (D-130 gap 1, D-133 positive test).
-- Commit `ed2b19b` plus the graph record.
+- New: `firmware/PblPkg/EnrollKeys/{EnrollKeys.c,EnrollKeys.inf}`,
+  `firmware/PblPkg/EnrollKeys.efi` (`418d7d8c…`),
+  `firmware/PblPkg/test-d133-enroll-harness.sh`,
+  `firmware/PblPkg/artifacts/d133-*`.
+- Changed: `firmware/PblPkg/build-pbl.sh`, `PblPkg.dsc`,
+  `PblPersistDxe.efi` (rebuilt; a second rebuild reproduces `042f2914…` exactly),
+  `docs/adr/PBL-DEBT-LEDGER.md`, `.devin/graph/GRAPH-SPEC.yaml`.
+- Commits: `086987a` (helper + harness + artifacts), plus the record commit.
 
 ### Next session opening
-Write the EFI enrolment helper: a small EDK2 application added to `PblPkg.dsc`
-that reads a dbx ESL and our signer's certificate from the ESP, calls
-`SetVariable("dbx"/"db", …)` while the platform is in SetupMode, enrols PK last to
-leave SetupMode, then reboots into the signed PblApp — which yields D-133's
-positive test (the real Windows UEFI CA 2023 must satisfy the check) and clears
-Decision Step 6 for D-130.
+Take D-130 gap 2: run the SMM platform (`-machine q35,smm=on` + secure pflash +
+the PBL OVMF build) with `tpm-crb` and a swtpm started with the documented
+sequence, and capture the serial log that shows where it stalls — enrolment no
+longer blocks that, so the TPM interface is the only thing left in the Secure
+Boot chain before D-129's hardware run.
 
 ---
 
@@ -126,7 +169,6 @@ Decision Step 6 for D-130.
 | D-120 | BitLocker detection not implemented | OPEN | — |
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
-| D-133 | Decision Step 6 flags report presence, not identity: DbHasWi | OPEN | — |
 
 See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130) for close criteria.
 

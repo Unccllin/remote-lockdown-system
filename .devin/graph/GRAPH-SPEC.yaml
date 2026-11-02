@@ -111,7 +111,8 @@ session_nodes:
     entry_conditions:
       - "ARTIFACT complete"
     exit_conditions:
-      - "DEBT-LEDGER.md or PBL-DEBT-LEDGER.md updated (if a debt item was closed)"
+      - "DEBT-LEDGER.md or PBL-DEBT-LEDGER.md updated (if a debt item was \
+        closed)"
       - "trace.md updated with session-end status block"
       - "next session opening stated in one sentence"
 
@@ -160,7 +161,8 @@ phase_nodes:
     name: secrets-config
     skill: .devin/skills/phase-1-secrets-config/SKILL.md
     config: .devin/orchestration/phases/phase-1.conf
-    files_owned: "scripts/generate-secrets.sh,scripts/generate-recovery-keys.sh,scripts/validate-env.sh"
+    files_owned: "scripts/generate-secrets.sh,\
+                 scripts/generate-recovery-keys.sh,scripts/validate-env.sh"
     deps: []
     status: COMPLETE
 
@@ -168,7 +170,8 @@ phase_nodes:
     name: platform-services
     skill: .devin/skills/phase-2-platform-services/SKILL.md
     config: .devin/orchestration/phases/phase-2.conf
-    files_owned: "agent/platform/linux/*,agent/platform/macos/*,agent/platform/windows/*"
+    files_owned: "agent/platform/linux/*,agent/platform/macos/*,\
+                 agent/platform/windows/*"
     deps: []
     status: COMPLETE
 
@@ -192,7 +195,8 @@ phase_nodes:
     name: signing-autoupdate
     skill: .devin/skills/phase-5-signing-autoupdate/SKILL.md
     config: .devin/orchestration/phases/phase-5.conf
-    files_owned: "scripts/setup-signing.sh,docs/CODE_SIGNING.md,electron/package.json"
+    files_owned: "scripts/setup-signing.sh,docs/CODE_SIGNING.md,\
+                 electron/package.json"
     deps: [P4]
     status: COMPLETE
 
@@ -200,7 +204,8 @@ phase_nodes:
     name: monitoring
     skill: .devin/skills/phase-6-monitoring/SKILL.md
     config: .devin/orchestration/phases/phase-6.conf
-    files_owned: "server/src/routes/health.js,dashboard/src/pages/HealthPage.jsx,scripts/monitor.sh"
+    files_owned: "server/src/routes/health.js,\
+                 dashboard/src/pages/HealthPage.jsx,scripts/monitor.sh"
     deps: [P3]
     status: COMPLETE
 
@@ -216,7 +221,9 @@ phase_nodes:
     name: deps-sast
     skill: .devin/skills/phase-8-deps-sast/SKILL.md
     config: .devin/orchestration/phases/phase-8.conf
-    files_owned: "server/package.json,dashboard/package.json,agent/requirements-dev.txt,.github/workflows/codeql.yml,.github/workflows/lint.yml"
+    files_owned: "server/package.json,dashboard/package.json,\
+                 agent/requirements-dev.txt,.github/workflows/codeql.yml,\
+                 .github/workflows/lint.yml"
     deps: [P4]
     status: COMPLETE
 
@@ -224,7 +231,8 @@ phase_nodes:
     name: agent-e2e
     skill: .devin/skills/phase-9-agent-e2e/SKILL.md
     config: .devin/orchestration/phases/phase-9.conf
-    files_owned: "tests/e2e/agent-helpers.js,tests/e2e/agent-integration.test.js,scripts/run-e2e.sh"
+    files_owned: "tests/e2e/agent-helpers.js,\
+                 tests/e2e/agent-integration.test.js,scripts/run-e2e.sh"
     deps: [P7]
     status: COMPLETE
 
@@ -232,7 +240,8 @@ phase_nodes:
     name: dashboard-e2e
     skill: .devin/skills/phase-10-dashboard-e2e/SKILL.md
     config: .devin/orchestration/phases/phase-10.conf
-    files_owned: "dashboard/playwright.config.js,dashboard/e2e/*.js,dashboard/package.json"
+    files_owned: "dashboard/playwright.config.js,dashboard/e2e/*.js,\
+                 dashboard/package.json"
     deps: [P7]
     status: COMPLETE
 
@@ -248,7 +257,8 @@ phase_nodes:
     name: docker
     skill: .devin/skills/phase-12-docker/SKILL.md
     config: .devin/orchestration/phases/phase-12.conf
-    files_owned: "scripts/validate-docker.sh,docker-compose.test.yml,docs/DEPLOYMENT.md"
+    files_owned: "scripts/validate-docker.sh,docker-compose.test.yml,\
+                 docs/DEPLOYMENT.md"
     deps: [P11]
     status: COMPLETE
 
@@ -256,7 +266,9 @@ phase_nodes:
     name: notifications-metrics
     skill: .devin/skills/phase-13-notifications-metrics/SKILL.md
     config: .devin/orchestration/phases/phase-13.conf
-    files_owned: "server/src/routes/metrics.js,server/src/notifications/notify.js,server/src/jobs/alertScheduler.js"
+    files_owned: "server/src/routes/metrics.js,\
+                 server/src/notifications/notify.js,\
+                 server/src/jobs/alertScheduler.js"
     deps: [P6]
     status: COMPLETE
 
@@ -272,7 +284,8 @@ phase_nodes:
     name: load-testing
     skill: .devin/skills/phase-15-load-testing/SKILL.md
     config: .devin/orchestration/phases/phase-15.conf
-    files_owned: "tests/load/k6-*.js,scripts/run-load-test.sh,docs/LOAD_TESTING.md"
+    files_owned: "tests/load/k6-*.js,scripts/run-load-test.sh,\
+                 docs/LOAD_TESTING.md"
     deps: [P13]
     status: COMPLETE
 
@@ -280,7 +293,9 @@ phase_nodes:
     name: rbac
     skill: .devin/skills/phase-16-rbac/SKILL.md
     config: .devin/orchestration/phases/phase-16.conf
-    files_owned: "server/src/routes/admins.js,server/src/db/migrations/007_rbac.sql,dashboard/src/pages/AdminsPage.jsx"
+    files_owned: "server/src/routes/admins.js,\
+                 server/src/db/migrations/007_rbac.sql,\
+                 dashboard/src/pages/AdminsPage.jsx"
     deps: [P3]
     status: COMPLETE
 
@@ -327,7 +342,8 @@ verification_nodes:
 
   - id: V-LINT-AGENT
     name: agent-ruff
-    command: "cd agent && python3 -m ruff check . && python3 -m ruff format --check ."
+    command: "cd agent && python3 -m ruff check . && python3 -m ruff format \
+             --check ."
     expected_exit: 0
     component: C-AGENT
 
@@ -340,13 +356,15 @@ verification_nodes:
 
   - id: V-SYNTAX-SWEEP
     name: js-syntax-sweep
-    command: "find server/src electron -name '*.js' -o -name '*.cjs' | grep -v node_modules | xargs -I{} node --check {}"
+    command: "find server/src electron -name '*.js' -o -name '*.cjs' | grep \
+             -v node_modules | xargs -I{} node --check {}"
     expected_exit: 0
     component: C-SERVER
 
   - id: V-SHELL-SYNTAX
     name: shell-syntax-check
-    command: "bash -n scripts/*.sh && bash -n .devin/orchestration/orchestrator.sh"
+    command: "bash -n scripts/*.sh && bash -n \
+             .devin/orchestration/orchestrator.sh"
     expected_exit: 0
     component: C-SERVER
 
@@ -365,7 +383,8 @@ verification_nodes:
 
   - id: V-ELECTRON-SYNTAX
     name: electron-syntax-check
-    command: "cd electron && node --check main.js preload.js setup-preload.js setup-wizard.js server-starter.js config.js updater.js"
+    command: "cd electron && node --check main.js preload.js setup-preload.js \
+             setup-wizard.js server-starter.js config.js updater.js"
     expected_exit: 0
     component: C-ELECTRON
 
@@ -402,7 +421,8 @@ enforcement_paths:
     verified_by: [V-AGENT, V-HW-HARNESS]
     status: verified-on-hardware
     hardware_artifact_ref: "agent/hw_test_artifact_azure.json"
-    risk_notes: "D-011 CLOSED: Verified on Azure Windows 11 VM. 3 files encrypted/decrypted in 33ms."
+    risk_notes: "D-011 CLOSED: Verified on Azure Windows 11 VM. 3 files \
+                encrypted/decrypted in 33ms."
 
   - id: E-DECRYPT
     name: file-decryption
@@ -415,13 +435,15 @@ enforcement_paths:
 
   - id: E-LOCK-SCREEN
     name: workstation-lock
-    description: "LockWorkStation (Windows) / dm-tool (Linux) / CGSession (macOS)"
+    description: "LockWorkStation (Windows) / dm-tool (Linux) / CGSession \
+                 (macOS)"
     component: C-AGENT
     entry_function: "agent._lock_workstation"
     verified_by: [V-AGENT, V-HW-HARNESS]
     status: verified-on-hardware
     hardware_artifact_ref: "agent/hw_test_artifact_azure.json"
-    risk_notes: "D-007 CLOSED: Verified on Azure Windows 11 VM. tsdiscon issued with session_id=0, console_session_id=1."
+    risk_notes: "D-007 CLOSED: Verified on Azure Windows 11 VM. tsdiscon \
+                issued with session_id=0, console_session_id=1."
 
   - id: E-GUARDIAN
     name: lock-guardian
@@ -431,7 +453,8 @@ enforcement_paths:
     verified_by: [V-AGENT, V-HW-HARNESS]
     status: verified-on-hardware
     hardware_artifact_ref: "agent/hw_test_artifact_azure.json"
-    risk_notes: "D-007 CLOSED: Verified on Azure Windows 11 VM. Guardian ran 12s with re-lock."
+    risk_notes: "D-007 CLOSED: Verified on Azure Windows 11 VM. Guardian ran \
+                12s with re-lock."
 
   - id: E-BCD
     name: bcd-lockdown
@@ -446,9 +469,19 @@ enforcement_paths:
     # was verified on hardware" is not what those artifacts show. I3 now
     # refuses the claim (see docs/D-129-HARDWARE-RUNBOOK.md §2, §6).
     status: verified-in-unit-test
-    hardware_artifact_ref: "agent/hw_test_artifact_azure_bitlocker.json#E-BCD-01"
-    verification_note: "Attempted on hardware twice (Azure VM, HP SPARE_TEST 2026-08-21); both recorded FAIL. Re-run agent/hw_test_harness.py --tag E-BCD --services admin on Windows and cite the passing artifact to restore this claim."
-    risk_notes: "D-008 CLOSED: BitLocker suspend/resume verified on Azure VM with BitLocker. BCD changes fail on Azure (platform restriction) but rollback + BitLocker resume work correctly. On HP SPARE_TEST the BCD apply reported critical_applied=0 with rolled_back=true — the apply path, not just the platform, is unproven."
+    hardware_artifact_ref: "agent/hw_test_artifact_azure_bitlocker.json#E-BCD-0\
+                           1"
+    verification_note: "Attempted on hardware twice (Azure VM, HP SPARE_TEST \
+                       2026-08-21); both recorded FAIL. Re-run \
+                       agent/hw_test_harness.py --tag E-BCD --services admin \
+                       on Windows and cite the passing artifact to restore \
+                       this claim."
+    risk_notes: "D-008 CLOSED: BitLocker suspend/resume verified on Azure VM \
+                with BitLocker. BCD changes fail on Azure (platform \
+                restriction) but rollback + BitLocker resume work correctly. \
+                On HP SPARE_TEST the BCD apply reported critical_applied=0 \
+                with rolled_back=true — the apply path, not just the \
+                platform, is unproven."
 
   - id: E-HP-UEFI
     name: hp-uefi-lockdown
@@ -457,11 +490,13 @@ enforcement_paths:
     entry_function: "hp_uefi_lockdown.apply_boot_lockdown"
     verified_by: [V-AGENT, V-HW-HARNESS]
     status: verified-in-unit-test
-    risk_notes: "D-009 model-aware names; D-010 Sure Admin detection; needs hardware verification."
+    risk_notes: "D-009 model-aware names; D-010 Sure Admin detection; needs \
+                hardware verification."
 
   - id: E-ACK
     name: command-ack
-    description: "ACK with key_material + bios_password + boot_lock_detail to server"
+    description: "ACK with key_material + bios_password + boot_lock_detail to \
+                 server"
     component: C-AGENT
     entry_function: "agent.ack_command"
     verified_by: [V-AGENT, V-SERVER]
@@ -502,7 +537,8 @@ enforcement_paths:
     entry_function: "agent.handle_lockdown (boot_lock_detail aggregation)"
     verified_by: [V-AGENT, V-SERVER, V-DASHBOARD]
     status: verified-in-unit-test
-    risk_notes: "Closes the dangerous gap where critical_applied=0 was reported as success"
+    risk_notes: "Closes the dangerous gap where critical_applied=0 was \
+                reported as success"
 
   - id: E-OFFLINE-QUEUE
     name: offline-queue
@@ -569,93 +605,126 @@ component_nodes:
 debt_items:
   - id: D-001
     description: "Orchestrator only knows phases 0-7, not 8-16"
-    close_criteria: "orchestrator.sh updated with all 17 phases + dependency graph"
+    close_criteria: "orchestrator.sh updated with all 17 phases + dependency \
+                    graph"
     status: CLOSED
     commit_ref: "2026-08-10 session"
-    artifact_ref: "orchestrator.sh status shows all 17 phases; test 16 and test 8 pass; I6 resolved"
+    artifact_ref: "orchestrator.sh status shows all 17 phases; test 16 and \
+                  test 8 pass; I6 resolved"
 
   - id: D-002
-    description: "Phase completion markers are empty 0-byte files with no artifact references"
-    close_criteria: "Each phase-N.complete file contains commit hash + artifact reference"
+    description: "Phase completion markers are empty 0-byte files with no \
+                 artifact references"
+    close_criteria: "Each phase-N.complete file contains commit hash + \
+                    artifact reference"
     status: CLOSED
     commit_ref: "2026-08-10 session"
-    artifact_ref: "All 17 .complete files populated with commit+artifact+date+tests (4597 bytes total); I7 resolved"
+    artifact_ref: "All 17 .complete files populated with \
+                  commit+artifact+date+tests (4597 bytes total); I7 resolved"
 
   - id: D-003
     description: "No hardware-in-the-loop test harness for enforcement paths"
-    close_criteria: "At least one enforcement path verified on real hardware with run artifact"
+    close_criteria: "At least one enforcement path verified on real hardware \
+                    with run artifact"
     status: CLOSED
     commit_ref: "4e4b6e6"
-    artifact_ref: "agent/hw_test_artifact_azure.json - 3/5 enforcement paths passed on Azure Windows 11 VM"
+    artifact_ref: "agent/hw_test_artifact_azure.json - 3/5 enforcement paths \
+                  passed on Azure Windows 11 VM"
     blocks: [E-LOCK-SCREEN, E-GUARDIAN, E-BCD, E-HP-UEFI]
 
   - id: D-004
-    description: "HP UEFI lockdown reports false success when critical_applied=0"
-    close_criteria: "Server treats critical_applied=0 as lockdown_effective=false; dashboard shows warning"
+    description: "HP UEFI lockdown reports false success when \
+                 critical_applied=0"
+    close_criteria: "Server treats critical_applied=0 as \
+                    lockdown_effective=false; dashboard shows warning"
     status: CLOSED
     commit_ref: "Phase 17 (this session)"
     artifact_ref: "330 server tests + 143 agent tests + 26 dashboard tests pass"
 
   - id: D-005
     description: "No cross-session context persistence (no trace.md)"
-    close_criteria: "trace.md exists and is updated at session end with status block"
+    close_criteria: "trace.md exists and is updated at session end with \
+                    status block"
     status: CLOSED
     commit_ref: "2026-08-10 graph session"
-    artifact_ref: ".devin/graph/trace.md created with two session entries; I4 enforced by graph_assert.py"
+    artifact_ref: ".devin/graph/trace.md created with two session entries; I4 \
+                  enforced by graph_assert.py"
 
   - id: D-006
     description: "No formal graph spec or assertion engine"
-    close_criteria: "GRAPH-SPEC.yaml + graph_loader.py + graph_assert.py exist and enforce transitions"
+    close_criteria: "GRAPH-SPEC.yaml + graph_loader.py + graph_assert.py \
+                    exist and enforce transitions"
     status: CLOSED
     commit_ref: "2026-08-10 graph session"
-    artifact_ref: "GRAPH-SPEC.yaml + graph_loader.py + graph_assert.py created; 2 violations correctly detected (I6, I7); deliberate I1 violation test passes"
+    artifact_ref: "GRAPH-SPEC.yaml + graph_loader.py + graph_assert.py \
+                  created; 2 violations correctly detected (I6, I7); \
+                  deliberate I1 violation test passes"
 
   - id: D-007
-    description: "Lock guardian uses LockWorkStation from service session (Session 0 isolation)"
-    close_criteria: "Lock guardian works from service context OR documented as requiring interactive session"
+    description: "Lock guardian uses LockWorkStation from service session \
+                 (Session 0 isolation)"
+    close_criteria: "Lock guardian works from service context OR documented \
+                    as requiring interactive session"
     status: CLOSED
     commit_ref: "56c579c + 4e4b6e6"
-    artifact_ref: "agent/hw_test_artifact_azure.json - E-LOCK-SCREEN PASS (tsdiscon session_id=0), E-GUARDIAN PASS (12s re-lock)"
+    artifact_ref: "agent/hw_test_artifact_azure.json - E-LOCK-SCREEN PASS \
+                  (tsdiscon session_id=0), E-GUARDIAN PASS (12s re-lock)"
     blocks: [E-LOCK-SCREEN, E-GUARDIAN]
 
   - id: D-008
-    description: "BCD lockdown does not check BitLocker status before modifying BCD"
-    close_criteria: "Agent checks BitLocker and either handles or warns before bcdedit"
+    description: "BCD lockdown does not check BitLocker status before \
+                 modifying BCD"
+    close_criteria: "Agent checks BitLocker and either handles or warns \
+                    before bcdedit"
     status: CLOSED
     commit_ref: "4e4b6e6 + 1511288"
-    artifact_ref: "agent/hw_test_artifact_azure_bitlocker.json - BitLocker detected, protectors suspended/resumed correctly"
+    artifact_ref: "agent/hw_test_artifact_azure_bitlocker.json - BitLocker \
+                  detected, protectors suspended/resumed correctly"
     blocks: [E-BCD]
 
   - id: D-009
-    description: "HP UEFI setting names are hardcoded — vary across HP models/BIOS versions"
+    description: "HP UEFI setting names are hardcoded — vary across HP \
+                 models/BIOS versions"
     close_criteria: "Setting names are dynamically discovered or model-aware"
     status: CLOSED
-    commit_ref: "2026-08-14 session (RESEARCH-HP-HARDWARE.md + code verification)"
-    artifact_ref: "docs/RESEARCH-HP-HARDWARE.md — all candidate setting names verified against HP primary source documentation"
+    commit_ref: "2026-08-14 session (RESEARCH-HP-HARDWARE.md + code \
+                verification)"
+    artifact_ref: "docs/RESEARCH-HP-HARDWARE.md — all candidate setting names \
+                  verified against HP primary source documentation"
     blocks: [E-HP-UEFI]
 
   - id: D-010
-    description: "No HP Sure Admin / Sure Run / Sure Start awareness in UEFI lockdown"
-    close_criteria: "Agent detects Sure Admin and either works with it or reports blocked"
+    description: "No HP Sure Admin / Sure Run / Sure Start awareness in UEFI \
+                 lockdown"
+    close_criteria: "Agent detects Sure Admin and either works with it or \
+                    reports blocked"
     status: CLOSED
-    commit_ref: "2026-08-14 session (RESEARCH-HP-HARDWARE.md + EBAM detection fix)"
-    artifact_ref: "docs/RESEARCH-HP-HARDWARE.md — HP Sure Admin BIOS setting name + EBAM detection code"
+    commit_ref: "2026-08-14 session (RESEARCH-HP-HARDWARE.md + EBAM detection \
+                fix)"
+    artifact_ref: "docs/RESEARCH-HP-HARDWARE.md — HP Sure Admin BIOS setting \
+                  name + EBAM detection code"
     blocks: [E-HP-UEFI]
 
   - id: D-011
-    description: "File encryption fails silently on open files (PermissionError on Windows)"
-    close_criteria: "Agent retries with file-closed detection or reports which files blocked encryption"
+    description: "File encryption fails silently on open files \
+                 (PermissionError on Windows)"
+    close_criteria: "Agent retries with file-closed detection or reports \
+                    which files blocked encryption"
     status: CLOSED
     commit_ref: "690abdd + 4e4b6e6"
-    artifact_ref: "agent/hw_test_artifact_azure.json - E-ENCRYPT PASS (3 files encrypted/decrypted in 33ms on real Windows)"
+    artifact_ref: "agent/hw_test_artifact_azure.json - E-ENCRYPT PASS (3 \
+                  files encrypted/decrypted in 33ms on real Windows)"
     blocks: [E-ENCRYPT]
 
   - id: D-012
-    description: "Dashboard does not surface lockdown-effectiveness to operator (FIXED this session)"
-    close_criteria: "DeviceDetailPage shows boot_lock_detail panel with red flagging"
+    description: "Dashboard does not surface lockdown-effectiveness to \
+                 operator (FIXED this session)"
+    close_criteria: "DeviceDetailPage shows boot_lock_detail panel with red \
+                    flagging"
     status: CLOSED
     commit_ref: "Phase 17 (this session)"
-    artifact_ref: "5 new dashboard tests pass; panel renders for locked/stolen devices"
+    artifact_ref: "5 new dashboard tests pass; panel renders for \
+                  locked/stolen devices"
 
   # -------------------------------------------------------------------------
   # PBL debt items (D-100 through D-130)
@@ -667,35 +736,47 @@ debt_items:
 
   - id: D-100
     description: "QEMU not installed locally for PBL smoke testing"
-    close_criteria: "QEMU boot of PblApp.efi produces a run artifact (screenshot or serial log)"
+    close_criteria: "QEMU boot of PblApp.efi produces a run artifact \
+                    (screenshot or serial log)"
     status: CLOSED
     category: ENV
-    commit_ref: "684d7eb — Dockerfile.qemu + ci-harness-docker.sh (pbl-qemu image)"
-    artifact_ref: "QEMU serial logs: ci-harness-docker.sh 15/0, test-fve-harness.sh 16/0 (3 boots)"
+    commit_ref: "684d7eb — Dockerfile.qemu + ci-harness-docker.sh (pbl-qemu \
+                image)"
+    artifact_ref: "QEMU serial logs: ci-harness-docker.sh 15/0, \
+                  test-fve-harness.sh 16/0 (3 boots)"
 
   - id: D-101
     description: "swtpm not installed locally for TPM 2.0 simulation"
-    close_criteria: "QEMU+swtpm boot shows PBL TPM initialization (lock-state read, PCR read)"
+    close_criteria: "QEMU+swtpm boot shows PBL TPM initialization (lock-state \
+                    read, PCR read)"
     status: CLOSED
     category: ENV
-    commit_ref: "47a2ca4 + 6898dce — swtpm control-socket transport + TPM header byte-order fix"
-    artifact_ref: "swtpm-backed QEMU boots: NV provisioning + bound HMAC session in every harness log"
+    commit_ref: "47a2ca4 + 6898dce — swtpm control-socket transport + TPM \
+                header byte-order fix"
+    artifact_ref: "swtpm-backed QEMU boots: NV provisioning + bound HMAC \
+                  session in every harness log"
 
   - id: D-102
-    description: "TpmClient.c uses TPM_ST_NO_SESSIONS (no auth) — C2 requires HMAC sessions"
-    close_criteria: "TPM2_StartAuthSession (HMAC + AES-256-CFB) implemented for all NV operations"
+    description: "TpmClient.c uses TPM_ST_NO_SESSIONS (no auth) — C2 requires \
+                 HMAC sessions"
+    close_criteria: "TPM2_StartAuthSession (HMAC + AES-256-CFB) implemented \
+                    for all NV operations"
     status: CLOSED
     category: SECURITY
     commit_ref: "83bd5d299708b9b8307e2b6efabfab843d1d4c37"
-    artifact_ref: "Docker QEMU+swtpm smoke test: 12 PASS / 0 FAIL; /tmp/pbl-ci-artifact.txt"
+    artifact_ref: "Docker QEMU+swtpm smoke test: 12 PASS / 0 FAIL; \
+                  /tmp/pbl-ci-artifact.txt"
 
   - id: D-103
     description: "PlatformState.c SMBIOS string extraction is stubbed"
-    close_criteria: "Extract vendor/version/product strings from SMBIOS Type 0/1/2/4"
+    close_criteria: "Extract vendor/version/product strings from SMBIOS Type \
+                    0/1/2/4"
     status: CLOSED
     category: STUB
     commit_ref: "session 10 — PblSmbiosGetString helper + Type 0/1 extraction"
-    artifact_ref: "PblApp.efi SHA-256 702a3a10db5c14ec247c70ad2207c7727e5113c22f48e72619a4dfc36d8712ea"
+    artifact_ref: "PblApp.efi SHA-256 \
+                  702a3a10db5c14ec247c70ad2207c7727e5113c22f48e72619a4dfc36d87\
+                  12ea"
 
   - id: D-104
     description: "PlatformState.c PK fingerprint computation is stubbed"
@@ -703,31 +784,43 @@ debt_items:
     status: CLOSED
     category: STUB
     commit_ref: "session 9 — Sha256HashAll on PK variable data"
-    artifact_ref: "PblApp.efi SHA-256 4331ba23ba745ac10ba78c4743b9b9684fdd0e02ded3d6cdc2e56797cad2f5d6"
+    artifact_ref: "PblApp.efi SHA-256 \
+                  4331ba23ba745ac10ba78c4743b9b9684fdd0e02ded3d6cdc2e56797cad2\
+                  f5d6"
 
   - id: D-105
     description: "PlatformState.c db/dbx signature list parsing is stubbed"
-    close_criteria: "Parse EFI_SIGNATURE_LIST entries, identify known certificate GUIDs"
+    close_criteria: "Parse EFI_SIGNATURE_LIST entries, identify known \
+                    certificate GUIDs"
     status: CLOSED
     category: STUB
     commit_ref: "session 9 — walk EFI_SIGNATURE_LIST in db and dbx"
-    artifact_ref: "PblApp.efi SHA-256 4331ba23ba745ac10ba78c4743b9b9684fdd0e02ded3d6cdc2e56797cad2f5d6"
+    artifact_ref: "PblApp.efi SHA-256 \
+                  4331ba23ba745ac10ba78c4743b9b9684fdd0e02ded3d6cdc2e56797cad2\
+                  f5d6"
 
   - id: D-106
-    description: "PlatformState.c BootOrder network boot detection is incomplete"
-    close_criteria: "Parse EFI_DEVICE_PATH_PROTOCOL for MAC/IPv4/IPv6/HTTP boot nodes"
+    description: "PlatformState.c BootOrder network boot detection is \
+                 incomplete"
+    close_criteria: "Parse EFI_DEVICE_PATH_PROTOCOL for MAC/IPv4/IPv6/HTTP \
+                    boot nodes"
     status: CLOSED
     category: STUB
     commit_ref: "session 11 — walk EFI_DEVICE_PATH_PROTOCOL in Boot#### entries"
-    artifact_ref: "PblApp.efi SHA-256 2ceabe2e4c5aaa0c78ec2a0f964315030538e56175ad936cebc02d2a54fd0525"
+    artifact_ref: "PblApp.efi SHA-256 \
+                  2ceabe2e4c5aaa0c78ec2a0f964315030538e56175ad936cebc02d2a54fd\
+                  0525"
 
   - id: D-107
     description: "PlatformState.c PCR reading is not wired to TpmClient.c"
-    close_criteria: "Call PblTpmReadPcr for PCR 4/5/7/11, store digests in PBL_PLATFORM_STATE"
+    close_criteria: "Call PblTpmReadPcr for PCR 4/5/7/11, store digests in \
+                    PBL_PLATFORM_STATE"
     status: CLOSED
     category: TODO
     commit_ref: "session 8 — PblCollectPcrReadings calls PblTpmReadPcr"
-    artifact_ref: "PblApp.efi SHA-256 7e51e58a831b1000f2bfab4ad648f47c357e505489c9d382b898c591bd8921c5"
+    artifact_ref: "PblApp.efi SHA-256 \
+                  7e51e58a831b1000f2bfab4ad648f47c357e505489c9d382b898c591bd89\
+                  21c5"
 
   - id: D-108
     description: "TpmClient.c PblTpmReadPcr response parsing is stubbed"
@@ -735,35 +828,44 @@ debt_items:
     status: CLOSED
     category: STUB
     commit_ref: "session 8 — PblTpmReadPcr parses TPM2_PCR_Read response"
-    artifact_ref: "PblApp.efi SHA-256 7e51e58a831b1000f2bfab4ad648f47c357e505489c9d382b898c591bd8921c5"
+    artifact_ref: "PblApp.efi SHA-256 \
+                  7e51e58a831b1000f2bfab4ad648f47c357e505489c9d382b898c591bd89\
+                  21c5"
 
   - id: D-109
     description: "Verdict fetch and verification flow not implemented (C1 §7)"
-    close_criteria: "C1 §7 9-step verification + C3 HTTPS POST implemented and tested"
+    close_criteria: "C1 §7 9-step verification + C3 HTTPS POST implemented \
+                    and tested"
     status: CLOSED
     category: TODO
     commit_ref: "684d7eb — Verdict.c fetch + COSE_Sign1 verify"
-    artifact_ref: "QEMU serial log: verdict fetch + verify steps (TLS pin hardened in D-116, sig verify in D-205)"
+    artifact_ref: "QEMU serial log: verdict fetch + verify steps (TLS pin \
+                  hardened in D-116, sig verify in D-205)"
 
   - id: D-110
     description: "Policy blob parsing not implemented (C4)"
-    close_criteria: "COSE_Sign1 parsing + CBOR decoding of ~40 policy fields + signature verification"
+    close_criteria: "COSE_Sign1 parsing + CBOR decoding of ~40 policy fields \
+                    + signature verification"
     status: CLOSED
     category: TODO
     commit_ref: "684d7eb — Policy.c COSE_Sign1 + CBOR field parse"
-    artifact_ref: "QEMU serial log: policy parse step; root-of-trust provisioning via gen-policy-rot.py (D-215)"
+    artifact_ref: "QEMU serial log: policy parse step; root-of-trust \
+                  provisioning via gen-policy-rot.py (D-215)"
 
   - id: D-111
     description: "Decision engine not implemented (C4 §5 18-step evaluation)"
-    close_criteria: "C4 §5 18-step evaluation with locked/unlocked/degraded/override scenarios"
+    close_criteria: "C4 §5 18-step evaluation with \
+                    locked/unlocked/degraded/override scenarios"
     status: CLOSED
     category: TODO
     commit_ref: "684d7eb — Decision.c C4 §5 evaluation"
-    artifact_ref: "QEMU serial log: decision step → BLOCK + lock screen every boot"
+    artifact_ref: "QEMU serial log: decision step → BLOCK + lock screen every \
+                  boot"
 
   - id: D-112
     description: "Lock screen UI not implemented (REQ-14)"
-    close_criteria: "Text-mode + graphical lock screen with device ID, contact info, countdown"
+    close_criteria: "Text-mode + graphical lock screen with device ID, \
+                    contact info, countdown"
     status: CLOSED
     category: TODO
     commit_ref: "684d7eb — LockScreen.c"
@@ -775,15 +877,18 @@ debt_items:
     status: CLOSED
     category: TODO
     commit_ref: "684d7eb — Override.c"
-    artifact_ref: "harness sends override input ('Override input sent: True') in ci-harness boots"
+    artifact_ref: "harness sends override input ('Override input sent: True') \
+                  in ci-harness boots"
 
   - id: D-114
     description: "Chain-load Windows Boot Manager not implemented"
-    close_criteria: "ESP file discovery + gBS->LoadImage + gBS->StartImage for bootmgfw.efi"
+    close_criteria: "ESP file discovery + gBS->LoadImage + gBS->StartImage \
+                    for bootmgfw.efi"
     status: CLOSED
     category: TODO
     commit_ref: "684d7eb — ChainLoad.c"
-    artifact_ref: "test-chainload-harness.sh 7/7 PASS + 3/3 mismatch vs real Win11 23H2 bootx64.efi"
+    artifact_ref: "test-chainload-harness.sh 7/7 PASS + 3/3 mismatch vs real \
+                  Win11 23H2 bootx64.efi"
 
   - id: D-115
     description: "CBOR encoding/decoding not implemented"
@@ -795,7 +900,8 @@ debt_items:
 
   - id: D-116
     description: "TLS certificate pin verification not implemented (C3 §4)"
-    close_criteria: "Certificate pin extraction from C4 policy + TLS handshake verification"
+    close_criteria: "Certificate pin extraction from C4 policy + TLS \
+                    handshake verification"
     status: CLOSED
     category: SECURITY
     commit_ref: "684d7eb — TlsVerify.c"
@@ -803,11 +909,13 @@ debt_items:
 
   - id: D-117
     description: "No runtime tests for PBL modules"
-    close_criteria: "Host-side unit tests for TPM commands + QEMU+swtpm integration tests"
+    close_criteria: "Host-side unit tests for TPM commands + QEMU+swtpm \
+                    integration tests"
     status: CLOSED
     category: TEST
     commit_ref: "684d7eb + harness commits"
-    artifact_ref: "8+ QEMU+swtpm serial logs; ci-harness-docker 15/0, persistence 16/0, fve 16/0"
+    artifact_ref: "8+ QEMU+swtpm serial logs; ci-harness-docker 15/0, \
+                  persistence 16/0, fve 16/0"
 
   - id: D-118
     description: "EFI_RNG_PROTOCOL nonce generation not implemented (C3 §5)"
@@ -833,11 +941,13 @@ debt_items:
 
   - id: D-121
     description: "SPI protections check not implemented (C4 §2.3)"
-    close_criteria: "Read SPI config registers via SMM protocol, check BIOSWE/BLE/SMM_BWP"
+    close_criteria: "Read SPI config registers via SMM protocol, check \
+                    BIOSWE/BLE/SMM_BWP"
     status: CLOSED
     category: TODO
     commit_ref: "684d7eb — SpiProtections.c (Intel B0:D31:F5 HSFS read)"
-    artifact_ref: "exercised every QEMU boot in platform-state collection; real-hw residual → D-129"
+    artifact_ref: "exercised every QEMU boot in platform-state collection; \
+                  real-hw residual → D-129"
 
   - id: D-122
     description: "DCI/DCP check not implemented (C4 §2.4)"
@@ -857,11 +967,13 @@ debt_items:
 
   - id: D-124
     description: "MOR (Memory Overwrite Request) not implemented (C4 §2.6)"
-    close_criteria: "Set MOR bit via EFI_TCG2_PROTOCOL or ACPI Memory Clear interface"
+    close_criteria: "Set MOR bit via EFI_TCG2_PROTOCOL or ACPI Memory Clear \
+                    interface"
     status: CLOSED
     category: TODO
     commit_ref: "684d7eb — Mor.c, wired into BLOCK path in PblApp.c"
-    artifact_ref: "MOR set on lockdown path in QEMU boots; real-hw residual → D-129"
+    artifact_ref: "MOR set on lockdown path in QEMU boots; real-hw residual → \
+                  D-129"
 
   - id: D-125
     description: "TCG event log not implemented (C4 §2.7)"
@@ -873,7 +985,8 @@ debt_items:
 
   - id: D-126
     description: "SVN (Security Version Number) check not implemented (C4 §2.8)"
-    close_criteria: "Read firmware version from SMBIOS Type 0, compare against C4 policy floor"
+    close_criteria: "Read firmware version from SMBIOS Type 0, compare \
+                    against C4 policy floor"
     status: CLOSED
     category: TODO
     commit_ref: "684d7eb — Svn.c"
@@ -889,7 +1002,8 @@ debt_items:
 
   - id: D-128
     description: "SBAT variable check not implemented"
-    close_criteria: "Determine SBAT relevance for PBL; if relevant, read SBAT variable from ESP"
+    close_criteria: "Determine SBAT relevance for PBL; if relevant, read SBAT \
+                    variable from ESP"
     status: CLOSED
     category: TODO
     commit_ref: "684d7eb — Sbat.c"
@@ -897,13 +1011,15 @@ debt_items:
 
   - id: D-129
     description: "No real hardware validation for PBL"
-    close_criteria: "Boot PblApp.efi on real UEFI hardware, capture serial/log output"
+    close_criteria: "Boot PblApp.efi on real UEFI hardware, capture \
+                    serial/log output"
     status: OPEN
     category: ENV
 
   - id: D-130
     description: "Code signing not configured for PblApp.efi"
-    close_criteria: "Sign PblApp.efi with sbsign, verify loads under Secure Boot in QEMU"
+    close_criteria: "Sign PblApp.efi with sbsign, verify loads under Secure \
+                    Boot in QEMU"
     status: OPEN
     category: SECURITY
 
@@ -958,12 +1074,15 @@ debt_items:
   # -------------------------------------------------------------------------
 
   - id: D-200
-    description: "PBL verdict endpoint (POST /v1/verdict) not implemented in serverless Worker"
+    description: "PBL verdict endpoint (POST /v1/verdict) not implemented in \
+                 serverless Worker"
     close_criteria: >-
-      CBOR request parsed, device status looked up, COSE_Sign1 verdict signed and
+      CBOR request parsed, device status looked up, COSE_Sign1 verdict signed
+      and
       returned; and a runtime test with real PBL firmware (the ledger's stronger
       wording — the spec previously closed this on the unit-tested endpoint
-      alone, which is why the spec and the ledger disagreed for several sessions).
+      alone, which is why the spec and the ledger disagreed for several
+      sessions).
     status: CLOSED
     category: SERVER
     commit_ref: >-
@@ -977,7 +1096,8 @@ debt_items:
 
   - id: D-133
     description: >-
-      Decision Step 6 flags report presence, not identity: DbHasWindowsUefiCa2023
+      Decision Step 6 flags report presence, not identity:
+      DbHasWindowsUefiCa2023
       is set for any X.509 cert in db and DbxHasMs2011Revocation for any X.509
       revocation in dbx, so a self-signed development certificate satisfies a
       check named "has Windows UEFI CA 2023".
@@ -986,20 +1106,27 @@ debt_items:
       test (a self-signed cert in db no longer satisfies the Windows-CA check)
       AND the positive test (the real Windows UEFI CA 2023 does satisfy it),
       both evidenced by serial-log basis lines.
-    status: OPEN
+    status: CLOSED
     category: SECURITY
     commit_ref: >-
       6cff1ff — PlatformState.c walks EFI_SIGNATURE_DATA entries and compares
-      fingerprints (negative test passes; positive test blocked on varstore
-      enrolment)
+      fingerprints against the Windows UEFI CA 2023 / Microsoft UEFI CA 2011
+      SHA-256s; 086987a — EnrollKeys.efi enrols db/dbx/PK in Setup Mode so the
+      positive case can be built at all
     artifact_ref: >-
-      firmware/PblPkg/artifacts/d133-negative-test-{serial.log,results.txt} —
-      basis moved from "dbx lacks the MS 2011 revocation" to "db lacks the
-      Windows UEFI CA 2023" under the same signed build and Secure Boot platform
+      firmware/PblPkg/artifacts/d133-step6-results.txt — one signed PblApp, one
+      Secure Boot platform, three varstores: db+dbx correct passes Step 6 (basis
+      advances to "S3 enabled without MOR"); db without the Windows UEFI CA 2023
+      blocks with "db lacks the Windows UEFI CA 2023"; dbx with a dummy hash
+      blocks with "dbx lacks the MS 2011 revocation". Serial logs:
+      d133-{positive-db-and-dbx,negative-db-noca,negative-dbx-dummy}-serial.log,
+      d133-enroll-serial.log, d133-negative-test-{serial.log,results.txt}
 
   - id: D-201
-    description: "PBL policy endpoint (GET /v1/policy/{version}) not implemented"
-    close_criteria: "COSE_Sign1 policy blob served from KV with correct Content-Type"
+    description: "PBL policy endpoint (GET /v1/policy/{version}) not \
+                 implemented"
+    close_criteria: "COSE_Sign1 policy blob served from KV with correct \
+                    Content-Type"
     status: CLOSED
     category: SERVER
     commit_ref: "684d7eb — GET/POST /v1/policy in Worker + Express"
@@ -1007,7 +1134,8 @@ debt_items:
 
   - id: D-202
     description: "PBL enrollment endpoint (POST /v1/enroll) not implemented"
-    close_criteria: "Accepts device_id/ek_cert/ak_public, stores in KV, returns pinned cert + policy version"
+    close_criteria: "Accepts device_id/ek_cert/ak_public, stores in KV, \
+                    returns pinned cert + policy version"
     status: CLOSED
     category: SERVER
     commit_ref: "684d7eb — POST /v1/enroll in Worker + Express"
@@ -1015,31 +1143,42 @@ debt_items:
 
   - id: D-203
     description: "PBL attestation endpoint (POST /v1/attest) not implemented"
-    close_criteria: "Accepts TPM2_Quote, verifies AK signature, returns attestation result"
+    close_criteria: "Accepts TPM2_Quote, verifies AK signature, returns \
+                    attestation result"
     status: CLOSED
     category: SERVER
     commit_ref: "684d7eb — POST /v1/attest (TPM2_Quote verify + PCR digest)"
-    artifact_ref: "579 server Jest + 305 serverless Vitest tests; PCR/event-log deep compare is residual"
+    artifact_ref: "579 server Jest + 305 serverless Vitest tests; \
+                  PCR/event-log deep compare is residual"
 
   - id: D-204
-    description: "PBL override endpoints (POST /v1/override/challenge and /response) not implemented"
-    close_criteria: "Challenge issued and response verified for offline override flow"
+    description: "PBL override endpoints (POST /v1/override/challenge and \
+                 /response) not implemented"
+    close_criteria: "Challenge issued and response verified for offline \
+                    override flow"
     status: CLOSED
     category: SERVER
     commit_ref: "684d7eb — /v1/override/challenge + /response"
-    artifact_ref: "579 server Jest + 305 serverless Vitest tests; production operator key is residual"
+    artifact_ref: "579 server Jest + 305 serverless Vitest tests; production \
+                  operator key is residual"
 
   - id: D-205
-    description: "Verdict signing infrastructure (Ed25519/ES256 + COSE_Sign1) not implemented"
-    close_criteria: "Ed25519 signing key generated, cert pinned in C4 policy, COSE_Sign1 signing works"
+    description: "Verdict signing infrastructure (Ed25519/ES256 + COSE_Sign1) \
+                 not implemented"
+    close_criteria: "Ed25519 signing key generated, cert pinned in C4 policy, \
+                    COSE_Sign1 signing works"
     status: CLOSED
     category: SECURITY
-    commit_ref: "684d7eb + 985f059 — ES256 firmware verification verified in QEMU+swtpm"
-    artifact_ref: "test-d205-harness.sh certs/chain tests; Ed25519 firmware verify blocked by EDK2 (sub-debt)"
+    commit_ref: "684d7eb + 985f059 — ES256 firmware verification verified in \
+                QEMU+swtpm"
+    artifact_ref: "test-d205-harness.sh certs/chain tests; Ed25519 firmware \
+                  verify blocked by EDK2 (sub-debt)"
 
   - id: D-206
-    description: "PBL device identity mapping (TPM-based device_id) not implemented"
-    close_criteria: "KV schema for pbl_devices:{device_id} works, lookup by TPM device_id returns correct status"
+    description: "PBL device identity mapping (TPM-based device_id) not \
+                 implemented"
+    close_criteria: "KV schema for pbl_devices:{device_id} works, lookup by \
+                    TPM device_id returns correct status"
     status: CLOSED
     category: SERVER
     commit_ref: "60c0a78"
@@ -1055,15 +1194,18 @@ debt_items:
 
   - id: D-208
     description: "COSE_Sign1 encoding in serverless Worker not implemented"
-    close_criteria: "Worker produces valid COSE_Sign1 responses verifiable by PBL"
+    close_criteria: "Worker produces valid COSE_Sign1 responses verifiable by \
+                    PBL"
     status: CLOSED
     category: SERVER
     commit_ref: "ee311de"
     artifact_ref: "575 server + 305 serverless tests pass"
 
   - id: D-209
-    description: "PBL policy blob generation (~40 fields, signed) not implemented"
-    close_criteria: "All ~40 C4 policy fields populated, signed with policy key, stored in KV"
+    description: "PBL policy blob generation (~40 fields, signed) not \
+                 implemented"
+    close_criteria: "All ~40 C4 policy fields populated, signed with policy \
+                    key, stored in KV"
     status: CLOSED
     category: SERVER
     commit_ref: "d111ada"
@@ -1071,7 +1213,8 @@ debt_items:
 
   - id: D-210
     description: "Serverless Worker /v1/* route integration not implemented"
-    close_criteria: "/v1/* routes dispatched correctly, PBL endpoints accessible at Worker URL"
+    close_criteria: "/v1/* routes dispatched correctly, PBL endpoints \
+                    accessible at Worker URL"
     status: CLOSED
     category: SERVER
     commit_ref: "9612fbb"
@@ -1080,11 +1223,14 @@ debt_items:
   # Covert tracking debt items (D-211+)
   - id: D-211
     description: "Covert tracking mode (C5) not fully implemented"
-    close_criteria: "Agent stealth, dashboard Track button, admin API, PCR sealing, end-to-end test"
+    close_criteria: "Agent stealth, dashboard Track button, admin API, PCR \
+                    sealing, end-to-end test"
     status: CLOSED
     category: TODO
-    commit_ref: "684d7eb + C5 chain (Decision.c TRACKING, server verdict+track, agent handle_track)"
-    artifact_ref: "agent pytest suite incl. tracking tests; real-Windows residual → D-129"
+    commit_ref: "684d7eb + C5 chain (Decision.c TRACKING, server \
+                verdict+track, agent handle_track)"
+    artifact_ref: "agent pytest suite incl. tracking tests; real-Windows \
+                  residual → D-129"
 
 # ---------------------------------------------------------------------------
 # GRAPH INVARIANTS (asserted by graph_assert.py)
@@ -1101,7 +1247,7 @@ debt_items:
 # I5: No code changes can be made before RULE-ZERO is complete for the
 #     current work item.
 # I6: The orchestrator must know about ALL phases in the graph (resolved —
-#     D-001 CLOSED; orchestrator.sh has all 17 phases in PHASE_DEPS, PHASE_NAMES,
+# D-001 CLOSED; orchestrator.sh has all 17 phases in PHASE_DEPS, PHASE_NAMES,
 #     show_status, run_all, and case statement).
 # I7: Every phase marked COMPLETE must have a non-empty artifact reference
 #     (resolved — D-002 CLOSED; all 17 .complete files populated with commit
@@ -1111,36 +1257,46 @@ invariants:
   - id: I1
     rule: "phase_deps_must_be_complete"
     description: "No phase can run before its dependencies are COMPLETE"
-    check: "for each phase P with deps D, all D must have status COMPLETE before P runs"
+    check: "for each phase P with deps D, all D must have status COMPLETE \
+           before P runs"
 
   - id: I2
     rule: "debt_close_requires_evidence"
-    description: "No debt item can be CLOSED without commit_ref and artifact_ref"
-    check: "for each debt item with status CLOSED, commit_ref and artifact_ref must be non-empty"
+    description: "No debt item can be CLOSED without commit_ref and \
+                 artifact_ref"
+    check: "for each debt item with status CLOSED, commit_ref and \
+           artifact_ref must be non-empty"
 
   - id: I3
     rule: "hardware_verification_requires_real_artifact"
-    description: "No enforcement path can be marked verified-on-hardware without real hardware artifact"
-    check: "for each enforcement path with status verified-on-hardware, artifact_ref must reference real hardware (not WSL, not mock)"
+    description: "No enforcement path can be marked verified-on-hardware \
+                 without real hardware artifact"
+    check: "for each enforcement path with status verified-on-hardware, \
+           artifact_ref must reference real hardware (not WSL, not mock)"
 
   - id: I4
     rule: "session_close_requires_trace_update"
     description: "No session can close without updating trace.md"
-    check: "trace.md must have a new entry with session-end status block after CLOSE-DEBT"
+    check: "trace.md must have a new entry with session-end status block \
+           after CLOSE-DEBT"
 
   - id: I5
     rule: "rule_zero_before_code"
     description: "No code changes before RULE-ZERO is complete"
-    check: "RULE-ZERO exit_conditions must be met before IMPLEMENT entry_conditions are checked"
+    check: "RULE-ZERO exit_conditions must be met before IMPLEMENT \
+           entry_conditions are checked"
 
   - id: I6
     rule: "orchestrator_knows_all_phases"
     description: "Orchestrator must know about ALL phases in the graph"
-    check: "orchestrator.sh PHASE_DEPS and PHASE_NAMES must include all 17 phases (0-16)"
+    check: "orchestrator.sh PHASE_DEPS and PHASE_NAMES must include all 17 \
+           phases (0-16)"
     currently_violated: false
 
   - id: I7
     rule: "complete_phases_have_artifacts"
-    description: "Every phase marked COMPLETE must have a non-empty artifact reference"
-    check: "each results/phase-N.complete file must contain commit hash + artifact reference"
+    description: "Every phase marked COMPLETE must have a non-empty artifact \
+                 reference"
+    check: "each results/phase-N.complete file must contain commit hash + \
+           artifact reference"
     currently_violated: false

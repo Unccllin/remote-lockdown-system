@@ -733,6 +733,18 @@
   verdict releases the boot" cannot be shown until PblApp is signed and keys are
   enrolled — the signing work is a prerequisite for that evidence, not only a
   release concern.
+- **Update (2026-10-30, session 164) — gap 1 is closed end to end.** The db/dbx
+  content is now produced by an in-guest helper (`EnrollKeys.efi`, commit
+  `086987a`): from an empty Setup-Mode varstore it enrols dbx, db, KEK and PK
+  (PK last, since that is what leaves Setup Mode), and the platform reports
+  `SecureBoot=1 SetupMode=0` immediately afterwards. On the next boot Decision
+  Step 5 and Step 6 both pass for the signed PblApp, and the basis line advances
+  to `S3 enabled without MOR` — so the residual D-130 failure is no longer the
+  key database. Evidence and the two fencing negatives:
+  `firmware/PblPkg/artifacts/d133-step6-results.txt` (D-133).
+  What remains open is unrelated to enrolment: **gap 2** (TPM under SMM —
+  `tpm-tis` sees an unprovisioned TPM, `tpm-crb` stalls) and the fact that the
+  signing cert in use is a test self-signed one, not a provisioned fleet PFX.
 - **Status**: OPEN
 - **Category**: SECURITY
 - **Blocker**: PblApp.efi is not signed. Secure Boot will not load an
@@ -957,9 +969,9 @@
     defence in depth, not a gap in the fix as ruled.
 
 ### D-133 — Decision Step 6 checks report properties they never verified
-- **Status**: OPEN — **implementation done and the negative test passes**
-  (session 161); the positive test is blocked on varstore enrolment. Found
-  2026-10-30, session 160, while planning the Secure Boot work for D-130.
+- **Status**: CLOSED (2026-10-30, session 164). Implementation session 161; the
+  negative test passed then and the positive test passes now. Found 2026-10-30,
+  session 160, while planning the Secure Boot work for D-130.
 - **Category**: SECURITY
 - **What the code does**: `PblCollectDbDbxState` (`PlatformState.c:166-185`,
   `196-220`) walks db and dbx and sets flags whose names promise specificity the
@@ -1005,9 +1017,51 @@
   - after: `Decision BLOCK basis: db lacks the Windows UEFI CA 2023` — the db
     half now rejects it, because sha256(snakeoil DER) ≠ sha256(Windows UEFI CA
     2023). The gate no longer accepts a look-alike.
-- **Positive test — NOT yet run, and the blocker is now precisely identified**
-  (session 163). Offline varstore editing gets most of the way and then stops at
-  one specific operation:
+- **Positive test — PASSES** (`firmware/PblPkg/artifacts/d133-step6-results.txt`,
+  session 164). Three boots of the *same* signed PblApp on the *same* Secure Boot
+  platform, varying only what is in db/dbx:
+
+  | db | dbx | Decision basis |
+  |----|-----|----------------|
+  | signer + real Windows UEFI CA 2023 | MS 2011 CA hash | *passes Step 6* — basis advances to "S3 enabled without MOR" |
+  | signer only | MS 2011 CA hash | `db lacks the Windows UEFI CA 2023` |
+  | signer + real Windows UEFI CA 2023 | sha256("") dummy | `dbx lacks the MS 2011 revocation` |
+
+  The first row is the close criterion: the real certificate satisfies a check
+  named after it, and the basis line shows the decision moving past Step 6. The
+  fence-posts on either side show each half still fails closed on the identity,
+  not the shape. Reproduce with `firmware/PblPkg/test-d133-enroll-harness.sh`.
+- **How the varstore was built (session 164)** — an in-guest helper,
+  `firmware/PblPkg/EnrollKeys/EnrollKeys.c`, writes db/dbx/KEK/PK from ESLs staged
+  on the ESP while the platform is in Setup Mode, PK last because enrolling it is
+  what leaves Setup Mode. Running it exposed three defects that no amount of
+  reading had caught, each silent until the firmware said otherwise:
+  1. **Every write failed with EFI_INVALID_PARAMETER.** PK/KEK/db/dbx are
+     time-based authenticated variables: `AuthService.c:ProcessVarWithPk()`
+     requires both the `TIME_BASED_AUTHENTICATED_WRITE_ACCESS` attribute *and* an
+     `EFI_VARIABLE_AUTHENTICATION_2` header even in Setup Mode, then takes the
+     payload from `Data + AUTHINFO2_SIZE (Data)`. Setup Mode skips the signature
+     *verification* (`PcdRequireSelfSignedPk=FALSE`), so the PKCS#7 may be empty —
+     the shape is mandatory, the signature is not. Same construction as
+     `OvmfPkg/EnrollDefaultKeys`.
+  2. **PK/KEK were written under the wrong vendor GUID** (the image-security
+     database GUID instead of `gEfiGlobalVariableGuid`). Not harmless: the driver
+     does not treat the variable as authenticated and the write fails with
+     EFI_INVALID_PARAMETER. Symptom ordering gave it away — dbx, db and KEK
+     succeeded, PK failed.
+  3. **The distro OVMF cannot be used for PK enrolment.** Ubuntu's
+     `OVMF_CODE_4M.secboot.fd` is built with `PcdRequireSelfSignedPk=TRUE`, so the
+     unsigned Setup-Mode PK write returns EFI_SECURITY_VIOLATION. The PBL OVMF
+     build (`build-pbl.sh`) has the PCD FALSE and accepts it. A harness that
+     silently falls back to the distro build would look like a helper bug.
+- **The offline route does exist after all, for dbx at least**: `virt-fw-vars`
+  has `--add-dbx-hash`/`--add-dbx-cert`, which (unlike `--set-dbx`) go through
+  `sigdb_add_hash`/`sigdb_add_cert` and need no auth blob. Session 163's finding
+  stands for `--set-dbx`; the add-* options are a second, untested route. The
+  in-guest helper remains the fleet path, since a real machine's NVRAM is not a
+  file and the ruling is provisioning-time enrolment.
+- **Positive test — the session-163 blocker, kept for the record**: offline
+  varstore editing gets most of the way and then stops at one specific operation:
   - `virt-fw-vars --add-db GUID cert.pem` **works** — adding our signer to the
     Microsoft-keyed store's db succeeds and produces a valid varstore.
   - `virt-fw-vars --set-dbx FILE` **cannot work with a bare ESL**. Its source
@@ -1033,7 +1087,13 @@
   reflash; that is the refinement, not a correctness gap.
 - **Close criteria**: the positive test — a db containing the real Windows UEFI
   CA 2023 must satisfy the check, with the serial-log basis line showing the
-  decision moving past Step 6.
+  decision moving past Step 6. **Met (session 164).**
+- **Commit**: `6cff1ff` (fingerprint comparison, session 161), `086987a`
+  (EnrollKeys.efi + the positive/negative matrix).
+- **Artifact**: `firmware/PblPkg/artifacts/d133-step6-results.txt` plus
+  `d133-{positive-db-and-dbx,negative-db-noca,negative-dbx-dummy}-serial.log`,
+  `d133-enroll-serial.log`, and the session-161
+  `d133-negative-test-{serial.log,results.txt}`.
 
 ---
 
