@@ -505,6 +505,173 @@ describe('Serverless Worker', () => {
       expect(checkin2Data.command.type).toBe('unlock');
       expect(checkin2Data.command.key_material).toBe('test-fernet-key-base64');
     });
+
+    it('marks a duress recovery on the queued unlock command', async () => {
+      // Session 177: a mutation audit replaced the duress_code expression with
+      // `null` and the whole suite stayed green — nothing asserted the flag. A
+      // duress recovery silently becoming a REAL unlock is the exact failure the
+      // feature exists to prevent, so it needs its own assertion.
+      const { apiKey, device } = await enrollDevice(worker, env, 'DURESS-001');
+
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${device.id}/flag-stolen`,
+          { hostname_confirm: 'DURESS-001' },
+          { Authorization: 'Bearer test-admin-token' },
+        ),
+        env,
+      );
+
+      // Acknowledge the lockdown command first — the check-in hands out the
+      // oldest pending command, so the unlock queued by recover would otherwise
+      // sit behind it.
+      const lockBody = JSON.stringify({ hostname: 'DURESS-001' });
+      const lockCheckin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', lockBody, signRequest(lockBody, apiKey)),
+        env,
+      );
+      const lockData: any = await parseResponse(lockCheckin);
+      const lockAckBody = JSON.stringify({
+        hostname: 'DURESS-001',
+        command_id: lockData.command.id,
+        result_status: 'executed',
+      });
+      await worker.fetch(
+        makeRequest('POST', '/api/agent/command-ack', lockAckBody, signRequest(lockAckBody, apiKey)),
+        env,
+      );
+
+      const recoverResp = await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${device.id}/recover`,
+          { hostname_confirm: 'DURESS-001', duress_code: true },
+          { Authorization: 'Bearer test-admin-token' },
+        ),
+        env,
+      );
+      expect(recoverResp.status).toBe(200);
+
+      // The agent learns it must fake the unlock from the check-in payload.
+      const durressCheckinBody = JSON.stringify({ hostname: 'DURESS-001' });
+      const durressCheckin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', durressCheckinBody,
+                   signRequest(durressCheckinBody, apiKey)),
+        env,
+      );
+      const durressData: any = await parseResponse(durressCheckin);
+
+      expect(durressData.command.type).toBe('unlock');
+      expect(durressData.command.duress_code).toBe(true);
+    });
+
+    it('a normal recovery is not marked as duress', async () => {
+      const { apiKey, device } = await enrollDevice(worker, env, 'NORMAL-001');
+
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${device.id}/flag-stolen`,
+          { hostname_confirm: 'NORMAL-001' },
+          { Authorization: 'Bearer test-admin-token' },
+        ),
+        env,
+      );
+      // Acknowledge the lockdown command first — the check-in hands out the
+      // oldest pending command, so the unlock queued by recover would otherwise
+      // sit behind it.
+      const lockBody = JSON.stringify({ hostname: 'NORMAL-001' });
+      const lockCheckin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', lockBody, signRequest(lockBody, apiKey)),
+        env,
+      );
+      const lockData: any = await parseResponse(lockCheckin);
+      const lockAckBody = JSON.stringify({
+        hostname: 'NORMAL-001',
+        command_id: lockData.command.id,
+        result_status: 'executed',
+      });
+      await worker.fetch(
+        makeRequest('POST', '/api/agent/command-ack', lockAckBody, signRequest(lockAckBody, apiKey)),
+        env,
+      );
+
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${device.id}/recover`,
+          { hostname_confirm: 'NORMAL-001' },
+          { Authorization: 'Bearer test-admin-token' },
+        ),
+        env,
+      );
+
+      const normalBody = JSON.stringify({ hostname: 'NORMAL-001' });
+      const normalCheckin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', normalBody, signRequest(normalBody, apiKey)),
+        env,
+      );
+      const normalData: any = await parseResponse(normalCheckin);
+
+      expect(normalData.command.type).toBe('unlock');
+      expect(normalData.command.duress_code ?? null).toBe(null);
+    });
+
+    it("a device cannot ACK another device's command", async () => {
+      // Session 177: removing the `c.device_id === device.id` ownership check from
+      // handleCommandAck left the whole suite green. Without that check any
+      // enrolled device can mark another device's lockdown command as executed or
+      // failed, so the fleet's command state is forgeable.
+      const victim = await enrollDevice(worker, env, 'ACK-VICTIM-001');
+      const attacker = await enrollDevice(worker, env, 'ACK-ATTACKER-001');
+
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${victim.device.id}/flag-stolen`,
+          { hostname_confirm: 'ACK-VICTIM-001' },
+          { Authorization: 'Bearer test-admin-token' },
+        ),
+        env,
+      );
+
+      // The victim checks in and receives its lockdown command.
+      const victimBody = JSON.stringify({ hostname: 'ACK-VICTIM-001' });
+      const victimCheckin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', victimBody, signRequest(victimBody, victim.apiKey)),
+        env,
+      );
+      const victimData: any = await parseResponse(victimCheckin);
+      const victimCmdId = victimData.command.id;
+      expect(victimCmdId).toBeTruthy();
+
+      // The attacker tries to ACK it with a valid signature of its own.
+      const attackBody = JSON.stringify({
+        hostname: 'ACK-ATTACKER-001',
+        command_id: victimCmdId,
+        result_status: 'failed',
+      });
+      const attackResp = await worker.fetch(
+        makeRequest('POST', '/api/agent/command-ack', attackBody,
+                   signRequest(attackBody, attacker.apiKey)),
+        env,
+      );
+      expect(attackResp.status).toBe(404);
+
+      // And the rightful owner can still ACK it.
+      const ownerBody = JSON.stringify({
+        hostname: 'ACK-VICTIM-001',
+        command_id: victimCmdId,
+        result_status: 'executed',
+      });
+      const ownerResp = await worker.fetch(
+        makeRequest('POST', '/api/agent/command-ack', ownerBody,
+                   signRequest(ownerBody, victim.apiKey)),
+        env,
+      );
+      expect(ownerResp.status).toBe(200);
+    });
   });
 
   describe('firmware_audit on checkin', () => {

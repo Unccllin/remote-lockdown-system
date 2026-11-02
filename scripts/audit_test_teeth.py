@@ -189,6 +189,33 @@ MUTATIONS: list[dict] = [
         "new": "  if (false) {  // MUTATION: allow releasing a locked/stolen device",
         "why": "an admin release unlocks a device that is locked or stolen",
     },
+    {
+        "path": "worker/ack",
+        "label": "WRK/ack-ownership",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  // Update command status\n  const commands = await listCommands(env);\n  const cmdIdx = commands.findIndex(\n    (c) => c.id === command_id && c.device_id === device.id,\n  );",
+        "new": "  // Update command status\n  const commands = await listCommands(env);\n  const cmdIdx = commands.findIndex(\n    (c) => c.id === command_id,  // MUTATION: no ownership check\n  );",
+        "why": "any device can ACK another device's command",
+    },
+    {
+        "path": "worker/duress",
+        "label": "WRK/duress",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "    duress_code: payload.duress_code === true ? true : null,",
+        "new": "    duress_code: null,  // MUTATION: a duress recover becomes a real unlock",
+        "why": "a coerced (duress) recovery really unlocks instead of faking it",
+    },
+    {
+        "path": "worker/recover",
+        "label": "WRK/recover-unlock",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "    duress_code: payload.duress_code === true ? true : null,\n  };\n  commands.push(cmd);",
+        "new": "    duress_code: payload.duress_code === true ? true : null,\n  };\n  // MUTATION: never queue the unlock command",
+        "why": "recovery releases the key and marks the device recovering but never unlocks it",
+    },
 ]
 
 
