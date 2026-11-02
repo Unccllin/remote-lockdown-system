@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 55 | 58 | ✗ |
+| Debt items | 55 | 59 | ✗ |
 | Enforcement paths (on hardware) | 3 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 55 of 58 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 55 of 59 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 10 enforcement paths that still need hardware verification:**
 
@@ -53,112 +53,83 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 164 — 2026-11-02 (EnrollKeys writes the Secure Boot stores: D-133's positive test passes)
+## Latest session: 165 — 2026-11-02 (D-130 gap 2 was never SMM: stock firmware takes the platform hierarchy away)
 
 ### VERIFY
-- Enrolment on the PBL OVMF build: `dbx 76 B`, `db 2389 B`, `KEK 2407 B`,
-  `PK 901 B` all `[OK]`, then `after: SecureBoot=1 SetupMode=0`,
-  `enrolment complete`.
-- Varstore re-read after the run (`virt-fw-vars -p`): `PK`, `KEK`, `db 2389`,
-  `dbx 76`, `SecureBootEnable ON` — the writes are in NVRAM, not just in the log.
-- Three boots of the same signed `PblApp.efi` (`b03e2c33…`), one variable pair
-  different each time:
-  `db={signer,Windows UEFI CA 2023} dbx={MS 2011 hash}` → Step 6 passes, basis
-  `S3 enabled without MOR`; `db={signer}` → `db lacks the Windows UEFI CA 2023`;
-  `dbx={sha256("")}` → `dbx lacks the MS 2011 revocation`.
-- `OVMF` loaded the signed image under Secure Boot in all three runs
-  (`BdsDxe: starting`), so the enrolment store verifies our signer too.
-- `bash -n test-d133-enroll-harness.sh`, full harness run exit 0,
-  and the fingerprint cross-check in the harness (`WinCA2023` = `076f1fea…9ae330`)
-  hard-fails if the extracted certificate ever stops matching `PlatformState.c`.
+- Matrix artifact `firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt`:
+  `pbl-nosmm-tis`, `pbl-smmon-tis`, `pbl-smmon-crb` → `device_id from AK Name:
+  ABABABAB`; `ubu-nosmm-tis`, `ubu-nosmm-crb`, `ubu-smmon-tis` →
+  `NV_Read(AK_NAME) RC=0x9A2` + `NV_DefineSpace(0x1C00001) RC=0x9A2`.
+- Harness exit 0 with all six assertions satisfied; serial logs filed alongside.
+- `bash -n` on both harnesses **and** on their embedded container scripts
+  (extracted and syntax-checked, because a heredoc can hide a breakage).
+- `make graph-check` passes with D-134 present (I2 unaffected: D-134 is OPEN).
 
 ### Fog cleared
-- **How to write a Secure Boot variable from inside the guest**: one
-  `SetVariable` per variable with an auth-header stub and the authenticated
-  attribute — specified by `AuthService.c:690-700`, demonstrated by
-  `OvmfPkg/EnrollDefaultKeys`, and now exercised end to end on our own build.
-- **Why the earlier attempts failed, precisely**: not one cause but three —
-  missing auth-header shape, wrong vendor GUID for PK/KEK, and (earlier) a stale
-  binary copied by a script branch that never ran.
-- **What D-133's positive test needs**: a db holding the real Windows UEFI CA
-  2023 plus our signer and a dbx holding the 2011 CA hash. Both are now produced
-  by the helper, so the "cannot be tested without offline varstore editing"
-  premise from S163 is retired.
-- **The offline route has a second, untested branch**: `virt-fw-vars
-  --add-dbx-hash`/`--add-dbx-cert` call `sigdb_add_hash`/`sigdb_add_cert`
-  (`efi/siglist.py:173`) and never touch `authdata`, unlike `--set-dbx`
-  (`vars.py:322-327`). S163's finding is correct for `--set-dbx` only.
+- **What "TPM under SMM" actually was**: a platform-hierarchy authorization
+  failure, reproducible without SMM at all, and absent on our own OVMF build.
+- **Whether CRB works**: yes — identical to TIS on the PBL build. The old "stall
+  with no output" was the swtpm startup sequence that session 101 already fixed;
+  the note outlived the fix.
+- **Whether the SMM guest's TPM traffic reaches swtpm**: yes, 1900+ commands per
+  run, with the emulator answering.
+- **Whether target machines need WSL**: no, for both supported install paths.
 
 ### Fog remaining
-- **Whether `--add-dbx-hash` actually survives an OVMF boot in UserMode** is
-  untested. It would only matter as a convenience for test stores; the fleet path
-  is the in-guest helper.
-- **How a distro OVMF platform is meant to take a PK** (a properly PKCS#7-signed
-  auth blob, i.e. what `Set-SecureBootUEFI`/`efi-updatevar` produce) is not
-  implemented here. Files checked: `AuthService.c` (the
-  `VerifyTimeBasedPayloadAndUpdate` path), `OvmfPkg/OvmfPkgX64.dsc`,
-  `scripts/gen-secureboot-keys.sh` (it emits unsigned `.auth` files and documents
-  Setup-Mode-only validity).
-- **D-130 gap 2 (TPM under SMM)** is untouched: `tpm-tis` reaches an unprovisioned
-  TPM, `tpm-crb` stalls. Files checked: `PblPkg/ci-harness-docker.sh`,
-  `test-mor-harness.sh`, `PBL-DEBT-LEDGER.md` D-130.
+- **Whether HP firmware randomizes/disables `platformAuth`** is still unknown, and
+  it is the whole of D-134. QEMU cannot answer it. Files checked:
+  `TpmClient.c`, `PblPkg.dec`, the edk2 hierarchy library, the PBL OVMF patch, the
+  D-129 runbook, `docs/RESEARCH-HP-HARDWARE.md` (BIOS setting names only — nothing
+  about platformAuth).
+- **Whether the owner-hierarchy fallback survives `TPM2_Clear(RH_OWNER)`** (the
+  stated reason the code prefers the platform hierarchy) is untested. Files
+  checked: `TpmClient.c:1263-1330`, D-102/D-206 notes in the ledger.
 - Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, 10/13
-  enforcement paths unit-test only, no CI run observed for S151–S164.
-- **Pre-existing style debt noticed, deliberately not touched**: `GRAPH-SPEC.yaml`
-  has 135 lines over 80 columns in `HEAD` as well (verified: identical count
-  before and after this session's edit; my edit adds none). Fixing them means
-  refolding scalars such as `files_owned: "a,b,c"`, which changes parsed values —
-  a separate change, not a ride-along.
+  enforcement paths unit-test only, no CI run observed for S151–S165.
 
 ### Debt items closed
-- **D-133** — Step 6 checks report identities, not shapes. Negative test passed in
-  S161; positive test passes now. Commit `6cff1ff` + `086987a`; artifacts
-  `firmware/PblPkg/artifacts/d133-step6-results.txt`,
-  `d133-{positive-db-and-dbx,negative-db-noca,negative-dbx-dummy}-serial.log`,
-  `d133-enroll-serial.log`.
-- Convergence moves 54/58 → 55/58.
+- None. This session produced a diagnosis and a new item, not a close.
 
 ### Debt items still open
-- D-120, D-129, D-130 (gap 1 now closed end to end; gap 2 + fleet PFX remain).
+- D-120, D-129, D-130 (gap 2 now understood; gap 1 closed in S164), **D-134 (new)**.
 
 ### Blockers
-- None for the Secure Boot key database. D-130 stays open on gap 2 (TPM under
-  SMM) and on the absence of a provisioned fleet signing PFX; D-129 still needs
-  real hardware.
+- D-134 needs the real machine. Until then the production default
+  (`PcdPblTpmUsePlatformHierarchy=TRUE`) is a *guess* with a demonstrated failure
+  mode on firmware that manages platformAuth correctly.
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary, and this time it worked as
-  intended): three consecutive runs each printed one precise firmware status
-  (`Invalid Parameter`, then `Invalid Parameter` on a *different* variable, then
-  `Security Violation` on the last one). Because the helper reports every write
-  instead of aborting silently, the failing operation was always the object of
-  study. The lesson worth keeping: a helper that says "half-enrolled is worse
-  than un-enrolled" also produces the diagnosis.
-- **Layer 5 — state management**: an entire session of work (files, a built
-  binary, a DSC change) was left uncommitted and untraced by S163's dangling run.
-  `build-pbl.sh`'s silent `-f` skip made it worse: the repo copy was stale, so a
-  harness could have booted a binary that disagreed with its source. The copy is
-  now derived from the real build path and prints a hash.
-- **Layer 1 — task specification** (minor): the harness first claimed
-  "q35 + TIS TPM" while running the non-SMM PBL build. Corrected in the generated
-  artifact rather than left as a plausible-looking wrong detail.
+- **Layer 5 — state management** (primary). The correct explanation was already in
+  the ledger (session 113, distro OVMF randomizes platformAuth → `0x9A2`), written
+  by an earlier session that fixed one harness and did not generalise the lesson.
+  A finding recorded in a session block is not knowledge until it is reachable from
+  the symptom — which is why D-134 now exists as an item with a symptom table, and
+  the runbook carries the check at the point of use.
+- **Layer 4 — verification feedback** (mine): the first sweep kept its logs inside
+  the container's `/tmp`, so the evidence evaporated and I had to rebuild the
+  harness before I could quote a line. Persisting artifacts is part of the harness,
+  not an afterthought.
+- **Layer 2 — context provision**: my own harness printed `--- name ...` through
+  `printf`, which treats the leading `---` as an option and aborted the run before
+  any QEMU started. Nothing was lost but a cycle; the fix is `printf --` or `echo`.
 
 ### Session artifacts
-- New: `firmware/PblPkg/EnrollKeys/{EnrollKeys.c,EnrollKeys.inf}`,
-  `firmware/PblPkg/EnrollKeys.efi` (`418d7d8c…`),
-  `firmware/PblPkg/test-d133-enroll-harness.sh`,
-  `firmware/PblPkg/artifacts/d133-*`.
-- Changed: `firmware/PblPkg/build-pbl.sh`, `PblPkg.dsc`,
-  `PblPersistDxe.efi` (rebuilt; a second rebuild reproduces `042f2914…` exactly),
-  `docs/adr/PBL-DEBT-LEDGER.md`, `.devin/graph/GRAPH-SPEC.yaml`.
-- Commits: `086987a` (helper + harness + artifacts), plus the record commit.
+- New: `firmware/PblPkg/test-d130-tpm-hierarchy-harness.sh`,
+  `firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt`,
+  `firmware/PblPkg/artifacts/d130-tpm-{pbl-nosmm-tis,pbl-smmon-tis,pbl-smmon-crb,ubu-nosmm-tis,ubu-nosmm-crb,ubu-smmon-tis}-serial.log`.
+- Changed: `docs/adr/PBL-DEBT-LEDGER.md` (D-130 gap 2, new D-134),
+  `.devin/graph/GRAPH-SPEC.yaml` (D-134 node),
+  `docs/D-129-HARDWARE-RUNBOOK.md` (pre-registered check), `README.md`
+  (Windows target requirements), both harnesses (uid/gid + chown).
+- Beliefs: B-047 (Windows target needs no WSL/Python/NSSM), confirmed `code-read`.
 
 ### Next session opening
-Take D-130 gap 2: run the SMM platform (`-machine q35,smm=on` + secure pflash +
-the PBL OVMF build) with `tpm-crb` and a swtpm started with the documented
-sequence, and capture the serial log that shows where it stalls — enrolment no
-longer blocks that, so the TPM interface is the only thing left in the Secure
-Boot chain before D-129's hardware run.
+Settle D-134's question without the hardware if possible: build the same PblApp
+twice, `PcdPblTpmUsePlatformHierarchy` TRUE and FALSE, and run both through
+`test-d130-tpm-hierarchy-harness.sh`'s stock-OVMF arm — the owner-hierarchy build
+should read the AK Name on a platform-auth-managed firmware, which turns D-134's
+close criteria into a two-artifact comparison and leaves only the HP confirmation
+for the D-129 window.
 
 ---
 
@@ -169,6 +140,7 @@ Boot chain before D-129's hardware run.
 | D-120 | BitLocker detection not implemented | OPEN | — |
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
+| D-134 | PBL's TPM NV indices are created under the platform hierarch | OPEN | — |
 
 See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130) for close criteria.
 

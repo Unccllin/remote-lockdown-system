@@ -3441,3 +3441,139 @@ longer blocks that, so the TPM interface is the only thing left in the Secure
 Boot chain before D-129's hardware run.
 
 ---
+
+---
+
+## Session 165 — 2026-11-02 (D-130 gap 2 was never SMM: stock firmware takes the platform hierarchy away)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S164 opening),
+  `scripts/check-ruling.sh` (no open items → task mode),
+  `firmware/PblPkg/ci-harness-docker.sh` (swtpm start + D-131 provisioning
+  recipe), `scripts/provision-qemu-tpm.sh`,
+  `firmware/PblPkg/PblApp/TpmClient.c:1105,1168-1275,1322-1330` (NV define/read
+  and the `PcdPblTpmUsePlatformHierarchy` branches), `PblPkg.dec:72`,
+  edk2 `SecurityPkg/Library/PeiDxeTpmPlatformHierarchyLib/PeiDxeTpmPlatformHierarchyLib.c`
+  (`ConfigureTpmPlatformHierarchy`, `RandomizePlatformAuth`,
+  `DisableTpmPlatformHierarchy`), `OvmfPkg/Include/Dsc/OvmfTpmComponents{Pei,Dxe}.dsc.inc`,
+  `firmware/PblPkg/ovmf-platform-hierarchy-null.patch`, and the D-130 entry in
+  `docs/adr/PBL-DEBT-LEDGER.md` (including the session-113 note at line ~528).
+- **Finding (the recorded cause was wrong)**: D-130 gap 2 said `tpm-tis` reaches a
+  TPM with none of our indices and `tpm-crb` stalls. A 6-way matrix — SMM {off,on}
+  × {`tpm-tis`,`tpm-crb`} × OVMF {PBL build, stock distro build} — on one
+  provisioned swtpm state shows the outcome tracks **only the OVMF build**: the
+  PBL build reads the AK Name in all three of its arms (including SMM and CRB); the
+  stock build fails `0x9A2` in all three. So SMM is orthogonal and CRB is fine.
+- **Finding (why)**: stock OVMF wires `PeiDxeTpmPlatformHierarchyLib`, whose
+  `ConfigureTpmPlatformHierarchy()` randomizes `platformAuth` or disables the
+  hierarchy; PBL's indices are `TPM_RH_PLATFORM` + `PLATFORMCREATE`
+  (`PcdPblTpmUsePlatformHierarchy=TRUE`), i.e. exactly what that policy removes.
+  Read fails `0x9A2`, define fails `0x18B`. Our OVMF is patched to the Null lib,
+  which is the entire difference.
+- **Finding (the traffic always arrived)**: the SMM arms produce 1900+ swtpm log
+  lines, so S160's "the SMM guest's TPM traffic does not reach the swtpm instance"
+  was a misreading — the emulator answered every command, with `TPM_RC_HANDLE`.
+- **Finding (this was seen once before)**: the ledger already records the same
+  failure in a FVE harness that accidentally used the distro OVMF (session 113,
+  "silently breaking RS_PW provisioning (RC=0x9A2)"). The lesson had been applied
+  to that harness and not carried to the SMM question.
+- **Finding (operator constraint, verified)**: target machines have no WSL. The
+  one-click NSIS installer uses `certutil` + `sc.exe` + registry only; the ZIP path
+  uses PowerShell with a bundled `nssm.exe`; `agent/install_service.ps1` (repo dev
+  script) needs system Python + NSSM and is therefore **not** a supported target
+  path. WSL appears only in `scripts/verify-environment.sh` and the
+  verify-environment skill, as Linux-side interop for PS1 syntax checks.
+
+### IMPLEMENT
+- New harness `firmware/PblPkg/test-d130-tpm-hierarchy-harness.sh`: provisions one
+  TPM state (NV `0x01C00003` = AK Name, platform hierarchy), boots the unsigned
+  PblApp six ways, persists serial + swtpm logs, and asserts the matrix.
+- Both harnesses (`d133`, `d130`) now pass `HOST_UID`/`HOST_GID` into the container
+  and `chown` the bind mount before exiting — the first ad-hoc sweep wrote its logs
+  to the container's `/tmp` and lost them, and the host trap could not delete
+  root-owned temp files.
+- `README.md`: "Managed device requirements (Windows)" — the table above, so the
+  no-WSL constraint is stated where an operator looks.
+- `docs/D-129-HARDWARE-RUNBOOK.md` Step 3: a **pre-registered** NV-reachability
+  check with both acceptable outcomes and the follow-up each requires.
+- `docs/adr/PBL-DEBT-LEDGER.md`: D-130 gap 2 rewritten with the corrected diagnosis
+  (old text struck through, not deleted) and **D-134 filed** for the production
+  consequence; `.devin/graph/GRAPH-SPEC.yaml` gains the D-134 node.
+
+### VERIFY
+- Matrix artifact `firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt`:
+  `pbl-nosmm-tis`, `pbl-smmon-tis`, `pbl-smmon-crb` → `device_id from AK Name:
+  ABABABAB`; `ubu-nosmm-tis`, `ubu-nosmm-crb`, `ubu-smmon-tis` →
+  `NV_Read(AK_NAME) RC=0x9A2` + `NV_DefineSpace(0x1C00001) RC=0x9A2`.
+- Harness exit 0 with all six assertions satisfied; serial logs filed alongside.
+- `bash -n` on both harnesses **and** on their embedded container scripts
+  (extracted and syntax-checked, because a heredoc can hide a breakage).
+- `make graph-check` passes with D-134 present (I2 unaffected: D-134 is OPEN).
+
+### Fog cleared
+- **What "TPM under SMM" actually was**: a platform-hierarchy authorization
+  failure, reproducible without SMM at all, and absent on our own OVMF build.
+- **Whether CRB works**: yes — identical to TIS on the PBL build. The old "stall
+  with no output" was the swtpm startup sequence that session 101 already fixed;
+  the note outlived the fix.
+- **Whether the SMM guest's TPM traffic reaches swtpm**: yes, 1900+ commands per
+  run, with the emulator answering.
+- **Whether target machines need WSL**: no, for both supported install paths.
+
+### Fog remaining
+- **Whether HP firmware randomizes/disables `platformAuth`** is still unknown, and
+  it is the whole of D-134. QEMU cannot answer it. Files checked:
+  `TpmClient.c`, `PblPkg.dec`, the edk2 hierarchy library, the PBL OVMF patch, the
+  D-129 runbook, `docs/RESEARCH-HP-HARDWARE.md` (BIOS setting names only — nothing
+  about platformAuth).
+- **Whether the owner-hierarchy fallback survives `TPM2_Clear(RH_OWNER)`** (the
+  stated reason the code prefers the platform hierarchy) is untested. Files
+  checked: `TpmClient.c:1263-1330`, D-102/D-206 notes in the ledger.
+- Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, 10/13
+  enforcement paths unit-test only, no CI run observed for S151–S165.
+
+### Debt items closed
+- None. This session produced a diagnosis and a new item, not a close.
+
+### Debt items still open
+- D-120, D-129, D-130 (gap 2 now understood; gap 1 closed in S164), **D-134 (new)**.
+
+### Blockers
+- D-134 needs the real machine. Until then the production default
+  (`PcdPblTpmUsePlatformHierarchy=TRUE`) is a *guess* with a demonstrated failure
+  mode on firmware that manages platformAuth correctly.
+
+### Failure attribution
+- **Layer 5 — state management** (primary). The correct explanation was already in
+  the ledger (session 113, distro OVMF randomizes platformAuth → `0x9A2`), written
+  by an earlier session that fixed one harness and did not generalise the lesson.
+  A finding recorded in a session block is not knowledge until it is reachable from
+  the symptom — which is why D-134 now exists as an item with a symptom table, and
+  the runbook carries the check at the point of use.
+- **Layer 4 — verification feedback** (mine): the first sweep kept its logs inside
+  the container's `/tmp`, so the evidence evaporated and I had to rebuild the
+  harness before I could quote a line. Persisting artifacts is part of the harness,
+  not an afterthought.
+- **Layer 2 — context provision**: my own harness printed `--- name ...` through
+  `printf`, which treats the leading `---` as an option and aborted the run before
+  any QEMU started. Nothing was lost but a cycle; the fix is `printf --` or `echo`.
+
+### Session artifacts
+- New: `firmware/PblPkg/test-d130-tpm-hierarchy-harness.sh`,
+  `firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt`,
+  `firmware/PblPkg/artifacts/d130-tpm-{pbl-nosmm-tis,pbl-smmon-tis,pbl-smmon-crb,ubu-nosmm-tis,ubu-nosmm-crb,ubu-smmon-tis}-serial.log`.
+- Changed: `docs/adr/PBL-DEBT-LEDGER.md` (D-130 gap 2, new D-134),
+  `.devin/graph/GRAPH-SPEC.yaml` (D-134 node),
+  `docs/D-129-HARDWARE-RUNBOOK.md` (pre-registered check), `README.md`
+  (Windows target requirements), both harnesses (uid/gid + chown).
+- Beliefs: B-047 (Windows target needs no WSL/Python/NSSM), confirmed `code-read`.
+
+### Next session opening
+Settle D-134's question without the hardware if possible: build the same PblApp
+twice, `PcdPblTpmUsePlatformHierarchy` TRUE and FALSE, and run both through
+`test-d130-tpm-hierarchy-harness.sh`'s stock-OVMF arm — the owner-hierarchy build
+should read the AK Name on a platform-auth-managed firmware, which turns D-134's
+close criteria into a two-artifact comparison and leaves only the HP confirmation
+for the D-129 window.
+
+---
