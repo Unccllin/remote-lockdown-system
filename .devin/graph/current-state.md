@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 55 | 59 | ✗ |
+| Debt items | 55 | 60 | ✗ |
 | Enforcement paths (on hardware) | 3 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 55 of 59 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 55 of 60 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 10 enforcement paths that still need hardware verification:**
 
@@ -53,80 +53,84 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 166 — 2026-11-02 (the owner-hierarchy fallback cannot read what it defines; D-134 needs a ruling)
+## Latest session: 167 — 2026-11-02 (D-134 ruled and fixed: NV reads work on stock firmware; the epoch counter never increments)
 
 ### VERIFY
-- `test-d134-nv-auth-matrix.sh` exits 0 with all five assertions satisfied;
-  matrix reproduced twice (the first run needed the RC regex fixed — it expected
-  9 hex digits where tpm2-tools prints 8).
-- Exploratory arms: FALSE+provisioned+stock OVMF → `RC=0x149`; TRUE+provisioned
-  +stock OVMF → `RC=0x9A2` (S165); both PCD variants on a fresh TPM → `0x28B`.
-- `bash -n` on the new harness; embedded container script syntax-checked.
-- `make graph-check` passes; `scripts/check-ruling.sh` now exits 1 **by design**
-  (the ruling is open).
+- `build-pbl.sh` clean under `-Werror` (PblApp `613b11bb…`; the tracked
+  `PblApp.efi` is gitignored, so the product change is source-only).
+- `test-d134-owner-hierarchy-harness.sh` exit 0, three arms all reading the AK
+  Name (`artifacts/d134-owner-hierarchy-results.txt`):
+  owner+stock (the firmware that produced `0x9A2` before), owner+PBL, and
+  **platform-provisioned+stock** — index-handle auth does not care which
+  hierarchy created the index, so units enrolled under the old scheme keep
+  working after the upgrade (`AUTHREAD` is set in both schemes).
+- `test-d134-nv-auth-matrix.sh` exit 0 (TPM rules unchanged by our firmware).
+- `bash -n` on every harness plus their embedded container scripts.
+- `make graph-check` passes; `scripts/check-ruling.sh` exits 0 (ruling closed).
+- `make check-firmware-todos` clean.
 
 ### Fog cleared
-- **Whether flipping the PCD is a fix**: no. It trades `0x9A2` for `0x149`
-  because the owner path authorizes with a handle its own attributes do not
-  permit. The minimum correct pair is `OWNERREAD` + `TPM_RH_OWNER`, or index-handle
-  authorization with `AUTHREAD`.
-- **Whether a machine can be migrated between hierarchies later**: no —
-  `PLATFORMCREATE` blocks the owner hierarchy from deleting the index, so the
-  choice has to be made at enrolment.
-- **What the empty-TPM results mean**: nothing about hierarchy; they are the
-  unenrolled-device path.
+- **Does the ruling's fix work on firmware that manages platformAuth?** Yes — the
+  stock-OVMF arm reads the AK Name where the previous build reported `0x9A2`.
+- **Must old enrolments be re-provisioned?** No for reading: index-handle auth
+  works on platform-created indices too. New indices are created under the owner
+  hierarchy, so the state is "read both, write owner".
+- **Is Q2 code needed?** No: a missing index already reads as unprovisioned, and
+  the D-131 Q1 path (no `device_id` → refuse to fetch → denied-boot-with-local-
+  unlock) is the fail-closed behaviour the ruling chose.
 
 ### Fog remaining
-- **Whether Windows sets `ownerAuth`** (Q3) is the one fact that can invalidate
-  the recommended option. Files checked: `docs/RESEARCH-TPM-KEY-STORAGE.md`
-  (says the OS manages the owner hierarchy, does not say whether auth is set),
-  `TpmClient.c` comments (assume empty), `docs/RESEARCH-UEFI-VARS-TPM.md:213`.
-  Needs a Windows-provisioned TPM, which this host does not have.
-- **Whether the HP firmware disables or randomizes `platformAuth`** (D-134's
-  other half) still needs the D-129 window.
+- **D-135 (epoch counter)**: why `NV_Increment` fails from PBL but not from
+  tpm2-tools on the same index. Files checked: `TpmClient.c:1690-1760`
+  (`PblTpmNvIncrementCounter`), `180-260` (session attribute selection),
+  `PblTpmSubmitCommand`. Next step is the raw 10-byte response, which the log
+  does not print.
+- **The HP confirmation** for D-134 (D-129 window) — QEMU cannot answer what the
+  target firmware does, although the fixed build no longer depends on it for
+  reads.
 - Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, 10/13
-  enforcement paths unit-test only, no CI run observed for S151–S166.
+  enforcement paths unit-test only, no CI run observed for S151–S167.
 
 ### Debt items closed
-- None.
+- None closed. D-134's design question is resolved and verified in QEMU; the item
+  stays OPEN until the HP machine confirms it, per its close criteria.
 
 ### Debt items still open
-- D-120, D-129, D-130, D-134 (now with a ruling attached).
+- D-120, D-129, D-130, D-134, **D-135 (new)**.
 
 ### Blockers
-- D-134 is blocked on the ruling (Q1) and on Q3's Windows check; the hardware
-  half is blocked on D-129's window.
+- D-134: hardware window. D-135: none — it has a reproduction and a narrowed
+  search space.
 
 ### Failure attribution
-- **Layer 1 — task specification** (primary). D-134 was written with the close
-  criteria \"flip the PCD or verify on hardware\", which presumed the fallback
-  worked. Nobody had ever run it. The criteria were the bug.
-- **Layer 4 — verification feedback** (mine, twice): the first matrix harness
-  asserted an RC format tpm2-tools does not print (9 hex digits vs 8), so it
-  failed on a parsing detail after the physics was already right; and my first
-  attempt reused one TPM across cases, which `PLATFORMCREATE` turned into a
-  cascade of misleading `define FAIL` lines — the failure was in the harness,
-  not the TPM.
-- **Process note**: the exploratory arms cost ~5 minutes and moved D-134 from
-  \"hardware question\" to \"design question with measured options\". The lesson
-  is not \"run more experiments\" but \"a fallback path that has never been
-  executed is a hypothesis, not a fallback\".
+- **Layer 4 — verification feedback** (primary, and it earned its keep twice): the
+  harness aborted before any boot because `tpm2_startup` returned non-zero under
+  `set -e`, and the port arithmetic put the control socket where the TCTI does not
+  look. Both produced empty output that looked like a container problem. The fix
+  in both cases was to make the harness *say* what failed rather than abort
+  silently.
+- **Layer 1 — task specification** (mine): the first close criteria for D-134
+  said "flip the PCD", which the S166 matrix then disproved. Writing the criteria
+  from the symptom instead of from the mechanism is what made them wrong.
+- **Process note**: D-135 was found only because the D-134 verification read the
+  whole `[3/8]` block instead of grepping for the line it wanted. The epoch
+  warning had been in every log for several sessions.
 
 ### Session artifacts
-- New: `firmware/PblPkg/test-d134-nv-auth-matrix.sh`,
-  `firmware/PblPkg/artifacts/d134-nv-auth-matrix-results.txt`,
-  `firmware/PblPkg/artifacts/d134-nv-auth-matrix-raw.csv`.
-- Changed: `docs/adr/PBL-DEBT-LEDGER.md` (D-134),
-  `.devin/PENDING-RULING.md` (D-134 hierarchy ruling).
-- Untouched on purpose: `firmware/PblPkg/PblApp/TpmClient.c`, `PblPkg.dec`
-  (production default), `firmware/PblPkg/PblApp.efi`.
+- New: `firmware/PblPkg/test-d134-owner-hierarchy-harness.sh`,
+  `firmware/PblPkg/artifacts/d134-owner-hierarchy-results.txt`,
+  `firmware/PblPkg/artifacts/d134q-{owner-stock,owner-pbl,platform-stock}-serial.log`.
+- Changed: `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/PblPkg.dec`,
+  `scripts/provision-qemu-tpm.sh`, `firmware/PblPkg/ci-harness-docker.sh`,
+  `docs/adr/PBL-DEBT-LEDGER.md`, `.devin/graph/GRAPH-SPEC.yaml`,
+  `.devin/PENDING-RULING.md`, `test-d130-tpm-hierarchy-harness.sh`,
+  `test-d134-nv-auth-matrix.sh` (harness robustness).
 
 ### Next session opening
-Wait for the D-134 ruling. The moment Q1 is answered, the change is small and
-already located: the attribute constant in `PblTpmNvDefineSpace` plus the
-`AuthHierarchy` choice in `PblTpmReadAkName`/`PblTpmProvisionNvIndices` — then
-re-run `test-d134-nv-auth-matrix.sh` (TPM rules unchanged) and the FALSE-build arm
-of the exploratory set to show `0x149` becoming `READ-OK`.
+Take D-135: print the raw 10-byte response for `NV_Increment(0x1C00004)` (or dump
+PBL's command bytes next to the tpm2-tools one that works) and fix the command
+construction — then a two-boot run showing the epoch advancing and NG-T7's
+rollback comparison firing on a rolled-back lock state.
 
 ---
 
@@ -138,6 +142,7 @@ of the exploratory set to show `0x149` becoming `READ-OK`.
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices are created under the platform hierarch | OPEN | — |
+| D-135 | The lock-epoch counter at NV 0x1C00004 never increments: eve | OPEN | — |
 
 See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130) for close criteria.
 

@@ -3705,3 +3705,133 @@ re-run `test-d134-nv-auth-matrix.sh` (TPM rules unchanged) and the FALSE-build a
 of the exploratory set to show `0x149` becoming `READ-OK`.
 
 ---
+
+---
+
+## Session 167 — 2026-11-02 (D-134 ruled and fixed: NV reads work on stock firmware; the epoch counter never increments)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S166 opening),
+  `.devin/PENDING-RULING.md` (D-134 ruling — open at session start),
+  `firmware/PblPkg/PblApp/TpmClient.c:1082-1180` (`PblTpmReadAkName`),
+  `1180-1300` (`PblTpmNvDefineSpace`), `1310-1370` (`PblTpmProvisionNvIndices`),
+  `1690-1760` (`PblTpmNvIncrementCounter`), `180-230`
+  (`PblTpmSessionAttrsForCommand`), `firmware/PblPkg/PblPkg.dec:60-80`,
+  `scripts/provision-qemu-tpm.sh`, `firmware/PblPkg/ci-harness-docker.sh:126-150`.
+- **Finding (the fix is authorization, not attributes)**: `NV_Read` authorized by
+  the **index handle** works under every attribute set and every hierarchy state
+  (S166 matrix lanes 2, 5, 7). That is what makes the fix independent of both
+  `platformAuth` and `ownerAuth`.
+- **Finding (the ruling's Q3 really is moot)**: with index-handle authorization
+  the `ownerAuth` question disappears — no Windows check needed.
+- **Finding (the epoch counter is a separate defect)**: every boot, old and new
+  build, prints `NV_Increment(0x1C00004) RC=0x9A2` while `[OK] NV indices
+  provisioned` says the index exists. `PblTpmNvIncrementCounter` already
+  authorizes with the index handle, and tpm2-tools increments an identical
+  counter index successfully (`read-back 0000000000000001`), while a non-counter
+  index is refused with `0x282` (`TPM_RC_ATTRIBUTES`) as the spec requires. So the
+  TPM, the attributes and the authorization are all correct — the defect is in
+  PBL's command construction for `TPM_CC_NV_Increment`.
+
+### IMPLEMENT
+- `TpmClient.c`: `PblTpmReadAkName` authorizes `NV_Read` with
+  `Handles[0] = PBL_NV_AK_NAME` (was the PCD-selected hierarchy); the unused
+  `AuthHierarchy` local removed; owner attribute set is now `0x02060004`
+  (`AUTHWRITE|AUTHREAD|NO_DA|OWNERREAD`) in both `PblTpmNvDefineSpace` and
+  `PblTpmProvisionNvIndices`, with comments stating the ruling and the evidence.
+- `PblPkg.dec`: `PcdPblTpmUsePlatformHierarchy` default TRUE→FALSE, documented as
+  the ruling's choice and keeping the TRUE path reproducible for the failure mode.
+- Provisioning aligned so enrolment and firmware agree (Q1's second half):
+  `scripts/provision-qemu-tpm.sh` (both sites) and
+  `firmware/PblPkg/ci-harness-docker.sh` now `tpm2_nvdefine 0x01C00003 -C o -a
+  0x02060004` instead of `-C p -a 0x420D000D`.
+- New harness `firmware/PblPkg/test-d134-owner-hierarchy-harness.sh` (3 arms).
+- Harness fixes found by using them: `tpm2_startup` is best-effort (`|| true` —
+  a failure aborted the run before any boot); the work dir is root-owned inside
+  the container so the host trap now falls back to deleting it through the image;
+  and the tpm2-tools TCTI wants the control port at `data+1`.
+- `.devin/PENDING-RULING.md`: D-134 ruling closed — Q1 **(A2) owner hierarchy +
+  index-handle auth**, Q2 **(A) cleared TPM = unenrolled**, Q3 **moot**.
+- `docs/adr/PBL-DEBT-LEDGER.md`: D-134 updated with the implementation and the
+  verification matrix; **D-135 filed** for the epoch counter.
+  `.devin/graph/GRAPH-SPEC.yaml`: D-134 close criteria rewritten to the hardware
+  confirmation that remains, plus commit/artifact refs; D-135 node added.
+
+### VERIFY
+- `build-pbl.sh` clean under `-Werror` (PblApp `613b11bb…`; the tracked
+  `PblApp.efi` is gitignored, so the product change is source-only).
+- `test-d134-owner-hierarchy-harness.sh` exit 0, three arms all reading the AK
+  Name (`artifacts/d134-owner-hierarchy-results.txt`):
+  owner+stock (the firmware that produced `0x9A2` before), owner+PBL, and
+  **platform-provisioned+stock** — index-handle auth does not care which
+  hierarchy created the index, so units enrolled under the old scheme keep
+  working after the upgrade (`AUTHREAD` is set in both schemes).
+- `test-d134-nv-auth-matrix.sh` exit 0 (TPM rules unchanged by our firmware).
+- `bash -n` on every harness plus their embedded container scripts.
+- `make graph-check` passes; `scripts/check-ruling.sh` exits 0 (ruling closed).
+- `make check-firmware-todos` clean.
+
+### Fog cleared
+- **Does the ruling's fix work on firmware that manages platformAuth?** Yes — the
+  stock-OVMF arm reads the AK Name where the previous build reported `0x9A2`.
+- **Must old enrolments be re-provisioned?** No for reading: index-handle auth
+  works on platform-created indices too. New indices are created under the owner
+  hierarchy, so the state is "read both, write owner".
+- **Is Q2 code needed?** No: a missing index already reads as unprovisioned, and
+  the D-131 Q1 path (no `device_id` → refuse to fetch → denied-boot-with-local-
+  unlock) is the fail-closed behaviour the ruling chose.
+
+### Fog remaining
+- **D-135 (epoch counter)**: why `NV_Increment` fails from PBL but not from
+  tpm2-tools on the same index. Files checked: `TpmClient.c:1690-1760`
+  (`PblTpmNvIncrementCounter`), `180-260` (session attribute selection),
+  `PblTpmSubmitCommand`. Next step is the raw 10-byte response, which the log
+  does not print.
+- **The HP confirmation** for D-134 (D-129 window) — QEMU cannot answer what the
+  target firmware does, although the fixed build no longer depends on it for
+  reads.
+- Unchanged: `PblTlsVerifyCert` residual (D-132), 19 Dependabot alerts, 10/13
+  enforcement paths unit-test only, no CI run observed for S151–S167.
+
+### Debt items closed
+- None closed. D-134's design question is resolved and verified in QEMU; the item
+  stays OPEN until the HP machine confirms it, per its close criteria.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134, **D-135 (new)**.
+
+### Blockers
+- D-134: hardware window. D-135: none — it has a reproduction and a narrowed
+  search space.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, and it earned its keep twice): the
+  harness aborted before any boot because `tpm2_startup` returned non-zero under
+  `set -e`, and the port arithmetic put the control socket where the TCTI does not
+  look. Both produced empty output that looked like a container problem. The fix
+  in both cases was to make the harness *say* what failed rather than abort
+  silently.
+- **Layer 1 — task specification** (mine): the first close criteria for D-134
+  said "flip the PCD", which the S166 matrix then disproved. Writing the criteria
+  from the symptom instead of from the mechanism is what made them wrong.
+- **Process note**: D-135 was found only because the D-134 verification read the
+  whole `[3/8]` block instead of grepping for the line it wanted. The epoch
+  warning had been in every log for several sessions.
+
+### Session artifacts
+- New: `firmware/PblPkg/test-d134-owner-hierarchy-harness.sh`,
+  `firmware/PblPkg/artifacts/d134-owner-hierarchy-results.txt`,
+  `firmware/PblPkg/artifacts/d134q-{owner-stock,owner-pbl,platform-stock}-serial.log`.
+- Changed: `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/PblPkg.dec`,
+  `scripts/provision-qemu-tpm.sh`, `firmware/PblPkg/ci-harness-docker.sh`,
+  `docs/adr/PBL-DEBT-LEDGER.md`, `.devin/graph/GRAPH-SPEC.yaml`,
+  `.devin/PENDING-RULING.md`, `test-d130-tpm-hierarchy-harness.sh`,
+  `test-d134-nv-auth-matrix.sh` (harness robustness).
+
+### Next session opening
+Take D-135: print the raw 10-byte response for `NV_Increment(0x1C00004)` (or dump
+PBL's command bytes next to the tpm2-tools one that works) and fix the command
+construction — then a two-boot run showing the epoch advancing and NG-T7's
+rollback comparison firing on a rolled-back lock state.
+
+---
