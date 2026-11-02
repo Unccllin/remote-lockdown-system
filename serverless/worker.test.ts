@@ -8,7 +8,7 @@
  * Run with: npx vitest run
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import crypto from 'crypto';
 
 // Mock KV namespace
@@ -671,6 +671,130 @@ describe('Serverless Worker', () => {
         env,
       );
       expect(ownerResp.status).toBe(200);
+    });
+
+    it('a device cannot escrow a key against another device\'s command', async () => {
+      // Session 178: deleting the ownership check in handleEscrowKey left the
+      // suite green, so nothing asserted that a command id is bound to the device
+      // that owns it.
+      const victim = await enrollDevice(worker, env, 'ESCROW-VICTIM-001');
+      const attacker = await enrollDevice(worker, env, 'ESCROW-ATTACKER-001');
+
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${victim.device.id}/flag-stolen`,
+          { hostname_confirm: 'ESCROW-VICTIM-001' },
+          { Authorization: 'Bearer test-admin-token' },
+        ),
+        env,
+      );
+      const victimBody = JSON.stringify({ hostname: 'ESCROW-VICTIM-001' });
+      const victimCheckin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', victimBody, signRequest(victimBody, victim.apiKey)),
+        env,
+      );
+      const victimCmdId = (await parseResponse(victimCheckin) as any).command.id;
+
+      // The owner can escrow against its own command.
+      const ownerBody = JSON.stringify({ command_id: victimCmdId, key_material: 'owner-key' });
+      const ownerResp = await worker.fetch(
+        makeRequest('POST', '/api/agent/escrow-key', ownerBody, signRequest(ownerBody, victim.apiKey)),
+        env,
+      );
+      expect(ownerResp.status).toBe(200);
+
+      // Another enrolled device must not be able to.
+      const attackBody = JSON.stringify({ command_id: victimCmdId, key_material: 'attacker-key' });
+      const attackResp = await worker.fetch(
+        makeRequest('POST', '/api/agent/escrow-key', attackBody, signRequest(attackBody, attacker.apiKey)),
+        env,
+      );
+      expect(attackResp.status).toBe(404);
+    });
+
+    it('an executed command cannot be rewritten by a later ACK', async () => {
+      // The dedup early-return is what stops an agent (or a replay) flipping an
+      // already-executed command to `failed`.
+      const { apiKey, device } = await enrollDevice(worker, env, 'TERMINAL-001');
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${device.id}/flag-stolen`,
+          { hostname_confirm: 'TERMINAL-001' },
+          { Authorization: 'Bearer test-admin-token' },
+        ),
+        env,
+      );
+      const body = JSON.stringify({ hostname: 'TERMINAL-001' });
+      const checkin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)),
+        env,
+      );
+      const cmdId = (await parseResponse(checkin) as any).command.id;
+
+      const firstBody = JSON.stringify({
+        hostname: 'TERMINAL-001',
+        command_id: cmdId,
+        result_status: 'executed',
+      });
+      const first = await worker.fetch(
+        makeRequest('POST', '/api/agent/command-ack', firstBody, signRequest(firstBody, apiKey)),
+        env,
+      );
+      expect(first.status).toBe(200);
+
+      // A second ACK trying to flip it to failed must be deduplicated, not applied.
+      const secondBody = JSON.stringify({
+        hostname: 'TERMINAL-001',
+        command_id: cmdId,
+        result_status: 'failed',
+      });
+      const second = await worker.fetch(
+        makeRequest('POST', '/api/agent/command-ack', secondBody, signRequest(secondBody, apiKey)),
+        env,
+      );
+      const secondData: any = await parseResponse(second);
+      expect(secondData.deduplicated).toBe(true);
+
+      // ...and the stored status is still `executed`.
+      const stored = JSON.parse((await env.LOCKDOWN_KV.get('commands')) as string);
+      expect(stored.find((c: any) => c.id === cmdId).status).toBe('executed');
+    });
+
+    it('persists command_uuid so a retried ACK can be deduplicated', async () => {
+      // The agent uses command_uuid to suppress duplicate handling of the same
+      // command across retries; if it is not stored the retry looks new.
+      const { apiKey, device } = await enrollDevice(worker, env, 'UUID-001');
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${device.id}/flag-stolen`,
+          { hostname_confirm: 'UUID-001' },
+          { Authorization: 'Bearer test-admin-token' },
+        ),
+        env,
+      );
+      const body = JSON.stringify({ hostname: 'UUID-001' });
+      const checkin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)),
+        env,
+      );
+      const cmdId = (await parseResponse(checkin) as any).command.id;
+
+      const ackBody = JSON.stringify({
+        hostname: 'UUID-001',
+        command_id: cmdId,
+        result_status: 'executed',
+        command_uuid: 'cmd-uuid-abc-123',
+      });
+      await worker.fetch(
+        makeRequest('POST', '/api/agent/command-ack', ackBody, signRequest(ackBody, apiKey)),
+        env,
+      );
+
+      const stored = JSON.parse((await env.LOCKDOWN_KV.get('commands')) as string);
+      expect(stored.find((c: any) => c.id === cmdId).command_uuid).toBe('cmd-uuid-abc-123');
     });
   });
 
@@ -1359,7 +1483,7 @@ describe('Serverless Worker', () => {
 
     it('installer returns a self-contained install.ps1 and re-keys the device', async () => {
       await seedAdmin(env, 'sa1', 'password123');
-      const { device, apiKey: oldKey } = await enrollDevice(worker, env, 'INST-001');
+      const { device } = await enrollDevice(worker, env, 'INST-001');
       const resp = await worker.fetch(makeRequest('GET', `/api/installer/${device.id}`, undefined,
         { Authorization: 'Bearer test-admin-token' }), env);
       expect(resp.status).toBe(200);
@@ -2060,7 +2184,7 @@ describe('KV-RACE-001: checkin does not overwrite ACK status update', () => {
       makeRequest('POST', '/api/agent/checkin', checkin2Body, signRequest(checkin2Body, apiKey)),
       env,
     );
-    const checkin2Data: any = await parseResponse(checkin2Resp);
+    await parseResponse(checkin2Resp);
     expect(checkin2Resp.status).toBe(200);
 
     // 6. Verify device status is still 'locked' (not overwritten to 'stolen')

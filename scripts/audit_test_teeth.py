@@ -216,6 +216,33 @@ MUTATIONS: list[dict] = [
         "new": "    duress_code: payload.duress_code === true ? true : null,\n  };\n  // MUTATION: never queue the unlock command",
         "why": "recovery releases the key and marks the device recovering but never unlocks it",
     },
+    {
+        "path": "worker/escrow",
+        "label": "WRK/escrow-ownership",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  const cmd = commands.find(\n    (c) => c.id === command_id && c.device_id === device.id,\n  );\n  if (!cmd) {\n    return errorResponse('Command not found for this device', 404);",
+        "new": "  const cmd = commands.find(\n    (c) => c.id === command_id,  // MUTATION: no ownership check\n  );\n  if (!cmd) {\n    return errorResponse('Command not found for this device', 404);",
+        "why": "a device can escrow a key against another device's command id",
+    },
+    {
+        "path": "worker/ack-terminal",
+        "label": "WRK/ack-terminal",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  // Idempotent: if already executed, return success\n  if (commands[cmdIdx].status === 'executed') {\n    return jsonResponse({ ok: true, deduplicated: true });\n  }",
+        "new": "  // MUTATION: an executed command can be rewritten",
+        "why": "an already-executed command can be flipped to failed (history rewritten)",
+    },
+    {
+        "path": "worker/ack-uuid",
+        "label": "WRK/ack-uuid",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  if (payload.command_uuid) {\n    commands[cmdIdx].command_uuid = payload.command_uuid;\n  }",
+        "new": "  // MUTATION: command_uuid is never persisted",
+        "why": "retry idempotency loses the uuid the agent uses to suppress duplicates",
+    },
 ]
 
 
