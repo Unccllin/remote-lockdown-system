@@ -4326,3 +4326,88 @@ E-HP-UEFI's post-set verification re-read, and E-DECRYPT's encrypt side — beca
 one killed mutation per path only proves that one line is guarded.
 
 ---
+
+---
+
+## Session 172 — 2026-11-02 (round 2 of the mutation audit: three paths confirmed double-guarded, no new gaps)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S171 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `scripts/audit_test_teeth.py` (the S171 tool and its table),
+  `agent/agent.py:546-600` (`encrypt_folder`), `agent/bcd_lockdown.py:612-650`
+  (`_rollback_bcd`), `agent/hp_uefi_lockdown.py:1136-1160` (`_verify_setting`),
+  and the tests that touch them (`test_boot_lockdown_bcd.py` rollback cases,
+  `test_boot_lockdown_uefi.py:957-980`, `test_boot_lockdown_t7series.py:618,675`).
+- **Finding (the tool needed a label before the table could grow)**: with two
+  mutations per path, verdict lines keyed on `path` became ambiguous. Rows now
+  carry an optional `label` (`E-BCD/rollback`), so a result names the defect and
+  not just the feature.
+- **Prediction stated before the run** (recorded because a match and a
+  rationalisation look identical afterwards): all three round-2 mutations would be
+  killed — the encrypt mutation breaks a Fernet round-trip, the rollback mutation
+  skips restorations that `test_boot_lockdown_bcd.py:167` asserts, and the
+  verify mutation suppresses the Sure-Admin warning that
+  `test_boot_lockdown_uefi.py:966` asserts.
+- **Result: prediction matched.** 13 of 13 killed. No new gap found.
+
+### IMPLEMENT
+- `scripts/audit_test_teeth.py`: three round-2 rows — `E-DECRYPT/encrypt` (store
+  plaintext as ciphertext), `E-BCD/rollback` (return success without restoring),
+  `E-HP-UEFI/verify` (`_verify_setting` never reads the value back) — plus the
+  `label` field so a path can appear more than once.
+
+### VERIFY
+- Full audit, 13 mutations, each against the whole agent suite: **13 KILLED**.
+- The three audited paths now have **two** independently-killed defects each, so
+  their `verified-in-unit-test` status no longer rests on a single guarded line.
+
+### Fog cleared
+- **Whether the three paths were only single-line-guarded**: no. Encryption,
+  BCD rollback and post-set verification each have a second defect that the suite
+  catches, so the earlier session's caution ("one killed mutation only proves that
+  one line bites") does not apply to these three any more.
+
+### Fog remaining
+- **The other seven paths still have exactly one mutation each** — E-ACK (pending
+  ACK write only, not the drain-on-reconnect), E-DEADMAN (switch never evaluated,
+  not the timeout arithmetic), E-AUTO-UPDATE (signature presence, not the signed
+  payload contents), E-EFFECTIVENESS (critical count, not the aggregated report),
+  E-OFFLINE-QUEUE (queue write, not drain ordering/retention), E-TRACK (scan
+  presence, not the parser's field mapping beyond SSID/signal), E-RECOVERY
+  (decryption happens, not wrong-key fail-closed).
+- **The method has not been applied outside the agent.** The server (663 Jest
+  tests) is where a toothless test would matter most — auth middleware, the
+  device-lock route, HMAC verification. That is the next thread, and it needs its
+  own mutation runner because the runner here is Python/pytest-specific.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
+  (D-132); 19 Dependabot alerts; no CI run observed for S151–S172.
+
+### Debt items closed
+- None. No defect was found this session.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130).
+
+### Failure attribution
+- No failure this session. Worth noting the opposite risk instead: a confirmation
+  round produces no finding, and the temptation is to dress it up as progress.
+  The honest summary is that three status labels moved from "one guarded line" to
+  "two", and nothing else changed.
+- **Layer 4 — verification feedback** (observed, not failed): stating the
+  prediction before running the audit is what made the result interpretable. Two
+  sessions ago the same green output was meaningless because nobody had asked what
+  it should have said.
+
+### Session artifacts
+- Changed: `scripts/audit_test_teeth.py` (three rows + label field).
+
+### Next session opening
+Move the method to the server: write a Jest-side mutation runner (the pytest one is
+Python-only) and start with the defect class that matters most — remove the auth
+check from one protected route and see whether any of the 663 server tests fail. If
+one survives, that is a security gap worth more than everything this session found.
+
+---
