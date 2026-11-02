@@ -1160,6 +1160,42 @@
   Artifact: `firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt`.
   This has been seen once before in a different harness (session 113: a FVE harness
   accidentally using the distro OVMF silently broke RS_PW provisioning `0x9A2`).
+- **The fallback is broken too (session 166)** — so "flip the PCD" is not a fix.
+  A PblApp built with `PcdPblTpmUsePlatformHierarchy=FALSE` against a
+  platform-provisioned index returns **`0x149` = `TPM_RC_NV_AUTHORIZATION`**
+  (not `0x9A2`): it defines owner indices with `0x02040004`
+  (`AUTHWRITE|AUTHREAD|NO_DA` — **no `OWNERREAD`**) but then authorizes `NV_Read`
+  with `TPM_RH_OWNER`, which TPM 2.0 permits only when `TPMA_NV_OWNERREAD` is set.
+  The TPM's own words: *"NV access authorization fails in command actions"*.
+  Matrix (`firmware/PblPkg/artifacts/d134-nv-auth-matrix-results.txt`, pure
+  tpm2-tools + swtpm, so these are the TPM's rules and not our firmware's):
+
+  | attrs | define under | read `-C p` | read `-C o` | read by index |
+  |-------|--------------|-------------|-------------|---------------|
+  | `0x420D000D` production | platform | OK | `0x149` | OK |
+  | `0x02040004` PCD=FALSE as coded | owner | — | **`0x149`** | OK |
+  | `0x02060004` + `OWNERREAD` | owner | — | OK | OK |
+
+  Two consequences. (a) The owner-hierarchy fallback needs `OWNERREAD` added to
+  the attribute set *and* `PblTpmNvDefineSpace`'s own-define path exercised; the
+  index-handle read already works, so passing the index as `authHandle` is the
+  other valid fix. (b) **Provisioning and consumption must agree on hierarchy**:
+  an index created at enrolment under the platform hierarchy keeps `0x420D000D`
+  attributes and remains unreadable by an owner-authorized build no matter what
+  the PCD says — `PLATFORMCREATE` also makes it undeletable by the owner
+  hierarchy (observed: `tpm2_nvundefine -C o` fails), so a machine cannot be
+  migrated between the two schemes in the field.
+- **Untested and decision-relevant**: whether Windows sets a non-empty
+  `ownerAuth`. If it does, owner-hierarchy indices are unreadable from firmware
+  and option (a) above does not save the fleet. Files checked:
+  `docs/RESEARCH-TPM-KEY-STORAGE.md:125` ("Owner hierarchy: managed by the OS"),
+  which does not settle it; `TpmClient.c` assumes "empty platform/owner auth in
+  dev/swtpm".
+- **The empty-TPM arms are NOT evidence here** (a trap worth recording): with a
+  fresh TPM both PCD variants report `0x28B` (`TPM_RC_HANDLE` on the second
+  handle), because the AK Name index is only written at *enrolment* and PBL reads
+  it before its own `PblTpmProvisionNvIndices` runs. An empty TPM is an
+  *unenrolled* device, not a hierarchy signal.
 - **Why it is separate from D-129**: D-129 asks whether PBL runs on hardware at all;
   this asks a specific design question — *is the platform hierarchy the right place
   for indexes an OS-level agent must read after the firmware has finished with the
@@ -1169,11 +1205,15 @@
 - **Close criteria**: on real hardware in the D-129 window, one of the two
   configurations is shown to reach NV and the choice is recorded with an artifact:
   (a) production `PcdPblTpmUsePlatformHierarchy=TRUE` reads the AK Name on the HP
-  machine, or (b) it is flipped to FALSE and the AK Name is read via the owner
-  hierarchy — and, if (b), a `TPM2_Clear(RH_OWNER)` is shown either not to lose the
-  lock state or to be handled explicitly.
-- **Blocker**: needs the real machine (D-129 window). QEMU cannot answer it, because
-  the answer depends on the *target firmware's* platformAuth policy.
+  machine, or (b) it is flipped to FALSE **and the `OWNERREAD`/index-auth defect
+  above is fixed**, and the AK Name is read via the owner hierarchy — and, if (b),
+  a `TPM2_Clear(RH_OWNER)` is shown either not to lose the lock state or to be
+  handled explicitly, and enrolment is shown to create the index with attributes
+  the chosen read path can authorize.
+- **Blocker**: needs the real machine (D-129 window) *and* a ruling on which
+  hierarchy the enrolled AK Name index belongs to — see `.devin/PENDING-RULING.md`
+  (D-134 hierarchy ruling, opened session 166). QEMU cannot answer the firmware
+  half, because the answer depends on the *target firmware's* platformAuth policy.
 
 ---
 

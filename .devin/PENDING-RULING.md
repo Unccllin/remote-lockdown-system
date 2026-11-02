@@ -99,3 +99,72 @@ know. D-200 documents UNLOCKED as a deliberate choice.
 
 - [x] Q2 — unknown-device verdict → **(A) stop returning UNLOCKED**.
 
+
+## D-134 TPM hierarchy ruling (opened 2026-11-02, session 166)
+
+PBL stores its NV state (lock state, policy version, lock epoch, **and the AK
+Name that yields `device_id`**) in a TPM NV index. The hierarchy that owns those
+indices decides whether the product works on a real machine, and the evidence
+now says the current production default does not.
+
+### What is established (experiment, not inference)
+
+- `PcdPblTpmUsePlatformHierarchy=TRUE` (production default, `PblPkg.dec:72`)
+  writes and reads with `TPM_RH_PLATFORM` + `PLATFORMCREATE`, attributes
+  `0x420D000D`.
+- Stock OVMF **randomizes or disables the platform hierarchy** at EndOfDxe
+  (`PeiDxeTpmPlatformHierarchyLib`). Against it, PBL gets `0x9A2` on
+  `NV_Read(AK_NAME)` — i.e. `device_id` empty, verdict suppressed, machine
+  silently unmanaged. Our QEMU only works because the PBL OVMF build is patched
+  to the Null library (`ovmf-platform-hierarchy-null.patch`).
+- The owner-hierarchy fallback (`PCD=FALSE`) **cannot read what it defines**:
+  it defines with `0x02040004` (no `OWNERREAD`) and authorizes with
+  `TPM_RH_OWNER` → `0x149 TPM_RC_NV_AUTHORIZATION`. Adding `OWNERREAD`
+  (`0x02060004`), or authorizing with the index handle, makes it readable.
+- An index created by provisioning under one hierarchy cannot be migrated later:
+  `PLATFORMCREATE` makes it undeletable by the owner hierarchy.
+- Untested: whether Windows sets a non-empty `ownerAuth`.
+
+Artifacts: `firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt`,
+`firmware/PblPkg/artifacts/d134-nv-auth-matrix-results.txt`.
+
+### Q1 — which hierarchy owns the enrolled AK Name index?
+
+- [ ] Q1 — hierarchy → **(A) owner hierarchy + `OWNERREAD`, with enrolment and
+      firmware agreeing** (recommended). The index is created once at
+      provisioning with `AUTHREAD|OWNERREAD`, PBL reads it with `TPM_RH_OWNER`
+      (empty owner auth), and `PCD` defaults to FALSE everywhere so there is one
+      code path. Cost: the lock state no longer survives `TPM2_Clear(RH_OWNER)`
+      — which is the stated reason the platform hierarchy was chosen — so Q2
+      must be answered.
+- [ ] Q1 — other options: **(B)** keep the platform hierarchy and require
+      firmware that leaves `platformAuth` empty (document it as a fleet
+      requirement and test it on the HP machine first); **(C)** keep the platform
+      hierarchy for the lock state but move **only the AK Name index** to the
+      owner hierarchy, so `device_id` survives even when the lock state does not.
+
+### Q2 — if the owner hierarchy is chosen, what happens on `TPM2_Clear`?
+
+A user or a Windows refresh can clear the owner hierarchy, taking the lock state
+with it. Options: re-provision on first boot after a clear (detect missing index
+→ treat as unenrolled and refuse to unlock, which is fail-closed but loses
+lockdown persistence); seal a copy of the lock state to the platform hierarchy as
+well (two indices, belt and braces); or accept the loss and re-lock on next
+contact.
+
+- [ ] Q2 — clear behaviour → **(A) fail-closed: a cleared TPM is an unenrolled
+      device** (recommended, consistent with the D-131 Q1 ruling that an absent
+      AK Name means "refuse to fetch"). Re-lock requires a fresh enrolment, which
+      is also the only way to restore `device_id`.
+
+### Q3 — is the owner-hierarchy read safe against a non-empty `ownerAuth`?
+
+If Windows sets `ownerAuth`, a `TPM_RH_OWNER`-authorized read from firmware fails
+exactly as it does today on stock OVMF, and option (A) would be no better than
+(B). This needs a check on a Windows-provisioned TPM before (A) is implemented.
+
+- [ ] Q3 — verify on a Windows machine → run `tpm2_nvread` (or the equivalent)
+      against an index created with `OWNERREAD` on a TPM that Windows has
+      already provisioned; record the result. If `ownerAuth` is non-empty,
+      fall back to index-handle authorization (`AUTHREAD` only), which the
+      matrix shows works without any hierarchy auth.

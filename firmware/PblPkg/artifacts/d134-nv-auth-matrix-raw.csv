@@ -1,0 +1,8 @@
+lane|case|attrs|read-auth|result
+1|production: read via platform auth|0x420D000D|p|READ-OK
+2|production: read via index auth|0x420D000D|0x01C00003|READ-OK
+3|production: read via owner auth|0x420D000D|o|READ-DENIED(0x00000149)
+4|PCD=FALSE as coded: read via owner auth|0x02040004|o|READ-DENIED(0x00000149)
+5|PCD=FALSE as coded: read via index auth|0x02040004|0x01C00003|READ-OK
+6|PCD=FALSE + OWNERREAD: read via owner auth|0x02060004|o|READ-OK
+7|PCD=FALSE + OWNERREAD: read via index auth|0x02060004|0x01C00003|READ-OK

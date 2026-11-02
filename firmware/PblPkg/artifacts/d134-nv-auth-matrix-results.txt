@@ -1,0 +1,25 @@
+# D-134 — NV authorization matrix (platform vs owner hierarchy)
+# generated 2026-11-02T08:18:00Z by test-d134-nv-auth-matrix.sh
+#
+# Pure tpm2-tools + swtpm: no OVMF, no PblApp, so these are the TPM's rules,
+# not our firmware's behaviour. Each case starts from a fresh TPM because
+# PLATFORMCREATE stops the owner hierarchy deleting a platform index.
+#
+# TPMA_NV attributes used:
+#   0x420D000D  PPWRITE|AUTHWRITE|POLICYWRITE|PPREAD|AUTHREAD|POLICYREAD|
+#               NO_DA|PLATFORMCREATE   (production, platform hierarchy)
+#   0x02040004  AUTHWRITE|AUTHREAD|NO_DA   (PCD=FALSE, as coded today)
+#   0x02060004  the above | OWNERREAD (0x20000)   (candidate fix)
+
+lane  case                                        attrs       read-auth   result
+1     production: read via platform auth          0x420D000D  p           READ-OK
+2     production: read via index auth             0x420D000D  0x01C00003  READ-OK
+3     production: read via owner auth             0x420D000D  o           READ-DENIED(0x00000149)
+4     PCD=FALSE as coded: read via owner auth     0x02040004  o           READ-DENIED(0x00000149)
+5     PCD=FALSE as coded: read via index auth     0x02040004  0x01C00003  READ-OK
+6     PCD=FALSE + OWNERREAD: read via owner auth  0x02060004  o           READ-OK
+7     PCD=FALSE + OWNERREAD: read via index auth  0x02060004  0x01C00003  READ-OK
+
+# Reading: TPM2_NV_Read(authHandle=TPM_RH_OWNER) requires TPMA_NV_OWNERREAD.
+# The PCD=FALSE branch defines with AUTHREAD only and authorizes with RH_OWNER,
+# so it cannot read its own index — 0x149 = TPM_RC_NV_AUTHORIZATION.
