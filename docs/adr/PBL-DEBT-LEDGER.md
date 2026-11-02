@@ -700,18 +700,55 @@
        signed `EFI_VARIABLE_AUTHENTICATION_2` blob rather than a bare ESL (see
        D-133 for the evidence). The route that remains is an EFI enrolment helper
        writing dbx from inside the guest in SetupMode, then enrolling PK.
-    2. **TPM under SMM.** With `-device tpm-tis` the guest reaches a TPM that
+    2. **TPM under SMM.** ~~With `-device tpm-tis` the guest reaches a TPM that
        holds none of our provisioned indices — `TPM_RC_HANDLE` (0x18B / 0x9A2),
        which *reads* like "device unprovisioned" but is an interface mismatch;
-       with `-device tpm-crb` the boot stalls with no serial output at all.
+       with `-device tpm-crb` the boot stalls with no serial output at all.~~
+       **Diagnosed correctly (2026-11-02, session 165) — it was never SMM and
+       never the TPM device.** A 6-way matrix (`SMM {off,on}` x `{tpm-tis,
+       tpm-crb}` x `OVMF {PBL build, stock distro build}`) on one provisioned
+       swtpm state shows the outcome tracks **only the OVMF build**:
+
+       | arm | AK Name at NV 0x01C00003 |
+       |-----|--------------------------|
+       | PBL build, no SMM, `tpm-tis` | `[OK] device_id from AK Name: ABABABAB…` |
+       | PBL build, **SMM**, `tpm-tis` | `[OK] device_id from AK Name: ABABABAB…` |
+       | PBL build, **SMM**, `tpm-crb` | `[OK] device_id from AK Name: ABABABAB…` |
+       | stock build, no SMM, `tpm-tis` | `NV_Read(AK_NAME) RC=0x9A2` |
+       | stock build, no SMM, `tpm-crb` | `NV_Read(AK_NAME) RC=0x9A2` |
+       | stock build, SMM, `tpm-tis` | `NV_Read(AK_NAME) RC=0x9A2` |
+
+       So: **CRB works** (identical to TIS on the PBL build — the S160 "stall with
+       no output" was the old swtpm startup sequence, not the device), and **SMM is
+       orthogonal**. The swtpm logs also show 1900+ TPM command lines in the SMM
+       arms, so the traffic did reach the emulator: S160's "the SMM guest's TPM
+       traffic does not reach the swtpm instance" was a misreading of a
+       permission\_denied-looking error code.
+
+       The cause is the **platform-hierarchy policy**. Stock OVMF wires
+       `PeiDxeTpmPlatformHierarchyLib` for both `Tcg2PlatformPei` and
+       `Tcg2PlatformDxe` (`OvmfPkg/Include/Dsc/OvmfTpmComponents{Pei,Dxe}.dsc.inc`),
+       and `ConfigureTpmPlatformHierarchy()` either randomizes `platformAuth`
+       (`Tpm2HierarchyChangeAuth`, `PcdRandomizePlatformHierarchy`) or disables the
+       hierarchy (`Tpm2HierarchyControl(…, NO)`). PBL creates its NV indices under
+       `TPM_RH_PLATFORM` (`TpmClient.c:1204-1214`, `PcdPblTpmUsePlatformHierarchy`
+       = TRUE, `PLATFORMCREATE`) — exactly the indices that policy takes away, which
+       is why read fails 0x9A2 and define fails 0x18B. Our OVMF build overrides both
+       components to `PeiDxeTpmPlatformHierarchyLibNull`
+       (`firmware/PblPkg/ovmf-platform-hierarchy-null.patch`), leaving platformAuth
+       empty, and that single difference is the whole matrix.
+       Evidence: `firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt` plus the
+       six `d130-tpm-*-serial.log` runs;
+       reproduce with `firmware/PblPkg/test-d130-tpm-hierarchy-harness.sh`.
+       **The production consequence is filed as D-134** — this is not a QEMU
+       artefact, it is the behaviour to expect on firmware that manages platformAuth
+       properly, which stock OVMF does and real HP firmware very likely does.
        **Diagnosed (session 160)**: the provisioned state is *intact* — inspecting
        the same state directory afterwards shows `0x1C00003` present with the
        correct AK Name, and a non-Secure-Boot run on the same directory shows all
-       four indices. So nothing was wiped and nothing was misprovisioned: the SMM
-       guest's TPM traffic does not reach the swtpm instance the harness started.
-       That rules out provisioning and points at the device/interface pairing
-       (`tpm-tis` is not SMM-capable; the documented OVMF Secure Boot recipe pairs
-       SMM with `tpm-crb`, which stalls with our swtpm startup sequence).
+       four indices. So nothing was wiped and nothing was misprovisioned. That
+       finding stands; the explanation attached to it did not (see the corrected
+       diagnosis in session 165 below).
   - **Harness trap removed (session 160)**: a mounted `/ovmf` with a missing
     file used to fall through to the stock non-Secure-Boot OVMF, so a varstore
     edit that silently produced nothing looked like a normal run reporting
@@ -742,9 +779,10 @@
   to `S3 enabled without MOR` — so the residual D-130 failure is no longer the
   key database. Evidence and the two fencing negatives:
   `firmware/PblPkg/artifacts/d133-step6-results.txt` (D-133).
-  What remains open is unrelated to enrolment: **gap 2** (TPM under SMM —
-  `tpm-tis` sees an unprovisioned TPM, `tpm-crb` stalls) and the fact that the
-  signing cert in use is a test self-signed one, not a provisioned fleet PFX.
+  What remains open is unrelated to enrolment: **gap 2** (TPM under SMM — see the
+  corrected diagnosis in session 165: not SMM at all, it is the platform-hierarchy
+  policy, now filed as **D-134**) and the fact that the signing cert in use is a
+  test self-signed one, not a provisioned fleet PFX.
 - **Status**: OPEN
 - **Category**: SECURITY
 - **Blocker**: PblApp.efi is not signed. Secure Boot will not load an
@@ -1094,6 +1132,48 @@
   `d133-{positive-db-and-dbx,negative-db-noca,negative-dbx-dummy}-serial.log`,
   `d133-enroll-serial.log`, and the session-161
   `d133-negative-test-{serial.log,results.txt}`.
+
+### D-134 — PBL's NV indices live in the TPM platform hierarchy, which stock firmware takes away
+- **Status**: OPEN (found 2026-11-02, session 165, while chasing D-130 gap 2)
+- **Category**: SECURITY / DEPLOYMENT
+- **What the code does**: `PcdPblTpmUsePlatformHierarchy` defaults to **TRUE**
+  (`PblPkg.dec:72`), and that selects `TPM_RH_PLATFORM` as the NV auth handle for
+  define/read/write (`TpmClient.c:1105`, `1204-1214`, `1322-1330`) with attributes
+  `0x420D000D` (`PPWRITE|AUTHWRITE|POLICYWRITE|PPREAD|AUTHREAD|POLICYREAD|NO_DA|`
+  `PLATFORMCREATE`). The FALSE branch (owner hierarchy, attributes `0x02040004`)
+  exists but the source comment calls it a *"dev/swtpm fallback if the platform auth
+  has been randomized by the firmware"* — i.e. the fragile case is the documented
+  production default.
+- **Why it matters**: firmware that randomizes `platformAuth`
+  (`PeiDxeTpmPlatformHierarchyLib.ConfigureTpmPlatformHierarchy` →
+  `Tpm2HierarchyChangeAuth`) or disables the platform hierarchy
+  (`Tpm2HierarchyControl(…, NO)`) makes PBL's own NV indices unreachable. The
+  firmware then sees `NV_Read` fail `0x9A2` and `NV_DefineSpace` fail `0x18B`, so
+  `DeviceId` is never populated and — per the D-131 ruling — the verdict request is
+  suppressed and PBL silently follows the cached-verdict → denied-boot path. A
+  stolen device would boot to the local-unlock path while every log line reads like
+  a normal unprovisioned device.
+- **Demonstrated, not hypothesised** (session 165): one provisioned swtpm state,
+  six arms, outcome tracking *only* the OVMF build — PBL build (whose OVMF is
+  patched to `PeiDxeTpmPlatformHierarchyLibNull`) sees the AK Name in all three
+  arms including SMM and CRB; the stock distro build fails `0x9A2` in all three.
+  Artifact: `firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt`.
+  This has been seen once before in a different harness (session 113: a FVE harness
+  accidentally using the distro OVMF silently broke RS_PW provisioning `0x9A2`).
+- **Why it is separate from D-129**: D-129 asks whether PBL runs on hardware at all;
+  this asks a specific design question — *is the platform hierarchy the right place
+  for indexes an OS-level agent must read after the firmware has finished with the
+  machine?* The standard answer is no (BitLocker and other OS-visible status live in
+  the owner hierarchy); the counter-argument in the code is that
+  `TPM2_Clear(RH_OWNER)` would erase the lock state.
+- **Close criteria**: on real hardware in the D-129 window, one of the two
+  configurations is shown to reach NV and the choice is recorded with an artifact:
+  (a) production `PcdPblTpmUsePlatformHierarchy=TRUE` reads the AK Name on the HP
+  machine, or (b) it is flipped to FALSE and the AK Name is read via the owner
+  hierarchy — and, if (b), a `TPM2_Clear(RH_OWNER)` is shown either not to lose the
+  lock state or to be handled explicitly.
+- **Blocker**: needs the real machine (D-129 window). QEMU cannot answer it, because
+  the answer depends on the *target firmware's* platformAuth policy.
 
 ---
 

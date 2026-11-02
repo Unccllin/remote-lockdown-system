@@ -1122,6 +1122,24 @@ debt_items:
       d133-{positive-db-and-dbx,negative-db-noca,negative-dbx-dummy}-serial.log,
       d133-enroll-serial.log, d133-negative-test-{serial.log,results.txt}
 
+  - id: D-134
+    description: >-
+      PBL's TPM NV indices are created under the platform hierarchy
+      (PcdPblTpmUsePlatformHierarchy=TRUE by default, TpmClient.c NV
+      define/read with TPM_RH_PLATFORM and PLATFORMCREATE), but stock firmware
+      randomizes platformAuth or disables the hierarchy at EndOfDxe. The
+      indices then become unreachable (NV_Read 0x9A2, NV_DefineSpace 0x18B),
+      DeviceId is never populated, and PBL silently follows the unprovisioned
+      path.
+    close_criteria: >-
+      On real hardware, one configuration is shown to reach NV and the choice
+      recorded with an artifact: the platform-hierarchy config reads the AK
+      Name on the target machine, or the PCD is flipped to the owner hierarchy
+      and the AK Name is read there - plus, if flipped, a TPM2_Clear(RH_OWNER)
+      is shown not to lose the lock state or to be handled explicitly.
+    status: OPEN
+    category: SECURITY
+
   - id: D-201
     description: "PBL policy endpoint (GET /v1/policy/{version}) not \
                  implemented"

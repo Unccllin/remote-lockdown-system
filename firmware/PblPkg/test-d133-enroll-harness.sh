@@ -206,6 +206,7 @@ timeout "${TIMEOUT:-90}" qemu-system-x86_64 \
   2>&1 | tee "/work/$log"
 set -e
 cp "$B/VARS.fd" "$W/VARS_out.fd"
+chown -R "${HOST_UID:-0}:${HOST_GID:-0}" "$W" 2>/dev/null || true
 RSCRIPT
 chmod +x "$W/run.sh"
 
@@ -223,7 +224,8 @@ docker run --rm -v "$W":/work "$IMAGE" sh -c '
 # Docker options must come before the image; the phase/log go through env so an
 # argument can never be mistaken for the image name (docker exits 125 when it is).
 run_container() {
-  docker run --rm -e TIMEOUT="$TIMEOUT" "$@" \
+  docker run --rm -e TIMEOUT="$TIMEOUT" \
+    -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" "$@" \
     -v "$W":/work -v "$W/run.sh":/run.sh:ro "$IMAGE" /bin/bash /run.sh
 }
 

@@ -1,0 +1,17 @@
+# D-130 gap 2 — TPM NV reachability across SMM x TPM device x OVMF build
+# generated 2026-11-02T07:50:41Z by test-d130-tpm-hierarchy-harness.sh
+#
+# PblApp.efi  b03e2c33… (unsigned; Secure Boot not needed)
+# PBL OVMF    ed72baa1…  (PeiDxeTpmPlatformHierarchyLibNull, patched)
+# stock OVMF  949bfa53…  (distro build, real hierarchy lib)
+#
+# One TPM state, provisioned once: NV 0x01C00003 = 34-byte AK Name under the
+# platform hierarchy, exactly as scripts/provision-qemu-tpm.sh does.
+
+variant        code(smm)             AK Name visible?
+pbl-nosmm-tis  PBL                   YES  (device_id from AK Name: ABABABAB)
+pbl-smmon-tis  PBL                   YES  (device_id from AK Name: ABABABAB)
+pbl-smmon-crb  PBL                   YES  (device_id from AK Name: ABABABAB)
+ubu-nosmm-tis  stock                 no   (NV_Read(AK_NAME) RC=0x9A2)
+ubu-nosmm-crb  stock                 no   (NV_Read(AK_NAME) RC=0x9A2)
+ubu-smmon-tis  stock                 no   (NV_Read(AK_NAME) RC=0x9A2)

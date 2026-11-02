@@ -256,6 +256,33 @@ Evidence is the log containing the full flow: banner → `[2/8] policy` →
 `BLOCK` is the expected outcome (no BitLocker / no kernel DMA protection) and is
 **correct fail-closed behaviour**, not a failure of the test.
 
+**Pre-registered check — TPM NV reachability (D-134).** Before reading anything
+else in the log, look for the AK Name line:
+
+```text
+[OK] device_id from AK Name: …           <- platform hierarchy reachable
+[INFO] NV_Read(AK_Name) RC=0x9A2         <- platform hierarchy taken away
+[WARN] NV_DefineSpace(…01) RC=0x18B      <- same cause, define side
+```
+
+PBL creates its NV indices under `TPM_RH_PLATFORM` by default
+(`PcdPblTpmUsePlatformHierarchy=TRUE`). QEMU shows (session 165, artifact
+`firmware/PblPkg/artifacts/d130-tpm-hierarchy-results.txt`) that stock firmware
+
+takes that hierarchy away — `0x9A2` / `0x18B` — and that the PBL OVMF build only
+works because it is patched to `PeiDxeTpmPlatformHierarchyLibNull`. **Record
+whichever happens**, because both outcomes close D-134 differently:
+
+- AK Name read OK → the production PCD is fine on this firmware; file the log.
+- `0x9A2` / `0x18B` → rebuild with `PcdPblTpmUsePlatformHierarchy=FALSE`, re-run
+  the same capture, and file **both** logs. Then also check that
+  `TPM2_Clear(RH_OWNER)` does not silently lose the lock state before claiming
+  the owner-hierarchy path is a fix.
+
+Do not skip this as "just a warning": with `DeviceId` empty, PBL suppresses the
+verdict request and follows the cached-verdict path, so every later line looks
+normal while the device is effectively offline from the server.
+
 Then Step 7: **reboot and boot again** to prove NV persistence — second boot must
 read the cached verdict instead of fetching. One boot is not the test.
 

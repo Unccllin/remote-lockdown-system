@@ -1,0 +1,68 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1,0x1)/Ata(Primary,Master,0x0)
+BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1,0x1)/Ata(Primary,Master,0x0)
+
+========================================
+  PBL — Pre-Boot Lock v0
+  Contracts: C1-C4 (frozen 2026-09-05)
+========================================
+
+[1/8] Collecting platform state...
+  [INFO] NV_Read(AK_NAME) RC=0x9A2
+  [INFO] AK Name not available: Device Error (device unprovisioned)
+  [INFO] No device_id — device is unprovisioned (C2 §1.3)
+  [INFO] Loaded images: 105 (digest B808CB6813EFAB93...)
+  [INFO] Boot path: flags=0x00 shell-mask=0x0000 bootnext=0xFFFF
+  [INFO] Boot-ID: reset=2 restart=0 safe=1
+[2/8] Parsing policy blob...
+  [INFO] No policy.cose on ESP: Not Found — using DEGRADED
+  [WARN] Policy parse: Not Found — using DEGRADED
+[3/8] Reading TPM NV state...
+  [WARN] NV_DefineSpace(0x1C00001) RC=0x9A2
+  [WARN] NV_DefineSpace(LOCK_STATE): Device Error
+  [WARN] NV index provisioning failed: Device Error
+  [INFO] HMAC session start failed: Device Error — using password auth
+  [WARN] NV_Read(LOCK_STATE) RC=0x18B
+  [INFO] No cached lock state: Device Error
+  [WARN] NV_Read(POLICY_VERSION) RC=0x18B
+  [INFO] No policy version counter: Device Error
+[4/8] Fetching verdict...
+  [INFO] EFI_RNG_PROTOCOL not available — trying TPM2_GetRandom
+  [WARN] Verdict request suppressed: no device_id (C2 §1.3)
+  [WARN] No cached verdict — denied-boot-with-local-unlock
+[5/8] Verifying verdict...
+  [INFO] Skipping verification for cached verdict
+  [WARN] NV_Increment(0x1C00004) RC=0x18B
+  [WARN] NV_Write(LOCK_STATE) RC=0x18B
+  [WARN] NV_Write(LOCK_STATE) failed: Device Error
+[6/8] Evaluating decision...
+  [INFO] Decision BLOCK basis: Secure Boot disabled
+[7/8] Extending PCR 12/13...
+  [OK] PCR HMAC session established
+  Self-image SHA-256: B03E2C3310E9363A2B478303ED5E67B5E9176AFC86B16EBD60AB9AD65841669D
+  [OK] PCR 13 (self-image) extended
+  [OK] PCR 13 (inputs) extended
+  [OK] PCR 12 (decision) extended
+[8/8] Decision: BLOCK — lock screen
+  [MOR] SetVariable failed: Write Protected
+  [MOR] Lock not supported: Write Protected
+[2J[01;01H[0m[37m[44m
+
+
+                    ========================================
+                              THIS DEVICE IS LOCKED
+                    ========================================
+
+
+                                   Device ID:
+  0000000000000000000000000000000000000000000000000000000000000000
+
+                 This device has been administratively locked.
+                      Do not attempt to bypass this lock.
+
+
+
+--- Override Challenge ---
+Challenge code: 9be90f00000000e81700000000000000
+
+Enter the override response code:
+> qemu-system-x86_64: terminating on signal 15 from pid 95 (timeout)
