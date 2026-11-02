@@ -11,6 +11,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import crypto from 'crypto';
 
+// The Worker is a bearer-token API (`Authorization: Bearer` / `x-agent-key`) with
+// no cookie-based sessions, so a wildcard CORS origin does not expose credentials:
+// a hostile page can send the request, but it cannot attach a token it does not
+// have. Stated once here rather than as a bare '*' in seven assertions, so the
+// decision is visible and reviewable instead of looking like an accident.
+const TOKEN_API_CORS_ORIGIN = '*';
+
 // Mock KV namespace
 class MockKV {
   private data: Record<string, string | Uint8Array> = {};
@@ -671,6 +678,47 @@ describe('Serverless Worker', () => {
         env,
       );
       expect(ownerResp.status).toBe(200);
+    });
+
+    it("a check-in only receives its own device's commands", async () => {
+      // Session 179: dropping the `c.device_id === device.id` term from the
+      // check-in delivery filter left the whole suite green, so nothing asserted
+      // that a device is handed only its own work. With that term gone one
+      // machine's check-in can return another machine's pending lockdown — the
+      // worst cross-device failure this product can have.
+      const victim = await enrollDevice(worker, env, 'DELIVER-VICTIM-001');
+      const bystander = await enrollDevice(worker, env, 'DELIVER-BYSTANDER-001');
+
+      // Queue a lockdown for the victim only.
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${victim.device.id}/flag-stolen`,
+          { hostname_confirm: 'DELIVER-VICTIM-001' },
+          { Authorization: 'Bearer test-admin-token' },
+        ),
+        env,
+      );
+
+      // The bystander must get nothing, even though a command is pending.
+      const bystanderBody = JSON.stringify({ hostname: 'DELIVER-BYSTANDER-001' });
+      const bystanderCheckin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', bystanderBody,
+                   signRequest(bystanderBody, bystander.apiKey)),
+        env,
+      );
+      const bystanderData: any = await parseResponse(bystanderCheckin);
+      expect(bystanderData.command).toBe(null);
+
+      // Positive control: the victim does receive it.
+      const victimBody = JSON.stringify({ hostname: 'DELIVER-VICTIM-001' });
+      const victimCheckin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', victimBody,
+                   signRequest(victimBody, victim.apiKey)),
+        env,
+      );
+      const victimData: any = await parseResponse(victimCheckin);
+      expect(victimData.command?.type).toBe('lockdown');
     });
 
     it('a device cannot escrow a key against another device\'s command', async () => {
@@ -2052,7 +2100,7 @@ describe('Serverless Worker', () => {
       const req = makeRequest('OPTIONS', '/api/health');
       const resp = await worker.fetch(req, env);
       expect(resp.status).toBe(200);
-      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe(TOKEN_API_CORS_ORIGIN);
     });
   });
 });
@@ -2356,7 +2404,7 @@ describe('D-210: PBL route integration', () => {
 
     it('returns 404 for non-existent device', async () => {
       const resp = await worker.fetch(
-        makeRequest('POST', '/v1/devices/ff'.repeat(32) + '/lock', undefined, {
+        makeRequest('POST', `/v1/devices/${'ff'.repeat(32)}/lock`, undefined, {
           Authorization: 'Bearer test-admin-token',
         }),
         env,
@@ -2586,7 +2634,7 @@ describe('D-210: PBL route integration', () => {
 
     it('returns 404 for non-existent device', async () => {
       const resp = await worker.fetch(
-        makeRequest('POST', '/v1/devices/ff'.repeat(32) + '/track', undefined, {
+        makeRequest('POST', `/v1/devices/${'ff'.repeat(32)}/track`, undefined, {
           Authorization: 'Bearer test-admin-token',
         }),
         env,
@@ -2623,7 +2671,7 @@ describe('D-210: PBL route integration', () => {
 
     it('returns 404 for non-existent device', async () => {
       const resp = await worker.fetch(
-        makeRequest('POST', '/v1/devices/ff'.repeat(32) + '/stop-track', undefined, {
+        makeRequest('POST', `/v1/devices/${'ff'.repeat(32)}/stop-track`, undefined, {
           Authorization: 'Bearer test-admin-token',
         }),
         env,
@@ -2873,14 +2921,14 @@ describe('D-210: PBL route integration', () => {
   describe('CORS headers on PBL routes (D-210)', () => {
     it('includes CORS headers on GET /v1/health', async () => {
       const resp = await worker.fetch(makeRequest('GET', '/v1/health'), env);
-      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe(TOKEN_API_CORS_ORIGIN);
       expect(resp.headers.get('Access-Control-Allow-Methods')).toContain('GET');
       expect(resp.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
     });
 
     it('includes CORS headers on GET /v1/policy/1', async () => {
       const resp = await worker.fetch(makeRequest('GET', '/v1/policy/1'), env);
-      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe(TOKEN_API_CORS_ORIGIN);
     });
 
     it('includes CORS headers on GET /v1/devices (admin)', async () => {
@@ -2890,19 +2938,19 @@ describe('D-210: PBL route integration', () => {
         }),
         env,
       );
-      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe(TOKEN_API_CORS_ORIGIN);
     });
 
     it('includes CORS headers on 404 responses', async () => {
       const resp = await worker.fetch(makeRequest('GET', '/v1/unknown'), env);
       expect(resp.status).toBe(404);
-      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe(TOKEN_API_CORS_ORIGIN);
     });
 
     it('includes CORS headers on 401 responses', async () => {
       const resp = await worker.fetch(makeRequest('GET', '/v1/devices'), env);
       expect(resp.status).toBe(401);
-      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe(TOKEN_API_CORS_ORIGIN);
     });
 
     it('handles OPTIONS preflight with CORS headers', async () => {
@@ -2910,7 +2958,7 @@ describe('D-210: PBL route integration', () => {
         method: 'OPTIONS',
       }), env);
       expect(resp.status).toBe(200);
-      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(resp.headers.get('Access-Control-Allow-Origin')).toBe(TOKEN_API_CORS_ORIGIN);
       expect(resp.headers.get('Access-Control-Allow-Methods')).toContain('DELETE');
     });
   });

@@ -243,6 +243,24 @@ MUTATIONS: list[dict] = [
         "new": "  // MUTATION: command_uuid is never persisted",
         "why": "retry idempotency loses the uuid the agent uses to suppress duplicates",
     },
+    {
+        "path": "worker/checkin-device",
+        "label": "WRK/checkin-device-filter",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  const pendingCmds = commands\n    .filter((c) => c.device_id === device.id && c.status === 'pending')\n    .sort((a, b) => a.created_at.localeCompare(b.created_at));",
+        "new": "  const pendingCmds = commands\n    .filter((c) => c.status === 'pending')  // MUTATION: no device filter\n    .sort((a, b) => a.created_at.localeCompare(b.created_at));",
+        "why": "a device is handed ANOTHER device's pending command (tell B to lock)",
+    },
+    {
+        "path": "worker/checkin-pending",
+        "label": "WRK/checkin-pending-filter",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  const pendingCmds = commands\n    .filter((c) => c.device_id === device.id && c.status === 'pending')\n    .sort((a, b) => a.created_at.localeCompare(b.created_at));",
+        "new": "  const pendingCmds = commands\n    .filter((c) => c.device_id === device.id)  // MUTATION: any status\n    .sort((a, b) => a.created_at.localeCompare(b.created_at));",
+        "why": "an executed command is re-delivered, so a recovered device re-locks",
+    },
 ]
 
 
