@@ -273,6 +273,15 @@ full-verify: graph-check lint test test-e2e verify-env check-artifacts
 	@echo "  graph-check + lint + tests + e2e + env + artifacts"
 	@echo "=========================================="
 
+# Deploy verification — bring the PRODUCTION stack up locally and smoke it.
+# Distinct from verify-env (tooling) and test-e2e (in-process SQLite): this is the
+# only gate that runs the real image against real PostgreSQL. Wraps
+# scripts/verify-docker-stack.sh; needs Docker + .env.prod.
+.PHONY: verify-deploy
+
+verify-deploy:
+	./scripts/verify-docker-stack.sh
+
 # Hardware test harness v2.0 (D-003) — runs 12 enforcement path tests against
 # real Windows/HP hardware. On non-Windows/non-HP, tests are skipped.
 # Modes: simulate (real actions), dry-run (skip), check (eligibility only).

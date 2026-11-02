@@ -183,6 +183,65 @@ curl -X POST https://lockdown.example.com/api/setup/create-admin \
 
 ---
 
+## Verify the stack locally before you deploy it
+
+The API E2E suite (`tests/e2e/`) boots Express **in-process on SQLite** via
+supertest — it never exercises the container, PostgreSQL 16, or the static
+dashboard. So a green test run does not prove the deployment works.
+
+`scripts/verify-docker-stack.sh` does prove it, on this machine:
+
+```bash
+./scripts/verify-docker-stack.sh          # build image, run postgres + server, smoke, tear down
+./scripts/verify-docker-stack.sh --keep   # leave it running for manual poking
+```
+
+It builds the **production image** from `Dockerfile.server`, starts PostgreSQL 16
+and the server with the production env wiring, waits for the DB-backed readiness
+probe, then checks over HTTP:
+
+- `GET /api/health` → 200, and `/api/health/ready` becomes ready (DB reachable,
+  migrations applied);
+- `GET /api/devices` without a token → **401** (auth enforced in the container);
+- `GET /` → 200 `text/html` (the built dashboard is in the image and served
+  same-origin);
+- `POST /api/setup/create-admin` → token, then `/api/devices` with it → 200;
+- `POST /api/devices` → agent key, then `POST /api/agent/checkin` with that key
+  → the agent's own ingress works;
+- a second `create-admin` → 403/409 (the first-admin takeover guard holds).
+
+It runs under its own compose project (`pbl-verify`), publishes only to
+`127.0.0.1`, and removes its volumes on exit, so it cannot collide with a real
+deployment. `make verify-env` calls it through `scripts/validate-docker.sh
+--live`.
+
+### Port conflicts: Caddy needs 80 and 443 free
+
+Caddy terminates TLS on 80/443. If anything else on the host already holds those
+ports — a VPN such as Tailscale (`ss -ltnp | grep :443`), another reverse proxy,
+or a web server — `docker compose up` aborts with
+`failed to bind host port 0.0.0.0:443/tcp: address already in use` and **nothing
+else starts**. Two ways out:
+
+```bash
+# 1. Free the port (example: stop Tailscale's 443 listener)
+sudo tailscale serve reset        # or: sudo systemctl stop tailscaled
+
+# 2. Or keep Caddy off the privileged ports with an override
+cat > docker-compose.local.yml <<'YAML'
+services:
+  caddy:
+    ports: ["8080:80", "8443:443"]
+YAML
+docker compose --env-file .env.prod -f docker-compose.prod.yml \
+               -f docker-compose.local.yml up -d
+```
+
+The local verification script sidesteps this entirely by not starting Caddy: it
+reaches the server on loopback, because a placeholder `DOMAIN` cannot obtain a
+certificate anyway. Caddy is the one component that cannot be verified locally —
+check it on the real host with a real domain.
+
 ## SSL / TLS: Caddy auto-HTTPS
 
 Caddy automatically provisions and renews TLS certificates from

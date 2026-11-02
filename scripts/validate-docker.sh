@@ -258,22 +258,48 @@ check_live() {
     return
   fi
 
-  # --env-file loads .env.prod for ${VAR} interpolation in the compose file.
-  # Docker Compose only auto-loads .env (not .env.prod), so this is required
-  # for POSTGRES_PASSWORD, JWT_SECRET, etc. to reach the containers.
+  # The live check used to run `up -d --build` on the whole production stack with
+  # its output discarded. Two problems with that, both found on 2026-11-02:
+  #
+  #   1. Caddy binds 80/443. On a host where anything else holds those ports
+  #      (tailscale does here, on :443) the whole `up` aborts, and the failure
+  #      says "docker compose up failed" with no cause — a deployment looks
+  #      broken when only the TLS terminator could not start. Caddy also cannot
+  #      obtain a certificate for a placeholder DOMAIN locally, so it is the one
+  #      component that genuinely cannot run in a local verification.
+  #   2. Discarding output made every failure undiagnosable.
+  #
+  # So the live check now delegates to scripts/verify-docker-stack.sh, which
+  # starts the *production image* against the *real PostgreSQL* on loopback,
+  # without Caddy, and drives the API. Same code path that ships; only the TLS
+  # terminator is omitted, and it is the one thing that cannot run here.
+  if [[ -x "$PROJECT_ROOT/scripts/verify-docker-stack.sh" ]]; then
+    echo "  running scripts/verify-docker-stack.sh (build + API smoke, ~2 min)..."
+    local live_log=/tmp/validate-docker-live.log
+    if "$PROJECT_ROOT/scripts/verify-docker-stack.sh" >"$live_log" 2>&1; then
+      pass "live stack + API smoke passed (production image, real PostgreSQL)"
+    else
+      fail "live stack smoke failed — see $live_log"
+      tail -25 "$live_log" >&2 || true
+    fi
+    return
+  fi
+
+  # Fallback: no verification script available. Keep the old behaviour but never
+  # hide the reason for a failure.
   local compose_cmd=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
   echo "  building and starting stack..."
-  if ! "${compose_cmd[@]}" up -d --build >/dev/null 2>&1; then
-    fail "docker compose up failed"
+  local up_log=/tmp/validate-docker-up.log
+  if ! "${compose_cmd[@]}" up -d --build >"$up_log" 2>&1; then
+    fail "docker compose up failed — see $up_log"
+    tail -15 "$up_log" >&2 || true
     "${compose_cmd[@]}" down --volumes >/dev/null 2>&1 || true
     return
   fi
 
-  # Wait for the server health endpoint to respond.
   local healthy=0 waited=0 max_wait=60
   while [[ $waited -lt $max_wait ]]; do
-    if curl -sf "http://localhost/health" >/dev/null 2>&1 \
-       || curl -sf "http://localhost/api/health" >/dev/null 2>&1; then
+    if curl -sf "http://localhost/api/health" >/dev/null 2>&1; then
       healthy=1
       break
     fi
