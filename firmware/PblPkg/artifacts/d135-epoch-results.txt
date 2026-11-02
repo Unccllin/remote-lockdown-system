@@ -1,0 +1,18 @@
+# D-135 — lock-epoch counter advances and NG-T7 detects a rolled-back state
+# generated 2026-11-02T10:13:29Z by test-d135-epoch-harness.sh
+#
+# PblApp 3906065d…  (mNvNameCache sized PBL_NV_INDEX_COUNT,
+#        cache-full now warns instead of failing silently)
+# One persistent swtpm state across three boots; the counter is read with
+# tpm2-tools between boots (the TPM is the independent witness, not the log).
+
+boot  NV_Increment failures   counter after boot   notable line
+1     0                      -                    Lock state cached to TPM NV
+2     0                      -                    NG-T7: cache epoch=1 live=1 (read=Success)
+3     0                      -                    NG-T7: cache epoch=2 live=4 (read=Success)
+
+# Counter progression (from the harness run, read with tpm2_nvread):
+#   boot 1 -> 1, boot 2 -> 2, manual bump -> 4, boot 3 -> 5 (increment worked)
+# NG-T7: boot 3's cache said epoch=2 while the live counter was 4, so
+# PblTpmReadLockState reported EFI_NOT_FOUND and the caller fell back to a
+# fresh verdict path instead of trusting the stale cache.

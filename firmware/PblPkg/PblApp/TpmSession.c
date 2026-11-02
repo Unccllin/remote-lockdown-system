@@ -44,15 +44,21 @@
     Encrypt: C_i = P_i XOR E_K(C_{i-1}), C_{-1} = IV
     Decrypt: P_i = C_i XOR E_K(C_{i-1}), C_{-1} = IV
 
-  Since the keystream generation is the same, this single function handles
-  both operations. The caller passes the ciphertext for decrypt, plaintext
-  for encrypt — the XOR result is the output.
+  The feedback is ALWAYS the ciphertext block. Because both call sites work
+  in place (Output == Data), the ciphertext is overwritten by the XOR result on
+  the decrypt path, so it has to be saved first — otherwise every block after
+  the first decrypts against plaintext feedback and comes out garbage. That was
+  D-135's tail: a 64-byte NV_Read returned a correct magic byte and a corrupt
+  Epoch field, so NG-T7 compared a garbage epoch against the live counter and
+  never fired.
 
   @param  Key       AES-256 key (32 bytes).
   @param  Iv        Initialization vector (16 bytes, all zeros for TPM).
   @param  Data      Data to encrypt/decrypt (in-place, must be 16-byte aligned).
   @param  DataSize  Size of data (must be multiple of 16 for full-block CFB).
   @param  Output    Output buffer (same size as Data).
+  @param  Decrypt   TRUE when decrypting (feedback comes from the INPUT block),
+                    FALSE when encrypting (feedback is the OUTPUT block).
 
   @retval TRUE   Success.
   @retval FALSE  AES operation failed.
@@ -64,12 +70,14 @@ PblAesCfb256Process (
   IN  CONST UINT8  *Iv,
   IN  CONST UINT8  *Data,
   IN  UINTN         DataSize,
-  OUT UINT8        *Output
+  OUT UINT8        *Output,
+  IN  BOOLEAN       Decrypt
   )
 {
   UINT8  AesCtx[1024];  // Stack-allocated AES context (AesGetContextSize returns ~248 but pad for safety)
   UINT8  ZeroIv[AES_BLOCK_SIZE];
   UINT8  Feedback[AES_BLOCK_SIZE];
+  UINT8  CipherBlock[AES_BLOCK_SIZE];
   UINT8  Keystream[AES_BLOCK_SIZE];
   UINTN  Offset;
 
@@ -89,6 +97,10 @@ PblAesCfb256Process (
 
   // Process each 16-byte block
   for (Offset = 0; Offset + AES_BLOCK_SIZE <= DataSize; Offset += AES_BLOCK_SIZE) {
+    // Save the input block: on the decrypt path (in place) the XOR below
+    // destroys the ciphertext, and the ciphertext is the next feedback.
+    CopyMem (CipherBlock, Data + Offset, AES_BLOCK_SIZE);
+
     // Keystream block = E_K(feedback)
     // AesCbcEncrypt with IV=0 on a single block gives E_K(block)
     if (!AesCbcEncrypt (AesCtx, Feedback, AES_BLOCK_SIZE, ZeroIv, Keystream)) {
@@ -100,9 +112,13 @@ PblAesCfb256Process (
       Output[Offset + i] = Data[Offset + i] ^ Keystream[i];
     }
 
-    // Update feedback = output (ciphertext for encrypt, ciphertext for decrypt)
-    // In CFB, feedback is always the ciphertext block
-    CopyMem (Feedback, Output + Offset, AES_BLOCK_SIZE);
+    // Update feedback to the CIPHERTEXT block: the saved input when decrypting,
+    // the freshly produced output when encrypting.
+    if (Decrypt) {
+      CopyMem (Feedback, CipherBlock, AES_BLOCK_SIZE);
+    } else {
+      CopyMem (Feedback, Output + Offset, AES_BLOCK_SIZE);
+    }
   }
 
   // Handle remaining bytes (partial block) — CFB handles this naturally
@@ -771,7 +787,7 @@ PblTpmEncryptCommandParams (
   if (!PblTpmSessionCfbKeyIv (&mSession, TRUE, Key, Iv)) {
     return EFI_DEVICE_ERROR;
   }
-  if (!PblAesCfb256Process (Key, Iv, Data + 2, CipherSize, Data + 2)) {
+  if (!PblAesCfb256Process (Key, Iv, Data + 2, CipherSize, Data + 2, FALSE)) {
     return EFI_DEVICE_ERROR;
   }
 
@@ -820,7 +836,7 @@ PblTpmDecryptResponseParams (
   if (!PblTpmSessionCfbKeyIv (&mSession, FALSE, Key, Iv)) {
     return EFI_DEVICE_ERROR;
   }
-  if (!PblAesCfb256Process (Key, Iv, Data + 2, CipherSize, Data + 2)) {
+  if (!PblAesCfb256Process (Key, Iv, Data + 2, CipherSize, Data + 2, TRUE)) {
     return EFI_DEVICE_ERROR;
   }
 

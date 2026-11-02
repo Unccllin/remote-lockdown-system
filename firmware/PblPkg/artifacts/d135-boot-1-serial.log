@@ -10,7 +10,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
   [INFO] NV_Read(AK_NAME) RC=0x18B
   [INFO] AK Name not available: Device Error (device unprovisioned)
   [INFO] No device_id — device is unprovisioned (C2 §1.3)
-  [INFO] Loaded images: 93 (digest 535BD321DFBC499C...)
+  [INFO] Loaded images: 93 (digest 15C40EDFEB598CC6...)
   [INFO] Boot path: flags=0x00 shell-mask=0x0000 bootnext=0xFFFF
   [INFO] Boot-ID: reset=1 restart=0 safe=1
 [2/8] Parsing policy blob...
@@ -34,7 +34,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
   [INFO] Decision BLOCK basis: Secure Boot disabled
 [7/8] Extending PCR 12/13...
   [OK] PCR HMAC session established
-  Self-image SHA-256: 01C904EB7FC98705B6EF5E0BE39B47FB5EC53D73A179D6929C1A65D17FAD8793
+  Self-image SHA-256: 3906065D77D9E763916BA05A4DE0CF73669D3B58437A5229B8FADBFBE41927E5
   [OK] PCR 13 (self-image) extended
   [OK] PCR 13 (inputs) extended
   [OK] PCR 12 (decision) extended
@@ -51,9 +51,6 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 
                                    Device ID:
   0000000000000000000000000000000000000000000000000000000000000000
-
-                                    Reason:
-  :ﾸ
 
                  This device has been administratively locked.
                       Do not attempt to bypass this lock.

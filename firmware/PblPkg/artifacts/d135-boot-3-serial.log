@@ -7,10 +7,10 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 ========================================
 
 [1/8] Collecting platform state...
-  [INFO] NV_Read(AK_NAME) RC=0x9A2
-  [INFO] AK Name not available: Device Error (device unprovisioned)
+  [INFO] NV_Read(AK_NAME) RC=0x14A
+  [INFO] AK Name not available: Not Found (device unprovisioned)
   [INFO] No device_id — device is unprovisioned (C2 §1.3)
-  [INFO] Loaded images: 93 (digest 535BD321DFBC499C...)
+  [INFO] Loaded images: 93 (digest 15C40EDFEB598CC6...)
   [INFO] Boot path: flags=0x00 shell-mask=0x0000 bootnext=0xFFFF
   [INFO] Boot-ID: reset=6 restart=0 safe=1
 [2/8] Parsing policy blob...
@@ -19,22 +19,23 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [3/8] Reading TPM NV state...
   [OK] NV indices provisioned
   [OK] HMAC session established (bound to lock-state NV)
-  [WARN] NV_Read(counter 0x1C00004) RC=0x9A2
+  [INFO] NG-T7: cache epoch=2 live=4 (read=Success)
+  [WARN] lock-state epoch stale (cache=2 live=4) — rolled back?
+  [INFO] No cached lock state: Not Found
   [WARN] NV_Read(POLICY_VERSION) RC=0x14A
   [INFO] No policy version counter: Not Found
 [4/8] Fetching verdict...
   [INFO] EFI_RNG_PROTOCOL not available — trying TPM2_GetRandom
   [WARN] Verdict request suppressed: no device_id (C2 §1.3)
-  [INFO] Using cached verdict: 1 (grace_until=0)
+  [WARN] No cached verdict — denied-boot-with-local-unlock
 [5/8] Verifying verdict...
   [INFO] Skipping verification for cached verdict
-  [WARN] NV_Increment(0x1C00004) RC=0x9A2
   [OK] Lock state cached to TPM NV
 [6/8] Evaluating decision...
   [INFO] Decision BLOCK basis: Secure Boot disabled
 [7/8] Extending PCR 12/13...
   [OK] PCR HMAC session established
-  Self-image SHA-256: 01C904EB7FC98705B6EF5E0BE39B47FB5EC53D73A179D6929C1A65D17FAD8793
+  Self-image SHA-256: 3906065D77D9E763916BA05A4DE0CF73669D3B58437A5229B8FADBFBE41927E5
   [OK] PCR 13 (self-image) extended
   [OK] PCR 13 (inputs) extended
   [OK] PCR 12 (decision) extended
@@ -50,7 +51,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 
 
                                    Device ID:
-  00000000748663a4b332ec53d3888d84e6db3ce03ed9b9ed8201ba2c4eaf4bff
+  0000000000000000000000000000000000000000000000000000000000000000
 
                                     Reason:
   :ﾸ
@@ -64,4 +65,4 @@ BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 Challenge code: 3ab80f0000000000c0670d00000000b0
 
 Enter the override response code:
-> qemu-system-x86_64: terminating on signal 15 from pid 98 (timeout)
+> qemu-system-x86_64: terminating on signal 15 from pid 101 (timeout)
