@@ -4421,3 +4421,106 @@ check from one protected route and see whether any of the 663 server tests fail.
 one survives, that is a security gap worth more than everything this session found.
 
 ---
+
+---
+
+## Session 173 — 2026-11-02 (the audit reaches the server, and the tool lies three more ways)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S172 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `server/src/middleware/auth.js` (41 lines: `requireAuth`,
+  `requireRole`, `ROLE_HIERARCHY`), `server/src/middleware/hmacAuth.js` (184 lines:
+  `createHmac` + `crypto.timingSafeEqual`), `server/package.json`,
+  `server/jest.config.js`, `server/tests/auth.routes.test.js`,
+  `server/tests/hmacAuth.test.js`, and the route suites asserting 401/403.
+- **Finding (the jest invocation must come from package.json, not from memory)**:
+  `npm test` runs `node --experimental-vm-modules node_modules/jest/bin/jest.js`.
+  Without that flag the suite dies partway through with
+  `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` (pglite dynamic import) — exit code
+  1, i.e. indistinguishable from "tests failed".
+- **Finding (a crash, an attribution bug, and a flake are three ways to fake a kill)**:
+  1. the flag-less run reported three security mutations KILLED from a crashed suite;
+  2. with the flag fixed, the verdict named `GET /api/admins (list) › operator
+     cannot list admins (403)` as the catcher for the *hmacAuth* mutation — the tool
+     took the first `●` line in the output, which was an unrelated suite's failure;
+  3. the server baseline run then showed the suite is **green** (716 tests, 43
+     suites), so that admins failure was intermittent. A flaky test makes *any*
+     mutation look caught.
+- **Finding (method, not tooling)**: "the run was red" is not the question. The
+  question is whether the mutation caused a failure that a green run does not have.
+  The tool now establishes a green baseline per runner, records the failing-test
+  set, and counts only **new** failures; a red baseline aborts the audit instead of
+  being scored.
+
+### IMPLEMENT
+- `scripts/audit_test_teeth.py`: `runner` field (`pytest` | `jest`), jest branch
+  using `package.json`'s flags, validity requiring the runner's own tallies
+  (`Tests:` / `Test Suites:`) and rejecting crash markers, per-runner green
+  baseline, delta-based verdicts, and the catching test named in the output.
+- Three server rows for the class where a miss costs most: `SVC/requireAuth`
+  (forged token granted `super-admin`), `SVC/requireRole` (role hierarchy
+  ignored), `SVC/hmacAuth` (`timingSafeEqual` bypassed).
+
+### VERIFY
+- Server baseline: **green**, `Test Suites: 43 passed`, `Tests: 716 passed`
+  (exit 0) — recorded before any mutation was scored.
+- Server auth mutations under the delta method: **3 of 3 KILLED**, and for the
+  first time the verdicts name the right catchers:
+  - `SVC/requireAuth` → `D-205: Admin key rotation endpoint › rejects operator role with 403`
+  - `SVC/requireRole` → the same case (a forged `super-admin` turns the expected 403
+    into a 200, so the role test notices before any token test does)
+  - `SVC/hmacAuth` → `hmacAuth middleware › invalid signature is rejected` — the
+    test that should catch it, whereas the untrustworthy run had named an unrelated
+    admins case.
+- The agent table is unaffected by these changes; its baseline is green too.
+
+### Fog cleared
+- **The server suite is green and large** (716 tests), so a correctly-scored
+  mutation verdict there is meaningful — which was not true of the first three
+  attempts.
+- **Why three "kills" in a row were not trustworthy**: crash, misattribution and
+  flakiness, in that order, each producing the same word.
+
+### Fog remaining
+- **Nothing has been mutated outside `auth.js` and `hmacAuth.js`.** The device-lock
+  route's state transitions, field encryption, the HMAC timestamp/replay window,
+  installer routes, and the dashboard/serverless/electron suites are untouched.
+- **A full-suite run per mutation costs ~90 s on the server** (716 tests). Fine for
+  an audit; useless as a pre-commit hook, and worth stating so nobody wires it into CI.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
+  (D-132); 19 Dependabot alerts; no CI run observed for S151–S173.
+
+### Debt items closed
+- None. No defect found in server auth; the work was establishing that the verdict
+  itself can be believed.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, and this is now a pattern). Across
+  sessions 171, 172 and 173, four separate harnesses of mine reported success or
+  failure without the underlying run being valid: resolved paths, `-x` summary
+  parsing, crash-vs-failure, and now flaky-vs-caught. Each was found by reading the
+  output instead of the verdict. The general rule that finally worked: **require the
+  runner's own report, and require the failure to be new relative to a green
+  baseline.**
+- **Layer 1 — task specification** (mine): I wrote the jest invocation from the
+  Makefile's shape rather than from `server/package.json`, the only file that
+  defines how this suite is meant to run. Reading the four lines of the test script
+  first would have removed two of the three failure modes.
+
+### Session artifacts
+- Changed: `scripts/audit_test_teeth.py` (jest runner, validity gate, baseline +
+  delta scoring, named catchers, `--label`, 3 server rows).
+
+### Next session opening
+Use the now-trustworthy tool on the server's worst failure mode: mutate the
+device-lock route so a LOCKED device is reported UNLOCKED, and the HMAC
+timestamp/replay window so an old signature is accepted. Both are logic-heavy, both
+were impossible to audit until this session's scoring was fixed.
+
+---

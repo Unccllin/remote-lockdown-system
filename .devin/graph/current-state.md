@@ -53,45 +53,40 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 172 — 2026-11-02 (round 2 of the mutation audit: three paths confirmed double-guarded, no new gaps)
+## Latest session: 173 — 2026-11-02 (the audit reaches the server, and the tool lies three more ways)
 
 ### VERIFY
-- Full audit, 13 mutations, each against the whole agent suite: **13 KILLED**.
-- The three audited paths now have **two** independently-killed defects each, so
-  their `verified-in-unit-test` status no longer rests on a single guarded line.
+- Server baseline: **green**, `Test Suites: 43 passed`, `Tests: 716 passed`
+  (exit 0) — recorded before any mutation was scored.
+- Server auth mutations under the delta method: **3 of 3 KILLED**, and for the
+  first time the verdicts name the right catchers:
+  - `SVC/requireAuth` → `D-205: Admin key rotation endpoint › rejects operator role with 403`
+  - `SVC/requireRole` → the same case (a forged `super-admin` turns the expected 403
+    into a 200, so the role test notices before any token test does)
+  - `SVC/hmacAuth` → `hmacAuth middleware › invalid signature is rejected` — the
+    test that should catch it, whereas the untrustworthy run had named an unrelated
+    admins case.
+- The agent table is unaffected by these changes; its baseline is green too.
 
 ### Fog cleared
-- **A password-equivalent file was landing in the source tree, unignored**: after a
-  mutation run the tree was dirty with `agent/.bios_pw_backup` —
-  `hp_uefi_lockdown.BIOS_PASSWORD_BACKUP_FILE`, XOR'd with the *hostname* (the
-  module's own comment calls this "not cryptographically strong") and written next
-  to the module. It was not in `.gitignore`, so a `git add -A` would have committed
-  a device's BIOS and power-on passwords. The normal suite does not write it; only
-  the mutated runs reached that line, which is exactly how such an artifact slips
-  through review. Now ignored, with the reason recorded where the other agent state
-  files are ignored.
-
-  BCD rollback and post-set verification each have a second defect that the suite
-  catches, so the earlier session's caution ("one killed mutation only proves that
-  one line bites") does not apply to these three any more.
+- **The server suite is green and large** (716 tests), so a correctly-scored
+  mutation verdict there is meaningful — which was not true of the first three
+  attempts.
+- **Why three "kills" in a row were not trustworthy**: crash, misattribution and
+  flakiness, in that order, each producing the same word.
 
 ### Fog remaining
-- **The other seven paths still have exactly one mutation each** — E-ACK (pending
-  ACK write only, not the drain-on-reconnect), E-DEADMAN (switch never evaluated,
-  not the timeout arithmetic), E-AUTO-UPDATE (signature presence, not the signed
-  payload contents), E-EFFECTIVENESS (critical count, not the aggregated report),
-  E-OFFLINE-QUEUE (queue write, not drain ordering/retention), E-TRACK (scan
-  presence, not the parser's field mapping beyond SSID/signal), E-RECOVERY
-  (decryption happens, not wrong-key fail-closed).
-- **The method has not been applied outside the agent.** The server (663 Jest
-  tests) is where a toothless test would matter most — auth middleware, the
-  device-lock route, HMAC verification. That is the next thread, and it needs its
-  own mutation runner because the runner here is Python/pytest-specific.
+- **Nothing has been mutated outside `auth.js` and `hmacAuth.js`.** The device-lock
+  route's state transitions, field encryption, the HMAC timestamp/replay window,
+  installer routes, and the dashboard/serverless/electron suites are untouched.
+- **A full-suite run per mutation costs ~90 s on the server** (716 tests). Fine for
+  an audit; useless as a pre-commit hook, and worth stating so nobody wires it into CI.
 - Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
-  (D-132); 19 Dependabot alerts; no CI run observed for S151–S172.
+  (D-132); 19 Dependabot alerts; no CI run observed for S151–S173.
 
 ### Debt items closed
-- None. No defect was found this session.
+- None. No defect found in server auth; the work was establishing that the verdict
+  itself can be believed.
 
 ### Debt items still open
 - D-120, D-129, D-130, D-134 — all resource-blocked.
@@ -100,24 +95,27 @@
 - Hardware (D-129/D-134), real media (D-120), signing PFX (D-130).
 
 ### Failure attribution
-- No failure this session. Worth noting the opposite risk instead: a confirmation
-  round produces no finding, and the temptation is to dress it up as progress.
-  The honest summary is that three status labels moved from "one guarded line" to
-  "two", and nothing else changed.
-- **Layer 4 — verification feedback** (observed, not failed): stating the
-  prediction before running the audit is what made the result interpretable. Two
-  sessions ago the same green output was meaningless because nobody had asked what
-  it should have said.
+- **Layer 4 — verification feedback** (primary, and this is now a pattern). Across
+  sessions 171, 172 and 173, four separate harnesses of mine reported success or
+  failure without the underlying run being valid: resolved paths, `-x` summary
+  parsing, crash-vs-failure, and now flaky-vs-caught. Each was found by reading the
+  output instead of the verdict. The general rule that finally worked: **require the
+  runner's own report, and require the failure to be new relative to a green
+  baseline.**
+- **Layer 1 — task specification** (mine): I wrote the jest invocation from the
+  Makefile's shape rather than from `server/package.json`, the only file that
+  defines how this suite is meant to run. Reading the four lines of the test script
+  first would have removed two of the three failure modes.
 
 ### Session artifacts
-- Changed: `scripts/audit_test_teeth.py` (three rows + label field),
-  `.gitignore` (`agent/.bios_pw_backup`).
+- Changed: `scripts/audit_test_teeth.py` (jest runner, validity gate, baseline +
+  delta scoring, named catchers, `--label`, 3 server rows).
 
 ### Next session opening
-Move the method to the server: write a Jest-side mutation runner (the pytest one is
-Python-only) and start with the defect class that matters most — remove the auth
-check from one protected route and see whether any of the 663 server tests fail. If
-one survives, that is a security gap worth more than everything this session found.
+Use the now-trustworthy tool on the server's worst failure mode: mutate the
+device-lock route so a LOCKED device is reported UNLOCKED, and the HMAC
+timestamp/replay window so an old signature is accepted. Both are logic-heavy, both
+were impossible to audit until this session's scoring was fixed.
 
 ---
 
