@@ -799,3 +799,22 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-047
+  statement: The one-click Windows installer runs on the target with native Windows facilities only (certutil,
+    sc.exe, registry, the frozen lockdown-agent.exe/watchdog exe). No WSL, no Python, no NSSM on the target;
+    makensis is a server-side Linux build dependency only. The IT-admin alternative agent/install_service.ps1
+    does require Python + NSSM on the target, so it is not interchangeable with the one-click path.
+  domain: deployment/windows
+  status: confirmed
+  evidence_level: code-read
+  provenance: server/src/routes/installer.js NSIS body (certutil + sc.exe + registry only), ZIP install.ps1
+    uses bundled nssm.exe, agent/install_service.ps1 param block requires system python + NSSM
+  source: 'stated by the operator 2026-11-02: target machines have no WSL; verified against the installer
+    sources'
+  asserted: '2026-11-02'
+  last_verified: '2026-11-02'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

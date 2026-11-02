@@ -36,6 +36,23 @@ generator. No separate server setup needed. Auto-updates via GitHub Releases.
 
 See [electron/README.md](electron/README.md) for build + sign instructions.
 
+#### Managed device requirements (Windows)
+
+Target machines are plain Windows boxes — **no WSL, no Python, no NSSM is
+installed or required by the supported paths.** Everything runs from the frozen
+PyInstaller binaries:
+
+| Path | What runs on the target | Needs WSL / Python? |
+|------|------------------------|---------------------|
+| One-click installer (`.exe`, NSIS) | `certutil` to decode config, `sc.exe create/start` for the agent + watchdog services, registry entries for Add/Remove Programs | No — nothing else on the machine |
+| ZIP + `install.ps1` | PowerShell, the bundled `nssm.exe`, same frozen exes | No — NSSM ships inside the ZIP |
+| `agent/install_service.ps1` (repo dev script) | system `python` + NSSM from PATH | **Yes — Python required.** Development convenience only, not a supported target path |
+
+WSL appears in this repository only in `scripts/verify-environment.sh` and the
+verify-environment skill, which use WSL interop from a Linux dev box to
+syntax-check the PowerShell installers. That is a developer convenience: no
+artifact shipped to a target device depends on it.
+
 ### Option B: Cloud Deployment (Docker)
 
 ```bash

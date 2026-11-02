@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-02 10:29:27 — 46 beliefs
+Generated: 2026-11-02 10:38:57 — 47 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -30,6 +30,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-020 | confirmed | code-read | Everything a UEFI application reads can be forged by earlier DXE/SMM code — the only trust anchors are TPM-sealed/measured state, server-side verdicts, and cross-layer disagreement. |
 | B-021 | confirmed | code-read | A user-mode agent cannot defeat a kernel/admin adversary — it can only detect, delay, and re-assert; real anchors are TPM, PBL, and the server. |
+
+## deployment/windows
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-047 | confirmed | code-read | The one-click Windows installer runs on the target with native Windows facilities only (certutil, sc.exe, registry, the frozen lockdown-agent.exe/watchdog exe). No WSL, no Python, no NSSM on the target; makensis is a server-side Linux build dependency only. The IT-admin alternative agent/install_service.ps1 does require Python + NSSM on the target, so it is not interchangeable with the one-click path. |
 
 ## firmware/bcd
 
