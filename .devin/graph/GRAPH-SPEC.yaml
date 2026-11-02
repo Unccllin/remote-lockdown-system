@@ -1153,27 +1153,51 @@ debt_items:
 
   - id: D-135
     description: >-
-      The lock-epoch counter at NV 0x1C00004 never increments: every boot prints
-      NV_Increment RC=0x9A2 even though the index is defined and provisioning
-      reports OK. NG-T7 compares the cached epoch against NV to detect a
-      rolled-back lock state, so the check is inert. Not an authorization
-      problem - PblTpmNvIncrementCounter already authorizes with the index
-      handle, and the same index increments correctly from tpm2-tools.
+      The lock-epoch counter at NV 0x1C00004 never incremented: every boot
+      printed NV_Increment RC=0x9A2 even though the index was defined and
+      provisioning reported OK, so NG-T7's rollback comparison could never fire.
+      Root cause was three instances of a locally assumed value not matching
+      what was provisioned (a 3-slot name cache for 4 indices, a refresh list
+      naming 3 of 4, and an RS_PW fallback sending an empty password against a
+      non-empty index auth).
     close_criteria: >-
       A boot where the epoch counter increments (read-back advances across
       boots) and NG-T7's rollback comparison is shown to fire on a deliberately
       rolled-back lock state.
-    status: OPEN
+    status: CLOSED
     category: SECURITY
+    commit_ref: >-
+      e14bcd0 - cache sized from PBL_NV_INDEX_COUNT with a STATIC_ASSERT;
+      399dc8d - refresh every index from NV_ReadPublic, ask the TPM for an
+      uncached NV name, and send the NV index auth in the RS_PW fallback;
+      1d5a23f - D-136's CFB fix, without which the cached epoch was garbage
     artifact_ref: >-
-      firmware/PblPkg/artifacts/d135-nv-name-vs-tpm.txt - tpm2_nvreadpublic
-      shows LOCK_STATE 0x22060004 and LOCK_EPOCH 0x22060014 carry
-      TPMA_NV_WRITTEN while POLICY_VERSION 0x02060014 and AK_NAME 0x02060004 do
-      not, so names derived from the define template cannot match the live
-      indices;
-      d135-boot-1-cold-serial.log (clean after the cache-size fix) versus
-      d135-boot-2-warm-serial.log (NV_Read AK_NAME / counter / NV_Increment all
-      RC=0x9A2, which tpm2_rc_decode renders session(1) authorization failure)
+      firmware/PblPkg/artifacts/d135-epoch-results.txt - five checks green,
+      counter 1 -> 2 -> 4 (out-of-band) -> 5 across three boots, and
+      "lock-state epoch stale (cache=2 live=4) - rolled back?" on the third;
+      d135-boot-{1,2,3}-serial.log, d135-nv-name-vs-tpm.txt
+
+  - id: D-136
+    description: >-
+      PblAesCfb256Process ran in place for both directions and always took its
+      CFB feedback from the output buffer. On decrypt the XOR overwrites the
+      ciphertext with plaintext before it becomes the next feedback block, so
+      only block 0 decrypted correctly: any parameter-encrypted response
+      longer than 16 bytes was corrupt from byte 16 on (DeviceId and Epoch of
+      the lock-state cache).
+    close_criteria: >-
+      An encrypted NV read whose fields past byte 16 decode correctly, shown
+      by the lock-state epoch comparing equal to the live counter on a fresh
+      boot and stale on a rolled-back one.
+    status: CLOSED
+    category: SECURITY
+    commit_ref: >-
+      1d5a23f - Decrypt flag; feedback from the input block when decrypting,
+      from the output block when encrypting
+    artifact_ref: >-
+      firmware/PblPkg/artifacts/d135-epoch-results.txt - NG-T7 diagnostics show
+      cache epoch=1 live=1 (fresh) then cache epoch=2 live=4 (stale) instead
+      of the garbage 18020293802152137203 seen before the fix
 
   - id: D-201
     description: "PBL policy endpoint (GET /v1/policy/{version}) not \

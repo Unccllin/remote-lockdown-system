@@ -1244,7 +1244,8 @@
   closed (`.devin/PENDING-RULING.md`, D-134 ruling, closed session 166).
 
 ### D-135 — The lock-epoch counter never increments, so NG-T7 rollback detection is inert
-- **Status**: OPEN (found 2026-11-02, session 166, while verifying D-134)
+- **Status**: CLOSED (2026-11-02, session 169). Found session 166 while verifying
+  D-134; it took three code defects in this item plus D-136 in the CFB layer.
 - **Category**: SECURITY
 - **What happens**: every boot, on every build and every OVMF, prints
   `[WARN] NV_Increment(0x1C00004) RC=0x9A2` — including the fixed owner-hierarchy
@@ -1312,36 +1313,67 @@
      Also: `PblTpmGetHandleName` no longer falls back to the 4-byte handle name for
      an uncached NV index — it asks the TPM with `TPM2_NV_ReadPublic` (no
      authorization needed) and caches the real name.
-- **Half verified, half still inert (session 169).** Three boots on one persistent
-  TPM state, with the counter read through the owner hierarchy — an independent
-  witness, not our own log:
-  - `boot 1 -> 1`, `boot 2 -> 2`, then two out-of-band increments to `4`,
+- **Verified in QEMU — both close criteria met** (`firmware/PblPkg/artifacts/d135-epoch-results.txt`,
+  PblApp `3906065d…` / `726f006c…`, harness exit 0 with all five checks green).
+  Three boots on one persistent TPM state, counter read through the owner
+  hierarchy (an independent witness, not our own log):
+  - `boot 1 -> 1`, `boot 2 -> 2`, two out-of-band increments to `4`,
     `boot 3 -> 5`. **The counter counts on every boot, warm boots included**, and
-    no `NV_Increment` warning appears anywhere. That was this item's actual defect
-    and it is fixed.
-  - The cache carries the epoch too: a raw `NV_Read(LOCK_STATE)` dump shows the
-    `Epoch` field at offset 48 holding `01…` after boot 1 and `02…` after boot 2,
-    matching the counter exactly.
-  - **NG-T7 still does not fire.** With the cache at epoch 2 and the live counter
-    at 4, boot 3 stayed silent and did not report a stale cache. The comparison
-    is written to fail OPEN (`if (!EFI_ERROR (EpochStatus) && Cache->Epoch <
-    LiveEpoch)`), so a failed counter read silently trusts a stale cache with no
-    trace in the log.
-- **Leading hypothesis for the remaining half**: `PblTpmFillCommandHmac` returns
-  early with a **zero-length HMAC** whenever `PblTpmGetSessionKeySize() == 0`, on
-  the stated assumption that "the session key is empty (unbound, no salt) and the
-  entity auth is empty". `PcdPblTpmNvAuthValue` is **not** empty by default
-  (`PBL_DEV_NV_AUTH_KEY_32B_LONG!!`), so the TPM expects a real HMAC for
-  `NV_Read(counter)` while PBL sends none — a `0x9A2` the comparison then swallows.
-  The same shortcut would explain why commands sent on the session work for the
-  bound index and fail for the others.
-- **Diagnostic in place**: the NG-T7 block now prints
-  `[INFO] NG-T7: cache epoch=%lu live=%lu (read=%r)` on every boot that has a
-  cached epoch, so the next run names the cause instead of requiring another
-  guess. `firmware/PblPkg/test-d135-epoch-harness.sh` records that line in its
-  artifact.
-- **Blocker**: none — the counter half is done; the comparison needs the
-  HMAC-vs-empty-auth decision.
+    no `NV_Increment` warning appears anywhere.
+  - `boot 2: NG-T7: cache epoch=1 live=1 (read=Success)` — sane values, no false
+    positive.
+  - `boot 3: NG-T7: cache epoch=2 live=4 (read=Success)` followed by
+    `[WARN] lock-state epoch stale (cache=2 live=4) — rolled back?`, and the caller
+    fell back to a fresh verdict path instead of trusting the stale cache.
+- **The last piece was not in this item** — it was **D-136**: the cached epoch was
+  garbage (`18020293802152137203`) because AES-CFB *response* decryption used the
+  overwritten plaintext as feedback. Fixing that is what made the comparison fire;
+  before it, every epoch read past byte 16 was noise.
+- **Commit**: `399dc8d` (layers 2 and 3: refresh every index, send the NV index
+  auth, ask the TPM for an uncached name), `1d5a23f` (D-136's CFB fix), `e14bcd0`
+  (layer 1, session 168).
+- **Artifact**: `firmware/PblPkg/artifacts/d135-epoch-results.txt`,
+  `d135-boot-{1,2,3}-serial.log`, `d135-boot-1-cold-serial.log`,
+  `d135-boot-2-warm-serial.log`, `d135-nv-name-vs-tpm.txt`.
+- **Blocker**: none.
+
+### D-136 — AES-CFB response decryption broke after the first block, so every encrypted NV read returned garbage past byte 16
+- **Status**: CLOSED (2026-11-02, session 169) — found while chasing D-135's tail.
+- **Category**: SECURITY
+- **What the code did**: `PblAesCfb256Process` (`TpmSession.c:62`) was called
+  **in place** (`Output == Data`) for both directions, and always took its CFB
+  feedback from `Output + Offset`:
+  ```c
+  Output[Offset + i] = Data[Offset + i] ^ Keystream[i];
+  CopyMem (Feedback, Output + Offset, AES_BLOCK_SIZE);   // ciphertext?
+  ```
+  On the **encrypt** path `Output` is the ciphertext, so the feedback was right
+  and NV writes stored correct data. On the **decrypt** path the XOR overwrites
+  the ciphertext with plaintext *before* it is used as the next feedback block, so
+  block 0 decrypted correctly and every later block decrypted against plaintext
+  feedback and came out as noise.
+- **How it surfaced**: D-135's diagnostic printed
+  `NG-T7: cache epoch=18020293802152137203 live=1 (read=Success)` — a garbage
+  epoch with a *successful* counter read. A raw `NV_Read` through tpm2-tools (no
+  session) showed the stored bytes were correct, which isolated the fault to the
+  in-firmware decryption rather than to the data.
+- **Impact**: any parameter-encrypted response longer than 16 bytes was corrupt
+  from byte 16 on. For `PBL_LOCK_STATE_CACHE` (64 bytes) that means `DeviceId`
+  (offset 12) and `Epoch` (offset 48) were garbage; `Magic`, `Verdict`,
+  `IssuedAt` survived because they sit in block 0. NG-T7 consequently compared a
+  garbage epoch against the live counter and never detected a rollback — which is
+  why D-135's comparison looked inert after the counter itself was fixed.
+- **Fix**: `PblAesCfb256Process` takes a `Decrypt` flag; it saves the input block
+  before the XOR and takes the feedback from the input when decrypting, from the
+  output when encrypting. Both call sites pass their direction (they already
+  computed it for the key derivation).
+- **Artifact**: `firmware/PblPkg/artifacts/d135-epoch-results.txt` and
+  `d135-boot-3-serial.log` — the NG-T7 diagnostic line plus the detection.
+- **Commit**: `1d5a23f` — `Decrypt` flag, feedback from the input block when
+  decrypting; both call sites pass their direction.
+- **Lesson worth keeping**: this survived because every earlier harness checked
+  a *field in block 0* (the magic byte, the verdict, the counter). The 64-byte
+  read "worked" as long as nobody looked past byte 16.
 
 ---
 

@@ -3961,3 +3961,135 @@ and after each define/`ALREADY_STARTED`), then make
 `lock-state epoch stale (cache=2 live=4)` on the third.
 
 ---
+
+---
+
+## Session 169 — 2026-11-02 (D-135 closed: three authorization defects and one AES-CFB bug behind a frozen counter)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S168 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `firmware/PblPkg/PblApp/TpmClient.c:415-500` (name-cache
+  struct/size and the `PBL_NV_INDEX_COUNT` assert), `1390-1420`
+  (`PblTpmProvisionNvIndices` refresh tail), `520-600`
+  (`PblTpmGetHandleName`), `168-200`/`368-400` (RS_PW fallback),
+  `1590-1625` (`PblTpmReadLockState` + NG-T7 block),
+  `firmware/PblPkg/PblApp/TpmSession.c:40-130` (`PblAesCfb256Process`),
+  `760-830` (encrypt/decrypt call sites), `firmware/PblPkg/PblApp/PblApp.h:56-72`
+  and the `PBL_LOCK_STATE_CACHE` layout.
+- **Finding (layer 2 — the refresh list named three of four indices)**: the same
+  omission as S168's cache size, in a second hand-maintained list.
+  `PblTpmNvRefreshName` was called for LOCK_STATE, POLICY_VERSION and AK_NAME and
+  never for LOCK_EPOCH, so on a warm boot the epoch name came from the define
+  template while the live index carried `TPMA_NV_WRITTEN` (`TPMS_NV_PUBLIC` is
+  part of the name). Both lists are now `mPblNvIndices[PBL_NV_INDEX_COUNT]` with
+  `STATIC_ASSERT`s.
+- **Finding (layer 3 — the RS_PW fallback sent an empty password)**: the indices
+  are created with a non-empty `PcdPblTpmNvAuthValue`
+  (`PBL_DEV_NV_AUTH_KEY_32B_LONG!!`), so any command issued before the HMAC
+  session starts authorized with an empty password against a non-empty index auth.
+  The AK Name read is exactly that case — which is why `NV_Read(AK_NAME) RC=0x9A2`
+  survived the first two fixes.
+- **Finding (D-136 — AES-CFB decryption broke after block 0)**: the NG-T7
+  diagnostic printed `cache epoch=18020293802152137203 live=1 (read=Success)`, i.e.
+  a garbage epoch with a *successful* counter read. A raw `tpm2_nvread` (no
+  session) showed the stored bytes were correct, which isolated the fault to
+  in-firmware decryption. `PblAesCfb256Process` is called in place for both
+  directions and always took its feedback from `Output + Offset`; on decrypt the
+  XOR overwrites the ciphertext with plaintext before it becomes the next feedback
+  block, so only block 0 decrypted correctly.
+- **Finding (why this hid for so long)**: every earlier check read a field in
+  block 0 — the magic byte, the verdict, `IssuedAt`. `DeviceId` (offset 12) and
+  `Epoch` (offset 48) were noise in every boot ever recorded, and nothing looked
+  there until NG-T7's own comparison did.
+
+### IMPLEMENT
+- `PblApp.h`: `PBL_NV_INDEX_COUNT 4`.
+- `TpmClient.c`: `mNvNameCache[PBL_NV_INDEX_COUNT]` + `mPblNvIndices[]` with
+  `STATIC_ASSERT`s; loud warning when the cache is full; `PblTpmGetHandleName`
+  asks the TPM (`NV_ReadPublic`, no auth needed) for an uncached NV index instead
+  of falling back to the 4-byte handle name; RS_PW fallback sends the NV index
+  auth for NV handles and stays empty for hierarchy handles; NG-T7 block prints
+  `[INFO] NG-T7: cache epoch=%lu live=%lu (read=%r)` so a fail-open comparison can
+  no longer be silent.
+- `TpmSession.c`: `PblAesCfb256Process` takes a `Decrypt` flag, saves the input
+  block before the XOR, and takes feedback from the input when decrypting.
+- `test-d135-epoch-harness.sh`: counter read through the owner hierarchy
+  (`OWNERREAD`, no auth needed), out-of-band increment with the index auth taken
+  from the binary via `grep -ao` (`-P file:` — bash cannot carry the NUL), and
+  assertions that no longer abort on `grep -c` returning 1 under `pipefail`.
+
+### VERIFY
+- `build-pbl.sh` clean under `-Werror` (PblApp `3906065d…`).
+- `test-d135-epoch-harness.sh` **exit 0, five checks green**
+  (`artifacts/d135-epoch-results.txt`):
+  - counter `boot 1 -> 1`, `boot 2 -> 2`, two out-of-band increments to `4`,
+    `boot 3 -> 5` — the counter counts on every boot, warm boots included;
+  - `boot 2: NG-T7: cache epoch=1 live=1 (read=Success)` — sane, no false positive;
+  - `boot 3: NG-T7: cache epoch=2 live=4 (read=Success)` then
+    `[WARN] lock-state epoch stale (cache=2 live=4) — rolled back?`.
+- `make graph-check` passes; `make check-firmware-todos` clean; `bash -n` on every
+  harness and its embedded container script.
+
+### Fog cleared
+- **Why the epoch counter never moved**: three authorization defects, each a
+  locally assumed value that did not match what was provisioned — cache size,
+  refresh list, RS_PW password. Each was individually sufficient to break it.
+- **Why NG-T7 never fired even after the counter worked**: the cached epoch was
+  garbage, because encrypted responses past byte 16 were mis-decrypted (D-136).
+- **What `0x9A2` actually means**: `session(1): authorization failure without DA
+  implications` — an HMAC/RS_PW failure, never an NV policy error.
+
+### Fog remaining
+- **D-134** still needs the HP machine (D-129 window) to confirm the owner-hierarchy
+  read on real firmware. QEMU half is green.
+- **D-120, D-129, D-130** unchanged.
+- Not investigated: whether any *other* consumer of an encrypted response longer
+  than 16 bytes exists and was silently corrupt before D-136 (the lock state was
+  the only one observed; a verdict/policy blob path would be the next place to
+  look). Files checked: `PblTpmDecryptResponseParams` call sites (3: lock state,
+  policy version, epoch read).
+
+### Debt items closed
+- **D-135** — lock-epoch counter / NG-T7. Commits `e14bcd0`, `399dc8d`, `1d5a23f`;
+  artifacts `d135-epoch-results.txt`, `d135-boot-{1,2,3}-serial.log`,
+  `d135-nv-name-vs-tpm.txt`.
+- **D-136** — AES-CFB response decryption broke after block 0. Commit `1d5a23f`.
+- Convergence: 55/60 → **57/61** (D-135 closed, D-136 found and closed).
+
+### Debt items still open
+- D-120, D-129, D-130, D-134.
+
+### Blockers
+- D-134: hardware window (D-129). Nothing else is blocked.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary). This defect chain survived
+  sessions 166–168 because every harness read a field in block 0 of an encrypted
+  response: the magic byte validated, the verdict decoded, the counter read
+  returned "Success". The fields that were noise — `DeviceId`, `Epoch` — were
+  never asserted on. A one-line diagnostic printing the compared values is what
+  ended three sessions of guessing.
+- **Layer 2 — context provision** (mine, repeatedly): I wrote D-135's first close
+  criteria from the symptom ("flip the PCD"), then guessed "command construction"
+  in S167, then "HMAC/empty-auth" in S168. Each guess was plausible and each cost
+  a verification cycle. The pattern that actually worked was *printing the value
+  being compared*, not reasoning about the code above it.
+- **Layer 4 again, tooling side**: three verification failures were my own
+  (`-P` vs `-p`, a NUL that bash cannot hold, `strings` missing from the image,
+  `grep -c` returning 1 under `pipefail`). Each looked like "the firmware denies
+  access", which is precisely the misreading that would have kept D-135 open.
+
+### Session artifacts
+- New: `firmware/PblPkg/artifacts/d135-epoch-results.txt`.
+- Changed: `firmware/PblPkg/PblApp/TpmSession.c`,
+  `firmware/PblPkg/PblApp/TpmClient.c`, `firmware/PblPkg/PblApp/PblApp.h`,
+  `firmware/PblPkg/test-d135-epoch-harness.sh`, `docs/adr/PBL-DEBT-LEDGER.md`,
+  `.devin/graph/GRAPH-SPEC.yaml`, `d135-boot-*-serial.log`.
+
+### Next session opening
+D-134's hardware confirmation is the only thing left in the Secure Boot/TPM
+thread: run the D-129 window's Step 3 with the owner-hierarchy build and record
+whether `[OK] device_id from AK Name` appears on the HP machine, then flip D-134
+on the result.
+
+---
