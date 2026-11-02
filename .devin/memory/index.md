@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-02 14:25:18
-Active memories: 756 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-02 15:41:15
+Active memories: 785 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -35,16 +35,21 @@ Active memories: 756 | Superseded: 0 | Decayed: 20
 | m-698 | MISTAKE: Wrote commit_ref 1fa4a5b into GRAPH-SPEC. |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-716 | PlatformState.c accepts EFI_CERT_SHA256 in dbx (pa |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-721 | MISTAKE: mistake: left a session's work (EnrollKey |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-795 | MISTAKE: mistake: would have shipped a component a |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-778 | Result: 10/10 mutations killed after adding two mi |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-719 | MISTAKE: mistake: trusted a script branch that use |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-724 | tpm-crb works identically to tpm-tis on the PBL bu |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-720 | MISTAKE: mistake: an earlier attempt in this sessi |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-742 | Index-handle auth also reads platform-created indi |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-772 | A regression assertion on the STORED lock-state Ep |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-783 | MISTAKE: mistake: the second version used summary- |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-701 | Fix shape: verify commit tokens with git rev-parse |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-710 | Remaining route: an EFI helper that SetVariable's  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-735 | PLATFORMCREATE makes a platform-created index unde |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-743 | Owner attribute set for PBL is now 0x02060004 = AU |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-781 | With -x, pytest prints 'stopping after 1 failures' |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-728 | Target machines have no WSL: one-click NSIS uses c |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-805 | MISTAKE: mistake: the first run asserted /v1/polic |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-732 | Flipping PcdPblTpmUsePlatformHierarchy to FALSE do |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-713 | PK/KEK/db/dbx are time-based authenticated variabl | 7 | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-748 | MISTAKE: mistake: harness aborted before any boot  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
@@ -52,6 +57,7 @@ Active memories: 756 | Superseded: 0 | Decayed: 20
 | m-760 | 0x9A2 = tpm2_rc_decode 'session(1): authorization  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-727 | Production risk filed as D-134: the production PCD |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-731 | MISTAKE: mistake: accepted a recorded diagnosis (S |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-803 | Worker env usage: LOCKDOWN_KV (50), ADMIN_TOKEN (9 |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-695 | virt-fw-vars: use --extract-certs to dump certs (t |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-736 | A fresh/empty TPM gives 0x28B (TPM_RC_HANDLE on th |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-755 | Fix direction: names must come from TPM2_NV_ReadPu |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
@@ -66,32 +72,44 @@ Active memories: 756 | Superseded: 0 | Decayed: 20
 | m-712 | MISTAKE: Nearly recorded 'the tool is broken' from |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-756 | The epoch counter is the only visible symptom beca |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-768 | MISTAKE: mistake: my verification failed three tim |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-790 | 'The run was red' is not the question. Correct mut |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-759 | MISTAKE: mistake: the harness's counter() helper r |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-779 | E-EFFECTIVENESS and E-RECOVERY first looked like s |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-787 | The audit table now carries an optional 'label' pe |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-788 | The other seven paths still have exactly one mutat |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-726 | The same failure was already recorded in session 1 |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-744 | A cleared TPM needs no new code for fail-closed be |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-749 | MISTAKE: mistake: port arithmetic put the swtpm co |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-707 | Two different garbage years from the same input sh |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-804 | wrangler dev spawns workerd as a child, so kill th |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-792 | Across sessions 171-173 four of my harnesses could |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-696 | EFI_SIGNATURE_LIST layout: 28-byte header (GUID, L |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-746 | tpm2-tools swtpm TCTI derives the control port as  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-708 | Writing dbx unsigned is only legal in SetupMode, b |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-705 | MISTAKE: Implement first would have failed the who |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-741 | NV_Read authorized by the INDEX handle works under |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-722 | D-130 gap 2 was never SMM and never tpm-tis/crb: a |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-784 | MISTAKE: mistake: mapped one suite per enforcement |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-786 | Those three paths now have two independently-kille |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-796 | The API E2E suite boots Express in-process on SQLi |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-739 | MISTAKE: mistake: first matrix harness asserted an |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-711 | MISTAKE: Plannned 'try virt-fw-vars against the em |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-733 | Why: PblTpmReadAkName authorizes NV_Read with TPM_ |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-747 | tpm2_startup must be best-effort (|| true): it can |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-771 | D-136 blast radius is exactly one consumer: PblTpm |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-752 | 0x9A2 decodes with tpm2_rc_decode as 'tpm:session( |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-794 | MISTAKE: mistake: attributed a kill to the first f |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-740 | MISTAKE: mistake: first micro-test reused one TPM  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-765 | Verification tooling gotchas: tpm2_nvread takes th |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-774 | D-134's GRAPH-SPEC description was stale (claimed  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-799 | Caddy/TLS cannot be verified locally (needs a real |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-767 | MISTAKE: mistake: S167 described the defect as 'PB |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-697 | EFI_CERT_X509_SHA256 payload is ToBeRevoked(8) + R |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-725 | swtpm logs show 1900+ command lines in the SMM arm |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-769 | MISTAKE: mistake: the harness aborted silently on  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-738 | MISTAKE: mistake: my close criteria for D-134 said |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-729 | MISTAKE: mistake: kept the first sweep's serial lo |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-791 | Server baseline is green: 43 suites, 716 tests. Wi |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-700 | I2 only checked non-empty strings. Measuring first |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-750 | MISTAKE: mistake: wrote D-134's original close cri |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-717 | virt-fw-vars --add-dbx-hash/--add-dbx-cert skip au |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
@@ -101,16 +119,27 @@ Active memories: 756 | Superseded: 0 | Decayed: 20
 | m-699 | MISTAKE: Grepped for 'Decision basis' when the fir |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-764 | Why it hid for sessions: every harness asserted on |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-773 | General rule learned here: before accepting any re |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-800 | serverless/worker.test.ts and pbl.test.ts call wor |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-777 | Built scripts/audit_test_teeth.py: one semantic mu |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-754 | Layer 2 (still open): on a warm boot PblTpmProvisi |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-793 | MISTAKE: mistake: copied the jest invocation from  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-785 | Added E-DECRYPT/encrypt (stores plaintext as ciphe |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-709 | The Microsoft Corporation UEFI CA 2011 cert extrac |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-758 | MISTAKE: mistake: S167's write-up described the de |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-801 | scripts/verify-worker.sh covers both halves: wrang |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-715 | Ubuntu OVMF_CODE_4M.secboot.fd is built with PcdRe |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-763 | D-136: PblAesCfb256Process ran in place for both d |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-798 | Two smoke assumptions were mine, not the deploymen |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-780 | scripts/run-agent-tests.sh does 'cd agent' and alw |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-745 | New defect D-135: NV_Increment(0x1C00004) returns  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-789 | Jest must be invoked exactly as server/package.jso |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-782 | MISTAKE: mistake: my audit tool's first run printe |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-797 | make full-verify's only red was docker-live, and i |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-706 | virt-fw-vars: --add-db GUID cert.pem works fine; - | 7 | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-703 | Teeth demonstrated end to end by injecting a fabri |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-718 | Even after PK enrolment at boot-services time the  |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-704 | MISTAKE: The existing I2 tests encoded the weak co |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
+| m-802 | Route behaviour proven over HTTP: /api/setup/statu |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-702 | Token extraction must exclude hex literals and fil |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-775 | MISTAKE: mistake: wrote a regression assertion tha |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
 | m-730 | MISTAKE: mistake: printf '--- name ...' in the har |  | 0.50 | 2026-11-02 | 0.250 | 0 |  |
