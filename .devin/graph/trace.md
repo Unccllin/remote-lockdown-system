@@ -6222,7 +6222,8 @@ the enrolment token, so no `makensis` in a Worker and no per-device build.
   (rewritten), `installer/generic/claim-enroll.ps1` (deleted),
   `scripts/build-generic-installer.sh` (rewritten),
   `scripts/test_generic_installer.py` (new), `docs/DEPLOYMENT.md`, `AGENTS.md`.
-- Commit: `8744535` (amended; see `git log --oneline -1`).
+- Commit: `50387c9` (the pre-amend object 8744535 still resolves via reflog but
+  is not on the branch — citing the live hash so I2 checks the right commit).
 
 ### Next session opening
 
