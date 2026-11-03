@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-03 13:20:10
-Active memories: 887 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-03 14:48:10
+Active memories: 906 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -44,10 +44,14 @@ Active memories: 887 | Superseded: 0 | Decayed: 20
 | m-882 | Electron carries almost no request surface of its  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-879 | enable_pba was hardcoded false in the Worker's che |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-869 | Tally now five behaviours found by 'client sends,  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-914 | MISTAKE: mistake: S195 recorded the failure as 'ob |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-865 | The linter's 'unused' list contained both real dea |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-906 | Prove non-vacuity by breaking the property and wat |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-852 | Business rules preserved from Express: one firmwar |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-848 | 361 tests pass; coverage 89.05/83.01/93.08/90.77;  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-911 | 'await' on server.close() is a no-op; graceful shu |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-925 | A prebuilt .efi plus a tool image is enough to run |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-919 | Before adding a heavy runtime dependency for CI fi |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-874 | Fix: on an executed ACK the Worker writes agent_<t |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-899 | Linting a CI shell block is not executing it: glob |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-893 | 'Unknown' must stay distinguishable from 'unverifi |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
@@ -58,6 +62,7 @@ Active memories: 887 | Superseded: 0 | Decayed: 20
 | m-888 | MISTAKE: mistake: in S190 the Express fix was scop |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-838 | Implemented handleAgentUpdate in serverless/worker |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-897 | A signature over 'v1:{version}:{sha256}' is bound  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-922 | MISTAKE: mistake: earlier framed the wrangler deci |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-845 | Serve /api/installer/agent-version from the same a |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-851 | Two more route-ordering traps of the same shape as |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-836 | The shipped defaults already point at the Worker ( |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
@@ -65,26 +70,35 @@ Active memories: 887 | Superseded: 0 | Decayed: 20
 | m-867 | The field sweep found three more gaps, all in hand |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-860 | integrations is NOT an endpoint port: 442 lines ac |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-896 | MISTAKE: mistake: trusted the turn-end lens blocke |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-917 | Worker agent auth is stricter than Express (full H |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-837 | The agent calls GET /api/agent/update (agent.py:32 |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-908 | When a session blames existing code, re-read that  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-884 | NSIS ${GetOptions} sets the output to an empty str |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-892 | A pin is a promise about a path that must outlive  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-918 | MISTAKE: mistake: assumed Express's tolerant agent |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-853 | rotate-key test asserts the property that matters: |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-880 | The agent's consumption of the check-in response i |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-886 | MISTAKE: mistake: wrote the ruling from the Expres |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-913 | For checker false positives, a line-level pragma w |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-895 | Bare imports of sibling modules break when a repo- |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-873 | Consequence: the fields restored in sessions 185 ( |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-843 | MISTAKE: mistake: earlier I treated 'the Worker ha |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-910 | MISTAKE: mistake: reported two pre-existing harnes |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-870 | The dashboard is the cheapest oracle: it reads fou |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-850 | MISTAKE: mistake (avoided): the installer route-or |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-900 | Editing unrelated files to satisfy a checker expan |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-849 | Remaining parity: link-pbl/unlink-pbl/by-pbl, rota |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-846 | /api/devices/:id/location/latest must return the N |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-926 | MISTAKE: mistake: S199 claimed D-132's residual wa |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-923 | Never cite a ledger entry as fact: read the code,  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-876 | The dashboard REQUEST direction was already clean: |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-855 | 371 tests; coverage 89.07/83.08/93.52/91.09; three |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-864 | Unknown must stay null, not false: 'never attempte |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-924 | Dockerised harnesses can unlock verification that  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-903 | A sync spawn in a jest test starves any in-process |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-868 | The sweep also CLEARED things: lockdown->locked, u |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-883 | 392 tests; coverage 89.53/83.53/95.02/91.56; three |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-921 | An accidental discovery is not a control; convert  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-859 | List responses carry summary rows only (no artifac |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-861 | 378 tests; coverage 89.36/82.83/93.92/91.42; four  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-871 | 387 tests; coverage 89.52/83.24/95.02/91.55; three |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
@@ -99,9 +113,14 @@ Active memories: 887 | Superseded: 0 | Decayed: 20
 | m-839 | Release publishing is two wrangler kv key put call |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-891 | A migration that exists in only one dialect dir fa |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-866 | 385 tests; coverage 89.48/83.30/93.95/91.52; four  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-909 | Corollary of the 12ms/15s lesson: measure the mech |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-887 | The Worker's pi-lens advisories (JSON.parse x14, a |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-890 | MISTAKE: mistake: one unexplained vitest failure u |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-894 | Express COALESCE and Worker metadata overwrite are |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-916 | Cleanup handlers must tolerate the resources they  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-915 | Porting an API endpoint-by-endpoint must include ' |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-920 | A contract between two files (advertised URL vs ro |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-912 | An intermittent failure in a suite that feeds CI i |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-863 | SECOND live defect on the default path: handleComm |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-878 | MISTAKE: mistake: I fixed the STORAGE of a signal  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-872 | The dashboard's lockdown-effectiveness panel does  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
