@@ -6341,3 +6341,109 @@ real service, and add the hardware test that would have caught it.
 Give the Worker the same fix: publish the CLI installer to KV and make both
 generated serverless scripts (`handleInstaller` and the re-arm script) download it
 and run `--config-file` instead of `sc.exe create RemoteLockdownAgent`.
+
+---
+
+## Session 191 — 2026-11-03 (the Worker's installers delegate too; the SCM bug leaves the product)
+
+### RULE-ZERO
+
+- **Read**: `.devin/PENDING-RULING.md` (S190 closed → task mode, then the S191
+  ruling), `serverless/worker.ts` (`handleInstaller`, `handleRearm`,
+  `handleDownloadBinary`, the binary route block, `Env`), `serverless/worker.test.ts`
+  (installer + rearm + MockKV, `makeRequest`), `serverless/README.md` (KV publish
+  steps, "what this backend does not implement"), `agent/installer.py`
+  (`--config-file`), `docs/DEPLOYMENT.md`.
+- **Finding**: the two serverless scripts were worse than the Express one. They
+  installed into a **third** directory (`$env:ProgramData\RemoteLockdown`), passed
+  a malformed `binPath` (`"\"$inst\lockdown-agent.exe\" --config ..."`), wrote an
+  8-key config (so the agent fell back to `~/SecureData` for the lockdown folder),
+  and registered `sc.exe create RemoteLockdownAgent`. `worker.test.ts` asserted
+  `expect(script).toContain('sc.exe create')` — the defect was pinned by a test.
+- **Ruling (S191)**: Q1 (A) publish the CLI installer as a new KV key
+  `binary:agent-installer`; Q2 (A) one `generateServerlessInstallScript()` used by
+  both call sites. Both answered by the user.
+
+### Fog cleared
+
+- **Whether the firmware re-arm path could join the same mechanism**: yes. It
+  returns a script to `PblPersistDxe`, so it has to stay a script — but the script
+  only stages files and delegates, which is exactly what the per-device path does.
+  The two responses are now one template with a different header and tail.
+- **What a generated serverless script needs from KV**: `binary:agent` and
+  `binary:agent-installer` only. The agent's install directory, state paths, the
+  lockdown folder, persistence and tamper ACLs are all decided by
+  `agent/installer.py`, so nothing in the script hard-codes a path any more.
+- **Whether the Worker's advisories were mine**: no. JSON.parse ×14,
+  `as unknown as` ×2 and `Record<string, any>` ×1 are byte-identical at HEAD
+  (19/3/1 occurrences before and after); only the three declarations my edit
+  orphaned were fixed (`configB64` twice, plus two rest-omission bindings renamed
+  with the `_` prefix their lint gate asks for).
+
+### Fog remaining
+
+- Both generated scripts download ~20MB of binaries on the target with no
+  integrity check (`Invoke-WebRequest` then execute). The released artefacts are
+  unsigned (D-130 is the firmware signing item; agent/installer PE signing is not
+  tracked anywhere). Worth a follow-up: publish per-binary SHA-256 in KV and
+  verify before executing.
+- The Worker's download routes remain unauthenticated (a deliberate, still
+  unreviewed difference from Express) — `binary:agent-installer` is now a third
+  such artefact, so the surface grew by one.
+- The serverless per-device script re-keys the device at generation time
+  (`api_key_hash` replaced) but, unlike Express, keeps no record of which admin
+  downloaded it beyond the audit entry; unchanged.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
+  residual (D-132); 19 Dependabot alerts; Cloudflare observability/backup (item
+  10).
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), real domain (Caddy TLS), a Windows host to run a
+  generated installer for the first time.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, and the clearest instance yet): a
+  test asserted the broken mechanism (`toContain('sc.exe create')`), so the
+  suite protected the bug instead of catching it. The replacements assert the
+  property that matters — no `sc.exe` in executable code, delegation to
+  `lockdown-installer.exe --config-file`, one template not two.
+- **Layer 1 — task specification** (carried from S190): the Express fix was
+  scoped by the file I happened to open. Both this session's work and the S190
+  ruling existed only because a later grep for `sc.exe` found the second and
+  third copies. The sweep for "who else emits this artefact" should precede the
+  fix, not follow it.
+
+### VERIFY
+
+- `serverless`: **395 passed** (392 + 2 download tests + 1 drift guard, minus
+  none); coverage **90.02 / 83.55 / 95.6 / 92.08** against floors 82/75/86/82.
+- `scripts/verify-worker.sh`: bundle builds and every checked route answers
+  (health, 401/200/401 on `/api/devices`, 404 unknown, `/v1/verdict` 400,
+  `/v1/policy/1` 200, `/api/download/agent` 404 with an empty local KV).
+- Drift guard: `worker.ts` contains exactly **one** `lockdown-installer.exe
+  --config-file` invocation and no executable `sc.exe create`.
+- `eslint worker.ts` clean.
+
+### Session artifacts
+
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `serverless/README.md`, `.devin/PENDING-RULING.md` (S191 ruling opened + closed).
+- Commit: `PENDING-HASH`.
+
+### Next session opening
+
+Add integrity checking to the generated serverless installers: publish each
+binary's SHA-256 in KV and have the script verify before executing, or sign the
+installer PE and pin the key — the scripts currently download ~20MB and run it
+unverified.

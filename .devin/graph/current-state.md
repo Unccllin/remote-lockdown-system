@@ -53,89 +53,91 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 190 — 2026-11-03 (per-device installers delegate; the SCM bug leaves Express)
+## Latest session: 191 — 2026-11-03 (the Worker's installers delegate too; the SCM bug leaves the product)
 
 ### Fog cleared
-- **Whether the per-device installer could keep its "no token on the target"
-  property while sharing one engine**: yes — `--config-file` installs from the
-  baked config without enrolling, so the device's API key can stay baked in and
-  still flow through `build_config()`.
-- **Whether the ZIP path was a real fallback**: only when `nssm.exe` already
-  existed on the target; otherwise it started the agent with `Start-Process`, so
-  persistence silently varied by machine. It now delegates like the NSIS path.
-- **What the four install mechanisms actually were**: NSIS/`sc.exe` → Program
-  Files, ZIP/NSSM-or-nothing → Program Files, CLI/GUI installer → ProgramData,
-  generic wrapper → ProgramData. Two of the four were unpersisted or broken; the
-  two that survive are front doors onto `agent/installer.py`.
+
+- **Whether the firmware re-arm path could join the same mechanism**: yes. It
+  returns a script to `PblPersistDxe`, so it has to stay a script — but the script
+  only stages files and delegates, which is exactly what the per-device path does.
+  The two responses are now one template with a different header and tail.
+- **What a generated serverless script needs from KV**: `binary:agent` and
+  `binary:agent-installer` only. The agent's install directory, state paths, the
+  lockdown folder, persistence and tamper ACLs are all decided by
+  `agent/installer.py`, so nothing in the script hard-codes a path any more.
+- **Whether the Worker's advisories were mine**: no. JSON.parse ×14,
+  `as unknown as` ×2 and `Record<string, any>` ×1 are byte-identical at HEAD
+  (19/3/1 occurrences before and after); only the three declarations my edit
+  orphaned were fixed (`configB64` twice, plus two rest-omission bindings renamed
+  with the `_` prefix their lint gate asks for).
 
 ### Fog remaining
-- **The serverless Worker still generates `sc.exe` installers in two places**
-  (`serverless/worker.ts` ~1715 `handleInstaller`, ~2202 the re-arm script), so
-  the Cloudflare path still ships the same ~30s kill. Fixing it needs a decision
-  the Express fix did not: the Worker has no filesystem, so the delegate binary
-  would have to be published to KV (e.g. `binary:agent-installer`) and downloaded
-  by the generated script. Recorded as the next opening rather than guessed at.
-- `generateNsisScript` keeps the existing MUI finish page that opens
-  `${SERVER_URL}/devices`; that URL is the backend origin, not the dashboard's
-  path in every deployment — unchanged, unverified.
-- `verify-environment.sh`'s `nsis-compile` check still reports `config=false`:
-  the generated installer uses `/SOLID lzma`, so the base64 config is not
-  findable as a literal substring in the compressed exe. Informational only
-  (the check gates on the MZ header), and pre-existing — the embedding is
-  asserted at script level by `installer.helpers.test.js`.
+
+- Both generated scripts download ~20MB of binaries on the target with no
+  integrity check (`Invoke-WebRequest` then execute). The released artefacts are
+  unsigned (D-130 is the firmware signing item; agent/installer PE signing is not
+  tracked anywhere). Worth a follow-up: publish per-binary SHA-256 in KV and
+  verify before executing.
+- The Worker's download routes remain unauthenticated (a deliberate, still
+  unreviewed difference from Express) — `binary:agent-installer` is now a third
+  such artefact, so the surface grew by one.
+- The serverless per-device script re-keys the device at generation time
+  (`api_key_hash` replaced) but, unlike Express, keeps no record of which admin
+  downloaded it beyond the audit entry; unchanged.
 - Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
-  residual (D-132); 19 Dependabot alerts; the Worker's unauthenticated
-  `/api/download/agent`; Cloudflare observability/backup (item 10).
+  residual (D-132); 19 Dependabot alerts; Cloudflare observability/backup (item
+  10).
 
 ### Debt items closed
-- None (no ledger item covers the installer mechanism split).
+
+- None.
 
 ### Debt items still open
+
 - D-120, D-129, D-130, D-134 — all resource-blocked.
 
 ### Blockers
+
 - Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
-  credentials (Worker publish), real domain (Caddy TLS), a Windows host to run
-  either generated installer for the first time.
+  credentials (Worker publish), real domain (Caddy TLS), a Windows host to run a
+  generated installer for the first time.
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary, and it took two sessions to
-  surface): nothing ever executed a generated installer, so a mechanism that
-  cannot work (SCM without a service handshake) passed every test — the NSIS
-  check only proved makensis produced a PE file. The new tests assert the
-  *mechanism* (no `sc.exe`/`schtasks`/`icacls` in generated code, delegation to
-  the CLI installer, token-gated removal) and the panel of four mutations that
-  reintroduce each defect is killed.
-- **Layer 1 — task specification** (mine, this session): I read the Express
-  generator but did not diff it against the Worker's equivalent before writing
-  the ruling, so the serverless half of the same bug stayed out of scope and is
-  now deferred to the next session. The contract sweep should start from "who
-  else generates this artefact", not from the file I happened to open.
+
+- **Layer 4 — verification feedback** (primary, and the clearest instance yet): a
+  test asserted the broken mechanism (`toContain('sc.exe create')`), so the
+  suite protected the bug instead of catching it. The replacements assert the
+  property that matters — no `sc.exe` in executable code, delegation to
+  `lockdown-installer.exe --config-file`, one template not two.
+- **Layer 1 — task specification** (carried from S190): the Express fix was
+  scoped by the file I happened to open. Both this session's work and the S190
+  ruling existed only because a later grep for `sc.exe` found the second and
+  third copies. The sweep for "who else emits this artefact" should precede the
+  fix, not follow it.
 
 ### VERIFY
-- Server: **722 passed / 43 suites** (`npm test`), `eslint .` clean;
-  `installer.helpers.test.js` 34 tests (was 25).
-- Agent: **743 passed** (`scripts/run-agent-tests.sh`); `test_installer.py`
-  24 tests (was 10); ruff check + format clean on 55 files.
-- Script harness: `make test-scripts` all green (30 + 18 + 17 + 40 + 44).
-- `scripts/verify-environment.sh --nsis`: 5 PASS / 0 FAIL — NSIS 3.10 compiles the
-  regenerated per-device installer (195,999 B, PE32, MZ valid) and the dummy
-  CLI installer is staged for it.
-- Mutations **KILLED** by the intended tests: `sc.exe create` reinserted into the
-  generated install section; `--config-file` dropped from the delegate call;
-  baked install writing the raw config instead of the normalised 12-key one.
+
+- `serverless`: **395 passed** (392 + 2 download tests + 1 drift guard, minus
+  none); coverage **90.02 / 83.55 / 95.6 / 92.08** against floors 82/75/86/82.
+- `scripts/verify-worker.sh`: bundle builds and every checked route answers
+  (health, 401/200/401 on `/api/devices`, 404 unknown, `/v1/verdict` 400,
+  `/v1/policy/1` 200, `/api/download/agent` 404 with an empty local KV).
+- Drift guard: `worker.ts` contains exactly **one** `lockdown-installer.exe
+  --config-file` invocation and no executable `sc.exe create`.
+- `eslint worker.ts` clean.
 
 ### Session artifacts
-- Changed: `server/src/routes/installer.js`, `server/tests/installer.helpers.test.js`,
-  `server/tests/installer.routes.test.js`, `agent/installer.py`,
-  `agent/tests/test_installer.py`, `scripts/verify-environment.sh`,
-  `docs/DEPLOYMENT.md`, `.devin/PENDING-RULING.md` (S190 ruling opened + closed).
-- Commit: `bc74496`.
+
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `serverless/README.md`, `.devin/PENDING-RULING.md` (S191 ruling opened + closed).
+- Commit: `PENDING-HASH`.
 
 ### Next session opening
-Give the Worker the same fix: publish the CLI installer to KV and make both
-generated serverless scripts (`handleInstaller` and the re-arm script) download it
-and run `--config-file` instead of `sc.exe create RemoteLockdownAgent`.
+
+Add integrity checking to the generated serverless installers: publish each
+binary's SHA-256 in KV and have the script verify before executing, or sign the
+installer PE and pin the key — the scripts currently download ~20MB and run it
+unverified.
 
 ---
 
