@@ -304,11 +304,6 @@ async function resolveAdminAuth(request: Request, env: Env): Promise<AdminClaims
   return verifyAdminToken(env, token);
 }
 
-// Back-compat boolean form used by existing handlers.
-async function verifyAdminAuth(request: Request, env: Env): Promise<boolean> {
-  return (await resolveAdminAuth(request, env)) !== null;
-}
-
 /**
  * Role gate — mirrors the Express server's requireRole(minRole).
  * Returns the admin claims if authorized, or a Response (401/403) to return.
@@ -3281,7 +3276,7 @@ async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
 // PBL /v1/* routes — CBOR/COSE wire format, no agent auth
 // ---------------------------------------------------------------------------
 
-import { generateSigningKey, importPrivateKey, loadOrGenerateSigningKey, loadOrGeneratePolicySigningKey, rotateSigningKey, getKidHistory, type SigningKeyPair } from './pbl/signing';
+import { loadOrGenerateSigningKey, loadOrGeneratePolicySigningKey, rotateSigningKey, getKidHistory, type SigningKeyPair } from './pbl/signing';
 import { loadCertChain, storeCertChain, splitDerCerts } from './pbl/certs';
 import { handleVerdict } from './pbl/routes/verdict';
 import { handlePolicy, handleStorePolicy } from './pbl/routes/policy';
@@ -3291,7 +3286,7 @@ import { handleOverrideChallenge, handleOverrideResponse } from './pbl/routes/ov
 import { handleSigningKey } from './pbl/routes/signingKey';
 import { handleFirmwareDownload } from './pbl/routes/firmware';
 import { listDevices as listPblDevices, deleteDevice as deletePblDevice, getDevice as getPblDevice, setDeviceStatus as setPblDeviceStatus } from './pbl/devices';
-import { checkDeviceRateLimit, checkIpRateLimit, rateLimitResponse, DEVICE_RATE_LIMITS, IP_RATE_LIMITS } from './pbl/rateLimit';
+import { checkIpRateLimit, rateLimitResponse, IP_RATE_LIMITS } from './pbl/rateLimit';
 import type { Env } from './pbl/env';
 
 // Cache the signing key pair across requests within the same isolate.
