@@ -414,6 +414,33 @@ MUTATIONS: list[dict] = [
         "new": "      'this serverless deployment does not implement it. See serverless/README.md.',\n    200,  // MUTATION: pretend the inventory is served",
         "why": "the dashboard is told the integration inventory succeeded, and gets an error body",
     },
+    {
+        "path": "worker/effectiveness",
+        "label": "WRK/effectiveness-crit",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "      lockdownEffective = criticalTotal > 0;",
+        "new": "      lockdownEffective = true;  // MUTATION: zero critical controls reads as success",
+        "why": "an encrypted-only device is recorded as a clean boot-locked lockdown",
+    },
+    {
+        "path": "worker/effectiveness-persist",
+        "label": "WRK/effectiveness-persist",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  command.lockdown_effective = lockdownEffective;",
+        "new": "  command.lockdown_effective = null;  // MUTATION: never recorded",
+        "why": "the effectiveness verdict is computed and then thrown away",
+    },
+    {
+        "path": "worker/effectiveness-scope",
+        "label": "WRK/effectiveness-scope",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "    if (detail.boot_lock_attempted === true) {",
+        "new": "    if (true) {  // MUTATION: an unattempted boot-lock reads as ineffective",
+        "why": "a device that never tried boot-lock is marked ineffective rather than unknown",
+    },
 ]
 
 

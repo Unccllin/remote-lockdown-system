@@ -4073,4 +4073,90 @@ describe('D-210: PBL route integration', () => {
       expect(resp.status).toBe(501);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Lockdown effectiveness (session 185). The agent reports boot_lock_detail on
+  // ACK; Express derives `lockdown_effective` from it (agent.js:411-418) and the
+  // Worker used to discard the field. A boot-lock that silently applied zero
+  // critical controls is encrypted-only, and recording it as a plain success is
+  // precisely the gap E-EFFECTIVENESS exists to close.
+  // -------------------------------------------------------------------------
+  describe('lockdown effectiveness from the ACK', () => {
+    const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+    async function queueLockdown(hostname: string) {
+      const { device, apiKey } = await enrollDevice(worker, env, hostname);
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${device.id}/flag-stolen`,
+          { hostname_confirm: hostname },
+          ADMIN,
+        ),
+        env,
+      );
+      const body = JSON.stringify({ hostname });
+      const checkin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)),
+        env,
+      );
+      const commandId = (await parseResponse(checkin) as any).command.id;
+      return { device, apiKey, commandId };
+    }
+
+    async function ackAndReadCommand(
+      hostname: string,
+      apiKey: string,
+      commandId: string,
+      extra: Record<string, unknown>,
+    ) {
+      const body = JSON.stringify({
+        hostname,
+        command_id: commandId,
+        result_status: 'executed',
+        ...extra,
+      });
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/command-ack', body, signRequest(body, apiKey)),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const stored = JSON.parse((await env.LOCKDOWN_KV.get('commands')) as string);
+      return stored.find((c: any) => c.id === commandId);
+    }
+
+    it('records a lockdown that applied zero critical controls as NOT effective', async () => {
+      const { apiKey, commandId } = await queueLockdown('EFF-001');
+      const cmd = await ackAndReadCommand('EFF-001', apiKey, commandId, {
+        boot_lock_status: 'partial',
+        boot_lock_detail: { boot_lock_attempted: true, critical_applied_total: 0 },
+      });
+      expect(cmd.lockdown_effective).toBe(false);
+      expect(cmd.boot_lock_status).toBe('partial');
+      expect(cmd.boot_lock_detail.boot_lock_attempted).toBe(true);
+    });
+
+    it('records a lockdown that applied critical controls as effective', async () => {
+      const { apiKey, commandId } = await queueLockdown('EFF-002');
+      const cmd = await ackAndReadCommand('EFF-002', apiKey, commandId, {
+        boot_lock_status: 'applied',
+        boot_lock_detail: { boot_lock_attempted: true, critical_applied_total: 3 },
+      });
+      expect(cmd.lockdown_effective).toBe(true);
+    });
+
+    it('leaves effectiveness unknown when the agent reports no boot-lock detail', async () => {
+      const { apiKey, commandId } = await queueLockdown('EFF-003');
+      const cmd = await ackAndReadCommand('EFF-003', apiKey, commandId, {});
+      expect(cmd.lockdown_effective ?? null).toBe(null);
+    });
+
+    it('leaves effectiveness unknown when boot-lock was not attempted at all', async () => {
+      const { apiKey, commandId } = await queueLockdown('EFF-004');
+      const cmd = await ackAndReadCommand('EFF-004', apiKey, commandId, {
+        boot_lock_detail: { boot_lock_attempted: false, critical_applied_total: 0 },
+      });
+      expect(cmd.lockdown_effective ?? null).toBe(null);
+    });
+  });
 });

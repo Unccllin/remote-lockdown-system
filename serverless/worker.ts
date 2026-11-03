@@ -87,6 +87,12 @@ interface Command {
   created_at: string;
   executed_at: string | null;
   command_uuid: string | null;
+  // D-204 / E-EFFECTIVENESS: reported by the agent on ACK. `lockdown_effective`
+  // is false when boot-lock was attempted but zero critical controls applied —
+  // the device is encrypted-only, which must not read as a clean lockdown.
+  boot_lock_status?: string | null;
+  boot_lock_detail?: unknown;
+  lockdown_effective?: boolean | null;
   // Duress code: when truthy on an unlock command, the agent pretends
   // to unlock but silently re-encrypts and re-locks after a delay.
   // Set by the admin via the "Release with Duress Code" dashboard option.
@@ -1127,10 +1133,32 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ ok: true, deduplicated: true });
   }
 
-  commands[cmdIdx].status = result_status;
-  commands[cmdIdx].executed_at = new Date().toISOString();
+  // E-EFFECTIVENESS: a lockdown that reports boot-lock attempted with zero
+  // critical controls applied is NOT effective — the device is encrypted-only.
+  // The rule is Express's (server/src/routes/agent.js:411-418). This handler used
+  // to destructure boot_lock_detail and discard it, so on the serverless backend
+  // every silently no-op'd boot-lock was recorded as a plain success.
+  const command = commands[cmdIdx];
+  let lockdownEffective: boolean | null = null;
+  if (result_status === 'executed' && command.command_type === 'lockdown' && boot_lock_detail) {
+    const detail = boot_lock_detail as {
+      boot_lock_attempted?: unknown;
+      critical_applied_total?: unknown;
+    };
+    if (detail.boot_lock_attempted === true) {
+      const criticalTotal =
+        typeof detail.critical_applied_total === 'number' ? detail.critical_applied_total : 0;
+      lockdownEffective = criticalTotal > 0;
+    }
+  }
+
+  command.status = result_status;
+  command.executed_at = new Date().toISOString();
+  command.boot_lock_status = typeof boot_lock_status === 'string' ? boot_lock_status : null;
+  command.boot_lock_detail = boot_lock_detail ?? null;
+  command.lockdown_effective = lockdownEffective;
   if (payload.command_uuid) {
-    commands[cmdIdx].command_uuid = payload.command_uuid;
+    command.command_uuid = payload.command_uuid;
   }
   await saveCommands(env, commands);
 
