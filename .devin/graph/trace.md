@@ -5388,3 +5388,100 @@ only piece with a real design decision left (how the installer fetches its confi
 at run time without a token pasted by hand).
 
 ---
+
+---
+
+## Session 182 — 2026-11-02 (serverless parity: agent-version and location/latest, plus corrupt-KV honesty)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S181 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `server/src/routes/installer.js` (`/agent-version`),
+  `server/src/routes/devices.js` (`/:id/location/latest`),
+  `serverless/worker.ts` (route dispatch, `handleGetLocations`, `listLocations`,
+  `LocationReport`, the eight KV readers, the `installerMatch` regex), and the
+  existing location/installer tests in `serverless/worker.test.ts`.
+- **Finding (a route-ordering trap that would have shipped)**: `/api/installer/:deviceId`
+  is matched by an anchored regex, so `agent-version` is read as a device id unless
+  the specific path is registered first. Express documents the same trap above its
+  own route. The new test asserts the endpoint is not shadowed.
+- **Finding (Express and the Worker could disagree)**: Express hardcodes
+  `version: '1.0.0'` in `/agent-version` while its `/update` reads the binary's
+  metadata. Serving both from the single `agent_release` KV record removes that
+  class of drift.
+- **Finding (corrupt KV produced an unnamed crash)**: all eight KV readers did
+  `JSON.parse(data)` with no context, so a truncated or hand-edited value raised a
+  bare `SyntaxError` from inside a random handler. The tempting repair — fall back
+  to an empty collection — would make a tampered fleet look empty, which is the
+  wrong direction for an anti-theft system.
+
+### IMPLEMENT
+- `GET /api/installer/agent-version`: viewer auth; served from `agent_release`
+  (same record as `/api/agent/update`); `?platform=` override; `{version: null,
+  available: false}` when nothing is published; `source: 'kv'`.
+- `GET /api/devices/:id/location/latest`: viewer auth; newest report by
+  `created_at`, with `reported_at` mapped for dashboard compatibility; **404** when
+  the device has never reported, matching the Express message.
+- `parseKvJson<T>(raw, key)`: names the offending key and re-throws, so corruption
+  stays loud. All eight KV readers now use it.
+- Two `as unknown as` probes for `KV.delete()` gained SAFETY comments stating the
+  runtime `typeof` guard they depend on.
+- `scripts/audit_test_teeth.py`: three rows for the new endpoints.
+
+### VERIFY
+- `worker.test.ts`: **361 passed** (353 + 8). The new tests cover: auth required on
+  both endpoints; no release published; published version/hash/size; per-platform
+  override; agent-version not shadowed by the per-device route; 404 for a device
+  with no reports; newest-not-first for two reports.
+- Coverage: **89.05 / 83.01 / 93.08 / 90.77** (floors 82/75/86/82).
+- All three mutations **KILLED** by the intended tests: hardcoded version,
+  oldest-instead-of-newest, and the missing 404.
+
+### Fog cleared
+- **Whether the dashboard's version badge and last-seen pin work against the
+  Worker**: they did not; now they do, and neither can disagree with the update
+  endpoint because both read one record.
+- **What corrupt KV does**: it fails with the key named, rather than a bare
+  SyntaxError or a silent empty fleet.
+
+### Fog remaining
+- Parity gaps still open (item 8): `link-pbl` / `unlink-pbl` / `devices/by-pbl/:id`,
+  `rotate-key`, `settings/retention`, `hw-test-artifact` (3 routes),
+  `integrations` (2 routes).
+- The generic NSIS installer (item 9) and Cloudflare-native observability/backup
+  (item 10) are untouched.
+- Unchanged: `/api/download/agent` remains unauthenticated in the Worker while
+  Express requires agent auth — still unreviewed; D-120/D-129/D-130/D-134
+  resource-blocked; `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), a real domain (Caddy TLS).
+
+### Failure attribution
+- No failure this session. Worth recording the near-miss: the `installerMatch`
+  ordering trap was only avoided because I read Express's own comment above the
+  equivalent route. Nothing in the Worker's dispatch makes the hazard visible, and
+  the failure mode ("Device not found" from an endpoint that is fine) is exactly the
+  kind of thing that gets misdiagnosed as a missing route.
+- **Layer 4 — verification feedback**: the corrupt-KV behaviour had no test either
+  way, so neither the crash nor a "repair" that silently blanked the fleet would
+  have been caught. The new helper is a behaviour change in a security-sensitive
+  path and should get its own test in the next increment.
+
+### Session artifacts
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `scripts/audit_test_teeth.py`.
+
+### Next session opening
+Finish item 8 in one pass — `link-pbl`/`unlink-pbl`/`by-pbl`, `rotate-key`,
+`settings/retention` — then `hw-test-artifact` and `integrations`, adding a test per
+endpoint as each lands; and add the missing test for `parseKvJson` rejecting corrupt
+KV rather than blanking it.
+
+---

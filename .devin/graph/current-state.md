@@ -53,40 +53,36 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 181 — 2026-11-02 (serverless-first confirmed as the direction; the fleet's auto-update was silently dead on it)
+## Latest session: 182 — 2026-11-02 (serverless parity: agent-version and location/latest, plus corrupt-KV honesty)
 
 ### VERIFY
-- `worker.test.ts`: **353 passed** (347 + 6): auth required; no release → no update
-  with `reason`; newer release → hash/size/signature/download_url; same version →
-  no update; per-platform override; corrupt **and** incomplete metadata → 500.
-- Coverage: **88.93 / 82.84 / 92.85 / 90.7** (floors 82/75/86/82).
-- All three mutations **KILLED**, each by the intended test:
-  `requires agent auth`, `does not offer the version the agent already runs`,
-  `fails closed on corrupt or incomplete metadata`.
-- Pre-existing advisories confirmed not mine: `git show HEAD:serverless/worker.ts`
-  already contains 7 `JSON.parse` sites and 2 `as unknown as` casts; the CORS
-  literals were pre-existing too and are now named.
+- `worker.test.ts`: **361 passed** (353 + 8). The new tests cover: auth required on
+  both endpoints; no release published; published version/hash/size; per-platform
+  override; agent-version not shadowed by the per-device route; 404 for a device
+  with no reports; newest-not-first for two reports.
+- Coverage: **89.05 / 83.01 / 93.08 / 90.77** (floors 82/75/86/82).
+- All three mutations **KILLED** by the intended tests: hardcoded version,
+  oldest-instead-of-newest, and the missing 404.
 
 ### Fog cleared
-- **Whether the default deployment can patch its agents**: it could not, now it
-  can. That question had never been asked because the endpoint's absence produced a
-  logged warning, not an error.
-- **Where release metadata belongs in a serverless design**: in KV, written at
-  publish time, signed off-platform — the Worker must never hold the update key.
+- **Whether the dashboard's version badge and last-seen pin work against the
+  Worker**: they did not; now they do, and neither can disagree with the update
+  endpoint because both read one record.
+- **What corrupt KV does**: it fails with the key named, rather than a bare
+  SyntaxError or a silent empty fleet.
 
 ### Fog remaining
-- The remaining parity gaps and the three un-portable pieces are tracked as the
-  session's todo items (7-11): `installer/agent-version`, the PBL-linking /
-  rotate-key / location-latest / retention endpoints, `hw-test-artifact`,
-  `integrations`, the generic NSIS installer, and Cloudflare-native
-  observability/backup.
-- The Worker's `/api/download/agent` is unauthenticated (Express requires agent
-  auth) — a deliberate-looking difference nobody has reviewed.
-- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
-  (D-132); 19 Dependabot alerts.
+- Parity gaps still open (item 8): `link-pbl` / `unlink-pbl` / `devices/by-pbl/:id`,
+  `rotate-key`, `settings/retention`, `hw-test-artifact` (3 routes),
+  `integrations` (2 routes).
+- The generic NSIS installer (item 9) and Cloudflare-native observability/backup
+  (item 10) are untouched.
+- Unchanged: `/api/download/agent` remains unauthenticated in the Worker while
+  Express requires agent auth — still unreviewed; D-120/D-129/D-130/D-134
+  resource-blocked; `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
 
 ### Debt items closed
-- None; this is the first increment of the serverless-first plan.
+- None.
 
 ### Debt items still open
 - D-120, D-129, D-130, D-134 — all resource-blocked.
@@ -96,27 +92,25 @@
   credentials (Worker publish), a real domain (Caddy TLS).
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary, and the widest-reaching instance in
-  this thread). The Worker's route table was covered by tests that call
-  `worker.fetch()` directly, so a *missing route* was invisible: nothing enumerated
-  "every endpoint the clients call". The gap was found only by diffing Express's
-  routes against the Worker's and then asking which ones the agent actually calls —
-  a comparison no harness was doing.
-- **Layer 1 — task specification** (mine, earlier): I treated "the Worker has lots
-  of routes" as "the Worker is the backend", without checking the *clients'
-  defaults. The defaults said Worker all along; that should have been the first
-  thing read when the question was "is this serverless?".
+- No failure this session. Worth recording the near-miss: the `installerMatch`
+  ordering trap was only avoided because I read Express's own comment above the
+  equivalent route. Nothing in the Worker's dispatch makes the hazard visible, and
+  the failure mode ("Device not found" from an endpoint that is fine) is exactly the
+  kind of thing that gets misdiagnosed as a missing route.
+- **Layer 4 — verification feedback**: the corrupt-KV behaviour had no test either
+  way, so neither the crash nor a "repair" that silently blanked the fleet would
+  have been caught. The new helper is a behaviour change in a security-sensitive
+  path and should get its own test in the next increment.
 
 ### Session artifacts
 - Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
-  `serverless/README.md`, `scripts/audit_test_teeth.py`.
+  `scripts/audit_test_teeth.py`.
 
 ### Next session opening
-Continue the serverless-first plan in dependency order: `installer/agent-version`
-and `devices/:id/location/latest` (small, and the dashboard has UI waiting on
-them), then the PBL-linking trio — then the generic NSIS installer, which is the
-only piece with a real design decision left (how the installer fetches its config
-at run time without a token pasted by hand).
+Finish item 8 in one pass — `link-pbl`/`unlink-pbl`/`by-pbl`, `rotate-key`,
+`settings/retention` — then `hw-test-artifact` and `integrations`, adding a test per
+endpoint as each lands; and add the missing test for `parseKvJson` rejecting corrupt
+KV rather than blanking it.
 
 ---
 
