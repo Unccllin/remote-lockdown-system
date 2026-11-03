@@ -53,6 +53,9 @@ interface Device {
   last_checkin: string | null;
   enrolled_at: string;
   api_key_hash: string;
+  // Optional link to the firmware-side PBL device_id (64 hex chars, C1 §4).
+  // Absent for agents that were never matched to a PBL boot record.
+  pbl_device_id?: string | null;
   // Populated from checkin metadata (KV-RACE-001), not stored on `devices`.
   firmware_audit?: Record<string, unknown> | null;
   firmware_audit_at?: string | null;
@@ -2496,6 +2499,15 @@ export default {
     // Device lookup by hardware UUID — must be checked BEFORE the generic
     // /api/devices/:id route, otherwise "by-hardware" would be treated as
     // a device ID.
+    if (path === '/api/devices/settings/retention' && method === 'GET') {
+      return handleRetentionSettings(request, env);
+    }
+
+    if (path.startsWith('/api/devices/by-pbl/') && method === 'GET') {
+      const pblId = decodeURIComponent(path.substring('/api/devices/by-pbl/'.length));
+      return handleByPbl(request, env, pblId);
+    }
+
     if (path.startsWith('/api/devices/by-hardware/') && method === 'GET') {
       const hardwareUuid = decodeURIComponent(path.slice('/api/devices/by-hardware/'.length));
       return handleDeviceByHardware(request, env, hardwareUuid);
@@ -2531,6 +2543,15 @@ export default {
       }
       if (action === 'location/latest' && method === 'GET') {
         return handleLatestLocation(request, env, deviceId);
+      }
+      if (action === 'link-pbl' && method === 'POST') {
+        return handleLinkPbl(request, env, deviceId);
+      }
+      if (action === 'unlink-pbl' && method === 'POST') {
+        return handleUnlinkPbl(request, env, deviceId);
+      }
+      if (action === 'rotate-key' && method === 'POST') {
+        return handleRotateKey(request, env, deviceId);
       }
       if (action === 'pba-credentials' && method === 'GET') {
         return handleGetPbaCredentials(request, env, deviceId);
@@ -2806,6 +2827,185 @@ async function handleLatestLocation(
     ...latest,
     id: `loc-${deviceId}-0`,
     reported_at: latest.created_at,
+  });
+}
+
+/** PBL device ids are 32 bytes rendered as lowercase-hex (C1 §4). */
+const PBL_DEVICE_ID_PATTERN = /^[0-9a-fA-F]{64}$/;
+
+/** Read a JSON body without letting a malformed one throw a bare SyntaxError. */
+async function readJsonBody<T>(request: Request): Promise<T | null> {
+  try {
+    return JSON.parse(await request.text()) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * POST /api/devices/:id/link-pbl — attach a firmware PBL device_id to an agent.
+ *
+ * A PBL device_id may be linked to at most one agent device: two agents claiming
+ * the same firmware identity would make the verdict path ambiguous about which
+ * machine a lock applies to, so a collision is 409 with the current owner named.
+ */
+async function handleLinkPbl(
+  request: Request,
+  env: Env,
+  deviceId: string,
+): Promise<Response> {
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
+
+  const payload = await readJsonBody<{ pbl_device_id?: string }>(request);
+  const pblId = payload?.pbl_device_id;
+  if (!pblId || typeof pblId !== 'string') {
+    return errorResponse('pbl_device_id is required', 400);
+  }
+  if (!PBL_DEVICE_ID_PATTERN.test(pblId)) {
+    return errorResponse('pbl_device_id must be 64 hex chars (32 bytes)', 400);
+  }
+
+  const devices = await listDevices(env);
+  const device = devices.find((d) => d.id === deviceId);
+  if (!device) return errorResponse('Device not found', 404);
+
+  const collision = devices.find(
+    (d) =>
+      d.id !== device.id &&
+      d.pbl_device_id &&
+      d.pbl_device_id.toLowerCase() === pblId.toLowerCase(),
+  );
+  if (collision) {
+    return jsonResponse(
+      {
+        error: 'PBL device_id already linked to another agent device',
+        linked_device_id: collision.id,
+      },
+      409,
+    );
+  }
+
+  device.pbl_device_id = pblId;
+  await saveDevices(env, devices);
+  await addAuditEntry(env, device.id, 'pbl_device_linked', `pbl_device_id=${pblId}`);
+  return jsonResponse({ linked: true, device_id: device.id, pbl_device_id: pblId });
+}
+
+/**
+ * POST /api/devices/:id/unlink-pbl — detach the firmware identity.
+ * 400 when nothing is linked, so "unlink succeeded" never means "nothing happened".
+ */
+async function handleUnlinkPbl(
+  request: Request,
+  env: Env,
+  deviceId: string,
+): Promise<Response> {
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
+
+  const devices = await listDevices(env);
+  const device = devices.find((d) => d.id === deviceId);
+  if (!device) return errorResponse('Device not found', 404);
+  if (!device.pbl_device_id) {
+    return errorResponse('Device has no PBL device_id linked', 400);
+  }
+
+  const previous = device.pbl_device_id;
+  device.pbl_device_id = null;
+  await saveDevices(env, devices);
+  await addAuditEntry(env, device.id, 'pbl_device_unlinked', `pbl_device_id=${previous}`);
+  return jsonResponse({ unlinked: true, device_id: device.id });
+}
+
+/**
+ * GET /api/devices/by-pbl/:pblDeviceId — the reverse lookup the dashboard uses to
+ * jump from a firmware boot record to the agent that manages it.
+ */
+async function handleByPbl(
+  request: Request,
+  env: Env,
+  pblDeviceId: string,
+): Promise<Response> {
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
+
+  if (!PBL_DEVICE_ID_PATTERN.test(pblDeviceId)) {
+    return errorResponse('pbl_device_id must be 64 hex chars', 400);
+  }
+
+  const devices = await listDevices(env);
+  const device = devices.find(
+    (d) => d.pbl_device_id && d.pbl_device_id.toLowerCase() === pblDeviceId.toLowerCase(),
+  );
+  if (!device) {
+    return errorResponse('No agent device linked to this PBL device_id', 404);
+  }
+
+  const meta = await getCheckinMetadata(env, device.id);
+  const { api_key_hash, ...safeDevice } = mergeCheckinMetadata(device, meta);
+  return jsonResponse(safeDevice);
+}
+
+/**
+ * POST /api/devices/:id/rotate-key — issue a new agent API key.
+ *
+ * The plaintext key is returned exactly once (the server keeps only its hash), so
+ * the caller must provision it to the device out-of-band.
+ */
+async function handleRotateKey(
+  request: Request,
+  env: Env,
+  deviceId: string,
+): Promise<Response> {
+  const auth = await requireRole(request, env, 'super-admin');
+  if (auth instanceof Response) return auth;
+
+  const devices = await listDevices(env);
+  const device = devices.find((d) => d.id === deviceId);
+  if (!device) {
+    return errorResponse(
+      'Device not found. Verify the device ID is correct and the device is enrolled in the system.',
+      404,
+    );
+  }
+
+  const newApiKey = generateApiKey();
+  device.api_key_hash = await sha256(newApiKey);
+  await saveDevices(env, devices);
+  await addAuditEntry(env, device.id, 'api_key_rotated', '');
+
+  return jsonResponse({
+    device_id: device.id,
+    hostname: device.hostname,
+    api_key: newApiKey,
+  });
+}
+
+/**
+ * GET /api/devices/settings/retention — the retention windows the dashboard shows.
+ *
+ * Bound from Worker vars when present, otherwise the same defaults Express uses.
+ * Note the route must be matched before /api/devices/:id, or "settings" is read as
+ * a device id.
+ */
+async function handleRetentionSettings(request: Request, env: Env): Promise<Response> {
+  const auth = await requireRole(request, env, 'viewer');
+  if (auth instanceof Response) return auth;
+
+  const vars = env as unknown as {
+    LOCATION_RETENTION_DAYS?: string;
+    COMMAND_EXPIRY_DAYS?: string;
+  };
+  const locationDays = parseInt(vars.LOCATION_RETENTION_DAYS || '90', 10);
+  const commandDays = parseInt(vars.COMMAND_EXPIRY_DAYS || '30', 10);
+
+  return jsonResponse({
+    location_retention_days: Number.isFinite(locationDays) ? locationDays : 90,
+    command_expiry_days: Number.isFinite(commandDays) ? commandDays : 30,
+    audit_log_retention_days: 365,
+    min_location_retention: 7,
+    max_location_retention: 180,
   });
 }
 

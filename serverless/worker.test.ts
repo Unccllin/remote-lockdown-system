@@ -3742,4 +3742,169 @@ describe('D-210: PBL route integration', () => {
       expect(data.reported_at).toBeTruthy();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Device endpoints the dashboard calls and the Worker lacked (session 183):
+  // PBL linkage, key rotation and retention settings.
+  // -------------------------------------------------------------------------
+  describe('PBL device linkage', () => {
+    const PBL = 'a'.repeat(64);
+    const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+    it('links a firmware identity to an agent device', async () => {
+      const { device } = await enrollDevice(worker, env, 'PBLLINK-001');
+      const resp = await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/link-pbl`, { pbl_device_id: PBL }, ADMIN),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.linked).toBe(true);
+      expect(data.pbl_device_id).toBe(PBL);
+
+      const getResp = await worker.fetch(
+        makeRequest('GET', `/api/devices/${device.id}`, undefined, ADMIN),
+        env,
+      );
+      expect((await parseResponse(getResp) as any).pbl_device_id).toBe(PBL);
+    });
+
+    it('rejects a malformed pbl_device_id', async () => {
+      const { device } = await enrollDevice(worker, env, 'PBLLINK-002');
+      const resp = await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/link-pbl`, { pbl_device_id: 'not-hex' }, ADMIN),
+        env,
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it('refuses to link one firmware identity to two agents', async () => {
+      const a = await enrollDevice(worker, env, 'PBLLINK-A');
+      const b = await enrollDevice(worker, env, 'PBLLINK-B');
+      await worker.fetch(
+        makeRequest('POST', `/api/devices/${a.device.id}/link-pbl`, { pbl_device_id: PBL }, ADMIN),
+        env,
+      );
+      const resp = await worker.fetch(
+        makeRequest('POST', `/api/devices/${b.device.id}/link-pbl`, { pbl_device_id: PBL }, ADMIN),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(409);
+      expect(data.linked_device_id).toBe(a.device.id);
+    });
+
+    it('looks a device up by its firmware identity', async () => {
+      const { device } = await enrollDevice(worker, env, 'PBLLOOKUP-001');
+      await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/link-pbl`, { pbl_device_id: PBL }, ADMIN),
+        env,
+      );
+      const resp = await worker.fetch(
+        makeRequest('GET', `/api/devices/by-pbl/${PBL}`, undefined, ADMIN),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.id).toBe(device.id);
+      expect(data.api_key_hash).toBeUndefined();
+    });
+
+    it('404s for an unlinked firmware identity', async () => {
+      const resp = await worker.fetch(
+        makeRequest('GET', `/api/devices/by-pbl/${'b'.repeat(64)}`, undefined, ADMIN),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('refuses to unlink when nothing is linked', async () => {
+      const { device } = await enrollDevice(worker, env, 'PBLLINK-003');
+      const resp = await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/unlink-pbl`, {}, ADMIN),
+        env,
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it('unlinks and clears the field', async () => {
+      const { device } = await enrollDevice(worker, env, 'PBLLINK-004');
+      await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/link-pbl`, { pbl_device_id: PBL }, ADMIN),
+        env,
+      );
+      const resp = await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/unlink-pbl`, {}, ADMIN),
+        env,
+      );
+      expect((await parseResponse(resp) as any).unlinked).toBe(true);
+
+      const getResp = await worker.fetch(
+        makeRequest('GET', `/api/devices/${device.id}`, undefined, ADMIN),
+        env,
+      );
+      expect((await parseResponse(getResp) as any).pbl_device_id ?? null).toBe(null);
+    });
+  });
+
+  describe('POST /api/devices/:id/rotate-key', () => {
+    it('issues a new key that works and invalidates the old one', async () => {
+      const { device, apiKey: oldKey } = await enrollDevice(worker, env, 'ROTATE-001');
+
+      const resp = await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/rotate-key`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(typeof data.api_key).toBe('string');
+      expect(data.api_key).not.toBe(oldKey);
+
+      // The new key authenticates an agent call…
+      const newBody = JSON.stringify({ hostname: 'ROTATE-001' });
+      const newResp = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', newBody, signRequest(newBody, data.api_key)),
+        env,
+      );
+      expect(newResp.status).toBe(200);
+
+      // …and the old one no longer does.
+      const oldResp = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', newBody, signRequest(newBody, oldKey)),
+        env,
+      );
+      expect(oldResp.status).toBe(401);
+    });
+
+    it('requires admin auth', async () => {
+      const { device } = await enrollDevice(worker, env, 'ROTATE-002');
+      const resp = await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/rotate-key`),
+        env,
+      );
+      expect(resp.status).toBe(401);
+    });
+  });
+
+  describe('GET /api/devices/settings/retention', () => {
+    it('returns the retention windows and is not shadowed by /api/devices/:id', async () => {
+      // "settings" would otherwise be read as a device id and answered with a 404
+      // device lookup, which is the failure this route ordering prevents.
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/devices/settings/retention', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.location_retention_days).toBe(90);
+      expect(data.command_expiry_days).toBe(30);
+      expect(data.audit_log_retention_days).toBe(365);
+      expect(data.min_location_retention).toBe(7);
+      expect(data.max_location_retention).toBe(180);
+    });
+  });
 });

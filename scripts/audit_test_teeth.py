@@ -342,6 +342,33 @@ MUTATIONS: list[dict] = [
         "new": "  if (false) {  // MUTATION: never report \"no location data\"\n    return errorResponse(\n      'No location data. The device has not reported any location reports yet.',\n      404,\n    );\n  }",
         "why": "a device with no reports returns 200 with a malformed payload instead of 404",
     },
+    {
+        "path": "worker/link-pbl",
+        "label": "WRK/link-pbl-collision",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  if (collision) {",
+        "new": "  if (false) {  // MUTATION: one firmware identity may be claimed by two agents",
+        "why": "two agents claim the same PBL device_id, making the verdict target ambiguous",
+    },
+    {
+        "path": "worker/rotate-key",
+        "label": "WRK/rotate-key-hash",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  device.api_key_hash = await sha256(newApiKey);",
+        "new": "  // MUTATION: the stored hash is never updated, so the old key stays valid",
+        "why": "rotation reports success while the compromised key keeps working",
+    },
+    {
+        "path": "worker/unlink-pbl",
+        "label": "WRK/unlink-pbl-400",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  if (!device.pbl_device_id) {",
+        "new": "  if (false) {  // MUTATION: unlink on an unlinked device reports success",
+        "why": "an operator is told the unlink worked when there was nothing to unlink",
+    },
 ]
 
 
