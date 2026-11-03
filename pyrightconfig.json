@@ -1,0 +1,17 @@
+{
+  "//platform": "The Python in this repo targets Windows: the agent, the CLI installer and the setup wizard call ctypes.windll, use subprocess.CREATE_NO_WINDOW / DETACHED_PROCESS, and import tkinter (deliberately optional so the non-GUI functions stay testable on Linux). Checking them as Linux reports findings for code that is correct on the platform it ships to — see agent/installer_gui.py's import guard. Platform is a property of the target, not of the host running the checker.",
+  "pythonPlatform": "Windows",
+
+  "//executionEnvironments": "agent/tests/ imports its siblings by bare module name (sys.path.insert(parent); import installer). The repo root also contains an installer/ directory of NSIS sources, which resolves as a namespace package first and makes every installer.* attribute look missing. Scoping the agent tree as its own execution root resolves those imports to the actual modules; no runtime import changes.",
+  "executionEnvironments": [{ "root": "agent", "extraPaths": ["."] }],
+
+  "exclude": [
+    "**/node_modules",
+    "**/.venv",
+    "**/dist",
+    "**/dist-electron",
+    "**/build",
+    "**/__pycache__",
+    "**/coverage"
+  ]
+}

@@ -89,4 +89,46 @@ describe('DevicesPage', () => {
     expect(screen.getByText('Recovering')).toBeInTheDocument();
     expect(screen.getByText('Total')).toBeInTheDocument();
   });
+
+  // B-006 / S193: a device that would accept an unauthenticated update must be
+  // visible in the list, not only on its detail page.
+  it('marks devices whose updates are unverified (sha256-only)', async () => {
+    api.get.mockResolvedValue({
+      data: [
+        { id: '1', hostname: 'DEV-PLAIN', owner_name: 'Alice', status: 'active', last_checkin: null, enrolled_at: '2025-01-01', update_verification: 'sha256-only' },
+        { id: '2', hostname: 'DEV-PINNED', owner_name: 'Bob', status: 'active', last_checkin: null, enrolled_at: '2025-01-02', update_verification: 'signature' },
+        { id: '3', hostname: 'DEV-SILENT', owner_name: 'Charlie', status: 'active', last_checkin: null, enrolled_at: '2025-01-03' },
+      ],
+    });
+
+    renderWithRouter(<DevicesPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('DEV-PLAIN')).toBeInTheDocument();
+    });
+
+    // Exactly one badge — the pinned and never-reported rows carry none.
+    expect(screen.getAllByText('updates unverified')).toHaveLength(1);
+    expect(screen.queryByText('updates blocked')).not.toBeInTheDocument();
+  });
+
+  it('distinguishes a device that refuses updates from one that accepts them unverified', async () => {
+    // 'key-unreadable' means a pin is configured but cannot be read, so the agent
+    // refuses every update. Reporting that as "unverified" would be the opposite
+    // of what happens.
+    api.get.mockResolvedValue({
+      data: [
+        { id: '1', hostname: 'DEV-BLOCKED', owner_name: 'Alice', status: 'active', last_checkin: null, enrolled_at: '2025-01-01', update_verification: 'key-unreadable' },
+      ],
+    });
+
+    renderWithRouter(<DevicesPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('DEV-BLOCKED')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('updates blocked')).toBeInTheDocument();
+    expect(screen.queryByText('updates unverified')).not.toBeInTheDocument();
+  });
 });

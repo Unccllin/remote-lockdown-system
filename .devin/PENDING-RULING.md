@@ -337,3 +337,49 @@ being served; verified by the generated serverless scripts and by
 `installer_gui.py`'s agent + lock-screen downloads. Documented as transport
 integrity (the repo's own "self-certifying" caveat); authenticity stays blocked on
 the PFX/D-130.
+
+## Update-pinning ruling (opened 2026-11-03, session 193)
+
+The updater already fails closed — *when a key is configured*. Nothing configures
+one. `agent/agent.py:3419` tests `bool(cfg.get("update_public_key"))`, so a pinned
+path with a missing file refuses the update; but every generated config omits the
+key, so installer-provisioned agents land in the `else` branch and accept an
+update whose only check is a hash served next to the binary.
+
+### Context that constrains the choice
+- Generators that omit the key: `agent/installer.py:build_config` (12 keys),
+  `agent/installer_gui.py:write_config`, and the Worker's config object in
+  `generateServerlessInstallScript`. `agent/config.ini.example:62` points at
+  `C:\ProgramData\LockdownAgent\update_signing.pub` — a file no script creates,
+  and `_load_pem_public_key()` returns `None` for a path that does not exist
+  (which fails closed only because the *string* is set).
+- Both backends can sign already: Express signs with `UPDATE_SIGNING_KEY` and
+  returns `signature_alg: 'ed25519'` or `null`; the Worker serves whatever
+  `agent_release` metadata CI published. The agent ignores a non-ed25519 alg.
+- A compromised backend can omit the signature entirely, which the unpinned agent
+  cannot distinguish from "this deployment has no key".
+- No keypair is provisioned in this environment; `secrets/` is empty and
+  `server/.env.example` only documents `UPDATE_SIGNING_KEY`.
+
+### Q1 — how does an agent come to have a pinned update key?
+
+- [x] Q1 — root of trust → **(A) generated configs pin the key, and the installer
+      stages the operator-supplied `.pub`** (recommended). Three generators gain
+      `update_public_key`; the key file is written beside `config.json` when the
+      operator supplies one at build/generation time. No wire changes, matches the
+      existing `config.ini.example` convention.
+
+### Q2 — what should an unpinned agent do with an update today?
+
+- [x] Q2 — unpinned behaviour → **(A) make the degraded mode loud and visible**
+      (recommended) — keep accepting hash-only (an agent that refuses everything
+      stops patching silently), but record `signature_verified` provenance in the
+      update signal, report the verification mode in check-in, surface it per
+      device, and document that an unsigned backend is hash-only. Strict
+      fail-closed stays available as a follow-up once Q1(A) is fleet-wide.
+
+**Ruling closed 2026-11-03, session 193** — Q1 (A) + Q2 (A). Implementation
+constraint that follows from the ruling and must not be lost: a config may only
+name `update_public_key` when the `.pub` file is actually staged on the target,
+because a configured-but-missing key fails closed and silently stops every future
+update. Unpinned installs stay hash-only, now visible per device.

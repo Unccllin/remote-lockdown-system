@@ -1244,6 +1244,10 @@ def checkin(cfg: dict) -> dict | None:
         "hostname": cfg["hostname"],
         "mac_address": get_mac_address(),
         "hardware_uuid": get_hardware_uuid(),
+        # Provenance the operator can act on: "signature" means this device will
+        # only apply a detached-signature-verified update; "sha256-only" means it
+        # would accept whatever the backend serves.
+        "update_verification": update_verification_mode(cfg),
     }
     if tpm_restart is not None:
         body["tpm_restart_count"] = tpm_restart
@@ -3343,6 +3347,22 @@ def _check_key_domain_separation(cfg: dict) -> None:
             )
     except (ValueError, TypeError):
         pass
+
+
+def update_verification_mode(cfg: dict) -> str:
+    """How this agent verifies updates, as reported at check-in.
+
+    "signature"      — a pinned key loads; only signature-verified updates apply
+    "sha256-only"    — no key; the hash served beside the binary is the only check
+    "key-unreadable" — a key is configured but cannot be loaded, so
+                       download_update() refuses every update (it fails closed on
+                       a configured key). Reporting this as "sha256-only" would
+                       tell the operator the opposite of what happens.
+    """
+    pinned = cfg.get("update_public_key")
+    if not pinned:
+        return "sha256-only"
+    return "signature" if _get_update_public_key(cfg) is not None else "key-unreadable"
 
 
 def verify_update_signature(cfg: dict, signature_b64: str, version: str, sha256: str) -> bool:

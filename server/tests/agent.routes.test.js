@@ -178,6 +178,76 @@ describe('POST /api/agent/checkin', () => {
     expect(update[1][4]).toBeNull();
   });
 
+  // B-006 / S193: the agent reports how it verifies updates, per device.
+  describe('update_verification (B-006)', () => {
+    const updateCall = () => mockPool.query.mock.calls.find(c =>
+      /UPDATE devices/i.test(c[0]) && /update_verification/i.test(c[0]));
+
+    test.each(['signature', 'sha256-only', 'key-unreadable'])(
+      'persists the reported mode %s',
+      async (mode) => {
+        const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+        mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+
+        const res = await request(app)
+          .post('/api/agent/checkin')
+          .set('x-agent-key', AGENT_KEY)
+          .send({ hostname: 'DEV-001', update_verification: mode });
+
+        expect(res.status).toBe(200);
+        const update = updateCall();
+        expect(update).toBeTruthy();
+        // $6 is the mode; COALESCE leaves the stored value alone when it is null.
+        expect(update[1][5]).toBe(mode);
+        expect(update[0]).toMatch(/COALESCE\(\$6, update_verification\)/);
+      }
+    );
+
+    test('an unrecognised mode is stored as null, not coerced', async () => {
+      // "unknown" and "unverified" are different facts: the dashboard renders
+      // 'Not reported' rather than claiming a device accepts unauthenticated
+      // updates when it merely sent something unrecognisable.
+      const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+      mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+
+      const res = await request(app)
+        .post('/api/agent/checkin')
+        .set('x-agent-key', AGENT_KEY)
+        .send({ hostname: 'DEV-001', update_verification: 'trust-me' });
+
+      expect(res.status).toBe(200);
+      expect(updateCall()[1][5]).toBeNull();
+    });
+
+    test('an absent mode leaves the stored value untouched', async () => {
+      // An older agent never sends the field; COALESCE keeps whatever the device
+      // reported last time instead of resetting it to unknown on every check-in.
+      const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+      mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+
+      const res = await request(app)
+        .post('/api/agent/checkin')
+        .set('x-agent-key', AGENT_KEY)
+        .send({ hostname: 'DEV-001' });
+
+      expect(res.status).toBe(200);
+      expect(updateCall()[1][5]).toBeNull();
+    });
+
+    test('a non-string mode is rejected rather than stringified', async () => {
+      const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
+      mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });
+
+      const res = await request(app)
+        .post('/api/agent/checkin')
+        .set('x-agent-key', AGENT_KEY)
+        .send({ hostname: 'DEV-001', update_verification: ['signature'] });
+
+      expect(res.status).toBe(200);
+      expect(updateCall()[1][5]).toBeNull();
+    });
+  });
+
   test('returns server_time for deadman anchoring (B-005)', async () => {
     const device = { id: 'dev-1', hostname: 'DEV-001', status: 'active' };
     mockPool.query.setResult('SELECT * FROM devices', { rows: [device] });

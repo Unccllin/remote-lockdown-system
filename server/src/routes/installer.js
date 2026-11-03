@@ -513,7 +513,33 @@ async function generateApiKeyAndUpdateDevice(deviceId, adminId, action, detail) 
  * @param {string} apiKey - plaintext API key for the device
  * @returns {object} config object
  */
-function buildDeviceConfig(device, serverUrl, apiKey) {
+/**
+ * Path of the update-signing public key to stage into Windows installers, or null.
+ *
+ * Configured with UPDATE_PUBLIC_KEY_PEM (a path on the server, mirroring the
+ * UPDATE_SIGNING_KEY convention). Absent means "unpinned": the generated config
+ * then omits update_public_key entirely, because the agent refuses every update
+ * when a pinned path cannot be read.
+ */
+function resolveUpdatePublicKey() {
+  const configured = process.env.UPDATE_PUBLIC_KEY_PEM;
+  if (!configured) return null;
+  try {
+    return fs.existsSync(configured) ? configured : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+const UPDATE_KEY_FILENAME = 'update_signing.pub';
+
+/**
+ * Where the agent will look for the pinned key on the target machine.
+ * Keep in step with agent/installer.py's INSTALL_DIR.
+ */
+const TARGET_UPDATE_KEY_PATH = 'C:\\ProgramData\\LockdownAgent\\update_signing.pub';
+
+function buildDeviceConfig(device, serverUrl, apiKey, updateKeyPath = null) {
   const config = {
     server_url: serverUrl,
     device_hostname: device.hostname,
@@ -530,6 +556,13 @@ function buildDeviceConfig(device, serverUrl, apiKey) {
   const googleKey = process.env.GOOGLE_API_KEY;
   if (googleKey) {
     config.google_api_key = googleKey;
+  }
+
+  // Named only when the installer actually stages the key file — see
+  // resolveUpdatePublicKey(). An unpinned agent accepts SHA-256-only updates and
+  // reports that at check-in.
+  if (updateKeyPath) {
+    config.update_public_key = TARGET_UPDATE_KEY_PATH;
   }
 
   return config;
@@ -549,7 +582,9 @@ function buildDeviceConfig(device, serverUrl, apiKey) {
  * @param {string|null} [installerBinPath] - CLI installer staged into Windows ZIPs
  * @returns {Array<{name: string, data: Buffer}>}
  */
-function assembleZipFiles(config, device, platform, agentBinPath, watchdogBinPath, plat, installerBinPath = null) {
+function assembleZipFiles(
+  config, device, platform, agentBinPath, watchdogBinPath, plat, installerBinPath = null, updateKeyPath = null
+) {
   const files = [];
 
   // Agent binary
@@ -574,6 +609,12 @@ function assembleZipFiles(config, device, platform, agentBinPath, watchdogBinPat
       name: plat.installerName,
       data: fs.readFileSync(installerBinPath),
     });
+  }
+
+  // Pinned update key, when the server has one. The CLI installer finds this file
+  // beside itself, exactly like the NSIS path does.
+  if (updateKeyPath && fs.existsSync(updateKeyPath)) {
+    files.push({ name: UPDATE_KEY_FILENAME, data: fs.readFileSync(updateKeyPath) });
   }
 
   // Config JSON
@@ -636,7 +677,9 @@ function findNsis() {
   } catch (_) { /* makensis not found via which — fall through */ }
   return null;
 }
-function generateNsisScript(config, hostname, agentBinPath, watchdogBinPath, installerBinPath) {
+function generateNsisScript(
+  config, hostname, agentBinPath, watchdogBinPath, installerBinPath, updateKeyPath
+) {
   const productName = 'Remote Lockdown Agent';
   const installDir = '$APPDATA\\LockdownAgent';
   const hasWatchdog = watchdogBinPath && fs.existsSync(watchdogBinPath);
@@ -751,6 +794,7 @@ Section "Agent" SecAgent
   File "${nsisPath(agentBinPath)}"
   File "${nsisPath(installerBinPath)}"
 ${hasWatchdog ? `  File "${nsisPath(watchdogBinPath)}"` : ''}
+${updateKeyPath ? `  File "${nsisPath(updateKeyPath)}"` : ''}
 
   ; Write config.json — decode from base64 using certutil (built into Windows).
   ; This avoids NSIS string escaping issues with JSON quotes and backslashes.
@@ -1645,10 +1689,16 @@ router.get('/:deviceId', requireAuth, async (req, res) => {
   const serverUrl = `${protocol}://${host}`;
 
   // Build the device-specific config (shared helper)
-  const config = buildDeviceConfig(device, serverUrl, apiKey);
+  // Optional pinned update key (UPDATE_PUBLIC_KEY_PEM). Null when the operator
+  // has not provisioned one — the config then omits the pin, and the agent
+  // reports SHA-256-only update verification at check-in.
+  const updateKeyPath = resolveUpdatePublicKey();
+  const config = buildDeviceConfig(device, serverUrl, apiKey, updateKeyPath);
 
   // Assemble the files for the ZIP (shared helper)
-  const files = assembleZipFiles(config, device, platform, agentBinPath, watchdogBinPath, plat, installerBinPath);
+  const files = assembleZipFiles(
+    config, device, platform, agentBinPath, watchdogBinPath, plat, installerBinPath, updateKeyPath
+  );
 
   // Build ZIP
   const zip = buildZip(files);
@@ -1714,12 +1764,13 @@ router.get('/:deviceId/nsis', requireAuth, async (req, res) => {
   const serverUrl = `${protocol}://${host}`;
 
   // Build the device-specific config (shared helper)
-  const config = buildDeviceConfig(device, serverUrl, apiKey);
+  const updateKeyPath = resolveUpdatePublicKey();
+  const config = buildDeviceConfig(device, serverUrl, apiKey, updateKeyPath);
 
   // Generate and compile the NSIS installer
   try {
     const nsiScript = generateNsisScript(
-      config, device.hostname, agentBinPath, watchdogBinPath, installerBinPath
+      config, device.hostname, agentBinPath, watchdogBinPath, installerBinPath, updateKeyPath
     );
     const licenseText = generateNsisLicense(device.hostname);
     const exeBuffer = await compileNsisInstaller(nsiScript, licenseText);

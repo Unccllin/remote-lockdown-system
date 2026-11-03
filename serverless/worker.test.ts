@@ -891,6 +891,99 @@ describe('Serverless Worker', () => {
     });
   });
 
+  // B-006 / S193: how each device verifies updates, reported at check-in.
+  describe('update_verification on checkin (B-006)', () => {
+    async function getDevice(deviceId: string) {
+      const devReq = makeRequest('GET', `/api/devices/${deviceId}`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      return (await parseResponse(await worker.fetch(devReq, env))) as any;
+    }
+
+    it.each(['signature', 'sha256-only', 'key-unreadable'])(
+      'persists the reported mode %s and surfaces it via GET /api/devices/:id',
+      async (mode) => {
+        const hostname = `UPDVER-${mode}`;
+        const { apiKey, device } = await enrollDevice(worker, env, hostname);
+        const body = JSON.stringify({ hostname, update_verification: mode });
+        const resp = await worker.fetch(
+          makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)),
+          env,
+        );
+        expect(resp.status).toBe(200);
+
+        expect((await getDevice(device.id)).update_verification).toBe(mode);
+      },
+    );
+
+    it('reports an unrecognised mode as null instead of coercing it', async () => {
+      // "unknown" and "unverified" are different facts: reporting the latter for
+      // a value we did not understand would claim the device accepts
+      // unauthenticated updates when it might not.
+      const { apiKey, device } = await enrollDevice(worker, env, 'UPDVER-BOGUS');
+      const body = JSON.stringify({ hostname: 'UPDVER-BOGUS', update_verification: 'trust-me' });
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)),
+        env,
+      );
+      expect(resp.status).toBe(200);
+
+      const devData = await getDevice(device.id);
+      expect(devData.update_verification).toBeFalsy();
+    });
+
+    it('keeps the last reported mode when a check-in omits it', async () => {
+      // Parity with the Express server's COALESCE($6, update_verification): an
+      // older agent must not reset a known mode to "unknown" every check-in.
+      const hostname = 'UPDVER-KEEP';
+      const { apiKey, device } = await enrollDevice(worker, env, hostname);
+
+      const pinned = JSON.stringify({ hostname, update_verification: 'signature' });
+      await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', pinned, signRequest(pinned, apiKey)),
+        env,
+      );
+
+      const silent = JSON.stringify({ hostname });
+      await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', silent, signRequest(silent, apiKey)),
+        env,
+      );
+
+      expect((await getDevice(device.id)).update_verification).toBe('signature');
+    });
+
+    it('POST /api/ping reports the mode and does not wipe the firmware audit', async () => {
+      // /api/ping is the legacy alias for the same check-in payload. It is a
+      // partial heartbeat, so it must merge into the stored metadata rather than
+      // replace it — before S193 it dropped firmware_audit wholesale.
+      const hostname = 'UPDVER-PING';
+      const { apiKey, device } = await enrollDevice(worker, env, hostname);
+      const audit = { platform: 'Windows', secure_boot: false, note: 'secure_boot_off' };
+
+      const full = JSON.stringify({
+        hostname,
+        firmware_audit: audit,
+        update_verification: 'sha256-only',
+      });
+      await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', full, signRequest(full, apiKey)),
+        env,
+      );
+
+      const ping = JSON.stringify({ hostname });
+      const pingResp = await worker.fetch(
+        makeRequest('POST', '/api/ping', ping, signRequest(ping, apiKey)),
+        env,
+      );
+      expect(pingResp.status).toBe(200);
+
+      const devData = await getDevice(device.id);
+      expect(devData.firmware_audit).toEqual(audit);
+      expect(devData.update_verification).toBe('sha256-only');
+    });
+  });
+
   describe('POST /api/agent/deadman-report', () => {
     it('stores key and marks device locked', async () => {
       const { apiKey, device } = await enrollDevice(worker, env, 'DEADMAN-001');

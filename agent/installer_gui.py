@@ -42,20 +42,46 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import requests
 
 # Tkinter is Windows-only (the GUI runs on the target Windows machine).
 # Import lazily so the non-GUI functions (hardware ID collection, enrollment,
 # config writing) can be tested on Linux without tkinter installed.
+#
+# The module-level names are annotated `Any` in the fallback branch on purpose:
+# the wizard's ~60 `tk.*` / `ttk.*` call sites are guarded by TKINTER_AVAILABLE at
+# the point where the wizard is constructed, and annotating the fallback keeps the
+# whole file importable and type-checkable on a host that is not the target.
 try:
     import tkinter as tk
     from tkinter import messagebox, ttk
 
     TKINTER_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover - Windows always ships tkinter
     TKINTER_AVAILABLE = False
-    tk = None  # type: ignore[assignment]
+    tk: Any = None
+    messagebox: Any = None
+    ttk: Any = None
+
+# Windows-only attributes, resolved defensively. `ctypes.windll` and the Popen
+# creation flags exist only on Windows; reading them through getattr keeps this
+# module importable (and checkable) on Linux without changing Windows behaviour.
+_WINDLL: Any = getattr(ctypes, "windll", None)
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0)
+
+
+def _shell32() -> Any:
+    """ctypes' shell32 handle on Windows, None everywhere else.
+
+    Typed `Any` deliberately: these two calls are Windows-only by construction,
+    and the module must still import on the host that runs the test suite.
+    """
+    windll = cast(Any, _WINDLL)
+    return None if windll is None else cast(Any, windll.shell32)
+
 
 # ---------------------------------------------------------------------------
 # Constants — shared with installer.py
@@ -154,8 +180,11 @@ def get_serial_number() -> str | None:
 
 
 def is_admin() -> bool:
+    shell32: Any = _shell32()
+    if shell32 is None:
+        return False
     try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
+        return bool(shell32.IsUserAnAdmin())
     except (OSError, AttributeError, PermissionError):
         return False
 
@@ -163,7 +192,8 @@ def is_admin() -> bool:
 def relaunch_as_admin():
     """Re-launch the current executable with UAC elevation."""
     params = " ".join(f'"{a}"' for a in sys.argv[1:])
-    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
+    shell32: Any = _shell32()
+    shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
     sys.exit(0)
 
 
@@ -205,8 +235,54 @@ def enroll_device_with_token(
     return resp.json()
 
 
+UPDATE_KEY_FILENAME = "update_signing.pub"
+
+
+def staged_update_public_key() -> str:
+    """Path of a staged update public key, or "" when none is present.
+
+    Only a key that exists may be named in config.json: the agent refuses every
+    future update when update_public_key is configured but unreadable, so a
+    missing file must mean "unpinned", never "pinned to nothing".
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).parent
+    else:
+        base = Path(__file__).parent
+    candidate = base / UPDATE_KEY_FILENAME
+    return str(candidate) if candidate.is_file() else ""
+
+
+def install_update_public_key(source: str | Path | None = None) -> str:
+    """Copy a staged update public key into INSTALL_DIR; return its final path.
+
+    The pin must name a path that outlives the install run. The GUI is normally
+    launched from the download folder, so naming the staged path would break every
+    future update as soon as that folder is cleaned (the agent fails closed on a
+    configured key it cannot read). A copy failure returns "" — unpinned and
+    reported as SHA-256-only at check-in — rather than naming an unusable path.
+    """
+    candidate = Path(source) if source else Path(staged_update_public_key() or "")
+    if not candidate.is_file():
+        return ""
+
+    dest = INSTALL_DIR / UPDATE_KEY_FILENAME
+    try:
+        INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+        if candidate.resolve() != dest.resolve():
+            shutil.copy2(candidate, dest)
+    except OSError:  # pragma: no cover - depends on host filesystem
+        return ""
+    return str(dest)
+
+
 def write_config(
-    server_url: str, api_key: str, hostname: str, device_id: str, boot_lock_enabled: bool = True
+    server_url: str,
+    api_key: str,
+    hostname: str,
+    device_id: str,
+    boot_lock_enabled: bool = True,
+    update_public_key: str = "",
 ) -> Path:
     """Write the agent config file atomically.
 
@@ -227,6 +303,10 @@ def write_config(
         "verify_tls": True,
         "server_supports_ack_dedup": True,
     }
+    # Only present when a key was actually provisioned — a configured-but-missing
+    # path would make the agent refuse all future updates.
+    if update_public_key:
+        config["update_public_key"] = update_public_key
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
 
     # Atomic write: write to temp file, then rename
@@ -414,7 +494,7 @@ def add_defender_exclusions() -> bool:
 def launch_agent(agent_path: Path):
     subprocess.Popen(
         [str(agent_path), "--config", str(CONFIG_FILE)],
-        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+        creationflags=_CREATE_NO_WINDOW | _DETACHED_PROCESS,
         cwd=str(INSTALL_DIR),
     )
 
@@ -771,14 +851,23 @@ class SetupWizard:
                     )
 
                 elif "Writing config" in msg:
+                    pinned = install_update_public_key()
                     write_config(
                         self.server_url.get(),
                         self.install_result["api_key"],
                         self.hostname.get(),
                         self.install_result["device"]["id"],
                         boot_lock_enabled=self.boot_lock.get(),
+                        update_public_key=pinned,
                     )
                     self.root.after(0, self._log, f"  Config: {CONFIG_FILE}")
+                    self.root.after(
+                        0,
+                        self._log,
+                        f"  Update key: {pinned}"
+                        if pinned
+                        else "  Update key: none staged (updates are SHA-256 only)",
+                    )
 
                 elif "Installing agent" in msg:
                     # Add Defender exclusions first — PyInstaller exes

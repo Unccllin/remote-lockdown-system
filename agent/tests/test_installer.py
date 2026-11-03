@@ -9,14 +9,30 @@ Covers:
 
 import sys
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# installer.py is in the parent directory
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# installer.py is in the parent directory. It is loaded by path, not by bare
+# import: the repo root also contains an installer/ directory (the NSIS sources),
+# so `import installer` is ambiguous to static tooling and every installer.*
+# attribute reads as missing. The module is still registered under `installer`
+# because the string patches below ("installer.requests.post") resolve it there.
+AGENT_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(AGENT_DIR))
 
-import installer
+if "installer" not in sys.modules:
+    import importlib.util
+
+    # Typed Any: spec/loader are Optional in the stubs, and this loader is test
+    # plumbing whose failure mode is an ImportError at collection time.
+    _spec: Any = importlib.util.spec_from_file_location("installer", AGENT_DIR / "installer.py")
+    _loaded = importlib.util.module_from_spec(_spec)
+    sys.modules["installer"] = _loaded
+    _spec.loader.exec_module(_loaded)
+
+installer: Any = sys.modules["installer"]
 
 # ---------------------------------------------------------------------------
 # enroll_device_with_token
@@ -421,3 +437,139 @@ def test_argparse_accepts_config_file():
     args = installer.build_parser().parse_args(["--config-file", "c.json", "--silent"])
     assert args.config_file == "c.json"
     assert args.silent is True
+
+
+# ---------------------------------------------------------------------------
+# Update-key pinning — only ever named when the file exists (S193)
+# ---------------------------------------------------------------------------
+
+
+def test_build_config_omits_the_pin_by_default():
+    """No key staged → no update_public_key key at all.
+
+    A configured path that does not exist makes the agent refuse *every* update
+    (it fails closed on a pinned key), so "unpinned" must be an absent key, never
+    a path to nothing.
+    """
+    cfg = installer.build_config("https://x", "k", "h", "d")
+    assert "update_public_key" not in cfg
+
+
+def test_build_config_records_the_pin_when_one_is_given():
+    cfg = installer.build_config("https://x", "k", "h", "d", update_public_key="/k.pub")
+    assert cfg["update_public_key"] == "/k.pub"
+
+
+def test_staged_update_key_is_empty_without_a_file(tmp_path):
+    assert installer.staged_update_public_key(tmp_path) == ""
+
+
+def test_staged_update_key_returns_the_path_when_staged(tmp_path):
+    key = tmp_path / installer.UPDATE_KEY_FILENAME
+    key.write_text("-----BEGIN PUBLIC KEY-----\n")
+
+    assert installer.staged_update_public_key(tmp_path) == str(key)
+
+
+def test_run_baked_install_pins_a_staged_key(tmp_path, monkeypatch):
+    import json
+
+    cfg = _baked(tmp_path / "baked.json")
+    key = tmp_path / "inst" / installer.UPDATE_KEY_FILENAME
+    key.parent.mkdir(parents=True)
+    key.write_text("-----BEGIN PUBLIC KEY-----\n")
+
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path / "inst")
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "inst" / "config.json")
+    monkeypatch.setattr(installer, "find_agent_exe", lambda: tmp_path / "lockdown-agent.exe")
+    monkeypatch.setattr(installer, "install_files", lambda p: p)
+    monkeypatch.setattr(installer, "create_lockdown_folder", lambda: None)
+    monkeypatch.setattr(installer, "install_service", lambda: True)
+    monkeypatch.setattr(installer, "verify_checkin", lambda url, key: True)
+    monkeypatch.setattr(installer, "print_summary", lambda *a, **k: None)
+    monkeypatch.setattr(installer, "staged_update_public_key", lambda *a: str(key))
+
+    assert installer.run_baked_install(cfg) == 0
+    written = json.loads((tmp_path / "inst" / "config.json").read_text())
+    assert written["update_public_key"] == str(key)
+
+
+def test_run_baked_install_leaves_updates_unpinned_without_a_key(tmp_path, monkeypatch):
+    """No key staged → the config must not name one, or updates stop entirely."""
+    import json
+
+    cfg = _baked(tmp_path / "baked.json")
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path / "inst")
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "inst" / "config.json")
+    monkeypatch.setattr(installer, "find_agent_exe", lambda: tmp_path / "lockdown-agent.exe")
+    monkeypatch.setattr(installer, "install_files", lambda p: p)
+    monkeypatch.setattr(installer, "create_lockdown_folder", lambda: None)
+    monkeypatch.setattr(installer, "install_service", lambda: True)
+    monkeypatch.setattr(installer, "verify_checkin", lambda url, key: True)
+    monkeypatch.setattr(installer, "print_summary", lambda *a, **k: None)
+    monkeypatch.setattr(installer, "staged_update_public_key", lambda *a: "")
+
+    assert installer.run_baked_install(cfg) == 0
+    written = json.loads((tmp_path / "inst" / "config.json").read_text())
+    assert "update_public_key" not in written
+
+
+def test_install_update_public_key_copies_the_key_into_the_install_dir(tmp_path, monkeypatch):
+    """The pin must name a path that outlives the install run.
+
+    The staged key normally sits in the download folder. Naming that path works
+    until the folder is cleaned — and then the agent fails closed on a configured
+    key it cannot read and stops patching entirely.
+    """
+    install_dir = tmp_path / "ProgramData" / "LockdownAgent"
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    staged = downloads / installer.UPDATE_KEY_FILENAME
+    staged.write_text("-----BEGIN PUBLIC KEY-----\n")
+
+    monkeypatch.setattr(installer, "INSTALL_DIR", install_dir)
+
+    pinned = installer.install_update_public_key(staged)
+
+    assert pinned == str(install_dir / installer.UPDATE_KEY_FILENAME)
+    assert (install_dir / installer.UPDATE_KEY_FILENAME).read_text() == (
+        "-----BEGIN PUBLIC KEY-----\n"
+    )
+    # The named path is the installed copy, not the download folder.
+    assert downloads not in Path(pinned).parents
+
+
+def test_install_update_public_key_is_empty_when_nothing_is_staged(tmp_path, monkeypatch):
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path / "inst")
+
+    assert installer.install_update_public_key(tmp_path / "absent.pub") == ""
+
+
+def test_baked_install_pins_the_installed_copy_not_the_download_folder(tmp_path, monkeypatch):
+    """End to end: a key next to the baked config is installed and then named."""
+    import json
+
+    install_dir = tmp_path / "ProgramData" / "LockdownAgent"
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    cfg = _baked(downloads / "config.json")
+    (downloads / installer.UPDATE_KEY_FILENAME).write_text("-----BEGIN PUBLIC KEY-----\n")
+
+    monkeypatch.setattr(installer, "INSTALL_DIR", install_dir)
+    monkeypatch.setattr(installer, "CONFIG_FILE", install_dir / "config.json")
+    monkeypatch.setattr(installer, "find_agent_exe", lambda: tmp_path / "lockdown-agent.exe")
+    monkeypatch.setattr(installer, "install_files", lambda p: p)
+    monkeypatch.setattr(installer, "create_lockdown_folder", lambda: None)
+    monkeypatch.setattr(installer, "install_service", lambda: True)
+    monkeypatch.setattr(installer, "verify_checkin", lambda url, key: True)
+    monkeypatch.setattr(installer, "print_summary", lambda *a, **k: None)
+    monkeypatch.setattr(installer, "staged_update_public_key", lambda *a: "")
+
+    assert installer.run_baked_install(cfg) == 0
+
+    written = json.loads((install_dir / "config.json").read_text())
+    assert written["update_public_key"] == str(install_dir / installer.UPDATE_KEY_FILENAME)
+    assert (install_dir / installer.UPDATE_KEY_FILENAME).is_file()
+    # The download copy is irrelevant once installed — a cleaned folder changes nothing.
+    (downloads / installer.UPDATE_KEY_FILENAME).unlink()
+    assert Path(written["update_public_key"]).is_file()

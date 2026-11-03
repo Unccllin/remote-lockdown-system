@@ -1,11 +1,10 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Monitor, RefreshCw, Plus, WifiOff, Wifi, ShieldOff, Loader,
-  Crosshair, Search, ArrowUpDown, ArrowUp, ArrowDown, Users,
+  Crosshair, Search, ArrowUpDown, ArrowUp, ArrowDown,
   Lock, Flag, MapPin,
 } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
 import { useCurrentUser } from '../hooks/useCurrentUser';
@@ -270,7 +269,20 @@ export default function DevicesPage() {
                         {d.status}
                       </span>
                     </td>
-                    <td className="px-5 py-3 font-mono text-slate-200">{d.hostname}</td>
+                    <td className="px-5 py-3 font-mono text-slate-200">
+                      {d.hostname}
+                      {(d.update_verification === 'sha256-only'
+                        || d.update_verification === 'key-unreadable') && (
+                        <span
+                          className="ml-2 inline-flex items-center rounded px-1.5 py-0.5 align-middle text-[10px] font-medium bg-amber-500/15 text-amber-300"
+                          title={d.update_verification === 'key-unreadable'
+                            ? 'A signing key is configured but unreadable — this device refuses every update'
+                            : 'Updates on this device are verified by SHA-256 only — no signing key is pinned'}
+                        >
+                          {d.update_verification === 'key-unreadable' ? 'updates blocked' : 'updates unverified'}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-5 py-3 text-slate-300">{d.owner_name}</td>
                     <td className="px-5 py-3 text-slate-400 text-xs">{d.model || d.hw_model || '—'}</td>
                     <td className="px-5 py-3 text-slate-400">

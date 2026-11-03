@@ -257,3 +257,75 @@ describe('route ordering — literal before parameterised', () => {
     expect(res.body).toHaveProperty('version');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Update-key pinning (B-006 / S193)
+//
+// The agent refuses *every* update when update_public_key is configured but the
+// file cannot be read. So the generated config may name the pin only when the
+// installer actually stages the key — "unpinned" must mean an absent field, not
+// a path to nothing.
+// ---------------------------------------------------------------------------
+
+describe('update-key pinning in generated installers (B-006)', () => {
+  const DEVICE = { id: 'dev-1', hostname: 'DEV-PIN', owner_name: 'Owner', status: 'active' };
+  const PLAT = installer.helpers.getPlatformConfig('win');
+  let tmp;
+  let agentBin;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'updpin-'));
+    agentBin = path.join(tmp, 'lockdown-agent.exe');
+    fs.writeFileSync(agentBin, Buffer.from('MZ-fake-agent'));
+    delete process.env.UPDATE_PUBLIC_KEY_PEM;
+  });
+
+  afterEach(() => {
+    delete process.env.UPDATE_PUBLIC_KEY_PEM;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test('omits update_public_key when no key is provisioned', () => {
+    const config = installer.helpers.buildDeviceConfig(DEVICE, 'https://srv', 'key-123');
+
+    // Absent, not null/empty — the agent treats a configured-but-unreadable path
+    // as "refuse every update".
+    expect(config).not.toHaveProperty('update_public_key');
+  });
+
+  test('names the installed path when a key is provisioned', () => {
+    const config = installer.helpers.buildDeviceConfig(DEVICE, 'https://srv', 'key-123', '/keys/update_signing.pub');
+
+    expect(config.update_public_key).toBe('C:\\ProgramData\\LockdownAgent\\update_signing.pub');
+  });
+
+  test('ships the key in the ZIP so the installer can stage it', () => {
+    const keyPath = path.join(tmp, 'update_signing.pub');
+    const keyBytes = '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n';
+    fs.writeFileSync(keyPath, keyBytes);
+
+    const config = installer.helpers.buildDeviceConfig(DEVICE, 'https://srv', 'key-123', keyPath);
+    const files = installer.helpers.assembleZipFiles(
+      config, DEVICE, 'win', agentBin, null, PLAT, null, keyPath
+    );
+
+    const shipped = files.find((f) => f.name === 'update_signing.pub');
+    expect(shipped).toBeTruthy();
+    expect(shipped.data.toString()).toBe(keyBytes);
+    // The config the ZIP carries points at the path the installer will create.
+    const configFile = files.find((f) => f.name === 'config.json');
+    expect(JSON.parse(configFile.data.toString()).update_public_key)
+      .toBe('C:\\ProgramData\\LockdownAgent\\update_signing.pub');
+  });
+
+  test('omits the key from the ZIP when there is nothing to stage', () => {
+    const config = installer.helpers.buildDeviceConfig(DEVICE, 'https://srv', 'key-123');
+    const files = installer.helpers.assembleZipFiles(
+      config, DEVICE, 'win', agentBin, null, PLAT
+    );
+
+    expect(files.find((f) => f.name === 'update_signing.pub')).toBeUndefined();
+    expect(JSON.parse(files.find((f) => f.name === 'config.json').data.toString()))
+      .not.toHaveProperty('update_public_key');
+  });
+});

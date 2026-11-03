@@ -390,8 +390,54 @@ def enroll_device_with_token(server_url: str, token: str, hostname: str, owner_n
 # ---------------------------------------------------------------------------
 
 
+# Filename of the detached-signature public key the agent pins for updates. It is
+# only ever named in config.json when the file is actually staged on the target:
+# a configured-but-missing path makes the agent refuse every future update
+# (agent.py fails closed on a pinned key), which would silently stop patching.
+UPDATE_KEY_FILENAME = "update_signing.pub"
+
+
+def staged_update_public_key(installer_dir: Path | None = None) -> str:
+    """Return the path of a staged update public key, or "" when none is staged."""
+    base = installer_dir or Path(__file__).parent
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).parent
+    candidate = base / UPDATE_KEY_FILENAME
+    return str(candidate) if candidate.is_file() else ""
+
+
+def install_update_public_key(source: str | Path | None = None) -> str:
+    """Copy a staged update public key into INSTALL_DIR; return its final path.
+
+    The pin must name a path that outlives this run. Naming the installer's own
+    directory (a download folder, typically) works only until that folder is
+    cleaned — and then the agent refuses *every* update, because it fails closed
+    on a configured key it cannot read. That is the one way this feature can be
+    worse than being unpinned, so a copy failure falls back to "" (unpinned,
+    hash-only, reported at check-in) instead of naming an unusable path.
+    """
+    candidate = Path(source) if source else Path(staged_update_public_key() or "")
+    if not candidate.is_file():
+        return ""
+
+    dest = INSTALL_DIR / UPDATE_KEY_FILENAME
+    try:
+        INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+        if candidate.resolve() != dest.resolve():
+            shutil.copy2(candidate, dest)
+    except OSError as exc:  # pragma: no cover - depends on host filesystem
+        print_warn(f"Could not install {UPDATE_KEY_FILENAME} to {INSTALL_DIR}: {exc}")
+        return ""
+    return str(dest)
+
+
 def build_config(
-    server_url: str, api_key: str, hostname: str, device_id: str, boot_lock_enabled: bool = True
+    server_url: str,
+    api_key: str,
+    hostname: str,
+    device_id: str,
+    boot_lock_enabled: bool = True,
+    update_public_key: str = "",
 ) -> dict:
     """The single definition of a provisioned config.json.
 
@@ -402,7 +448,7 @@ def build_config(
     back to its own defaults — which put the lockdown folder somewhere else than
     the enrolled path does.
     """
-    return {
+    config = {
         "server_url": server_url.rstrip("/"),
         "api_key": api_key,
         "hostname": hostname,
@@ -416,14 +462,25 @@ def build_config(
         "verify_tls": True,
         "server_supports_ack_dedup": True,
     }
+    # Only present when a key was actually provisioned — see UPDATE_KEY_FILENAME.
+    if update_public_key:
+        config["update_public_key"] = update_public_key
+    return config
 
 
 def write_config(
-    server_url: str, api_key: str, hostname: str, device_id: str, boot_lock_enabled: bool = True
+    server_url: str,
+    api_key: str,
+    hostname: str,
+    device_id: str,
+    boot_lock_enabled: bool = True,
+    update_public_key: str = "",
 ) -> Path:
     """Write the agent config.json to the install directory."""
 
-    config = build_config(server_url, api_key, hostname, device_id, boot_lock_enabled)
+    config = build_config(
+        server_url, api_key, hostname, device_id, boot_lock_enabled, update_public_key
+    )
 
     print_step(2, f"Writing config to {CONFIG_FILE}...")
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
@@ -464,6 +521,7 @@ def load_baked_config(config_path: Path) -> dict:
         "api_key": api_key,
         "device_id": data.get("device_id") or "",
         "boot_lock_enabled": data.get("boot_lock_enabled", True),
+        "update_public_key": data.get("update_public_key", ""),
     }
 
 
@@ -494,12 +552,40 @@ def run_baked_install(config_path: Path, boot_lock_enabled: bool | None = None) 
 
     use_boot_lock = baked["boot_lock_enabled"] if boot_lock_enabled is None else boot_lock_enabled
 
+    # A per-device dashboard can bake the pin; otherwise use a key staged beside
+    # the installer. Either way the key is copied into INSTALL_DIR first: the pin
+    # must name a path that survives this run (see install_update_public_key).
+    staged = next(
+        (
+            path
+            for path in (
+                config_path.parent / UPDATE_KEY_FILENAME,
+                # The dashboard names the installed path; if the operator unpacked
+                # the key there by hand it is a valid source, but it is still
+                # copied, never pinned in place.
+                Path(baked.get("update_public_key") or ""),
+                Path(staged_update_public_key() or ""),
+            )
+            if path.is_file()
+        ),
+        None,
+    )
+    pinned = install_update_public_key(staged) if staged else ""
+    if pinned:
+        print_ok(f"Update key pinned: {pinned}")
+    else:
+        print_warn(
+            "No update_signing.pub staged — updates will be SHA-256-verified only "
+            "(unauthenticated; see docs/CODE_SIGNING.md)"
+        )
+
     write_config(
         baked["server_url"],
         baked["api_key"],
         baked["hostname"],
         baked["device_id"],
         boot_lock_enabled=use_boot_lock,
+        update_public_key=pinned,
     )
     installed_agent = install_files(agent_exe)
     create_lockdown_folder()
@@ -872,7 +958,19 @@ def main():
 
     # --- Step 2: Write config ---
     boot_lock = not args.no_boot_lock
-    write_config(server_url, api_key, hostname, device_id, boot_lock_enabled=boot_lock)
+    pinned = install_update_public_key()
+    if pinned:
+        print_ok(f"Update key pinned: {pinned}")
+    else:
+        print_warn("No update_signing.pub staged — updates will be SHA-256-verified only")
+    write_config(
+        server_url,
+        api_key,
+        hostname,
+        device_id,
+        boot_lock_enabled=boot_lock,
+        update_public_key=pinned,
+    )
 
     # --- Step 3: Install files ---
     installed_agent = install_files(agent_exe)

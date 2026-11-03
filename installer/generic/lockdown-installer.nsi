@@ -238,6 +238,12 @@ Section "Install"
   ; inline PowerShell probe when the watchdog exe is absent.
   File /nonfatal "${STAGE}\lockdown-watchdog.exe"
   File /nonfatal "${STAGE}\lockdown-lockscreen.exe"
+  ; The pinned Ed25519 update key. Optional: without it the agent accepts updates
+  ; verified only by the hash served beside the binary (B-006), which it now
+  ; reports per device at check-in. installer.py only names the pin in config.json
+  ; when this file is actually present — a configured-but-missing key would make
+  ; the agent refuse every future update.
+  File /nonfatal "${STAGE}\update_signing.pub"
 
   DetailPrint "Enrolling this machine with $ServerUrl ..."
   ; agent/installer.py --silent: enroll via POST /api/enroll/claim, write

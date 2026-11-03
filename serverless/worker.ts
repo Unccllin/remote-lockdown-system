@@ -59,6 +59,11 @@ interface Device {
   // Populated from checkin metadata (KV-RACE-001), not stored on `devices`.
   firmware_audit?: Record<string, unknown> | null;
   firmware_audit_at?: string | null;
+  // update_verification: "signature" when the agent has a pinned update key and
+  // will only apply detached-signature-verified updates, "sha256-only" when it
+  // would accept whatever this backend serves (B-006). Reported per check-in so
+  // the operator can see which devices are unauthenticated for updates.
+  update_verification?: 'signature' | 'sha256-only' | 'key-unreadable';
 }
 
 /** A hardware-test artifact uploaded by hw_test_harness v2.0 (D-129 evidence). */
@@ -582,6 +587,24 @@ interface CheckinMetadata {
   // KV-RACE-001 separation and is refreshed every checkin.
   firmware_audit?: Record<string, unknown> | null;
   firmware_audit_at?: string | null;
+  // How the device verifies updates (B-006). Absent means it never reported one;
+  // "unknown" is not the same fact as "unverified".
+  update_verification?: 'signature' | 'sha256-only' | 'key-unreadable';
+}
+
+/**
+ * Accept only the two modes the agent can report.
+ *
+ * An unrecognised or absent value must stay null (unknown) rather than be coerced
+ * — "unknown" and "unverified" are different facts, and the dashboard shows them
+ * differently.
+ */
+function normalizeUpdateVerification(
+  value: unknown,
+): 'signature' | 'sha256-only' | 'key-unreadable' | undefined {
+  return value === 'signature' || value === 'sha256-only' || value === 'key-unreadable'
+    ? value
+    : undefined;
 }
 
 async function getCheckinMetadata(env: Env, deviceId: string): Promise<CheckinMetadata | null> {
@@ -606,6 +629,7 @@ function mergeCheckinMetadata(device: Device, metadata: CheckinMetadata | null):
     serial_number: metadata.serial_number ?? device.serial_number,
     firmware_audit: metadata.firmware_audit ?? device.firmware_audit ?? null,
     firmware_audit_at: metadata.firmware_audit_at ?? device.firmware_audit_at ?? null,
+    update_verification: metadata.update_verification ?? null,
   };
 }
 
@@ -770,11 +794,20 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   const devices = await listDevices(env);
   const idx = devices.findIndex((d) => d.id === device.id);
   if (idx >= 0) {
+    // A ping is a partial heartbeat. Spread the stored metadata so fields this
+    // payload does not carry — firmware_audit, a previously reported
+    // update_verification — survive: replacing the object wholesale dropped the
+    // firmware audit until the next full check-in.
+    const existing = await getCheckinMetadata(env, device.id);
     await saveCheckinMetadata(env, device.id, {
+      ...existing,
       last_checkin: new Date().toISOString(),
       mac_address: mac_address || devices[idx].mac_address,
       hardware_uuid: hardware_uuid || devices[idx].hardware_uuid,
       serial_number: serial_number || devices[idx].serial_number,
+      update_verification:
+        normalizeUpdateVerification(payload.update_verification)
+        ?? existing?.update_verification,
     });
   }
 
@@ -942,6 +975,10 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
     return errorResponse('Device not found', 404);
   }
   // Save checkin metadata to a separate KV key (the fix for KV-RACE-001)
+  // update_verification falls back to the stored value when this check-in omits
+  // it, mirroring the Express server's `COALESCE($6, update_verification)`: an
+  // older agent must not reset a known mode to "unknown" on every check-in.
+  const existingMetadata = await getCheckinMetadata(env, device.id);
   await saveCheckinMetadata(env, device.id, {
     last_checkin: new Date().toISOString(),
     mac_address: mac_address || devices[idx].mac_address,
@@ -949,6 +986,9 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
     serial_number: serial_number || devices[idx].serial_number,
     firmware_audit: firmwareAudit,
     firmware_audit_at: firmwareAudit ? new Date().toISOString() : null,
+    update_verification:
+      normalizeUpdateVerification(payload.update_verification)
+      ?? existingMetadata?.update_verification,
   });
   // Do NOT call saveDevices() here — that would race with the ACK handler.
 

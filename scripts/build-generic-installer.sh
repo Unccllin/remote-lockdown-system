@@ -91,6 +91,15 @@ for f in "$STAGE/lockdown-watchdog.exe" "$STAGE/lockdown-lockscreen.exe"; do
   [ -f "$f" ] || info "optional companion not staged: $(basename "$f")"
 done
 
+# The update-signing public key. Without it the installed agent verifies updates
+# by SHA-256 only (unauthenticated) and says so at check-in; with it, unsigned
+# updates are refused. See scripts/generate-update-keys.sh.
+if [ -f "$STAGE/update_signing.pub" ]; then
+  info "update key staged: ${STAGE}/update_signing.pub (updates will be signature-verified)"
+else
+  info "no update_signing.pub staged — installed agents will accept SHA-256-only updates"
+fi
+
 # makensis: system, then the local unpacked tree (which needs NSISDIR because its
 # stubs live beside it, not in /usr/share/nsis).
 MAKENSIS=""

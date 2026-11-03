@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import DeviceDetailPage from '../src/pages/DeviceDetailPage';
 import { setupUser } from './setup';
@@ -792,5 +792,60 @@ describe('DeviceDetailPage', () => {
       expect(screen.getByText('DEV-001')).toBeInTheDocument();
     }, { timeout: 3000 });
     expect(screen.queryByText('Lock Applied from Service Session')).not.toBeInTheDocument();
+  });
+
+  // B-006 / S193: how this device verifies updates.
+  describe('update verification', () => {
+    function mockDevice(overrides) {
+      api.get.mockImplementation((url) => {
+        if (url.startsWith('/devices/1') && !url.includes('location')) {
+          return Promise.resolve({ data: { ...baseDevice, ...overrides } });
+        }
+        return Promise.resolve({ data: [] });
+      });
+    }
+
+    it('says a pinned device refuses unsigned updates', async () => {
+      mockDevice({ update_verification: 'signature' });
+
+      renderWithRouter();
+
+      await waitFor(() => {
+        expect(screen.getByText('Signature-pinned')).toBeInTheDocument();
+      }, { timeout: 3000 });
+      expect(screen.getByText(/Unsigned or invalidly-signed updates are refused/i)).toBeInTheDocument();
+    });
+
+    it('warns that an unpinned device would apply an unauthenticated update', async () => {
+      mockDevice({ update_verification: 'sha256-only' });
+
+      renderWithRouter();
+
+      await waitFor(() => {
+        expect(screen.getByText(/SHA-256 only — unauthenticated/i)).toBeInTheDocument();
+      }, { timeout: 3000 });
+      expect(screen.getByText(/Stage update_signing\.pub beside the agent/i)).toBeInTheDocument();
+    });
+
+    it('reports a configured-but-unreadable key as updates being refused', async () => {
+      // Not the same failure as "unverified": nothing is applied at all here.
+      mockDevice({ update_verification: 'key-unreadable' });
+
+      renderWithRouter();
+
+      await waitFor(() => {
+        expect(screen.getByText(/Signing key unreadable — updates refused/i)).toBeInTheDocument();
+      }, { timeout: 3000 });
+    });
+
+    it('shows "Not reported" when the device has never said', async () => {
+      mockDevice({});
+
+      renderWithRouter();
+
+      await waitFor(() => {
+        expect(screen.getByText('Not reported')).toBeInTheDocument();
+      }, { timeout: 3000 });
+    });
   });
 });

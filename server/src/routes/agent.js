@@ -89,7 +89,9 @@ async function findDevice(hostname, mac_address, hardware_uuid) {
 /**
  * Update device check-in timestamp and populate hardware identity if missing.
  */
-async function updateDeviceCheckin(deviceId, hostname, macAddress, hardwareUuid, firmwareAudit) {
+async function updateDeviceCheckin(
+  deviceId, hostname, macAddress, hardwareUuid, firmwareAudit, updateVerification
+) {
   await pool.query(
     `UPDATE devices
        SET last_checkin   = NOW(),
@@ -97,11 +99,25 @@ async function updateDeviceCheckin(deviceId, hostname, macAddress, hardwareUuid,
            mac_address    = COALESCE($2, mac_address),
            hardware_uuid  = COALESCE($3, hardware_uuid),
            firmware_audit = COALESCE($5, firmware_audit),
-           firmware_audit_at = CASE WHEN $5 IS NOT NULL THEN NOW() ELSE firmware_audit_at END
+           firmware_audit_at = CASE WHEN $5 IS NOT NULL THEN NOW() ELSE firmware_audit_at END,
+           update_verification = COALESCE($6, update_verification)
      WHERE id = $4`,
     [hostname, macAddress || null, hardwareUuid || null, deviceId,
-     firmwareAudit ? JSON.stringify(firmwareAudit) : null]
+     firmwareAudit ? JSON.stringify(firmwareAudit) : null,
+     updateVerification || null]
   );
+}
+
+/**
+ * Accept only the two update-verification modes the agent can report.
+ *
+ * Absent or unrecognised stays NULL (unknown) rather than being coerced: the
+ * dashboard distinguishes "this device has never said" from "this device accepts
+ * unauthenticated updates".
+ */
+function normalizeUpdateVerification(value) {
+  const modes = ['signature', 'sha256-only', 'key-unreadable'];
+  return modes.includes(value) ? value : null;
 }
 
 /**
@@ -289,7 +305,12 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
     && typeof req.body.firmware_audit === 'object'
     && !Array.isArray(req.body.firmware_audit))
     ? req.body.firmware_audit : null;
-  await updateDeviceCheckin(device.id, hostname, mac_address, hardware_uuid, firmwareAudit);
+  // B-006: how this device verifies updates ("signature" | "sha256-only"), so the
+  // dashboard can show which devices would accept an unauthenticated binary.
+  const updateVerification = normalizeUpdateVerification(req.body.update_verification);
+  await updateDeviceCheckin(
+    device.id, hostname, mac_address, hardware_uuid, firmwareAudit, updateVerification
+  );
 
   // Phase 5: Expire stale pending commands (older than COMMAND_EXPIRY_DAYS).
   await expireStaleCommands(device.id);

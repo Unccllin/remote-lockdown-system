@@ -818,3 +818,30 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-048
+  statement: 'Update authenticity is end-to-end only when a signing key is provisioned: every config generator
+    (agent/installer.py, agent/installer_gui.py, server routes/installer.js, the Worker''s generated script
+    and the generic NSIS installer) names update_public_key only when update_signing.pub is actually staged,
+    and both installers copy it into C:\ProgramData\LockdownAgent and pin that installed path — never
+    the staging/download folder, because the agent fails closed on a configured-but-unreadable key and
+    would refuse every future update. Unpinned agents accept SHA-256-only updates and report update_verification
+    (signature | sha256-only | key-unreadable) at check-in; both backends store it (Express COALESCE,
+    Worker merge) and the dashboard shows it per device and per row.'
+  domain: agent/update
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'server 733 passed (+11: 6 check-in mode tests, 1 SQLite migration column test, 4 installer
+    pinning tests); agent 763 (+3 pinning/copy tests); serverless 404 (+6 mode/ping tests); dashboard
+    203 (+6 badge/card tests); ruff + eslint clean; SQLite migration 014 verified to fail the new test
+    when removed'
+  source: agent/installer.py install_update_public_key; agent/installer_gui.py; server/src/routes/installer.js
+    resolveUpdatePublicKey + TARGET_UPDATE_KEY_PATH; serverless/worker.ts CheckinMetadata.update_verification;
+    server/src/db/migrations{,-sqlite}/014_update_verification.sql; docs/CODE_SIGNING.md
+  asserted: '2026-11-03'
+  last_verified: '2026-11-03'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Verified by 7 route tests, 6 worker tests, 6 dashboard tests, 3+4 installer tests. Not hardware-verified;
+    authenticity still waits on the owner PFX (D-130) for the binaries themselves.

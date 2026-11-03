@@ -730,6 +730,32 @@ export default function DeviceDetailPage() {
         </div>
       </div>
 
+      {/* Update verification (B-006). The agent reports how it verifies updates:
+          a pinned Ed25519 key ("signature") or the hash served beside the binary
+          ("sha256-only"). Unknown means it has never reported — which is not the
+          same fact as unverified. */}
+      <div className="card mb-6">
+        <p className="text-xs text-slate-400 mb-1">Update verification</p>
+        <p className="text-sm font-medium text-slate-200">
+          {device.update_verification === 'signature'
+            ? 'Signature-pinned'
+            : device.update_verification === 'sha256-only'
+              ? 'SHA-256 only — unauthenticated'
+              : device.update_verification === 'key-unreadable'
+                ? 'Signing key unreadable — updates refused'
+                : 'Not reported'}
+        </p>
+        <p className="text-xs text-slate-500 mt-1">
+          {device.update_verification === 'sha256-only'
+            ? 'This device would apply an update whose only check is the hash served with it. Stage update_signing.pub beside the agent and re-run the installer to pin a signing key.'
+            : device.update_verification === 'signature'
+              ? 'Unsigned or invalidly-signed updates are refused on this device.'
+              : device.update_verification === 'key-unreadable'
+                ? 'A signing key is configured but cannot be read, so this device refuses every update. Check that update_signing.pub exists at the configured path.'
+                : 'This agent has not reported its update verification mode yet.'}
+        </p>
+      </div>
+
       {/* Hardware Identity — physical-machine identifiers that persist even
           if the hostname changes (e.g. after theft). Lets the admin confirm
           they are looking at the right physical box. */}

@@ -198,3 +198,63 @@ class TestDownloadUpdate:
             agent.download_update(cfg, "https://srv/dl", sha, "2.0.0", signature=sig)
         assert pend.exists()
         assert any("key domains" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# update_verification_mode — the mode reported at check-in (S193)
+# ---------------------------------------------------------------------------
+
+
+def test_mode_is_sha256_only_when_no_key_is_pinned():
+    """Unpinned: the hash served beside the binary is the only check."""
+    assert agent.update_verification_mode({}) == "sha256-only"
+
+
+def test_mode_is_signature_when_the_pinned_key_loads(update_keypair):
+    """Pinned and readable: unsigned updates are refused."""
+    _private, pub_path = update_keypair
+    cfg = {"update_public_key": str(pub_path)}
+    assert agent.update_verification_mode(cfg) == "signature"
+
+
+def test_mode_reports_an_unreadable_pin_rather_than_sha256_only(tmp_path):
+    """A configured-but-missing key refuses every update — say so.
+
+    Reporting this state as "sha256-only" would tell the operator that updates
+    are still being applied unauthenticated, when in fact none are applied at all.
+    """
+    cfg = {"update_public_key": str(tmp_path / "nope.pub")}
+    assert agent.update_verification_mode(cfg) == "key-unreadable"
+
+
+def test_checkin_reports_the_verification_mode(tmp_path, update_keypair):
+    """Every check-in carries the mode, so the dashboard can show it per device."""
+    _private, pub_path = update_keypair
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"command": None}
+
+    def _capture(endpoint, cfg, body, **_kwargs):
+        captured["endpoint"] = endpoint
+        captured["body"] = body
+        return _Resp()
+
+    cfg = {
+        "hostname": "HOST-1",
+        "server_url": "https://x",
+        "verify_tls": True,
+        "update_public_key": str(pub_path),
+    }
+    with patch.object(agent, "_post_with_fallback", _capture):
+        agent.checkin(cfg)
+
+    assert captured["endpoint"] == "/api/agent/checkin"
+    assert captured["body"]["update_verification"] == "signature"
