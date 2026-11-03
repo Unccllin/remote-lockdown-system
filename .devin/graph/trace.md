@@ -6549,3 +6549,183 @@ when `update_public_key` is configured — otherwise it accepts a hash alone. Cl
 that gap (make the pinned key mandatory for the serverless default) or state
 explicitly in the docs that a Worker deployment without a pinned key is
 hash-only.
+
+---
+
+## Session 193 — 2026-11-03 (updates are pinned end-to-end, or the device says they are not)
+
+### RULE-ZERO
+
+**Read**: `.devin/PENDING-RULING.md` (S193 update-pinning ruling, Q1(A)+Q2(A),
+closed), the uncommitted S193 working tree, `.devin/graph/current-state.md`,
+`.devin/graph/GRAPH-SPEC.yaml`, `docs/CODE_SIGNING.md`,
+`server/src/db/migrationRunner.js` + `migrations/` vs `migrations-sqlite/`,
+`server/src/routes/agent.js` (`updateDeviceCheckin`), `server/src/routes/installer.js`
+(`buildDeviceConfig`/`assembleZipFiles`/`TARGET_UPDATE_KEY_PATH`),
+`serverless/worker.ts` (`CheckinMetadata`, `handlePing`, `handleAgentCheckin`),
+`agent/installer.py` (`INSTALL_DIR`, `install_files`, `run_baked_install`),
+`agent/installer_gui.py`, `agent/agent.py` (`update_verification_mode`),
+`server/tests/{agent.routes,installer.routes,migrationIdempotency}.test.js`,
+`serverless/worker.test.ts`, `dashboard/tests/{DevicesPage,DeviceDetailPage.rendering}.test.jsx`.
+
+**Finding**: session 193's implementation was in the working tree and unrecorded,
+with three defects that made it unsafe to ship as-is.
+
+1. **No SQLite migration.** `migrations/014_update_verification.sql` existed;
+   `migrations-sqlite/014` did not. `updateDeviceCheckin` writes the column
+   unconditionally, so every check-in on a SQLite deployment would fail with
+   `no such column: update_verification`. The PGlite suite applied 14 migrations
+   and the SQLite suite 13 — the gap was visible in the test log and in nothing else.
+2. **Both installers pinned the staging path.** `staged_update_public_key()`
+   returned the key beside `installer.exe` (a download folder) and named *that* in
+   `config.json`. The agent fails closed on a configured-but-unreadable key, so
+   cleaning the download folder silently stops every future update — the one
+   outcome the ruling said must not happen ("a config may only name
+   `update_public_key` when the `.pub` file is actually staged on the target").
+3. **The Worker's ping wiped the firmware audit.** `handlePing` replaced the
+   check-in metadata object wholesale, dropping `firmware_audit` (and the new
+   mode) until the next full check-in.
+
+Also found: `CheckinMetadata` in `worker.ts` had no `update_verification` field, so
+the in-flight code was an excess-property error that only ran because vitest does
+not typecheck; `dashboard/tests/DeviceDetailPage.rendering.test.jsx` carried two
+unused imports, meaning `npx eslint .` was **not** clean at HEAD despite the docs
+saying it was; and `agent/tests/test_installer.py`'s bare `import installer`
+resolves to the repo-root `installer/` namespace directory (the NSIS sources) under
+static analysis, making 43 real attributes look missing.
+
+### IMPLEMENT
+
+- `server/src/db/migrations-sqlite/014_update_verification.sql` — the missing
+  dialect half; without it check-in dies on SQLite.
+- `agent/installer.py` — new `install_update_public_key()`: copies a staged
+  `update_signing.pub` into `C:\ProgramData\LockdownAgent` and returns **that**
+  path (or `""` on failure, which means unpinned/hash-only rather than a path to
+  nothing). `run_baked_install` searches beside the baked config, then the baked
+  field, then beside the exe, and always copies. `main()` does the same.
+- `agent/installer_gui.py` — mirrors it; the wizard is normally launched from the
+  download folder, which is exactly the path that must not be pinned. Also
+  replaced `ctypes.windll` / `subprocess.CREATE_NO_WINDOW` with `getattr`-resolved
+  constants and typed the tkinter fallback `Any`, so the module imports and
+  type-checks on the host that runs the suite (its own docstring requires that).
+- `serverless/worker.ts` — `CheckinMetadata.update_verification` declared;
+  `/api/ping` now merges into the stored metadata instead of replacing it;
+  both handlers fall back to the last reported mode when a check-in omits it,
+  matching Express's `COALESCE($6, update_verification)`.
+- `agent/tests/test_installer.py` — loads `agent/installer.py` by path (registered
+  in `sys.modules` so the existing `patch("installer.requests.post")` strings still
+  resolve) to remove the namespace-directory ambiguity.
+- `pyrightconfig.json` — declares the Windows target platform and scopes `agent/`
+  as an execution environment. 65 LSP findings in `installer_gui.py` were the
+  checker reading Windows-only APIs (`ctypes.windll`, `CREATE_NO_WINDOW`,
+  optional tkinter) as Linux; platform is a property of the target, not the host.
+- Docs: `docs/CODE_SIGNING.md` gains "Agent update signing — the Ed25519 pin
+  (B-006)" (what it buys, how it is provisioned, the three modes, and the explicit
+  statement that a deployment without a pin is hash-only);
+  `server/.env.example` documents `UPDATE_PUBLIC_KEY_PEM`.
+
+### Fog cleared
+
+- **Whether the pin could safely name the staging path**: no. `agent.py` fails
+  closed on a configured-but-unreadable key, so a pin into a download folder
+  converts "keys were provisioned" into "updates stopped silently". Proven by
+  `test_baked_install_pins_the_installed_copy_not_the_download_folder`, which
+  deletes the download copy afterwards and asserts the named path still resolves.
+- **Whether the two backends agree on a partial check-in**: they did not. Express
+  COALESCEs, the Worker overwrote. Now both keep the last reported mode, and the
+  ping path additionally stops discarding `firmware_audit`.
+- **What a missing mode means**: unknown, not unverified. `key-unreadable` is a
+  third state — the device refuses every update — so it is rendered and stored
+  separately rather than folded into `sha256-only`.
+
+### Fog remaining
+
+- Authenticity is still not end-to-end for the *binaries*: they are not
+  Authenticode-signed (D-130, owner PFX). The pin authenticates update metadata
+  only; a first-install binary is still trusted by transport hash.
+- No key is provisioned in this environment: `secrets/` is empty, so no live
+  deployment exercises the `signature` mode yet. `scripts/generate-update-keys.sh`
+  creates the pair but the CI secret and Worker `agent_release` signing step are
+  unconfigured.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
+  residual (D-132); 19 Dependabot alerts; Cloudflare observability/backup (item 10).
+- The Worker's download routes remain unauthenticated (deliberate, unreviewed).
+
+### Debt items closed
+
+- None. (B-006 was already refuted→B-036 in S0.6; this session closes the *pin
+  provisioning* gap, recorded as belief B-048 at code-read.)
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130 — also blocks a
+  genuinely authentic first install), Cloudflare credentials, real domain, a
+  Windows host to run a generated installer, and now an owner decision to
+  provision a live update keypair into CI.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, twice): the SQLite half of
+  migration 014 was missing and nothing asserted a *behavioural* property of the
+  dialect split — the migration test compared a version list, and the check-in
+  route test used a mocked pool, so neither could see the dead column. The new
+  test writes the real column on SQLite and fails when the file is removed
+  (verified by removing it). Same shape on the Worker: 43 attributes read as
+  missing because the import was ambiguous, and no test exercised type checking.
+- **Layer 2 — context provision** (secondary): the ruling carried the
+  "only name a staged key" constraint in prose, but the implementation's helper
+  returned the staging path and the docstring said "staged". One sentence naming
+  the *installed* path would have produced the correct helper the first time.
+- **Layer 1 — task specification**: the in-flight work had no trace block, so the
+  next session had to reconstruct intent from a diff. Under-specified handoff, not
+  missing capability.
+
+### VERIFY
+
+- `server`: **733 passed** (722 + 11), 43 suites; eslint clean.
+- `agent`: **763 passed** (760 + 3); `ruff check` + `ruff format --check` clean on
+  55 files.
+- `serverless`: **404 passed** (398 + 6); `tsc --noEmit -p .` clean.
+- `dashboard`: **203 passed** (197 + 6); `npx eslint .` clean (the two unused
+  imports in `DeviceDetailPage.rendering.test.jsx` were pre-existing at HEAD and
+  are now removed).
+- `electron`: 30 passed. `make test-coverage` exits 0 for all five components.
+  `make graph-check`: all invariants pass. `make lint-workflows` exit 0;
+  `shellcheck scripts/generate-update-keys.sh` exit 0.
+- Tests assert behaviour, not shape: the SQLite test exercises the real
+  `COALESCE` write and fails without the migration; the Worker tests assert the
+  mode survives a partial check-in and that a ping no longer drops
+  `firmware_audit`; the installer tests delete the download copy and assert the
+  pinned path still resolves; the dashboard tests distinguish the three modes plus
+  "not reported" rather than matching a class name.
+
+### Session artifacts
+
+- Changed: `agent/agent.py`, `agent/installer.py`, `agent/installer_gui.py`,
+  `agent/tests/test_agent_update_signature.py`, `agent/tests/test_installer.py`,
+  `server/src/routes/agent.js`, `server/src/routes/installer.js`,
+  `server/src/db/migrations/014_update_verification.sql` (new),
+  `server/src/db/migrations-sqlite/014_update_verification.sql` (new),
+  `server/tests/{agent.routes,installer.routes,migrationIdempotency}.test.js`,
+  `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `dashboard/src/pages/{DevicesPage,DeviceDetailPage}.jsx`,
+  `dashboard/tests/{DevicesPage,DeviceDetailPage.rendering}.test.jsx`,
+  `installer/generic/lockdown-installer.nsi`,
+  `scripts/build-generic-installer.sh`, `scripts/generate-update-keys.sh` (new),
+  `docs/CODE_SIGNING.md`, `server/.env.example`, `pyrightconfig.json` (new),
+  `.devin/PENDING-RULING.md`, `.devin/brain/` (B-048).
+- Commit: `600a88b`.
+
+### Next session opening
+
+Give the pinned path something to verify against: provision a real update keypair
+(`scripts/generate-update-keys.sh`), wire the private half into the release job so
+`agent_release` metadata carries a signature, and then prove one device flips from
+`sha256-only` to `signature` on a real install — the first hardware evidence for
+E-AUTO-UPDATE.
+
+---

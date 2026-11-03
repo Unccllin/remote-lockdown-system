@@ -53,87 +53,111 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 192 — 2026-11-03 (installer downloads are verified before they run)
+## Latest session: 193 — 2026-11-03 (updates are pinned end-to-end, or the device says they are not)
 
 ### Fog cleared
-- **Whether a published digest or a derived one is safer here**: derived. A
-  `binary:<name>.sha256` sidecar is a second artefact that can drift from the
-  bytes it describes — the exact class of bug S186–S191 kept finding. Computing
-  the digest per response makes drift impossible by construction.
-- **What the header actually proves**: transport integrity only. It cannot serve
-  as an authenticity claim, because it arrives from the same origin as the body.
-  Recorded in `serverless/README.md` next to the publish steps so the next reader
-  cannot mistake it for signing.
-- **Whether `Invoke-WebRequest -OutFile` can be used with header verification**:
-  no. `-OutFile` returns no object on PowerShell 5.1, so there is no response to
-  read the digest from. The script now fetches the body into memory, verifies it,
-  writes it with `[System.IO.File]::WriteAllBytes`, and fails closed if the body
-  is not bytes.
+
+- **Whether the pin could safely name the staging path**: no. `agent.py` fails
+  closed on a configured-but-unreadable key, so a pin into a download folder
+  converts "keys were provisioned" into "updates stopped silently". Proven by
+  `test_baked_install_pins_the_installed_copy_not_the_download_folder`, which
+  deletes the download copy afterwards and asserts the named path still resolves.
+- **Whether the two backends agree on a partial check-in**: they did not. Express
+  COALESCEs, the Worker overwrote. Now both keep the last reported mode, and the
+  ping path additionally stops discarding `firmware_audit`.
+- **What a missing mode means**: unknown, not unverified. `key-unreadable` is a
+  third state — the device refuses every update — so it is rendered and stored
+  separately rather than folded into `sha256-only`.
 
 ### Fog remaining
-- Authenticity is still missing: the binaries are not Authenticode-signed, so a
-  tampered *script* carries a tampered digest and runs. This waits on the owner
-  PFX, the same blocker as D-130, and is the reason the header is documented as
-  transport integrity rather than a fix for tampering.
-- One unexplained test failure appeared once under `--coverage` (1 failed / 397
-  passed) and did not reproduce in four subsequent runs (three plain, one with
-  coverage). Not diagnosed; recorded rather than asserted as fixed.
-- The Worker's download routes are still unauthenticated (a deliberate,
-  still-unreviewed difference from Express).
+
+- Authenticity is still not end-to-end for the *binaries*: they are not
+  Authenticode-signed (D-130, owner PFX). The pin authenticates update metadata
+  only; a first-install binary is still trusted by transport hash.
+- No key is provisioned in this environment: `secrets/` is empty, so no live
+  deployment exercises the `signature` mode yet. `scripts/generate-update-keys.sh`
+  creates the pair but the CI secret and Worker `agent_release` signing step are
+  unconfigured.
 - Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
-  residual (D-132); 19 Dependabot alerts; Cloudflare observability/backup (item
-  10).
+  residual (D-132); 19 Dependabot alerts; Cloudflare observability/backup (item 10).
+- The Worker's download routes remain unauthenticated (deliberate, unreviewed).
 
 ### Debt items closed
-- None.
+
+- None. (B-006 was already refuted→B-036 in S0.6; this session closes the *pin
+  provisioning* gap, recorded as belief B-048 at code-read.)
 
 ### Debt items still open
+
 - D-120, D-129, D-130, D-134 — all resource-blocked.
 
 ### Blockers
-- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130 — now also the
-  blocker for installer authenticity), Cloudflare credentials (Worker publish),
-  real domain (Caddy TLS), a Windows host to run a generated installer.
+
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130 — also blocks a
+  genuinely authentic first install), Cloudflare credentials, real domain, a
+  Windows host to run a generated installer, and now an owner decision to
+  provision a live update keypair into CI.
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (primary): the suite could not have caught
-  this. Nothing asserted that a downloaded artefact was checked before execution,
-  so "it installs" was the only property tested. The new tests assert the check
-  itself — header present on all three download routes, digest equal to the served
-  bytes, script verification lines, and five `_download_verified` failure modes
-  including a truncated body whose digest was recomputed.
-- **Layer 1 — task specification** (the recurring one): the S191 opening named
-  "integrity checking" in one line, and the scope question (which clients) was
-  only answerable after reading `installer_gui.py`. Asking "who else consumes
-  this contract" before writing the opening would have produced a complete task
-  description a session earlier.
+
+- **Layer 4 — verification feedback** (primary, twice): the SQLite half of
+  migration 014 was missing and nothing asserted a *behavioural* property of the
+  dialect split — the migration test compared a version list, and the check-in
+  route test used a mocked pool, so neither could see the dead column. The new
+  test writes the real column on SQLite and fails when the file is removed
+  (verified by removing it). Same shape on the Worker: 43 attributes read as
+  missing because the import was ambiguous, and no test exercised type checking.
+- **Layer 2 — context provision** (secondary): the ruling carried the
+  "only name a staged key" constraint in prose, but the implementation's helper
+  returned the staging path and the docstring said "staged". One sentence naming
+  the *installed* path would have produced the correct helper the first time.
+- **Layer 1 — task specification**: the in-flight work had no trace block, so the
+  next session had to reconstruct intent from a diff. Under-specified handoff, not
+  missing capability.
 
 ### VERIFY
 
-- `serverless`: **398 passed** (395 + 3); coverage **90.05 / 83.55 / 95.6 /
-  92.09** against floors 82/75/86/82.
-- `agent`: **750 passed** (743 + 7); `ruff check` + `ruff format --check` clean on
+- `server`: **733 passed** (722 + 11), 43 suites; eslint clean.
+- `agent`: **763 passed** (760 + 3); `ruff check` + `ruff format --check` clean on
   55 files.
-- New tests assert behaviour, not shape: the digest header equals the SHA-256 of
-  the body actually served, all three download routes carry it, both artefacts in
-  the generated script are verified, and `_download_verified` refuses a missing
-  header, a non-200, a mismatched digest, and a truncated body — leaving no
-  `.part` file behind in any failure case.
+- `serverless`: **404 passed** (398 + 6); `tsc --noEmit -p .` clean.
+- `dashboard`: **203 passed** (197 + 6); `npx eslint .` clean (the two unused
+  imports in `DeviceDetailPage.rendering.test.jsx` were pre-existing at HEAD and
+  are now removed).
+- `electron`: 30 passed. `make test-coverage` exits 0 for all five components.
+  `make graph-check`: all invariants pass. `make lint-workflows` exit 0;
+  `shellcheck scripts/generate-update-keys.sh` exit 0.
+- Tests assert behaviour, not shape: the SQLite test exercises the real
+  `COALESCE` write and fails without the migration; the Worker tests assert the
+  mode survives a partial check-in and that a ping no longer drops
+  `firmware_audit`; the installer tests delete the download copy and assert the
+  pinned path still resolves; the dashboard tests distinguish the three modes plus
+  "not reported" rather than matching a class name.
 
 ### Session artifacts
-- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
-  `serverless/README.md`, `agent/installer_gui.py`,
-  `agent/tests/test_installer_gui.py`, `.devin/PENDING-RULING.md` (S192 ruling
-  opened + closed).
-- Commit: `66cf0c4`.
+
+- Changed: `agent/agent.py`, `agent/installer.py`, `agent/installer_gui.py`,
+  `agent/tests/test_agent_update_signature.py`, `agent/tests/test_installer.py`,
+  `server/src/routes/agent.js`, `server/src/routes/installer.js`,
+  `server/src/db/migrations/014_update_verification.sql` (new),
+  `server/src/db/migrations-sqlite/014_update_verification.sql` (new),
+  `server/tests/{agent.routes,installer.routes,migrationIdempotency}.test.js`,
+  `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `dashboard/src/pages/{DevicesPage,DeviceDetailPage}.jsx`,
+  `dashboard/tests/{DevicesPage,DeviceDetailPage.rendering}.test.jsx`,
+  `installer/generic/lockdown-installer.nsi`,
+  `scripts/build-generic-installer.sh`, `scripts/generate-update-keys.sh` (new),
+  `docs/CODE_SIGNING.md`, `server/.env.example`, `pyrightconfig.json` (new),
+  `.devin/PENDING-RULING.md`, `.devin/brain/` (B-048).
+- Commit: `600a88b`.
 
 ### Next session opening
-Decide whether the agent's own downloads join the same contract: `/api/download/agent`
-is what the updater fetches too, and the agent verifies the Ed25519 signature only
-when `update_public_key` is configured — otherwise it accepts a hash alone. Close
-that gap (make the pinned key mandatory for the serverless default) or state
-explicitly in the docs that a Worker deployment without a pinned key is
-hash-only.
+
+Give the pinned path something to verify against: provision a real update keypair
+(`scripts/generate-update-keys.sh`), wire the private half into the release job so
+`agent_release` metadata carries a signature, and then prove one device flips from
+`sha256-only` to `signature` on a real install — the first hardware evidence for
+E-AUTO-UPDATE.
 
 ---
 
