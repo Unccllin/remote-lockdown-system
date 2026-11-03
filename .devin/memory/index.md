@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-03 08:15:56
-Active memories: 815 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-03 08:48:41
+Active memories: 846 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -32,6 +32,37 @@ Active memories: 815 | Superseded: 0 | Decayed: 20
 | m-040 | The EFI_HTTP_PROTOCOL uses token-based async API ( |  | 0.60 | 2026-08-18 | 0.255 | 0 |  |
 | m-016 | MISTAKE: Used wrong MSS1 signature byte order (0x4 |  | 0.60 | 2026-08-18 | 0.255 | 0 |  |
 | m-001 | EDK2 GenerateCapsule --signer-private-cert needs a |  | 0.60 | 2026-08-18 | 0.255 | 0 |  |
+| m-854 | Worker Device gains pbl_device_id?: string | null; |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-847 | All eight KV readers now use parseKvJson(raw, key) |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-842 | Remaining parity gaps: installer/agent-version, li |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-840 | 6 tests + 3 mutations (auth, version comparison, m |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-857 | HW test artifacts are the D-129 evidence path: wit |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-865 | The linter's 'unused' list contained both real dea |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-852 | Business rules preserved from Express: one firmwar |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-848 | 361 tests pass; coverage 89.05/83.01/93.08/90.77;  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-862 | Integrations inventory is a 442-line connector sub |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-858 | Real bug found: the artifact list sorted by create |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-838 | Implemented handleAgentUpdate in serverless/worker |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-845 | Serve /api/installer/agent-version from the same a |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-851 | Two more route-ordering traps of the same shape as |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-836 | The shipped defaults already point at the Worker ( |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-860 | integrations is NOT an endpoint port: 442 lines ac |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-837 | The agent calls GET /api/agent/update (agent.py:32 |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-853 | rotate-key test asserts the property that matters: |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-843 | MISTAKE: mistake: earlier I treated 'the Worker ha |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-850 | MISTAKE: mistake (avoided): the installer route-or |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-849 | Remaining parity: link-pbl/unlink-pbl/by-pbl, rota |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-846 | /api/devices/:id/location/latest must return the N |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-855 | 371 tests; coverage 89.07/83.08/93.52/91.09; three |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-864 | Unknown must stay null, not false: 'never attempte |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-859 | List responses carry summary rows only (no artifac |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-861 | 378 tests; coverage 89.36/82.83/93.92/91.42; four  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-841 | Owner decisions this session: Worker is THE backen |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-856 | Pre-existing dead code in worker.ts confirmed at H |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-844 | /api/installer/:deviceId is matched by an anchored |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-839 | Release publishing is two wrangler kv key put call |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-866 | 385 tests; coverage 89.48/83.30/93.95/91.52; four  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-863 | SECOND live defect on the default path: handleComm |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-698 | MISTAKE: Wrote commit_ref 1fa4a5b into GRAPH-SPEC. |  | 0.50 | 2026-11-02 | 0.247 | 0 |  |
 | m-716 | PlatformState.c accepts EFI_CERT_SHA256 in dbx (pa |  | 0.50 | 2026-11-02 | 0.247 | 0 |  |
 | m-721 | MISTAKE: mistake: left a session's work (EnrollKey |  | 0.50 | 2026-11-02 | 0.247 | 0 |  |
