@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-03 08:48:41
-Active memories: 846 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-03 10:47:31
+Active memories: 866 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -17,6 +17,7 @@ Active memories: 846 | Superseded: 0 | Decayed: 20
 | m-020 | When splitting a UEFI driver into multiple .c file |  | 0.65 | 2026-08-18 | 0.276 | 0 |  |
 | m-022 | sfdisk can create GPT partitions in image files: s |  | 0.65 | 2026-08-18 | 0.276 | 0 |  |
 | m-021 | OVMF requires GPT with ESP type code (C12A7328-F81 |  | 0.65 | 2026-08-18 | 0.276 | 0 |  |
+| m-242 | MISTAKE: mistake: The previous session's convergen |  | 0.55 | 2026-11-03 | 0.275 | 0 |  |
 | m-249 | Build passes: PblApp.efi = 28,672 bytes, SHA-256 4 |  | 0.50 | 2026-09-07 | 0.265 | 0 |  |
 | m-042 | MISTAKE: Tried to use UefiRuntimeLib in DXE_DRIVER |  | 0.60 | 2026-08-18 | 0.255 | 0 |  |
 | m-015 | QEMU pc-bios files are in separate packages: seabi |  | 0.60 | 2026-08-18 | 0.255 | 0 |  |
@@ -35,34 +36,54 @@ Active memories: 846 | Superseded: 0 | Decayed: 20
 | m-854 | Worker Device gains pbl_device_id?: string | null; |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-847 | All eight KV readers now use parseKvJson(raw, key) |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-842 | Remaining parity gaps: installer/agent-version, li |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-885 | serverless/worker.ts still generates sc.exe instal |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-840 | 6 tests + 3 mutations (auth, version comparison, m |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-875 | GET /api/audit already returns most-recent-first ( |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-857 | HW test artifacts are the D-129 evidence path: wit |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-882 | Electron carries almost no request surface of its  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-879 | enable_pba was hardcoded false in the Worker's che |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-869 | Tally now five behaviours found by 'client sends,  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-865 | The linter's 'unused' list contained both real dea |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-852 | Business rules preserved from Express: one firmwar |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-848 | 361 tests pass; coverage 89.05/83.01/93.08/90.77;  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-874 | Fix: on an executed ACK the Worker writes agent_<t |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-862 | Integrations inventory is a 442-line connector sub |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-858 | Real bug found: the artifact list sorted by create |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-838 | Implemented handleAgentUpdate in serverless/worker |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-845 | Serve /api/installer/agent-version from the same a |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-851 | Two more route-ordering traps of the same shape as |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-836 | The shipped defaults already point at the Worker ( |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-867 | The field sweep found three more gaps, all in hand |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-860 | integrations is NOT an endpoint port: 442 lines ac |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-837 | The agent calls GET /api/agent/update (agent.py:32 |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-884 | NSIS ${GetOptions} sets the output to an empty str |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-853 | rotate-key test asserts the property that matters: |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-880 | The agent's consumption of the check-in response i |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-886 | MISTAKE: mistake: wrote the ruling from the Expres |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-873 | Consequence: the fields restored in sessions 185 ( |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-843 | MISTAKE: mistake: earlier I treated 'the Worker ha |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-870 | The dashboard is the cheapest oracle: it reads fou |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-850 | MISTAKE: mistake (avoided): the installer route-or |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-849 | Remaining parity: link-pbl/unlink-pbl/by-pbl, rota |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-846 | /api/devices/:id/location/latest must return the N |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-876 | The dashboard REQUEST direction was already clean: |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-855 | 371 tests; coverage 89.07/83.08/93.52/91.09; three |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-864 | Unknown must stay null, not false: 'never attempte |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-868 | The sweep also CLEARED things: lockdown->locked, u |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-883 | 392 tests; coverage 89.53/83.53/95.02/91.56; three |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-859 | List responses carry summary rows only (no artifac |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-861 | 378 tests; coverage 89.36/82.83/93.92/91.42; four  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-871 | 387 tests; coverage 89.52/83.24/95.02/91.55; three |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-841 | Owner decisions this session: Worker is THE backen |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-881 | bitlocker_pin/bitlocker_recovery_password are NOT  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-856 | Pre-existing dead code in worker.ts confirmed at H |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-877 | 389 tests; coverage 89.53/83.53/95.02/91.56; three |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-844 | /api/installer/:deviceId is matched by an anchored |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-839 | Release publishing is two wrangler kv key put call |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-866 | 385 tests; coverage 89.48/83.30/93.95/91.52; four  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-863 | SECOND live defect on the default path: handleComm |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-878 | MISTAKE: mistake: I fixed the STORAGE of a signal  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
+| m-872 | The dashboard's lockdown-effectiveness panel does  |  | 0.50 | 2026-11-03 | 0.250 | 0 |  |
 | m-698 | MISTAKE: Wrote commit_ref 1fa4a5b into GRAPH-SPEC. |  | 0.50 | 2026-11-02 | 0.247 | 0 |  |
 | m-716 | PlatformState.c accepts EFI_CERT_SHA256 in dbx (pa |  | 0.50 | 2026-11-02 | 0.247 | 0 |  |
 | m-721 | MISTAKE: mistake: left a session's work (EnrollKey |  | 0.50 | 2026-11-02 | 0.247 | 0 |  |
@@ -651,7 +672,6 @@ Active memories: 846 | Superseded: 0 | Decayed: 20
 | m-241 | 4 real trace reviewer failures remain in pre-PBL s |  | 0.50 | 2026-09-07 | 0.133 | 0 |  |
 | m-245 | Source file survey: PblApp.c 190 lines (scaffold w |  | 0.50 | 2026-09-07 | 0.133 | 0 |  |
 | m-257 | Binary grew 4KB: 32,768→36,864 bytes. SHA changed  |  | 0.50 | 2026-09-07 | 0.133 | 0 |  |
-| m-242 | MISTAKE: mistake: The previous session's convergen |  | 0.50 | 2026-09-07 | 0.133 | 0 |  |
 | m-250 | This unblocks D-109 (server can now generate signe |  | 0.50 | 2026-09-07 | 0.133 | 0 |  |
 | m-240 | MISTAKE: mistake: Trace.md had inaccurate line cou |  | 0.50 | 2026-09-07 | 0.133 | 0 |  |
 | m-256 | D-115 updated: blocker changed from 'empty stubs'  |  | 0.50 | 2026-09-07 | 0.133 | 0 |  |
