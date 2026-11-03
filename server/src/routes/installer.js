@@ -31,10 +31,16 @@
  * The ZIP contains:
  *   - lockdown-agent (or .exe)   — the standalone agent binary
  *   - lockdown-watchdog (or .exe) — the process monitor
+ *   - lockdown-installer.exe      — the CLI installer (Windows only)
  *   - config.json                 — device-specific config (server_url, api_key, hostname)
- *   - install.ps1 (Windows)       — PowerShell install script (registers NSSM service)
+ *   - install.ps1 (Windows)       — wrapper that runs lockdown-installer.exe
  *   - install.sh (Linux/macOS)    — Shell install script (systemd service)
  *   - README.txt                  — Quick start instructions
+ *
+ * Both Windows installers (the ZIP's install.ps1 and the NSIS exe) delegate to
+ * lockdown-installer.exe --config-file, i.e. agent/installer.py. Persistence is
+ * never implemented in a generated script: the only verified mechanism is the
+ * scheduled task + run key + tamper protection in agent/service_installer.py.
  */
 
 const express = require('express');
@@ -74,6 +80,9 @@ function getPlatformConfig(requestedPlatform) {
       ext: '.exe',
       agentName: 'lockdown-agent.exe',
       watchdogName: 'lockdown-watchdog.exe',
+      // The CLI installer the generated Windows installers delegate to
+      // (agent/installer.py → agent/installer.spec).
+      installerName: 'lockdown-installer.exe',
     };
   }
   return {
@@ -81,6 +90,7 @@ function getPlatformConfig(requestedPlatform) {
     ext: '',
     agentName: 'lockdown-agent',
     watchdogName: 'lockdown-watchdog',
+    installerName: null,
   };
 }
 
@@ -215,7 +225,14 @@ async function fetchReleaseInfo() {
     timeout: 15000,
   });
 
-  const release = JSON.parse(data.toString('utf8'));
+  let release;
+  try {
+    release = JSON.parse(data.toString('utf8'));
+  } catch (err) {
+    // A malformed API payload is a different failure from a missing binary —
+    // say which one happened instead of surfacing a bare SyntaxError.
+    throw new Error(`Invalid JSON from the GitHub releases API: ${err.message}`);
+  }
   if (!release || !release.assets) {
     throw new Error(`Invalid release response from GitHub API`);
   }
@@ -453,7 +470,14 @@ async function resolveDeviceAndBinaries(deviceId, platform) {
   }
 
   const watchdogBinPath = await resolveAgentBinary(platform, plat.watchdogName, 'lockdown-watchdog');
-  return { device, agentBinPath, watchdogBinPath, plat };
+
+  // The CLI installer both generated Windows installers delegate to. Windows
+  // only — the Linux install.sh keeps its systemd service path.
+  const installerBinPath = plat.installerName
+    ? await resolveAgentBinary(platform, plat.installerName, 'lockdown-installer')
+    : null;
+
+  return { device, agentBinPath, watchdogBinPath, installerBinPath, plat };
 }
 
 /**
@@ -522,9 +546,10 @@ function buildDeviceConfig(device, serverUrl, apiKey) {
  * @param {string} agentBinPath - path to the resolved agent binary
  * @param {string|null} watchdogBinPath - path to the watchdog binary (or null)
  * @param {object} plat - platform config from getPlatformConfig()
+ * @param {string|null} [installerBinPath] - CLI installer staged into Windows ZIPs
  * @returns {Array<{name: string, data: Buffer}>}
  */
-function assembleZipFiles(config, device, platform, agentBinPath, watchdogBinPath, plat) {
+function assembleZipFiles(config, device, platform, agentBinPath, watchdogBinPath, plat, installerBinPath = null) {
   const files = [];
 
   // Agent binary
@@ -538,6 +563,16 @@ function assembleZipFiles(config, device, platform, agentBinPath, watchdogBinPat
     files.push({
       name: plat.watchdogName,
       data: fs.readFileSync(watchdogBinPath),
+    });
+  }
+
+  // CLI installer — install.ps1 is a thin wrapper that calls it, so the ZIP
+  // keeps working without NSSM (whose absence used to silently downgrade the
+  // install to a non-persistent Start-Process).
+  if (installerBinPath && plat.installerName && fs.existsSync(installerBinPath)) {
+    files.push({
+      name: plat.installerName,
+      data: fs.readFileSync(installerBinPath),
     });
   }
 
@@ -601,31 +636,48 @@ function findNsis() {
   } catch (_) { /* makensis not found via which — fall through */ }
   return null;
 }
-function generateNsisScript(config, hostname, agentBinPath, watchdogBinPath) {
-  const serviceName = 'LockdownAgent';
-  const watchdogServiceName = 'LockdownWatchdog';
-  const installDir = '$PROGRAMFILES64\\LockdownAgent';
-
+function generateNsisScript(config, hostname, agentBinPath, watchdogBinPath, installerBinPath) {
+  const productName = 'Remote Lockdown Agent';
+  const installDir = '$APPDATA\\LockdownAgent';
   const hasWatchdog = watchdogBinPath && fs.existsSync(watchdogBinPath);
+
+  if (!installerBinPath || !fs.existsSync(installerBinPath)) {
+    // Fail loudly rather than emitting a script that installs the files and
+    // never starts the agent: the delegate is what performs enrolment-free
+    // install (config normalisation, scheduled task, tamper protection).
+    throw new Error(
+      'lockdown-installer.exe is required to build a per-device installer ' +
+        '(build it with agent/installer.spec — see scripts/build-generic-installer.sh for staging)'
+    );
+  }
 
   // Encode config.json as base64 so we don't have to deal with NSIS string
   // escaping of JSON quotes, backslashes, and ${} variable references.
   // NSIS writes the base64 to a temp file, then uses certutil to decode it.
   const configB64 = Buffer.from(JSON.stringify(config), 'utf8').toString('base64');
 
+  const nsisPath = (p) => p.replace(/\\/g, '\\\\');
+
   return `; NSIS Installer Script — Remote Lockdown Agent
 ; Device: ${hostname}
 ; Generated: ${new Date().toISOString()}
 ; Auto-generated by the Remote Lockdown admin server. Do not edit manually.
+;
+; This script only packages. Persistence, config normalisation, the lockdown
+; folder, tamper protection and check-in verification are performed by
+; lockdown-installer.exe --config-file (agent/installer.py), the same installer
+; a fleet deployment runs — so there is one install path, not two. An earlier
+; version registered \`sc.exe\` services here; the agent implements no SCM
+; handshake, so Windows failed those services with 1053 and terminated the
+; process about 30 seconds after every boot.
 
-!define PRODUCT_NAME "Remote Lockdown Agent"
+!define PRODUCT_NAME "${productName}"
 !define PRODUCT_VERSION "1.0.0"
 !define PRODUCT_PUBLISHER "Remote Lockdown"
-!define SERVICE_NAME "${serviceName}"
-!define WATCHDOG_SERVICE_NAME "${watchdogServiceName}"
 !define DEVICE_HOSTNAME "${hostname.replace(/"/g, '')}"
 !define SERVER_URL "${config.server_url.replace(/"/g, '')}"
 !define CONFIG_B64 "${configB64}"
+!define INSTALLER_EXE "lockdown-installer.exe"
 
 ; --- Basic installer configuration ---
 Name "\${PRODUCT_NAME} — \${DEVICE_HOSTNAME}"
@@ -636,27 +688,41 @@ ShowInstDetails show
 ShowUnInstDetails show
 SetCompressor /SOLID lzma
 
+; agent/installer.py installs into %ProgramData%\\LockdownAgent and the agent
+; keeps its state there. NSIS has no $COMMONAPPDATA; $APPDATA becomes
+; C:\\ProgramData once SetShellVarContext is set (done in .onInit).
 InstallDir "${installDir}"
-InstallDirRegKey HKLM "Software\\\${PRODUCT_NAME}" "InstallDir"
 
 ; --- Modern UI ---
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
+!include "nsDialogs.nsh"
+
+Var UninstallToken
+Var InstallResult
+Var Dialog
+Var TokenField
 
 ; MUI Settings
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "Remote Lockdown Agent — Anti-Theft Protection"
-!define MUI_WELCOMEPAGE_TEXT "This wizard will install the Remote Lockdown Agent on this device.\\r\\n\\r\\nDevice: \${DEVICE_HOSTNAME}\\r\\nServer: \${SERVER_URL}\\r\\n\\r\\nThe agent runs silently in the background and protects this device if it is ever lost or stolen.\\r\\n\\r\\nClick Next to continue."
+!define MUI_WELCOMEPAGE_TEXT "This wizard installs the Remote Lockdown Agent on this device.\\r\\n\\r\\nDevice: \${DEVICE_HOSTNAME}\\r\\nServer: \${SERVER_URL}\\r\\n\\r\\nThe device is already enrolled: its credentials are inside this installer, so nothing has to be typed in.\\r\\n\\r\\nClick Next to continue."
 
 ; --- Wizard pages ---
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "license.txt"
-!insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
 ; --- Uninstaller pages ---
+; Removal is authorized by the backend, not by local administrator rights: the
+; agent's binary, config and state files carry DENY-DELETE ACLs that only a
+; verified uninstall token removes.
+!define MUI_UNWELCOMEPAGE_TITLE "Remove the Remote Lockdown Agent"
+!define MUI_UNWELCOMEPAGE_TEXT "Removal is authorized by the backend. You need a short-lived uninstall token — request one for this device from the admin dashboard.\\r\\n\\r\\nWithout a valid token nothing is removed: the agent is protected against removal by design, so a lost device cannot be disarmed by whoever holds it."
 !insertmacro MUI_UNPAGE_WELCOME
+UninstPage custom un.TokenPageShow un.TokenPageLeave
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
@@ -664,35 +730,60 @@ InstallDirRegKey HKLM "Software\\\${PRODUCT_NAME}" "InstallDir"
 ; --- Languages ---
 !insertmacro MUI_LANGUAGE "English"
 
-; --- Embedded files ---
-; The agent binary and config are embedded inside the .exe and extracted
-; during installation. This means the user gets a single .exe with
-; everything bundled — no ZIP extraction needed.
+Function .onInit
+  SetShellVarContext all ; $APPDATA = C:\\ProgramData
+  StrCpy $INSTDIR "$APPDATA\\LockdownAgent"
+  ; A repair/re-install must land on the directory the agent and its ACLs live in.
+  ReadRegStr $0 HKLM "Software\\\${PRODUCT_NAME}" "InstallDir"
+  \${If} $0 != ""
+    StrCpy $INSTDIR $0
+  \${EndIf}
+FunctionEnd
 
+; --- Install ---
 Section "Agent" SecAgent
   SectionIn RO ; Required section
 
   SetOutPath "$INSTDIR"
 
-  ; Write agent binary (embedded in installer)
-  File "${agentBinPath.replace(/\\/g, '\\\\')}"
+  ; Binaries. lockdown-installer.exe is mandatory: it is the install step below
+  ; and the only thing that can authorize a later removal.
+  File "${nsisPath(agentBinPath)}"
+  File "${nsisPath(installerBinPath)}"
+${hasWatchdog ? `  File "${nsisPath(watchdogBinPath)}"` : ''}
 
-  ; Write watchdog binary if available
-${hasWatchdog ? `  File "${watchdogBinPath.replace(/\\/g, '\\\\')}"` : ''}
-
-  ; Write config.json — decode from base64 using certutil (built into Windows)
-  ; This avoids NSIS string escaping issues with JSON quotes and backslashes
+  ; Write config.json — decode from base64 using certutil (built into Windows).
+  ; This avoids NSIS string escaping issues with JSON quotes and backslashes.
   FileOpen $0 "$INSTDIR\\config.b64" w
   FileWrite $0 "\${CONFIG_B64}"
   FileClose $0
   nsExec::ExecToLog 'certutil -decode "$INSTDIR\\config.b64" "$INSTDIR\\config.json"'
+  Pop $1
   Delete "$INSTDIR\\config.b64"
+  \${If} $1 != "0"
+    MessageBox MB_ICONSTOP "Could not write the device configuration (certutil exit $1). Nothing has been installed."
+    Abort
+  \${EndIf}
 
-  ; Write uninstaller
+  DetailPrint "Installing the agent and starting it..."
+  ; --config-file: no enrolment and no token (the API key is baked into
+  ; config.json); the installer normalises the config, creates the lockdown
+  ; folder, installs the scheduled task + run key, applies tamper protection and
+  ; verifies check-in. Exit code 0 means all of that succeeded.
+  nsExec::ExecToLog '"$INSTDIR\\\${INSTALLER_EXE}" --config-file "$INSTDIR\\config.json" --silent'
+  Pop $InstallResult
+  \${If} $InstallResult != "0"
+    MessageBox MB_ICONSTOP "Installation failed (exit $InstallResult). See the details above.$\
+\\r$\
+\\n$\
+\\r$\
+\\nThe agent was not started. If the device record already exists, remove it from the dashboard before retrying."
+    Abort
+  \${EndIf}
+
   WriteUninstaller "$INSTDIR\\Uninstall.exe"
-
-  ; Store install dir in registry
   WriteRegStr HKLM "Software\\\${PRODUCT_NAME}" "InstallDir" "$INSTDIR"
+  WriteRegStr HKLM "Software\\\${PRODUCT_NAME}" "ServerUrl" "\${SERVER_URL}"
 
   ; --- Register in Add/Remove Programs ---
   WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\${PRODUCT_NAME}" "DisplayName" "\${PRODUCT_NAME}"
@@ -704,18 +795,6 @@ ${hasWatchdog ? `  File "${watchdogBinPath.replace(/\\/g, '\\\\')}"` : ''}
   WriteRegDWORD HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\${PRODUCT_NAME}" "NoModify" 1
   WriteRegDWORD HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\${PRODUCT_NAME}" "NoRepair" 1
 
-  ; --- Install Windows services ---
-  ; Use sc.exe (built into Windows) to create auto-start services
-  nsExec::ExecToLog 'sc.exe create $\{SERVICE_NAME} binPath= "\\"$INSTDIR\\lockdown-agent.exe\\" --config \\"$INSTDIR\\config.json\\"" start= auto DisplayName= "Remote Lockdown Agent"'
-  nsExec::ExecToLog 'sc.exe description $\{SERVICE_NAME} "Anti-theft agent for $\{DEVICE_HOSTNAME}"'
-${hasWatchdog ? `
-  nsExec::ExecToLog 'sc.exe create $\{WATCHDOG_SERVICE_NAME} binPath= "\\"$INSTDIR\\lockdown-watchdog.exe\\"" start= auto DisplayName= "Remote Lockdown Watchdog"'
-  nsExec::ExecToLog 'sc.exe description $\{WATCHDOG_SERVICE_NAME} "Monitors and restarts the Lockdown Agent"'` : ''}
-
-  ; Start the services
-  nsExec::ExecToLog 'sc.exe start $\{SERVICE_NAME}'
-${hasWatchdog ? `  nsExec::ExecToLog 'sc.exe start $\{WATCHDOG_SERVICE_NAME}'` : ''}
-
   ; Calculate installed size for Add/Remove Programs
   \${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
@@ -724,31 +803,91 @@ ${hasWatchdog ? `  nsExec::ExecToLog 'sc.exe start $\{WATCHDOG_SERVICE_NAME}'` :
 SectionEnd
 
 ; --- Uninstaller ---
-Section "Uninstall"
-  ; Stop and delete services
-  nsExec::ExecToLog 'sc.exe stop $\{SERVICE_NAME}'
-  nsExec::ExecToLog 'sc.exe delete $\{SERVICE_NAME}'
-  nsExec::ExecToLog 'sc.exe stop $\{WATCHDOG_SERVICE_NAME}'
-  nsExec::ExecToLog 'sc.exe delete $\{WATCHDOG_SERVICE_NAME}'
+Function un.onInit
+  SetShellVarContext all ; $APPDATA = C:\\ProgramData
+  \${un.GetParameters} $R0
+  StrCpy $UninstallToken ""
+  \${un.GetOptions} $R0 "--uninstall-token=" $UninstallToken
+  \${If} $UninstallToken == ""
+    \${un.GetOptions} $R0 "--uninstall-token" $UninstallToken
+    \${If} $UninstallToken != ""
+      StrCpy $R1 $UninstallToken 1
+      \${If} $R1 == " "
+      \${OrIf} $R1 == "="
+        StrCpy $UninstallToken $UninstallToken "" 1
+      \${EndIf}
+    \${EndIf}
+  \${EndIf}
 
-  ; Delete installed files
+  ReadRegStr $0 HKLM "Software\\\${PRODUCT_NAME}" "InstallDir"
+  \${If} $0 == ""
+    StrCpy $0 "$APPDATA\\LockdownAgent"
+  \${EndIf}
+  \${IfNot} \${FileExists} "$0\\\${INSTALLER_EXE}"
+    MessageBox MB_ICONSTOP "Cannot remove the agent: $0\\\${INSTALLER_EXE} is missing. Re-run the installer to repair before removing."
+    Abort
+  \${EndIf}
+FunctionEnd
+
+Function un.TokenPageShow
+  \${If} $UninstallToken != ""
+    Abort ; token supplied on the command line
+  \${EndIf}
+
+  !insertmacro MUI_HEADER_TEXT "Authorize removal" "Request a token from the dashboard, then paste it here."
+
+  nsDialogs::Create 1018
+  Pop $Dialog
+  \${If} $Dialog == error
+    Abort
+  \${EndIf}
+
+  \${NSD_CreateLabel} 0 0 100% 40u "Removal must be authorized by the backend. Request an uninstall token for this device from the admin dashboard, then paste it below. It is valid for 5 minutes."
+  Pop $0
+  \${NSD_CreateLabel} 0 44u 100% 12u "Uninstall token:"
+  Pop $0
+  \${NSD_CreateText} 0 57u 100% 12u ""
+  Pop $TokenField
+
+  nsDialogs::Show
+FunctionEnd
+
+Function un.TokenPageLeave
+  \${NSD_GetText} $TokenField $UninstallToken
+  \${If} $UninstallToken == ""
+    MessageBox MB_ICONEXCLAMATION "A valid uninstall token is required. The agent stays installed."
+    Abort
+  \${EndIf}
+FunctionEnd
+
+Section "Uninstall"
+  SetOutPath "$INSTDIR"
+  nsExec::ExecToLog '"$INSTDIR\\\${INSTALLER_EXE}" --uninstall --uninstall-token "$UninstallToken"'
+  Pop $InstallResult
+
+  \${If} $InstallResult != "0"
+    MessageBox MB_ICONSTOP "The backend did not authorize this removal (exit $InstallResult). Nothing has been removed — the agent is still installed and still checking in. Request a fresh token and try again."
+    Abort
+  \${EndIf}
+
+  ; Persistence (scheduled task, run key, tamper ACLs) is already gone.
   Delete "$INSTDIR\\lockdown-agent.exe"
   Delete "$INSTDIR\\lockdown-watchdog.exe"
   Delete "$INSTDIR\\config.json"
-  Delete "$INSTDIR\\Uninstall.exe"
+  Delete "$INSTDIR\\launch_agent.vbs"
   Delete "$INSTDIR\\agent.log"
   Delete "$INSTDIR\\watchdog.log"
+  Delete "$INSTDIR\\Uninstall.exe"
+  Delete "$INSTDIR\\\${INSTALLER_EXE}"
 
-  ; Remove install directory (only if empty)
   RMDir "$INSTDIR"
 
-  ; Remove registry entries
   DeleteRegKey HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\${PRODUCT_NAME}"
   DeleteRegKey HKLM "Software\\\${PRODUCT_NAME}"
 SectionEnd
 
 ; --- Finish page: offer to verify in dashboard ---
-!define MUI_FINISHPAGE_TEXT "Installation complete!\\r\\n\\r\\nThe agent is now running as a Windows service and will check in with the server automatically.\\r\\n\\r\\nYou can verify the device status in the admin dashboard."
+!define MUI_FINISHPAGE_TEXT "Installation complete!\\r\\n\\r\\nThe agent is running and will check in with the server automatically.\\r\\n\\r\\nYou can verify the device status in the admin dashboard."
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Open admin dashboard"
 !define MUI_FINISHPAGE_RUN_FUNCTION "OpenDashboard"
@@ -790,7 +929,8 @@ YOUR RIGHTS
   - Deletion: Request deletion of your data
   - Objection: Object to data processing
   - Portability: Receive your data in machine-readable format
-  - Withdrawal: Remove the agent at any time via Add/Remove Programs
+  - Withdrawal: Removal is authorized by your administrator — the dashboard
+    issues a short-lived uninstall token (Add/Remove Programs prompts for it)
 
 DATA SECURITY
   - All sensitive data is encrypted with AES-256-GCM
@@ -845,9 +985,6 @@ async function compileNsisInstaller(nsiContent, licenseContent) {
 }
 
 function generateInstallPs1(config, hostname) {
-  const serviceName = 'LockdownAgent';
-  const watchdogServiceName = 'LockdownWatchdog';
-  const installDir = 'C:\\Program Files\\LockdownAgent';
   // Security: single-quote-escape interpolated device/request fields so they
   // can never break out of their string literal in the generated script.
   const safeHostname = escapePs1(hostname);
@@ -859,13 +996,17 @@ function generateInstallPs1(config, hostname) {
 #
 # Run as Administrator: Right-click → Run with PowerShell
 # Or: powershell -ExecutionPolicy Bypass -File install.ps1
+#
+# This script is a thin wrapper. Installation is performed by
+# lockdown-installer.exe --config-file (agent/installer.py), which normalises
+# config.json, creates the lockdown folder, installs the scheduled task + run
+# key, applies tamper protection and verifies check-in. It used to register an
+# NSSM service instead, which silently fell back to a non-persistent
+# Start-Process whenever nssm.exe was not already on the machine.
 
 #Requires -RunAsAdministrator
 
 $ErrorActionPreference = "Stop"
-$serviceName = "${serviceName}"
-$watchdogServiceName = "${watchdogServiceName}"
-$installDir = "${installDir}"
 # Escaped device/request fields — use these variables, never interpolate raw.
 $deviceHostname = ${safeHostname}
 $serverUrl = ${safeServerUrl}
@@ -902,14 +1043,15 @@ if ($Host.Name -eq "ConsoleHost") {
     }
 } else {
     # Non-interactive (e.g., double-click): show dialog
+    $nl = [Environment]::NewLine
     Add-Type -AssemblyName Microsoft.VisualBasic
     $result = [Microsoft.VisualBasic.Interaction]::MsgBox(
-        "Remote Lockdown Agent will be installed on this device.\`n\`n" +
-        "This agent includes anti-theft tracking capabilities:\`n" +
-        "- If this device is reported stolen, location data will be collected\`n" +
-        "- The locked folder will be encrypted\`n" +
-        "- Boot loader may be locked (BIOS/UEFI)\`n\`n" +
-        "Location data is only collected when the device is flagged as stolen.\`n\`n" +
+        "Remote Lockdown Agent will be installed on this device.$nl$nl" +
+        "This agent includes anti-theft tracking capabilities:$nl" +
+        "- If this device is reported stolen, location data will be collected$nl" +
+        "- The locked folder will be encrypted$nl" +
+        "- Boot loader may be locked (BIOS/UEFI)$nl$nl" +
+        "Location data is only collected when the device is flagged as stolen.$nl$nl" +
         "Do you accept the EULA and acknowledge these capabilities?",
         4,  # vbYesNo
         "Remote Lockdown Agent — EULA Acceptance"
@@ -927,104 +1069,39 @@ if (-not $eulaAccepted) {
 Write-Host "EULA accepted. Proceeding with installation..." -ForegroundColor Green
 Write-Host ""
 
-# Create install directory
-if (!(Test-Path $installDir)) {
-    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+# --- Delegate to the CLI installer bundled beside this script ---
+$installerExe = Join-Path $PSScriptRoot "lockdown-installer.exe"
+$configFile = Join-Path $PSScriptRoot "config.json"
+
+if (!(Test-Path $installerExe)) {
+    Write-Host "ERROR: lockdown-installer.exe is missing from this package." -ForegroundColor Red
+    Write-Host "Download the installer ZIP again from the dashboard." -ForegroundColor Red
+    exit 1
+}
+if (!(Test-Path $configFile)) {
+    Write-Host "ERROR: config.json is missing from this package." -ForegroundColor Red
+    Write-Host "Download the installer ZIP again from the dashboard." -ForegroundColor Red
+    exit 1
 }
 
-# Copy binaries
-Copy-Item "lockdown-agent.exe" "$installDir\\lockdown-agent.exe" -Force
-Copy-Item "lockdown-watchdog.exe" "$installDir\\lockdown-watchdog.exe" -Force
-Write-Host "Binaries copied to $installDir"
-
-# Copy config
-Copy-Item "config.json" "$installDir\\config.json" -Force
-Write-Host "Config copied to $installDir\\config.json"
-
-# Check if NSSM is available (bundled or on PATH)
-$nssmPath = Join-Path $installDir "nssm.exe"
-if (!(Test-Path $nssmPath)) {
-    # Try PATH
-    $nssmPath = (Get-Command nssm.exe -ErrorAction SilentlyContinue).Source
+& $installerExe --config-file $configFile --silent
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Installation failed (exit $LASTEXITCODE)." -ForegroundColor Red
+    Write-Host "The agent was NOT started. Fix the cause above and re-run this script." -ForegroundColor Red
+    exit $LASTEXITCODE
 }
-
-if ($nssmPath) {
-    Write-Host "Using NSSM: $nssmPath"
-
-    # Install agent service
-    & $nssmPath install $serviceName "$installDir\\lockdown-agent.exe" --config "$installDir\\config.json"
-    & $nssmPath set $serviceName DisplayName "Remote Lockdown Agent"
-    & $nssmPath set $serviceName Description "Anti-theft agent for $deviceHostname"
-    & $nssmPath set $serviceName Start SERVICE_AUTO_START
-    & $nssmPath set $serviceName AppStdout "$installDir\\agent.log"
-    & $nssmPath set $serviceName AppStderr "$installDir\\agent.log"
-
-    # Install watchdog service
-    & $nssmPath install $watchdogServiceName "$installDir\\lockdown-watchdog.exe"
-    & $nssmPath set $watchdogServiceName DisplayName "Remote Lockdown Watchdog"
-    & $nssmPath set $watchdogServiceName Description "Monitors and restarts the Lockdown Agent"
-    & $nssmPath set $watchdogServiceName Start SERVICE_AUTO_START
-    & $nssmPath set $watchdogServiceName AppStdout "$installDir\\watchdog.log"
-    & $nssmPath set $watchdogServiceName AppStderr "$installDir\\watchdog.log"
-
-    # Start services
-    & $nssmPath start $serviceName
-    & $nssmPath start $watchdogServiceName
-
-    Write-Host "Services installed and started." -ForegroundColor Green
-} else {
-    Write-Host "NSSM not found. Starting agent directly..." -ForegroundColor Yellow
-    Write-Host "For production, install NSSM to run as a service." -ForegroundColor Yellow
-    Start-Process "$installDir\\lockdown-agent.exe" -ArgumentList "--config", "$installDir\\config.json" -WorkingDirectory $installDir
-    Write-Host "Agent started in background."
-}
-
-# --- Phase 7: Register uninstaller in Add/Remove Programs ---
-$uninstallerPath = "$installDir\\uninstall.ps1"
-# Create uninstaller script
-$uninstallerScript = @"
-#Requires -RunAsAdministrator
-Write-Host "Uninstalling Remote Lockdown Agent..." -ForegroundColor Yellow
-# Stop and remove services
-& nssm stop $serviceName 2>\`$null
-& nssm remove $serviceName confirm 2>\`$null
-& nssm stop $watchdogServiceName 2>\`$null
-& nssm remove $watchdogServiceName confirm 2>\`$null
-# Remove install directory
-Remove-Item "$installDir" -Recurse -Force -ErrorAction SilentlyContinue
-# Remove registry entry
-Remove-Item "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\LockdownAgent" -ErrorAction SilentlyContinue
-Write-Host "Uninstallation complete." -ForegroundColor Green
-"@
-Set-Content -Path $uninstallerPath -Value $uninstallerScript -Encoding UTF8
-
-# Register in Add/Remove Programs
-$regKey = "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\LockdownAgent"
-New-Item -Path $regKey -Force | Out-Null
-Set-ItemProperty -Path $regKey -Name "DisplayName" -Value "Remote Lockdown Agent"
-Set-ItemProperty -Path $regKey -Name "DisplayVersion" -Value "1.0.0"
-Set-ItemProperty -Path $regKey -Name "Publisher" -Value "Remote Lockdown"
-Set-ItemProperty -Path $regKey -Name "InstallLocation" -Value $installDir
-Set-ItemProperty -Path $regKey -Name "UninstallString" -Value "powershell -ExecutionPolicy Bypass -File \`"$uninstallerPath\`""
-Set-ItemProperty -Path $regKey -Name "DisplayIcon" -Value "$installDir\\lockdown-agent.exe"
-Set-ItemProperty -Path $regKey -Name "NoModify" -Value 1 -Type DWord
-Set-ItemProperty -Path $regKey -Name "NoRepair" -Value 1 -Type DWord
-Write-Host "Uninstaller registered in Add/Remove Programs." -ForegroundColor Green
 
 Write-Host ""
 Write-Host "Installation complete!" -ForegroundColor Green
 Write-Host "The agent will check in with the server at: $serverUrl"
 Write-Host "Verify checkin in the admin dashboard."
 Write-Host ""
-Write-Host "To uninstall: Use Add/Remove Programs or run: $uninstallerPath"
+Write-Host "Removal: this agent is tamper-protected by design. Request an uninstall"
+Write-Host "token for this device from the dashboard, then run:"
+Write-Host ('  & "' + $installerExe + '" --uninstall --uninstall-token <TOKEN>')
 `;
 }
 
-/**
- * Generate the Linux/macOS install script.
- * Installs the agent + watchdog as a systemd service.
- * Phase 7: Shows EULA + tracking disclosure before installation.
- */
 function generateInstallSh(config, hostname) {
   const serviceName = 'lockdown-agent';
   const watchdogServiceName = 'lockdown-watchdog';
@@ -1286,7 +1363,8 @@ For the full Terms of Service, see:
 https://github.com/unccllin/remote-lockdown-system/blob/main/docs/TERMS_OF_SERVICE.md
 
 To object to this agreement, do not install the software. If already
-installed, use the uninstall script or Add/Remove Programs to remove it.
+installed, request an uninstall token from the dashboard and run:
+  lockdown-installer.exe --uninstall --uninstall-token <TOKEN>
 `;
 }
 
@@ -1530,9 +1608,9 @@ router.get('/:deviceId', requireAuth, async (req, res) => {
   const platform = req.query.platform === 'linux' ? 'linux' : 'win';
 
   // Look up the device and resolve agent binaries (shared helper)
-  let device, agentBinPath, watchdogBinPath, plat;
+  let device, agentBinPath, watchdogBinPath, installerBinPath, plat;
   try {
-    ({ device, agentBinPath, watchdogBinPath, plat } = await resolveDeviceAndBinaries(deviceId, platform));
+    ({ device, agentBinPath, watchdogBinPath, installerBinPath, plat } = await resolveDeviceAndBinaries(deviceId, platform));
   } catch (err) {
     if (err.code === 'DEVICE_NOT_FOUND') {
       return res.status(404).json({ error: 'Device not found' });
@@ -1545,6 +1623,15 @@ router.get('/:deviceId', requireAuth, async (req, res) => {
       });
     }
     throw err;
+  }
+
+  // The Windows packages delegate installation to this binary; shipping the ZIP
+  // without it would leave install.ps1 with nothing to run.
+  if (plat.installerName && !installerBinPath) {
+    return res.status(503).json({
+      error: `Agent installer binary (${plat.installerName}) not found. ` +
+        `Build it with agent/installer.spec (agent/build.ps1) and publish it alongside the agent binary.`,
+    });
   }
 
   // Generate a new API key and update the device record (shared helper)
@@ -1561,7 +1648,7 @@ router.get('/:deviceId', requireAuth, async (req, res) => {
   const config = buildDeviceConfig(device, serverUrl, apiKey);
 
   // Assemble the files for the ZIP (shared helper)
-  const files = assembleZipFiles(config, device, platform, agentBinPath, watchdogBinPath, plat);
+  const files = assembleZipFiles(config, device, platform, agentBinPath, watchdogBinPath, plat, installerBinPath);
 
   // Build ZIP
   const zip = buildZip(files);
@@ -1591,9 +1678,9 @@ router.get('/:deviceId/nsis', requireAuth, async (req, res) => {
   }
 
   // Look up the device and resolve agent binaries (shared helper)
-  let device, agentBinPath, watchdogBinPath;
+  let device, agentBinPath, watchdogBinPath, installerBinPath;
   try {
-    ({ device, agentBinPath, watchdogBinPath } = await resolveDeviceAndBinaries(deviceId, platform));
+    ({ device, agentBinPath, watchdogBinPath, installerBinPath } = await resolveDeviceAndBinaries(deviceId, platform));
   } catch (err) {
     if (err.code === 'DEVICE_NOT_FOUND') {
       return res.status(404).json({ error: 'Device not found' });
@@ -1604,6 +1691,16 @@ router.get('/:deviceId/nsis', requireAuth, async (req, res) => {
       });
     }
     throw err;
+  }
+
+  // The generated installer delegates to this binary, so without it there is
+  // nothing to package (better a clear 503 than an installer that does nothing).
+  if (!installerBinPath) {
+    return res.status(503).json({
+      error: 'Agent installer binary (lockdown-installer.exe) not found. ' +
+        'Build it with agent/installer.spec (agent/build.ps1) and publish it alongside the agent binary.',
+      fallback: `Use the ZIP installer at /api/installer/${deviceId}?platform=win instead`,
+    });
   }
 
   // Generate a new API key for this device (shared helper)
@@ -1621,7 +1718,9 @@ router.get('/:deviceId/nsis', requireAuth, async (req, res) => {
 
   // Generate and compile the NSIS installer
   try {
-    const nsiScript = generateNsisScript(config, device.hostname, agentBinPath, watchdogBinPath);
+    const nsiScript = generateNsisScript(
+      config, device.hostname, agentBinPath, watchdogBinPath, installerBinPath
+    );
     const licenseText = generateNsisLicense(device.hostname);
     const exeBuffer = await compileNsisInstaller(nsiScript, licenseText);
 

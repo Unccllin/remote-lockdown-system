@@ -177,3 +177,63 @@ authorized by the index handle, `PcdPblTpmUsePlatformHierarchy` default FALSE,
 and provisioning scripts moved to the owner hierarchy so enrolment and firmware
 agree. D-134 closes on a QEMU run showing a real `device_id` on a fresh owner-
 provisioned TPM, plus the HP confirmation in the D-129 window.
+
+## Per-device installer ruling (opened 2026-11-03, session 190)
+
+The self-hosted dashboard's "one-click installer" button downloads an NSIS exe
+from `GET /api/installer/:deviceId/nsis`. It installs the agent as an `sc.exe`
+service. The agent has **no** `StartServiceCtrlDispatcher` (0 hits repo-wide), so
+the SCM starts the process, never receives a status report, fails the service
+with 1053 about 30 seconds later, and terminates it. The device checks in once
+and then goes dark on every boot.
+
+Session 189 fixed the serverless/generic installer by making it a wrapper over
+`agent/installer.py`, whose persistence is the only one verified on real hardware
+(HP box): scheduled task `SystemHealthMonitor` + HKLM Run key + VBS launcher +
+tamper-protection ACLs, in `%ProgramData%\LockdownAgent`.
+
+### Context that constrains the choice
+- Four install mechanisms exist, with three different install directories:
+  NSIS/`sc.exe` (Program Files), ZIP/`install.ps1` → NSSM or a bare
+  `Start-Process` (Program Files), CLI/GUI installer → scheduled task
+  (ProgramData), generic wrapper → the same.
+- The ZIP's `install.ps1` needs `nssm.exe`, which is neither bundled in the ZIP
+  nor a repo dependency; without it the script falls back to `Start-Process`,
+  i.e. no persistence at all. It also applies no tamper protection and no
+  Defender exclusion.
+- `buildDeviceConfig` (installer.js) emits `server_url`, `device_hostname`,
+  `api_key`, `poll_interval`, `sign_requests`, `server_supports_ack_dedup`,
+  `boot_lock_enabled`, `enrolled_at` (+ optional `google_api_key`).
+  `installer.py`'s `write_config` emits 12 keys including `device_id`,
+  `lockdown_folder`, `lock_sentinel`, `pending_ack_file`, `recovery_key_file`
+  and `verify_tls`.
+- A per-device installer has one property the generic one cannot have: no token
+  is needed on the target machine, because the API key is baked in.
+
+### Q1 — what should the per-device Windows installer do?
+
+- [x] Q1 — per-device install path → **(A) wrapper over `installer.py` with a
+      baked-config mode** (recommended). Add `--config-file` to installer.py
+      (skip enrollment, install from the provided config.json), and regenerate
+      `generateNsisScript` to stage `lockdown-installer.exe` + `config.json` +
+      the agent and call it — exactly the split adopted in S189, so `sc.exe`
+      disappears from the generator. Keeps "double-click, no token", keeps one
+      install engine, lands in `%ProgramData%\LockdownAgent` like everything
+      else. Cost: the generated .nsi changes, so the `nsis-compile` check in
+      `verify-environment.sh` and the installer.js unit tests need updating.
+
+### Q2 — what happens to the ZIP + `install.ps1` (NSSM) path?
+
+- [x] Q2 — ZIP path → **(A) ship `lockdown-installer.exe` in the ZIP and reduce
+      `install.ps1` to a thin wrapper** (recommended) — the ZIP keeps working as
+      the documented fallback and stops depending on NSSM. Alternative: leave it
+      (documented as NSSM-optional, so persistence silently varies by machine),
+      or delete the ZIP path entirely and serve only the exe.
+
+**Ruling closed 2026-11-03, session 190** — Q1 (A) + Q2 (A). Implementation:
+`--config-file` mode in `agent/installer.py` (install from a baked config, no
+enrolment), `generateNsisScript` regenerated to stage `lockdown-installer.exe` +
+`config.json` and delegate to it (no `sc.exe`), and `install.ps1` reduced to a
+wrapper over the same binary so the ZIP stops depending on NSSM. Uninstall stays
+server-authorized, matching the generic wrapper — which means the generated EULA
+must stop promising token-free removal from Add/Remove Programs.

@@ -301,3 +301,123 @@ def test_run_uninstall_without_service_installer_module(tmp_path, monkeypatch, c
 
     assert installer.run_uninstall("tok") == 1
     assert "service_installer" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# --config-file — the per-device install path (no enrolment, no token)
+# ---------------------------------------------------------------------------
+
+
+def _baked(path, **overrides):
+    """Write a per-device config.json like the dashboard generates."""
+    import json
+
+    data = {
+        "server_url": "https://backend.example/",
+        "device_hostname": "BAKED-HOST",
+        "api_key": "baked-key",
+        "poll_interval": 30,
+        "boot_lock_enabled": False,
+    }
+    data.update(overrides)
+    path.write_text(json.dumps(data))
+    return path
+
+
+def test_load_baked_config_accepts_the_dashboard_shape(tmp_path):
+    """device_hostname + api_key are what the server's generator emits."""
+    loaded = installer.load_baked_config(_baked(tmp_path / "c.json"))
+
+    assert loaded["server_url"] == "https://backend.example/"
+    assert loaded["hostname"] == "BAKED-HOST"
+    assert loaded["api_key"] == "baked-key"
+    assert loaded["boot_lock_enabled"] is False
+
+
+def test_load_baked_config_accepts_the_enrolled_keys(tmp_path):
+    """A config from the enrolment flow (hostname/agent_key) works too."""
+    path = _baked(tmp_path / "c.json")
+    path.write_text(
+        '{"server_url": "https://x", "hostname": "H", "agent_key": "k", "device_id": "dev-1"}'
+    )
+
+    loaded = installer.load_baked_config(path)
+    assert (loaded["hostname"], loaded["api_key"], loaded["device_id"]) == ("H", "k", "dev-1")
+
+
+def test_load_baked_config_rejects_a_config_without_the_api_key(tmp_path):
+    path = _baked(tmp_path / "c.json")
+    path.write_text('{"server_url": "https://x", "hostname": "H"}')
+
+    with pytest.raises(ValueError, match="server_url and api_key"):
+        installer.load_baked_config(path)
+
+
+def test_load_baked_config_reports_a_missing_file(tmp_path):
+    with pytest.raises(ValueError, match="not found"):
+        installer.load_baked_config(tmp_path / "nope.json")
+
+
+def test_run_baked_install_writes_the_full_normalised_config(tmp_path, monkeypatch):
+    """The baked path must produce the same 12 keys as the enrolment path.
+
+    The generated per-device config carries 8 keys; the agent then falls back to
+    its own defaults, which put the lockdown folder somewhere else than an
+    enrolled install does. Normalising here is what keeps the two identical.
+    """
+    import json
+
+    cfg = _baked(tmp_path / "baked.json")
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path / "installed")
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "installed" / "config.json")
+    monkeypatch.setattr(installer, "find_agent_exe", lambda: tmp_path / "lockdown-agent.exe")
+    monkeypatch.setattr(installer, "install_files", lambda p: p)
+    monkeypatch.setattr(installer, "create_lockdown_folder", lambda: None)
+    monkeypatch.setattr(installer, "install_service", lambda: True)
+    monkeypatch.setattr(installer, "verify_checkin", lambda url, key: True)
+    monkeypatch.setattr(installer, "print_summary", lambda *a, **k: None)
+
+    assert installer.run_baked_install(cfg) == 0
+
+    written = json.loads((tmp_path / "installed" / "config.json").read_text())
+    assert set(written) == set(installer.build_config("https://x", "k", "h", "d"))
+    assert written["api_key"] == "baked-key"
+    # The trailing slash in the generated server_url is normalised away, exactly
+    # as the enrolment path does.
+    assert written["server_url"] == "https://backend.example"
+    # boot_lock_enabled came from the baked config, not the default.
+    assert written["boot_lock_enabled"] is False
+
+
+def test_run_baked_install_honours_a_boot_lock_override(tmp_path, monkeypatch):
+    """--no-boot-lock wins over the baked value."""
+    import json
+
+    cfg = _baked(tmp_path / "baked.json", boot_lock_enabled=True)
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path / "installed")
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "installed" / "config.json")
+    monkeypatch.setattr(installer, "find_agent_exe", lambda: tmp_path / "lockdown-agent.exe")
+    monkeypatch.setattr(installer, "install_files", lambda p: p)
+    monkeypatch.setattr(installer, "create_lockdown_folder", lambda: None)
+    monkeypatch.setattr(installer, "install_service", lambda: True)
+    monkeypatch.setattr(installer, "verify_checkin", lambda url, key: True)
+    monkeypatch.setattr(installer, "print_summary", lambda *a, **k: None)
+
+    assert installer.run_baked_install(cfg, boot_lock_enabled=False) == 0
+    written = json.loads((tmp_path / "installed" / "config.json").read_text())
+    assert written["boot_lock_enabled"] is False
+
+
+def test_run_baked_install_refuses_without_the_agent_binary(tmp_path, monkeypatch, capsys):
+    cfg = _baked(tmp_path / "baked.json")
+    monkeypatch.setattr(installer, "find_agent_exe", lambda: None)
+    monkeypatch.setattr(installer, "install_service", lambda: pytest.fail("must not install"))
+
+    assert installer.run_baked_install(cfg) == 1
+    assert "Cannot find" in capsys.readouterr().out
+
+
+def test_argparse_accepts_config_file():
+    args = installer.build_parser().parse_args(["--config-file", "c.json", "--silent"])
+    assert args.config_file == "c.json"
+    assert args.silent is True

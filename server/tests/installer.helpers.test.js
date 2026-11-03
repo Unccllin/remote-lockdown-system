@@ -89,6 +89,7 @@ describe('getPlatformConfig', () => {
       ext: '.exe',
       agentName: 'lockdown-agent.exe',
       watchdogName: 'lockdown-watchdog.exe',
+      installerName: 'lockdown-installer.exe',
     });
   });
 
@@ -189,6 +190,29 @@ describe('generated install scripts — escaping is applied, not just available'
     expect(ps1).not.toContain("'\\''"); // never the POSIX idiom in a PS1 file
   });
 
+  test('install.ps1 delegates installation instead of registering a service', () => {
+    // The generated script used to create an NSSM service, falling back to a
+    // non-persistent Start-Process when nssm.exe was absent. Persistence now
+    // lives only in agent/installer.py (scheduled task + run key + tamper ACLs).
+    const { generateInstallPs1 } = require('../src/routes/installer').helpers;
+    const ps1 = generateInstallPs1(config, 'DEV-001');
+    expect(ps1).toContain('lockdown-installer.exe');
+    expect(ps1).toContain('--config-file');
+    expect(ps1).toMatch(/& \$installerExe --config-file \$configFile --silent/);
+
+    // Check the executable lines, not the header comment that records the
+    // NSSM decision — that is documentation, and it must stay.
+    const code = ps1
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'));
+    expect(code.some((line) => /nssm/i.test(line))).toBe(false);
+    expect(code.some((line) => /Start-Process/.test(line))).toBe(false);
+
+    // A failed delegate call must stop the script, not report success.
+    expect(ps1).toMatch(/if \(\$LASTEXITCODE -ne 0\)/);
+  });
+
   test('the readme states the platform and the device', () => {
     const { generateReadme } = require('../src/routes/installer').helpers;
     expect(generateReadme('DEV-1', 'win')).toMatch(/Windows/);
@@ -239,6 +263,79 @@ describe('assembleZipFiles', () => {
     // no watchdog path supplied → no watchdog entry
     expect(winNames).not.toContain(winPlat.watchdogName);
 
+    // With the CLI installer supplied, the Windows ZIP carries it — install.ps1
+    // has nothing to delegate to otherwise.
+    const cliInstaller = path.join(dir, 'lockdown-installer.exe');
+    fs.writeFileSync(cliInstaller, 'INSTALLER');
+    const withCli = assembleZipFiles(config, device, 'win', agent, null, winPlat, cliInstaller);
+    expect(withCli.map((f) => f.name)).toContain(winPlat.installerName);
+
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('generateNsisScript — the per-device installer delegates', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { generateNsisScript, generateNsisLicense } = require('../src/routes/installer').helpers;
+
+  const config = { server_url: 'https://x', device_hostname: 'DEV-1', api_key: 'k' };
+
+  function stage() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nsi-'));
+    const agent = path.join(dir, 'lockdown-agent.exe');
+    const cli = path.join(dir, 'lockdown-installer.exe');
+    fs.writeFileSync(agent, 'AGENT');
+    fs.writeFileSync(cli, 'INSTALLER');
+    return { dir, agent, cli };
+  }
+
+  test('registers no sc.exe service of its own', () => {
+    const { dir, agent, cli } = stage();
+    const nsi = generateNsisScript(config, 'DEV-1', agent, null, cli);
+    const code = nsi
+      .split('\n')
+      .map((line) => line.replace(/;.*$/, '').trim())
+      .filter(Boolean);
+    expect(code.some((line) => /sc\.exe|schtasks|reg add|icacls/i.test(line))).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('delegates to the CLI installer with the baked config', () => {
+    const { dir, agent, cli } = stage();
+    const nsi = generateNsisScript(config, 'DEV-1', agent, null, cli);
+    expect(nsi).toContain('--config-file');
+    expect(nsi).toContain('--silent');
+    expect(nsi).toMatch(/\$\{INSTALLER_EXE\}" --config-file/);
+    // The config is embedded (base64) so nothing is fetched at install time.
+    expect(nsi).toContain(Buffer.from(JSON.stringify(config), 'utf8').toString('base64'));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('refuses to generate without the CLI installer binary', () => {
+    const { dir, agent } = stage();
+    expect(() => generateNsisScript(config, 'DEV-1', agent, null, null)).toThrow(
+      /lockdown-installer\.exe is required/
+    );
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('uninstall is token-gated and deletes only after authorization', () => {
+    const { dir, agent, cli } = stage();
+    const nsi = generateNsisScript(config, 'DEV-1', agent, null, cli);
+    expect(nsi).toContain('--uninstall-token');
+    const body = nsi.split('Section "Uninstall"')[1];
+    const call = body.indexOf('--uninstall');
+    const firstDelete = body.indexOf('Delete "');
+    expect(call).toBeGreaterThan(-1);
+    expect(firstDelete).toBeGreaterThan(call);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('the licence no longer promises token-free removal', () => {
+    const licence = generateNsisLicense('DEV-1');
+    expect(licence).toMatch(/uninstall token/i);
+    expect(licence).not.toMatch(/Remove the agent at any time via Add\/Remove Programs/);
   });
 });

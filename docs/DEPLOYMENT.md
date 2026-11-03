@@ -232,7 +232,31 @@ per-device deployment uses — so there is one install path, not two.
 without one; the agent's binary, config and state files carry DENY-DELETE ACLs,
 so a local administrator cannot simply delete the install either. This is
 intentional: an anti-theft agent with an unauthenticated uninstaller has shipped
-the bypass it exists to prevent. 
+the bypass it exists to prevent.
+
+### Per-device installers use the same engine
+
+The self-hosted dashboard can also build an installer for one already-created
+device — the one-click `.exe` (`GET /api/installer/:id/nsis`, the button on the
+enrolment page) and the ZIP (`GET /api/installer/:id`). Neither implements
+installation itself any more: both stage `lockdown-agent.exe` plus
+`lockdown-installer.exe` and run
+
+```powershell
+lockdown-installer.exe --config-file config.json --silent
+```
+
+i.e. the same `agent/installer.py` path a fleet install uses. That matters for
+more than tidiness: the generated installers used to register `sc.exe` services
+(NSIS) or NSSM services (ZIP), and the agent implements no SCM handshake, so
+Windows failed the service with 1053 and terminated the process about 30 seconds
+after every boot — a device that checked in once and then went dark. The ZIP
+path additionally degraded to a non-persistent `Start-Process` whenever
+`nssm.exe` was not already installed.
+
+Both require `lockdown-installer.exe` next to the agent binary when generating
+(the routes return 503 without it); build it with `agent/installer.spec`.
+
 
 ## Verify the stack locally before you deploy it
 

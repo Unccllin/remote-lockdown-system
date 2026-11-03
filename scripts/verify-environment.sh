@@ -302,6 +302,10 @@ check_nsis() {
     fs.mkdirSync(dummyDir, { recursive: true });
     const dummyBin = path.join(dummyDir, 'lockdown-agent.exe');
     fs.writeFileSync(dummyBin, Buffer.alloc(2048, 0x90));
+    // The generated installer delegates to lockdown-installer.exe, so it must be
+    // staged for generation to succeed (see the 5th argument below).
+    const dummyInstaller = path.join(dummyDir, 'lockdown-installer.exe');
+    fs.writeFileSync(dummyInstaller, Buffer.alloc(4096, 0x90));
 
     const config = {
       server_url: 'https://verify.test',
@@ -312,7 +316,7 @@ check_nsis() {
 
     (async () => {
       try {
-        const nsi = installer.generateNsisScript(config, 'VERIFY-TEST', dummyBin, null);
+        const nsi = installer.generateNsisScript(config, 'VERIFY-TEST', dummyBin, null, dummyInstaller);
         const license = installer.generateNsisLicense('VERIFY-TEST');
         const exe = await installer.compileNsisInstaller(nsi, license);
 
@@ -372,9 +376,11 @@ check_nsis() {
     fs.mkdirSync(dummyDir, { recursive: true });
     const dummyBin = path.join(dummyDir, 'lockdown-agent.exe');
     fs.writeFileSync(dummyBin, Buffer.alloc(2048, 0x90));
+    const dummyInstaller = path.join(dummyDir, 'lockdown-installer.exe');
+    fs.writeFileSync(dummyInstaller, Buffer.alloc(4096, 0x90));
     const config = { server_url: 'https://verify.test', device_hostname: 'V', api_key: 'k', poll_interval: 30 };
     (async () => {
-      const nsi = installer.generateNsisScript(config, 'V', dummyBin, null);
+      const nsi = installer.generateNsisScript(config, 'V', dummyBin, null, dummyInstaller);
       const lic = installer.generateNsisLicense('V');
       const exe = await installer.compileNsisInstaller(nsi, lic);
       fs.writeFileSync('$tmpexe', exe);
@@ -795,9 +801,7 @@ check_electron() {
 
   # Attempt actual build if node_modules are installed
   local node_bin="node"
-  local npm_bin="npm"
   [[ -f "$HOME/.local/node/bin/node" ]] && node_bin="$HOME/.local/node/bin/node"
-  [[ -f "$HOME/.local/node/bin/npm" ]] && npm_bin="$HOME/.local/node/bin/npm"
 
   if [[ -d "$ELECTRON_DIR/node_modules" ]]; then
     record_pass "electron-deps" "node_modules installed"
