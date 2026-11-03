@@ -5790,3 +5790,104 @@ is either used or explicitly ignored — two defects have now come from that gap
 take the generic NSIS installer.
 
 ---
+
+---
+
+## Session 186 — 2026-11-03 (payload sweep: three more fields the agent reports and the Worker discarded)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S185 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `agent/agent.py` (the payload each agent call builds:
+  `checkin`, `ack_command`, `location`, `deadman-report`, `escrow-key`),
+  `server/src/routes/agent.js:360-545` (what Express does with each field, including
+  the device-status transitions on ACK and `encryption_blocked_files` /
+  `lock_session_context` persistence), `dashboard/src/pages/DeviceDetailPage.jsx`
+  (which fields the UI actually renders), and `serverless/worker.ts`
+  (`handleCommandAck` in full, the `Command` record).
+- **Finding (the sweep was worth doing — three more gaps, all in one handler)**:
+  1. **`encryption_blocked_files` was dropped.** D-011's whole point: the agent
+     reports files it could not encrypt (open/locked). The dashboard renders that
+     list (`DeviceDetailPage.jsx:289`). With the Worker dropping it, a device whose
+     folder was only partly encrypted **looked fully encrypted to the operator** —
+     the same class as the boot-lock no-op found last session.
+  2. **`lock_session_context` was dropped**, which the dashboard also reads
+     (`DeviceDetailPage.jsx:292`).
+  3. **`track` / `stop_track` never transitioned the device.** Express moves it to
+     `tracking` on a completed track and back to `active` on stop_track; the Worker
+     handled only lockdown/unlock, so **a device under covert tracking still
+     reported as active**.
+- **Finding (what the sweep cleared, not just what it found)**: the Worker *does*
+  transition `lockdown`→`locked` and `unlock`→`active`, persists `boot_lock_status`/
+  `boot_lock_detail`/`lockdown_effective` (session 185), and handles
+  `key_material`, `bios_password`, `power_on_password`, `bitlocker_pin`,
+  `bitlocker_recovery_password` and `command_uuid`. The sweep's value is as much the
+  cleared list as the three findings.
+- **Deliberate, documented non-use**: `mac_address` and `hardware_uuid` arrive on the
+  ACK and are not consumed there — they are handled on `checkin`, which is the path
+  that updates device metadata. Noted rather than "fixed", because duplicating the
+  metadata update in two paths is how the two paths drift.
+
+### IMPLEMENT
+- `Command` record: `encryption_blocked_files?: unknown` and
+  `lock_session_context?: unknown`, with the D-011 rationale in a comment.
+- `handleCommandAck`: destructures and persists both; the status transition gained
+  `track` → `tracking` and `stop_track` → `active`.
+- `scripts/audit_test_teeth.py`: three rows.
+
+### VERIFY
+- `worker.test.ts`: **387 passed** (385 + 2). The new tests assert the blocked-file
+  list and session context survive to the stored command, and that a completed
+  `track` command leaves the device in `tracking` (after acknowledging the lockdown
+  queued ahead of it).
+- Coverage: **89.52 / 83.24 / 95.02 / 91.55** (floors 82/75/86/82).
+- Three mutations **KILLED** by the intended tests: blocked files dropped, session
+  context dropped, tracking reported as active.
+
+### Fog cleared
+- **Whether the dashboard's "partially encrypted" warning works on the serverless
+  backend**: it did not — the list never arrived. Now it does.
+- **Whether a tracked device is distinguishable from an idle one**: it was not, on
+  this backend. Now `tracking` is set and cleared like Express does.
+
+### Fog remaining
+- The generic NSIS installer (item 9) and Cloudflare-native observability/backup
+  (item 10) are untouched.
+- `/api/download/agent` remains unauthenticated in the Worker while Express requires
+  agent auth — still awaiting a deliberate decision.
+- The sweep covered the **agent-facing** payloads. The dashboard's request bodies
+  (create/update device, admins, policy) have not been swept the same way.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
+  (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), a real domain (Caddy TLS).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (the sweep as a method). Five behaviours have
+  now been found by comparing "what the client sends" against "what the server
+  handles": the missing update endpoint, `boot_lock_detail`, blocked files, session
+  context, and the tracking transitions. None was reachable by mutating a line,
+  because the line was absent rather than wrong — a mutation audit structurally
+  cannot see code that was never written.
+- **Layer 2 — context provision**: the dashboard was the oracle here. It reads four
+  fields from the lockdown detail and the Worker produced one of them; comparing the
+  UI's reads against the backend's writes is the cheapest way to find that class of
+  gap, and it should be a standing check rather than a one-off.
+
+### Session artifacts
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `scripts/audit_test_teeth.py`.
+
+### Next session opening
+Sweep the same way in the other direction — the dashboard's request bodies against
+what the Worker reads — then take the generic NSIS installer, which is the last
+piece of the serverless plan with a real design decision in it.
+
+---

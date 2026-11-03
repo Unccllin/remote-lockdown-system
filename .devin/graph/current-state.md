@@ -53,30 +53,30 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 185 — 2026-11-03 (integrations declared self-hosted-only; and a second live defect on the default path — lockdown effectiveness was discarded)
+## Latest session: 186 — 2026-11-03 (payload sweep: three more fields the agent reports and the Worker discarded)
 
 ### VERIFY
-- `worker.test.ts`: **385 passed** (381 + 4). The effectiveness tests assert
-  zero-critical → **false**, controls applied → **true**, no detail → **null**,
-  boot-lock not attempted → **null**.
-- Coverage: **89.48 / 83.30 / 93.95 / 91.52** (floors 82/75/86/82).
-- Four mutations **KILLED** by the intended tests: integrations answering 200,
-  `criticalTotal > 0` replaced by `true`, the effectiveness value never persisted,
-  and the attempted-scope guard removed.
+- `worker.test.ts`: **387 passed** (385 + 2). The new tests assert the blocked-file
+  list and session context survive to the stored command, and that a completed
+  `track` command leaves the device in `tracking` (after acknowledging the lockdown
+  queued ahead of it).
+- Coverage: **89.52 / 83.24 / 95.02 / 91.55** (floors 82/75/86/82).
+- Three mutations **KILLED** by the intended tests: blocked files dropped, session
+  context dropped, tracking reported as active.
 
 ### Fog cleared
-- **Whether the serverless backend records lockdown quality at all**: it did not. A
-  device that came back "locked" while its boot half had done nothing looks
-  identical to a real lockdown in both the command record and the dashboard.
-- **What integrations costs to port**: not the endpoints — the connector abstraction
-  and its credential handling. Declaring it self-hosted-only is now written down in
-  the code and the README rather than left as an implicit gap.
+- **Whether the dashboard's "partially encrypted" warning works on the serverless
+  backend**: it did not — the list never arrived. Now it does.
+- **Whether a tracked device is distinguishable from an idle one**: it was not, on
+  this backend. Now `tracking` is set and cleared like Express does.
 
 ### Fog remaining
 - The generic NSIS installer (item 9) and Cloudflare-native observability/backup
   (item 10) are untouched.
 - `/api/download/agent` remains unauthenticated in the Worker while Express requires
-  agent auth — still unreviewed, and worth a deliberate decision either way.
+  agent auth — still awaiting a deliberate decision.
+- The sweep covered the **agent-facing** payloads. The dashboard's request bodies
+  (create/update device, admins, policy) have not been swept the same way.
 - Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
   (D-132); 19 Dependabot alerts.
 
@@ -91,27 +91,25 @@
   credentials (Worker publish), a real domain (Caddy TLS).
 
 ### Failure attribution
-- **Layer 4 — verification feedback**, and the most useful instance yet: the defect
-  was found by chasing a *linter advisory about dead code*. Two of the five flagged
-  symbols were real dead code and one was a discarded security signal; without the
-  advisory I would not have read that handler at all. The lesson is not "trust the
-  linter" but "a field that is read and never used is a smell with two possible
-  causes, and only reading the code tells you which".
-- **Layer 1 — task specification** (mine): the mutation audit has been checking
-  *endpoints* for teeth. Nothing checks that every field the agent *sends* is
-  handled. `boot_lock_detail` is the second such field found by accident (after the
-  update endpoint), which suggests a systematic sweep — client payload fields vs
-  server-handled fields — is worth more than another endpoint mutation.
+- **Layer 4 — verification feedback** (the sweep as a method). Five behaviours have
+  now been found by comparing "what the client sends" against "what the server
+  handles": the missing update endpoint, `boot_lock_detail`, blocked files, session
+  context, and the tracking transitions. None was reachable by mutating a line,
+  because the line was absent rather than wrong — a mutation audit structurally
+  cannot see code that was never written.
+- **Layer 2 — context provision**: the dashboard was the oracle here. It reads four
+  fields from the lockdown detail and the Worker produced one of them; comparing the
+  UI's reads against the backend's writes is the cheapest way to find that class of
+  gap, and it should be a standing check rather than a one-off.
 
 ### Session artifacts
 - Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
-  `serverless/README.md`, `scripts/audit_test_teeth.py`.
+  `scripts/audit_test_teeth.py`.
 
 ### Next session opening
-Sweep the other direction: for each agent request payload (`checkin`, `command-ack`,
-`location`, `deadman-report`, `escrow-key`), assert that every field the agent sends
-is either used or explicitly ignored — two defects have now come from that gap — then
-take the generic NSIS installer.
+Sweep the same way in the other direction — the dashboard's request bodies against
+what the Worker reads — then take the generic NSIS installer, which is the last
+piece of the serverless plan with a real design decision in it.
 
 ---
 
