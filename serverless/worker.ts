@@ -87,6 +87,9 @@ interface Command {
   created_at: string;
   executed_at: string | null;
   command_uuid: string | null;
+  // T7/T8: opt-in pre-boot authentication, chosen by the operator on flag-stolen.
+  // The agent sets an HP power-on password / BitLocker TPM+PIN when it is true.
+  enable_pba?: boolean;
   // D-204 / E-EFFECTIVENESS: reported by the agent on ACK. `lockdown_effective`
   // is false when boot-lock was attempted but zero critical controls applied —
   // the device is encrypted-only, which must not read as a clean lockdown.
@@ -1008,7 +1011,9 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
       key_material: keyMaterial,
       bios_password: biosPassword,
       power_on_password: powerOnPassword,
-      enable_pba: false,
+      // Was hardcoded false, so the opt-in flag the operator sets at flag-stolen
+      // never reached the agent: PBA was silently never enabled on this backend.
+      enable_pba: pendingCmd.enable_pba === true,
       bitlocker_pin: bitlockerPin,
       bitlocker_recovery_password: bitlockerRecoveryPassword,
       // Duress code: forwarded from the queued unlock command so the
@@ -1759,7 +1764,7 @@ async function handleFlagStolen(
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
 
-  const payload = await request.json() as { hostname_confirm?: string };
+  const payload = await request.json() as { hostname_confirm?: string; enable_pba?: boolean };
 
   const devices = await listDevices(env);
   const device = devices.find((d) => d.id === deviceId);
@@ -1792,6 +1797,9 @@ async function handleFlagStolen(
     device_id: deviceId,
     command_type: 'lockdown',
     status: 'pending',
+    // Only an explicit `true` opts in — anything else (absent, "true", 1) leaves
+    // PBA off, matching the Express handler's `enable_pba === true`.
+    enable_pba: payload.enable_pba === true,
     created_at: new Date().toISOString(),
     executed_at: null,
     command_uuid: null,

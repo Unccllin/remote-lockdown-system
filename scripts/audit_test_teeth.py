@@ -495,6 +495,33 @@ MUTATIONS: list[dict] = [
         "new": "  if (true) {  // MUTATION: failed commands also claim confirmation\n    await addAuditEntry(",
         "why": "a failed lockdown is recorded as a confirmed one",
     },
+    {
+        "path": "worker/pba-hardcoded",
+        "label": "WRK/pba-hardcoded",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "      enable_pba: pendingCmd.enable_pba === true,",
+        "new": "      enable_pba: false,  // MUTATION: the opt-in never reaches the agent",
+        "why": "pre-boot authentication is silently never enabled on this backend",
+    },
+    {
+        "path": "worker/pba-optin",
+        "label": "WRK/pba-optin",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "    enable_pba: payload.enable_pba === true,",
+        "new": "    enable_pba: true,  // MUTATION: every device opts in to PBA",
+        "why": "a device is pushed into pre-boot authentication nobody asked for",
+    },
+    {
+        "path": "worker/pba-loose",
+        "label": "WRK/pba-loose",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "    enable_pba: payload.enable_pba === true,",
+        "new": "    enable_pba: Boolean(payload.enable_pba),  // MUTATION: truthy counts",
+        "why": "a client sending the string \"true\" silently enables PBA",
+    },
 ]
 
 

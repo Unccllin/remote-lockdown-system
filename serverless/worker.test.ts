@@ -4334,4 +4334,51 @@ describe('D-210: PBL route integration', () => {
       expect(entries.some((e) => e.action === 'agent_lockdown_confirmed')).toBe(false);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // enable_pba: the operator's opt-in pre-boot authentication (T7/T8). Express
+  // threads it from flag-stolen into the command and reports it on check-in; the
+  // Worker accepted neither and hardcoded false, so PBA was silently never
+  // enabled on the serverless backend (session 188).
+  // -------------------------------------------------------------------------
+  describe('enable_pba is threaded to the agent', () => {
+    const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+    async function flagAndCheckin(hostname: string, body: Record<string, unknown>) {
+      const { device, apiKey } = await enrollDevice(worker, env, hostname);
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${device.id}/flag-stolen`,
+          { hostname_confirm: hostname, ...body },
+          ADMIN,
+        ),
+        env,
+      );
+      const checkinBody = JSON.stringify({ hostname });
+      const checkin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', checkinBody, signRequest(checkinBody, apiKey)),
+        env,
+      );
+      return (await parseResponse(checkin) as any).command;
+    }
+
+    it('reports enable_pba true when the operator opted in', async () => {
+      const command = await flagAndCheckin('PBA-001', { enable_pba: true });
+      expect(command.type).toBe('lockdown');
+      expect(command.enable_pba).toBe(true);
+    });
+
+    it('reports enable_pba false by default', async () => {
+      const command = await flagAndCheckin('PBA-002', {});
+      expect(command.enable_pba).toBe(false);
+    });
+
+    it('treats only an explicit boolean true as opting in', async () => {
+      // A string "true" or 1 is a client bug; opting a device into pre-boot
+      // authentication is a security decision and must not be inferred.
+      const command = await flagAndCheckin('PBA-003', { enable_pba: 'true' });
+      expect(command.enable_pba).toBe(false);
+    });
+  });
 });
