@@ -1023,3 +1023,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-056
+  statement: 'The PBL firmware builds reproducibly on this host with the repo''s own script: EDK II lives
+    at ~/.local/src/edk2 (commit 2970e56) with nasm 2.16.01 at ~/.local/bin, BaseTools and OVMF already
+    built, and ''cd firmware/PblPkg && ./build-pbl.sh --arch X64'' reproduces PblApp.efi (3906065d...),
+    PblPersistDxe.efi (042f2914...) and EnrollKeys.efi (418d7d8c...) byte-identically — git status firmware/
+    stays empty. So firmware fixes are buildable and verifiable here, contrary to S200''s ''no EDK II
+    build tool'' conclusion that was drawn from inside the pbl-qemu image only. For D-116, the remaining
+    gap is the TLS VERSION FLOOR, not pinning or hostname: chain pinning comes from C4 key 78 + PblInstallTlsCaCertificate,
+    hostname verification comes from EDK2''s HttpDxe (HttpsSupport.c:666-668 sets VerifyHost.HostName
+    from RemoteHost, :695-702 applies EfiTlsVerifyHost), but TlsDxe creates its context as TLS10 (TlsDriver.c:263)
+    and TlsInit.c:107 makes that the minimum, so TLS 1.0/1.1 can be negotiated; PBL cannot raise it because
+    HttpsClient.c only ever holds EFI_HTTP_PROTOCOL (no EFI_TLS_PROTOCOL handle, no EfiTlsVersion).'
+  domain: firmware/tls
+  status: confirmed
+  evidence_level: code-read
+  provenance: build-pbl.sh executed (exit 0), git status firmware/ empty, all three SHA-256 identical
+    before/after; edk2 source lines read in the local checkout; artifact recorded
+  source: firmware/PblPkg/build-pbl.sh; ~/.local/src/edk2 NetworkPkg/HttpDxe/HttpsSupport.c, NetworkPkg/TlsDxe/TlsDriver.c,
+    CryptoPkg/Library/TlsLib/TlsInit.c; firmware/PblPkg/PblApp/HttpsClient.c; firmware/PblPkg/artifacts/build-reproducible-2026-11-03.txt
+  asserted: '2026-11-03'
+  last_verified: '2026-11-03'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

@@ -429,48 +429,53 @@
   (2) Verify the server can decode the firmware's CBOR request body
   end-to-end.
 
-### D-116 — Hostname binding is missing from the TLS path (chain pinning is done)
-- **Status**: OPEN — **narrowed (2026-11-03, session 200) after verifying the code.**
-  The pinning half is implemented and tested; the hostname half is not.
+### D-116 — TLS floor is 1.0 (chain pinning and hostname binding are covered by the stack)
+- **Status**: OPEN — **narrowed twice (2026-11-03, sessions 200/201) by reading the code.**
+  Of the three things C3 §4 asks for, two are done by D-132 + EDK2, and one is a
+  real gap that PBL cannot currently close.
 - **Category**: SECURITY
-- **Blocker (corrected — the previous text was stale)**:
-  The entry said "`TlsVerify.c` is an empty stub" and that no pin verification
-  exists. Both statements are false as of D-132's fix:
-  - `TlsVerify.c` is 223 lines and defines `PblInstallTlsCaCertificate` (called
-    from `PblApp.c:600`, immediately before the fetch at `:617`) plus
-    `PblTlsVerifyCert`. D-132's ruling replaced the "no DER-accepting API"
-    deadlock: C4 **key 78** carries the CA's DER, and the platform
-    `TlsCaCertificate` store is rebuilt from the policy on every boot, so EDK2's
-    hard-coded `EFI_TLS_VERIFY_PEER` validates the chain against exactly the
-    pinned CA.
-  - Chain pinning is proven, not assumed: `artifacts/d132-mismatched-ca-results.txt`
-    boots the real firmware against a server presenting a leaf signed by a second
-    CA — the firmware logs `[OK] Pinned CA installed as TLS trust anchor (750
-    bytes)`, the handshake aborts, and **no request reaches the server**.
-  - **What is actually missing**: hostname binding. `PblApp.c` parses the host
-    (`PblParseUriHostname`) and passes it to `PblHttpsPost`, which only checks it
-    is non-NULL; `HttpsClient.c` configures no TLS session data (no
-    `SetSessionData`, no host name), and `PblTlsVerifyCert` — the only code that
-    would compare CN/SAN — **has no caller** and lacks SAN support
-    (`TODO (C3 §4)` inside it). C3 §4 requires rejecting a certificate whose
-    CN/SAN does not match the URI host. Whether EDK2's HttpDxe happens to verify
-    the host itself is *not established anywhere in this repository*.
+- **What the previous text got wrong (both times)**:
+  - It said "`TlsVerify.c` is an empty stub". False: 223 lines, two functions.
+  - S200 then said hostname binding was missing. **Also false** — EDK2's HttpDxe
+    does it: `NetworkPkg/HttpDxe/HttpsSupport.c:666-668` sets
+    `TlsConfigData.VerifyHost.HostName` from `HttpInstance->RemoteHost` (the URI
+    host) and `:695-702` applies it with `SetSessionData(EfiTlsVerifyHost,
+    sizeof(EFI_TLS_VERIFY_HOST))`, alongside `VerifyMethod = EFI_TLS_VERIFY_PEER`
+    (`:659`). PBL passing the hostname to `PblHttpsPost` and then relying on the
+    stack is therefore correct, not a gap.
+- **What is implemented**:
+  - **Chain pinning**: C4 key 78 carries the CA's DER;
+    `PblInstallTlsCaCertificate` (`TlsVerify.c:56`, called `PblApp.c:600` before the
+    fetch at `:617`) rebuilds the platform `TlsCaCertificate` store from the policy
+    each boot, so EDK2's `EFI_TLS_VERIFY_PEER` validates against exactly the pinned
+    CA. Proven by `artifacts/d132-mismatched-ca-results.txt`: mismatched CA →
+    handshake aborts, nothing reaches the server.
+  - **Hostname**: by the stack, as above.
+- **The gap — TLS version floor**: C3 §4 requires ≥ TLS 1.2. EDK2's TlsDxe creates
+  its context with `TlsCtxNew(TLS10_PROTOCOL_VERSION_MAJOR,
+  TLS10_PROTOCOL_VERSION_MINOR)` (`NetworkPkg/TlsDxe/TlsDriver.c:263`), and
+  `CryptoPkg/Library/TlsLib/TlsInit.c:107` applies that as
+  `SSL_CTX_set_min_proto_version`, with only SSLv3 disabled (`:101`). So PBL will
+  negotiate TLS 1.0/1.1 if a server offers it. PBL cannot raise the floor through
+  `EFI_HTTP_PROTOCOL`: HttpDxe sets only `EfiTlsConnectionEnd`,
+  `EfiTlsVerifyMethod`, `EfiTlsVerifyHost` and `EfiTlsSessionState`
+  (`HttpsSupport.c:672-712`) and exposes no `EfiTlsVersion`.
 - **Residual work**:
-  1. Bind the hostname: either configure the TLS session with the URI host (so
-     EDK2 verifies CN/SAN) or call a completed `PblTlsVerifyCert` (needs SAN
-     extraction via `X509GetExtensionData`, OID 2.5.29.17).
-  2. Decide `PblTlsVerifyCert`'s fate: give it a caller, or delete it and say so.
-     Leaving a 223-line security function that nothing calls is a review hazard —
-     it reads like enforcement and is dead.
-  3. Confirm the TLS version floor (C3 §4 asks for ≥1.2). PBL sets none; it
-     relies on the EDK2 default, which is unverified here.
-- **Close criteria (rewritten)**: a runtime artifact showing a certificate with
-  the right CA but the wrong CN/SAN is rejected, and one with both correct is
-  accepted; plus `PblTlsVerifyCert` either called or removed.
-- **Superseded criterion**: "implement pin verification using
-  `EFI_TLS_PROTOCOL->SetSessionData`" — D-132's ruling established that EDK2
-  cannot be told to skip chain validation, which is why the store-replacement
-  design replaced this approach.
+  1. Decide the fix: (a) drive `EFI_TLS_PROTOCOL` directly for the verdict fetch
+     (bypassing `EFI_HTTP_PROTOCOL`) so `EfiTlsVersion` can be set to TLS 1.2+, or
+     (b) patch the platform's TlsDxe minimum via a policy assumption documented
+     with the threat model, or (c) accept TLS 1.0 and record why. Option (a) is the
+     only one that keeps C3 §4 in firmware we control.
+  2. Decide `PblTlsVerifyCert`'s fate: it has no caller and lacks SAN support
+     (`TODO (C3 §4)`), while the stack covers hostname verification. Delete it, or
+     call it as defence in depth — but do not leave a 223-line security function
+     that nothing calls.
+- **Close criteria (rewritten)**: a runtime artifact showing the negotiated
+  protocol is ≥ TLS 1.2 (or an explicit, recorded threat-model acceptance), plus
+  `PblTlsVerifyCert` either called or removed.
+- **Superseded criteria**: "implement pin verification using
+  `EFI_TLS_PROTOCOL->SetSessionData`" (D-132 showed EDK2 cannot be told to skip
+  chain validation) and "implement hostname verification" (the stack does it).
 
 ### D-117 — No runtime tests for PBL modules
 - **Status**: OPEN

@@ -1,0 +1,25 @@
+# PBL reproducible-build check — 2026-11-03 (session 201)
+#
+# Why: S200 concluded firmware changes were unverified because "no EDK II build
+# tool" was present. That was checked only inside the pbl-qemu Docker image. EDK II
+# *is* installed on this host, so the claim was wrong and the build is available:
+#   EDK2_DIR=/home/cllin/.local/src/edk2   (commit 2970e56)
+#   nasm     =/home/cllin/.local/bin/nasm  (2.16.01)
+#   BaseTools and OVMF already built.
+#
+# Command (the repo's own reproducible build script):
+#   cd firmware/PblPkg && ./build-pbl.sh --arch X64
+#
+# Result: the script rebuilds from source and copies the outputs over the tracked
+# binaries; `git status firmware/` is EMPTY afterwards, i.e. the rebuild is
+# byte-identical to what is committed. Both halves matter: the build is genuinely
+# reproducible (SOURCE_DATE_EPOCH + -ffile-prefix-map), and the committed firmware
+# is current with the source rather than a stale binary.
+
+PblApp.efi       3906065d77d9e763916ba05a4de0cf73669d3b58437a5229b8fadbfbe41927e5
+PblPersistDxe.efi 042f29147e82614d5fa61406c9568fc2e001c88438a19d04364774424170db5d
+EnrollKeys.efi   418d7d8ce90df8435ba27d16f8ec98ef06b76e3a65895e25c711d7ee2e07464b
+
+# Both the "before" (committed) and "after" (rebuilt) hashes are identical, so a
+# firmware fix can now be built and verified here — which is what D-116's residual
+# work needs.

@@ -39,6 +39,7 @@ help:
 	@echo "  make test-electron        run electron tests"
 	@echo "  make test-e2e             run API-level E2E tests (lockdown + recovery + agent-integration)"
 	@echo "  make test-worker-e2e      run the Worker update path against local workerd (opt-in)"
+	@echo "  make firmware-build       rebuild PblApp.efi from source (reproducible; needs EDK II)"
 	@echo "  make firmware-qemu        boot PblApp.efi in QEMU+swtpm via Docker (17 checks)"
 	@echo "  make test-e2e-dashboard   run Playwright browser E2E tests (dashboard)"
 	@echo "  make test-coverage        run all test suites with coverage reporting"
@@ -124,6 +125,13 @@ test-worker:
 # (~36s, boots workerd per case) and needs `npx --no-install wrangler`, so it is
 # opt-in rather than part of `make test` / CI. It is the only place the shipping
 # backend is exercised end to end with a real agent and real Ed25519 keys.
+# PBL firmware build (reproducible). Needs EDK II at EDK2_DIR (default
+# ~/.local/src/edk2) and nasm on PATH; the script pins SOURCE_DATE_EPOCH and
+# strips absolute paths, so the outputs are byte-identical to the committed
+# binaries (verified 2026-11-03, artifacts/build-reproducible-2026-11-03.txt).
+firmware-build:
+	@cd firmware/PblPkg && ./build-pbl.sh --arch $${PBL_ARCH:-X64}
+
 # PBL firmware runtime check in QEMU + swtpm, via Docker.
 #
 # Needs no local qemu/swtpm/EDK II: the image carries them and the prebuilt
