@@ -305,6 +305,40 @@ cd agent     && python3 -m ruff format --check .
 # is missing instead of silently linting less than CI does.
 make lint-workflows                           # actionlint + shellcheck, exit 0 = clean
 
+### pyright / ast-grep: advisory, and there is a large baseline
+
+These are **not** CI gates. The gates are eslint (server/dashboard), ruff +
+ruff format (agent), `tsc --noEmit -p .` (serverless) and the test suites. An LSP
+or agent-harness checker will report findings in this repo that are older than any
+session working in it — measured 2026-11-03: **~178 diagnostics tree-wide**, almost
+all of them Windows-only APIs analysed on a Linux host (`ctypes.windll`, `winreg`,
+`subprocess.CREATE_NO_WINDOW`, `signal.SIGBREAK`) and firmware scripts whose
+dependencies live outside the checker's interpreter.
+
+Rules that keep this from costing a session (learned in S194–S196):
+
+1. **Fix only what you touch.** A finding in a file you did not change is baseline;
+   editing that file to silence it pulls it into your diff and multiplies the
+   cascade. Revert such detours.
+2. **Prefer source-level fixes over config claims.** `getattr(ctypes, "windll", None)`,
+   `mode="r+b"` as a keyword, path-loading a module whose bare name collides with a
+   repo directory — these work regardless of how the checker resolves the file. A
+   `pyrightconfig.json` platform claim was added, proved to change nothing, and was
+   removed.
+3. **A line-level pragma with a reason beats a blanket** for genuine false
+   positives, e.g. `socket.AF_UNIX,  # pyright: ignore[reportAttributeAccessIssue]`
+   in the POSIX-only TPM debug scripts.
+4. **Never let a checker rewrite behaviour to satisfy a heuristic.** A one-shot
+   operator script that should fail loudly on a missing input does not need a
+   try/except wrapped around every `json.loads`.
+5. **Know the false-positive class.** ast-grep's `unchecked-throwing-call` fires on
+   calls that ARE inside `try:` when the call sits in an assignment or a `with`
+   (`sys.stdout = open(...)`, `with open(p) as f: json.load(f)`,
+   `state = json.loads(p.read_text())` under a `try`). Its reported line numbers can
+   also lag a file's current content after edits — check the line before believing
+   the message. Verify the enclosed-ness yourself, record it, and move on; there is
+   no repo-level rule config to adjust because these rules ship with the harness.
+
 # Firmware deferrals must name their source (C1-C5 §n, REQ-n, D-nnn, STUB,
 # Agent X). This gate runs in PBL CI's static-analysis job *and* locally; the
 # same logic lives in scripts/check-firmware-todos.py so a red job can be

@@ -211,7 +211,22 @@ async function startTestServer() {
   const cleanup = async () => {
     if (closed) return;
     closed = true;
-    try { await server.close(); } catch (e) { /* ignore */ }
+    // `server.close()` returns the server, not a promise, so `await`ing it does
+    // nothing: without waiting for the listening socket to actually close and its
+    // connections to drain, the next line ends the SQLite singleton while a
+    // request handler may still be mid-query. The sqlite3 driver *throws* from its
+    // native error callback ("SQLITE_MISUSE: Database handle is closed"), which is
+    // an uncaught exception that kills the jest process — an intermittent E2E
+    // failure with no test-level trace (observed 1-in-3 full sweeps, S196).
+    // Keep-alive sockets hold close() open, so drop them explicitly first.
+    try {
+      await new Promise((resolve) => {
+        server.close(() => resolve());
+        if (typeof server.closeAllConnections === 'function') {
+          server.closeAllConnections();
+        }
+      });
+    } catch (e) { /* already closed */ }
     try { await sqlitePool.end(); } catch (e) { /* ignore */ }
     // Remove the temp DB and SQLite sidecar files (-wal, -shm).
     for (const suffix of ['', '-wal', '-shm']) {

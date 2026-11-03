@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
@@ -292,3 +294,60 @@ class TestCheckin:
 
             result = agent.checkin(cfg)
             assert result is None
+
+
+# ---------------------------------------------------------------------------
+# JSON config — the shape the dashboard/enrollment page generates
+# ---------------------------------------------------------------------------
+
+
+class TestJsonConfig:
+    """A malformed config must fail loudly, never silently fall back to defaults.
+
+    Falling back would point the agent at the built-in default server, so a
+    corrupt file would look like "the agent enrolled somewhere else" instead of
+    "this file is broken".
+    """
+
+    def test_dashboard_shape_is_parsed(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "server_url": "https://srv.example",
+                    "api_key": "device-key-from-dashboard",
+                    "device_hostname": "HOST-JSON",
+                    "poll_interval": 30,
+                    "verify_tls": False,
+                }
+            )
+        )
+
+        cfg = agent.load_config(path)
+
+        assert cfg["server_url"] == "https://srv.example"
+        assert cfg["agent_key"] == "device-key-from-dashboard"
+        assert cfg["hostname"] == "HOST-JSON"
+        assert cfg["poll_interval"] == 30
+        assert cfg["verify_tls"] is False
+
+    def test_corrupt_json_names_the_file(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text("{ this is not json")
+
+        with pytest.raises(ValueError) as exc:
+            agent.load_config(path)
+
+        # The path must be in the message: "invalid config" with no name is
+        # unactionable on a fleet.
+        assert str(path) in str(exc.value)
+
+    def test_non_object_json_is_rejected(self, tmp_path):
+        """A JSON array parses fine and then breaks on data["api_key"]."""
+        path = tmp_path / "config.json"
+        path.write_text('["api_key", "value"]')
+
+        with pytest.raises(ValueError) as exc:
+            agent.load_config(path)
+
+        assert "must be a JSON object" in str(exc.value)

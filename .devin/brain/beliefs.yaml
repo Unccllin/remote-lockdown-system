@@ -925,3 +925,27 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-052
+  statement: 'In the jest E2E harness, ''await server.close()'' is a no-op (close() returns the server,
+    not a promise), so calling sqlitePool.end() next closes the database while a request handler may still
+    be mid-query; the sqlite3 driver then THROWS from its native error callback (SQLITE_MISUSE: Database
+    handle is closed) as an uncaught exception that kills the jest process with no test-level trace. Teardown
+    must await a real close and drop keep-alive sockets (closeAllConnections) before ending the pool.
+    Separately, ast-grep''s unchecked-throwing-call rule fires on calls that ARE inside try: when they
+    sit in an assignment or a with, and its line numbers can lag the file after edits — verify enclosures
+    yourself instead of rewriting correct defensive code.'
+  domain: testing/e2e
+  status: proposed
+  evidence_level: assumed
+  provenance: 'code-read + executed: captured a failing sweep (SQLITE_MISUSE with no Tests: summary),
+    fixed the teardown order, then 8 consecutive full sweeps green (14 tests each); guard falsification
+    reproduced the TypeError'
+  source: tests/e2e/agent-helpers.js cleanup; server/src/db/sqlitePool.js end(); /tmp/e2e-2.log; agent/agent.py
+    _load_json_config
+  asserted: '2026-11-03'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

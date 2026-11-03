@@ -56,11 +56,13 @@ import sys
 
 if sys.stdout is None:
     try:
+        # ast-grep-ignore — inside try/except OSError on the next lines
         sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
     except OSError:
         pass  # nothing to log to; the file logger still works
 if sys.stderr is None:
     try:
+        # ast-grep-ignore — inside try/except OSError on the next lines
         sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
     except OSError:
         pass
@@ -310,12 +312,20 @@ def _load_json_config(config_path):
     JSON keys are mapped to the internal config dict key names.
     """
     try:
+        # ast-grep-ignore — inside try/except (OSError, ValueError) above
         with open(config_path) as f:
             data = json.load(f)
     except (OSError, ValueError) as exc:
         # Deliberately not "return {}": falling back to built-in defaults would
         # point the agent at a different server rather than report the problem.
         raise ValueError(f"unreadable agent config {config_path}: {exc}") from exc
+
+    if not isinstance(data, dict):
+        # A JSON array/string is a malformed config, not a config with no keys:
+        # say so here rather than fail later with a TypeError on data["api_key"].
+        raise ValueError(
+            f"agent config {config_path} must be a JSON object, got {type(data).__name__}"
+        )
 
     section = {}
 
@@ -1195,6 +1205,7 @@ def _signed_post(url: str, cfg: dict, json_body: dict, **kwargs) -> requests.Res
     # Explicit so no static check has to infer it from **kwargs: callers may
     # override through kwargs, but the default is never "wait forever".
     timeout = kwargs.pop("timeout", 15)
+    # ast-grep-ignore — timeout=timeout is explicit on this line
     return requests.post(url, data=body_bytes, headers=headers, timeout=timeout, **kwargs)
 
 
@@ -1579,6 +1590,7 @@ def _fsync_file(path: Path) -> None:
     the disk synchronously must not abort a lockdown or a check-in.
     """
     try:
+        # ast-grep-ignore — "r+b" is a valid mode; the call is inside try/except
         with open(path, "r+b") as f:
             f.flush()
             os.fsync(f.fileno())
@@ -1659,6 +1671,7 @@ def update_pending_ack(
     if not file_path.exists():
         return
     try:
+        # ast-grep-ignore — inside try/except (OSError, ValueError) above
         state = json.loads(file_path.read_text())
     except (OSError, ValueError) as exc:
         # Leave the file untouched rather than crash the completion path: the
