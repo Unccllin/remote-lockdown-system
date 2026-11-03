@@ -6891,3 +6891,151 @@ flips `sha256-only` → `signature` and accepts one update — the first hardwar
 evidence for E-AUTO-UPDATE.
 
 ---
+
+---
+
+## Session 195 — 2026-11-03 (the update path is proven end to end, and the harness had two bugs)
+
+### RULE-ZERO
+
+**Read**: session 194's `Next session opening`; `.devin/graph/current-state.md`;
+`server/src/routes/agent.js` (`/update`, `/download`, `updateDeviceCheckin`);
+`agent/agent.py` (`AGENT_VERSION`, `check_for_update`, `download_update`,
+`verify_update_signature`, `_STATE_DIR`, `_post_with_fallback`, `_signed_post`,
+`_update_pending_ack`, `_fsync_file`, `_load_json_config`);
+`server/src/config/paths.js`; `tests/e2e/agent-helpers.js`,
+`tests/e2e/agent-integration.test.js`, `tests/e2e/setup.js`, `scripts/run-e2e.sh`;
+`server/.env.example`.
+
+**Finding**: the recorded opening (provision the CI secret, publish to KV, flip the
+HP box) is blocked on owner credentials and hardware, but its *verifiable* half was
+not: nothing anywhere ran the update path end to end. The server test mocked the
+pool and never signed with a real key, the agent test mocked `requests` and never
+spoke HTTP, and the signer test verified bytes a real response had never carried. So
+"an update is authenticated" was asserted in three places and proven in none.
+
+Two defects in the existing agent E2E harness made it weaker than it looked, and
+both had to be fixed before an update suite could mean anything:
+
+1. **`spawnSync` blocks the event loop.** The test server runs in the same Node
+   process, so a synchronous spawn starves it: the agent's check-in timed out after
+   15s and the failure looked like a broken server. Only async `spawn` works.
+2. **`AGENT_SHARED_KEY` leaked into spawned agents.** The harness set it, the
+   agent's `load_config()` prefers env over the config file, so the agent
+   authenticated with the suite's shared key instead of its device key and every
+   check-in was 401 — which looks like broken auth rather than a harness leak.
+
+### IMPLEMENT
+
+- `tests/e2e/agent-update.e2e.test.js` — the first end-to-end proof of E-AUTO-UPDATE
+  without hardware: live Express server, real `agent.py` subprocess, real Ed25519
+  keypair, real HTTP, and the SHA-256 of the bytes actually served. Four cases
+  against one re-provisioned device: signed → accepted with `signature_verified:
+  true` and `update_verification: "signature"` stored from the real check-in;
+  unsigned → refused; signed by an untrusted key → refused; unpinned → flips to
+  `"sha256-only"`, still updates, and records `signature_verified: false`.
+- Three seams, each justified beyond the test:
+  - `AGENT_BINARIES_DIR` (`config/paths.js`) — `agent/dist` is gitignored, so a
+    fresh checkout has no binary and `/update` silently answered
+    `no_binary_available`; deployments that stage binaries elsewhere need it too.
+  - `AGENT_LATEST_VERSION` (`routes/agent.js`) — the version the endpoint advertises
+    was the literal `'1.0.0'` while the binary served is whatever is on disk; the
+    Worker already reads it from metadata for exactly this reason.
+  - `LOCKDOWN_STATE_DIR` (`agent.py`) — the update pending/download files landed in
+    the source tree when running from source.
+- `tests/e2e/agent-helpers.js` — extracted `agentEnv()` from `startAgent()` and
+  exported it, so the env rule (delete, never blank, agent-relevant vars) has one
+  definition instead of one per suite.
+- `scripts/run-e2e.sh` — `--agent-integration` now includes the update suite; the
+  jest 5 flag is `--testPathPatterns`.
+- `agent/agent.py` robustness pass, clearing eight pre-existing checker findings in
+  the file this session touches: devnull stream setup, JSON config load (raises with
+  the path instead of a bare traceback), an explicit POST timeout, `_fsync_file`
+  with a real try/except, and a corrupt pending-ACK file logged instead of crashing
+  the lockdown-completion path.
+
+### Fog cleared
+
+- **Why a Python client timed out against a server that answered Node in 12 ms**:
+  `spawnSync` starved the in-process server. Ruled out first: payload size, proxies,
+  `Connection: close`, and the server itself (12 ms for the same endpoint).
+- **Why every agent check-in was 401** while the same key worked from the parent
+  process: the inherited `AGENT_SHARED_KEY` overrode the config file.
+- **Whether one device can serve all four cases**: two devices cannot. Where DMI is
+  unreadable `get_hardware_uuid()` falls back to a host-stable value, and
+  `devices.hardware_uuid` is UNIQUE, so the second device's check-in collides
+  (`SQLITE_CONSTRAINT ... devices.hardware_uuid`). Re-provisioning one device is
+  both the correct model and the "flip" the dashboard would show.
+- **Whether the new suite can pass vacuously**: no. Bypassing
+  `verify_update_signature` in `download_update` makes the untrusted-key case fail
+  (1 failed / 3 passed), and the file was restored (`git diff --stat` verified).
+
+### Fog remaining
+
+- The evidence is **emulated, not hardware**. E-AUTO-UPDATE stays
+  `verified-in-unit-test` in the graph until the HP box shows the flip; inventing a
+  hardware artifact would violate I3.
+- One full-sweep E2E run failed once and did not reproduce in three subsequent
+  suite runs and two full sweeps. Recorded as observed-once, not as fixed.
+- `_load_json_config` now raises on a corrupt config (fail loudly rather than fall
+  back to built-in defaults pointing at the wrong server); no test pins that yet.
+- No signing key exists in CI (`UPDATE_SIGNING_KEY` unset), so a release still
+  publishes unsigned metadata behind a warning; no deployment has published a real
+  `agent-release.json` to KV.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; the repo's 178-diagnostic
+  pyright/ast-grep baseline (see S194) is still unowned.
+
+### Debt items closed
+
+- None. (E-AUTO-UPDATE evidence improved from "unit" to "emulated end-to-end"; the
+  graph status is unchanged on purpose.)
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+
+- Hardware (HP box) for the E-AUTO-UPDATE flip; owner provisioning of
+  `UPDATE_SIGNING_KEY`; Cloudflare credentials to publish metadata to KV.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the update path had three
+  boundary-limited proofs and no end-to-end one, and the harness used for
+  "real agent" testing had two defects that silently weakened it. Both were found
+  only by building the missing proof: a lint, a mock, and a green suite each said
+  the path worked.
+- **Layer 2 — context provision**: nothing said that agent E2E suites must use async
+  `spawn` (the server shares the process) or that `startAgent`'s env cleaning must be
+  shared rather than copied. The fixes are now in the harness with the reasons
+  attached, so the next suite inherits them.
+
+### VERIFY
+
+- **E2E: 14 passed** (10 + 4 new), 4 suites. Full sweep run twice green; the new
+  suite run three times without a failure.
+- `agent`: **763 passed**; `ruff check` + `ruff format --check` clean.
+- `server`: **733 passed** (43 suites); eslint clean.
+- `make test-scripts`: all suites green (18 + 17 + 40 + 44 + secret checks + 18).
+- `bash -n` + `shellcheck scripts/run-e2e.sh` clean; `make lint-workflows` clean.
+- Falsification: bypassing signature verification fails the untrusted-key case.
+- Checker: `agent/agent.py` and the new E2E files report 0 primary diagnostics.
+
+### Session artifacts
+
+- Changed: `tests/e2e/agent-update.e2e.test.js` (new),
+  `tests/e2e/agent-helpers.js`, `scripts/run-e2e.sh`,
+  `server/src/config/paths.js`, `server/src/routes/agent.js`, `agent/agent.py`,
+  `server/.env.example`.
+- Commit: `d9a9b21`.
+
+### Next session opening
+
+Attack the remaining vacuity risk in the harness: assert in the reopening test that
+the agent's *check-in* (not enrollment) is what sets `last_checkin`, then provision
+`UPDATE_SIGNING_KEY`, publish `agent-release.json` to KV, and take the flip to the HP
+box — the only thing standing between this emulated evidence and E-AUTO-UPDATE being
+`verified-on-hardware`.
+
+---

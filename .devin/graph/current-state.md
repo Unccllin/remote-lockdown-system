@@ -53,44 +53,43 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 194 — 2026-11-03 (release metadata is signed per platform, by a producer that exists)
+## Latest session: 195 — 2026-11-03 (the update path is proven end to end, and the harness had two bugs)
 
 ### Fog cleared
 
-- **Whether one signature can cover a multi-platform release**: no, by construction.
-  The message includes the hash. This was the document's own example, so the fix had
-  to be in the producer *and* the consumer.
-- **Whether the CI job signs the right binary**: it did not. `lockdown-agent-windows-*`
-  matches `lockdown-agent-windows-x64-watchdog.exe` *before* `lockdown-agent-windows-x64.exe`
-  (`-` < `.`). Executing the job's shell block locally produced a signature over the
-  8-byte watchdog instead of the 9-byte agent. The job now skips companion binaries,
-  and the re-run's hashes match `sha256sum`.
-- **What a Worker deployment without a key does**: it publishes/serves unsigned
-  metadata. Pinned agents refuse it and unpinned agents accept it and report
-  `sha256-only` at check-in (S193), so the state is visible rather than silent.
-- **Whether `# pyright: reportMissingImports=false` is honoured**: yes — the three
-  firmware files went from 5/1/5 missing-import errors to zero primary findings.
+- **Why a Python client timed out against a server that answered Node in 12 ms**:
+  `spawnSync` starved the in-process server. Ruled out first: payload size, proxies,
+  `Connection: close`, and the server itself (12 ms for the same endpoint).
+- **Why every agent check-in was 401** while the same key worked from the parent
+  process: the inherited `AGENT_SHARED_KEY` overrode the config file.
+- **Whether one device can serve all four cases**: two devices cannot. Where DMI is
+  unreadable `get_hardware_uuid()` falls back to a host-stable value, and
+  `devices.hardware_uuid` is UNIQUE, so the second device's check-in collides
+  (`SQLITE_CONSTRAINT ... devices.hardware_uuid`). Re-provisioning one device is
+  both the correct model and the "flip" the dashboard would show.
+- **Whether the new suite can pass vacuously**: no. Bypassing
+  `verify_update_signature` in `download_update` makes the untrusted-key case fail
+  (1 failed / 3 passed), and the file was restored (`git diff --stat` verified).
 
 ### Fog remaining
 
-- **No key exists in this environment.** `UPDATE_SIGNING_KEY` is not set, so a release
-  cut today publishes unsigned metadata (with a warning) and any pinned device would
-  refuse it. Provisioning it is an owner/secret step, not a code change.
-- E-AUTO-UPDATE is still `verified-in-unit-test`: no device has flipped
-  `sha256-only` → `signature` on real hardware.
-- Publishing `agent-release.json` to KV remains an operator step (no Cloudflare
-  credentials here); the Worker cannot publish it itself by design.
-- The repository's checker baseline is **178 diagnostics** (measured this session with
-  a workspace sweep), overwhelmingly Windows-only agent APIs (`ctypes.windll`,
-  `winreg`, `subprocess.CREATE_NO_WINDOW`, `signal.SIGBREAK`) analysed on Linux. It is
-  undocumented and cost several cycles to rediscover; it needs its own task, not a
-  per-session scramble.
-- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
-  (D-132); 19 Dependabot alerts; Cloudflare observability/backup (item 10).
+- The evidence is **emulated, not hardware**. E-AUTO-UPDATE stays
+  `verified-in-unit-test` in the graph until the HP box shows the flip; inventing a
+  hardware artifact would violate I3.
+- One full-sweep E2E run failed once and did not reproduce in three subsequent
+  suite runs and two full sweeps. Recorded as observed-once, not as fixed.
+- `_load_json_config` now raises on a corrupt config (fail loudly rather than fall
+  back to built-in defaults pointing at the wrong server); no test pins that yet.
+- No signing key exists in CI (`UPDATE_SIGNING_KEY` unset), so a release still
+  publishes unsigned metadata behind a warning; no deployment has published a real
+  `agent-release.json` to KV.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; the repo's 178-diagnostic
+  pyright/ast-grep baseline (see S194) is still unowned.
 
 ### Debt items closed
 
-- None. (Recorded as belief **B-049**, code-read.)
+- None. (E-AUTO-UPDATE evidence improved from "unit" to "emulated end-to-end"; the
+  graph status is unchanged on purpose.)
 
 ### Debt items still open
 
@@ -98,64 +97,47 @@
 
 ### Blockers
 
-- Signing key provisioned into CI (owner secret), Cloudflare credentials to publish to
-  KV, hardware for the E-AUTO-UPDATE flip, and — unchanged — the PFX for D-130.
+- Hardware (HP box) for the E-AUTO-UPDATE flip; owner provisioning of
+  `UPDATE_SIGNING_KEY`; Cloudflare credentials to publish metadata to KV.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): nothing tested the *producer* of
-  `agent_release`, so "the update is signed" was an assertion in a README rather than a
-  property with a test. The new suite closes that by asking the real verifier. The CI
-  glob bug is the same failure in miniature: actionlint validated the YAML and passed
-  it, while executing the block showed the wrong binary being signed — a lint is not a
-  close.
-- **Layer 1 — task specification** (mine): I replaced `new URL(request.url)` across the
-  Worker with a blanket text substitution, which included the body of the helper I had
-  just added and turned it into infinite recursion. The suite caught it (214 failures),
-  but the task as I framed it — "replace the call sites" — should have excluded the
-  definition.
-- **Layer 2 — context provision**: the repo's 178-diagnostic checker baseline is not
-  written down anywhere, so each session re-derives it under time pressure and risks
-  either chasing noise or suppressing real findings. Recording the number and its cause
-  in AGENTS.md is the harness change.
+- **Layer 4 — verification feedback** (primary): the update path had three
+  boundary-limited proofs and no end-to-end one, and the harness used for
+  "real agent" testing had two defects that silently weakened it. Both were found
+  only by building the missing proof: a lint, a mock, and a green suite each said
+  the path worked.
+- **Layer 2 — context provision**: nothing said that agent E2E suites must use async
+  `spawn` (the server shares the process) or that `startAgent`'s env cleaning must be
+  shared rather than copied. The fixes are now in the harness with the reasons
+  attached, so the next suite inherits them.
 
 ### VERIFY
 
-- `serverless`: **407 passed** (404 + 3 per-platform signature tests); `tsc --noEmit -p .`
-  clean. The per-platform test was verified to fail when the Worker's signature
-  selection is reverted to the top-level only (`expected 'dG9wLWxldmVs' to be 'd2luLXNpZw=='`).
-- `make test-scripts`: **18 new tests** (`scripts/test_sign_release_metadata.py`),
-  alongside the 5 existing suites, all green. Every emitted signature is accepted by
-  `agent.verify_update_signature`, and rejected for the wrong key, wrong version,
-  tampered bytes, and the other platform's hash.
-- **CI job executed locally** against fake release artifacts: `win: 178ed8b6… (9 bytes)`
-  and `linux: ae508a58… (11 bytes)`, both equal to `sha256sum` of the staged files —
-  after fixing the glob that had signed the 8-byte watchdog.
-- `make lint-workflows` (actionlint + shellcheck) exit 0; `make graph-check` all
-  invariants pass; changed Python compiles.
-- Checker: the session's new and modified files report **0 primary diagnostics**
-  (`scripts/sign-release-metadata.py`, `scripts/test_sign_release_metadata.py`,
-  `serverless/worker.ts`); the three firmware files report advisories only.
+- **E2E: 14 passed** (10 + 4 new), 4 suites. Full sweep run twice green; the new
+  suite run three times without a failure.
+- `agent`: **763 passed**; `ruff check` + `ruff format --check` clean.
+- `server`: **733 passed** (43 suites); eslint clean.
+- `make test-scripts`: all suites green (18 + 17 + 40 + 44 + secret checks + 18).
+- `bash -n` + `shellcheck scripts/run-e2e.sh` clean; `make lint-workflows` clean.
+- Falsification: bypassing signature verification fails the untrusted-key case.
+- Checker: `agent/agent.py` and the new E2E files report 0 primary diagnostics.
 
 ### Session artifacts
 
-- Changed: `scripts/sign-release-metadata.py` (new),
-  `scripts/test_sign_release_metadata.py` (new), `serverless/worker.ts`,
-  `serverless/worker.test.ts`, `serverless/README.md`,
-  `.github/workflows/release.yml`, `firmware/PblPkg/requirements.txt` (new),
-  `firmware/PblPkg/{test-d205,prepare-live-test,gen-policy-rot}.py` (headers only),
-  `.devin/brain/` (B-049).
-- Removed: `pyrightconfig.json` (added in S193; unnecessary once the source-level
-  fixes landed, and its platform claim demonstrably had no effect on the checker).
-- Commit: `5ca4748`.
+- Changed: `tests/e2e/agent-update.e2e.test.js` (new),
+  `tests/e2e/agent-helpers.js`, `scripts/run-e2e.sh`,
+  `server/src/config/paths.js`, `server/src/routes/agent.js`, `agent/agent.py`,
+  `server/.env.example`.
+- Commit: `d9a9b21`.
 
 ### Next session opening
 
-Turn the signature into evidence: provision the keypair into CI
-(`gh secret set UPDATE_SIGNING_KEY`), cut a release, publish the resulting
-`agent-release.json` to KV, and confirm on the HP box that the device's check-in
-flips `sha256-only` → `signature` and accepts one update — the first hardware
-evidence for E-AUTO-UPDATE.
+Attack the remaining vacuity risk in the harness: assert in the reopening test that
+the agent's *check-in* (not enrollment) is what sets `last_checkin`, then provision
+`UPDATE_SIGNING_KEY`, publish `agent-release.json` to KV, and take the flip to the HP
+box — the only thing standing between this emulated evidence and E-AUTO-UPDATE being
+`verified-on-hardware`.
 
 ---
 
