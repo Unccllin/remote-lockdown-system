@@ -6914,16 +6914,22 @@ pool and never signed with a real key, the agent test mocked `requests` and neve
 spoke HTTP, and the signer test verified bytes a real response had never carried. So
 "an update is authenticated" was asserted in three places and proven in none.
 
-Two defects in the existing agent E2E harness made it weaker than it looked, and
-both had to be fixed before an update suite could mean anything:
+Two *mechanisms* cost this session hours and must be recorded — but **CORRECTION
+(S196)**: they were not defects in the pre-existing harness, as first written here.
+`startAgent()` has always used async `spawn` (agent-helpers.js) and has always
+deleted `AGENT_SHARED_KEY` and its siblings from the child env. Both failures came
+from the *new* suite bypassing the harness's own rules (`spawnSync`, and
+`{...process.env}`). Both mechanisms were re-verified by execution in S196:
 
-1. **`spawnSync` blocks the event loop.** The test server runs in the same Node
-   process, so a synchronous spawn starves it: the agent's check-in timed out after
-   15s and the failure looked like a broken server. Only async `spawn` works.
-2. **`AGENT_SHARED_KEY` leaked into spawned agents.** The harness set it, the
-   agent's `load_config()` prefers env over the config file, so the agent
-   authenticated with the suite's shared key instead of its device key and every
-   check-in was 401 — which looks like broken auth rather than a harness leak.
+1. **`spawnSync` starves an in-process server.** The test server runs in the same
+   Node process as the test, so a synchronous spawn blocks the event loop and the
+   server cannot answer the child: measured `ReadTimeout 6.0s` synchronously versus
+   `200 in 0.01s` with async `spawn`. A property of in-process servers, not of the
+   harness — which is why the harness already used async spawn.
+2. **An inherited `AGENT_SHARED_KEY` overrides the config file's device key.**
+   `load_config()` prefers env over the file; measured `agent_key resolved ->
+   SHARED-KEY-FROM-ENV` with a file that named `DEVICE-KEY-FROM-FILE`. The harness
+   already deleted it; only the new suite leaked it.
 
 ### IMPLEMENT
 
@@ -7002,9 +7008,10 @@ both had to be fixed before an update suite could mean anything:
 ### Failure attribution
 
 - **Layer 4 — verification feedback** (primary): the update path had three
-  boundary-limited proofs and no end-to-end one, and the harness used for
-  "real agent" testing had two defects that silently weakened it. Both were found
-  only by building the missing proof: a lint, a mock, and a green suite each said
+  boundary-limited proofs and no end-to-end one. The two failures met while building
+  it were the new suite's own (sync spawn, leaked env), not harness defects — see
+  the correction above; the harness already encoded both rules, and copying them
+  instead of using them is what broke. A lint, a mock, and a green suite each said
   the path worked.
 - **Layer 2 — context provision**: nothing said that agent E2E suites must use async
   `spawn` (the server shares the process) or that `startAgent`'s env cleaning must be
@@ -7037,5 +7044,111 @@ the agent's *check-in* (not enrollment) is what sets `last_checkin`, then provis
 `UPDATE_SIGNING_KEY`, publish `agent-release.json` to KV, and take the flip to the HP
 box — the only thing standing between this emulated evidence and E-AUTO-UPDATE being
 `verified-on-hardware`.
+
+---
+
+---
+
+## Session 196 — 2026-11-03 (checking my own summary: the harness was fine, the new suite wasn't)
+
+### RULE-ZERO
+
+**Read**: the two claims in session 195's block ("Two defects in the existing agent
+E2E harness"); `tests/e2e/agent-helpers.js` (`startAgent`, `agentEnv`,
+`checkPythonAvailable`); `server/src/routes/devices.js` (enrollment `INSERT`);
+`server/src/db/migrations{, -sqlite}/001_base.sql` (`last_checkin`,
+`hardware_uuid UNIQUE`); `agent/agent.py` (`load_config` env precedence,
+`get_hardware_uuid`); `tests/e2e/agent-update.e2e.test.js`.
+
+**Finding**: the S195 attribution was wrong, and the harness's own code said so.
+`startAgent()` has *always* used async `spawn` and has *always* deleted
+`AGENT_SHARED_KEY` (and its siblings) from the child env. Both failures attributed
+to "the existing harness" were the **new** suite bypassing rules the harness already
+encoded — `spawnSync`, and `{...process.env}` instead of `agentEnv()`. The mechanisms
+are real and worth knowing; the blame was misplaced.
+
+The two mechanisms were re-measured rather than re-asserted:
+
+| Claim | Measurement |
+|---|---|
+| `spawnSync` starves the in-process server | same endpoint: **ReadTimeout 6.0 s** synchronously, **200 in 0.01 s** with async `spawn` |
+| inherited `AGENT_SHARED_KEY` beats the config file | `agent_key` resolved to **`SHARED-KEY-FROM-ENV`** where the file said `DEVICE-KEY-FROM-FILE` |
+| two devices on one host collide | `get_hardware_uuid()` → `91760580355` (host-stable) under `devices.hardware_uuid UNIQUE`; the S195 run raised `SQLITE_CONSTRAINT ... devices.hardware_uuid` |
+| the existing suite is not vacuous on check-in | `last_checkin` is `TIMESTAMPTZ` with no default and enrollment inserts only `(hostname, owner_name, api_key_hash)`; probe: **null after enrollment**, `2026-11-03 10:24:49` after the agent ran |
+
+### IMPLEMENT
+
+- `.devin/graph/trace.md` — S195's block corrected in place with a visible
+  `CORRECTION (S196)` marker: the mechanisms stay (they are true and cost hours), the
+  attribution is fixed, and the reason the harness was right is named.
+- `.devin/brain/` — **B-050 refuted → B-051 confirmed** (code-read), carrying the
+  measurements and the corrected statement. The refute path exists for exactly this:
+  a belief recorded from a debugging narrative rather than from the code.
+
+### Fog cleared
+
+- **Who was at fault for the two E2E failures**: the new suite, not the harness.
+  Verified by reading `agent-helpers.js` (async `spawn`; env scrubbing) and by
+  measuring both mechanisms in isolation.
+- **Whether the existing agent-integration suite proves a real check-in**: yes. Its
+  waiting assertion cannot be satisfied at enrollment, and the probe shows the value
+  moving from null to a timestamp only after the agent ran.
+
+### Fog remaining
+
+- The rest of S195 stands as written: E-AUTO-UPDATE evidence is emulated, one
+  full-sweep E2E failure was observed once and did not reproduce, and no signing key
+  exists in CI.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; the repo's 178-diagnostic
+  pyright/ast-grep baseline is still unowned.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+
+- Unchanged: hardware (HP box) for the E-AUTO-UPDATE flip; owner provisioning of
+  `UPDATE_SIGNING_KEY`; Cloudflare credentials for the KV publish.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): I published two claims about
+  pre-existing code without running the discriminating check, even though the
+  harness's own source answered the question. The summary was written from the
+  debugging narrative (what the failures *felt* like) instead of from the files.
+  The fix that generalises: when a session blames existing code, re-read that code
+  before writing the block — the repo has been wrong about this before, in the other
+  direction (stale debt entries claiming code was missing when it existed).
+- **Layer 5 — state management** (secondary): the wrong claim was already in
+  `trace.md` and in the brain, so it would have been inherited by the next session as
+  fact. Correcting both layers, with a marker, is what stops the error propagating.
+
+### VERIFY
+
+- Probe output (jest, then removed):
+  - `D: last_checkin after enrollment = null` → `D: last_checkin after agent run = "2026-11-03 10:24:49"`
+  - `E sync -> SYNC ReadTimeout 6.0` / `E async -> ASYNC 200 0.01`
+  - `agent_key resolved -> SHARED-KEY-FROM-ENV`
+- Code read: `agent-helpers.js:341` deletes `env.AGENT_SHARED_KEY`;
+  `agent-helpers.js:360` uses `spawn(...)`.
+- `make graph-check`: all invariants pass. `brain.py check`: 51 beliefs, integrity
+  clean (confirmed 38, refuted 13).
+
+### Session artifacts
+
+- Changed: `.devin/graph/trace.md` (S195 corrected), `.devin/brain/beliefs.yaml`,
+  `.devin/brain/BELIEFS.md`.
+- Commit: `PENDING`.
+
+### Next session opening
+
+Provision `UPDATE_SIGNING_KEY`, publish `agent-release.json` to KV, and take the
+`sha256-only` → `signature` flip to the HP box — the only thing between the current
+emulated E2E evidence and E-AUTO-UPDATE being `verified-on-hardware`.
 
 ---

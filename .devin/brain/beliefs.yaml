@@ -879,7 +879,7 @@ beliefs:
     every check-in 401. And two devices cannot share one host in these suites: get_hardware_uuid() falls
     back to a host-stable value where DMI is unreadable and devices.hardware_uuid is UNIQUE.'
   domain: testing/e2e
-  status: confirmed
+  status: refuted
   evidence_level: code-read
   provenance: 4-case update E2E green 3x + 2 full sweeps; each of the three defects reproduced first (15s
     ReadTimeout, 401, SQLITE_CONSTRAINT devices.hardware_uuid) then fixed and re-verified; falsification
@@ -890,6 +890,38 @@ beliefs:
   last_verified: '2026-11-03'
   commit_ref: null
   supersedes: null
-  superseded_by: null
+  superseded_by: B-051
   dependents: []
   notes: 'Falsification: bypassing verify_update_signature makes the untrusted-key case fail (1/4).'
+  refuted_on: '2026-11-03'
+  refute_evidence: 'S196: schema read (last_checkin TIMESTAMPTZ, no default; enrollment INSERT sets only
+    hostname/owner_name/api_key_hash), python probe (agent_key -> SHARED-KEY-FROM-ENV), code read (agent-helpers.js
+    deletes the vars; startAgent uses async spawn), and a jest probe printing null -> timestamp plus sync-timeout
+    vs async-200 on the same endpoint'
+- id: B-051
+  statement: 'The agent E2E harness (tests/e2e/agent-helpers.js) already encodes two rules that a new
+    suite must reuse, not reinvent: (1) spawn the agent ASYNCHRONOUSLY, because spawnSync blocks the Node
+    event loop and the test server shares that process — measured 6.0s ReadTimeout synchronously vs 200
+    in 0.01s async; (2) scrub agent-relevant env vars through agentEnv(), because load_config() prefers
+    env over the config file — an inherited AGENT_SHARED_KEY yields ''SHARED-KEY-FROM-ENV'' where the
+    file says ''DEVICE-KEY-FROM-FILE'', making every check-in 401. The S195 failures were the new suite
+    bypassing those rules, NOT defects in the pre-existing harness. Separately, and still true: devices.hardware_uuid
+    is UNIQUE while get_hardware_uuid() falls back to a host-stable value where DMI is unreadable, so
+    two devices on one host collide on check-in (re-provision one device); and last_checkin is NULL at
+    enrollment, so an assertion that it becomes non-null depends on a real check-in (verified: null before
+    the agent ran, ''2026-11-03 10:24:49'' after).'
+  domain: testing/e2e
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'executed probes in S196: jest probe printed last_checkin null -> ''2026-11-03 10:24:49'';
+    same endpoint ReadTimeout 6.0s via spawnSync vs 200 in 0.01s via async spawn; agent_key resolved to
+    SHARED-KEY-FROM-ENV over DEVICE-KEY-FROM-FILE; code read confirms agent-helpers deletes the vars and
+    uses async spawn'
+  source: refutes B-050
+  asserted: '2026-11-03'
+  last_verified: '2026-11-03'
+  commit_ref: null
+  supersedes: B-050
+  superseded_by: null
+  dependents: []
+  notes: ''

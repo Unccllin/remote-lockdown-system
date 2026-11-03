@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-03 13:20:02 — 50 beliefs
+Generated: 2026-11-03 13:25:41 — 51 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -136,7 +136,8 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
-| B-050 | confirmed | code-read | Agent E2E suites that run the in-process test server MUST spawn the agent asynchronously: spawnSync blocks the Node event loop, so the server cannot answer the subprocess and the agent reports a 15s read timeout that looks like a broken server. Spawned agents must also inherit the harness's agentEnv() (agent-relevant vars deleted, never blanked), because the agent's load_config() prefers env over the config file and an inherited AGENT_SHARED_KEY silently replaces the device key, making every check-in 401. And two devices cannot share one host in these suites: get_hardware_uuid() falls back to a host-stable value where DMI is unreadable and devices.hardware_uuid is UNIQUE. |
+| B-050 | refuted | code-read | Agent E2E suites that run the in-process test server MUST spawn the agent asynchronously: spawnSync blocks the Node event loop, so the server cannot answer the subprocess and the agent reports a 15s read timeout that looks like a broken server. Spawned agents must also inherit the harness's agentEnv() (agent-relevant vars deleted, never blanked), because the agent's load_config() prefers env over the config file and an inherited AGENT_SHARED_KEY silently replaces the device key, making every check-in 401. And two devices cannot share one host in these suites: get_hardware_uuid() falls back to a host-stable value where DMI is unreadable and devices.hardware_uuid is UNIQUE. → see B-051 |
+| B-051 | confirmed | code-read | The agent E2E harness (tests/e2e/agent-helpers.js) already encodes two rules that a new suite must reuse, not reinvent: (1) spawn the agent ASYNCHRONOUSLY, because spawnSync blocks the Node event loop and the test server shares that process — measured 6.0s ReadTimeout synchronously vs 200 in 0.01s async; (2) scrub agent-relevant env vars through agentEnv(), because load_config() prefers env over the config file — an inherited AGENT_SHARED_KEY yields 'SHARED-KEY-FROM-ENV' where the file says 'DEVICE-KEY-FROM-FILE', making every check-in 401. The S195 failures were the new suite bypassing those rules, NOT defects in the pre-existing harness. Separately, and still true: devices.hardware_uuid is UNIQUE while get_hardware_uuid() falls back to a host-stable value where DMI is unreadable, so two devices on one host collide on check-in (re-provision one device); and last_checkin is NULL at enrollment, so an assertion that it becomes non-null depends on a real check-in (verified: null before the agent ran, '2026-11-03 10:24:49' after). |
 
 ## threat-model
 
