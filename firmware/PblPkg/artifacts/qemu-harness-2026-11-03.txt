@@ -1,0 +1,35 @@
+=== Starting swtpm (TPM 2.0 simulator) ===
+  [INFO] tpm2-tools absent or PROVISION_AK_NAME=0 — unprovisioned path
+  swtpm started (PID 14)
+=== Creating ESP disk image ===
+Creating new GPT entries in memory.
+The new table will be used at the next reboot or after you
+run partprobe(8) or kpartx(8)
+The operation has completed successfully.
+mkfs.fat 4.2 (2021-01-31)
+
+=== Booting PblApp in OVMF (timeout 40s) ===
+  QEMU exited with code 124
+  Serial log: 2725 bytes
+  Override input sent: True
+
+=== Checking serial output ===
+  [PASS] PBL banner appears
+  [PASS] Platform state step
+  [PASS] Policy parse step
+  [PASS] TPM NV read step
+  [PASS] Verdict fetch step
+  [PASS] Verdict verify step
+  [PASS] Decision step
+  [PASS] PCR extend step
+  [PASS] Decision action step
+  [PASS] NV indices provisioned
+  [PASS] HMAC session established
+  [PASS] Self-image measured (D-217)
+  [PASS] Loaded image digest computed (D-213)
+  [PASS] Lock screen displayed
+  [PASS] unprovisioned detected
+  [PASS] verdict request suppressed
+  [PASS] Self-image hash matches PblApp.efi (3906065d77d9e763...)
+
+=== Results: 17 PASS / 0 FAIL ===

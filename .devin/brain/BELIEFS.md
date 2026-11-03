@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-03 14:35:33 — 54 beliefs
+Generated: 2026-11-03 14:48:02 — 55 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -103,6 +103,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-045 | confirmed | spec-checked | PK and KEK live under gEfiGlobalVariableGuid while db/dbx/dbt live under gEfiImageSecurityDatabaseGuid; writing PK or KEK under the image-security GUID fails with EFI_INVALID_PARAMETER because the variable driver does not recognise it as an authenticated variable. |
 | B-046 | confirmed | emulated | PK/KEK/db/dbx writes are rejected with EFI_INVALID_PARAMETER unless the attribute set includes EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS and the data begins with an EFI_VARIABLE_AUTHENTICATION_2 header — even while the platform is in SetupMode; the payload is then taken from Data + AUTHINFO2_SIZE(Data). |
+
+## firmware/tls
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-055 | confirmed | code-read | The PBL TLS pin is enforced by construction, not by PblTlsVerifyCert: C4 key 78 carries the pinned CA's DER and PblInstallTlsCaCertificate (TlsVerify.c:56, called from PblApp.c:600 before the fetch at :617) rebuilds the platform TlsCaCertificate store from it each boot, so EDK2's hard-coded EFI_TLS_VERIFY_PEER validates against exactly that CA — proven by artifacts/d132-mismatched-ca-results.txt (correct CA installed, wrong-CA server, handshake aborts, no request reaches the server). What is missing is HOSTNAME binding: PblApp parses the URI host, PblHttpsPost only NULL-checks it, HttpsClient.c configures no TLS session data, and PblTlsVerifyCert (TlsVerify.c:129) has no caller and no SAN support. Also: the QEMU+swtpm firmware harness DOES run locally in Docker (make firmware-qemu, 17 PASS/0 FAIL on the prebuilt PblApp.efi), contrary to the ledger's 'cannot run locally' text; but the image has no EDK II build tool, so firmware C changes cannot be compiled or verified until an edk2 checkout is added. |
 
 ## firmware/variables
 

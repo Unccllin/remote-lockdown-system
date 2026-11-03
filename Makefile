@@ -39,6 +39,7 @@ help:
 	@echo "  make test-electron        run electron tests"
 	@echo "  make test-e2e             run API-level E2E tests (lockdown + recovery + agent-integration)"
 	@echo "  make test-worker-e2e      run the Worker update path against local workerd (opt-in)"
+	@echo "  make firmware-qemu        boot PblApp.efi in QEMU+swtpm via Docker (17 checks)"
 	@echo "  make test-e2e-dashboard   run Playwright browser E2E tests (dashboard)"
 	@echo "  make test-coverage        run all test suites with coverage reporting"
 	@echo "  make full-verify          run everything: lint + test + e2e + verify-env + graph-check"
@@ -123,6 +124,17 @@ test-worker:
 # (~36s, boots workerd per case) and needs `npx --no-install wrangler`, so it is
 # opt-in rather than part of `make test` / CI. It is the only place the shipping
 # backend is exercised end to end with a real agent and real Ed25519 keys.
+# PBL firmware runtime check in QEMU + swtpm, via Docker.
+#
+# Needs no local qemu/swtpm/EDK II: the image carries them and the prebuilt
+# PblApp.efi is booted as-is. The ledger said this "cannot run locally" for
+# several sessions (D-117); it can, and this target is the invocation that works.
+firmware-qemu:
+	@command -v docker >/dev/null 2>&1 || { echo "firmware-qemu: docker is required"; exit 1; }
+	@docker build -q -t pbl-qemu -f firmware/Dockerfile.qemu firmware/ >/dev/null
+	@docker run --rm -v "$$(pwd)/firmware:/firmware" pbl-qemu \
+		/firmware/PblPkg/ci-harness-docker.sh --timeout $${QEMU_TIMEOUT:-40}
+
 test-worker-e2e:
 	@echo "=== Worker update path (local workerd) ==="
 	@LOCKDOWN_WORKER_E2E=1 $$( [ -x agent/.venv/bin/python ] && echo agent/.venv/bin/python || echo python3 ) scripts/test_worker_update_e2e.py

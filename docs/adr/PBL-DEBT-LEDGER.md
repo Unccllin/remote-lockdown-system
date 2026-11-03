@@ -429,26 +429,67 @@
   (2) Verify the server can decode the firmware's CBOR request body
   end-to-end.
 
-### D-116 — TLS certificate pin verification not implemented
-- **Status**: OPEN
+### D-116 — Hostname binding is missing from the TLS path (chain pinning is done)
+- **Status**: OPEN — **narrowed (2026-11-03, session 200) after verifying the code.**
+  The pinning half is implemented and tested; the hostname half is not.
 - **Category**: SECURITY
-- **Blocker**: `TlsVerify.c` is an empty stub. C3 §4 requires certificate
-  pinning from the signed C4 policy blob, not from a generic platform
-  certificate store. Without pin verification, the HTTPS client cannot
-  safely connect to the verdict server.
-- **Close criteria**: Implement certificate pin extraction from C4 policy.
-  Implement pin verification during TLS handshake using
-  `EFI_TLS_PROTOCOL->SetSessionData`. Test with pinned and unpinned
-  certificates.
+- **Blocker (corrected — the previous text was stale)**:
+  The entry said "`TlsVerify.c` is an empty stub" and that no pin verification
+  exists. Both statements are false as of D-132's fix:
+  - `TlsVerify.c` is 223 lines and defines `PblInstallTlsCaCertificate` (called
+    from `PblApp.c:600`, immediately before the fetch at `:617`) plus
+    `PblTlsVerifyCert`. D-132's ruling replaced the "no DER-accepting API"
+    deadlock: C4 **key 78** carries the CA's DER, and the platform
+    `TlsCaCertificate` store is rebuilt from the policy on every boot, so EDK2's
+    hard-coded `EFI_TLS_VERIFY_PEER` validates the chain against exactly the
+    pinned CA.
+  - Chain pinning is proven, not assumed: `artifacts/d132-mismatched-ca-results.txt`
+    boots the real firmware against a server presenting a leaf signed by a second
+    CA — the firmware logs `[OK] Pinned CA installed as TLS trust anchor (750
+    bytes)`, the handshake aborts, and **no request reaches the server**.
+  - **What is actually missing**: hostname binding. `PblApp.c` parses the host
+    (`PblParseUriHostname`) and passes it to `PblHttpsPost`, which only checks it
+    is non-NULL; `HttpsClient.c` configures no TLS session data (no
+    `SetSessionData`, no host name), and `PblTlsVerifyCert` — the only code that
+    would compare CN/SAN — **has no caller** and lacks SAN support
+    (`TODO (C3 §4)` inside it). C3 §4 requires rejecting a certificate whose
+    CN/SAN does not match the URI host. Whether EDK2's HttpDxe happens to verify
+    the host itself is *not established anywhere in this repository*.
+- **Residual work**:
+  1. Bind the hostname: either configure the TLS session with the URI host (so
+     EDK2 verifies CN/SAN) or call a completed `PblTlsVerifyCert` (needs SAN
+     extraction via `X509GetExtensionData`, OID 2.5.29.17).
+  2. Decide `PblTlsVerifyCert`'s fate: give it a caller, or delete it and say so.
+     Leaving a 223-line security function that nothing calls is a review hazard —
+     it reads like enforcement and is dead.
+  3. Confirm the TLS version floor (C3 §4 asks for ≥1.2). PBL sets none; it
+     relies on the EDK2 default, which is unverified here.
+- **Close criteria (rewritten)**: a runtime artifact showing a certificate with
+  the right CA but the wrong CN/SAN is rejected, and one with both correct is
+  accepted; plus `PblTlsVerifyCert` either called or removed.
+- **Superseded criterion**: "implement pin verification using
+  `EFI_TLS_PROTOCOL->SetSessionData`" — D-132's ruling established that EDK2
+  cannot be told to skip chain validation, which is why the store-replacement
+  design replaced this approach.
 
 ### D-117 — No runtime tests for PBL modules
 - **Status**: OPEN
 - **Category**: TEST
-- **Blocker**: No tests exist for any PBL module. All verification is
-  compilation-only (`-Werror`). There are no unit tests for TPM command
-  construction, response parsing, CBOR encoding, COSE verification, or
-  decision logic. The QEMU smoke test (`ci-harness.sh`) cannot run locally
-  (D-100, D-101).
+- **Blocker (corrected 2026-11-03, session 200 — the last sentence was stale)**:
+  No *host-side unit* tests exist for PBL modules; verification for individual
+  functions is still compilation-only (`-Werror`). There are no unit tests for TPM
+  command construction, response parsing, CBOR encoding, COSE verification, or
+  decision logic.
+  The QEMU smoke test **does** run locally, in Docker — no local `qemu`, `swtpm`
+  or EDK II checkout is needed:
+      make firmware-qemu
+  which builds `firmware/Dockerfile.qemu` and runs `ci-harness-docker.sh` against
+  the prebuilt `PblApp.efi`. Verified 2026-11-03: **17 PASS / 0 FAIL**
+  (`artifacts/qemu-harness-2026-11-03.txt`), including the banner, policy parse,
+  TPM NV read, verdict fetch/verify/decision, PCR extend, HMAC session,
+  self-image measurement, lock screen, and the unprovisioned-device path. So the
+  QEMU+swtpm half of the close criteria is *available*; what is missing is tests
+  that assert on it per module rather than one end-to-end smoke run.
 - **Close criteria**: Add host-side unit tests for TPM command buffer
   construction (byte-level verification). Add QEMU+swtpm integration tests
   for TPM NV read/write. Add verdict verification tests with test keys.

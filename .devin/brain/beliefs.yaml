@@ -997,3 +997,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-055
+  statement: 'The PBL TLS pin is enforced by construction, not by PblTlsVerifyCert: C4 key 78 carries
+    the pinned CA''s DER and PblInstallTlsCaCertificate (TlsVerify.c:56, called from PblApp.c:600 before
+    the fetch at :617) rebuilds the platform TlsCaCertificate store from it each boot, so EDK2''s hard-coded
+    EFI_TLS_VERIFY_PEER validates against exactly that CA — proven by artifacts/d132-mismatched-ca-results.txt
+    (correct CA installed, wrong-CA server, handshake aborts, no request reaches the server). What is
+    missing is HOSTNAME binding: PblApp parses the URI host, PblHttpsPost only NULL-checks it, HttpsClient.c
+    configures no TLS session data, and PblTlsVerifyCert (TlsVerify.c:129) has no caller and no SAN support.
+    Also: the QEMU+swtpm firmware harness DOES run locally in Docker (make firmware-qemu, 17 PASS/0 FAIL
+    on the prebuilt PblApp.efi), contrary to the ledger''s ''cannot run locally'' text; but the image
+    has no EDK II build tool, so firmware C changes cannot be compiled or verified until an edk2 checkout
+    is added.'
+  domain: firmware/tls
+  status: confirmed
+  evidence_level: code-read
+  provenance: file:line citations verified by grep; make firmware-qemu run twice at 17 PASS/0 FAIL with
+    artifact; docker run confirmed the image has no edk2 build tool
+  source: firmware/PblPkg/PblApp/TlsVerify.c; PblApp.c; HttpsClient.c; PblApp.h; firmware/PblPkg/artifacts/d132-mismatched-ca-results.txt;
+    docs/adr/PBL-DEBT-LEDGER.md D-116/D-117; Makefile firmware-qemu
+  asserted: '2026-11-03'
+  last_verified: '2026-11-03'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
