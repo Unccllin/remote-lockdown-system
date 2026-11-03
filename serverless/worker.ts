@@ -189,7 +189,7 @@ function jsonResponse(data: unknown, status = 200): Response {
     status,
     headers: {
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': TOKEN_API_CORS_ORIGIN,
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Agent-Key, X-Timestamp, X-Nonce, X-Signature, X-Sig-Version',
     },
@@ -465,11 +465,26 @@ async function verifyAdminToken(
   }
 }
 
+// The Worker authenticates with `Authorization: Bearer` and `X-Agent-Key` headers —
+// never cookies — so a wildcard origin does not expose credentials: a hostile page
+// can send the request but cannot attach a token it does not have. Restricting it
+// would break the Electron app, which loads the dashboard from file:// and
+// therefore sends a null origin. Named once here so the decision is reviewable
+// rather than repeated as a bare literal in three response paths.
+const TOKEN_API_CORS_ORIGIN = '*';
+
 const DEVICES_KEY = 'devices';
 const COMMANDS_KEY = 'commands';
 const KEYS_KEY = 'encryption_keys';
 const LOCATIONS_KEY = 'locations';
 const AUDIT_KEY = 'audit_log';
+
+// Agent release metadata for GET /api/agent/update, written at release time by
+// CI (see serverless/README.md). It holds the version, the binary's sha256/size
+// and the detached Ed25519 signature over "v1:{version}:{sha256}" — produced
+// wherever the signing key lives, never in the Worker. The Worker only serves it,
+// so it cannot drift from the signature's payload.
+const AGENT_RELEASE_KEY = 'agent_release';
 const BIOS_PASSWORDS_KEY = 'bios_passwords';
 
 // KV-RACE-001: Checkin metadata is stored in a separate KV key from device
@@ -2355,7 +2370,7 @@ export default {
     if (method === 'OPTIONS') {
       return new Response(null, {
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Origin': TOKEN_API_CORS_ORIGIN,
           'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
           'Access-Control-Allow-Headers':
             'Content-Type, Authorization, X-Agent-Key, X-Timestamp, X-Nonce, X-Signature, X-Sig-Version',
@@ -2526,6 +2541,10 @@ export default {
     if (path === '/api/download/installer' && method === 'GET') {
       return handleDownloadBinary(env, 'installer');
     }
+    if (path === '/api/agent/update' && method === 'GET') {
+      return handleAgentUpdate(request, env);
+    }
+
     if (path === '/api/download/agent' && method === 'GET') {
       return handleDownloadBinary(env, 'agent');
     }
@@ -2551,7 +2570,7 @@ export default {
       const resp = await handlePblRoute(request, env, path, method);
       // Add CORS headers to all PBL responses (D-210)
       const corsHeaders = {
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': TOKEN_API_CORS_ORIGIN,
         'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
       };
@@ -2589,6 +2608,100 @@ async function handleDownloadScript(env: Env, name: string): Promise<Response> {
 }
 
 /**
+ * Compare two dotted version strings ("1.2.3").
+ *
+ * Returns <0 when a<b, 0 when equal, >0 when a>b. Non-numeric segments count as
+ * 0, which is what the Express implementation does — an unparseable client
+ * version therefore reads as "older" and the agent is offered an update rather
+ * than being silently stranded.
+ */
+function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * GET /api/agent/update — auto-update capability check.
+ *
+ * The agent calls this on its check-in cycle (agent/agent.py:3238) and expects
+ * the Express contract: {update_available, latest_version, current_version,
+ * sha256, size, download_url, built_at, signature, signature_alg}. It verifies
+ * the Ed25519 signature against its pinned update key before applying anything,
+ * so an unsigned or mismatched response simply means no update.
+ *
+ * Before this existed the Worker answered 404 to every update check, and the
+ * agent's raise_for_status() turned that into a logged warning — so the default
+ * (serverless) deployment could never update the fleet, silently.
+ *
+ * Auth: agent HMAC (the agent signs the empty body for GET).
+ */
+async function handleAgentUpdate(request: Request, env: Env): Promise<Response> {
+  const device = await verifyAgentAuth(request, env, '');
+  if (!device) {
+    return errorResponse('Authentication failed', 401);
+  }
+
+  const currentVersion = request.headers.get('x-agent-version') || '0.0.0';
+  const platform = request.headers.get('x-agent-platform') || 'linux';
+
+  const raw = await env.LOCKDOWN_KV.get(AGENT_RELEASE_KEY);
+  if (!raw) {
+    // No release published: report "no update" with the version the agent sent,
+    // the same shape Express uses when it has no binary on disk.
+    return jsonResponse({
+      update_available: false,
+      latest_version: currentVersion,
+      reason: 'no_release_published',
+    });
+  }
+
+  let release: {
+    latest_version?: string;
+    sha256?: string;
+    size?: number;
+    built_at?: string;
+    signature?: string | null;
+    signature_alg?: string | null;
+    platforms?: Record<string, { sha256?: string; size?: number; built_at?: string }>;
+  };
+  try {
+    release = JSON.parse(raw);
+  } catch {
+    return errorResponse('Agent release metadata is corrupt', 500);
+  }
+
+  if (!release.latest_version) {
+    return errorResponse('Agent release metadata is incomplete', 500);
+  }
+
+  const perPlatform = release.platforms?.[platform];
+  const sha256 = perPlatform?.sha256 || release.sha256;
+  const size = perPlatform?.size ?? release.size;
+  if (!sha256 || typeof size !== 'number') {
+    // Metadata that cannot be verified must not be offered: the agent would
+    // download a binarywhose hash it cannot check.
+    return errorResponse('Agent release metadata is incomplete', 500);
+  }
+
+  return jsonResponse({
+    update_available: compareVersions(currentVersion, release.latest_version) < 0,
+    latest_version: release.latest_version,
+    current_version: currentVersion,
+    sha256,
+    size,
+    download_url: `/api/agent/download?platform=${platform}`,
+    built_at: perPlatform?.built_at || release.built_at || null,
+    signature: release.signature || null,
+    signature_alg: release.signature ? release.signature_alg || 'ed25519' : null,
+  });
+}
+
+/**
  * GET /api/download/installer or /api/download/agent
  * Serves a binary file stored in KV (key: binary:installer or binary:agent).
  * Returns the raw bytes with appropriate Content-Type and Content-Disposition.
@@ -2598,10 +2711,12 @@ async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
   if (!data) {
     return errorResponse(`${name} binary not available — upload via wrangler kv:key put`, 404);
   }
-  const filename =
-    name === 'installer' ? 'lockdown-setup.exe' :
-    name === 'lockscreen' ? 'lockdown-lockscreen.exe' :
-    'lockdown-agent.exe';
+  let filename = 'lockdown-agent.exe';
+  if (name === 'installer') {
+    filename = 'lockdown-setup.exe';
+  } else if (name === 'lockscreen') {
+    filename = 'lockdown-lockscreen.exe';
+  }
   return new Response(data, {
     status: 200,
     headers: {

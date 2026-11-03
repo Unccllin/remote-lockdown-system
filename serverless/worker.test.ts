@@ -3506,4 +3506,112 @@ describe('D-210: PBL route integration', () => {
       expect(victimData.command?.command_type).toBe('lockdown');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Agent auto-update. Session 181: the Worker had no /api/agent/update at all,
+  // so every update check on the default (serverless) deployment 404'd and the
+  // agent's raise_for_status() turned it into a logged warning — the fleet could
+  // never be patched remotely, silently.
+  // -------------------------------------------------------------------------
+  describe('GET /api/agent/update', () => {
+    const RELEASE = {
+      latest_version: '1.2.0',
+      sha256: 'a'.repeat(64),
+      size: 1234,
+      built_at: '2026-11-02T00:00:00.000Z',
+      signature: 'c2lnbmF0dXJl',
+      signature_alg: 'ed25519',
+      platforms: { win: { sha256: 'b'.repeat(64), size: 2345 } },
+    };
+
+    it('requires agent auth', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/api/agent/update'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('reports no update when no release has been published', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-001');
+      const headers = signRequest('', apiKey, { 'X-Agent-Version': '1.0.0' });
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/agent/update', undefined, headers),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.update_available).toBe(false);
+      expect(data.reason).toBe('no_release_published');
+      expect(data.latest_version).toBe('1.0.0');
+    });
+
+    it('offers a newer release with hash, size and signature', async () => {
+      await env.LOCKDOWN_KV.put('agent_release', JSON.stringify(RELEASE));
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-002');
+      const headers = signRequest('', apiKey, {
+        'X-Agent-Version': '1.0.0',
+        'X-Agent-Platform': 'linux',
+      });
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/agent/update', undefined, headers),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(data.update_available).toBe(true);
+      expect(data.latest_version).toBe('1.2.0');
+      expect(data.current_version).toBe('1.0.0');
+      expect(data.sha256).toBe(RELEASE.sha256);
+      expect(data.size).toBe(RELEASE.size);
+      expect(data.signature).toBe(RELEASE.signature);
+      expect(data.signature_alg).toBe('ed25519');
+      expect(data.download_url).toContain('/api/agent/download');
+    });
+
+    it('does not offer the version the agent already runs', async () => {
+      await env.LOCKDOWN_KV.put('agent_release', JSON.stringify(RELEASE));
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-003');
+      const headers = signRequest('', apiKey, { 'X-Agent-Version': '1.2.0' });
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/agent/update', undefined, headers),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(data.update_available).toBe(false);
+    });
+
+    it('honours per-platform hash and size', async () => {
+      await env.LOCKDOWN_KV.put('agent_release', JSON.stringify(RELEASE));
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-004');
+      const headers = signRequest('', apiKey, {
+        'X-Agent-Version': '1.0.0',
+        'X-Agent-Platform': 'win',
+      });
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/agent/update', undefined, headers),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(data.sha256).toBe('b'.repeat(64));
+      expect(data.size).toBe(2345);
+    });
+
+    it('fails closed on corrupt or incomplete metadata', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-005');
+      const headers = signRequest('', apiKey, { 'X-Agent-Version': '1.0.0' });
+
+      await env.LOCKDOWN_KV.put('agent_release', 'not-json');
+      const corrupt = await worker.fetch(
+        makeRequest('GET', '/api/agent/update', undefined, headers),
+        env,
+      );
+      expect(corrupt.status).toBe(500);
+
+      // Metadata without a hash cannot be verified, so it must not be offered.
+      await env.LOCKDOWN_KV.put('agent_release', JSON.stringify({ latest_version: '9.9.9' }));
+      const incompleteHeaders = signRequest('', apiKey, { 'X-Agent-Version': '1.0.0' });
+      const incomplete = await worker.fetch(
+        makeRequest('GET', '/api/agent/update', undefined, incompleteHeaders),
+        env,
+      );
+      expect(incomplete.status).toBe(500);
+    });
+  });
 });

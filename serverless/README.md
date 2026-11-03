@@ -35,6 +35,49 @@ npx wrangler secret put PBL_SIGNING_KEY
 npx wrangler secret put PBL_POLICY_SIGNING_KEY
 ```
 
+## Agent auto-update (`/api/agent/update`)
+
+The agent asks for an update on every check-in (`agent/agent.py:3238`) and verifies
+a detached Ed25519 signature over `v1:{version}:{sha256}` against its pinned update
+key before applying anything.
+
+The Worker serves that metadata from a single KV key, `agent_release`. It holds no
+signing key: signing happens wherever the private key lives (CI), and the Worker
+only serves the result — so it cannot drift from the payload that was signed.
+
+Publish a release (CI step, run where the signing key is available):
+
+```bash
+# 1. Upload the binary the update response points at
+npx wrangler kv key put --binding=LOCKDOWN_KV binary:agent --path ./dist/lockdown-agent.exe
+
+# 2. Publish its metadata (sha256/size of the exact bytes uploaded above).
+#    signature = base64 Ed25519 over "v1:<version>:<sha256>"
+cat > /tmp/agent-release.json <<JSON
+{
+  "latest_version": "1.1.0",
+  "sha256": "<64 hex chars>",
+  "size": 12345678,
+  "built_at": "2026-11-02T00:00:00.000Z",
+  "signature": "<base64 detached signature>",
+  "signature_alg": "ed25519",
+  "platforms": { "win": { "sha256": "<win build sha256>", "size": 23456789 } }
+}
+JSON
+npx wrangler kv key put --binding=LOCKDOWN_KV agent_release --path /tmp/agent-release.json
+```
+
+Behaviour worth knowing:
+
+- **no `agent_release` key** → `update_available: false` with
+  `reason: "no_release_published"`, and `latest_version` echoes what the agent sent.
+  Nothing breaks; the agent simply does not update.
+- **corrupt or incomplete metadata** (unparseable, or no `sha256`/`size`) → **500**.
+  Metadata that cannot be verified must never be offered, because the agent would
+  download a binary whose hash it cannot check.
+- **`platforms`** overrides the top-level hash/size per `X-Agent-Platform`
+  (`win`, `linux`), for when the two builds differ.
+
 ## Verify locally before deploying
 
 ```bash

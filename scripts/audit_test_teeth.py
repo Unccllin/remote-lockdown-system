@@ -288,6 +288,33 @@ MUTATIONS: list[dict] = [
         "new": "    if (true) {  // MUTATION: any token verifies",
         "why": "the verify endpoint accepts any uninstall token",
     },
+    {
+        "path": "worker/update-auth",
+        "label": "WRK/update-auth",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  const device = await verifyAgentAuth(request, env, '');\n  if (!device) {\n    return errorResponse('Authentication failed', 401);\n  }\n\n  const currentVersion = request.headers.get('x-agent-version') || '0.0.0';",
+        "new": "  const device = await verifyAgentAuth(request, env, '');\n  if (false) {  // MUTATION: no agent auth on the update check\n    return errorResponse('Authentication failed', 401);\n  }\n\n  const currentVersion = request.headers.get('x-agent-version') || '0.0.0';",
+        "why": "any caller can read fleet update metadata without an agent key",
+    },
+    {
+        "path": "worker/update-version",
+        "label": "WRK/update-version",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "    update_available: compareVersions(currentVersion, release.latest_version) < 0,",
+        "new": "    update_available: true,  // MUTATION: always offer an update",
+        "why": "every agent is told an update is available on every check",
+    },
+    {
+        "path": "worker/update-incomplete",
+        "label": "WRK/update-incomplete",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  if (!sha256 || typeof size !== 'number') {",
+        "new": "  if (false) {  // MUTATION: serve metadata that cannot be verified",
+        "why": "an agent is offered an update whose hash it cannot check",
+    },
 ]
 
 
