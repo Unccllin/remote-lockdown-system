@@ -5990,3 +5990,106 @@ enable_pba, duress_code — does the agent read all of them?) — then build the
 NSIS installer, which is the only remaining piece with a real design decision.
 
 ---
+
+---
+
+## Session 188 — 2026-11-03 (last sweeps: PBA was silently never enabled, and two directions cleared)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S187 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `serverless/worker.ts` (the check-in response construction,
+  `handleFlagStolen`), `agent/agent.py` (how a check-in command is consumed:
+  `enable_pba` 1996, `key_material` 2209, `bios_password`/`power_on_password`
+  2245-2247, `duress_code` 2320, `command_uuid`, and `handle_unlock`'s PBA teardown),
+  `agent/duress.py`, `agent/bitlocker_pba.py`, `server/src/routes/devices.js:240-275`
+  and `agent.js:340-360` (the `enable_pba` opt-in), and `electron/setup-wizard.js`
+  (its only direct request).
+- **Finding (`enable_pba` was silently never enabled — the most consequential of this
+  whole sweep)**: Express threads an operator opt-in from flag-stolen into the command
+  row (`devices.js:242,257` → `agent.js:351`) and reports it on check-in. The Worker's
+  flag-stolen read only `hostname_confirm`, the queued command carried no flag, and
+  check-in **hardcoded `enable_pba: false`**. So on the serverless backend pre-boot
+  authentication (HP power-on password / BitLocker TPM+PIN) was off, always, with
+  nothing in any log saying so — and PBA is the control that stops a thief booting a
+  locked machine.
+- **Finding (the agent's consumption was otherwise correct)**: it reads
+  `command.id/type`, `key_material`, `bios_password`, `power_on_password`,
+  `duress_code` and `command_uuid`. Duress in particular is wired end to end — the
+  server forwards the flag, `duress.is_duress_unlock()` acts on it, and the agent
+  re-encrypts and re-locks.
+- **Finding (a deliberate non-consumption, cleared rather than changed)**:
+  `bitlocker_pin` / `bitlocker_recovery_password` are never read by the agent, and
+  should not be: `handle_unlock` clears PBA from local state via
+  `bitlocker_pba.disable_pba()`, and those credentials travel **up** to the operator
+  for the dashboard's `pba-credentials` view. Recorded so a future session does not
+  "fix" it by making the agent trust server-sent credentials.
+- **Finding (Electron carries almost no surface of its own)**: its only direct request
+  is the setup wizard's health probe against `/api/health`; everything else is the
+  dashboard's calls, which were swept in S187.
+
+### IMPLEMENT
+- `Command` gains `enable_pba?: boolean` with the T7/T8 rationale.
+- `handleFlagStolen` accepts `enable_pba` and stores it — **only an explicit boolean
+  `true`** opts in. A string `"true"` or `1` is a client bug, and opting a device into
+  pre-boot authentication is a security decision that must not be inferred.
+- Check-in reports `pendingCmd.enable_pba === true` instead of `false`.
+- `scripts/audit_test_teeth.py`: three rows.
+
+### VERIFY
+- `worker.test.ts`: **392 passed** (389 + 3): opt-in reported as true, default false,
+  and a string `"true"` still false.
+- Coverage: **89.53 / 83.53 / 95.02 / 91.56** (floors 82/75/86/82).
+- Three mutations **KILLED** by the intended tests: the hardcoded `false`, an
+  always-on `true`, and loose truthy coercion.
+
+### Fog cleared
+- **Whether PBA works on the serverless backend**: it could not — the flag never
+  reached the agent. It does now, end to end.
+- **Whether duress survives the serverless path**: yes, verified by reading both
+  sides rather than assuming.
+- **What the Electron app adds to the request surface**: one health probe.
+
+### Fog remaining
+- The generic NSIS installer (item 9) and Cloudflare-native observability/backup
+  (item 10) are untouched.
+- `/api/download/agent` remains unauthenticated in the Worker while Express requires
+  agent auth — the last unreviewed deliberate difference, still without a decision.
+- The sweep covered: agent payloads (S186), dashboard requests + reads (S187), the
+  agent's consumption of the check-in response and Electron (S188). **Not** swept:
+  the firmware's `/v1/*` CBOR field expectations against what the Worker encodes.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
+  (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), a real domain (Caddy TLS).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (the sweep, complete). Seven mismatches have now
+  been found by comparing the two sides of a contract: the missing update endpoint,
+  `boot_lock_detail`, blocked files, session context, tracking transitions, the
+  `agent_<type>_confirmed` audit entry, and `enable_pba`. Every one was invisible to
+  the mutation audit because the code was absent rather than wrong, and every one
+  produced a feature that looked fine in logs.
+- **Layer 1 — task specification** (mine, and the pattern worth naming): I built the
+  serverless path by porting *endpoints*, and an endpoint that returns 200 is not a
+  feature that works. The sweep is what turned "routes exist" into "the contract
+  holds", and it should have been the first thing done when the serverless direction
+  was confirmed — not the sixth.
+
+### Session artifacts
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `scripts/audit_test_teeth.py`.
+
+### Next session opening
+Build the generic NSIS installer — the last piece of the serverless plan with a real
+design decision: a single CI-built installer whose config is fetched at run time via
+the enrolment token, so no `makensis` in a Worker and no per-device build.
+
+---

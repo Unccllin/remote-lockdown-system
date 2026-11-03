@@ -53,32 +53,30 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 187 — 2026-11-03 (the dashboard-side sweep: the effectiveness panel reads the audit log, and the Worker wrote no entry there)
+## Latest session: 188 — 2026-11-03 (last sweeps: PBA was silently never enabled, and two directions cleared)
 
 ### VERIFY
-- `worker.test.ts`: **389 passed** (387 + 2). The audit-entry test parses the stored
-  detail exactly as the dashboard does and asserts every field, including
-  `lockdown_effective === false` for a zero-critical lockdown; the second test
-  asserts a failed command writes no confirmation.
+- `worker.test.ts`: **392 passed** (389 + 3): opt-in reported as true, default false,
+  and a string `"true"` still false.
 - Coverage: **89.53 / 83.53 / 95.02 / 91.56** (floors 82/75/86/82).
-- Three mutations **KILLED** by the intended tests: the action name the UI scans for,
-  the detail fields it parses, and the executed-only gate.
+- Three mutations **KILLED** by the intended tests: the hardcoded `false`, an
+  always-on `true`, and loose truthy coercion.
 
 ### Fog cleared
-- **Whether the effectiveness panel works on the serverless backend**: it did not,
-  and it could not have — no reader met a writer. It does now, end to end.
-- **Whether the earlier two sessions were wasted**: their storage changes were
-  necessary but not sufficient. Without this, the panel would still be dark.
+- **Whether PBA works on the serverless backend**: it could not — the flag never
+  reached the agent. It does now, end to end.
+- **Whether duress survives the serverless path**: yes, verified by reading both
+  sides rather than assuming.
+- **What the Electron app adds to the request surface**: one health probe.
 
 ### Fog remaining
 - The generic NSIS installer (item 9) and Cloudflare-native observability/backup
   (item 10) are untouched.
 - `/api/download/agent` remains unauthenticated in the Worker while Express requires
-  agent auth — still awaiting a deliberate decision.
-- The sweep has now covered agent payloads (S186) and dashboard payloads plus
-  dashboard reads (S187). **Not** swept: the Electron app's requests/reads, and the
-  agent's *reads* of the check-in response (does it consume every field the server
-  sends?).
+  agent auth — the last unreviewed deliberate difference, still without a decision.
+- The sweep covered: agent payloads (S186), dashboard requests + reads (S187), the
+  agent's consumption of the check-in response and Electron (S188). **Not** swept:
+  the firmware's `/v1/*` CBOR field expectations against what the Worker encodes.
 - Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
   (D-132); 19 Dependabot alerts.
 
@@ -93,27 +91,26 @@
   credentials (Worker publish), a real domain (Caddy TLS).
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (the sharpest instance in this thread). I fixed
-  the *storage* of a signal twice without ever checking who reads it. The tests I
-  wrote were green because they read the command record — the same layer I had just
-  written. A test that asserts on the layer you just changed will pass whether or not
-  the feature reaches a user; the sweep's value was asking "who consumes this?" and
-  finding the answer was *nobody*.
-- **Layer 1 — task specification** (mine): "restore the field" was the task I set
-  myself, when the real requirement was "make the panel work". The difference is one
-  `grep` for the field name across the UI, which I did only after the sweep prompted
-  it.
+- **Layer 4 — verification feedback** (the sweep, complete). Seven mismatches have now
+  been found by comparing the two sides of a contract: the missing update endpoint,
+  `boot_lock_detail`, blocked files, session context, tracking transitions, the
+  `agent_<type>_confirmed` audit entry, and `enable_pba`. Every one was invisible to
+  the mutation audit because the code was absent rather than wrong, and every one
+  produced a feature that looked fine in logs.
+- **Layer 1 — task specification** (mine, and the pattern worth naming): I built the
+  serverless path by porting *endpoints*, and an endpoint that returns 200 is not a
+  feature that works. The sweep is what turned "routes exist" into "the contract
+  holds", and it should have been the first thing done when the serverless direction
+  was confirmed — not the sixth.
 
 ### Session artifacts
 - Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
   `scripts/audit_test_teeth.py`.
 
 ### Next session opening
-Sweep the last two unexamined directions — the Electron app's requests/reads, and the
-agent's consumption of the check-in response (the server sends command, key_material,
-bios_password, power_on_password, bitlocker_pin, bitlocker_recovery_password,
-enable_pba, duress_code — does the agent read all of them?) — then build the generic
-NSIS installer, which is the only remaining piece with a real design decision.
+Build the generic NSIS installer — the last piece of the serverless plan with a real
+design decision: a single CI-built installer whose config is fetched at run time via
+the enrolment token, so no `makensis` in a Worker and no per-device build.
 
 ---
 
