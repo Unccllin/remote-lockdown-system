@@ -291,3 +291,49 @@ KV key `binary:agent-installer` (+ `/api/download/agent-installer`), one
 handler, both delegating to `lockdown-installer.exe --config-file ... --silent`
 so the baked api_key needs no enrolment and `ProgramData\RemoteLockdown`
 disappears.
+
+## Installer integrity ruling (opened 2026-11-03, session 192)
+
+The generated serverless scripts download ~20 MB of binaries and execute them
+with no integrity check at all:
+`Invoke-WebRequest ... -OutFile "$work\lockdown-agent.exe"` → run. Nothing
+verifies the bytes, and the artefacts are unsigned.
+
+### Context that constrains the choice
+- The repo already states the doctrine in the agent's update path: "a
+  channel-delivered hash alone is self-certifying" (`agent/agent.py:3419`,
+  B-006). A hash that arrives from the same origin as the bytes proves
+  *transport* integrity (no truncation, no proxy meddling), not authenticity.
+- The Express installer path does verify: `resolveAgentBinary` checks the asset
+  against the release's `SHA256SUMS` and fails closed when an asset is unlisted
+  (`server/src/routes/installer.js`).
+- `agent/installer_gui.py` downloads the agent and the lock screen with only
+  `dest.stat().st_size > 1000000` as a check — a wrong or malicious binary of
+  the right size passes.
+- `sha256()` in the Worker takes a *string*; a bytes variant does not exist.
+- Authenticode signing is blocked on the same thing D-130 is: no owner PFX in
+  this environment, and signtool/osslsigncode is not wired into the build.
+
+### Q1 — which integrity mechanism?
+
+- [x] Q1 — mechanism → **(A) `x-content-sha256` response header on every
+      `/api/download/*` response, verified by the clients** (recommended). One
+      mechanism serves the generated scripts *and* `installer_gui.py`; the hash
+      is computed from the exact bytes being served, so it cannot drift the way
+      a separately published digest can. Honest about what it is: transport
+      integrity. Authenticity waits for the PFX (Q1 option C).
+
+### Q2 — how far does the check reach in this session?
+
+- [x] Q2 — scope → **(A) every client of `/api/download/*` — the two generated
+      serverless scripts and `installer_gui.py`'s agent + lock-screen downloads**
+      (recommended), since they are the same gap and the header is one change.
+      Alternative: the generated scripts only, leaving the GUI wizard's
+      size-only check in place.
+
+**Ruling closed 2026-11-03, session 192** — Q1 (A) + Q2 (A). Implementation:
+`x-content-sha256` on every `/api/download/*` response, computed from the bytes
+being served; verified by the generated serverless scripts and by
+`installer_gui.py`'s agent + lock-screen downloads. Documented as transport
+integrity (the repo's own "self-certifying" caveat); authenticity stays blocked on
+the PFX/D-130.

@@ -186,6 +186,22 @@ async function sha256(data: string): Promise<string> {
     .join('');
 }
 
+/**
+ * SHA-256 of raw bytes, lowercase hex.
+ *
+ * Used to label binary downloads with x-content-sha256 so a client can prove the
+ * body it received is the body this Worker served. It is transport integrity,
+ * not authenticity — a hash delivered alongside the bytes is self-certifying
+ * (see the same caveat in agent/agent.py's update path). Authenticity needs a
+ * signature; the installer binaries are not Authenticode-signed yet.
+ */
+async function sha256HexBytes(bytes: ArrayBuffer): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 /** Constant-time string comparison (length + byte-wise). */
 function timingSafeEqualStr(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -2181,24 +2197,43 @@ ${configB64}
 '@
     [System.IO.File]::WriteAllBytes("$work\\config.json", [Convert]::FromBase64String($configB64))
 
-    # 2. Fetch the agent and the CLI installer that installs it.
-    Invoke-WebRequest -Uri '${serverUrl}/api/download/agent' -OutFile "$work\\lockdown-agent.exe" -UseBasicParsing
-    Invoke-WebRequest -Uri '${serverUrl}/api/download/agent-installer' -OutFile "$work\\lockdown-installer.exe" -UseBasicParsing
+    # 2. Download helper. Every /api/download/* response carries
+    #    x-content-sha256, the digest of exactly the bytes served; a body that
+    #    does not match is deleted and the install stops. This is transport
+    #    integrity (truncation, corruption, a meddling proxy), not authenticity —
+    #    the binaries are not Authenticode-signed yet.
+    function Get-VerifiedFile {
+        param([string]$Url, [string]$Dest)
+        $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing
+        $expect = [string]$resp.Headers['x-content-sha256']
+        if ([string]::IsNullOrWhiteSpace($expect)) {
+            throw "No x-content-sha256 returned for $Url — refusing to run an unverifiable binary."
+        }
+        [System.IO.File]::WriteAllBytes($Dest, $resp.Content)
+        $actual = (Get-FileHash -LiteralPath $Dest -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $expect.ToLowerInvariant()) {
+            Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue
+            throw "Checksum mismatch for $Url (expected $expect, got $actual). Refusing to install."
+        }
+    }
+
+    Get-VerifiedFile -Url '${serverUrl}/api/download/agent' -Dest "$work\\lockdown-agent.exe"
+    Get-VerifiedFile -Url '${serverUrl}/api/download/agent-installer' -Dest "$work\\lockdown-installer.exe"
 
     # 3. Hand off. --config-file installs from the baked config: it normalises
     #    the config, creates the lockdown folder, installs the scheduled task and
     #    run key, applies tamper protection and verifies check-in.
     & "$work\\lockdown-installer.exe" --config-file "$work\\config.json" --silent
-    $code = $LASTEXITCODE
+    if ($LASTEXITCODE -ne 0) {
+        throw "Installation failed (exit $LASTEXITCODE)."
+    }
+} catch {
+    Write-Error $_.Exception.Message
+    exit 1
 } finally {
     # The installer has already copied what it needs; the API key in this temp
     # copy must not outlive the run.
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
-}
-
-if ($code -ne 0) {
-    Write-Error "Installation failed (exit $code)."
-    exit $code
 }
 
 ${tail}
@@ -3368,6 +3403,11 @@ async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
       'Content-Type': 'application/vnd.microsoft.portable-executable',
       'Content-Disposition': `attachment; filename="${filename}"`,
       'Content-Length': String(data.byteLength),
+      // Digest of exactly these bytes, so a client can refuse a truncated or
+      // altered body before executing it. Computed per response rather than
+      // stored at publish time: a separately published digest can drift from
+      // the artefact, a derived one cannot.
+      'x-content-sha256': await sha256HexBytes(data),
       'Cache-Control': 'public, max-age=3600',
     },
   });

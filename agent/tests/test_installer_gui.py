@@ -316,3 +316,152 @@ def test_run_hardware_tests_returns_dict():
     assert isinstance(result, dict)
     # Either has test results or an error key
     assert "error" in result or "encrypt" in result
+
+
+# ---------------------------------------------------------------------------
+# Verified binary downloads (x-content-sha256)
+# ---------------------------------------------------------------------------
+#
+# The wizard downloads the agent and the lock-screen binary from the Worker and
+# executes them. The Worker sends the digest of exactly the bytes it serves, so a
+# truncated, corrupted or altered body has to be refused — the previous check was
+# `size > 1000000`, which any wrong binary of the right size passes.
+
+
+class _FakeResponse:
+    """Minimal stand-in for requests' streaming response."""
+
+    def __init__(self, status_code=200, body=b"", headers=None):
+        self.status_code = status_code
+        self._body = body
+        self.headers = headers or {}
+
+    def iter_content(self, chunk_size=65536):  # noqa: ARG002
+        for i in range(0, len(self._body), chunk_size):
+            yield self._body[i : i + chunk_size]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _digest(body: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(body).hexdigest()
+
+
+def _big_body(seed: bytes = b"A") -> bytes:
+    """A body above MIN_BINARY_BYTES so the size floor is not what rejects it."""
+    import installer_gui
+
+    return seed * (installer_gui.MIN_BINARY_BYTES + 1)
+
+
+def test_verified_download_writes_the_file_when_the_digest_matches(tmp_path):
+    import installer_gui
+
+    body = _big_body()
+    resp = _FakeResponse(headers={"x-content-sha256": _digest(body)}, body=body)
+    dest = tmp_path / "lockdown-agent.exe"
+
+    with patch("installer_gui.requests.get", return_value=resp):
+        result = installer_gui._download_verified("https://x/api/download/agent", dest)
+
+    assert result == dest
+    assert dest.read_bytes() == body
+    # No partial file left behind.
+    assert list(tmp_path.glob("*.part")) == []
+
+
+def test_verified_download_rejects_a_body_that_does_not_match_the_digest(tmp_path):
+    import installer_gui
+
+    body = _big_body()
+    wrong = _digest(b"something else entirely")
+    resp = _FakeResponse(headers={"x-content-sha256": wrong}, body=body)
+    dest = tmp_path / "lockdown-agent.exe"
+
+    with patch("installer_gui.requests.get", return_value=resp):
+        result = installer_gui._download_verified("https://x/api/download/agent", dest)
+
+    assert result is None
+    # A rejected binary must not be left where the installer would copy it from.
+    assert not dest.exists()
+    assert list(tmp_path.glob("*.part")) == []
+
+
+def test_verified_download_rejects_a_response_without_a_digest(tmp_path):
+    import installer_gui
+
+    resp = _FakeResponse(headers={}, body=_big_body())
+    dest = tmp_path / "lockdown-agent.exe"
+
+    with patch("installer_gui.requests.get", return_value=resp):
+        result = installer_gui._download_verified("https://x/api/download/agent", dest)
+
+    assert result is None
+    assert not dest.exists()
+
+
+def test_verified_download_rejects_a_non_200(tmp_path):
+    import installer_gui
+
+    resp = _FakeResponse(status_code=404, headers={"x-content-sha256": "a" * 64})
+    dest = tmp_path / "lockdown-agent.exe"
+
+    with patch("installer_gui.requests.get", return_value=resp):
+        result = installer_gui._download_verified("https://x/api/download/agent", dest)
+
+    assert result is None
+    assert not dest.exists()
+
+
+def test_verified_download_rejects_a_truncated_body_even_with_a_matching_length(tmp_path):
+    """A short body whose digest was computed over the short body still fails.
+
+    This is the case a size check cannot see: the attacker truncates the payload
+    and recomputes the digest. It must fail because the digest is not the one the
+    server published for the real artefact — modelled here by sending the digest
+    of the *intended* body while delivering a truncated one.
+    """
+    import installer_gui
+
+    intended = _big_body()
+    truncated = intended[:1000]
+    resp = _FakeResponse(headers={"x-content-sha256": _digest(intended)}, body=truncated)
+    dest = tmp_path / "lockdown-agent.exe"
+
+    with patch("installer_gui.requests.get", return_value=resp):
+        result = installer_gui._download_verified("https://x/api/download/agent", dest)
+
+    assert result is None
+    assert not dest.exists()
+
+
+def test_download_agent_exe_uses_the_verified_path(tmp_path):
+    import installer_gui
+
+    body = _big_body()
+    resp = _FakeResponse(headers={"x-content-sha256": _digest(body)}, body=body)
+
+    with patch("installer_gui.requests.get", return_value=resp) as get:
+        result = installer_gui.download_agent_exe("https://x", tmp_path)
+
+    assert result == tmp_path / installer_gui.AGENT_EXE_NAME
+    assert get.call_args[0][0] == "https://x/api/download/agent"
+
+
+def test_download_lockscreen_exe_uses_the_verified_path(tmp_path):
+    import installer_gui
+
+    body = _big_body()
+    resp = _FakeResponse(headers={"x-content-sha256": _digest(body)}, body=body)
+
+    with patch("installer_gui.requests.get", return_value=resp) as get:
+        result = installer_gui.download_lockscreen_exe("https://x", tmp_path)
+
+    assert result == tmp_path / "lockdown-lockscreen.exe"
+    assert get.call_args[0][0] == "https://x/api/download/lockscreen"

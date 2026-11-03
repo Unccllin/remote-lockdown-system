@@ -1574,6 +1574,53 @@ describe('Serverless Worker', () => {
       expect(new Uint8Array(await resp.arrayBuffer())).toEqual(bytes);
     });
 
+    it('labels every binary with the digest of the bytes it serves', async () => {
+      const bytes = new Uint8Array([0x4d, 0x5a, 0xde, 0xad, 0xbe, 0xef]);
+      await env.LOCKDOWN_KV.put('binary:agent', bytes);
+
+      const resp = await worker.fetch(makeRequest('GET', '/api/download/agent'), env);
+      const body = new Uint8Array(await resp.arrayBuffer());
+
+      const digest = await crypto.subtle.digest('SHA-256', body);
+      const expected = Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+
+      expect(resp.headers.get('x-content-sha256')).toBe(expected);
+      // The digest must describe the body that was actually served.
+      expect(body).toEqual(bytes);
+    });
+
+    it('every download route carries the digest, not just one', async () => {
+      await env.LOCKDOWN_KV.put('binary:agent', new Uint8Array([1, 2, 3]));
+      await env.LOCKDOWN_KV.put('binary:lockscreen', new Uint8Array([4, 5, 6]));
+      await env.LOCKDOWN_KV.put('binary:installer', new Uint8Array([7, 8, 9]));
+
+      for (const path of ['/api/download/agent', '/api/download/lockscreen', '/api/download/installer']) {
+        const resp = await worker.fetch(makeRequest('GET', path), env);
+        expect(resp.status, path).toBe(200);
+        expect(resp.headers.get('x-content-sha256'), path).toMatch(/^[0-9a-f]{64}$/);
+      }
+    });
+
+    it('the generated installer verifies both downloads before running them', async () => {
+      await seedAdmin(env, 'sa1', 'password123');
+      const { device } = await enrollDevice(worker, env, 'INTEG-001');
+      const resp = await worker.fetch(makeRequest('GET', `/api/installer/${device.id}`, undefined,
+        { Authorization: 'Bearer test-admin-token' }), env);
+      const script = await resp.text();
+
+      // Fetch, compare against the served digest, delete on mismatch.
+      expect(script).toContain('x-content-sha256');
+      expect(script).toContain('Get-FileHash');
+      expect(script).toContain('Checksum mismatch');
+      // A missing digest must abort rather than run an unverifiable binary.
+      expect(script).toContain('unverifiable binary');
+      // Both artefacts are verified: the agent and the installer it runs.
+      const verified = script.match(/Get-VerifiedFile -Url/g) ?? [];
+      expect(verified.length).toBe(2);
+    });
+
     it('keeps one generated-install template, not one per route', async () => {
       // The per-device script and the firmware re-arm script are the same
       // installer. They were two hand-copied templates, and the sc.exe mechanism

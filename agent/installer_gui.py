@@ -258,27 +258,63 @@ def find_agent_exe() -> Path | None:
     return None
 
 
+# A real agent/lock-screen binary is many megabytes. The digest check below is
+# the real gate; this floor only rejects an obviously wrong body early.
+MIN_BINARY_BYTES = 1_000_000
+
+
+def _download_verified(url: str, dest: Path, *, timeout: int = 120) -> Path | None:
+    """Download *url* to *dest*, verifying the response's x-content-sha256.
+
+    The Worker computes the digest of exactly the bytes it serves, so a
+    truncated, corrupted or altered body is refused instead of installed. This is
+    transport integrity, not authenticity: a hash delivered alongside the bytes
+    is self-certifying (the same caveat the agent's update path records for
+    channel-delivered hashes). Authenticity needs a signature, and the binaries
+    are not Authenticode-signed yet.
+
+    Returns the path on success, None on any failure (nothing is left behind).
+    """
+    import hashlib
+
+    tmp = dest.with_name(dest.name + ".part")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with requests.get(url, timeout=timeout, verify=True, stream=True) as resp:
+            if resp.status_code != 200:
+                return None
+            expected = (resp.headers.get("x-content-sha256") or "").strip().lower()
+            if not expected:
+                return None
+            digest = hashlib.sha256()
+            with open(tmp, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+                        digest.update(chunk)
+        if digest.hexdigest() != expected:
+            tmp.unlink(missing_ok=True)
+            return None
+        if tmp.stat().st_size <= MIN_BINARY_BYTES:
+            tmp.unlink(missing_ok=True)
+            return None
+        tmp.replace(dest)
+        return dest
+    except (requests.RequestException, OSError):
+        tmp.unlink(missing_ok=True)
+        return None
+
+
 def download_agent_exe(server_url: str, dest_dir: Path) -> Path | None:
     """Download the agent binary from the Worker (GET /api/download/agent).
 
     This is used when the agent exe is not bundled with the installer.
-    The binary is stored in Cloudflare KV and served by the Worker.
+    The binary is stored in Cloudflare KV and served by the Worker, together with
+    the digest that :func:`_download_verified` checks.
     """
     url = f"{server_url.rstrip('/')}/api/download/agent"
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / AGENT_EXE_NAME
-    try:
-        resp = requests.get(url, timeout=120, verify=True, stream=True)
-        if resp.status_code != 200:
-            return None
-        with open(dest, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=65536):
-                f.write(chunk)
-        return dest if dest.exists() and dest.stat().st_size > 1000000 else None
-    except (requests.RequestException, OSError):
-        if dest.exists():
-            dest.unlink()
-        return None
+    return _download_verified(url, dest_dir / AGENT_EXE_NAME)
 
 
 def download_lockscreen_exe(server_url: str, dest_dir: Path) -> Path | None:
@@ -286,23 +322,12 @@ def download_lockscreen_exe(server_url: str, dest_dir: Path) -> Path | None:
 
     The lock screen is a fullscreen topmost window that blocks all desktop
     interaction during lockdown. Without it, the agent falls back to
-    LockWorkStation() which a thief can bypass by logging back in.
+    LockWorkStation() which a thief can bypass by logging back in. The download is
+    digest-checked exactly like the agent binary.
     """
     url = f"{server_url.rstrip('/')}/api/download/lockscreen"
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / "lockdown-lockscreen.exe"
-    try:
-        resp = requests.get(url, timeout=120, verify=True, stream=True)
-        if resp.status_code != 200:
-            return None
-        with open(dest, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=65536):
-                f.write(chunk)
-        return dest if dest.exists() and dest.stat().st_size > 1000000 else None
-    except (requests.RequestException, OSError):
-        if dest.exists():
-            dest.unlink()
-        return None
+    return _download_verified(url, dest_dir / "lockdown-lockscreen.exe")
 
 
 def install_files(agent_exe: Path) -> Path:

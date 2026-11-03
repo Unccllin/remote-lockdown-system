@@ -170,7 +170,8 @@ Without `binary:agent-installer` the generated scripts download nothing and the
 install fails loudly (the download route returns 404). The generated script:
 
 1. writes the device's baked `config.json` to a temp directory,
-2. downloads `lockdown-agent.exe` and `lockdown-installer.exe`,
+2. downloads `lockdown-agent.exe` and `lockdown-installer.exe`, verifying each
+   against the `x-content-sha256` response header,
 3. runs `lockdown-installer.exe --config-file ... --silent`, which normalises the
    config, creates the lockdown folder, installs the scheduled task + run key,
    applies tamper protection and verifies check-in,
@@ -179,6 +180,26 @@ install fails loudly (the download route returns 404). The generated script:
 It deliberately contains no `sc.exe`: the agent implements no SCM handshake, so a
 service created that way is failed with 1053 and the process terminated about 30
 seconds after boot.
+
+### Integrity of the downloads
+
+Every `/api/download/*` response carries `x-content-sha256`: the SHA-256 of
+exactly the bytes being served, computed per response rather than stored at
+publish time. A separately published digest can drift from the artefact (the
+failure class this repo keeps finding); a derived one cannot.
+
+Both clients verify it before executing anything:
+
+- the generated install scripts (`Get-VerifiedFile` → `Get-FileHash`), and
+- `agent/installer_gui.py` (`_download_verified`, which previously accepted any
+  body larger than 1 MB).
+
+Be exact about what this buys: **transport integrity** — no truncation, no
+corruption, no proxy substituting a body. It is not authenticity. A hash that
+arrives from the same origin as the bytes is self-certifying, which is the same
+caveat `agent/agent.py` records for channel-delivered update hashes (B-006).
+Authenticity needs a signature, and the installer binaries are not
+Authenticode-signed yet (that waits on the owner PFX — see D-130).
 
 ## What is not covered by the local verification
 
