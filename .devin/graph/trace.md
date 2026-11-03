@@ -5485,3 +5485,102 @@ endpoint as each lands; and add the missing test for `parseKvJson` rejecting cor
 KV rather than blanking it.
 
 ---
+
+---
+
+## Session 183 — 2026-11-02 (device parity: PBL linkage, key rotation, retention — and two more ordering traps)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S182 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `server/src/routes/devices.js` (`link-pbl`, `unlink-pbl`,
+  `by-pbl`, `rotate-key`, `settings/retention` — including the 409 collision
+  response and the 400 "nothing linked" response), and `serverless/worker.ts`
+  (`Device` interface, `generateApiKey`, `sha256`, `addAuditEntry`,
+  `mergeCheckinMetadata`, `getCheckinMetadata`, the `deviceMatch` regex).
+- **Finding (two more route-ordering traps of the same shape as session 182's)**:
+  `/api/devices/:id` is matched by `/^\/api\/devices\/([^/]+)(\/(.+))?$/`, so
+  `settings` is read as a device id and `by-pbl` swallows the identity into its
+  action group. Both would answer a plausible-looking **404 "Device not found"**
+  from endpoints that are perfectly fine — the most misdiagnosable failure shape
+  there is. Both are registered before the regex, like `by-hardware`, and both have
+  a test.
+- **Finding (business rules worth not losing in a port)**: one firmware identity may
+  be linked to at most one agent — two claimants make the verdict target ambiguous,
+  which is the whole point of the linkage — so a collision is **409 naming the
+  current owner**; unlinking a device with no link is **400**, not a silent success;
+  and a rotated key's plaintext is returned exactly once while only its hash is
+  stored.
+
+### IMPLEMENT
+- `serverless/worker.ts`: `pbl_device_id?: string | null` on `Device`;
+  `PBL_DEVICE_ID_PATTERN` (64 hex); `readJsonBody` (a malformed body returns null
+  instead of a bare SyntaxError); and five handlers —
+  `handleLinkPbl`, `handleUnlinkPbl`, `handleByPbl` (strips `api_key_hash` and merges
+  check-in metadata), `handleRotateKey` (super-admin), `handleRetentionSettings`
+  (worker vars with Express's defaults and clamps).
+- Routes: `settings/retention` and `by-pbl/` before the `deviceMatch` regex;
+  `link-pbl` / `unlink-pbl` / `rotate-key` in the per-device action dispatch.
+- `scripts/audit_test_teeth.py`: three rows.
+
+### VERIFY
+- `worker.test.ts`: **371 passed** (361 + 10). Coverage of the new behaviour: link
+  success and read-back, malformed id → 400, collision → 409 naming the owner,
+  reverse lookup (and `api_key_hash` absent), unknown id → 404, unlink-when-unlinked
+  → 400, unlink clears the field, rotation invalidates the old key, auth on both,
+  and retention not shadowed by `/api/devices/:id`.
+- Coverage: **89.07 / 83.08 / 93.52 / 91.09** (floors 82/75/86/82).
+- Three mutations **KILLED** by the intended tests: the 409 collision guard, the
+  stored-hash update, and the unlink 400.
+- The rotation test asserts the property that actually matters — the **new** key
+  authenticates an agent check-in and the **old** one receives 401 — rather than
+  just that a key came back.
+
+### Fog cleared
+- **Whether the dashboard's PBL linkage and rotation flows work against the
+  Worker**: they did not exist; now they do, with the same rules and status codes.
+- **What "settings" and "by-pbl" look like when mis-routed**: a clean 404 for a
+  device that does not exist, which is why both are now covered by tests.
+
+### Fog remaining
+- Parity is two endpoint groups from complete: `hw-test-artifact` (3 routes) and
+  `integrations` (2 routes).
+- The generic NSIS installer (item 9) and Cloudflare-native observability/backup
+  (item 10) are untouched.
+- **Pre-existing dead code in `worker.ts`** surfaced by the linter and confirmed at
+  HEAD: `verifyAdminAuth`, `boot_lock_detail`, `generateSigningKey`,
+  `importPrivateKey`, `checkDeviceRateLimit` are declared and never used. Worth one
+  cleanup commit — not mixed into a feature commit.
+- Unchanged: `/api/download/agent` is unauthenticated in the Worker while Express
+  requires agent auth; D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
+  residual (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), a real domain (Caddy TLS).
+
+### Failure attribution
+- No failure this session. The pattern worth naming: this is the **third**
+  consecutive session where the Worker's route ordering produced a trap that the
+  Express code had already documented in a comment. The Worker's dispatch is a long
+  if-chain where specificity is load-bearing and invisible; every new route that
+  starts with `/api/devices/` or `/api/installer/` has to be placed by hand. A test
+  per endpoint ("is it shadowed?") is the only thing making the ordering safe, and
+  that is now the convention in this file.
+
+### Session artifacts
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `scripts/audit_test_teeth.py`.
+
+### Next session opening
+Finish parity: `hw-test-artifact` (POST/GET/list-by-id) and `integrations`
+(GET list, GET devices-per-integration) — both are read-mostly and small. Then take
+the dead-code cleanup in `worker.ts` as its own commit, and only then the generic
+NSIS installer, which is the last piece with a real design decision in it.
+
+---

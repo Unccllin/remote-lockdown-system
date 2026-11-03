@@ -53,33 +53,39 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 182 — 2026-11-02 (serverless parity: agent-version and location/latest, plus corrupt-KV honesty)
+## Latest session: 183 — 2026-11-02 (device parity: PBL linkage, key rotation, retention — and two more ordering traps)
 
 ### VERIFY
-- `worker.test.ts`: **361 passed** (353 + 8). The new tests cover: auth required on
-  both endpoints; no release published; published version/hash/size; per-platform
-  override; agent-version not shadowed by the per-device route; 404 for a device
-  with no reports; newest-not-first for two reports.
-- Coverage: **89.05 / 83.01 / 93.08 / 90.77** (floors 82/75/86/82).
-- All three mutations **KILLED** by the intended tests: hardcoded version,
-  oldest-instead-of-newest, and the missing 404.
+- `worker.test.ts`: **371 passed** (361 + 10). Coverage of the new behaviour: link
+  success and read-back, malformed id → 400, collision → 409 naming the owner,
+  reverse lookup (and `api_key_hash` absent), unknown id → 404, unlink-when-unlinked
+  → 400, unlink clears the field, rotation invalidates the old key, auth on both,
+  and retention not shadowed by `/api/devices/:id`.
+- Coverage: **89.07 / 83.08 / 93.52 / 91.09** (floors 82/75/86/82).
+- Three mutations **KILLED** by the intended tests: the 409 collision guard, the
+  stored-hash update, and the unlink 400.
+- The rotation test asserts the property that actually matters — the **new** key
+  authenticates an agent check-in and the **old** one receives 401 — rather than
+  just that a key came back.
 
 ### Fog cleared
-- **Whether the dashboard's version badge and last-seen pin work against the
-  Worker**: they did not; now they do, and neither can disagree with the update
-  endpoint because both read one record.
-- **What corrupt KV does**: it fails with the key named, rather than a bare
-  SyntaxError or a silent empty fleet.
+- **Whether the dashboard's PBL linkage and rotation flows work against the
+  Worker**: they did not exist; now they do, with the same rules and status codes.
+- **What "settings" and "by-pbl" look like when mis-routed**: a clean 404 for a
+  device that does not exist, which is why both are now covered by tests.
 
 ### Fog remaining
-- Parity gaps still open (item 8): `link-pbl` / `unlink-pbl` / `devices/by-pbl/:id`,
-  `rotate-key`, `settings/retention`, `hw-test-artifact` (3 routes),
+- Parity is two endpoint groups from complete: `hw-test-artifact` (3 routes) and
   `integrations` (2 routes).
 - The generic NSIS installer (item 9) and Cloudflare-native observability/backup
   (item 10) are untouched.
-- Unchanged: `/api/download/agent` remains unauthenticated in the Worker while
-  Express requires agent auth — still unreviewed; D-120/D-129/D-130/D-134
-  resource-blocked; `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
+- **Pre-existing dead code in `worker.ts`** surfaced by the linter and confirmed at
+  HEAD: `verifyAdminAuth`, `boot_lock_detail`, `generateSigningKey`,
+  `importPrivateKey`, `checkDeviceRateLimit` are declared and never used. Worth one
+  cleanup commit — not mixed into a feature commit.
+- Unchanged: `/api/download/agent` is unauthenticated in the Worker while Express
+  requires agent auth; D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
+  residual (D-132); 19 Dependabot alerts.
 
 ### Debt items closed
 - None.
@@ -92,25 +98,23 @@
   credentials (Worker publish), a real domain (Caddy TLS).
 
 ### Failure attribution
-- No failure this session. Worth recording the near-miss: the `installerMatch`
-  ordering trap was only avoided because I read Express's own comment above the
-  equivalent route. Nothing in the Worker's dispatch makes the hazard visible, and
-  the failure mode ("Device not found" from an endpoint that is fine) is exactly the
-  kind of thing that gets misdiagnosed as a missing route.
-- **Layer 4 — verification feedback**: the corrupt-KV behaviour had no test either
-  way, so neither the crash nor a "repair" that silently blanked the fleet would
-  have been caught. The new helper is a behaviour change in a security-sensitive
-  path and should get its own test in the next increment.
+- No failure this session. The pattern worth naming: this is the **third**
+  consecutive session where the Worker's route ordering produced a trap that the
+  Express code had already documented in a comment. The Worker's dispatch is a long
+  if-chain where specificity is load-bearing and invisible; every new route that
+  starts with `/api/devices/` or `/api/installer/` has to be placed by hand. A test
+  per endpoint ("is it shadowed?") is the only thing making the ordering safe, and
+  that is now the convention in this file.
 
 ### Session artifacts
 - Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
   `scripts/audit_test_teeth.py`.
 
 ### Next session opening
-Finish item 8 in one pass — `link-pbl`/`unlink-pbl`/`by-pbl`, `rotate-key`,
-`settings/retention` — then `hw-test-artifact` and `integrations`, adding a test per
-endpoint as each lands; and add the missing test for `parseKvJson` rejecting corrupt
-KV rather than blanking it.
+Finish parity: `hw-test-artifact` (POST/GET/list-by-id) and `integrations`
+(GET list, GET devices-per-integration) — both are read-mostly and small. Then take
+the dead-code cleanup in `worker.ts` as its own commit, and only then the generic
+NSIS installer, which is the last piece with a real design decision in it.
 
 ---
 
