@@ -53,24 +53,31 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 196 — 2026-11-03 (checking my own summary: the harness was fine, the new suite wasn't)
+## Latest session: 197 — 2026-11-03 (the parked flake was a real teardown bug, found by chasing it)
 
 ### Fog cleared
 
-- **Who was at fault for the two E2E failures**: the new suite, not the harness.
-  Verified by reading `agent-helpers.js` (async `spawn`; env scrubbing) and by
-  measuring both mechanisms in isolation.
-- **Whether the existing agent-integration suite proves a real check-in**: yes. Its
-  waiting assertion cannot be satisfied at enrollment, and the probe shows the value
-  moving from null to a timestamp only after the agent ran.
+- **Whether the intermittent E2E failure was environmental noise**: no. Looping the
+  sweep and capturing logs produced the mechanism in one run: a native-callback
+  `SQLITE_MISUSE` after a teardown that never waited for the server.
+- **Whether `await server.close()` drains anything**: no — `close()` returns the
+  server object. This is the kind of line that *looks* correct in review and does
+  nothing.
+- **Whether the new update suite reaches CI**: yes. `ci.yml` and `release.yml` both
+  run `scripts/run-e2e.sh --agent-integration`, which globs `tests/e2e/*.test.js`;
+  the teardown race would have flaked CI, not just this host.
 
 ### Fog remaining
 
-- The rest of S195 stands as written: E-AUTO-UPDATE evidence is emulated, one
-  full-sweep E2E failure was observed once and did not reproduce, and no signing key
-  exists in CI.
-- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; the repo's 178-diagnostic
-  pyright/ast-grep baseline is still unowned.
+- The recorded opening is **fully blocked here**, verified rather than assumed: `gh`
+  is not installed (so `UPDATE_SIGNING_KEY` cannot be set) and `wrangler` is not
+  authenticated (so `agent-release.json` cannot be published). Only the HP-box flip
+  and those two credential steps remain, and none are reachable from this environment.
+- One full-sweep failure occurred in the batch immediately after the cleanup change
+  and did not reproduce in the eight runs since. Stated as observed, not as proven
+  impossible.
+- E-AUTO-UPDATE evidence is still emulated (`verified-in-unit-test`); D-120/D-129/
+  D-130/D-134 unchanged.
 
 ### Debt items closed
 
@@ -82,44 +89,50 @@
 
 ### Blockers
 
-- Unchanged: hardware (HP box) for the E-AUTO-UPDATE flip; owner provisioning of
-  `UPDATE_SIGNING_KEY`; Cloudflare credentials for the KV publish.
+- Hardware (HP box); owner provisioning of `UPDATE_SIGNING_KEY` (no `gh` binary
+  here); Cloudflare credentials for the KV publish (wrangler unauthenticated).
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): I published two claims about
-  pre-existing code without running the discriminating check, even though the
-  harness's own source answered the question. The summary was written from the
-  debugging narrative (what the failures *felt* like) instead of from the files.
-  The fix that generalises: when a session blames existing code, re-read that code
-  before writing the block — the repo has been wrong about this before, in the other
-  direction (stale debt entries claiming code was missing when it existed).
-- **Layer 5 — state management** (secondary): the wrong claim was already in
-  `trace.md` and in the brain, so it would have been inherited by the next session as
-  fact. Correcting both layers, with a marker, is what stops the error propagating.
+- **Layer 4 — verification feedback** (primary): S195 recorded an intermittent
+  failure as "observed once, not reproduced" and moved on. That is the gap: an
+  unexplained intermittent failure in a suite feeding CI is a finding, not a note.
+  Looping the sweep and capturing output cost one command and produced the exact
+  cause. The generalisable change: never park an intermittent failure — loop until
+  it reproduces, then explain it.
+- **Layer 3 — execution environment** (secondary): the harness's cleanup looked
+  correct while doing nothing (`await` on a non-promise), and no test covers teardown
+  ordering, so the bug was invisible until it manifested as a process-level crash.
 
 ### VERIFY
 
-- Probe output (jest, then removed):
-  - `D: last_checkin after enrollment = null` → `D: last_checkin after agent run = "2026-11-03 10:24:49"`
-  - `E sync -> SYNC ReadTimeout 6.0` / `E async -> ASYNC 200 0.01`
-  - `agent_key resolved -> SHARED-KEY-FROM-ENV`
-- Code read: `agent-helpers.js:341` deletes `env.AGENT_SHARED_KEY`;
-  `agent-helpers.js:360` uses `spawn(...)`.
-- `make graph-check`: all invariants pass. `brain.py check`: 51 beliefs, integrity
-  clean (confirmed 38, refuted 13).
+- **8 consecutive full E2E sweeps green** (14 tests each) after the cleanup fix: five
+  in one batch, then three more (the first batch immediately after the change had one
+  failure, recorded above).
+- `agent`: **766 passed** (763 + 3 new JSON-config tests); `ruff check` +
+  `ruff format --check` clean.
+- Falsification: removing the non-object guard makes `test_non_object_json_is_rejected`
+  fail with the exact `TypeError` the guard prevents.
+- Checker: `agent/agent.py` fresh probe → 0 primary findings; the remaining
+  `unchecked-throwing-call` items were verified to sit inside `try:`/`with` blocks
+  and recorded as the documented false-positive class.
+- `make graph-check`: all invariants pass.
 
 ### Session artifacts
 
-- Changed: `.devin/graph/trace.md` (S195 corrected), `.devin/brain/beliefs.yaml`,
-  `.devin/brain/BELIEFS.md`.
-- Commit: `de3e50c`.
+- Changed: `tests/e2e/agent-helpers.js`, `agent/agent.py`,
+  `agent/tests/test_agent_config.py`, `AGENTS.md`.
+- Commit: `cdfe484`.
 
 ### Next session opening
 
-Provision `UPDATE_SIGNING_KEY`, publish `agent-release.json` to KV, and take the
-`sha256-only` → `signature` flip to the HP box — the only thing between the current
-emulated E2E evidence and E-AUTO-UPDATE being `verified-on-hardware`.
+Stop treating the recorded opening as reachable: `gh` and `wrangler` are absent here,
+so `UPDATE_SIGNING_KEY` provisioning, the KV publish, and the HP-box flip need an
+owner session with credentials and hardware. Until then, the highest-value unblocked
+work is E-AUTO-UPDATE's *hardware-emulation* path — extend `agent/hw_test_harness.py`
+with an E-AUTO-UPDATE case that runs the same four scenarios on a real Windows box
+when one is available, so the artifact the graph demands is produced by the harness
+rather than by hand.
 
 ---
 

@@ -7152,3 +7152,138 @@ Provision `UPDATE_SIGNING_KEY`, publish `agent-release.json` to KV, and take the
 emulated E2E evidence and E-AUTO-UPDATE being `verified-on-hardware`.
 
 ---
+
+---
+
+## Session 197 — 2026-11-03 (the parked flake was a real teardown bug, found by chasing it)
+
+### RULE-ZERO
+
+**Read**: session 196's block and its "observed once, not reproduced" note;
+`tests/e2e/agent-helpers.js` (`startTestServer`, `cleanup`, `keepAliveTimeout`);
+`server/src/db/sqlitePool.js` (`getDb`, `end`); `server/tests/e2e/setup.js`;
+`server/src/middleware/hmacAuth.js` (the one live `setInterval`);
+`agent/agent.py` (`_load_json_config`); captured E2E logs in `/tmp/e2e-*.log`;
+`Makefile`/`.github/workflows/{ci,release}.yml` (E2E wiring).
+
+**Finding**: the "one failure, not reproduced" recorded in S195 was neither random nor
+unfixable. It was a teardown ordering bug with a one-line cause:
+
+```js
+try { await server.close(); } catch (e) {}   // close() returns the server, not a promise
+try { await sqlitePool.end(); } catch (e) {} // …so the pool dies while a handler may be mid-query
+```
+
+`await` on a non-promise is a no-op, so the sequence was effectively *close the
+database first, stop the server never*. A request handler that was still in flight
+then issued a query against the closed handle; the `sqlite3` driver **throws** from
+its native error callback (`SQLITE_MISUSE: Database handle is closed`), and an
+uncaught throw in a native callback kills the jest process — which is why the failure
+had no test-level trace and printed no "Tests:" summary at all.
+
+S195 had widened that window by setting `keepAliveTimeout = 120000` (added to stop
+`ECONNRESET` on reused sockets), which is why the flake appeared immediately after.
+Both changes are right; the missing piece was draining connections before ending the
+pool.
+
+### IMPLEMENT
+
+- `tests/e2e/agent-helpers.js` — `cleanup()` now awaits a real close
+  (`new Promise(resolve => server.close(resolve))`), drops keep-alive sockets with
+  `closeAllConnections()` so that callback actually fires, and only then ends the
+  pool. The comment states the failure mode it prevents.
+- `agent/agent.py` — `_load_json_config` rejects non-object JSON (`["api_key", …]`
+  used to parse fine and then die later on `data["api_key"]` with a bare
+  `TypeError`); the message names the file and the type.
+- `agent/tests/test_agent_config.py` — a `TestJsonConfig` class pinning three
+  behaviours: the dashboard JSON shape parses (server_url/api_key/hostname/poll/
+  verify_tls), corrupt JSON raises `ValueError` naming the path, and a JSON array is
+  rejected with "must be a JSON object". Removing the guard makes the third test fail
+  with `TypeError: list indices must be integers or slices, not str` (verified).
+- `AGENTS.md` — documented the pyright/ast-grep baseline (~178 diagnostics, mostly
+  Windows-only APIs on a Linux host) and the five rules that keep it from costing a
+  session, including the exact false-positive class met here: the
+  `unchecked-throwing-call` rule fires on calls that **are** inside `try:` when they
+  sit in an assignment or a `with`, and its line numbers can lag the file after edits
+  (it cited `requests.post` at a line that now reads `"x-nonce": nonce,`).
+
+### Fog cleared
+
+- **Whether the intermittent E2E failure was environmental noise**: no. Looping the
+  sweep and capturing logs produced the mechanism in one run: a native-callback
+  `SQLITE_MISUSE` after a teardown that never waited for the server.
+- **Whether `await server.close()` drains anything**: no — `close()` returns the
+  server object. This is the kind of line that *looks* correct in review and does
+  nothing.
+- **Whether the new update suite reaches CI**: yes. `ci.yml` and `release.yml` both
+  run `scripts/run-e2e.sh --agent-integration`, which globs `tests/e2e/*.test.js`;
+  the teardown race would have flaked CI, not just this host.
+
+### Fog remaining
+
+- The recorded opening is **fully blocked here**, verified rather than assumed: `gh`
+  is not installed (so `UPDATE_SIGNING_KEY` cannot be set) and `wrangler` is not
+  authenticated (so `agent-release.json` cannot be published). Only the HP-box flip
+  and those two credential steps remain, and none are reachable from this environment.
+- One full-sweep failure occurred in the batch immediately after the cleanup change
+  and did not reproduce in the eight runs since. Stated as observed, not as proven
+  impossible.
+- E-AUTO-UPDATE evidence is still emulated (`verified-in-unit-test`); D-120/D-129/
+  D-130/D-134 unchanged.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+
+- Hardware (HP box); owner provisioning of `UPDATE_SIGNING_KEY` (no `gh` binary
+  here); Cloudflare credentials for the KV publish (wrangler unauthenticated).
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): S195 recorded an intermittent
+  failure as "observed once, not reproduced" and moved on. That is the gap: an
+  unexplained intermittent failure in a suite feeding CI is a finding, not a note.
+  Looping the sweep and capturing output cost one command and produced the exact
+  cause. The generalisable change: never park an intermittent failure — loop until
+  it reproduces, then explain it.
+- **Layer 3 — execution environment** (secondary): the harness's cleanup looked
+  correct while doing nothing (`await` on a non-promise), and no test covers teardown
+  ordering, so the bug was invisible until it manifested as a process-level crash.
+
+### VERIFY
+
+- **8 consecutive full E2E sweeps green** (14 tests each) after the cleanup fix: five
+  in one batch, then three more (the first batch immediately after the change had one
+  failure, recorded above).
+- `agent`: **766 passed** (763 + 3 new JSON-config tests); `ruff check` +
+  `ruff format --check` clean.
+- Falsification: removing the non-object guard makes `test_non_object_json_is_rejected`
+  fail with the exact `TypeError` the guard prevents.
+- Checker: `agent/agent.py` fresh probe → 0 primary findings; the remaining
+  `unchecked-throwing-call` items were verified to sit inside `try:`/`with` blocks
+  and recorded as the documented false-positive class.
+- `make graph-check`: all invariants pass.
+
+### Session artifacts
+
+- Changed: `tests/e2e/agent-helpers.js`, `agent/agent.py`,
+  `agent/tests/test_agent_config.py`, `AGENTS.md`.
+- Commit: `cdfe484`.
+
+### Next session opening
+
+Stop treating the recorded opening as reachable: `gh` and `wrangler` are absent here,
+so `UPDATE_SIGNING_KEY` provisioning, the KV publish, and the HP-box flip need an
+owner session with credentials and hardware. Until then, the highest-value unblocked
+work is E-AUTO-UPDATE's *hardware-emulation* path — extend `agent/hw_test_harness.py`
+with an E-AUTO-UPDATE case that runs the same four scenarios on a real Windows box
+when one is available, so the artifact the graph demands is produced by the harness
+rather than by hand.
+
+---
