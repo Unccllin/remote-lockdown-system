@@ -7428,3 +7428,109 @@ again be advertised without existing. Then, when credentials exist, the two bloc
 steps: `UPDATE_SIGNING_KEY`, publish `agent-release.json`, and the HP-box flip.
 
 ---
+
+---
+
+## Session 199 — 2026-11-03 (auditing the class S198 found, and settling the CI question with evidence)
+
+### RULE-ZERO
+
+**Read**: session 198's block and `Next session opening`; `serverless/worker.ts`
+(route table, every response body that carries a URL, generated-script paths);
+`.github/workflows/ci.yml` and `release.yml` (what the serverless job actually runs);
+`serverless/worker.test.ts`; `Makefile` (`test-worker-e2e`).
+
+**Finding 1 — the S198 defect was a single instance, not a pattern.**
+A source-level audit compared every `/api/...` literal the Worker mentions (outside
+comments) against its dispatch branches: **37 mentioned paths, 56 dispatch branches,
+0 unrouted**. So "advertises a URL it does not serve" occurred exactly once
+(`/api/agent/download`), and there is no second broken contract waiting.
+
+**Finding 2 — the open CI decision does not need to be taken on risk grounds.**
+S198 left a choice: pin `wrangler` as a dev dependency so the workerd E2E can run on
+every PR, or keep it opt-in. The choice is not load-bearing, because CI already runs
+the Worker's unit suite (`ci.yml` → `npm run test:coverage`; `release.yml` →
+`npm test`), and that suite now contains S198's regression test — the one that takes
+`download_url` from a live update response and fetches it. **Keeping the workerd E2E
+opt-in does not leave this class ungated**; pinning wrangler (~100 MB in every job)
+would buy runtime fidelity (real workerd, real agent, real signature), not coverage
+of the failure mode.
+
+Decision: keep `test-worker-e2e` opt-in, and make the *class* gated by a static
+contract test that costs nothing.
+
+### IMPLEMENT
+
+- `serverless/worker.test.ts` — a `route contracts` describe with two tests:
+  1. every `/api/...` literal outside a comment must have a `path === '…'` branch or
+     a `path.startsWith` prefix, so a URL can never again be advertised without a
+     route (it reads `worker.ts`, because the route table only exists in source; the
+     extractor ignores `${}` templates so dynamic prefixes are not mistaken for
+     contracts);
+  2. the specific route that broke is named, so a regression reports the path rather
+     than an opaque diff.
+- No production code changed: the audit found nothing to fix.
+
+### Fog cleared
+
+- **Whether other advertised-but-unserved paths exist**: no. The audit is exhaustive
+  for `/api` literals outside comments (37/37 routed).
+- **Whether the opt-in workerd E2E leaves the S198 class ungated**: no — CI's
+  serverless job runs the unit regression that spans the contract, and the new static
+  test covers the structural half.
+
+### Fog remaining
+
+- The workerd E2E stays opt-in and therefore is not run by CI. That is now a stated
+  trade-off (runtime fidelity vs. a ~100 MB dependency and ~40 s per job), not an
+  unexamined gap.
+- Unchanged blockers: `UPDATE_SIGNING_KEY` (no `gh`), KV publish (wrangler
+  unauthenticated), HP-box flip (no hardware).
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+
+- Hardware; owner-provisioned signing key; Cloudflare credentials.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): S198 found the broken route *by
+  accident*, following a URL in a newly written E2E. An accidental discovery is not a
+  control; the same defect could be reintroduced tomorrow by a handler that builds a
+  URL nobody fetches. The static contract test turns one lucky catch into a check that
+  runs on every PR for free.
+
+### VERIFY
+
+- `serverless`: **414 passed** (412 + 2), `tsc --noEmit -p .` clean.
+- Non-vacuity: renaming the route to `/api/agent/download-DISABLED` fails 5 tests —
+  both contract tests and the four download tests — and the route was restored
+  (`grep` confirms exactly one `path === '/api/agent/download'`).
+- Audit output verbatim: `mentioned paths: 37   routed branches: 56`,
+  `mentioned but NOT routed (0)`.
+- `make graph-check`: all invariants pass.
+
+### Session artifacts
+
+- Changed: `serverless/worker.test.ts`.
+- Commit: `cf0b6ed`.
+
+### Next session opening
+
+The update thread is now gated at every level this environment can reach: Express
+end-to-end (S195), Worker end-to-end opt-in (S198), and the advertised-path contract
+in CI (S199). The remaining work is credential- and hardware-bound, so the next
+session should either take an owner session for `UPDATE_SIGNING_KEY` + the KV publish
++ the HP flip, or leave this thread and pick up one of the ledger items that is not
+resource-blocked (D-132's `PblTlsVerifyCert` residual is the only one left that is
+code-shaped).
+
+---

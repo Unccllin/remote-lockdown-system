@@ -53,38 +53,28 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 198 — 2026-11-03 (the serverless update path could never have applied an update)
+## Latest session: 199 — 2026-11-03 (auditing the class S198 found, and settling the CI question with evidence)
 
 ### Fog cleared
 
-- **Whether the serverless deployment can apply an update at all**: it could not. The
-  metadata was right, the signature was right, and the download route did not exist.
-- **Whether the agent survives a failed update download**: it did not, for any
-  pre-response failure. Now logged and refused, with the pending file untouched.
-- **Whether local workerd can serve a real signed release without an account**: yes —
-  `--persist-to` + `wrangler kv key put --local` from a separate process.
+- **Whether other advertised-but-unserved paths exist**: no. The audit is exhaustive
+  for `/api` literals outside comments (37/37 routed).
+- **Whether the opt-in workerd E2E leaves the S198 class ungated**: no — CI's
+  serverless job runs the unit regression that spans the contract, and the new static
+  test covers the structural half.
 
 ### Fog remaining
 
-- Authenticity is still not fleet-wide: no `UPDATE_SIGNING_KEY` in CI, no published
-  `agent-release.json` (blocked: `gh` absent, wrangler unauthenticated). The *route*
-  and the *per-platform signature path* are now proven; the key is not provisioned.
-- The Worker E2E is opt-in, so CI does not run it. Making it a CI gate would mean
-  pinning `wrangler` as a dev dependency (a ~100 MB install) — a deliberate decision
-  to take, not a default.
-- The turn-end ast-grep list for `agent/agent.py` is **not reproducible by any
-  on-demand check**: fresh `lens_diagnostics` probes report 0 diagnostics, including a
-  purpose-built probe file containing the exact shapes it flags (`open` in `try`,
-  `with open` in `try`, `read_text` in `try`, `kwargs`-threaded `requests.post`). One
-  entry is provably stale — it reports `requests.post` at L1184 while the file has it
-  at L1209. `# ast-grep-ignore` pragmas are not honoured by that pipeline. Recorded
-  instead of restructuring correct defensive code; AGENTS.md documents the class.
+- The workerd E2E stays opt-in and therefore is not run by CI. That is now a stated
+  trade-off (runtime fidelity vs. a ~100 MB dependency and ~40 s per job), not an
+  unexamined gap.
+- Unchanged blockers: `UPDATE_SIGNING_KEY` (no `gh`), KV publish (wrangler
+  unauthenticated), HP-box flip (no hardware).
 - Unchanged: D-120/D-129/D-130/D-134 resource-blocked.
 
 ### Debt items closed
 
-- None. (The two defects were unreleased: the Worker route had never been deployed with
-  a working download path, so no debt item covers them.)
+- None.
 
 ### Debt items still open
 
@@ -92,48 +82,40 @@
 
 ### Blockers
 
-- Hardware (HP box) for E-AUTO-UPDATE; owner provisioning of `UPDATE_SIGNING_KEY`
-  (no `gh`); Cloudflare credentials for the KV publish (wrangler unauthenticated).
+- Hardware; owner-provisioned signing key; Cloudflare credentials.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, third instance of one pattern): the
-  Worker's update tests asserted each half and never crossed the boundary between them.
-  A metadata test that fetched its own `download_url` would have failed on the first
-  run. The same shape appeared in S193 (config named a path nothing staged) and S194
-  (a signature that could only cover one platform): the defect lives *between* two
-  correct-looking pieces, so only a test that spans them finds it.
-- **Layer 1 — task specification** (secondary): the Worker was ported endpoint by
-  endpoint from Express, and the port's checklist never included "every URL the API
-  advertises resolves". Worth adding to the port checklist rather than rediscovering.
+- **Layer 4 — verification feedback** (primary): S198 found the broken route *by
+  accident*, following a URL in a newly written E2E. An accidental discovery is not a
+  control; the same defect could be reintroduced tomorrow by a handler that builds a
+  URL nobody fetches. The static contract test turns one lucky catch into a check that
+  runs on every PR for free.
 
 ### VERIFY
 
-- **Worker E2E: 5 passed** (`make test-worker-e2e`, ~40 s), including the per-platform
-  signature case verified by `agent.verify_update_signature` and the regression that
-  follows `download_url`.
-- `serverless`: **412 passed** (407 + 5); `tsc --noEmit -p .` clean.
-- `agent`: **768 passed** (766 + 2 regression tests for the download-failure crash);
-  `ruff check` + `ruff format --check` clean. The crash test was verified non-vacuous
-  by neutralising the guard (both new tests fail with `UnboundLocalError`).
-- Express E2E: **14 passed**; `make lint-workflows` clean; `make graph-check` passes.
-- Falsification summary: before the fixes the E2E failed at exactly the two defects
-  (`404` on `download_url`, then `UnboundLocalError` in the downloader); after, 5/5.
+- `serverless`: **414 passed** (412 + 2), `tsc --noEmit -p .` clean.
+- Non-vacuity: renaming the route to `/api/agent/download-DISABLED` fails 5 tests —
+  both contract tests and the four download tests — and the route was restored
+  (`grep` confirms exactly one `path === '/api/agent/download'`).
+- Audit output verbatim: `mentioned paths: 37   routed branches: 56`,
+  `mentioned but NOT routed (0)`.
+- `make graph-check`: all invariants pass.
 
 ### Session artifacts
 
-- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`, `serverless/README.md`,
-  `agent/agent.py`, `agent/tests/test_agent_update_signature.py`, `Makefile`,
-  `scripts/test_worker_update_e2e.py` (new).
-- Commit: `4ef3fcf`.
+- Changed: `serverless/worker.test.ts`.
+- Commit: `cf0b6ed`.
 
 ### Next session opening
 
-Decide the one open design question this suite raises: pin `wrangler` as a dev
-dependency so `test-worker-e2e` can run as a CI gate on every PR (the only way the
-Worker's update path stays honest), or keep it opt-in and accept that a route can
-again be advertised without existing. Then, when credentials exist, the two blocked
-steps: `UPDATE_SIGNING_KEY`, publish `agent-release.json`, and the HP-box flip.
+The update thread is now gated at every level this environment can reach: Express
+end-to-end (S195), Worker end-to-end opt-in (S198), and the advertised-path contract
+in CI (S199). The remaining work is credential- and hardware-bound, so the next
+session should either take an owner session for `UPDATE_SIGNING_KEY` + the KV publish
++ the HP flip, or leave this thread and pick up one of the ledger items that is not
+resource-blocked (D-132's `PblTlsVerifyCert` residual is the only one left that is
+code-shaped).
 
 ---
 
