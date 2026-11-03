@@ -6335,6 +6335,7 @@ real service, and add the hardware test that would have caught it.
   `server/tests/installer.routes.test.js`, `agent/installer.py`,
   `agent/tests/test_installer.py`, `scripts/verify-environment.sh`,
   `docs/DEPLOYMENT.md`, `.devin/PENDING-RULING.md` (S190 ruling opened + closed).
+- Commit: `bc74496`.
 
 ### Next session opening
 Give the Worker the same fix: publish the CLI installer to KV and make both
