@@ -4159,4 +4159,87 @@ describe('D-210: PBL route integration', () => {
       expect(cmd.lockdown_effective ?? null).toBe(null);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Fields the agent sends that the Worker used to ignore (session 186). A sweep
+  // of agent payloads vs handled fields found three: the blocked-file list, the
+  // lock-session context, and the tracking transitions.
+  // -------------------------------------------------------------------------
+  describe('ACK fields the agent sends', () => {
+    const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+    async function ack(hostname: string, apiKey: string, commandId: string, extra: object) {
+      const body = JSON.stringify({
+        hostname,
+        command_id: commandId,
+        result_status: 'executed',
+        ...extra,
+      });
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/command-ack', body, signRequest(body, apiKey)),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const stored = JSON.parse((await env.LOCKDOWN_KV.get('commands')) as string);
+      const devices = JSON.parse((await env.LOCKDOWN_KV.get('devices')) as string);
+      return {
+        command: stored.find((c: any) => c.id === commandId),
+        device: devices.find((d: any) => d.hostname === hostname),
+      };
+    }
+
+    it('persists the blocked-file list the agent reports', async () => {
+      // D-011: these are files the agent could not encrypt (open/locked). If the
+      // backend drops them, the operator believes the folder is fully encrypted.
+      const { device, apiKey } = await enrollDevice(worker, env, 'ACKBLOCK-001');
+      await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/flag-stolen`, { hostname_confirm: 'ACKBLOCK-001' }, ADMIN),
+        env,
+      );
+      const body = JSON.stringify({ hostname: 'ACKBLOCK-001' });
+      const checkin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)),
+        env,
+      );
+      const cmdId = (await parseResponse(checkin) as any).command.id;
+
+      const { command } = await ack('ACKBLOCK-001', apiKey, cmdId, {
+        encryption_blocked_files: ['Reports/locked.xlsx', 'Mail/outlook.pst'],
+        lock_session_context: { session: 'console', user: 'alice' },
+      });
+      expect(command.encryption_blocked_files).toEqual(['Reports/locked.xlsx', 'Mail/outlook.pst']);
+      expect(command.lock_session_context).toEqual({ session: 'console', user: 'alice' });
+    });
+
+    it('moves the device to tracking when a track command completes', async () => {
+      const { device, apiKey } = await enrollDevice(worker, env, 'ACKTRACK-001');
+      await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/flag-stolen`, { hostname_confirm: 'ACKTRACK-001' }, ADMIN),
+        env,
+      );
+      await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/track`, { hostname_confirm: 'ACKTRACK-001' }, ADMIN),
+        env,
+      );
+
+      // The lockdown command queued by flag-stolen comes first; acknowledge it.
+      const body = JSON.stringify({ hostname: 'ACKTRACK-001' });
+      const first = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)),
+        env,
+      );
+      const firstCmd = (await parseResponse(first) as any).command;
+      await ack('ACKTRACK-001', apiKey, firstCmd.id, {});
+
+      const second = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)),
+        env,
+      );
+      const trackCmd = (await parseResponse(second) as any).command;
+      expect(trackCmd.type).toBe('track');
+
+      const { device: afterTrack } = await ack('ACKTRACK-001', apiKey, trackCmd.id, {});
+      expect(afterTrack.status).toBe('tracking');
+    });
+  });
 });

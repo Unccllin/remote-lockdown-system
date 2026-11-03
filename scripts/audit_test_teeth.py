@@ -441,6 +441,33 @@ MUTATIONS: list[dict] = [
         "new": "    if (true) {  // MUTATION: an unattempted boot-lock reads as ineffective",
         "why": "a device that never tried boot-lock is marked ineffective rather than unknown",
     },
+    {
+        "path": "worker/ack-blocked-files",
+        "label": "WRK/ack-blocked-files",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  command.encryption_blocked_files = encryption_blocked_files ?? null;",
+        "new": "  command.encryption_blocked_files = null;  // MUTATION: blocked files dropped",
+        "why": "files the agent could not encrypt are hidden, so a folder looks fully encrypted",
+    },
+    {
+        "path": "worker/ack-session-context",
+        "label": "WRK/ack-session-context",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  command.lock_session_context = lock_session_context ?? null;",
+        "new": "  command.lock_session_context = null;  // MUTATION: session context dropped",
+        "why": "the lock-session context the dashboard reads is discarded",
+    },
+    {
+        "path": "worker/ack-track",
+        "label": "WRK/ack-track-status",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "      } else if (commands[cmdIdx].command_type === 'track') {\n        devices[devIdx].status = 'tracking';",
+        "new": "      } else if (commands[cmdIdx].command_type === 'track') {\n        devices[devIdx].status = 'active';  // MUTATION: tracking never shown",
+        "why": "a device under covert tracking still reports as active",
+    },
 ]
 
 

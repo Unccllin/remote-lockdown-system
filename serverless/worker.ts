@@ -93,6 +93,11 @@ interface Command {
   boot_lock_status?: string | null;
   boot_lock_detail?: unknown;
   lockdown_effective?: boolean | null;
+  // D-011: files the agent could not encrypt (open/locked). The dashboard shows
+  // these so an operator does not believe a folder is encrypted when it is not.
+  encryption_blocked_files?: unknown;
+  // Session context for the lock that was applied (duress / interactive logging).
+  lock_session_context?: unknown;
   // Duress code: when truthy on an unlock command, the agent pretends
   // to unlock but silently re-encrypts and re-locks after a delay.
   // Set by the admin via the "Release with Duress Code" dashboard option.
@@ -1108,6 +1113,8 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
     bitlocker_recovery_password,
     boot_lock_status,
     boot_lock_detail,
+    encryption_blocked_files,
+    lock_session_context,
   } = payload;
 
   if (!command_id || !result_status) {
@@ -1152,6 +1159,8 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
   command.boot_lock_status = typeof boot_lock_status === 'string' ? boot_lock_status : null;
   command.boot_lock_detail = boot_lock_detail ?? null;
   command.lockdown_effective = lockdownEffective;
+  command.encryption_blocked_files = encryption_blocked_files ?? null;
+  command.lock_session_context = lock_session_context ?? null;
   if (payload.command_uuid) {
     command.command_uuid = payload.command_uuid;
   }
@@ -1208,6 +1217,10 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
       if (commands[cmdIdx].command_type === 'lockdown') {
         devices[devIdx].status = 'locked';
       } else if (commands[cmdIdx].command_type === 'unlock') {
+        devices[devIdx].status = 'active';
+      } else if (commands[cmdIdx].command_type === 'track') {
+        devices[devIdx].status = 'tracking';
+      } else if (commands[cmdIdx].command_type === 'stop_track') {
         devices[devIdx].status = 'active';
       }
     }
