@@ -315,6 +315,33 @@ MUTATIONS: list[dict] = [
         "new": "  if (false) {  // MUTATION: serve metadata that cannot be verified",
         "why": "an agent is offered an update whose hash it cannot check",
     },
+    {
+        "path": "worker/agent-version",
+        "label": "WRK/agent-version",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "    version: release.latest_version || null,",
+        "new": "    version: '1.0.0',  // MUTATION: hardcoded, ignoring the published metadata",
+        "why": "the dashboard is told a version unrelated to the published release",
+    },
+    {
+        "path": "worker/latest-newest",
+        "label": "WRK/location-latest-newest",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  const latest = deviceLocs[deviceLocs.length - 1];",
+        "new": "  const latest = deviceLocs[0];  // MUTATION: oldest instead of newest",
+        "why": "the \"last seen\" pin shows where the device was first reported",
+    },
+    {
+        "path": "worker/latest-404",
+        "label": "WRK/location-latest-404",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  if (!latest) {\n    return errorResponse(\n      'No location data. The device has not reported any location reports yet.',\n      404,\n    );\n  }",
+        "new": "  if (false) {  // MUTATION: never report \"no location data\"\n    return errorResponse(\n      'No location data. The device has not reported any location reports yet.',\n      404,\n    );\n  }",
+        "why": "a device with no reports returns 200 with a malformed payload instead of 404",
+    },
 ]
 
 

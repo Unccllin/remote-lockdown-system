@@ -3614,4 +3614,132 @@ describe('D-210: PBL route integration', () => {
       expect(incomplete.status).toBe(500);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Two endpoints the dashboard needed and the Worker lacked (session 182).
+  // Both exist in Express; without them "point the dashboard at the Worker"
+  // leaves the version badge and the "last seen" pin broken.
+  // -------------------------------------------------------------------------
+  describe('GET /api/installer/agent-version', () => {
+    const RELEASE = {
+      latest_version: '1.3.0',
+      sha256: 'a'.repeat(64),
+      size: 4321,
+      built_at: '2026-11-02T00:00:00.000Z',
+      platforms: { win: { sha256: 'b'.repeat(64), size: 9876 } },
+    };
+
+    it('requires admin auth', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/api/installer/agent-version'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('reports unavailable when no release is published', async () => {
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/installer/agent-version', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.version).toBe(null);
+      expect(data.available).toBe(false);
+    });
+
+    it('serves the published version and hash', async () => {
+      await env.LOCKDOWN_KV.put('agent_release', JSON.stringify(RELEASE));
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/installer/agent-version', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(data.version).toBe('1.3.0');
+      expect(data.available).toBe(true);
+      expect(data.sha256).toBe(RELEASE.sha256);
+      expect(data.size).toBe(RELEASE.size);
+      expect(data.platform).toBe('linux');
+      expect(data.source).toBe('kv');
+    });
+
+    it('honours the per-platform override', async () => {
+      await env.LOCKDOWN_KV.put('agent_release', JSON.stringify(RELEASE));
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/installer/agent-version?platform=win', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(data.platform).toBe('win');
+      expect(data.sha256).toBe('b'.repeat(64));
+      expect(data.size).toBe(9876);
+    });
+
+    it('does not shadow the per-device installer route', async () => {
+      // /api/installer/:deviceId is an anchored regex; if agent-version were
+      // matched after it, "agent-version" would be read as a device id and this
+      // endpoint would 404 with "Device not found".
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/installer/agent-version', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(200);
+    });
+  });
+
+  describe('GET /api/devices/:id/location/latest', () => {
+    async function reportLocation(hostname: string, apiKey: string, city: string) {
+      const body = JSON.stringify({
+        hostname,
+        location: { latitude: 1.5, longitude: 2.5, source: 'ip', city },
+      });
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/location', body, signRequest(body, apiKey)),
+        env,
+      );
+      expect(resp.status).toBe(200);
+    }
+
+    it('requires admin auth', async () => {
+      const { device } = await enrollDevice(worker, env, 'LATEST-000');
+      const resp = await worker.fetch(
+        makeRequest('GET', `/api/devices/${device.id}/location/latest`),
+        env,
+      );
+      expect(resp.status).toBe(401);
+    });
+
+    it('404s when the device has never reported', async () => {
+      const { device } = await enrollDevice(worker, env, 'LATEST-001');
+      const resp = await worker.fetch(
+        makeRequest('GET', `/api/devices/${device.id}/location/latest`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('returns the newest report, not the first', async () => {
+      const { device, apiKey } = await enrollDevice(worker, env, 'LATEST-002');
+      await reportLocation('LATEST-002', apiKey, 'First-City');
+      await reportLocation('LATEST-002', apiKey, 'Second-City');
+
+      const resp = await worker.fetch(
+        makeRequest('GET', `/api/devices/${device.id}/location/latest`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.city).toBe('Second-City');
+      expect(data.reported_at).toBeTruthy();
+    });
+  });
 });

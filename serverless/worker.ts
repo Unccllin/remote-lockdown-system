@@ -360,9 +360,26 @@ const ROLE_HIERARCHY: Record<AdminRole, number> = {
   'super-admin': 2,
 };
 
+/**
+ * Parse a JSON blob read from KV.
+ *
+ * KV is external storage: a truncated or hand-edited value would otherwise raise
+ * a bare SyntaxError from deep inside a handler with no clue which key was bad.
+ * This names the key and re-throws. It deliberately does NOT fall back to an empty
+ * collection — silently treating corruption as "no data" would make a tampered
+ * fleet look empty, which is the wrong direction for an anti-theft system.
+ */
+function parseKvJson<T>(raw: string, key: string): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error(`corrupt KV value at "${key}" — refusing to treat it as empty`);
+  }
+}
+
 async function listAdmins(env: Env): Promise<Admin[]> {
   const data = await env.LOCKDOWN_KV.get(ADMINS_KEY);
-  return data ? JSON.parse(data) : [];
+  return data ? parseKvJson<Admin[]>(data, ADMINS_KEY) : [];
 }
 
 async function saveAdmins(env: Env, admins: Admin[]): Promise<void> {
@@ -496,7 +513,7 @@ const CHECKIN_KEY_PREFIX = 'device_checkin:';
 
 async function listDevices(env: Env): Promise<Device[]> {
   const data = await env.LOCKDOWN_KV.get(DEVICES_KEY);
-  return data ? JSON.parse(data) : [];
+  return data ? parseKvJson<Device[]>(data, DEVICES_KEY) : [];
 }
 
 async function saveDevices(env: Env, devices: Device[]): Promise<void> {
@@ -522,7 +539,7 @@ interface CheckinMetadata {
 
 async function getCheckinMetadata(env: Env, deviceId: string): Promise<CheckinMetadata | null> {
   const data = await env.LOCKDOWN_KV.get(`${CHECKIN_KEY_PREFIX}${deviceId}`);
-  return data ? JSON.parse(data) : null;
+  return data ? parseKvJson<CheckinMetadata>(data, `${CHECKIN_KEY_PREFIX}${deviceId}`) : null;
 }
 
 async function saveCheckinMetadata(env: Env, deviceId: string, metadata: CheckinMetadata): Promise<void> {
@@ -547,7 +564,7 @@ function mergeCheckinMetadata(device: Device, metadata: CheckinMetadata | null):
 
 async function listCommands(env: Env): Promise<Command[]> {
   const data = await env.LOCKDOWN_KV.get(COMMANDS_KEY);
-  return data ? JSON.parse(data) : [];
+  return data ? parseKvJson<Command[]>(data, COMMANDS_KEY) : [];
 }
 
 async function saveCommands(env: Env, commands: Command[]): Promise<void> {
@@ -556,7 +573,7 @@ async function saveCommands(env: Env, commands: Command[]): Promise<void> {
 
 async function listKeys(env: Env): Promise<EncryptionKey[]> {
   const data = await env.LOCKDOWN_KV.get(KEYS_KEY);
-  return data ? JSON.parse(data) : [];
+  return data ? parseKvJson<EncryptionKey[]>(data, KEYS_KEY) : [];
 }
 
 async function saveKeys(env: Env, keys: EncryptionKey[]): Promise<void> {
@@ -609,7 +626,7 @@ async function decSecret(env: Env, row: StoredBiosPassword): Promise<string> {
 async function listBiosPasswords(env: Env): Promise<BiosPassword[]> {
   const data = await env.LOCKDOWN_KV.get(BIOS_PASSWORDS_KEY);
   if (!data) return [];
-  const stored = JSON.parse(data) as StoredBiosPassword[];
+  const stored = parseKvJson<StoredBiosPassword[]>(data, BIOS_PASSWORDS_KEY);
   // Decrypt each row's password transparently.
   const out: BiosPassword[] = [];
   for (const r of stored) {
@@ -639,7 +656,7 @@ async function saveBiosPasswords(env: Env, pws: BiosPassword[]): Promise<void> {
 
 async function listLocations(env: Env): Promise<LocationReport[]> {
   const data = await env.LOCKDOWN_KV.get(LOCATIONS_KEY);
-  return data ? JSON.parse(data) : [];
+  return data ? parseKvJson<LocationReport[]>(data, LOCATIONS_KEY) : [];
 }
 
 async function saveLocations(env: Env, locations: LocationReport[]): Promise<void> {
@@ -650,7 +667,7 @@ async function saveLocations(env: Env, locations: LocationReport[]): Promise<voi
 
 async function listAudit(env: Env): Promise<AuditEntry[]> {
   const data = await env.LOCKDOWN_KV.get(AUDIT_KEY);
-  return data ? JSON.parse(data) : [];
+  return data ? parseKvJson<AuditEntry[]>(data, AUDIT_KEY) : [];
 }
 
 async function saveAudit(env: Env, entries: AuditEntry[]): Promise<void> {
@@ -1400,7 +1417,10 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
   // Delete the token (single-use) — use KV.delete if available, otherwise
   // overwrite with empty. The real Cloudflare KV supports delete(); the
   // MockKV in tests does not, so we guard with a typeof check.
+  // SAFETY: probe for an optional method. Real Cloudflare KV always has delete();
+  // the test double does not, so the shape is checked at runtime before use.
   if (typeof (env.LOCKDOWN_KV as unknown as { delete?: (k: string) => Promise<void> }).delete === 'function') {
+    // SAFETY: guarded by the typeof check above — delete() exists on that path.
     await (env.LOCKDOWN_KV as unknown as { delete: (k: string) => Promise<void> }).delete(tokenKey);
   } else {
     await env.LOCKDOWN_KV.put(tokenKey, '');
@@ -2509,6 +2529,9 @@ export default {
       if (action === 'locations' && method === 'GET') {
         return handleGetLocations(request, env, deviceId);
       }
+      if (action === 'location/latest' && method === 'GET') {
+        return handleLatestLocation(request, env, deviceId);
+      }
       if (action === 'pba-credentials' && method === 'GET') {
         return handleGetPbaCredentials(request, env, deviceId);
       }
@@ -2533,6 +2556,10 @@ export default {
     // No admin auth required — these are public downloads (the enrollment
     // token controls who can enroll, not who can download the installer).
     // Per-device installer (S4-serverless) — self-contained install.ps1.
+    if (path === '/api/installer/agent-version' && method === 'GET') {
+      return handleAgentVersion(request, env);
+    }
+
     const installerMatch = path.match(/^\/api\/installer\/([^/]+)$/);
     if (installerMatch && method === 'GET') {
       return handleInstaller(request, env, installerMatch[1]);
@@ -2698,6 +2725,87 @@ async function handleAgentUpdate(request: Request, env: Env): Promise<Response> 
     built_at: perPlatform?.built_at || release.built_at || null,
     signature: release.signature || null,
     signature_alg: release.signature ? release.signature_alg || 'ed25519' : null,
+  });
+}
+
+/**
+ * GET /api/installer/agent-version — the version the dashboard displays.
+ *
+ * Served from the same `agent_release` metadata as /api/agent/update, so the two
+ * can never disagree. (Express hardcodes '1.0.0' here while its update endpoint
+ * reads the binary; one source of truth is the improvement this port makes.)
+ */
+async function handleAgentVersion(request: Request, env: Env): Promise<Response> {
+  const auth = await requireRole(request, env, 'viewer');
+  if (auth instanceof Response) return auth;
+
+  const platform = new URL(request.url).searchParams.get('platform') || 'linux';
+  const raw = await env.LOCKDOWN_KV.get(AGENT_RELEASE_KEY);
+  if (!raw) {
+    return jsonResponse({ version: null, available: false, platform });
+  }
+
+  let release: {
+    latest_version?: string;
+    sha256?: string;
+    size?: number;
+    built_at?: string;
+    platforms?: Record<string, { sha256?: string; size?: number; built_at?: string }>;
+  };
+  try {
+    release = JSON.parse(raw);
+  } catch {
+    return errorResponse('Agent release metadata is corrupt', 500);
+  }
+
+  const perPlatform = release.platforms?.[platform];
+  const sha256 = perPlatform?.sha256 || release.sha256;
+  const size = perPlatform?.size ?? release.size;
+
+  return jsonResponse({
+    version: release.latest_version || null,
+    // "available" means the dashboard can show a version *and* verify it.
+    available: Boolean(release.latest_version && sha256),
+    sha256: sha256 || null,
+    size: typeof size === 'number' ? size : null,
+    built_at: perPlatform?.built_at || release.built_at || null,
+    platform,
+    source: 'kv',
+  });
+}
+
+/**
+ * GET /api/devices/:id/location/latest — the dashboard's "last seen" pin.
+ *
+ * The Worker keeps locations in a single KV list; /locations returns a window,
+ * this returns only the newest report. 404 (not an empty object) when the device
+ * has never reported, matching the Express message.
+ */
+async function handleLatestLocation(
+  request: Request,
+  env: Env,
+  deviceId: string,
+): Promise<Response> {
+  const auth = await requireRole(request, env, 'viewer');
+  if (auth instanceof Response) return auth;
+
+  const locations = await listLocations(env);
+  const deviceLocs = locations
+    .filter((l) => l.device_id === deviceId)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const latest = deviceLocs[deviceLocs.length - 1];
+
+  if (!latest) {
+    return errorResponse(
+      'No location data. The device has not reported any location reports yet.',
+      404,
+    );
+  }
+
+  return jsonResponse({
+    ...latest,
+    id: `loc-${deviceId}-0`,
+    reported_at: latest.created_at,
   });
 }
 
