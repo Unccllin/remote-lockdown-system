@@ -4039,4 +4039,38 @@ describe('D-210: PBL route integration', () => {
       expect(badId.status).toBe(400);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Integrations are declared self-hosted-only (session 185). The endpoint answers
+  // 501 rather than 404 so the dashboard can tell "this deployment does not
+  // implement it" from "you typed the URL wrong".
+  // -------------------------------------------------------------------------
+  describe('integrations are declared unavailable', () => {
+    it('checks auth before revealing anything', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/api/integrations'), env);
+      expect(resp.status).toBe(401);
+    });
+
+    it('answers 501 for the inventory list', async () => {
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/integrations', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(501);
+      expect(data.error).toMatch(/self-hosted/i);
+    });
+
+    it('answers 501 for a connector inventory', async () => {
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/integrations/meshcentral/devices', undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      expect(resp.status).toBe(501);
+    });
+  });
 });

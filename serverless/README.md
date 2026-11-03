@@ -78,6 +78,24 @@ Behaviour worth knowing:
 - **`platforms`** overrides the top-level hash/size per `X-Agent-Platform`
   (`win`, `linux`), for when the two builds differ.
 
+## What this backend does not implement
+
+**Integrations inventory** (`GET /api/integrations`,
+`GET /api/integrations/:id/devices`) is **self-hosted only**. In `server/` it is a
+connector subsystem (`server/src/integrations/`: a registry plus connectors that
+read credentials from `process.env` and call upstream APIs such as MeshCentral).
+The Worker has no equivalent, and duplicating that abstraction would mean two copies
+to keep in step.
+
+It answers **501 Not Implemented**, not 404 — 404 is indistinguishable from a
+mistyped path, while 501 says "this deployment does not implement it", which is the
+truth. Auth is checked first, so an anonymous caller learns nothing about which
+backend is behind the URL.
+
+Nothing else depends on it: lockdown, unlock, enrolment, verdicts, tracking and the
+audit trail are all served by this Worker. Only the third-party inventory view is
+missing.
+
 ## Verify locally before deploying
 
 ```bash

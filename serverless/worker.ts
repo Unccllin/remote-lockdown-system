@@ -2436,6 +2436,13 @@ export default {
     if (path === '/api/auth/login' && method === 'POST') {
       return handleAuthLogin(request, env);
     }
+    if (
+      (path === '/api/integrations' || path.startsWith('/api/integrations/')) &&
+      method === 'GET'
+    ) {
+      return handleIntegrationsUnavailable(request, env);
+    }
+
     if (path === '/api/hw-test-artifact' && method === 'POST') {
       return handleUploadHwArtifact(request, env);
     }
@@ -3007,6 +3014,33 @@ async function handleGetHwArtifact(
     return errorResponse('Artifact not found', 404);
   }
   return jsonResponse(artifact);
+}
+
+/**
+ * GET /api/integrations, /api/integrations/:id/devices — declared unavailable.
+ *
+ * The integrations inventory is a connector subsystem in the self-hosted server
+ * (server/src/integrations/: a registry plus connectors that read credentials from
+ * process.env and speak to upstream APIs). The Worker has no equivalent, and
+ * re-implementing it would mean a second copy of that abstraction to keep in step.
+ *
+ * It answers 501 rather than 404 on purpose: 404 would be indistinguishable from a
+ * typo'd path, while 501 says "this deployment does not implement it", which is the
+ * truth. Auth is checked first, so an anonymous caller learns nothing about which
+ * backend is behind the URL.
+ */
+async function handleIntegrationsUnavailable(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
+
+  return errorResponse(
+    'The integrations inventory view is only available on the self-hosted server deployment; ' +
+      'this serverless deployment does not implement it. See serverless/README.md.',
+    501,
+  );
 }
 
 /** PBL device ids are 32 bytes rendered as lowercase-hex (C1 §4). */

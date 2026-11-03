@@ -405,6 +405,15 @@ MUTATIONS: list[dict] = [
         "new": "  const artifact = artifacts[0];  // MUTATION: returns an arbitrary artifact",
         "why": "asking for one artifact returns whichever was stored first",
     },
+    {
+        "path": "worker/integrations",
+        "label": "WRK/integrations-501",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "      'this serverless deployment does not implement it. See serverless/README.md.',\n    501,",
+        "new": "      'this serverless deployment does not implement it. See serverless/README.md.',\n    200,  // MUTATION: pretend the inventory is served",
+        "why": "the dashboard is told the integration inventory succeeded, and gets an error body",
+    },
 ]
 
 
