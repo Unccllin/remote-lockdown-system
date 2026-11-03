@@ -9,7 +9,8 @@
 #   scripts/run-e2e.sh                       # run all E2E suites
 #   scripts/run-e2e.sh --suite lockdown      # run only the lockdown flow
 #   scripts/run-e2e.sh --suite recovery      # run only the recovery flow
-#   scripts/run-e2e.sh --agent-integration   # include the real-agent integration suite
+#   scripts/run-e2e.sh --agent-integration   # include the real-agent suites
+#                                            # (lockdown flow + auto-update verification)
 #   scripts/run-e2e.sh --verbose             # show full test output
 #   scripts/run-e2e.sh --suite all --verbose
 #
@@ -124,10 +125,12 @@ if [[ "${AGENT_INTEGRATION}" -eq 1 ]]; then
     TEST_MATCH='["<rootDir>/tests/e2e/*.test.js"]'
     SUITE_LABEL="all E2E suites + agent integration"
   else
-    # Convert the single-element array literal to a two-element one.
+    # Convert the single-element array literal to a multi-element one. Both
+    # agent suites are spawned processes over real HTTP, so they belong behind
+    # the same flag that guarantees a Python runtime.
     EXISTING_MATCH="${TEST_MATCH%]*}"
-    TEST_MATCH="${EXISTING_MATCH}, \"<rootDir>/tests/e2e/agent-integration.test.js\"]"
-    SUITE_LABEL="${SUITE_LABEL} + agent integration"
+    TEST_MATCH="${EXISTING_MATCH}, \"<rootDir>/tests/e2e/agent-integration.test.js\", \"<rootDir>/tests/e2e/agent-update.e2e.test.js\"]"
+    SUITE_LABEL="${SUITE_LABEL} + agent integration (lockdown + update)"
   fi
 fi
 

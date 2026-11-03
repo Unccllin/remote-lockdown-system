@@ -814,7 +814,10 @@ router.get('/update', agentAuth, async (req, res) => {
   hash.update(fs.readFileSync(binPath));
   const sha256 = hash.digest('hex');
 
-  const LATEST_VERSION = '1.0.0';
+  // Published release version. Configurable because it is a deployment fact:
+  // the binary served is whatever is on disk, so a hardcoded literal lets the
+  // two disagree (the Worker reads it from metadata for the same reason).
+  const LATEST_VERSION = process.env.AGENT_LATEST_VERSION || '1.0.0';
   const updateAvailable = compareVersions(agentVersion, LATEST_VERSION) < 0;
 
   // Build download URL — the agent will use its server_url + this path

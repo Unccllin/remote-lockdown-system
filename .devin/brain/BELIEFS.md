@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-03 12:52:34 — 49 beliefs
+Generated: 2026-11-03 13:20:02 — 50 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -131,6 +131,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-018 | confirmed | code-read | Harnesses that check log output rather than security outcomes pass vulnerable code — the D-220 bypass and the MOR no-op both survived green harnesses. |
+
+## testing/e2e
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-050 | confirmed | code-read | Agent E2E suites that run the in-process test server MUST spawn the agent asynchronously: spawnSync blocks the Node event loop, so the server cannot answer the subprocess and the agent reports a 15s read timeout that looks like a broken server. Spawned agents must also inherit the harness's agentEnv() (agent-relevant vars deleted, never blanked), because the agent's load_config() prefers env over the config file and an inherited AGENT_SHARED_KEY silently replaces the device key, making every check-in 401. And two devices cannot share one host in these suites: get_hardware_uuid() falls back to a host-stable value where DMI is unreadable and devices.hardware_uuid is UNIQUE. |
 
 ## threat-model
 

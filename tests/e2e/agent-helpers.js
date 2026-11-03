@@ -123,6 +123,11 @@ async function startTestServer() {
   // Bind to port 0 → OS assigns a free port. We resolve the actual port
   // from server.address() once listening.
   const server = http.createServer(app);
+  // Node closes an idle keep-alive socket after 5s by default. Suites that pause
+  // for an out-of-process agent run then reuse a dead socket and get ECONNRESET
+  // ("fetch failed"). Raising it keeps the harness's pooled connections usable.
+  server.keepAliveTimeout = 120000;
+  server.headersTimeout = 130000;
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve);
@@ -317,12 +322,20 @@ function cleanupAgentConfig(configPath) {
  *   process has spawned (does NOT wait for it to exit). `cleanup` kills the
  *   process and resolves after exit.
  */
-function startAgent(configPath, opts = {}) {
-  // Build a clean env for the agent subprocess. We MUST delete (not blank)
-  // agent-relevant env vars because the agent's load_config() treats an
-  // empty-string env var as "set" (os.environ.get returns '' rather than the
-  // fallback), which would override the config file's agent_key with '' and
-  // cause the agent to exit with "AGENT_SHARED_KEY is not set".
+/**
+ * Environment for an agent subprocess.
+ *
+ * We MUST delete (not blank) agent-relevant env vars: the agent's load_config()
+ * treats an empty-string env var as "set" (os.environ.get returns '' rather than
+ * the fallback), and a *non-empty* inherited one silently wins over the config
+ * file. That is how a spawned agent authenticates with the suite's
+ * AGENT_SHARED_KEY instead of its own device key and gets 401 from check-in —
+ * which looks like broken auth rather than a test-harness leak.
+ *
+ * Exported so every suite that spawns the agent shares one list; a suite with its
+ * own copy is a suite that will drift.
+ */
+function agentEnv(overrides = {}) {
   const env = { ...process.env };
   delete env.DEVICE_API_KEY;
   delete env.AGENT_SHARED_KEY;
@@ -337,7 +350,12 @@ function startAgent(configPath, opts = {}) {
   delete env.RECOVERY_PUBLIC_KEY;
   delete env.SERVER_URL;
   delete env.SERVER_SUPPORTS_ACK_DEDUP;
-  Object.assign(env, opts.env || {});
+  Object.assign(env, overrides);
+  return env;
+}
+
+function startAgent(configPath, opts = {}) {
+  const env = agentEnv(opts.env || {});
 
   const child = spawn('python3', [AGENT_SCRIPT, '--config', configPath], {
     env,
@@ -471,6 +489,7 @@ async function checkPythonAvailable() {
 }
 
 module.exports = {
+  agentEnv,
   startTestServer,
   createAgentConfig,
   cleanupAgentConfig,

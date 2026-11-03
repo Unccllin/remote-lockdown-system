@@ -55,9 +55,15 @@ import os
 import sys
 
 if sys.stdout is None:
-    sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+    except OSError:
+        pass  # nothing to log to; the file logger still works
 if sys.stderr is None:
-    sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+    try:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+    except OSError:
+        pass
 
 import argparse
 import base64
@@ -255,7 +261,10 @@ if _is_frozen():
     else:
         _STATE_DIR = Path("/var/lib/lockdown-agent")
 else:
-    _STATE_DIR = Path(__file__).parent
+    # LOCKDOWN_STATE_DIR lets a harness (or a sandboxed deployment) put the runtime
+    # state — update pending/download files, sentinels — somewhere writable and
+    # isolated instead of the source tree.
+    _STATE_DIR = Path(os.environ.get("LOCKDOWN_STATE_DIR") or Path(__file__).parent)
 
 # Default config file locations (searched in order)
 _CONFIG_SEARCH_PATHS = [
@@ -300,8 +309,13 @@ def _load_json_config(config_path):
     load_config() can fall back to its built-in defaults for missing keys.
     JSON keys are mapped to the internal config dict key names.
     """
-    with open(config_path) as f:
-        data = json.load(f)
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        # Deliberately not "return {}": falling back to built-in defaults would
+        # point the agent at a different server rather than report the problem.
+        raise ValueError(f"unreadable agent config {config_path}: {exc}") from exc
 
     section = {}
 
@@ -1178,7 +1192,10 @@ def _signed_post(url: str, cfg: dict, json_body: dict, **kwargs) -> requests.Res
     # Merge any caller-provided headers (e.g., none currently, but future-proof)
     headers.update(kwargs.pop("headers", {}))
     headers.setdefault("Content-Type", "application/json")
-    return requests.post(url, data=body_bytes, headers=headers, **kwargs)  # noqa: S113 -- timeout is passed by all callers via **kwargs
+    # Explicit so no static check has to infer it from **kwargs: callers may
+    # override through kwargs, but the default is never "wait forever".
+    timeout = kwargs.pop("timeout", 15)
+    return requests.post(url, data=body_bytes, headers=headers, timeout=timeout, **kwargs)
 
 
 def _post_with_fallback(endpoint: str, cfg: dict, json_body: dict, **kwargs) -> requests.Response:
@@ -1556,13 +1573,17 @@ def drain_offline_queue(cfg: dict) -> None:
 
 
 def _fsync_file(path: Path) -> None:
-    """Ensure file contents are flushed to disk (crash safety)."""
-    import contextlib
+    """Ensure file contents are flushed to disk (crash safety).
 
-    with contextlib.suppress(Exception):
+    Best-effort by design: the bytes are already written, and failing to reach
+    the disk synchronously must not abort a lockdown or a check-in.
+    """
+    try:
         with open(path, "r+b") as f:
             f.flush()
             os.fsync(f.fileno())
+    except (OSError, ValueError):
+        pass
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -1637,7 +1658,13 @@ def update_pending_ack(
     bitlocker_recovery_password after boot lockdown completes."""
     if not file_path.exists():
         return
-    state = json.loads(file_path.read_text())
+    try:
+        state = json.loads(file_path.read_text())
+    except (OSError, ValueError) as exc:
+        # Leave the file untouched rather than crash the completion path: the
+        # server still gets its ACK, without the BIOS fields.
+        log.warning("Pending ACK file %s unreadable: %s", file_path, exc)
+        return
     if bios_password:
         state["bios_password"] = bios_password
     if boot_lock_status:

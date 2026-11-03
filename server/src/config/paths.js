@@ -6,6 +6,10 @@
  * Used by routes/installer.js and routes/agent.js.
  *
  * Lookup order:
+ *   0. AGENT_BINARIES_DIR, when set — deployments that keep binaries outside the
+ *      repo tree, and harnesses that must not depend on a build existing locally
+ *      (`agent/dist/` is gitignored, so a fresh checkout has none and the update
+ *      endpoint silently answers `no_binary_available`).
  *   1. Electron production: process.resourcesPath/agent/
  *   2. Dev mode: <repo-root>/agent/dist/
  *
@@ -27,6 +31,13 @@ const fs = require('fs');
  */
 function getAgentBinariesDir() {
   const candidates = [];
+
+  // Explicit override. Checked first because an operator who sets it means it;
+  // falling back to a stale in-repo build would serve the wrong binaries.
+  const override = process.env.AGENT_BINARIES_DIR;
+  if (override) {
+    candidates.push(override);
+  }
 
   // Electron production: binaries are in extraResources at resourcesPath/agent/
   if (process.resourcesPath) {

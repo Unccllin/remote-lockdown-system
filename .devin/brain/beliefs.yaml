@@ -870,3 +870,26 @@ beliefs:
   dependents: []
   notes: 18 script tests verify the signature with agent.verify_update_signature itself, plus tamper/wrong-key/wrong-version/cross-platform
     rejection.
+- id: B-050
+  statement: 'Agent E2E suites that run the in-process test server MUST spawn the agent asynchronously:
+    spawnSync blocks the Node event loop, so the server cannot answer the subprocess and the agent reports
+    a 15s read timeout that looks like a broken server. Spawned agents must also inherit the harness''s
+    agentEnv() (agent-relevant vars deleted, never blanked), because the agent''s load_config() prefers
+    env over the config file and an inherited AGENT_SHARED_KEY silently replaces the device key, making
+    every check-in 401. And two devices cannot share one host in these suites: get_hardware_uuid() falls
+    back to a host-stable value where DMI is unreadable and devices.hardware_uuid is UNIQUE.'
+  domain: testing/e2e
+  status: confirmed
+  evidence_level: code-read
+  provenance: 4-case update E2E green 3x + 2 full sweeps; each of the three defects reproduced first (15s
+    ReadTimeout, 401, SQLITE_CONSTRAINT devices.hardware_uuid) then fixed and re-verified; falsification
+    showed 1 failed / 3 passed with verification bypassed
+  source: tests/e2e/agent-helpers.js agentEnv; tests/e2e/agent-update.e2e.test.js; tests/e2e/agent-integration.test.js;
+    server/src/config/paths.js; agent/agent.py _STATE_DIR
+  asserted: '2026-11-03'
+  last_verified: '2026-11-03'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Falsification: bypassing verify_update_signature makes the untrusted-key case fail (1/4).'
