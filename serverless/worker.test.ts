@@ -1529,7 +1529,7 @@ describe('Serverless Worker', () => {
       expect(rel.status).toBe(409);
     });
 
-    it('installer returns a self-contained install.ps1 and re-keys the device', async () => {
+    it('installer returns a delegating install.ps1 and re-keys the device', async () => {
       await seedAdmin(env, 'sa1', 'password123');
       const { device } = await enrollDevice(worker, env, 'INST-001');
       const resp = await worker.fetch(makeRequest('GET', `/api/installer/${device.id}`, undefined,
@@ -1537,15 +1537,68 @@ describe('Serverless Worker', () => {
       expect(resp.status).toBe(200);
       expect(resp.headers.get('Content-Type')).toContain('text/plain');
       const script = await resp.text();
-      // Self-contained: writes config + downloads agent + registers service.
+
+      // Staging: the baked config plus the two binaries from KV.
       expect(script).toContain('config.json');
       expect(script).toContain('/api/download/agent');
-      expect(script).toContain('sc.exe create');
+      expect(script).toContain('/api/download/agent-installer');
       expect(script).toContain('INST-001');
+
+      // Delegation: lockdown-installer.exe does the install, so the mechanism is
+      // the same one the generic and Express installers use.
+      expect(script).toContain('--config-file');
+      expect(script).toContain('--silent');
+
+      // The regression this test exists for: sc.exe services are killed by the
+      // SCM because the agent implements no StartServiceCtrlDispatcher.
+      expect(script).not.toContain('sc.exe');
+      expect(script).not.toContain('RemoteLockdown');
+
       // The embedded config carries a fresh api_key (re-keyed — old no longer matches).
       const list = await worker.fetch(makeRequest('GET', `/api/devices/${device.id}`, undefined,
         { Authorization: 'Bearer test-admin-token' }), env);
       expect(list.status).toBe(200);
+    });
+
+    it('serves the CLI installer the generated scripts run', async () => {
+      const bytes = new Uint8Array([0x4d, 0x5a, 0x01, 0x02, 0x03]);
+      await env.LOCKDOWN_KV.put('binary:agent-installer', bytes);
+
+      const resp = await worker.fetch(makeRequest('GET', '/api/download/agent-installer'), env);
+
+      expect(resp.status).toBe(200);
+      expect(resp.headers.get('Content-Type')).toContain('portable-executable');
+      // The staged filename matters: the script writes it to lockdown-installer.exe
+      // and the installer looks for lockdown-agent.exe next to itself.
+      expect(resp.headers.get('Content-Disposition')).toContain('lockdown-installer.exe');
+      expect(new Uint8Array(await resp.arrayBuffer())).toEqual(bytes);
+    });
+
+    it('keeps one generated-install template, not one per route', async () => {
+      // The per-device script and the firmware re-arm script are the same
+      // installer. They were two hand-copied templates, and the sc.exe mechanism
+      // survived in both because nobody fixed the second copy. Guard the merge.
+      const { readFileSync } = await import('fs');
+      const src = readFileSync(new URL('./worker.ts', import.meta.url), 'utf8');
+
+      const delegateCalls = src.match(/lockdown-installer\.exe" --config-file/g) ?? [];
+      expect(delegateCalls.length).toBe(1);
+
+      // Comments are allowed (and required) to explain the removed mechanism;
+      // what must not exist is an executable sc.exe call. The scripts are TS
+      // template literals, so check the emitted line inside them.
+      const executable = src
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => !line.startsWith('//') && !line.startsWith('*') && !line.startsWith(';'));
+      expect(executable.some((line) => /sc\.exe create/.test(line))).toBe(false);
+    });
+
+    it('reports a missing CLI installer instead of serving an empty body', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/api/download/agent-installer'), env);
+
+      expect(resp.status).toBe(404);
+      expect(await resp.text()).toContain('agent-installer binary not available');
     });
 
     it('installer requires operator role; viewer is rejected', async () => {
@@ -2012,6 +2065,12 @@ describe('Serverless Worker', () => {
       expect(script).toContain('REARM-001');
       expect(script).toContain('lockdown-agent.exe');
       expect(script).toContain('config.json');
+
+      // The re-arm script is the same installer as the per-device one: the
+      // firmware path was the second copy that kept the sc.exe mechanism alive.
+      expect(script).toContain('/api/download/agent-installer');
+      expect(script).toContain('--config-file');
+      expect(script).not.toContain('sc.exe');
     });
 
     it('returns 404 for an active (non-flagged) device', async () => {

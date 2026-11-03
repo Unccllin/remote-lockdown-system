@@ -237,3 +237,57 @@ enrolment), `generateNsisScript` regenerated to stage `lockdown-installer.exe` +
 wrapper over the same binary so the ZIP stops depending on NSSM. Uninstall stays
 server-authorized, matching the generic wrapper — which means the generated EULA
 must stop promising token-free removal from Add/Remove Programs.
+
+## Serverless installer ruling (opened 2026-11-03, session 191)
+
+Session 190 removed the `sc.exe` install mechanism from the Express side. The
+Worker still generates it in **two** places — `handleInstaller`
+(`GET /api/installer/:deviceId`) and the re-arm script returned by
+`POST /api/rearm` — so the Cloudflare path still starts an agent that Windows
+kills with 1053 about 30 seconds after every boot.
+
+### Context that constrains the choice
+- Both scripts are near-identical (only the wording and `rearmed: true` differ).
+  They download the agent from `/api/download/agent` into
+  `$env:ProgramData\RemoteLockdown`, write an 8-key config, then
+  `sc.exe create RemoteLockdownAgent binPath= "\"$inst\lockdown-agent.exe\" ..."`.
+  That `binPath` quoting is itself malformed for `sc.exe`.
+- `ProgramData\RemoteLockdown` is a **third** install directory: the agent's
+  own state lives in `ProgramData\LockdownAgent`, `agent/installer.py` installs
+  there, and the config they write omits `lockdown_folder`/`lock_sentinel`/
+  `pending_ack_file`/`recovery_key_file`/`verify_tls`, so the agent falls back
+  to `~/SecureData` for the lockdown folder.
+- The re-arm script cannot be replaced by "just use the dashboard": it is
+  returned to `PblPersistDxe` and executed on first Windows boot after a disk
+  swap, so the response must stay a non-interactive script.
+- The Worker has no filesystem. Anything a generated script executes must be
+  downloadable from KV: `binary:agent`, `binary:installer` (the generic NSIS
+  wrapper, which already contains `lockdown-installer.exe`), `binary:lockscreen`.
+  KV values cap at 25 MiB; the CLI installer is a onefile PyInstaller exe.
+- Existing tests assert the defect: `worker.test.ts` checks
+  `expect(script).toContain('sc.exe create')`.
+
+### Q1 — how should the generated serverless scripts install the agent?
+
+- [x] Q1 — delegate source → **(A) publish the CLI installer to a new KV key**
+      (recommended). Add `binary:agent-installer`; the script downloads it plus
+      the agent into a temp dir, writes `config.json` there and runs
+      `lockdown-installer.exe --config-file ... --silent`, so the baked
+      `api_key` still needs no enrolment and no token on the target. Cost: one
+      more publish step (documented next to `binary:installer`), a 503 when the
+      key is missing, and the three `sc.exe` assertions rewritten.
+
+### Q2 — the two generators are the same script twice; merge them?
+
+- [x] Q2 — duplication → **(A) one helper, two call sites** (recommended) — a
+      single `generateServerlessInstallScript({ device, config, serverUrl,
+      rearmed })` used by both `handleInstaller` and the re-arm handler, so the
+      install mechanism cannot drift between them again. Alternative: leave the
+      two copies (they have already diverged once) or merge later.
+
+**Ruling closed 2026-11-03, session 191** — Q1 (A) + Q2 (A). Implementation:
+KV key `binary:agent-installer` (+ `/api/download/agent-installer`), one
+`generateServerlessInstallScript()` used by `handleInstaller` and the re-arm
+handler, both delegating to `lockdown-installer.exe --config-file ... --silent`
+so the baked api_key needs no enrolment and `ProgramData\RemoteLockdown`
+disappears.

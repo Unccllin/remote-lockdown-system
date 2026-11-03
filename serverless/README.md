@@ -149,6 +149,37 @@ curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE/api/devices"
 Then point the agent and the Electron app at that URL. The Electron setup wizard
 validates the Worker URL before saving it.
 
+### Publish the binaries the installers need
+
+The Worker has no filesystem, so anything a generated install script executes has
+to be in KV first. Both the per-device installer
+(`GET /api/installer/:deviceId`) and the firmware re-arm script (`POST /api/rearm`)
+hand off to the CLI installer, so **three** keys are needed:
+
+```bash
+cd serverless
+npx wrangler kv key put --binding=LOCKDOWN_KV binary:agent \
+  --path ../agent/dist/lockdown-agent.exe
+npx wrangler kv key put --binding=LOCKDOWN_KV binary:agent-installer \
+  --path ../agent/dist/lockdown-installer.exe   # agent/installer.spec
+npx wrangler kv key put --binding=LOCKDOWN_KV binary:installer \
+  --path ../installer/generic/dist/lockdown-installer.exe  # the fleet installer
+```
+
+Without `binary:agent-installer` the generated scripts download nothing and the
+install fails loudly (the download route returns 404). The generated script:
+
+1. writes the device's baked `config.json` to a temp directory,
+2. downloads `lockdown-agent.exe` and `lockdown-installer.exe`,
+3. runs `lockdown-installer.exe --config-file ... --silent`, which normalises the
+   config, creates the lockdown folder, installs the scheduled task + run key,
+   applies tamper protection and verifies check-in,
+4. deletes the temp directory (the API key must not outlive the run).
+
+It deliberately contains no `sc.exe`: the agent implements no SCM handshake, so a
+service created that way is failed with 1053 and the process terminated about 30
+seconds after boot.
+
 ## What is not covered by the local verification
 
 - **Real KV behaviour** (eventual consistency, size limits, cold reads) — local

@@ -1697,27 +1697,14 @@ async function handleRearm(request: Request, env: Env): Promise<Response> {
     enrolled_at: new Date().toISOString(),
     rearmed: true,
   };
-  const configB64 = btoa(JSON.stringify(config, null, 2));
 
-  const script = `# Remote Lockdown — re-arm installer for ${device.hostname}
-# Triggered by PblPersistDxe after disk replacement / OS reinstall.
-$ErrorActionPreference = 'Stop'
-$inst = "$env:ProgramData\\RemoteLockdown"
-New-Item -ItemType Directory -Force -Path $inst | Out-Null
-
-$configB64 = @'
-${configB64}
-'@
-[System.IO.File]::WriteAllBytes("$inst\\config.json", [Convert]::FromBase64String($configB64))
-
-Invoke-WebRequest -Uri '${serverUrl}/api/download/agent' -OutFile "$inst\\lockdown-agent.exe"
-
-sc.exe create RemoteLockdownAgent binPath= "\"$inst\\lockdown-agent.exe\" --config \"$inst\\config.json\"" start= auto DisplayName= "Remote Lockdown Agent" | Out-Null
-sc.exe description RemoteLockdownAgent "Anti-theft agent for ${device.hostname}" | Out-Null
-sc.exe start RemoteLockdownAgent | Out-Null
-
-Write-Host "Remote Lockdown agent re-armed for ${device.hostname}."
-`;
+  // Same generator as GET /api/installer/:id — see generateServerlessInstallScript.
+  const script = generateServerlessInstallScript({
+    device,
+    config,
+    serverUrl,
+    rearmed: true,
+  });
 
   return new Response(script, {
     headers: {
@@ -2142,14 +2129,93 @@ async function handleReleaseDevice(
 }
 
 /**
+ * Build the self-contained install script returned by GET /api/installer/:id and
+ * by POST /api/rearm (which PblPersistDxe runs on first Windows boot after a
+ * disk swap).
+ *
+ * One helper, two call sites: the two responses are the same installer with a
+ * different header. They used to be two hand-copied templates that both
+ * registered the agent with `sc.exe create` — a mechanism the agent cannot
+ * satisfy (no StartServiceCtrlDispatcher), so Windows failed the service with
+ * 1053 and terminated the process about 30 seconds after every boot.
+ *
+ * The script now only stages files: it writes the baked config, fetches the two
+ * binaries from KV, and hands off to lockdown-installer.exe --config-file, which
+ * is the same installer the generic wrapper and the Express per-device
+ * installers use. config.json is normalised by that installer, so nothing here
+ * needs to know the state paths, and the device keeps its baked api_key — no
+ * enrolment, no token on the target, no duplicate device record.
+ */
+function generateServerlessInstallScript(options: {
+  device: Device;
+  config: Record<string, unknown>;
+  serverUrl: string;
+  rearmed: boolean;
+}): string {
+  const { device, config, serverUrl, rearmed } = options;
+  const configB64 = btoa(JSON.stringify(config, null, 2));
+  const host = device.hostname;
+  const title = rearmed ? 're-arm installer' : 'per-device installer';
+  const tail = rearmed
+    ? `Write-Host "Remote Lockdown agent re-armed for ${host}."`
+    : `Write-Host "Remote Lockdown agent installed and started for ${host}."`;
+  const trigger = rearmed
+    ? '# Triggered by PblPersistDxe after disk replacement / OS reinstall.'
+    : '# Generated for this device; its credentials are embedded below.';
+
+  return `# Remote Lockdown — ${title} for ${host}
+# Generated ${String(config.enrolled_at ?? '')} — run elevated (Administrator) on the target.
+${trigger}
+$ErrorActionPreference = 'Stop'
+
+# Work in a temp directory: the installer decides the real install location
+# (%ProgramData\\LockdownAgent) and copies the agent there itself.
+$work = Join-Path $env:TEMP ("remote-lockdown-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $work | Out-Null
+
+try {
+    # 1. Write config.json (embedded; base64 avoids quoting issues). It carries
+    #    this device's own API key, so no token or prompt is needed here.
+    $configB64 = @'
+${configB64}
+'@
+    [System.IO.File]::WriteAllBytes("$work\\config.json", [Convert]::FromBase64String($configB64))
+
+    # 2. Fetch the agent and the CLI installer that installs it.
+    Invoke-WebRequest -Uri '${serverUrl}/api/download/agent' -OutFile "$work\\lockdown-agent.exe" -UseBasicParsing
+    Invoke-WebRequest -Uri '${serverUrl}/api/download/agent-installer' -OutFile "$work\\lockdown-installer.exe" -UseBasicParsing
+
+    # 3. Hand off. --config-file installs from the baked config: it normalises
+    #    the config, creates the lockdown folder, installs the scheduled task and
+    #    run key, applies tamper protection and verifies check-in.
+    & "$work\\lockdown-installer.exe" --config-file "$work\\config.json" --silent
+    $code = $LASTEXITCODE
+} finally {
+    # The installer has already copied what it needs; the API key in this temp
+    # copy must not outlive the run.
+    Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+}
+
+if ($code -ne 0) {
+    Write-Error "Installation failed (exit $code)."
+    exit $code
+}
+
+${tail}
+`;
+}
+
+/**
  * GET /api/installer/:deviceId — per-device installer (S4-serverless).
  *
  * The Express server builds a per-device ZIP/NSIS on the fly — that needs
- * zip/makensis, which a Worker can't run. The serverless-native answer is
- * a self-contained install.ps1: it generates a fresh api_key + config.json
- * here, embeds them in the script, and the script (run on the target) writes
- * config.json, downloads the agent binary from /api/download/agent, and
- * registers it as a service via sc.exe — the same one-click effect.
+ * zip/makensis, which a Worker can't run. The serverless-native answer is a
+ * self-contained install.ps1: a fresh api_key + config.json are embedded in the
+ * script, and the script (run on the target) writes the config, downloads the
+ * agent AND the CLI installer from KV, and hands off to
+ * `lockdown-installer.exe --config-file` — the same install path the other
+ * installers use. It must not implement installation itself (see
+ * generateServerlessInstallScript).
  *
  * Returns a downloadable .ps1. Operator+ required.
  */
@@ -2179,32 +2245,13 @@ async function handleInstaller(request: Request, env: Env, deviceId: string): Pr
     boot_lock_enabled: true,
     enrolled_at: new Date().toISOString(),
   };
-  const configB64 = btoa(JSON.stringify(config, null, 2));
-
-  // Self-contained install.ps1 — writes config, downloads the agent binary,
-  // registers + starts the service. Run elevated on the target Windows host.
-  const script = `# Remote Lockdown — per-device installer for ${device.hostname}
-# Generated ${config.enrolled_at} — run elevated (Administrator) on the target.
-$ErrorActionPreference = 'Stop'
-$inst = "$env:ProgramData\\RemoteLockdown"
-New-Item -ItemType Directory -Force -Path $inst | Out-Null
-
-# 1. Write config.json (embedded, base64 to avoid quoting issues)
-$configB64 = @'
-${configB64}
-'@
-[System.IO.File]::WriteAllBytes("$inst\\config.json", [Convert]::FromBase64String($configB64))
-
-# 2. Download the agent binary from this server
-Invoke-WebRequest -Uri '${serverUrl}/api/download/agent' -OutFile "$inst\\lockdown-agent.exe"
-
-# 3. Register + start the agent as an auto-start service
-sc.exe create RemoteLockdownAgent binPath= "\"$inst\\lockdown-agent.exe\" --config \"$inst\\config.json\"" start= auto DisplayName= "Remote Lockdown Agent" | Out-Null
-sc.exe description RemoteLockdownAgent "Anti-theft agent for ${device.hostname}" | Out-Null
-sc.exe start RemoteLockdownAgent | Out-Null
-
-Write-Host "Remote Lockdown agent installed and started for ${device.hostname}."
-`;
+  // Delegated install script (shared with the re-arm path below).
+  const script = generateServerlessInstallScript({
+    device,
+    config,
+    serverUrl,
+    rearmed: false,
+  });
 
   return new Response(script, {
     headers: {
@@ -2688,6 +2735,7 @@ export default {
     // The binaries are uploaded to KV via:
     //   wrangler kv:key put --binding LOCKDOWN_KV "binary:installer" --path lockdown-setup.exe
     //   wrangler kv:key put --binding LOCKDOWN_KV "binary:agent" --path lockdown-agent.exe
+    //   wrangler kv:key put --binding LOCKDOWN_KV "binary:agent-installer" --path lockdown-installer.exe
     // No admin auth required — these are public downloads (the enrollment
     // token controls who can enroll, not who can download the installer).
     // Per-device installer (S4-serverless) — self-contained install.ps1.
@@ -2709,6 +2757,12 @@ export default {
 
     if (path === '/api/download/agent' && method === 'GET') {
       return handleDownloadBinary(env, 'agent');
+    }
+
+    // The CLI installer that the generated per-device / re-arm scripts run.
+    // Published at release time alongside binary:agent (see serverless/README.md).
+    if (path === '/api/download/agent-installer' && method === 'GET') {
+      return handleDownloadBinary(env, 'agent-installer');
     }
 
     if (path === '/api/download/lockscreen' && method === 'GET') {
@@ -3058,7 +3112,7 @@ async function handleListHwArtifacts(request: Request, env: Env): Promise<Respon
     )
     .slice(0, limit)
     // The list view never returns the full artifact blob — only the summary.
-    .map(({ artifact_json, ...summaryRow }) => summaryRow);
+    .map(({ artifact_json: _artifact_json, ...summaryRow }) => summaryRow);
 
   return jsonResponse(artifacts);
 }
@@ -3224,7 +3278,7 @@ async function handleByPbl(
   }
 
   const meta = await getCheckinMetadata(env, device.id);
-  const { api_key_hash, ...safeDevice } = mergeCheckinMetadata(device, meta);
+  const { api_key_hash: _api_key_hash, ...safeDevice } = mergeCheckinMetadata(device, meta);
   return jsonResponse(safeDevice);
 }
 
@@ -3303,6 +3357,8 @@ async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
   let filename = 'lockdown-agent.exe';
   if (name === 'installer') {
     filename = 'lockdown-setup.exe';
+  } else if (name === 'agent-installer') {
+    filename = 'lockdown-installer.exe';
   } else if (name === 'lockscreen') {
     filename = 'lockdown-lockscreen.exe';
   }
