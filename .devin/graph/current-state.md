@@ -53,29 +53,32 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 184 — 2026-11-03 (hardware-test artifacts ported; a sort bug found by the audit's own baseline gate)
+## Latest session: 185 — 2026-11-03 (integrations declared self-hosted-only; and a second live defect on the default path — lockdown effectiveness was discarded)
 
 ### VERIFY
-- `worker.test.ts`: **378 passed** (371 + 7), stable across three consecutive runs.
-- Coverage: **89.36 / 82.83 / 93.92 / 91.42** (floors 82/75/86/82).
-- Four mutations **KILLED**: CTRF rejected, artifact never linked to a device, full
-  blobs leaking into the list, and an arbitrary artifact returned by id.
+- `worker.test.ts`: **385 passed** (381 + 4). The effectiveness tests assert
+  zero-critical → **false**, controls applied → **true**, no detail → **null**,
+  boot-lock not attempted → **null**.
+- Coverage: **89.48 / 83.30 / 93.95 / 91.52** (floors 82/75/86/82).
+- Four mutations **KILLED** by the intended tests: integrations answering 200,
+  `criticalTotal > 0` replaced by `true`, the effectiveness value never persisted,
+  and the attempted-scope guard removed.
 
 ### Fog cleared
-- **Whether a serverless deployment can complete a hardware window**: it can now file
-  the artifacts. That was the last *blocking* parity gap.
-- **Why the list test was unreliable**: the timestamp tie, not the test's logic. The
-  audit's baseline gate caught it — a plain test run only looked green or flaky.
+- **Whether the serverless backend records lockdown quality at all**: it did not. A
+  device that came back "locked" while its boot half had done nothing looks
+  identical to a real lockdown in both the command record and the dashboard.
+- **What integrations costs to port**: not the endpoints — the connector abstraction
+  and its credential handling. Declaring it self-hosted-only is now written down in
+  the code and the README rather than left as an implicit gap.
 
 ### Fog remaining
-- **`integrations`** needs a decision: port the connector registry into the Worker
-  (shared module), implement a Worker-specific minimal connector, or declare
-  integrations self-hosted-only. 442 lines of subsystem, and it calls upstream HTTP.
 - The generic NSIS installer (item 9) and Cloudflare-native observability/backup
-  (item 10) are untouched, as is the `worker.ts` dead-code cleanup.
-- Unchanged: `/api/download/agent` is unauthenticated in the Worker while Express
-  requires agent auth; D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
-  residual (D-132); 19 Dependabot alerts.
+  (item 10) are untouched.
+- `/api/download/agent` remains unauthenticated in the Worker while Express requires
+  agent auth — still unreviewed, and worth a deliberate decision either way.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
+  (D-132); 19 Dependabot alerts.
 
 ### Debt items closed
 - None.
@@ -85,26 +88,30 @@
 
 ### Blockers
 - Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
-  credentials (Worker publish), a real domain (Caddy TLS). Plus the integrations
-  decision above.
+  credentials (Worker publish), a real domain (Caddy TLS).
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (working exactly as designed). My new list test
-  was passing in the suite but failing its *baseline* inside the audit, because two
-  uploads shared a millisecond. Without the baseline gate this would have been a test
-  that failed perhaps one run in ten and got "fixed" later by a `sleep` — the sort bug
-  would have stayed. The lesson is the same one this thread keeps teaching: a red
-  baseline is information, and the right response is to fix the code, not the test.
+- **Layer 4 — verification feedback**, and the most useful instance yet: the defect
+  was found by chasing a *linter advisory about dead code*. Two of the five flagged
+  symbols were real dead code and one was a discarded security signal; without the
+  advisory I would not have read that handler at all. The lesson is not "trust the
+  linter" but "a field that is read and never used is a smell with two possible
+  causes, and only reading the code tells you which".
+- **Layer 1 — task specification** (mine): the mutation audit has been checking
+  *endpoints* for teeth. Nothing checks that every field the agent *sends* is
+  handled. `boot_lock_detail` is the second such field found by accident (after the
+  update endpoint), which suggests a systematic sweep — client payload fields vs
+  server-handled fields — is worth more than another endpoint mutation.
 
 ### Session artifacts
 - Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
-  `scripts/audit_test_teeth.py`.
+  `serverless/README.md`, `scripts/audit_test_teeth.py`.
 
 ### Next session opening
-Settle `integrations`: read `server/src/integrations/index.js` and decide between a
-shared connector module both backends import, a Worker-only minimal connector, or an
-explicit self-hosted-only declaration — then take the generic NSIS installer, which is
-the last piece with a real design decision in it.
+Sweep the other direction: for each agent request payload (`checkin`, `command-ack`,
+`location`, `deadman-report`, `escrow-key`), assert that every field the agent sends
+is either used or explicitly ignored — two defects have now come from that gap — then
+take the generic NSIS installer.
 
 ---
 

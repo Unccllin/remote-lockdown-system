@@ -5681,3 +5681,112 @@ explicit self-hosted-only declaration — then take the generic NSIS installer, 
 the last piece with a real design decision in it.
 
 ---
+
+---
+
+## Session 185 — 2026-11-03 (integrations declared self-hosted-only; and a second live defect on the default path — lockdown effectiveness was discarded)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S184 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `server/src/integrations/{index,meshcentral,errors,graph}.js`
+  (442 lines: the connector registry and its `process.env` credentials),
+  `server/src/routes/agent.js:360-470` (the ACK handler: `boot_lock_status`,
+  `boot_lock_detail`, and how `lockdown_effective` is derived and persisted),
+  and `serverless/worker.ts` (`handleCommandAck`, the `Command` record, the PBL
+  imports).
+- **Finding (integrations is a subsystem, not an endpoint pair)**: 442 lines across
+  a registry, the MeshCentral connector, typed error classes and a graph view; it
+  reads credentials from `process.env` (which does not exist in a Worker) and calls
+  upstream HTTP. **Owner decision: declare it self-hosted-only.**
+- **Finding (a second live defect on the default deployment)**: the Worker's ACK
+  handler destructured `boot_lock_status` and `boot_lock_detail` and **used neither**.
+  Express derives `lockdown_effective` from that detail — boot-lock attempted with
+  zero critical controls applied means the device is encrypted-only, not locked — so
+  on the serverless backend **a boot-lock that silently no-op'd was recorded as a
+  plain success**. That is exactly the gap `E-EFFECTIVENESS` and D-204 exist to
+  close. Same class as the missing `/api/agent/update`: a live defect on the path the
+  product's defaults point at, invisible because the field was *accepted and
+  ignored* rather than rejected.
+- **Finding (the linter's "dead code" was half a real bug)**: chasing five unused
+  declarations is what surfaced the discarded field. Four were genuinely dead
+  imports (`generateSigningKey`, `importPrivateKey`, `checkDeviceRateLimit`,
+  `DEVICE_RATE_LIMITS`) and one a shim nothing calls (`verifyAdminAuth`); the fifth
+  "unused" value was `boot_lock_detail`, and deleting it would have made the
+  effectiveness bug permanent rather than fixing it.
+
+### IMPLEMENT
+- `GET /api/integrations` and `/api/integrations/:id/devices` answer **501 Not
+  Implemented** with an explanation, after an auth check (so an anonymous caller
+  learns nothing about which backend is behind the URL). 501 rather than 404 because
+  404 is indistinguishable from a mistyped path.
+- `serverless/README.md`: a "What this backend does not implement" section stating
+  the limit and that nothing else depends on it.
+- `handleCommandAck` now computes `lockdownEffective` with Express's rule
+  (`boot_lock_attempted === true` → `critical_applied_total > 0`) and persists
+  `lockdown_effective`, `boot_lock_status` and `boot_lock_detail` on the command.
+  Unknown stays **null**, not false: "never attempted" and "attempted and failed"
+  are both actionable, and conflating them hides the dangerous one.
+- `Command` record extended with the three optional fields.
+- Dead-code cleanup as its own commit: `verifyAdminAuth` plus four unused imports.
+- `scripts/audit_test_teeth.py`: four rows (the 501, the effectiveness comparison,
+  its persistence, and the attempted-scope guard).
+
+### VERIFY
+- `worker.test.ts`: **385 passed** (381 + 4). The effectiveness tests assert
+  zero-critical → **false**, controls applied → **true**, no detail → **null**,
+  boot-lock not attempted → **null**.
+- Coverage: **89.48 / 83.30 / 93.95 / 91.52** (floors 82/75/86/82).
+- Four mutations **KILLED** by the intended tests: integrations answering 200,
+  `criticalTotal > 0` replaced by `true`, the effectiveness value never persisted,
+  and the attempted-scope guard removed.
+
+### Fog cleared
+- **Whether the serverless backend records lockdown quality at all**: it did not. A
+  device that came back "locked" while its boot half had done nothing looks
+  identical to a real lockdown in both the command record and the dashboard.
+- **What integrations costs to port**: not the endpoints — the connector abstraction
+  and its credential handling. Declaring it self-hosted-only is now written down in
+  the code and the README rather than left as an implicit gap.
+
+### Fog remaining
+- The generic NSIS installer (item 9) and Cloudflare-native observability/backup
+  (item 10) are untouched.
+- `/api/download/agent` remains unauthenticated in the Worker while Express requires
+  agent auth — still unreviewed, and worth a deliberate decision either way.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
+  (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), a real domain (Caddy TLS).
+
+### Failure attribution
+- **Layer 4 — verification feedback**, and the most useful instance yet: the defect
+  was found by chasing a *linter advisory about dead code*. Two of the five flagged
+  symbols were real dead code and one was a discarded security signal; without the
+  advisory I would not have read that handler at all. The lesson is not "trust the
+  linter" but "a field that is read and never used is a smell with two possible
+  causes, and only reading the code tells you which".
+- **Layer 1 — task specification** (mine): the mutation audit has been checking
+  *endpoints* for teeth. Nothing checks that every field the agent *sends* is
+  handled. `boot_lock_detail` is the second such field found by accident (after the
+  update endpoint), which suggests a systematic sweep — client payload fields vs
+  server-handled fields — is worth more than another endpoint mutation.
+
+### Session artifacts
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `serverless/README.md`, `scripts/audit_test_teeth.py`.
+
+### Next session opening
+Sweep the other direction: for each agent request payload (`checkin`, `command-ack`,
+`location`, `deadman-report`, `escrow-key`), assert that every field the agent sends
+is either used or explicitly ignored — two defects have now come from that gap — then
+take the generic NSIS installer.
+
+---
