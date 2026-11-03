@@ -53,43 +53,28 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 195 — 2026-11-03 (the update path is proven end to end, and the harness had two bugs)
+## Latest session: 196 — 2026-11-03 (checking my own summary: the harness was fine, the new suite wasn't)
 
 ### Fog cleared
 
-- **Why a Python client timed out against a server that answered Node in 12 ms**:
-  `spawnSync` starved the in-process server. Ruled out first: payload size, proxies,
-  `Connection: close`, and the server itself (12 ms for the same endpoint).
-- **Why every agent check-in was 401** while the same key worked from the parent
-  process: the inherited `AGENT_SHARED_KEY` overrode the config file.
-- **Whether one device can serve all four cases**: two devices cannot. Where DMI is
-  unreadable `get_hardware_uuid()` falls back to a host-stable value, and
-  `devices.hardware_uuid` is UNIQUE, so the second device's check-in collides
-  (`SQLITE_CONSTRAINT ... devices.hardware_uuid`). Re-provisioning one device is
-  both the correct model and the "flip" the dashboard would show.
-- **Whether the new suite can pass vacuously**: no. Bypassing
-  `verify_update_signature` in `download_update` makes the untrusted-key case fail
-  (1 failed / 3 passed), and the file was restored (`git diff --stat` verified).
+- **Who was at fault for the two E2E failures**: the new suite, not the harness.
+  Verified by reading `agent-helpers.js` (async `spawn`; env scrubbing) and by
+  measuring both mechanisms in isolation.
+- **Whether the existing agent-integration suite proves a real check-in**: yes. Its
+  waiting assertion cannot be satisfied at enrollment, and the probe shows the value
+  moving from null to a timestamp only after the agent ran.
 
 ### Fog remaining
 
-- The evidence is **emulated, not hardware**. E-AUTO-UPDATE stays
-  `verified-in-unit-test` in the graph until the HP box shows the flip; inventing a
-  hardware artifact would violate I3.
-- One full-sweep E2E run failed once and did not reproduce in three subsequent
-  suite runs and two full sweeps. Recorded as observed-once, not as fixed.
-- `_load_json_config` now raises on a corrupt config (fail loudly rather than fall
-  back to built-in defaults pointing at the wrong server); no test pins that yet.
-- No signing key exists in CI (`UPDATE_SIGNING_KEY` unset), so a release still
-  publishes unsigned metadata behind a warning; no deployment has published a real
-  `agent-release.json` to KV.
+- The rest of S195 stands as written: E-AUTO-UPDATE evidence is emulated, one
+  full-sweep E2E failure was observed once and did not reproduce, and no signing key
+  exists in CI.
 - Unchanged: D-120/D-129/D-130/D-134 resource-blocked; the repo's 178-diagnostic
-  pyright/ast-grep baseline (see S194) is still unowned.
+  pyright/ast-grep baseline is still unowned.
 
 ### Debt items closed
 
-- None. (E-AUTO-UPDATE evidence improved from "unit" to "emulated end-to-end"; the
-  graph status is unchanged on purpose.)
+- None.
 
 ### Debt items still open
 
@@ -97,47 +82,44 @@
 
 ### Blockers
 
-- Hardware (HP box) for the E-AUTO-UPDATE flip; owner provisioning of
-  `UPDATE_SIGNING_KEY`; Cloudflare credentials to publish metadata to KV.
+- Unchanged: hardware (HP box) for the E-AUTO-UPDATE flip; owner provisioning of
+  `UPDATE_SIGNING_KEY`; Cloudflare credentials for the KV publish.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the update path had three
-  boundary-limited proofs and no end-to-end one, and the harness used for
-  "real agent" testing had two defects that silently weakened it. Both were found
-  only by building the missing proof: a lint, a mock, and a green suite each said
-  the path worked.
-- **Layer 2 — context provision**: nothing said that agent E2E suites must use async
-  `spawn` (the server shares the process) or that `startAgent`'s env cleaning must be
-  shared rather than copied. The fixes are now in the harness with the reasons
-  attached, so the next suite inherits them.
+- **Layer 4 — verification feedback** (primary): I published two claims about
+  pre-existing code without running the discriminating check, even though the
+  harness's own source answered the question. The summary was written from the
+  debugging narrative (what the failures *felt* like) instead of from the files.
+  The fix that generalises: when a session blames existing code, re-read that code
+  before writing the block — the repo has been wrong about this before, in the other
+  direction (stale debt entries claiming code was missing when it existed).
+- **Layer 5 — state management** (secondary): the wrong claim was already in
+  `trace.md` and in the brain, so it would have been inherited by the next session as
+  fact. Correcting both layers, with a marker, is what stops the error propagating.
 
 ### VERIFY
 
-- **E2E: 14 passed** (10 + 4 new), 4 suites. Full sweep run twice green; the new
-  suite run three times without a failure.
-- `agent`: **763 passed**; `ruff check` + `ruff format --check` clean.
-- `server`: **733 passed** (43 suites); eslint clean.
-- `make test-scripts`: all suites green (18 + 17 + 40 + 44 + secret checks + 18).
-- `bash -n` + `shellcheck scripts/run-e2e.sh` clean; `make lint-workflows` clean.
-- Falsification: bypassing signature verification fails the untrusted-key case.
-- Checker: `agent/agent.py` and the new E2E files report 0 primary diagnostics.
+- Probe output (jest, then removed):
+  - `D: last_checkin after enrollment = null` → `D: last_checkin after agent run = "2026-11-03 10:24:49"`
+  - `E sync -> SYNC ReadTimeout 6.0` / `E async -> ASYNC 200 0.01`
+  - `agent_key resolved -> SHARED-KEY-FROM-ENV`
+- Code read: `agent-helpers.js:341` deletes `env.AGENT_SHARED_KEY`;
+  `agent-helpers.js:360` uses `spawn(...)`.
+- `make graph-check`: all invariants pass. `brain.py check`: 51 beliefs, integrity
+  clean (confirmed 38, refuted 13).
 
 ### Session artifacts
 
-- Changed: `tests/e2e/agent-update.e2e.test.js` (new),
-  `tests/e2e/agent-helpers.js`, `scripts/run-e2e.sh`,
-  `server/src/config/paths.js`, `server/src/routes/agent.js`, `agent/agent.py`,
-  `server/.env.example`.
-- Commit: `d9a9b21`.
+- Changed: `.devin/graph/trace.md` (S195 corrected), `.devin/brain/beliefs.yaml`,
+  `.devin/brain/BELIEFS.md`.
+- Commit: `de3e50c`.
 
 ### Next session opening
 
-Attack the remaining vacuity risk in the harness: assert in the reopening test that
-the agent's *check-in* (not enrollment) is what sets `last_checkin`, then provision
-`UPDATE_SIGNING_KEY`, publish `agent-release.json` to KV, and take the flip to the HP
-box — the only thing standing between this emulated evidence and E-AUTO-UPDATE being
-`verified-on-hardware`.
+Provision `UPDATE_SIGNING_KEY`, publish `agent-release.json` to KV, and take the
+`sha256-only` → `signature` flip to the HP box — the only thing between the current
+emulated E2E evidence and E-AUTO-UPDATE being `verified-on-hardware`.
 
 ---
 
