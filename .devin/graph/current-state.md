@@ -53,35 +53,38 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 197 — 2026-11-03 (the parked flake was a real teardown bug, found by chasing it)
+## Latest session: 198 — 2026-11-03 (the serverless update path could never have applied an update)
 
 ### Fog cleared
 
-- **Whether the intermittent E2E failure was environmental noise**: no. Looping the
-  sweep and capturing logs produced the mechanism in one run: a native-callback
-  `SQLITE_MISUSE` after a teardown that never waited for the server.
-- **Whether `await server.close()` drains anything**: no — `close()` returns the
-  server object. This is the kind of line that *looks* correct in review and does
-  nothing.
-- **Whether the new update suite reaches CI**: yes. `ci.yml` and `release.yml` both
-  run `scripts/run-e2e.sh --agent-integration`, which globs `tests/e2e/*.test.js`;
-  the teardown race would have flaked CI, not just this host.
+- **Whether the serverless deployment can apply an update at all**: it could not. The
+  metadata was right, the signature was right, and the download route did not exist.
+- **Whether the agent survives a failed update download**: it did not, for any
+  pre-response failure. Now logged and refused, with the pending file untouched.
+- **Whether local workerd can serve a real signed release without an account**: yes —
+  `--persist-to` + `wrangler kv key put --local` from a separate process.
 
 ### Fog remaining
 
-- The recorded opening is **fully blocked here**, verified rather than assumed: `gh`
-  is not installed (so `UPDATE_SIGNING_KEY` cannot be set) and `wrangler` is not
-  authenticated (so `agent-release.json` cannot be published). Only the HP-box flip
-  and those two credential steps remain, and none are reachable from this environment.
-- One full-sweep failure occurred in the batch immediately after the cleanup change
-  and did not reproduce in the eight runs since. Stated as observed, not as proven
-  impossible.
-- E-AUTO-UPDATE evidence is still emulated (`verified-in-unit-test`); D-120/D-129/
-  D-130/D-134 unchanged.
+- Authenticity is still not fleet-wide: no `UPDATE_SIGNING_KEY` in CI, no published
+  `agent-release.json` (blocked: `gh` absent, wrangler unauthenticated). The *route*
+  and the *per-platform signature path* are now proven; the key is not provisioned.
+- The Worker E2E is opt-in, so CI does not run it. Making it a CI gate would mean
+  pinning `wrangler` as a dev dependency (a ~100 MB install) — a deliberate decision
+  to take, not a default.
+- The turn-end ast-grep list for `agent/agent.py` is **not reproducible by any
+  on-demand check**: fresh `lens_diagnostics` probes report 0 diagnostics, including a
+  purpose-built probe file containing the exact shapes it flags (`open` in `try`,
+  `with open` in `try`, `read_text` in `try`, `kwargs`-threaded `requests.post`). One
+  entry is provably stale — it reports `requests.post` at L1184 while the file has it
+  at L1209. `# ast-grep-ignore` pragmas are not honoured by that pipeline. Recorded
+  instead of restructuring correct defensive code; AGENTS.md documents the class.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked.
 
 ### Debt items closed
 
-- None.
+- None. (The two defects were unreleased: the Worker route had never been deployed with
+  a working download path, so no debt item covers them.)
 
 ### Debt items still open
 
@@ -89,50 +92,48 @@
 
 ### Blockers
 
-- Hardware (HP box); owner provisioning of `UPDATE_SIGNING_KEY` (no `gh` binary
-  here); Cloudflare credentials for the KV publish (wrangler unauthenticated).
+- Hardware (HP box) for E-AUTO-UPDATE; owner provisioning of `UPDATE_SIGNING_KEY`
+  (no `gh`); Cloudflare credentials for the KV publish (wrangler unauthenticated).
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): S195 recorded an intermittent
-  failure as "observed once, not reproduced" and moved on. That is the gap: an
-  unexplained intermittent failure in a suite feeding CI is a finding, not a note.
-  Looping the sweep and capturing output cost one command and produced the exact
-  cause. The generalisable change: never park an intermittent failure — loop until
-  it reproduces, then explain it.
-- **Layer 3 — execution environment** (secondary): the harness's cleanup looked
-  correct while doing nothing (`await` on a non-promise), and no test covers teardown
-  ordering, so the bug was invisible until it manifested as a process-level crash.
+- **Layer 4 — verification feedback** (primary, third instance of one pattern): the
+  Worker's update tests asserted each half and never crossed the boundary between them.
+  A metadata test that fetched its own `download_url` would have failed on the first
+  run. The same shape appeared in S193 (config named a path nothing staged) and S194
+  (a signature that could only cover one platform): the defect lives *between* two
+  correct-looking pieces, so only a test that spans them finds it.
+- **Layer 1 — task specification** (secondary): the Worker was ported endpoint by
+  endpoint from Express, and the port's checklist never included "every URL the API
+  advertises resolves". Worth adding to the port checklist rather than rediscovering.
 
 ### VERIFY
 
-- **8 consecutive full E2E sweeps green** (14 tests each) after the cleanup fix: five
-  in one batch, then three more (the first batch immediately after the change had one
-  failure, recorded above).
-- `agent`: **766 passed** (763 + 3 new JSON-config tests); `ruff check` +
-  `ruff format --check` clean.
-- Falsification: removing the non-object guard makes `test_non_object_json_is_rejected`
-  fail with the exact `TypeError` the guard prevents.
-- Checker: `agent/agent.py` fresh probe → 0 primary findings; the remaining
-  `unchecked-throwing-call` items were verified to sit inside `try:`/`with` blocks
-  and recorded as the documented false-positive class.
-- `make graph-check`: all invariants pass.
+- **Worker E2E: 5 passed** (`make test-worker-e2e`, ~40 s), including the per-platform
+  signature case verified by `agent.verify_update_signature` and the regression that
+  follows `download_url`.
+- `serverless`: **412 passed** (407 + 5); `tsc --noEmit -p .` clean.
+- `agent`: **768 passed** (766 + 2 regression tests for the download-failure crash);
+  `ruff check` + `ruff format --check` clean. The crash test was verified non-vacuous
+  by neutralising the guard (both new tests fail with `UnboundLocalError`).
+- Express E2E: **14 passed**; `make lint-workflows` clean; `make graph-check` passes.
+- Falsification summary: before the fixes the E2E failed at exactly the two defects
+  (`404` on `download_url`, then `UnboundLocalError` in the downloader); after, 5/5.
 
 ### Session artifacts
 
-- Changed: `tests/e2e/agent-helpers.js`, `agent/agent.py`,
-  `agent/tests/test_agent_config.py`, `AGENTS.md`.
-- Commit: `cdfe484`.
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`, `serverless/README.md`,
+  `agent/agent.py`, `agent/tests/test_agent_update_signature.py`, `Makefile`,
+  `scripts/test_worker_update_e2e.py` (new).
+- Commit: `4ef3fcf`.
 
 ### Next session opening
 
-Stop treating the recorded opening as reachable: `gh` and `wrangler` are absent here,
-so `UPDATE_SIGNING_KEY` provisioning, the KV publish, and the HP-box flip need an
-owner session with credentials and hardware. Until then, the highest-value unblocked
-work is E-AUTO-UPDATE's *hardware-emulation* path — extend `agent/hw_test_harness.py`
-with an E-AUTO-UPDATE case that runs the same four scenarios on a real Windows box
-when one is available, so the artifact the graph demands is produced by the harness
-rather than by hand.
+Decide the one open design question this suite raises: pin `wrangler` as a dev
+dependency so `test-worker-e2e` can run as a CI gate on every PR (the only way the
+Worker's update path stays honest), or keep it opt-in and accept that a route can
+again be advertised without existing. Then, when credentials exist, the two blocked
+steps: `UPDATE_SIGNING_KEY`, publish `agent-release.json`, and the HP-box flip.
 
 ---
 

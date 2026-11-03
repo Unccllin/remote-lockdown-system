@@ -327,7 +327,12 @@ Rules that keep this from costing a session (learned in S194–S196):
    removed.
 3. **A line-level pragma with a reason beats a blanket** for genuine false
    positives, e.g. `socket.AF_UNIX,  # pyright: ignore[reportAttributeAccessIssue]`
-   in the POSIX-only TPM debug scripts.
+   in the POSIX-only TPM debug scripts. For the **ast-grep** rules the suppression
+   syntax is the Semgrep convention, not an ast-grep one: a *standalone*
+   `# nosemgrep` (optionally `# nosemgrep: rule-id`) on the line **before** the
+   finding, because the matcher anchors to end-of-line so a reason cannot share it
+   — put the reason on the line above that. `# ast-grep-ignore` is silently ignored
+   (S198 lost hours to it).
 4. **Never let a checker rewrite behaviour to satisfy a heuristic.** A one-shot
    operator script that should fail loudly on a missing input does not need a
    try/except wrapped around every `json.loads`.

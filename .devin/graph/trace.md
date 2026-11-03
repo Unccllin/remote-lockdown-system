@@ -7287,3 +7287,144 @@ when one is available, so the artifact the graph demands is produced by the harn
 rather than by hand.
 
 ---
+
+---
+
+## Session 198 — 2026-11-03 (the serverless update path could never have applied an update)
+
+### RULE-ZERO
+
+**Read**: session 197's block and `Next session opening`; `serverless/worker.ts`
+(route table, `handleAgentUpdate`, `handleDownloadBinary`, `verifyAgentAuth`);
+`server/src/routes/agent.js` (`/download`, `/update`); `agent/agent.py`
+(`check_for_update`, `download_update`); `scripts/verify-worker.sh` (local workerd
+mechanics, `--persist-to`, break-glass token); `serverless/README.md` (publish steps);
+`serverless/worker.test.ts` (existing download + update tests).
+
+**Finding 1 — the shipping backend advertised a URL it did not serve.**
+`GET /api/agent/update` returns `download_url: /api/agent/download?platform=…`, but the
+Worker's route table only had `/api/download/agent` (the installer's public path). In
+the serverless deployment an available update therefore answered **404** on the
+download: the fleet could never patch. Nothing caught it because the existing tests
+asserted the metadata and the signature, and never followed the URL the metadata
+pointed at.
+
+**Finding 2 — a failed download crashed the agent's check cycle.** In
+`download_update`, `tmp_file` is created only after `requests.get()` returns, but the
+`except` handler called `tmp_file.unlink(...)` unconditionally. Any HTTP-level failure
+before that point (the 404 above, a connect timeout) raised `UnboundLocalError`, which
+is *not* in the handler's except tuple, so it escaped `download_update` and
+`check_for_update`'s `requests.RequestException` guard. The E2E was the first thing
+that ever 404'd that URL, which is why both bugs surfaced together.
+
+**Also established**: the Worker's `verifyAgentAuth` requires the full HMAC set
+(`X-Agent-Key/Timestamp/Nonce/Signature`) — Express tolerates unsigned requests during
+its transition, which is why the Express suite could send a bare key and the Worker
+suite could not; and KV seeded by a *separate* `wrangler kv key put --local
+--persist-to <dir>` is visible to a running `wrangler dev` on the same dir (verified),
+which is what makes an account-free end-to-end test possible.
+
+### IMPLEMENT
+
+- `serverless/worker.ts` — `GET /api/agent/download` (agent-authenticated, like the
+  Express route of the same path) serving `binary:agent:<platform>` first with the
+  shared `binary:agent` as fallback, plus `x-content-sha256` of exactly the bytes
+  served. Per-platform keys are what make the per-platform signatures from S194
+  coherent for a release whose builds differ.
+- `agent/agent.py` — `tmp_file = None` before the download `try`, and the cleanup path
+  guarded: a failed download is logged, never raised.
+- `scripts/test_worker_update_e2e.py` — the Worker's update path end to end against
+  local workerd: real keypair, real release metadata from
+  `scripts/sign-release-metadata.py`, real `agent/agent.py` subprocess, KV seeded the
+  way the release job seeds it. Five cases: signed accepted (and
+  `update_verification: "signature"` recorded), unsigned refused, untrusted key
+  refused, per-platform signatures served and each verified by the agent's own
+  verifier (with cross-platform rejection), and no-release-published reported as such.
+  Opt-in (`LOCKDOWN_WORKER_E2E=1` / `make test-worker-e2e`): it boots workerd per case
+  (~40 s) and needs `npx --no-install wrangler`, so CI and `make test-scripts` stay
+  fast and deterministic; without the flag it skips with the command to run.
+- `serverless/worker.test.ts` — five tests, including the regression that ties the two
+  halves together: take `download_url` from a real update response and fetch it.
+- `Makefile` (`test-worker-e2e`), `serverless/README.md` (per-platform `binary:agent:<platform>`).
+
+### Fog cleared
+
+- **Whether the serverless deployment can apply an update at all**: it could not. The
+  metadata was right, the signature was right, and the download route did not exist.
+- **Whether the agent survives a failed update download**: it did not, for any
+  pre-response failure. Now logged and refused, with the pending file untouched.
+- **Whether local workerd can serve a real signed release without an account**: yes —
+  `--persist-to` + `wrangler kv key put --local` from a separate process.
+
+### Fog remaining
+
+- Authenticity is still not fleet-wide: no `UPDATE_SIGNING_KEY` in CI, no published
+  `agent-release.json` (blocked: `gh` absent, wrangler unauthenticated). The *route*
+  and the *per-platform signature path* are now proven; the key is not provisioned.
+- The Worker E2E is opt-in, so CI does not run it. Making it a CI gate would mean
+  pinning `wrangler` as a dev dependency (a ~100 MB install) — a deliberate decision
+  to take, not a default.
+- The turn-end ast-grep list for `agent/agent.py` is **not reproducible by any
+  on-demand check**: fresh `lens_diagnostics` probes report 0 diagnostics, including a
+  purpose-built probe file containing the exact shapes it flags (`open` in `try`,
+  `with open` in `try`, `read_text` in `try`, `kwargs`-threaded `requests.post`). One
+  entry is provably stale — it reports `requests.post` at L1184 while the file has it
+  at L1209. `# ast-grep-ignore` pragmas are not honoured by that pipeline. Recorded
+  instead of restructuring correct defensive code; AGENTS.md documents the class.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked.
+
+### Debt items closed
+
+- None. (The two defects were unreleased: the Worker route had never been deployed with
+  a working download path, so no debt item covers them.)
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+
+- Hardware (HP box) for E-AUTO-UPDATE; owner provisioning of `UPDATE_SIGNING_KEY`
+  (no `gh`); Cloudflare credentials for the KV publish (wrangler unauthenticated).
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, third instance of one pattern): the
+  Worker's update tests asserted each half and never crossed the boundary between them.
+  A metadata test that fetched its own `download_url` would have failed on the first
+  run. The same shape appeared in S193 (config named a path nothing staged) and S194
+  (a signature that could only cover one platform): the defect lives *between* two
+  correct-looking pieces, so only a test that spans them finds it.
+- **Layer 1 — task specification** (secondary): the Worker was ported endpoint by
+  endpoint from Express, and the port's checklist never included "every URL the API
+  advertises resolves". Worth adding to the port checklist rather than rediscovering.
+
+### VERIFY
+
+- **Worker E2E: 5 passed** (`make test-worker-e2e`, ~40 s), including the per-platform
+  signature case verified by `agent.verify_update_signature` and the regression that
+  follows `download_url`.
+- `serverless`: **412 passed** (407 + 5); `tsc --noEmit -p .` clean.
+- `agent`: **768 passed** (766 + 2 regression tests for the download-failure crash);
+  `ruff check` + `ruff format --check` clean. The crash test was verified non-vacuous
+  by neutralising the guard (both new tests fail with `UnboundLocalError`).
+- Express E2E: **14 passed**; `make lint-workflows` clean; `make graph-check` passes.
+- Falsification summary: before the fixes the E2E failed at exactly the two defects
+  (`404` on `download_url`, then `UnboundLocalError` in the downloader); after, 5/5.
+
+### Session artifacts
+
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`, `serverless/README.md`,
+  `agent/agent.py`, `agent/tests/test_agent_update_signature.py`, `Makefile`,
+  `scripts/test_worker_update_e2e.py` (new).
+- Commit: `4ef3fcf`.
+
+### Next session opening
+
+Decide the one open design question this suite raises: pin `wrangler` as a dev
+dependency so `test-worker-e2e` can run as a CI gate on every PR (the only way the
+Worker's update path stays honest), or keep it opt-in and accept that a route can
+again be advertised without existing. Then, when credentials exist, the two blocked
+steps: `UPDATE_SIGNING_KEY`, publish `agent-release.json`, and the HP-box flip.
+
+---
