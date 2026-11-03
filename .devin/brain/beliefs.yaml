@@ -974,3 +974,26 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-054
+  statement: 'In serverless/worker.ts, every /api path the source mentions (outside comments) is dispatched:
+    37 mentioned paths vs 56 route-table branches, 0 unrouted — so the S198 ''advertised but unserved
+    URL'' defect was a single instance, not a pattern. The class is now gated two ways: serverless/worker.test.ts
+    asserts that every /api literal outside a comment has a path === branch (verified non-vacuous by renaming
+    the route, which fails both contract tests and the four download tests), and CI already runs that
+    suite (ci.yml npm run test:coverage, release.yml npm test). Consequence for the open question: keeping
+    the workerd E2E opt-in (LOCKDOWN_WORKER_E2E=1) does not leave the class ungated, so pinning wrangler
+    buys runtime fidelity, not failure-mode coverage.'
+  domain: testing/e2e
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'source audit: 37 mentioned / 56 routed / 0 unrouted; contract tests 414 green; renaming
+    the route failed 5 tests (both contract tests + four download tests), route restored and re-verified'
+  source: serverless/worker.test.ts route contracts; .github/workflows/ci.yml; .github/workflows/release.yml;
+    serverless/worker.ts
+  asserted: '2026-11-03'
+  last_verified: '2026-11-03'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

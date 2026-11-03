@@ -10,6 +10,11 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // The Worker is a bearer-token API (`Authorization: Bearer` / `x-agent-key`) with
 // no cookie-based sessions, so a wildcard CORS origin does not expose credentials:
@@ -146,6 +151,64 @@ beforeEach(async () => {
   const mod = await import('./worker.js');
   worker = mod.default;
   resetKeyCache = mod.resetKeyCache;
+});
+
+// ---------------------------------------------------------------------------
+// Route contracts: a path the Worker *mentions* must be a path it *dispatches*.
+//
+// /api/agent/update advertised "/api/agent/download?platform=…" for months while
+// the route table only had "/api/download/agent", so every serverless update
+// download answered 404 — the fleet could never patch, and no unit test noticed
+// because each side was asserted separately (S198). This walks the source: every
+// /api literal outside a comment must have a `path === '…'` branch (or a
+// `path.startsWith` prefix). It is a source-level invariant because the route
+// table only exists in source.
+// ---------------------------------------------------------------------------
+describe('route contracts (a mentioned path must be dispatched)', () => {
+  function analyse() {
+    const source = fs.readFileSync(path.join(HERE, 'worker.ts'), 'utf8');
+    const mentioned = new Set<string>();
+    const routed = new Set<string>();
+
+    for (const line of source.split('\n')) {
+      const trimmed = line.trim();
+      const isComment =
+        trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*');
+
+      if (!isComment) {
+        // Literal paths only: a template with ${} cannot match, so dynamic
+        // prefixes are not mistaken for contracts.
+        for (const match of line.matchAll(/['"`](\/api\/[A-Za-z0-9_./-]*)['"`]/g)) {
+          mentioned.add(match[1].replace(/\/$/, ''));
+        }
+      }
+      for (const match of line.matchAll(/path (?:===|!==) '([^']+)'/g)) {
+        routed.add(match[1].replace(/\/$/, ''));
+      }
+      for (const match of line.matchAll(/path\.startsWith\('([^']+)'\)/g)) {
+        routed.add(match[1].replace(/\/$/, '') + '*');
+      }
+    }
+    return { mentioned, routed };
+  }
+
+  it('every /api path the Worker mentions is dispatched', () => {
+    const { mentioned, routed } = analyse();
+    const prefixes = [...routed].filter((r) => r.endsWith('*')).map((r) => r.slice(0, -1));
+
+    const unrouted = [...mentioned].filter(
+      (p) => !routed.has(p) && !prefixes.some((prefix) => p.startsWith(prefix)),
+    );
+
+    expect(routed.size).toBeGreaterThan(20); // the parser still sees the route table
+    expect(unrouted).toEqual([]);
+  });
+
+  it('and the route that broke is dispatched', () => {
+    // Named explicitly so a regression names the path, not just a diff.
+    const { routed } = analyse();
+    expect(routed.has('/api/agent/download')).toBe(true);
+  });
 });
 
 describe('Serverless Worker', () => {
