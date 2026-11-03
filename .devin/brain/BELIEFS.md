@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-03 12:30:03 — 48 beliefs
+Generated: 2026-11-03 12:52:34 — 49 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -24,6 +24,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-006 | refuted | code-read | Agent update verification trusts a channel-delivered SHA-256, not a detached signature — the server channel is the sole trust root; a compromised server serves both binary and matching hash. → see B-036 |
 | B-036 | confirmed | code-read | Agent updates are authenticity-pinned by a detached Ed25519 signature over "v1:{version}:{sha256}" verified against a device-pinned update_public_key — a compromised server serving binary+hash cannot forge the signature; key domain is separate from recovery escrow; configured-but-broken signing key fails closed (HTTP 500); agents with a pinned key refuse unsigned/invalid updates |
 | B-048 | confirmed | code-read | Update authenticity is end-to-end only when a signing key is provisioned: every config generator (agent/installer.py, agent/installer_gui.py, server routes/installer.js, the Worker's generated script and the generic NSIS installer) names update_public_key only when update_signing.pub is actually staged, and both installers copy it into C:\ProgramData\LockdownAgent and pin that installed path — never the staging/download folder, because the agent fails closed on a configured-but-unreadable key and would refuse every future update. Unpinned agents accept SHA-256-only updates and report update_verification (signature \| sha256-only \| key-unreadable) at check-in; both backends store it (Express COALESCE, Worker merge) and the dashboard shows it per device and per row. |
+| B-049 | confirmed | code-read | Agent release metadata is produced by scripts/sign-release-metadata.py with one detached Ed25519 signature PER PLATFORM, because the signed message is 'v1:{version}:{sha256}' and therefore binds exactly one hash: a single top-level signature cannot be valid for both a Windows and a Linux build. CI (release.yml publish-agent-release-metadata) signs with the UPDATE_SIGNING_KEY secret, skips the companion binaries (the glob matches lockdown-agent-windows-x64-watchdog.exe before .exe), and attaches agent-release.json to the release; without the secret it publishes unsigned metadata behind a warning annotation, which a pinned agent refuses. The Worker serves platforms[<X-Agent-Platform>].signature first and falls back to the top-level signature only for metadata published before per-platform signing. |
 
 ## architecture
 

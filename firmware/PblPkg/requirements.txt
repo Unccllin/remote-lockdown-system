@@ -1,0 +1,15 @@
+# Python dependencies for the firmware-side test/provisioning scripts in this
+# directory (test-d205.py, gen-policy-rot.py, prepare-live-test.py).
+#
+# These scripts run on the PBL hardware host, outside the agent venv, and the
+# set was previously undeclared — so a checker (or a clean machine) could not
+# tell whether `import cbor2` was a real dependency or a typo.
+#
+#   python3 -m pip install -r firmware/PblPkg/requirements.txt
+#
+# cbor2       — CBOR encoding of the verdict/policy blobs the firmware parses
+# cryptography — Ed25519 policy signing and the D-205 certificate chain
+# requests    — the HTTP legs of prepare-live-test.py
+cbor2>=5.6
+cryptography>=41
+requests>=2.31

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# pyright: reportMissingImports=false
+# Dependencies for this directory are declared in requirements.txt
+# (cbor2, cryptography, requests). These scripts run on the PBL hardware host;
+# the checker's interpreter does not carry that set, so an unresolved import
+# here is an environment gap rather than a defect. Install them with:
+#   python3 -m pip install -r firmware/PblPkg/requirements.txt
 """test-d205.py — D-205 test harness: generate keys, policy, and mock verdict server.
 
 Generates:

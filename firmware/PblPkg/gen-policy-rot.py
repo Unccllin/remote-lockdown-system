@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# pyright: reportMissingImports=false
+# Dependencies for this directory are declared in requirements.txt
+# (cbor2, cryptography, requests). These scripts run on the PBL hardware host;
+# the checker's interpreter does not carry that set, so an unresolved import
+# here is an environment gap rather than a defect. Install them with:
+#   python3 -m pip install -r firmware/PblPkg/requirements.txt
 """gen-policy-rot.py — Provision the PBL policy signing key root of trust (D-215).
 
 The policy signing key is a long-lived root key pinned in firmware (C4 §1).

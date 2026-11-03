@@ -274,6 +274,103 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ---------------------------------------------------------------------------
+  # Publish signed agent_release metadata
+  #
+  # /api/agent/update serves whatever is published to the `agent_release` KV key,
+  # and the Worker holds no signing key by design — it cannot mint a signature it
+  # would also be trusting. The signature is therefore produced here, where the
+  # private key lives.
+  #
+  # It must be produced *per platform*: the agent verifies a detached Ed25519
+  # signature over "v1:{version}:{sha256}", so one signature is bound to exactly
+  # one hash. A release whose Windows and Linux builds differ (they always do) has
+  # no correct single signature — serving the top-level one would leave every
+  # platform but one silently refusing updates.
+  #
+  # The result is attached to the release so the exact bytes that were signed are
+  # auditable, and can be published with:
+  #   npx wrangler kv key put --binding=LOCKDOWN_KV agent_release \
+  #     --path agent-release.json
+  # ---------------------------------------------------------------------------
+  publish-agent-release-metadata:
+    name: Publish Agent Release Metadata
+    needs: publish-checksums
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Download the released agent binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # zizmor template-injection: bind the ref to an env var; the shell sees
+          # data, never interpolated workflow expressions.
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          mkdir -p staging
+          gh release download "$REF_NAME" \
+            --pattern "lockdown-agent-*" \
+            --dir ./staging \
+            --clobber
+          ls -l staging
+
+      - name: Sign the release metadata (per platform)
+        env:
+          # Ed25519 private key PEM. Absent => the metadata is published unsigned,
+          # which a pinned agent refuses; that is a warning, not a silent success.
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          args=("--version" "$version" "--out" "agent-release.json")
+
+          # The platform keys must match X-Agent-Platform ("win"/"linux"), which is
+          # what the agent sends and what the Worker looks up in `platforms`.
+          #
+          # The glob also matches the companion binaries the same job attaches
+          # (lockdown-agent-windows-x64-watchdog.exe sorts BEFORE .exe, because
+          # '-' < '.'), and signing a watchdog under `win` would attach a signature
+          # for bytes the updater never downloads. Skip the companions explicitly.
+          shopt -s nullglob
+          for pairing in "win:staging/lockdown-agent-windows-*" "linux:staging/lockdown-agent-linux-*"; do
+            platform="${pairing%%:*}"
+            pattern="${pairing#*:}"
+            for artifact in $pattern; do
+              case "$artifact" in
+                *watchdog*|*recovery*|*lockscreen*) continue ;;
+              esac
+              args+=("--artifact" "${platform}=${artifact}")
+              break
+            done
+          done
+          shopt -u nullglob
+
+          if [ -n "${UPDATE_SIGNING_KEY:-}" ]; then
+            keyfile="$(mktemp)"
+            printf '%s\n' "$UPDATE_SIGNING_KEY" > "$keyfile"
+            scripts/sign-release-metadata.py "${args[@]}" --key "$keyfile"
+            rm -f "$keyfile"
+          else
+            echo "::warning title=Unsigned release metadata::UPDATE_SIGNING_KEY is not set — agents with a pinned update key will REFUSE this release. See docs/CODE_SIGNING.md."
+            scripts/sign-release-metadata.py "${args[@]}" --unsigned
+          fi
+
+      - name: Upload agent_release metadata
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: agent-release.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
   # Build + publish Electron app for Windows
   # ---------------------------------------------------------------------------
   release-windows:

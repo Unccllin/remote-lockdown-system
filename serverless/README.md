@@ -45,27 +45,43 @@ The Worker serves that metadata from a single KV key, `agent_release`. It holds 
 signing key: signing happens wherever the private key lives (CI), and the Worker
 only serves the result — so it cannot drift from the payload that was signed.
 
-Publish a release (CI step, run where the signing key is available):
+**Do not hand-write this record.** `scripts/sign-release-metadata.py` computes the
+digests and signs them; a hand-copied hash drifts from the bytes it names, and a
+signature over a different hash is indistinguishable from an attack.
+
+The signature is bound to one hash (the message is `v1:{version}:{sha256}`), so a
+release whose platform builds differ needs **one signature per platform**. The
+signer emits that shape and refuses to fake a single top-level signature over two
+hashes; the Worker serves the per-platform signature and only falls back to the
+top-level one for metadata published before per-platform signing existed.
+
+CI does this in the `publish-agent-release-metadata` job and attaches
+`agent-release.json` to the release. To publish what CI signed:
 
 ```bash
-# 1. Upload the binary the update response points at
+# 1. Upload the binary the update response points at (per platform)
 npx wrangler kv key put --binding=LOCKDOWN_KV binary:agent --path ./dist/lockdown-agent.exe
 
-# 2. Publish its metadata (sha256/size of the exact bytes uploaded above).
-#    signature = base64 Ed25519 over "v1:<version>:<sha256>"
-cat > /tmp/agent-release.json <<JSON
-{
-  "latest_version": "1.1.0",
-  "sha256": "<64 hex chars>",
-  "size": 12345678,
-  "built_at": "2026-11-02T00:00:00.000Z",
-  "signature": "<base64 detached signature>",
-  "signature_alg": "ed25519",
-  "platforms": { "win": { "sha256": "<win build sha256>", "size": 23456789 } }
-}
-JSON
-npx wrangler kv key put --binding=LOCKDOWN_KV agent_release --path /tmp/agent-release.json
+# 2. Publish the metadata CI generated (do not edit it)
+npx wrangler kv key put --binding=LOCKDOWN_KV agent_release --path ./agent-release.json
 ```
+
+Building the record by hand, for a local release:
+
+```bash
+scripts/generate-update-keys.sh --out secrets/          # once: the keypair
+scripts/sign-release-metadata.py \
+  --version 1.1.0 \
+  --key secrets/update_signing.key \
+  --artifact win=agent/staging/lockdown-agent-windows-x64.exe \
+  --artifact linux=agent/staging/lockdown-agent-linux-x64 \
+  --out agent-release.json
+```
+
+`--artifact` takes `PLATFORM=PATH` with the platform names the agent sends in
+`X-Agent-Platform` (`win`, `linux`, `darwin`). Without `--key` the tool refuses
+unless `--unsigned` is passed explicitly, and an unsigned record is one a pinned
+agent will reject.
 
 Behaviour worth knowing:
 
@@ -75,8 +91,13 @@ Behaviour worth knowing:
 - **corrupt or incomplete metadata** (unparseable, or no `sha256`/`size`) → **500**.
   Metadata that cannot be verified must never be offered, because the agent would
   download a binary whose hash it cannot check.
-- **`platforms`** overrides the top-level hash/size per `X-Agent-Platform`
-  (`win`, `linux`), for when the two builds differ.
+- **`platforms`** overrides the top-level hash/size *and signature* per
+  `X-Agent-Platform` (`win`, `linux`), for when the two builds differ — which for
+  an unsigned-per-platform record means every platform but one refuses the update.
+- **unsigned metadata** (`signature: null`) → served as-is. Unpinned agents accept
+  it and report `sha256-only` at check-in; pinned agents refuse it. `agent-release.json`
+  from a CI run without `UPDATE_SIGNING_KEY` is exactly this case, and the job emits
+  a warning annotation saying so.
 
 ## What this backend does not implement
 

@@ -845,3 +845,28 @@ beliefs:
   dependents: []
   notes: Verified by 7 route tests, 6 worker tests, 6 dashboard tests, 3+4 installer tests. Not hardware-verified;
     authenticity still waits on the owner PFX (D-130) for the binaries themselves.
+- id: B-049
+  statement: 'Agent release metadata is produced by scripts/sign-release-metadata.py with one detached
+    Ed25519 signature PER PLATFORM, because the signed message is ''v1:{version}:{sha256}'' and therefore
+    binds exactly one hash: a single top-level signature cannot be valid for both a Windows and a Linux
+    build. CI (release.yml publish-agent-release-metadata) signs with the UPDATE_SIGNING_KEY secret, skips
+    the companion binaries (the glob matches lockdown-agent-windows-x64-watchdog.exe before .exe), and
+    attaches agent-release.json to the release; without the secret it publishes unsigned metadata behind
+    a warning annotation, which a pinned agent refuses. The Worker serves platforms[<X-Agent-Platform>].signature
+    first and falls back to the top-level signature only for metadata published before per-platform signing.'
+  domain: agent/update
+  status: confirmed
+  evidence_level: code-read
+  provenance: 18 script tests verify each emitted signature with agent.verify_update_signature; cross-platform/tamper/wrong-key/wrong-version
+    all rejected; CI shell block executed locally against fake release artifacts and produced hashes matching
+    sha256sum for win (9 bytes) and linux (11 bytes)
+  source: scripts/sign-release-metadata.py; .github/workflows/release.yml; serverless/worker.ts handleAgentUpdate;
+    serverless/README.md
+  asserted: '2026-11-03'
+  last_verified: '2026-11-03'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 18 script tests verify the signature with agent.verify_update_signature itself, plus tamper/wrong-key/wrong-version/cross-platform
+    rejection.

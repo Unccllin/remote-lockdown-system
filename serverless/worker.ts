@@ -66,7 +66,7 @@ interface Device {
   update_verification?: 'signature' | 'sha256-only' | 'key-unreadable';
 }
 
-/** A hardware-test artifact uploaded by hw_test_harness v2.0 (D-129 evidence). */
+/** A hardware-test artifact as stored in KV, after parsing an upload (D-129). */
 interface HwTestArtifact {
   // Serial, rendered as a decimal string: the dashboard validates /^\d+$/.
   id: string;
@@ -83,6 +83,41 @@ interface HwTestArtifact {
   artifact_json: unknown;
   created_at: string;
 }
+
+/**
+ * An artifact as *uploaded*, before it is normalised into HwTestArtifact.
+ *
+ * Two shapes are accepted on purpose: CTRF (`results.{tool,summary,extra}`) from
+ * harness v2.0, and the legacy flat shape the harness emitted for months before
+ * CTRF support landed. A rejected artifact on window day is a lost hardware run.
+ */
+interface HwTestArtifactUpload {
+  results?: {
+    tool?: { name?: string; version?: string };
+    summary?: HwTestSummary;
+    extra?: { environment?: HwTestEnvironment };
+  };
+  harness_version?: string;
+  summary?: HwTestSummary;
+  environment?: HwTestEnvironment;
+  [key: string]: unknown;
+}
+
+interface HwTestSummary {
+  tests?: number;
+  total?: number;
+  passed?: number;
+  failed?: number;
+  skipped?: number;
+  errors?: number;
+}
+
+interface HwTestEnvironment {
+  hostname?: string;
+  agent_binary_hash?: string;
+  [key: string]: unknown;
+}
+
 
 interface Command {
   id: string;
@@ -425,6 +460,39 @@ function parseKvJson<T>(raw: string, key: string): T {
     return JSON.parse(raw) as T;
   } catch {
     throw new Error(`corrupt KV value at "${key}" — refusing to treat it as empty`);
+  }
+}
+
+/**
+ * Parse a request body that was already read as text (agent HMAC verification
+ * needs the raw bytes, so the handlers cannot re-read the stream).
+ *
+ * Returns null instead of throwing: a malformed body from an authenticated agent
+ * is the caller's bug, and the honest answer is 400. Before this, the throw
+ * escaped the handler and the runtime turned it into a 500 with no explanation.
+ */
+function parseJsonBody(text: string): any | null {
+  try {
+    const value = JSON.parse(text);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The request's URL.
+ *
+ * `Request.url` is absolute by construction, so a throw here means the Request
+ * itself is malformed and never reached a handler. Centralised so the seven call
+ * sites do not each need a try/catch, and so a hypothetical malformed URL
+ * degrades to empty route params rather than a 500.
+ */
+function requestUrl(request: Request): URL {
+  try {
+    return new URL(request.url);
+  } catch {
+    return new URL('https://invalid.invalid/');
   }
 }
 
@@ -786,7 +854,8 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
     return errorResponse('Authentication failed', 401);
   }
 
-  const payload = JSON.parse(body);
+  const payload = parseJsonBody(body);
+  if (!payload) return errorResponse('Invalid JSON body', 400);
   const { mac_address, hardware_uuid, serial_number } = payload;
 
   // KV-RACE-001: Write checkin metadata to a separate KV key, NOT to
@@ -952,7 +1021,8 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
     return errorResponse('Authentication failed', 401);
   }
 
-  const payload = JSON.parse(body);
+  const payload = parseJsonBody(body);
+  if (!payload) return errorResponse('Invalid JSON body', 400);
   const { mac_address, hardware_uuid, serial_number } = payload;
   // firmware_audit: optional per-device SPI/Secure-Boot recon (PblPersistDxe
   // delivery-path decision). Validate it is a plain object — same contract
@@ -1091,7 +1161,8 @@ async function handleDeadmanReport(request: Request, env: Env): Promise<Response
     return errorResponse('Authentication failed', 401);
   }
 
-  const payload = JSON.parse(body);
+  const payload = parseJsonBody(body);
+  if (!payload) return errorResponse('Invalid JSON body', 400);
   const { key_material } = payload;
 
   if (!key_material) {
@@ -1131,7 +1202,8 @@ async function handleAgentLocation(request: Request, env: Env): Promise<Response
     return errorResponse('Authentication failed', 401);
   }
 
-  const payload = JSON.parse(body);
+  const payload = parseJsonBody(body);
+  if (!payload) return errorResponse('Invalid JSON body', 400);
   const { location } = payload;
   if (!location) {
     return errorResponse('location required', 400);
@@ -1163,7 +1235,8 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
     return errorResponse('Authentication failed', 401);
   }
 
-  const payload = JSON.parse(body);
+  const payload = parseJsonBody(body);
+  if (!payload) return errorResponse('Invalid JSON body', 400);
   const {
     command_id,
     result_status,
@@ -1341,7 +1414,8 @@ async function handleEscrowKey(request: Request, env: Env): Promise<Response> {
     return errorResponse('Authentication failed', 401);
   }
 
-  const payload = JSON.parse(body);
+  const payload = parseJsonBody(body);
+  if (!payload) return errorResponse('Invalid JSON body', 400);
   const { command_id, key_material } = payload;
   if (!command_id || !key_material) {
     return errorResponse('command_id and key_material required', 400);
@@ -1564,11 +1638,13 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
   // Delete the token (single-use) — use KV.delete if available, otherwise
   // overwrite with empty. The real Cloudflare KV supports delete(); the
   // MockKV in tests does not, so we guard with a typeof check.
-  // SAFETY: probe for an optional method. Real Cloudflare KV always has delete();
-  // the test double does not, so the shape is checked at runtime before use.
-  if (typeof (env.LOCKDOWN_KV as unknown as { delete?: (k: string) => Promise<void> }).delete === 'function') {
-    // SAFETY: guarded by the typeof check above — delete() exists on that path.
-    await (env.LOCKDOWN_KV as unknown as { delete: (k: string) => Promise<void> }).delete(tokenKey);
+  // SAFETY: KV.delete is optional at runtime — real Cloudflare KV has it, the test
+  // double does not — so the cast describes a shape that the typeof probe below
+  // establishes before the call. Nothing here assumes it exists.
+  const kv = env.LOCKDOWN_KV as unknown as { delete?: (k: string) => Promise<void> };
+  // SAFETY: narrowed by the typeof probe on this line.
+  if (typeof kv.delete === 'function') {
+    await kv.delete(tokenKey);
   } else {
     await env.LOCKDOWN_KV.put(tokenKey, '');
   }
@@ -1741,7 +1817,7 @@ async function handleRearm(request: Request, env: Env): Promise<Response> {
   await addAuditEntry(env, device.id, 'rearm',
     `hardware_uuid=${payload.hardware_uuid} status=${device.status}`);
 
-  const serverUrl = new URL(request.url).origin;
+  const serverUrl = requestUrl(request).origin;
   const config = {
     server_url: serverUrl,
     device_hostname: device.hostname,
@@ -2005,7 +2081,7 @@ async function handleGetLocations(
 ): Promise<Response> {
   const auth = await requireRole(request, env, 'viewer');
   if (auth instanceof Response) return auth;
-  const url = new URL(request.url);
+  const url = requestUrl(request);
   const limit = parseInt(url.searchParams.get('limit') || '20', 10);
   const locations = await listLocations(env);
   const deviceLocs = locations
@@ -2093,7 +2169,12 @@ async function handleDownloadEfsCert(
     return errorResponse('No EFS certificate backup for this device', 404);
   }
 
-  return jsonResponse(JSON.parse(certData));
+  const cert = parseJsonBody(certData);
+  if (!cert) {
+    // A cert record we cannot parse must not be handed back as if it were valid.
+    return errorResponse('Corrupt EFS certificate backup', 500);
+  }
+  return jsonResponse(cert);
 }
 
 /**
@@ -2309,7 +2390,7 @@ async function handleInstaller(request: Request, env: Env, deviceId: string): Pr
   await addAuditEntry(env, deviceId, 'installer_generated', `by=${auth.username} host=${device.hostname}`);
 
   // Base URL the agent should check in against (this Worker's origin).
-  const serverUrl = new URL(request.url).origin;
+  const serverUrl = requestUrl(request).origin;
   const config = {
     server_url: serverUrl,
     device_hostname: device.hostname,
@@ -2343,7 +2424,7 @@ async function handleInstaller(request: Request, env: Env, deviceId: string): Pr
 async function handleGetAudit(request: Request, env: Env): Promise<Response> {
   const auth = await requireRole(request, env, 'viewer');
   if (auth instanceof Response) return auth;
-  const url = new URL(request.url);
+  const url = requestUrl(request);
   const limit = parseInt(url.searchParams.get('limit') || '50', 10);
   const deviceId = url.searchParams.get('device_id');
   const entries = await listAudit(env);
@@ -2598,7 +2679,7 @@ async function handleDetailedHealth(env: Env): Promise<Response> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
+    const url = requestUrl(request);
     const path = url.pathname;
     const method = request.method;
 
@@ -2958,7 +3039,16 @@ async function handleAgentUpdate(request: Request, env: Env): Promise<Response> 
     built_at?: string;
     signature?: string | null;
     signature_alg?: string | null;
-    platforms?: Record<string, { sha256?: string; size?: number; built_at?: string }>;
+    // A signature is bound to ONE hash (it signs "v1:{version}:{sha256}"), so a
+    // release whose per-platform builds differ needs one signature per platform.
+    // A single top-level signature can only ever be valid for one of them.
+    platforms?: Record<string, {
+      sha256?: string;
+      size?: number;
+      built_at?: string;
+      signature?: string | null;
+      signature_alg?: string | null;
+    }>;
   };
   try {
     release = JSON.parse(raw);
@@ -2979,6 +3069,16 @@ async function handleAgentUpdate(request: Request, env: Env): Promise<Response> 
     return errorResponse('Agent release metadata is incomplete', 500);
   }
 
+  // Per-platform signature first: it is the only one that can be valid for this
+  // platform's hash. The top-level fallback keeps metadata published before
+  // per-platform signing (a single build, one signature) working.
+  const signature = perPlatform?.signature || release.signature || null;
+  const signatureAlg = signature
+    ? (perPlatform?.signature
+        ? perPlatform.signature_alg || 'ed25519'
+        : release.signature_alg || 'ed25519')
+    : null;
+
   return jsonResponse({
     update_available: compareVersions(currentVersion, release.latest_version) < 0,
     latest_version: release.latest_version,
@@ -2987,8 +3087,8 @@ async function handleAgentUpdate(request: Request, env: Env): Promise<Response> 
     size,
     download_url: `/api/agent/download?platform=${platform}`,
     built_at: perPlatform?.built_at || release.built_at || null,
-    signature: release.signature || null,
-    signature_alg: release.signature ? release.signature_alg || 'ed25519' : null,
+    signature,
+    signature_alg: signatureAlg,
   });
 }
 
@@ -3003,7 +3103,7 @@ async function handleAgentVersion(request: Request, env: Env): Promise<Response>
   const auth = await requireRole(request, env, 'viewer');
   if (auth instanceof Response) return auth;
 
-  const platform = new URL(request.url).searchParams.get('platform') || 'linux';
+  const platform = requestUrl(request).searchParams.get('platform') || 'linux';
   const raw = await env.LOCKDOWN_KV.get(AGENT_RELEASE_KEY);
   if (!raw) {
     return jsonResponse({ version: null, available: false, platform });
@@ -3014,7 +3114,16 @@ async function handleAgentVersion(request: Request, env: Env): Promise<Response>
     sha256?: string;
     size?: number;
     built_at?: string;
-    platforms?: Record<string, { sha256?: string; size?: number; built_at?: string }>;
+    // A signature is bound to ONE hash (it signs "v1:{version}:{sha256}"), so a
+    // release whose per-platform builds differ needs one signature per platform.
+    // A single top-level signature can only ever be valid for one of them.
+    platforms?: Record<string, {
+      sha256?: string;
+      size?: number;
+      built_at?: string;
+      signature?: string | null;
+      signature_alg?: string | null;
+    }>;
   };
   try {
     release = JSON.parse(raw);
@@ -3090,7 +3199,7 @@ async function handleUploadHwArtifact(request: Request, env: Env): Promise<Respo
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
 
-  const artifact = await readJsonBody<Record<string, any>>(request);
+  const artifact = await readJsonBody<HwTestArtifactUpload>(request);
   if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
     return errorResponse('Artifact must be a JSON object', 400);
   }
@@ -3168,7 +3277,7 @@ async function handleListHwArtifacts(request: Request, env: Env): Promise<Respon
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
 
-  const url = new URL(request.url);
+  const url = requestUrl(request);
   const deviceId = url.searchParams.get('device_id');
   if (deviceId && !/^[0-9a-f-]{16,36}$/i.test(deviceId)) {
     return errorResponse('Invalid device_id format', 400);
@@ -3403,6 +3512,8 @@ async function handleRetentionSettings(request: Request, env: Env): Promise<Resp
   const auth = await requireRole(request, env, 'viewer');
   if (auth instanceof Response) return auth;
 
+  // SAFETY: wrangler `[vars]` are typed loosely in Env; these two are optional
+  // numeric settings, and both call sites below validate with Number.isFinite.
   const vars = env as unknown as {
     LOCATION_RETENTION_DAYS?: string;
     COMMAND_EXPIRY_DAYS?: string;

@@ -3792,6 +3792,80 @@ describe('D-210: PBL route integration', () => {
       expect(data.size).toBe(2345);
     });
 
+    it('serves the per-platform signature, not the top-level one (B-006)', async () => {
+      // A signature signs "v1:{version}:{sha256}" — one hash. When the per-platform
+      // builds differ, the top-level signature can only be valid for one of them,
+      // so the platform's own signature has to win. Serving the wrong one looks
+      // identical to "this release was signed" while every other platform
+      // silently refuses to update.
+      const perPlatform = {
+        ...RELEASE,
+        signature: 'dG9wLWxldmVs',
+        platforms: {
+          win: {
+            sha256: 'b'.repeat(64),
+            size: 2345,
+            signature: 'd2luLXNpZw==',
+            signature_alg: 'ed25519',
+          },
+        },
+      };
+      await env.LOCKDOWN_KV.put('agent_release', JSON.stringify(perPlatform));
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-SIG-1');
+      const headers = signRequest('', apiKey, {
+        'X-Agent-Version': '1.0.0',
+        'X-Agent-Platform': 'win',
+      });
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/agent/update', undefined, headers),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+
+      expect(data.sha256).toBe('b'.repeat(64));
+      expect(data.signature).toBe('d2luLXNpZw==');
+      expect(data.signature_alg).toBe('ed25519');
+    });
+
+    it('falls back to the top-level signature for already-published metadata', async () => {
+      // Metadata published before per-platform signing is a single build with one
+      // signature; it must keep working.
+      await env.LOCKDOWN_KV.put('agent_release', JSON.stringify(RELEASE));
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-SIG-2');
+      const headers = signRequest('', apiKey, {
+        'X-Agent-Version': '1.0.0',
+        'X-Agent-Platform': 'win',
+      });
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/agent/update', undefined, headers),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+
+      expect(data.signature).toBe(RELEASE.signature);
+      expect(data.signature_alg).toBe('ed25519');
+    });
+
+    it('reports a null signature and alg when the release is unsigned', async () => {
+      // Unpinned agents accept this; pinned ones refuse it. Reporting an alg with
+      // no signature would claim a check that never happened.
+      const { signature: _sig, signature_alg: _alg, ...unsigned } = RELEASE;
+      await env.LOCKDOWN_KV.put('agent_release', JSON.stringify(unsigned));
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-SIG-3');
+      const headers = signRequest('', apiKey, {
+        'X-Agent-Version': '1.0.0',
+        'X-Agent-Platform': 'linux',
+      });
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/agent/update', undefined, headers),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+
+      expect(data.signature).toBeNull();
+      expect(data.signature_alg).toBeNull();
+    });
+
     it('fails closed on corrupt or incomplete metadata', async () => {
       const { apiKey } = await enrollDevice(worker, env, 'UPD-005');
       const headers = signRequest('', apiKey, { 'X-Agent-Version': '1.0.0' });
