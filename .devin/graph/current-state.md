@@ -53,30 +53,32 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 186 — 2026-11-03 (payload sweep: three more fields the agent reports and the Worker discarded)
+## Latest session: 187 — 2026-11-03 (the dashboard-side sweep: the effectiveness panel reads the audit log, and the Worker wrote no entry there)
 
 ### VERIFY
-- `worker.test.ts`: **387 passed** (385 + 2). The new tests assert the blocked-file
-  list and session context survive to the stored command, and that a completed
-  `track` command leaves the device in `tracking` (after acknowledging the lockdown
-  queued ahead of it).
-- Coverage: **89.52 / 83.24 / 95.02 / 91.55** (floors 82/75/86/82).
-- Three mutations **KILLED** by the intended tests: blocked files dropped, session
-  context dropped, tracking reported as active.
+- `worker.test.ts`: **389 passed** (387 + 2). The audit-entry test parses the stored
+  detail exactly as the dashboard does and asserts every field, including
+  `lockdown_effective === false` for a zero-critical lockdown; the second test
+  asserts a failed command writes no confirmation.
+- Coverage: **89.53 / 83.53 / 95.02 / 91.56** (floors 82/75/86/82).
+- Three mutations **KILLED** by the intended tests: the action name the UI scans for,
+  the detail fields it parses, and the executed-only gate.
 
 ### Fog cleared
-- **Whether the dashboard's "partially encrypted" warning works on the serverless
-  backend**: it did not — the list never arrived. Now it does.
-- **Whether a tracked device is distinguishable from an idle one**: it was not, on
-  this backend. Now `tracking` is set and cleared like Express does.
+- **Whether the effectiveness panel works on the serverless backend**: it did not,
+  and it could not have — no reader met a writer. It does now, end to end.
+- **Whether the earlier two sessions were wasted**: their storage changes were
+  necessary but not sufficient. Without this, the panel would still be dark.
 
 ### Fog remaining
 - The generic NSIS installer (item 9) and Cloudflare-native observability/backup
   (item 10) are untouched.
 - `/api/download/agent` remains unauthenticated in the Worker while Express requires
   agent auth — still awaiting a deliberate decision.
-- The sweep covered the **agent-facing** payloads. The dashboard's request bodies
-  (create/update device, admins, policy) have not been swept the same way.
+- The sweep has now covered agent payloads (S186) and dashboard payloads plus
+  dashboard reads (S187). **Not** swept: the Electron app's requests/reads, and the
+  agent's *reads* of the check-in response (does it consume every field the server
+  sends?).
 - Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
   (D-132); 19 Dependabot alerts.
 
@@ -91,25 +93,27 @@
   credentials (Worker publish), a real domain (Caddy TLS).
 
 ### Failure attribution
-- **Layer 4 — verification feedback** (the sweep as a method). Five behaviours have
-  now been found by comparing "what the client sends" against "what the server
-  handles": the missing update endpoint, `boot_lock_detail`, blocked files, session
-  context, and the tracking transitions. None was reachable by mutating a line,
-  because the line was absent rather than wrong — a mutation audit structurally
-  cannot see code that was never written.
-- **Layer 2 — context provision**: the dashboard was the oracle here. It reads four
-  fields from the lockdown detail and the Worker produced one of them; comparing the
-  UI's reads against the backend's writes is the cheapest way to find that class of
-  gap, and it should be a standing check rather than a one-off.
+- **Layer 4 — verification feedback** (the sharpest instance in this thread). I fixed
+  the *storage* of a signal twice without ever checking who reads it. The tests I
+  wrote were green because they read the command record — the same layer I had just
+  written. A test that asserts on the layer you just changed will pass whether or not
+  the feature reaches a user; the sweep's value was asking "who consumes this?" and
+  finding the answer was *nobody*.
+- **Layer 1 — task specification** (mine): "restore the field" was the task I set
+  myself, when the real requirement was "make the panel work". The difference is one
+  `grep` for the field name across the UI, which I did only after the sweep prompted
+  it.
 
 ### Session artifacts
 - Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
   `scripts/audit_test_teeth.py`.
 
 ### Next session opening
-Sweep the same way in the other direction — the dashboard's request bodies against
-what the Worker reads — then take the generic NSIS installer, which is the last
-piece of the serverless plan with a real design decision in it.
+Sweep the last two unexamined directions — the Electron app's requests/reads, and the
+agent's consumption of the check-in response (the server sends command, key_material,
+bios_password, power_on_password, bitlocker_pin, bitlocker_recovery_password,
+enable_pba, duress_code — does the agent read all of them?) — then build the generic
+NSIS installer, which is the only remaining piece with a real design decision.
 
 ---
 

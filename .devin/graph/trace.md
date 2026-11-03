@@ -5891,3 +5891,102 @@ what the Worker reads — then take the generic NSIS installer, which is the las
 piece of the serverless plan with a real design decision in it.
 
 ---
+
+---
+
+## Session 187 — 2026-11-03 (the dashboard-side sweep: the effectiveness panel reads the audit log, and the Worker wrote no entry there)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S186 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `dashboard/src/pages/EnrollPage.jsx`,
+  `DeviceDetailPage.jsx` (requests **and** reads), `dashboard/src/api/admins.js`,
+  `server/src/routes/agent.js:500-580` (the ACK transaction: the audit insert and
+  the status transitions), `server/src/notifications/notify.js`, and
+  `serverless/worker.ts` (`handleCommandAck`, `addAuditEntry`, `handleGetAudit`).
+- **Finding (the request direction was already clean)**: every dashboard request
+  matched a Worker route and field — `{hostname, owner_name}` for enrolment,
+  `{hostname_confirm, duress_code}` for recover, no body for track/stop-track/locate,
+  admins CRUD, `enroll/token`, `auth/login`. Worth clearing rather than assuming.
+- **Finding (the read direction was not — and it invalidated two sessions of work)**:
+  the lockdown-effectiveness panel does **not** read the command record. It scans the
+  audit log for the most recent `agent_<type>_confirmed` entry and parses that
+  entry's detail (`DeviceDetailPage.jsx:40-49`). Express writes that entry per
+  executed command (`agent.js:525-534`); **the Worker wrote no audit entry on ACK at
+  all**. So the fields restored in sessions 185 (`lockdown_effective`,
+  `boot_lock_status`, `boot_lock_detail`) and 186 (`encryption_blocked_files`,
+  `lock_session_context`, tracking transitions) were **stored but unreachable from
+  the UI**. Two fixes to the storage layer before anyone checked the reader.
+- **Finding (audit ordering already suited the reader)**: `GET /api/audit` returns
+  most-recent-first (`slice(-limit).reverse()`), so the dashboard's "first matching
+  entry" is the newest — no change needed there, and worth stating because the panel
+  would silently show a stale lockdown otherwise.
+
+### IMPLEMENT
+- `handleCommandAck`: on `result_status === 'executed'`, write
+  `agent_<type>_confirmed` with a JSON detail carrying `command_id`,
+  `command_uuid`, `boot_lock_status`, `boot_lock_detail`, `lockdown_effective`,
+  `encryption_blocked_files`, `lock_session_context` — the same shape Express writes,
+  so the existing parser works unchanged. Failed commands write nothing.
+- `scripts/audit_test_teeth.py`: three rows.
+
+### VERIFY
+- `worker.test.ts`: **389 passed** (387 + 2). The audit-entry test parses the stored
+  detail exactly as the dashboard does and asserts every field, including
+  `lockdown_effective === false` for a zero-critical lockdown; the second test
+  asserts a failed command writes no confirmation.
+- Coverage: **89.53 / 83.53 / 95.02 / 91.56** (floors 82/75/86/82).
+- Three mutations **KILLED** by the intended tests: the action name the UI scans for,
+  the detail fields it parses, and the executed-only gate.
+
+### Fog cleared
+- **Whether the effectiveness panel works on the serverless backend**: it did not,
+  and it could not have — no reader met a writer. It does now, end to end.
+- **Whether the earlier two sessions were wasted**: their storage changes were
+  necessary but not sufficient. Without this, the panel would still be dark.
+
+### Fog remaining
+- The generic NSIS installer (item 9) and Cloudflare-native observability/backup
+  (item 10) are untouched.
+- `/api/download/agent` remains unauthenticated in the Worker while Express requires
+  agent auth — still awaiting a deliberate decision.
+- The sweep has now covered agent payloads (S186) and dashboard payloads plus
+  dashboard reads (S187). **Not** swept: the Electron app's requests/reads, and the
+  agent's *reads* of the check-in response (does it consume every field the server
+  sends?).
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
+  (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), a real domain (Caddy TLS).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (the sharpest instance in this thread). I fixed
+  the *storage* of a signal twice without ever checking who reads it. The tests I
+  wrote were green because they read the command record — the same layer I had just
+  written. A test that asserts on the layer you just changed will pass whether or not
+  the feature reaches a user; the sweep's value was asking "who consumes this?" and
+  finding the answer was *nobody*.
+- **Layer 1 — task specification** (mine): "restore the field" was the task I set
+  myself, when the real requirement was "make the panel work". The difference is one
+  `grep` for the field name across the UI, which I did only after the sweep prompted
+  it.
+
+### Session artifacts
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `scripts/audit_test_teeth.py`.
+
+### Next session opening
+Sweep the last two unexamined directions — the Electron app's requests/reads, and the
+agent's consumption of the check-in response (the server sends command, key_material,
+bios_password, power_on_password, bitlocker_pin, bitlocker_recovery_password,
+enable_pba, duress_code — does the agent read all of them?) — then build the generic
+NSIS installer, which is the only remaining piece with a real design decision.
+
+---
