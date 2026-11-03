@@ -56,13 +56,15 @@ import sys
 
 if sys.stdout is None:
     try:
-        # ast-grep-ignore — inside try/except OSError on the next lines
+        # False positive: inside try/except OSError on the next lines.
+        # nosemgrep
         sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
     except OSError:
         pass  # nothing to log to; the file logger still works
 if sys.stderr is None:
     try:
-        # ast-grep-ignore — inside try/except OSError on the next lines
+        # False positive: inside try/except OSError on the next lines.
+        # nosemgrep
         sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
     except OSError:
         pass
@@ -312,7 +314,8 @@ def _load_json_config(config_path):
     JSON keys are mapped to the internal config dict key names.
     """
     try:
-        # ast-grep-ignore — inside try/except (OSError, ValueError) above
+        # False positive: inside try/except (OSError, ValueError) above.
+        # nosemgrep
         with open(config_path) as f:
             data = json.load(f)
     except (OSError, ValueError) as exc:
@@ -1205,7 +1208,8 @@ def _signed_post(url: str, cfg: dict, json_body: dict, **kwargs) -> requests.Res
     # Explicit so no static check has to infer it from **kwargs: callers may
     # override through kwargs, but the default is never "wait forever".
     timeout = kwargs.pop("timeout", 15)
-    # ast-grep-ignore — timeout=timeout is explicit on this line
+    # False positive: timeout=timeout is explicit on this line.
+    # nosemgrep
     return requests.post(url, data=body_bytes, headers=headers, timeout=timeout, **kwargs)
 
 
@@ -1590,7 +1594,8 @@ def _fsync_file(path: Path) -> None:
     the disk synchronously must not abort a lockdown or a check-in.
     """
     try:
-        # ast-grep-ignore — "r+b" is a valid mode; the call is inside try/except
+        # False positive: "r+b" is a valid mode, and the call is inside try/except.
+        # nosemgrep
         with open(path, "r+b") as f:
             f.flush()
             os.fsync(f.fileno())
@@ -1671,7 +1676,8 @@ def update_pending_ack(
     if not file_path.exists():
         return
     try:
-        # ast-grep-ignore — inside try/except (OSError, ValueError) above
+        # False positive: inside try/except (OSError, ValueError) above.
+        # nosemgrep
         state = json.loads(file_path.read_text())
     except (OSError, ValueError) as exc:
         # Leave the file untouched rather than crash the completion path: the
@@ -3441,6 +3447,7 @@ def download_update(
     configured, a valid detached signature is REQUIRED — a channel-
     delivered SHA-256 alone is self-certifying (B-006).
     """
+    tmp_file = None  # assigned below; the cleanup path must tolerate it never being
     try:
         log.info("Downloading update from %s ...", url)
         headers = sign_headers(cfg["agent_key"], b"")
@@ -3514,11 +3521,14 @@ def download_update(
 
     except (requests.RequestException, OSError, ValueError, TypeError) as e:
         log.error("Update download failed: %s", e)
-        # Clean up partial download
-        try:
-            tmp_file.unlink(missing_ok=True)
-        except OSError as e:
-            log.warning("Could not clean up partial update download: %s", e)
+        # Clean up a partial download, if one was ever started. Without the guard
+        # any failure before the temp file exists (a 404, a connect timeout) raised
+        # UnboundLocalError out of this handler and aborted the whole check cycle.
+        if tmp_file is not None:
+            try:
+                tmp_file.unlink(missing_ok=True)
+            except OSError as exc:
+                log.warning("Could not clean up partial update download: %s", exc)
 
 
 def clear_update_signal() -> None:

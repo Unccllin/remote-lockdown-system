@@ -3893,6 +3893,118 @@ describe('D-210: PBL route integration', () => {
   // Both exist in Express; without them "point the dashboard at the Worker"
   // leaves the version badge and the "last seen" pin broken.
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // The URL /api/agent/update advertises.
+  //
+  // The Worker used to advertise `/api/agent/download?platform=…` while only
+  // implementing `/api/download/agent`, so in the serverless deployment an
+  // available update could never be fetched: the metadata said "install me" and
+  // the download answered 404. The first test below is the regression that ties
+  // the advertised URL to a served route.
+  // -------------------------------------------------------------------------
+  describe('GET /api/agent/download (the update download URL)', () => {
+    const digestOf = async (bytes: Uint8Array) => {
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
+      return Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+    };
+
+    it('requires agent auth', async () => {
+      await env.LOCKDOWN_KV.put('binary:agent', new Uint8Array([1, 2, 3]));
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/agent/download?platform=linux'),
+        env,
+      );
+      expect(resp.status).toBe(401);
+    });
+
+    it('serves the binary with the digest of exactly those bytes', async () => {
+      const bytes = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x99]);
+      await env.LOCKDOWN_KV.put('binary:agent', bytes);
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-DL-1');
+
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/agent/download?platform=linux', undefined,
+          signRequest('', apiKey, { 'X-Agent-Platform': 'linux' })),
+        env,
+      );
+
+      expect(resp.status).toBe(200);
+      expect(new Uint8Array(await resp.arrayBuffer())).toEqual(bytes);
+      expect(resp.headers.get('x-content-sha256')).toBe(await digestOf(bytes));
+    });
+
+    it('prefers a per-platform binary over the shared one', async () => {
+      // A release whose builds differ publishes one key per platform; the shared
+      // key stays as the fallback for single-build deployments.
+      const shared = new Uint8Array([0x01]);
+      const windows = new Uint8Array([0x02, 0x02]);
+      await env.LOCKDOWN_KV.put('binary:agent', shared);
+      await env.LOCKDOWN_KV.put('binary:agent:win', windows);
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-DL-2');
+
+      const winResp = await worker.fetch(
+        makeRequest('GET', '/api/agent/download?platform=win', undefined,
+          signRequest('', apiKey, { 'X-Agent-Platform': 'win' })),
+        env,
+      );
+      expect(new Uint8Array(await winResp.arrayBuffer())).toEqual(windows);
+
+      const linuxResp = await worker.fetch(
+        makeRequest('GET', '/api/agent/download?platform=linux', undefined,
+          signRequest('', apiKey, { 'X-Agent-Platform': 'linux' })),
+        env,
+      );
+      expect(new Uint8Array(await linuxResp.arrayBuffer())).toEqual(shared);
+    });
+
+    it('404s when no binary is published', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-DL-3');
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/agent/download?platform=linux', undefined,
+          signRequest('', apiKey, { 'X-Agent-Platform': 'linux' })),
+        env,
+      );
+      expect(resp.status).toBe(404);
+    });
+
+    it('serves the exact download_url the update metadata advertises', async () => {
+      // The regression: metadata and route must agree.
+      const bytes = new Uint8Array([0x4d, 0x5a, 0x01, 0x02, 0x03]);
+      await env.LOCKDOWN_KV.put('binary:agent', bytes);
+      await env.LOCKDOWN_KV.put('agent_release', JSON.stringify({
+        latest_version: '9.9.9',
+        sha256: await digestOf(bytes),
+        size: bytes.length,
+        signature: 'c2ln',
+        signature_alg: 'ed25519',
+      }));
+      const { apiKey } = await enrollDevice(worker, env, 'UPD-DL-4');
+      const headers = signRequest('', apiKey, {
+        'X-Agent-Version': '1.0.0',
+        'X-Agent-Platform': 'linux',
+      });
+
+      const meta = await worker.fetch(
+        makeRequest('GET', '/api/agent/update', undefined, headers),
+        env,
+      );
+      const metaBody: any = await parseResponse(meta);
+      expect(metaBody.update_available).toBe(true);
+
+      const download = await worker.fetch(
+        makeRequest('GET', metaBody.download_url, undefined,
+          signRequest('', apiKey, { 'X-Agent-Platform': 'linux' })),
+        env,
+      );
+      expect(download.status).toBe(200);
+      expect(new Uint8Array(await download.arrayBuffer())).toEqual(bytes);
+      expect(await digestOf(new Uint8Array(await new Response(bytes).arrayBuffer())))
+        .toBe(await digestOf(bytes));
+    });
+  });
+
   describe('GET /api/installer/agent-version', () => {
     const RELEASE = {
       latest_version: '1.3.0',

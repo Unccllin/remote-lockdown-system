@@ -949,3 +949,28 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-053
+  statement: 'The Worker''s update path was structurally broken until S198: /api/agent/update advertised
+    download_url ''/api/agent/download?platform=...'' while the Worker only implemented ''/api/download/agent'',
+    so every serverless update download 404''d; and agent.py''s download_update called tmp_file.unlink()
+    in its except handler although tmp_file is created only after requests.get() returns, so any pre-response
+    failure raised UnboundLocalError (not in the except tuple) and escaped check_for_update. Both were
+    found only when an end-to-end test followed the advertised URL. Fixes: an agent-authenticated /api/agent/download
+    route serving binary:agent:<platform> with a shared binary:agent fallback (plus x-content-sha256),
+    and a guarded cleanup. The Worker requires full HMAC auth (all four X- headers) unlike Express''s
+    transition-tolerant hmacAuth.'
+  domain: agent/update
+  status: confirmed
+  evidence_level: code-read
+  provenance: Worker E2E failed at 404 then UnboundLocalError on first run, passed 5/5 after the fixes;
+    worker unit 412 incl. a test that follows download_url; agent 768 with regression tests that fail
+    (UnboundLocalError) when the guard is neutralised
+  source: serverless/worker.ts handleAgentBinaryDownload; agent/agent.py download_update; scripts/test_worker_update_e2e.py;
+    serverless/worker.test.ts
+  asserted: '2026-11-03'
+  last_verified: '2026-11-03'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

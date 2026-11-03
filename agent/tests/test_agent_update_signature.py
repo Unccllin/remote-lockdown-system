@@ -199,6 +199,53 @@ class TestDownloadUpdate:
         assert pend.exists()
         assert any("key domains" in r.message for r in caplog.records)
 
+    def test_http_error_before_the_temp_file_exists_is_logged_not_raised(
+        self, cfg, update_files, caplog
+    ):
+        """A 404 on the download URL must be logged, not raised.
+
+        The temp file is only created after `requests.get()` returns, so a failure
+        there used to reach the cleanup handler with the name unbound and raise
+        UnboundLocalError — which is not in the except tuple, so it escaped
+        download_update and aborted the agent's whole check cycle. Found by the
+        Worker E2E, which is the first place that ever 404'd this URL.
+        """
+        import logging
+
+        import requests
+
+        _dl, pend = update_files
+        cfg["update_public_key"] = ""
+
+        with (
+            patch("agent.requests.get", side_effect=requests.HTTPError("404 Client Error")),
+            caplog.at_level(logging.ERROR),
+        ):
+            agent.download_update(cfg, "https://srv/dl", "a" * 64, "2.0.0")
+
+        assert not pend.exists()
+        assert any("Update download failed" in r.message for r in caplog.records)
+
+    def test_connection_error_before_the_temp_file_exists_is_logged_not_raised(
+        self, cfg, update_files, caplog
+    ):
+        """Same guard for a connect failure (no temp file was ever started)."""
+        import logging
+
+        import requests
+
+        _dl, pend = update_files
+        cfg["update_public_key"] = ""
+
+        with (
+            patch("agent.requests.get", side_effect=requests.ConnectionError("refused")),
+            caplog.at_level(logging.ERROR),
+        ):
+            agent.download_update(cfg, "https://srv/dl", "a" * 64, "2.0.0")
+
+        assert not pend.exists()
+        assert any("Update download failed" in r.message for r in caplog.records)
+
 
 # ---------------------------------------------------------------------------
 # update_verification_mode — the mode reported at check-in (S193)

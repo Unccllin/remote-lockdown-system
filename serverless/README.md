@@ -59,7 +59,11 @@ CI does this in the `publish-agent-release-metadata` job and attaches
 `agent-release.json` to the release. To publish what CI signed:
 
 ```bash
-# 1. Upload the binary the update response points at (per platform)
+# 1. Upload the binary the update response points at.
+#    `binary:agent:<platform>` (win|linux) takes precedence over the shared
+#    `binary:agent`, so a release with different builds publishes one key each:
+#      npx wrangler kv key put --binding=LOCKDOWN_KV binary:agent:win   --path ./dist/lockdown-agent.exe
+#      npx wrangler kv key put --binding=LOCKDOWN_KV binary:agent:linux --path ./dist/lockdown-agent
 npx wrangler kv key put --binding=LOCKDOWN_KV binary:agent --path ./dist/lockdown-agent.exe
 
 # 2. Publish the metadata CI generated (do not edit it)

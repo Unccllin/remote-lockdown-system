@@ -2911,6 +2911,13 @@ export default {
       return handleAgentUpdate(request, env);
     }
 
+    // The URL /api/agent/update advertises. Without this the Worker told every
+    // agent an update was available and then 404'd the download — the serverless
+    // deployment could never apply one.
+    if (path === '/api/agent/download' && method === 'GET') {
+      return handleAgentBinaryDownload(request, env);
+    }
+
     if (path === '/api/download/agent' && method === 'GET') {
       return handleDownloadBinary(env, 'agent');
     }
@@ -3527,6 +3534,49 @@ async function handleRetentionSettings(request: Request, env: Env): Promise<Resp
     audit_log_retention_days: 365,
     min_location_retention: 7,
     max_location_retention: 180,
+  });
+}
+
+/**
+ * GET /api/agent/download?platform=win|linux — the binary /api/agent/update points at.
+ *
+ * Agent-authenticated, like the Express route of the same path: the metadata that
+ * names it is only handed to an authenticated agent, and the agent already signs
+ * its requests.
+ *
+ * KV key order is per-platform first (`binary:agent:<platform>`), then the shared
+ * `binary:agent`. A release whose builds differ publishes one key per platform and
+ * one signature per platform; a single-build release keeps the shared key.
+ */
+async function handleAgentBinaryDownload(request: Request, env: Env): Promise<Response> {
+  const device = await verifyAgentAuth(request, env, '');
+  if (!device) {
+    return errorResponse('Authentication failed', 401);
+  }
+
+  const platform = requestUrl(request).searchParams.get('platform') || 'linux';
+  const perPlatform = await env.LOCKDOWN_KV.get(`binary:agent:${platform}`, {
+    type: 'arrayBuffer',
+  });
+  const data = perPlatform ?? (await env.LOCKDOWN_KV.get('binary:agent', { type: 'arrayBuffer' }));
+  if (!data) {
+    return errorResponse(
+      'Agent binary not available — publish it with `wrangler kv key put ... binary:agent`',
+      404,
+    );
+  }
+
+  return new Response(data, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': 'attachment; filename="lockdown-agent"',
+      'Content-Length': String(data.byteLength),
+      // Digest of exactly these bytes, so the agent's own SHA-256 check has a
+      // second, independent source for the same value.
+      'x-content-sha256': await sha256HexBytes(data),
+      'Cache-Control': 'no-store',
+    },
   });
 }
 

@@ -38,6 +38,7 @@ help:
 	@echo "  make test-worker          run serverless worker tests"
 	@echo "  make test-electron        run electron tests"
 	@echo "  make test-e2e             run API-level E2E tests (lockdown + recovery + agent-integration)"
+	@echo "  make test-worker-e2e      run the Worker update path against local workerd (opt-in)"
 	@echo "  make test-e2e-dashboard   run Playwright browser E2E tests (dashboard)"
 	@echo "  make test-coverage        run all test suites with coverage reporting"
 	@echo "  make full-verify          run everything: lint + test + e2e + verify-env + graph-check"
@@ -117,6 +118,14 @@ test-scripts:
 
 test-worker:
 	@cd serverless && npx vitest run
+
+# The Worker's update path against local workerd (no Cloudflare account). Heavy
+# (~36s, boots workerd per case) and needs `npx --no-install wrangler`, so it is
+# opt-in rather than part of `make test` / CI. It is the only place the shipping
+# backend is exercised end to end with a real agent and real Ed25519 keys.
+test-worker-e2e:
+	@echo "=== Worker update path (local workerd) ==="
+	@LOCKDOWN_WORKER_E2E=1 $$( [ -x agent/.venv/bin/python ] && echo agent/.venv/bin/python || echo python3 ) scripts/test_worker_update_e2e.py
 
 test-electron:
 	@cd electron && npm test
