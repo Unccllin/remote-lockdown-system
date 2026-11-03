@@ -6729,3 +6729,165 @@ Give the pinned path something to verify against: provision a real update keypai
 E-AUTO-UPDATE.
 
 ---
+
+---
+
+## Session 194 — 2026-11-03 (release metadata is signed per platform, by a producer that exists)
+
+### RULE-ZERO
+
+**Read**: session 193's `Next session opening`; `.devin/graph/current-state.md`;
+`.devin/PENDING-RULING.md` (S193 update-pinning ruling, closed — no open items);
+`serverless/worker.ts` (`handleAgentUpdate`, `handleAgentVersion`, `AGENT_RELEASE_KEY`,
+`readJsonBody`, `parseKvJson`); `agent/agent.py` (`verify_update_signature`,
+`download_update`); `server/src/routes/agent.js` (in-process Ed25519 signing block);
+`serverless/README.md` (agent auto-update section); `.github/workflows/release.yml`
+(`publish-agent-binaries`, `publish-checksums`); `scripts/script_test_runner.py`,
+`scripts/test_ci_annotate.py` (suite conventions); `scripts/generate-update-keys.sh`.
+
+**Finding**: the `agent_release` record that both backends serve had **no producer in
+this repository**. `serverless/README.md` told the operator to hand-write `sha256` and
+`signature` into a heredoc — the exact shape that goes wrong silently: a copied hash
+that drifts from the bytes it names, or a signature over a different hash. Worse, the
+documented example put one top-level `signature` beside a per-platform `sha256` map.
+The agent verifies `v1:{version}:{sha256}`, so a signature is bound to exactly one
+hash: that record can be valid for at most one platform. Every other platform would
+refuse the update while the metadata looked correctly signed.
+
+The Worker had the matching gap on the serving side: it chose the per-platform hash
+but returned the top-level signature.
+
+### IMPLEMENT
+
+- `scripts/sign-release-metadata.py` — the missing producer. SHA-256 + size per
+  `--artifact PLATFORM=PATH`, one Ed25519 signature per platform over
+  `v1:{version}:{sha256}`, OpenSSL-backed so it runs wherever the release job runs.
+  Refuses a version containing `:` (the payload is colon-delimited), an unknown
+  platform (the Worker looks the key up by `X-Agent-Platform`), a missing/empty
+  artifact, and signing without `--key` unless `--unsigned` is explicit. Mirrors the
+  values at the top level only for a single-platform release, so older readers keep
+  working; for two platforms it deliberately emits no top-level signature.
+- `serverless/worker.ts` — serves `platforms[platform].signature` first, falling back
+  to the top-level signature for metadata published before per-platform signing; the
+  type declarations for both update endpoints gained the per-platform signature.
+  While in the file: `parseJsonBody`/`requestUrl` helpers replace six unguarded
+  `JSON.parse(body)` and seven `new URL(request.url)` call sites (a malformed body
+  from an authenticated agent is now 400, not an unhandled 500), the corrupt-EFS-cert
+  path returns 500 instead of throwing, and the loosely-typed upload payload got a
+  named shape (`HwTestArtifactUpload`) instead of `Record<string, any>`.
+- `.github/workflows/release.yml` — `publish-agent-release-metadata`: downloads the
+  released `lockdown-agent-*` binaries, signs them, and attaches `agent-release.json`
+  to the release. Without `UPDATE_SIGNING_KEY` it publishes unsigned metadata **and
+  emits a warning annotation** saying a pinned fleet will refuse it.
+- `serverless/README.md` — "do not hand-write this record"; documents per-platform
+  signing, the CI job, and the unsigned case.
+- `scripts/test_sign_release_metadata.py` — 18 tests that do not reimplement
+  verification: they feed the emitted metadata to `agent.verify_update_signature`.
+- `firmware/PblPkg/requirements.txt` + per-file `reportMissingImports=false` headers
+  for the three firmware scripts whose `cbor2`/`cryptography` imports the checker
+  could not resolve (the dependency set was undeclared; a clean machine could not
+  tell a real dependency from a typo).
+
+### Fog cleared
+
+- **Whether one signature can cover a multi-platform release**: no, by construction.
+  The message includes the hash. This was the document's own example, so the fix had
+  to be in the producer *and* the consumer.
+- **Whether the CI job signs the right binary**: it did not. `lockdown-agent-windows-*`
+  matches `lockdown-agent-windows-x64-watchdog.exe` *before* `lockdown-agent-windows-x64.exe`
+  (`-` < `.`). Executing the job's shell block locally produced a signature over the
+  8-byte watchdog instead of the 9-byte agent. The job now skips companion binaries,
+  and the re-run's hashes match `sha256sum`.
+- **What a Worker deployment without a key does**: it publishes/serves unsigned
+  metadata. Pinned agents refuse it and unpinned agents accept it and report
+  `sha256-only` at check-in (S193), so the state is visible rather than silent.
+- **Whether `# pyright: reportMissingImports=false` is honoured**: yes — the three
+  firmware files went from 5/1/5 missing-import errors to zero primary findings.
+
+### Fog remaining
+
+- **No key exists in this environment.** `UPDATE_SIGNING_KEY` is not set, so a release
+  cut today publishes unsigned metadata (with a warning) and any pinned device would
+  refuse it. Provisioning it is an owner/secret step, not a code change.
+- E-AUTO-UPDATE is still `verified-in-unit-test`: no device has flipped
+  `sha256-only` → `signature` on real hardware.
+- Publishing `agent-release.json` to KV remains an operator step (no Cloudflare
+  credentials here); the Worker cannot publish it itself by design.
+- The repository's checker baseline is **178 diagnostics** (measured this session with
+  a workspace sweep), overwhelmingly Windows-only agent APIs (`ctypes.windll`,
+  `winreg`, `subprocess.CREATE_NO_WINDOW`, `signal.SIGBREAK`) analysed on Linux. It is
+  undocumented and cost several cycles to rediscover; it needs its own task, not a
+  per-session scramble.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
+  (D-132); 19 Dependabot alerts; Cloudflare observability/backup (item 10).
+
+### Debt items closed
+
+- None. (Recorded as belief **B-049**, code-read.)
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+
+- Signing key provisioned into CI (owner secret), Cloudflare credentials to publish to
+  KV, hardware for the E-AUTO-UPDATE flip, and — unchanged — the PFX for D-130.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): nothing tested the *producer* of
+  `agent_release`, so "the update is signed" was an assertion in a README rather than a
+  property with a test. The new suite closes that by asking the real verifier. The CI
+  glob bug is the same failure in miniature: actionlint validated the YAML and passed
+  it, while executing the block showed the wrong binary being signed — a lint is not a
+  close.
+- **Layer 1 — task specification** (mine): I replaced `new URL(request.url)` across the
+  Worker with a blanket text substitution, which included the body of the helper I had
+  just added and turned it into infinite recursion. The suite caught it (214 failures),
+  but the task as I framed it — "replace the call sites" — should have excluded the
+  definition.
+- **Layer 2 — context provision**: the repo's 178-diagnostic checker baseline is not
+  written down anywhere, so each session re-derives it under time pressure and risks
+  either chasing noise or suppressing real findings. Recording the number and its cause
+  in AGENTS.md is the harness change.
+
+### VERIFY
+
+- `serverless`: **407 passed** (404 + 3 per-platform signature tests); `tsc --noEmit -p .`
+  clean. The per-platform test was verified to fail when the Worker's signature
+  selection is reverted to the top-level only (`expected 'dG9wLWxldmVs' to be 'd2luLXNpZw=='`).
+- `make test-scripts`: **18 new tests** (`scripts/test_sign_release_metadata.py`),
+  alongside the 5 existing suites, all green. Every emitted signature is accepted by
+  `agent.verify_update_signature`, and rejected for the wrong key, wrong version,
+  tampered bytes, and the other platform's hash.
+- **CI job executed locally** against fake release artifacts: `win: 178ed8b6… (9 bytes)`
+  and `linux: ae508a58… (11 bytes)`, both equal to `sha256sum` of the staged files —
+  after fixing the glob that had signed the 8-byte watchdog.
+- `make lint-workflows` (actionlint + shellcheck) exit 0; `make graph-check` all
+  invariants pass; changed Python compiles.
+- Checker: the session's new and modified files report **0 primary diagnostics**
+  (`scripts/sign-release-metadata.py`, `scripts/test_sign_release_metadata.py`,
+  `serverless/worker.ts`); the three firmware files report advisories only.
+
+### Session artifacts
+
+- Changed: `scripts/sign-release-metadata.py` (new),
+  `scripts/test_sign_release_metadata.py` (new), `serverless/worker.ts`,
+  `serverless/worker.test.ts`, `serverless/README.md`,
+  `.github/workflows/release.yml`, `firmware/PblPkg/requirements.txt` (new),
+  `firmware/PblPkg/{test-d205,prepare-live-test,gen-policy-rot}.py` (headers only),
+  `.devin/brain/` (B-049).
+- Removed: `pyrightconfig.json` (added in S193; unnecessary once the source-level
+  fixes landed, and its platform claim demonstrably had no effect on the checker).
+- Commit: `5ca4748`.
+
+### Next session opening
+
+Turn the signature into evidence: provision the keypair into CI
+(`gh secret set UPDATE_SIGNING_KEY`), cut a release, publish the resulting
+`agent-release.json` to KV, and confirm on the HP box that the device's check-in
+flips `sha256-only` → `signature` and accepts one update — the first hardware
+evidence for E-AUTO-UPDATE.
+
+---

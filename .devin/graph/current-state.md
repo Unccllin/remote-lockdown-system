@@ -53,39 +53,44 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 193 — 2026-11-03 (updates are pinned end-to-end, or the device says they are not)
+## Latest session: 194 — 2026-11-03 (release metadata is signed per platform, by a producer that exists)
 
 ### Fog cleared
 
-- **Whether the pin could safely name the staging path**: no. `agent.py` fails
-  closed on a configured-but-unreadable key, so a pin into a download folder
-  converts "keys were provisioned" into "updates stopped silently". Proven by
-  `test_baked_install_pins_the_installed_copy_not_the_download_folder`, which
-  deletes the download copy afterwards and asserts the named path still resolves.
-- **Whether the two backends agree on a partial check-in**: they did not. Express
-  COALESCEs, the Worker overwrote. Now both keep the last reported mode, and the
-  ping path additionally stops discarding `firmware_audit`.
-- **What a missing mode means**: unknown, not unverified. `key-unreadable` is a
-  third state — the device refuses every update — so it is rendered and stored
-  separately rather than folded into `sha256-only`.
+- **Whether one signature can cover a multi-platform release**: no, by construction.
+  The message includes the hash. This was the document's own example, so the fix had
+  to be in the producer *and* the consumer.
+- **Whether the CI job signs the right binary**: it did not. `lockdown-agent-windows-*`
+  matches `lockdown-agent-windows-x64-watchdog.exe` *before* `lockdown-agent-windows-x64.exe`
+  (`-` < `.`). Executing the job's shell block locally produced a signature over the
+  8-byte watchdog instead of the 9-byte agent. The job now skips companion binaries,
+  and the re-run's hashes match `sha256sum`.
+- **What a Worker deployment without a key does**: it publishes/serves unsigned
+  metadata. Pinned agents refuse it and unpinned agents accept it and report
+  `sha256-only` at check-in (S193), so the state is visible rather than silent.
+- **Whether `# pyright: reportMissingImports=false` is honoured**: yes — the three
+  firmware files went from 5/1/5 missing-import errors to zero primary findings.
 
 ### Fog remaining
 
-- Authenticity is still not end-to-end for the *binaries*: they are not
-  Authenticode-signed (D-130, owner PFX). The pin authenticates update metadata
-  only; a first-install binary is still trusted by transport hash.
-- No key is provisioned in this environment: `secrets/` is empty, so no live
-  deployment exercises the `signature` mode yet. `scripts/generate-update-keys.sh`
-  creates the pair but the CI secret and Worker `agent_release` signing step are
-  unconfigured.
-- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
-  residual (D-132); 19 Dependabot alerts; Cloudflare observability/backup (item 10).
-- The Worker's download routes remain unauthenticated (deliberate, unreviewed).
+- **No key exists in this environment.** `UPDATE_SIGNING_KEY` is not set, so a release
+  cut today publishes unsigned metadata (with a warning) and any pinned device would
+  refuse it. Provisioning it is an owner/secret step, not a code change.
+- E-AUTO-UPDATE is still `verified-in-unit-test`: no device has flipped
+  `sha256-only` → `signature` on real hardware.
+- Publishing `agent-release.json` to KV remains an operator step (no Cloudflare
+  credentials here); the Worker cannot publish it itself by design.
+- The repository's checker baseline is **178 diagnostics** (measured this session with
+  a workspace sweep), overwhelmingly Windows-only agent APIs (`ctypes.windll`,
+  `winreg`, `subprocess.CREATE_NO_WINDOW`, `signal.SIGBREAK`) analysed on Linux. It is
+  undocumented and cost several cycles to rediscover; it needs its own task, not a
+  per-session scramble.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
+  (D-132); 19 Dependabot alerts; Cloudflare observability/backup (item 10).
 
 ### Debt items closed
 
-- None. (B-006 was already refuted→B-036 in S0.6; this session closes the *pin
-  provisioning* gap, recorded as belief B-048 at code-read.)
+- None. (Recorded as belief **B-049**, code-read.)
 
 ### Debt items still open
 
@@ -93,71 +98,64 @@
 
 ### Blockers
 
-- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130 — also blocks a
-  genuinely authentic first install), Cloudflare credentials, real domain, a
-  Windows host to run a generated installer, and now an owner decision to
-  provision a live update keypair into CI.
+- Signing key provisioned into CI (owner secret), Cloudflare credentials to publish to
+  KV, hardware for the E-AUTO-UPDATE flip, and — unchanged — the PFX for D-130.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, twice): the SQLite half of
-  migration 014 was missing and nothing asserted a *behavioural* property of the
-  dialect split — the migration test compared a version list, and the check-in
-  route test used a mocked pool, so neither could see the dead column. The new
-  test writes the real column on SQLite and fails when the file is removed
-  (verified by removing it). Same shape on the Worker: 43 attributes read as
-  missing because the import was ambiguous, and no test exercised type checking.
-- **Layer 2 — context provision** (secondary): the ruling carried the
-  "only name a staged key" constraint in prose, but the implementation's helper
-  returned the staging path and the docstring said "staged". One sentence naming
-  the *installed* path would have produced the correct helper the first time.
-- **Layer 1 — task specification**: the in-flight work had no trace block, so the
-  next session had to reconstruct intent from a diff. Under-specified handoff, not
-  missing capability.
+- **Layer 4 — verification feedback** (primary): nothing tested the *producer* of
+  `agent_release`, so "the update is signed" was an assertion in a README rather than a
+  property with a test. The new suite closes that by asking the real verifier. The CI
+  glob bug is the same failure in miniature: actionlint validated the YAML and passed
+  it, while executing the block showed the wrong binary being signed — a lint is not a
+  close.
+- **Layer 1 — task specification** (mine): I replaced `new URL(request.url)` across the
+  Worker with a blanket text substitution, which included the body of the helper I had
+  just added and turned it into infinite recursion. The suite caught it (214 failures),
+  but the task as I framed it — "replace the call sites" — should have excluded the
+  definition.
+- **Layer 2 — context provision**: the repo's 178-diagnostic checker baseline is not
+  written down anywhere, so each session re-derives it under time pressure and risks
+  either chasing noise or suppressing real findings. Recording the number and its cause
+  in AGENTS.md is the harness change.
 
 ### VERIFY
 
-- `server`: **733 passed** (722 + 11), 43 suites; eslint clean.
-- `agent`: **763 passed** (760 + 3); `ruff check` + `ruff format --check` clean on
-  55 files.
-- `serverless`: **404 passed** (398 + 6); `tsc --noEmit -p .` clean.
-- `dashboard`: **203 passed** (197 + 6); `npx eslint .` clean (the two unused
-  imports in `DeviceDetailPage.rendering.test.jsx` were pre-existing at HEAD and
-  are now removed).
-- `electron`: 30 passed. `make test-coverage` exits 0 for all five components.
-  `make graph-check`: all invariants pass. `make lint-workflows` exit 0;
-  `shellcheck scripts/generate-update-keys.sh` exit 0.
-- Tests assert behaviour, not shape: the SQLite test exercises the real
-  `COALESCE` write and fails without the migration; the Worker tests assert the
-  mode survives a partial check-in and that a ping no longer drops
-  `firmware_audit`; the installer tests delete the download copy and assert the
-  pinned path still resolves; the dashboard tests distinguish the three modes plus
-  "not reported" rather than matching a class name.
+- `serverless`: **407 passed** (404 + 3 per-platform signature tests); `tsc --noEmit -p .`
+  clean. The per-platform test was verified to fail when the Worker's signature
+  selection is reverted to the top-level only (`expected 'dG9wLWxldmVs' to be 'd2luLXNpZw=='`).
+- `make test-scripts`: **18 new tests** (`scripts/test_sign_release_metadata.py`),
+  alongside the 5 existing suites, all green. Every emitted signature is accepted by
+  `agent.verify_update_signature`, and rejected for the wrong key, wrong version,
+  tampered bytes, and the other platform's hash.
+- **CI job executed locally** against fake release artifacts: `win: 178ed8b6… (9 bytes)`
+  and `linux: ae508a58… (11 bytes)`, both equal to `sha256sum` of the staged files —
+  after fixing the glob that had signed the 8-byte watchdog.
+- `make lint-workflows` (actionlint + shellcheck) exit 0; `make graph-check` all
+  invariants pass; changed Python compiles.
+- Checker: the session's new and modified files report **0 primary diagnostics**
+  (`scripts/sign-release-metadata.py`, `scripts/test_sign_release_metadata.py`,
+  `serverless/worker.ts`); the three firmware files report advisories only.
 
 ### Session artifacts
 
-- Changed: `agent/agent.py`, `agent/installer.py`, `agent/installer_gui.py`,
-  `agent/tests/test_agent_update_signature.py`, `agent/tests/test_installer.py`,
-  `server/src/routes/agent.js`, `server/src/routes/installer.js`,
-  `server/src/db/migrations/014_update_verification.sql` (new),
-  `server/src/db/migrations-sqlite/014_update_verification.sql` (new),
-  `server/tests/{agent.routes,installer.routes,migrationIdempotency}.test.js`,
-  `serverless/worker.ts`, `serverless/worker.test.ts`,
-  `dashboard/src/pages/{DevicesPage,DeviceDetailPage}.jsx`,
-  `dashboard/tests/{DevicesPage,DeviceDetailPage.rendering}.test.jsx`,
-  `installer/generic/lockdown-installer.nsi`,
-  `scripts/build-generic-installer.sh`, `scripts/generate-update-keys.sh` (new),
-  `docs/CODE_SIGNING.md`, `server/.env.example`, `pyrightconfig.json` (new),
-  `.devin/PENDING-RULING.md`, `.devin/brain/` (B-048).
-- Commit: `600a88b`.
+- Changed: `scripts/sign-release-metadata.py` (new),
+  `scripts/test_sign_release_metadata.py` (new), `serverless/worker.ts`,
+  `serverless/worker.test.ts`, `serverless/README.md`,
+  `.github/workflows/release.yml`, `firmware/PblPkg/requirements.txt` (new),
+  `firmware/PblPkg/{test-d205,prepare-live-test,gen-policy-rot}.py` (headers only),
+  `.devin/brain/` (B-049).
+- Removed: `pyrightconfig.json` (added in S193; unnecessary once the source-level
+  fixes landed, and its platform claim demonstrably had no effect on the checker).
+- Commit: `5ca4748`.
 
 ### Next session opening
 
-Give the pinned path something to verify against: provision a real update keypair
-(`scripts/generate-update-keys.sh`), wire the private half into the release job so
-`agent_release` metadata carries a signature, and then prove one device flips from
-`sha256-only` to `signature` on a real install — the first hardware evidence for
-E-AUTO-UPDATE.
+Turn the signature into evidence: provision the keypair into CI
+(`gh secret set UPDATE_SIGNING_KEY`), cut a release, publish the resulting
+`agent-release.json` to KV, and confirm on the HP box that the device's check-in
+flips `sha256-only` → `signature` and accepts one update — the first hardware
+evidence for E-AUTO-UPDATE.
 
 ---
 
