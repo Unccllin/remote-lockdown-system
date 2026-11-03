@@ -53,36 +53,26 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 183 — 2026-11-02 (device parity: PBL linkage, key rotation, retention — and two more ordering traps)
+## Latest session: 184 — 2026-11-03 (hardware-test artifacts ported; a sort bug found by the audit's own baseline gate)
 
 ### VERIFY
-- `worker.test.ts`: **371 passed** (361 + 10). Coverage of the new behaviour: link
-  success and read-back, malformed id → 400, collision → 409 naming the owner,
-  reverse lookup (and `api_key_hash` absent), unknown id → 404, unlink-when-unlinked
-  → 400, unlink clears the field, rotation invalidates the old key, auth on both,
-  and retention not shadowed by `/api/devices/:id`.
-- Coverage: **89.07 / 83.08 / 93.52 / 91.09** (floors 82/75/86/82).
-- Three mutations **KILLED** by the intended tests: the 409 collision guard, the
-  stored-hash update, and the unlink 400.
-- The rotation test asserts the property that actually matters — the **new** key
-  authenticates an agent check-in and the **old** one receives 401 — rather than
-  just that a key came back.
+- `worker.test.ts`: **378 passed** (371 + 7), stable across three consecutive runs.
+- Coverage: **89.36 / 82.83 / 93.92 / 91.42** (floors 82/75/86/82).
+- Four mutations **KILLED**: CTRF rejected, artifact never linked to a device, full
+  blobs leaking into the list, and an arbitrary artifact returned by id.
 
 ### Fog cleared
-- **Whether the dashboard's PBL linkage and rotation flows work against the
-  Worker**: they did not exist; now they do, with the same rules and status codes.
-- **What "settings" and "by-pbl" look like when mis-routed**: a clean 404 for a
-  device that does not exist, which is why both are now covered by tests.
+- **Whether a serverless deployment can complete a hardware window**: it can now file
+  the artifacts. That was the last *blocking* parity gap.
+- **Why the list test was unreliable**: the timestamp tie, not the test's logic. The
+  audit's baseline gate caught it — a plain test run only looked green or flaky.
 
 ### Fog remaining
-- Parity is two endpoint groups from complete: `hw-test-artifact` (3 routes) and
-  `integrations` (2 routes).
+- **`integrations`** needs a decision: port the connector registry into the Worker
+  (shared module), implement a Worker-specific minimal connector, or declare
+  integrations self-hosted-only. 442 lines of subsystem, and it calls upstream HTTP.
 - The generic NSIS installer (item 9) and Cloudflare-native observability/backup
-  (item 10) are untouched.
-- **Pre-existing dead code in `worker.ts`** surfaced by the linter and confirmed at
-  HEAD: `verifyAdminAuth`, `boot_lock_detail`, `generateSigningKey`,
-  `importPrivateKey`, `checkDeviceRateLimit` are declared and never used. Worth one
-  cleanup commit — not mixed into a feature commit.
+  (item 10) are untouched, as is the `worker.ts` dead-code cleanup.
 - Unchanged: `/api/download/agent` is unauthenticated in the Worker while Express
   requires agent auth; D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
   residual (D-132); 19 Dependabot alerts.
@@ -95,26 +85,26 @@
 
 ### Blockers
 - Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
-  credentials (Worker publish), a real domain (Caddy TLS).
+  credentials (Worker publish), a real domain (Caddy TLS). Plus the integrations
+  decision above.
 
 ### Failure attribution
-- No failure this session. The pattern worth naming: this is the **third**
-  consecutive session where the Worker's route ordering produced a trap that the
-  Express code had already documented in a comment. The Worker's dispatch is a long
-  if-chain where specificity is load-bearing and invisible; every new route that
-  starts with `/api/devices/` or `/api/installer/` has to be placed by hand. A test
-  per endpoint ("is it shadowed?") is the only thing making the ordering safe, and
-  that is now the convention in this file.
+- **Layer 4 — verification feedback** (working exactly as designed). My new list test
+  was passing in the suite but failing its *baseline* inside the audit, because two
+  uploads shared a millisecond. Without the baseline gate this would have been a test
+  that failed perhaps one run in ten and got "fixed" later by a `sleep` — the sort bug
+  would have stayed. The lesson is the same one this thread keeps teaching: a red
+  baseline is information, and the right response is to fix the code, not the test.
 
 ### Session artifacts
 - Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
   `scripts/audit_test_teeth.py`.
 
 ### Next session opening
-Finish parity: `hw-test-artifact` (POST/GET/list-by-id) and `integrations`
-(GET list, GET devices-per-integration) — both are read-mostly and small. Then take
-the dead-code cleanup in `worker.ts` as its own commit, and only then the generic
-NSIS installer, which is the last piece with a real design decision in it.
+Settle `integrations`: read `server/src/integrations/index.js` and decide between a
+shared connector module both backends import, a Worker-only minimal connector, or an
+explicit self-hosted-only declaration — then take the generic NSIS installer, which is
+the last piece with a real design decision in it.
 
 ---
 

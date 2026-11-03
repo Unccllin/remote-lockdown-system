@@ -5584,3 +5584,100 @@ the dead-code cleanup in `worker.ts` as its own commit, and only then the generi
 NSIS installer, which is the last piece with a real design decision in it.
 
 ---
+
+---
+
+## Session 184 — 2026-11-03 (hardware-test artifacts ported; a sort bug found by the audit's own baseline gate)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S183 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `server/src/routes/hwTestArtifact.js` (all three routes, both
+  artifact shapes, the device-by-hostname lookup), `server/src/routes/integrations.js`
+  and `server/src/integrations/` (index, meshcentral, errors, graph), and
+  `serverless/worker.ts` (`listDevices`, `addAuditEntry`, `parseKvJson`, the route
+  dispatch).
+- **Finding (the artifact endpoint is the D-129 evidence path, not a nice-to-have)**:
+  without it a serverless deployment cannot file the hardware artifacts the runbook
+  requires, so a fully-serverless deployment could not complete a hardware window.
+- **Finding (both artifact shapes must be accepted)**: the harness emitted the legacy
+  `{harness_version, summary, environment}` shape for months before CTRF
+  `{results:{tool,summary,extra}}` landed. Rejecting either loses a hardware run —
+  the opposite of the endpoint's purpose.
+- **Finding (a real sort bug, surfaced by the audit rather than by a flaky pass)**: the
+  list sorted by `created_at` alone, and two uploads can land in the same
+  millisecond — the harness uploads a batch — leaving "newest first" ambiguous. My
+  new test failed its baseline because of it, which made two mutation verdicts
+  unscoreable and misattributed a third. The fix is a monotonic-id tiebreaker in the
+  sort, not a sleep in the test.
+- **Finding (integrations is a subsystem, not an endpoint pair)**: 442 lines across
+  four files — a connector registry, the MeshCentral connector, typed error classes
+  and a graph view. Porting it means duplicating that abstraction in the Worker (or
+  moving it to a shared module), which is a design decision, not a port. Left
+  explicitly open rather than half-ported.
+
+### IMPLEMENT
+- `serverless/worker.ts`: `HW_ARTIFACTS_KEY`, `HwTestArtifact` record (string ids so
+  the dashboard's `/^\d+$/` validation still holds), `listHwArtifacts` /
+  `saveHwArtifacts`, and three handlers:
+  - `handleUploadHwArtifact` — operator auth; accepts CTRF or legacy; extracts
+    summary/environment/harness version; links to the device whose hostname matches;
+    assigns the next numeric id; writes an audit entry; 201 with the summary.
+  - `handleListHwArtifacts` — operator auth; optional `device_id` (validated) and
+    `limit` clamped 1–100; newest first with the id tiebreaker; **summary rows only**
+    (no `artifact_json`).
+  - `handleGetHwArtifact` — operator auth; numeric id validated; 404 when absent;
+    returns the full artifact including its JSON.
+- `scripts/audit_test_teeth.py`: four rows.
+
+### VERIFY
+- `worker.test.ts`: **378 passed** (371 + 7), stable across three consecutive runs.
+- Coverage: **89.36 / 82.83 / 93.92 / 91.42** (floors 82/75/86/82).
+- Four mutations **KILLED**: CTRF rejected, artifact never linked to a device, full
+  blobs leaking into the list, and an arbitrary artifact returned by id.
+
+### Fog cleared
+- **Whether a serverless deployment can complete a hardware window**: it can now file
+  the artifacts. That was the last *blocking* parity gap.
+- **Why the list test was unreliable**: the timestamp tie, not the test's logic. The
+  audit's baseline gate caught it — a plain test run only looked green or flaky.
+
+### Fog remaining
+- **`integrations`** needs a decision: port the connector registry into the Worker
+  (shared module), implement a Worker-specific minimal connector, or declare
+  integrations self-hosted-only. 442 lines of subsystem, and it calls upstream HTTP.
+- The generic NSIS installer (item 9) and Cloudflare-native observability/backup
+  (item 10) are untouched, as is the `worker.ts` dead-code cleanup.
+- Unchanged: `/api/download/agent` is unauthenticated in the Worker while Express
+  requires agent auth; D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
+  residual (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), a real domain (Caddy TLS). Plus the integrations
+  decision above.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (working exactly as designed). My new list test
+  was passing in the suite but failing its *baseline* inside the audit, because two
+  uploads shared a millisecond. Without the baseline gate this would have been a test
+  that failed perhaps one run in ten and got "fixed" later by a `sleep` — the sort bug
+  would have stayed. The lesson is the same one this thread keeps teaching: a red
+  baseline is information, and the right response is to fix the code, not the test.
+
+### Session artifacts
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `scripts/audit_test_teeth.py`.
+
+### Next session opening
+Settle `integrations`: read `server/src/integrations/index.js` and decide between a
+shared connector module both backends import, a Worker-only minimal connector, or an
+explicit self-hosted-only declaration — then take the generic NSIS installer, which is
+the last piece with a real design decision in it.
+
+---
