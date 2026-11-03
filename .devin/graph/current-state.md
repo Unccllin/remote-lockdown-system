@@ -53,91 +53,87 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 191 — 2026-11-03 (the Worker's installers delegate too; the SCM bug leaves the product)
+## Latest session: 192 — 2026-11-03 (installer downloads are verified before they run)
 
 ### Fog cleared
-
-- **Whether the firmware re-arm path could join the same mechanism**: yes. It
-  returns a script to `PblPersistDxe`, so it has to stay a script — but the script
-  only stages files and delegates, which is exactly what the per-device path does.
-  The two responses are now one template with a different header and tail.
-- **What a generated serverless script needs from KV**: `binary:agent` and
-  `binary:agent-installer` only. The agent's install directory, state paths, the
-  lockdown folder, persistence and tamper ACLs are all decided by
-  `agent/installer.py`, so nothing in the script hard-codes a path any more.
-- **Whether the Worker's advisories were mine**: no. JSON.parse ×14,
-  `as unknown as` ×2 and `Record<string, any>` ×1 are byte-identical at HEAD
-  (19/3/1 occurrences before and after); only the three declarations my edit
-  orphaned were fixed (`configB64` twice, plus two rest-omission bindings renamed
-  with the `_` prefix their lint gate asks for).
+- **Whether a published digest or a derived one is safer here**: derived. A
+  `binary:<name>.sha256` sidecar is a second artefact that can drift from the
+  bytes it describes — the exact class of bug S186–S191 kept finding. Computing
+  the digest per response makes drift impossible by construction.
+- **What the header actually proves**: transport integrity only. It cannot serve
+  as an authenticity claim, because it arrives from the same origin as the body.
+  Recorded in `serverless/README.md` next to the publish steps so the next reader
+  cannot mistake it for signing.
+- **Whether `Invoke-WebRequest -OutFile` can be used with header verification**:
+  no. `-OutFile` returns no object on PowerShell 5.1, so there is no response to
+  read the digest from. The script now fetches the body into memory, verifies it,
+  writes it with `[System.IO.File]::WriteAllBytes`, and fails closed if the body
+  is not bytes.
 
 ### Fog remaining
-
-- Both generated scripts download ~20MB of binaries on the target with no
-  integrity check (`Invoke-WebRequest` then execute). The released artefacts are
-  unsigned (D-130 is the firmware signing item; agent/installer PE signing is not
-  tracked anywhere). Worth a follow-up: publish per-binary SHA-256 in KV and
-  verify before executing.
-- The Worker's download routes remain unauthenticated (a deliberate, still
-  unreviewed difference from Express) — `binary:agent-installer` is now a third
-  such artefact, so the surface grew by one.
-- The serverless per-device script re-keys the device at generation time
-  (`api_key_hash` replaced) but, unlike Express, keeps no record of which admin
-  downloaded it beyond the audit entry; unchanged.
+- Authenticity is still missing: the binaries are not Authenticode-signed, so a
+  tampered *script* carries a tampered digest and runs. This waits on the owner
+  PFX, the same blocker as D-130, and is the reason the header is documented as
+  transport integrity rather than a fix for tampering.
+- One unexplained test failure appeared once under `--coverage` (1 failed / 397
+  passed) and did not reproduce in four subsequent runs (three plain, one with
+  coverage). Not diagnosed; recorded rather than asserted as fixed.
+- The Worker's download routes are still unauthenticated (a deliberate,
+  still-unreviewed difference from Express).
 - Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
   residual (D-132); 19 Dependabot alerts; Cloudflare observability/backup (item
   10).
 
 ### Debt items closed
-
 - None.
 
 ### Debt items still open
-
 - D-120, D-129, D-130, D-134 — all resource-blocked.
 
 ### Blockers
-
-- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
-  credentials (Worker publish), real domain (Caddy TLS), a Windows host to run a
-  generated installer for the first time.
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130 — now also the
+  blocker for installer authenticity), Cloudflare credentials (Worker publish),
+  real domain (Caddy TLS), a Windows host to run a generated installer.
 
 ### Failure attribution
-
-- **Layer 4 — verification feedback** (primary, and the clearest instance yet): a
-  test asserted the broken mechanism (`toContain('sc.exe create')`), so the
-  suite protected the bug instead of catching it. The replacements assert the
-  property that matters — no `sc.exe` in executable code, delegation to
-  `lockdown-installer.exe --config-file`, one template not two.
-- **Layer 1 — task specification** (carried from S190): the Express fix was
-  scoped by the file I happened to open. Both this session's work and the S190
-  ruling existed only because a later grep for `sc.exe` found the second and
-  third copies. The sweep for "who else emits this artefact" should precede the
-  fix, not follow it.
+- **Layer 4 — verification feedback** (primary): the suite could not have caught
+  this. Nothing asserted that a downloaded artefact was checked before execution,
+  so "it installs" was the only property tested. The new tests assert the check
+  itself — header present on all three download routes, digest equal to the served
+  bytes, script verification lines, and five `_download_verified` failure modes
+  including a truncated body whose digest was recomputed.
+- **Layer 1 — task specification** (the recurring one): the S191 opening named
+  "integrity checking" in one line, and the scope question (which clients) was
+  only answerable after reading `installer_gui.py`. Asking "who else consumes
+  this contract" before writing the opening would have produced a complete task
+  description a session earlier.
 
 ### VERIFY
 
-- `serverless`: **395 passed** (392 + 2 download tests + 1 drift guard, minus
-  none); coverage **90.02 / 83.55 / 95.6 / 92.08** against floors 82/75/86/82.
-- `scripts/verify-worker.sh`: bundle builds and every checked route answers
-  (health, 401/200/401 on `/api/devices`, 404 unknown, `/v1/verdict` 400,
-  `/v1/policy/1` 200, `/api/download/agent` 404 with an empty local KV).
-- Drift guard: `worker.ts` contains exactly **one** `lockdown-installer.exe
-  --config-file` invocation and no executable `sc.exe create`.
-- `eslint worker.ts` clean.
+- `serverless`: **398 passed** (395 + 3); coverage **90.05 / 83.55 / 95.6 /
+  92.09** against floors 82/75/86/82.
+- `agent`: **750 passed** (743 + 7); `ruff check` + `ruff format --check` clean on
+  55 files.
+- New tests assert behaviour, not shape: the digest header equals the SHA-256 of
+  the body actually served, all three download routes carry it, both artefacts in
+  the generated script are verified, and `_download_verified` refuses a missing
+  header, a non-200, a mismatched digest, and a truncated body — leaving no
+  `.part` file behind in any failure case.
 
 ### Session artifacts
-
 - Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
-  `serverless/README.md`, `.devin/PENDING-RULING.md` (S191 ruling opened + closed).
-- Commit: `8179eaf`.
+  `serverless/README.md`, `agent/installer_gui.py`,
+  `agent/tests/test_installer_gui.py`, `.devin/PENDING-RULING.md` (S192 ruling
+  opened + closed).
+- Commit: `66cf0c4`.
 
 ### Next session opening
-
-Add integrity checking to the generated serverless installers: publish each
-binary's SHA-256 in KV and have the script verify before executing, or sign the
-installer PE and pin the key — the scripts currently download ~20MB and run it
-unverified.
+Decide whether the agent's own downloads join the same contract: `/api/download/agent`
+is what the updater fetches too, and the agent verifies the Ed25519 signature only
+when `update_public_key` is configured — otherwise it accepts a hash alone. Close
+that gap (make the pinned key mandatory for the serverless default) or state
+explicitly in the docs that a Worker deployment without a pinned key is
+hash-only.
 
 ---
 

@@ -6447,3 +6447,105 @@ Add integrity checking to the generated serverless installers: publish each
 binary's SHA-256 in KV and have the script verify before executing, or sign the
 installer PE and pin the key — the scripts currently download ~20MB and run it
 unverified.
+
+---
+
+## Session 192 — 2026-11-03 (installer downloads are verified before they run)
+
+### RULE-ZERO
+- **Read**: `.devin/PENDING-RULING.md` (S191 closed → task mode, then the S192
+  ruling), `serverless/worker.ts` (`handleDownloadBinary`, `sha256`,
+  `generateServerlessInstallScript`), `agent/agent.py` (`download_update`,
+  `verify_update_signature` — the repo's stated integrity doctrine),
+  `server/src/routes/installer.js` (`resolveAgentBinary` / SHA256SUMS fail-closed),
+  `agent/installer_gui.py` (`download_agent_exe`, `download_lockscreen_exe`),
+  `agent/tests/test_installer_gui.py` (existing style).
+- **Finding**: nothing on the install path verified bytes. The generated scripts
+  ran `Invoke-WebRequest … -OutFile` and executed; `installer_gui.py` accepted any
+  body with `stat().st_size > 1_000_000`. Meanwhile the agent's *update* path
+  already refuses an unsigned update when a key is pinned, and comments that "a
+  channel-delivered hash alone is self-certifying" (B-006) — the product knew the
+  distinction; the installer path just never applied it.
+- **Ruling (S192)**: Q1 (A) `x-content-sha256` header on every `/api/download/*`
+  response, verified by clients; Q2 (A) all clients (the two generated scripts and
+  `installer_gui.py`'s agent + lock-screen downloads).
+
+### Fog cleared
+- **Whether a published digest or a derived one is safer here**: derived. A
+  `binary:<name>.sha256` sidecar is a second artefact that can drift from the
+  bytes it describes — the exact class of bug S186–S191 kept finding. Computing
+  the digest per response makes drift impossible by construction.
+- **What the header actually proves**: transport integrity only. It cannot serve
+  as an authenticity claim, because it arrives from the same origin as the body.
+  Recorded in `serverless/README.md` next to the publish steps so the next reader
+  cannot mistake it for signing.
+- **Whether `Invoke-WebRequest -OutFile` can be used with header verification**:
+  no. `-OutFile` returns no object on PowerShell 5.1, so there is no response to
+  read the digest from. The script now fetches the body into memory, verifies it,
+  writes it with `[System.IO.File]::WriteAllBytes`, and fails closed if the body
+  is not bytes.
+
+### Fog remaining
+- Authenticity is still missing: the binaries are not Authenticode-signed, so a
+  tampered *script* carries a tampered digest and runs. This waits on the owner
+  PFX, the same blocker as D-130, and is the reason the header is documented as
+  transport integrity rather than a fix for tampering.
+- One unexplained test failure appeared once under `--coverage` (1 failed / 397
+  passed) and did not reproduce in four subsequent runs (three plain, one with
+  coverage). Not diagnosed; recorded rather than asserted as fixed.
+- The Worker's download routes are still unauthenticated (a deliberate,
+  still-unreviewed difference from Express).
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert`
+  residual (D-132); 19 Dependabot alerts; Cloudflare observability/backup (item
+  10).
+
+### Debt items closed
+- None.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130 — now also the
+  blocker for installer authenticity), Cloudflare credentials (Worker publish),
+  real domain (Caddy TLS), a Windows host to run a generated installer.
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary): the suite could not have caught
+  this. Nothing asserted that a downloaded artefact was checked before execution,
+  so "it installs" was the only property tested. The new tests assert the check
+  itself — header present on all three download routes, digest equal to the served
+  bytes, script verification lines, and five `_download_verified` failure modes
+  including a truncated body whose digest was recomputed.
+- **Layer 1 — task specification** (the recurring one): the S191 opening named
+  "integrity checking" in one line, and the scope question (which clients) was
+  only answerable after reading `installer_gui.py`. Asking "who else consumes
+  this contract" before writing the opening would have produced a complete task
+  description a session earlier.
+
+### VERIFY
+
+- `serverless`: **398 passed** (395 + 3); coverage **90.05 / 83.55 / 95.6 /
+  92.09** against floors 82/75/86/82.
+- `agent`: **750 passed** (743 + 7); `ruff check` + `ruff format --check` clean on
+  55 files.
+- New tests assert behaviour, not shape: the digest header equals the SHA-256 of
+  the body actually served, all three download routes carry it, both artefacts in
+  the generated script are verified, and `_download_verified` refuses a missing
+  header, a non-200, a mismatched digest, and a truncated body — leaving no
+  `.part` file behind in any failure case.
+
+### Session artifacts
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `serverless/README.md`, `agent/installer_gui.py`,
+  `agent/tests/test_installer_gui.py`, `.devin/PENDING-RULING.md` (S192 ruling
+  opened + closed).
+- Commit: `66cf0c4`.
+
+### Next session opening
+Decide whether the agent's own downloads join the same contract: `/api/download/agent`
+is what the updater fetches too, and the agent verifies the Ed25519 signature only
+when `update_public_key` is configured — otherwise it accepts a hash alone. Close
+that gap (make the pinned key mandatory for the serverless default) or state
+explicitly in the docs that a Worker deployment without a pinned key is
+hash-only.
