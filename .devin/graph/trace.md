@@ -5260,3 +5260,131 @@ with no mutation at all — location, deadman-report, rearm — are the honest n
 targets, since rearm in particular reverses a lockdown.
 
 ---
+
+---
+
+## Session 181 — 2026-11-02 (serverless-first confirmed as the direction; the fleet's auto-update was silently dead on it)
+
+### RULE-ZERO
+- **Read**: `.devin/graph/current-state.md` (S180 opening), `scripts/check-ruling.sh`
+  (clean → task mode), `server/src/routes/agent.js` (the `/update` and `/download`
+  contract, the Ed25519 signing of `v1:{version}:{sha256}`),
+  `serverless/worker.ts` (route table, `verifyAgentAuth`, `handleDownloadBinary`,
+  the `binary:*` KV convention), `agent/agent.py:3228-3265` (`check_for_update`,
+  the `raise_for_status()` path) and `agent/agent.py:1141` (`sign_headers`).
+- **Finding (the direction was already implemented, not just intended)**: the
+  shipped defaults point at the Worker — `agent/installer.py:61`,
+  `agent/installer_gui.py:64`, `agent/agent_diagnostic.py:273` and the Electron
+  simulation all use `lockdown-serverless.mainacollins196.workers.dev`. "Fully
+  serverless" is therefore finishing the serverless path, not pivoting to it.
+- **Finding (a live defect on that default path)**: the agent calls
+  `GET /api/agent/update` on its update cycle; the Worker had **no such route**
+  (`grep` → 0). The 404 is turned into a logged warning by
+  `resp.raise_for_status()`, so **the fleet could never be patched on the default
+  deployment and nothing surfaced it** — while `E-AUTO-UPDATE` was still listed as
+  a verified enforcement path.
+- **Finding (parity gap, 9 endpoints)**: `agent/update`, `installer/agent-version`,
+  `devices/:id/link-pbl` / `unlink-pbl` / `devices/by-pbl/:id`,
+  `devices/:id/rotate-key`, `devices/:id/location/latest`,
+  `devices/settings/retention`, `hw-test-artifact` (3 routes), `integrations`
+  (2 routes).
+- **Finding (three things that cannot be serverless as-is)**: the one-click NSIS
+  installer (`makensis` subprocess), Prometheus + Grafana, and the `pg_dump`
+  backup container. Each needs a replacement, not a port.
+
+### DECISIONS (owner, this session)
+1. **Worker is THE product backend**; Express/Docker stays in the tree as an
+   optional self-hosted deployment. Nothing is deleted.
+2. **Implement `/api/agent/update` in the Worker** (KV metadata + signed payload),
+   keeping the agent's existing verification contract unchanged.
+3. **Generic NSIS installer**, pre-built in CI, fetching device config at run time
+   — keeps the double-click UX without `makensis` in a Worker.
+4. **Cloudflare-native observability/backup** replaces Prometheus/Grafana/`pg_dump`.
+
+### IMPLEMENT
+- `serverless/worker.ts`:
+  - `GET /api/agent/update` (`handleAgentUpdate`): agent HMAC auth (the agent signs
+    the empty body), reads release metadata from the `agent_release` KV key, and
+    serves the Express contract — `update_available`, `latest_version`,
+    `current_version`, `sha256`, `size`, `download_url`, `built_at`, `signature`,
+    `signature_alg`. Per-platform hash/size via `X-Agent-Platform`.
+  - **The Worker holds no signing key.** Signing happens where the private key
+    lives (CI); the Worker only serves the result, so metadata cannot drift from
+    the payload that was signed.
+  - **Fails closed**: unparseable metadata, or metadata without `sha256`/`size`,
+    returns 500 rather than offering an update the agent could not verify.
+  - `compareVersions` helper (dotted, non-numeric segment counts as 0, matching
+    Express — an unparseable client version reads as older, so the agent is offered
+    an update rather than being stranded).
+  - CORS wildcard named once as `TOKEN_API_CORS_ORIGIN` with the rationale
+    (bearer-token API, no cookies; the Electron app sends a null origin), replacing
+    three bare literals; the nested filename ternary flattened.
+- `serverless/README.md`: an "Agent auto-update" section with the `agent_release`
+  KV shape, the two `wrangler kv key put` commands a release needs, and the
+  no-release / corrupt-metadata / per-platform behaviour.
+- `scripts/audit_test_teeth.py`: three rows for the new endpoint.
+
+### VERIFY
+- `worker.test.ts`: **353 passed** (347 + 6): auth required; no release → no update
+  with `reason`; newer release → hash/size/signature/download_url; same version →
+  no update; per-platform override; corrupt **and** incomplete metadata → 500.
+- Coverage: **88.93 / 82.84 / 92.85 / 90.7** (floors 82/75/86/82).
+- All three mutations **KILLED**, each by the intended test:
+  `requires agent auth`, `does not offer the version the agent already runs`,
+  `fails closed on corrupt or incomplete metadata`.
+- Pre-existing advisories confirmed not mine: `git show HEAD:serverless/worker.ts`
+  already contains 7 `JSON.parse` sites and 2 `as unknown as` casts; the CORS
+  literals were pre-existing too and are now named.
+
+### Fog cleared
+- **Whether the default deployment can patch its agents**: it could not, now it
+  can. That question had never been asked because the endpoint's absence produced a
+  logged warning, not an error.
+- **Where release metadata belongs in a serverless design**: in KV, written at
+  publish time, signed off-platform — the Worker must never hold the update key.
+
+### Fog remaining
+- The remaining parity gaps and the three un-portable pieces are tracked as the
+  session's todo items (7-11): `installer/agent-version`, the PBL-linking /
+  rotate-key / location-latest / retention endpoints, `hw-test-artifact`,
+  `integrations`, the generic NSIS installer, and Cloudflare-native
+  observability/backup.
+- The Worker's `/api/download/agent` is unauthenticated (Express requires agent
+  auth) — a deliberate-looking difference nobody has reviewed.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
+  (D-132); 19 Dependabot alerts.
+
+### Debt items closed
+- None; this is the first increment of the serverless-first plan.
+
+### Debt items still open
+- D-120, D-129, D-130, D-134 — all resource-blocked.
+
+### Blockers
+- Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
+  credentials (Worker publish), a real domain (Caddy TLS).
+
+### Failure attribution
+- **Layer 4 — verification feedback** (primary, and the widest-reaching instance in
+  this thread). The Worker's route table was covered by tests that call
+  `worker.fetch()` directly, so a *missing route* was invisible: nothing enumerated
+  "every endpoint the clients call". The gap was found only by diffing Express's
+  routes against the Worker's and then asking which ones the agent actually calls —
+  a comparison no harness was doing.
+- **Layer 1 — task specification** (mine, earlier): I treated "the Worker has lots
+  of routes" as "the Worker is the backend", without checking the *clients'
+  defaults. The defaults said Worker all along; that should have been the first
+  thing read when the question was "is this serverless?".
+
+### Session artifacts
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `serverless/README.md`, `scripts/audit_test_teeth.py`.
+
+### Next session opening
+Continue the serverless-first plan in dependency order: `installer/agent-version`
+and `devices/:id/location/latest` (small, and the dashboard has UI waiting on
+them), then the PBL-linking trio — then the generic NSIS installer, which is the
+only piece with a real design decision left (how the installer fetches its config
+at run time without a token pasted by hand).
+
+---

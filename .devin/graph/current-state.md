@@ -53,70 +53,70 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 180 — 2026-11-02 (the uninstall-authorisation pair and the ping delivery path had no tests at all)
+## Latest session: 181 — 2026-11-02 (serverless-first confirmed as the direction; the fleet's auto-update was silently dead on it)
 
 ### VERIFY
-- `worker.test.ts`: **347 passed** (341 + 6).
-- Coverage: **89 stmts / 82.8 branch / 92.66 funcs / 90.88 lines** (was 84.09 /
-  78.12 / 88 / 85.77) — floors 82 / 75 / 86 / 82.
-- All three mutations now **KILLED**, each naming its new test:
-  `a ping only returns its own device's pending command`,
-  `rejects a request with no credentials`, `rejects a wrong token`.
-- Table now holds **29 mutations** across three components (agent 13, server 3,
-  worker 13).
+- `worker.test.ts`: **353 passed** (347 + 6): auth required; no release → no update
+  with `reason`; newer release → hash/size/signature/download_url; same version →
+  no update; per-platform override; corrupt **and** incomplete metadata → 500.
+- Coverage: **88.93 / 82.84 / 92.85 / 90.7** (floors 82/75/86/82).
+- All three mutations **KILLED**, each by the intended test:
+  `requires agent auth`, `does not offer the version the agent already runs`,
+  `fails closed on corrupt or incomplete metadata`.
+- Pre-existing advisories confirmed not mine: `git show HEAD:serverless/worker.ts`
+  already contains 7 `JSON.parse` sites and 2 `as unknown as` casts; the CORS
+  literals were pre-existing too and are now named.
 
 ### Fog cleared
-- **Whether a device can obtain an uninstall token**: not without a valid
-  credential, and not with a wrong token — both directions asserted.
-- **Whether the ping route can leak another device's command**: it cannot, and the
-  check is now exercised with a positive control.
-- **Why this survived nine sessions of "the suite is green"**: the endpoints were
-  never *executed* by any test, so no assertion could be missing — the coverage
-  gap and the assertion gap were the same gap here.
+- **Whether the default deployment can patch its agents**: it could not, now it
+  can. That question had never been asked because the endpoint's absence produced a
+  logged warning, not an error.
+- **Where release metadata belongs in a serverless design**: in KV, written at
+  publish time, signed off-platform — the Worker must never hold the update key.
 
 ### Fog remaining
-- **`handleUninstallAuth`'s admin-token branch** (`token === (env.ADMIN_TOKEN || '')`)
-  is asserted only through the agent-key path; the break-glass path has no test.
-- **Remaining Worker handlers without mutations**: location, deadman-report, rearm,
-  track/locate, efs-cert, device-by-hardware, admins CRUD.
-- **Dashboard/electron** remain unaudited (the tool needs a fourth runner).
-- Unchanged: Docker path verified except Caddy TLS; Worker publish needs
-  `wrangler login` + 4 secrets; D-120/D-129/D-130/D-134 resource-blocked;
-  `PblTlsVerifyCert` residual (D-132); 19 Dependabot alerts.
+- The remaining parity gaps and the three un-portable pieces are tracked as the
+  session's todo items (7-11): `installer/agent-version`, the PBL-linking /
+  rotate-key / location-latest / retention endpoints, `hw-test-artifact`,
+  `integrations`, the generic NSIS installer, and Cloudflare-native
+  observability/backup.
+- The Worker's `/api/download/agent` is unauthenticated (Express requires agent
+  auth) — a deliberate-looking difference nobody has reviewed.
+- Unchanged: D-120/D-129/D-130/D-134 resource-blocked; `PblTlsVerifyCert` residual
+  (D-132); 19 Dependabot alerts.
 
 ### Debt items closed
-- None — seventh, eighth and ninth missing-test gaps closed.
+- None; this is the first increment of the serverless-first plan.
 
 ### Debt items still open
 - D-120, D-129, D-130, D-134 — all resource-blocked.
 
 ### Blockers
 - Hardware (D-129/D-134), real media (D-120), signing PFX (D-130), Cloudflare
-  credentials (Worker publish), real domain (Caddy TLS).
+  credentials (Worker publish), a real domain (Caddy TLS).
 
 ### Failure attribution
-- No failure this session; the predictions were right this time, which is the
-  less interesting outcome. What is worth recording is the *pattern* across ten
-  sessions: every gap found has been a behaviour that no test asserted, and in this
-  case no test even reached the code. Mutation testing and coverage disagreed
-  nowhere — where coverage was low, mutation survived; where both were high, the
-  assertions bit. Two sessions ago I claimed the E2E suite "covered" deployment and
-  was wrong in the same way: the code ran, nobody looked at the result.
-- **Layer 2 — context provision** (small): my first insertion attempt asserted a
-  blank line before the file's final `});` that does not exist, and my second
-  assumed `split("\n")[-1]` was the close rather than the trailing newline. Both
-  were caught by the assertions themselves before writing — a cheap way to be
-  wrong.
+- **Layer 4 — verification feedback** (primary, and the widest-reaching instance in
+  this thread). The Worker's route table was covered by tests that call
+  `worker.fetch()` directly, so a *missing route* was invisible: nothing enumerated
+  "every endpoint the clients call". The gap was found only by diffing Express's
+  routes against the Worker's and then asking which ones the agent actually calls —
+  a comparison no harness was doing.
+- **Layer 1 — task specification** (mine, earlier): I treated "the Worker has lots
+  of routes" as "the Worker is the backend", without checking the *clients'
+  defaults. The defaults said Worker all along; that should have been the first
+  thing read when the question was "is this serverless?".
 
 ### Session artifacts
-- Changed: `serverless/worker.test.ts` (6 tests), `scripts/audit_test_teeth.py`
-  (3 rows).
+- Changed: `serverless/worker.ts`, `serverless/worker.test.ts`,
+  `serverless/README.md`, `scripts/audit_test_teeth.py`.
 
 ### Next session opening
-The break-glass branch of `handleUninstallAuth` (admin token instead of a device
-key) is the only unasserted path left in that pair. After that, the Worker handlers
-with no mutation at all — location, deadman-report, rearm — are the honest next
-targets, since rearm in particular reverses a lockdown.
+Continue the serverless-first plan in dependency order: `installer/agent-version`
+and `devices/:id/location/latest` (small, and the dashboard has UI waiting on
+them), then the PBL-linking trio — then the generic NSIS installer, which is the
+only piece with a real design decision left (how the installer fetches its config
+at run time without a token pasted by hand).
 
 ---
 
