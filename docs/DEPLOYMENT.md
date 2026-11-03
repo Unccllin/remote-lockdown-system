@@ -191,6 +191,49 @@ the PBL `/v1/*` CBOR routes), with all state in KV. See
 [serverless/README.md](../serverless/README.md) for bindings, secrets, local
 verification (`make verify-worker`) and the publish step.
 
+## The generic (fleet) agent installer
+
+A Worker cannot run `makensis`, so the serverless backend does not build an
+installer per device. Instead it serves **one** installer for the whole fleet
+from KV key `binary:installer` (`GET /api/download/installer`, the link on the
+dashboard's enrolment page). Its configuration is claimed at install time from a
+15-minute enrolment token.
+
+```bash
+# 1. Build the PyInstaller binaries (Windows; produces agent/dist/*.exe)
+pwsh agent/build.ps1
+
+# 2. Compile the NSIS wrapper (Linux or Windows host with makensis)
+scripts/build-generic-installer.sh
+
+# 3. Publish it — the dashboard link serves this key
+cd serverless && npx wrangler kv key put --binding=LOCKDOWN_KV \
+  binary:installer --path ../installer/generic/dist/lockdown-installer.exe
+```
+
+Install (interactive, or silent for scripted rollout):
+
+```powershell
+.\lockdown-installer.exe                                     # wizard
+.\lockdown-installer.exe /S --token=<TOKEN> [--server-url=<URL>]
+```
+
+`--server-url` defaults to the backend the installer was built with, so a rollout
+only needs to hand out a token.
+
+The wrapper only packages: staging, the Add/Remove Programs entry and the
+uninstaller. Enrolment, `config.json`, the lockdown folder, the scheduled-task
+persistence, tamper protection and the check-in verification all run through
+`lockdown-installer.exe` (`agent/installer.py`) — the same CLI installer a
+per-device deployment uses — so there is one install path, not two.
+
+**Removal is authorized by the backend.** The uninstaller asks for a token from
+`POST /api/agent/uninstall-auth` (valid 5 minutes) and refuses to remove anything
+without one; the agent's binary, config and state files carry DENY-DELETE ACLs,
+so a local administrator cannot simply delete the install either. This is
+intentional: an anti-theft agent with an unauthenticated uninstaller has shipped
+the bypass it exists to prevent. 
+
 ## Verify the stack locally before you deploy it
 
 The API E2E suite (`tests/e2e/`) boots Express **in-process on SQLite** via

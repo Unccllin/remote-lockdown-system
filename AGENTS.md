@@ -316,6 +316,12 @@ make check-firmware-todos                      # exit 0 = clean, 1 = untraceable
 cd dashboard && npx vite build                # outputs dashboard/dist
 cd electron  && node --check main.js preload.js setup-preload.js setup-wizard.js server-starter.js config.js updater.js
 
+# Generic (fleet) agent installer: NSIS wrapper over the CLI installer. Needs
+# makensis and agent/dist/{lockdown-agent,lockdown-installer}.exe (agent/build.ps1);
+# the wrapper must not grow its own enrolment/persistence — see
+# scripts/test_generic_installer.py, which pins that.
+scripts/build-generic-installer.sh
+
 # Syntax sweep of all .js and .cjs (not .jsx — JSX needs vite/vitest to validate)
 find server/src electron -name '*.js' -o -name '*.cjs' | grep -v node_modules | xargs -I{} node --check {}
 

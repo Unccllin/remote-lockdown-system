@@ -1,16 +1,19 @@
 # Build the lockdown agent and companion tools as standalone executables
 # using PyInstaller.
 #
-# Produces three executables in dist\:
-#   lockdown-agent.exe     — the main agent (checkin, encryption, boot lockdown)
-#   lockdown-watchdog.exe  — process monitor that restarts the agent if it crashes
-#   lockdown-recovery.exe  — offline recovery tool for IT staff
+# Produces four executables in dist\:
+#   lockdown-agent.exe      — the main agent (checkin, encryption, boot lockdown)
+#   lockdown-watchdog.exe   — process monitor that restarts the agent if it crashes
+#   lockdown-recovery.exe   — offline recovery tool for IT staff
+#   lockdown-installer.exe  — CLI installer the generic NSIS wrapper delegates to
+#                             (enroll / config / persistence / authorized removal)
 #
 # Usage:
-#   .\build.ps1                 # Build all three for current platform
+#   .\build.ps1                 # Build everything except the GUI wizard
 #   .\build.ps1 -Clean          # Clean build directories and rebuild
 #   .\build.ps1 -Install        # Install PyInstaller first, then build
-#   .\build.ps1 -AgentOnly      # Build only the agent (skip watchdog/recovery)
+#   .\build.ps1 -AgentOnly      # Build only the agent (skip the companions)
+#   .\build.ps1 -WithGui        # Also build installer_gui.spec -> lockdown-setup.exe
 #
 # Requirements:
 #   - Python 3.8+
@@ -18,12 +21,14 @@
 #   - pip install -r requirements.txt
 #
 # Output:
-#   dist\lockdown-agent.exe, dist\lockdown-watchdog.exe, dist\lockdown-recovery.exe
+#   dist\lockdown-agent.exe, dist\lockdown-watchdog.exe,
+#   dist\lockdown-recovery.exe, dist\lockdown-installer.exe
 
 param(
     [switch]$Clean,
     [switch]$Install,
-    [switch]$AgentOnly
+    [switch]$AgentOnly,
+    [switch]$WithGui
 )
 
 $ErrorActionPreference = "Stop"
@@ -64,7 +69,15 @@ if ($Clean) {
 # Determine which specs to build
 $specs = @("agent.spec")
 if (-not $AgentOnly) {
-    $specs += @("watchdog.spec", "offline_recovery.spec")
+    # installer.spec is what the generic NSIS wrapper stages and calls. Without
+    # it there is nothing to publish to KV binary:installer, which is what the
+    # dashboard's download button serves — so it builds by default.
+    $specs += @("watchdog.spec", "offline_recovery.spec", "installer.spec")
+}
+if ($WithGui) {
+    # The GUI wizard downloads the agent itself and is an alternative to the
+    # NSIS wrapper; opt-in so the default build stays small.
+    $specs += @("installer_gui.spec")
 }
 
 $builtOk = @()
@@ -85,7 +98,11 @@ foreach ($spec in $specs) {
 # Summary
 Write-Host "=== Build Summary ===" -ForegroundColor Green
 foreach ($name in $builtOk) {
-    $binName = if ($name -eq "agent") { "lockdown-agent.exe" } else { "lockdown-$name.exe" }
+    $binName = switch ($name) {
+        "agent" { "lockdown-agent.exe" }
+        "installer_gui" { "lockdown-setup.exe" }
+        default { "lockdown-$name.exe" }
+    }
     $binPath = "dist\$binName"
     if (Test-Path $binPath) {
         $size = (Get-Item $binPath).Length / 1MB

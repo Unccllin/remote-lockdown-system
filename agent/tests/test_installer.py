@@ -171,33 +171,133 @@ def test_enroll_with_admin_token_uses_enroll_endpoint(mock_post):
 
 
 def test_argparse_accepts_token_argument():
-    """The --token argument is recognized by the argument parser."""
-    parser = installer.argparse.ArgumentParser()
-    # Mirror the main() parser setup
-    parser.add_argument("--server-url", default=None)
-    parser.add_argument("--admin-token", default=None)
-    parser.add_argument("--token", default=None)
-    parser.add_argument("--owner", default=None)
-    parser.add_argument("--hostname", default=None)
-    parser.add_argument("--no-boot-lock", action="store_true")
-    parser.add_argument("--silent", action="store_true")
-
-    args = parser.parse_args(["--token", "abc123", "--server-url", "https://x"])
+    """The --token argument is recognized by the real parser."""
+    args = installer.build_parser().parse_args(["--token", "abc123", "--server-url", "https://x"])
     assert args.token == "abc123"
     assert args.admin_token is None
+    assert args.uninstall is False
 
 
 def test_argparse_accepts_admin_token_argument():
     """The --admin-token argument is still recognized (backward compat)."""
-    parser = installer.argparse.ArgumentParser()
-    parser.add_argument("--server-url", default=None)
-    parser.add_argument("--admin-token", default=None)
-    parser.add_argument("--token", default=None)
-    parser.add_argument("--owner", default=None)
-    parser.add_argument("--hostname", default=None)
-    parser.add_argument("--no-boot-lock", action="store_true")
-    parser.add_argument("--silent", action="store_true")
-
-    args = parser.parse_args(["--admin-token", "secret", "--server-url", "https://x"])
+    args = installer.build_parser().parse_args(
+        ["--admin-token", "secret", "--server-url", "https://x"]
+    )
     assert args.admin_token == "secret"
     assert args.token is None
+
+
+def test_argparse_accepts_uninstall_arguments():
+    """--uninstall and --uninstall-token exist on the real parser.
+
+    The generic NSIS uninstaller calls exactly this pair, so a rename here
+    silently breaks removal (the wrapper only sees a non-zero exit code).
+    """
+    args = installer.build_parser().parse_args(["--uninstall", "--uninstall-token", "tok-123"])
+    assert args.uninstall is True
+    assert args.uninstall_token == "tok-123"
+
+
+# ---------------------------------------------------------------------------
+# run_uninstall — server-authorized removal
+# ---------------------------------------------------------------------------
+
+
+def _write_config(tmp_path, monkeypatch, **overrides):
+    """Point installer.CONFIG_FILE at a temp config.json and write it."""
+    import json
+
+    config = {
+        "server_url": "https://backend.example",
+        "api_key": "device-key",
+        "hostname": "TEST-HOST",
+        "device_id": "dev-9",
+    }
+    config.update(overrides)
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps(config))
+    monkeypatch.setattr(installer, "CONFIG_FILE", cfg_path)
+    return cfg_path
+
+
+def test_run_uninstall_without_config_refuses(tmp_path, monkeypatch, capsys):
+    """Nothing installed → exit 1 and say so, before asking for a token."""
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "config.json")
+
+    assert installer.run_uninstall("tok") == 1
+    assert "nothing is installed" in capsys.readouterr().out
+
+
+def test_run_uninstall_without_token_does_not_touch_persistence(tmp_path, monkeypatch, capsys):
+    """No token → exit 1, and no call reaches service_installer.uninstall().
+
+    This is the tamper-bypass guard: an unauthenticated removal must not even be
+    attempted, because a *failed* attempt still resets nothing but logs a local
+    admin's attempt as the thing to retry.
+    """
+    _write_config(tmp_path, monkeypatch)
+    fake = MagicMock()
+    monkeypatch.setitem(sys.modules, "service_installer", fake)
+
+    assert installer.run_uninstall(None) == 1
+    fake.uninstall.assert_not_called()
+    out = capsys.readouterr().out
+    assert "uninstall token is required" in out
+    assert "/api/agent/uninstall-auth" in out
+
+
+def test_run_uninstall_passes_config_values_to_service_installer(tmp_path, monkeypatch):
+    """The token, backend URL, API key and device id come from config.json."""
+    _write_config(tmp_path, monkeypatch)
+    fake = MagicMock()
+    fake.uninstall.return_value = True
+    monkeypatch.setitem(sys.modules, "service_installer", fake)
+
+    assert installer.run_uninstall("tok-abc") == 0
+    fake.uninstall.assert_called_once_with(
+        uninstall_token="tok-abc",
+        server_url="https://backend.example",
+        api_key="device-key",
+        device_id="dev-9",
+    )
+
+
+def test_run_uninstall_reports_backend_refusal(tmp_path, monkeypatch, capsys):
+    """When the backend refuses the token, exit 1 and say nothing was removed."""
+    _write_config(tmp_path, monkeypatch)
+    fake = MagicMock()
+    fake.uninstall.return_value = False
+    monkeypatch.setitem(sys.modules, "service_installer", fake)
+
+    assert installer.run_uninstall("stale-token") == 1
+    assert "did not authorize" in capsys.readouterr().out
+
+
+def test_run_uninstall_requires_server_url_and_api_key(tmp_path, monkeypatch, capsys):
+    """A config without credentials cannot verify a token → refuse."""
+    _write_config(tmp_path, monkeypatch, api_key=None)
+    fake = MagicMock()
+    monkeypatch.setitem(sys.modules, "service_installer", fake)
+
+    assert installer.run_uninstall("tok") == 1
+    fake.uninstall.assert_not_called()
+    assert "cannot verify" in capsys.readouterr().out
+
+
+def test_run_uninstall_reports_corrupt_config(tmp_path, monkeypatch, capsys):
+    """A malformed config.json is a refusal, not a traceback."""
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{not json")
+    monkeypatch.setattr(installer, "CONFIG_FILE", cfg)
+
+    assert installer.run_uninstall("tok") == 1
+    assert "Cannot read" in capsys.readouterr().out
+
+
+def test_run_uninstall_without_service_installer_module(tmp_path, monkeypatch, capsys):
+    """A build without service_installer refuses instead of half-removing."""
+    _write_config(tmp_path, monkeypatch)
+    monkeypatch.setitem(sys.modules, "service_installer", None)
+
+    assert installer.run_uninstall("tok") == 1
+    assert "service_installer" in capsys.readouterr().out
