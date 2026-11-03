@@ -1227,6 +1227,30 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
     await saveDevices(env, devices);
   }
 
+  // The dashboard's lockdown-effectiveness panel does not read the command record:
+  // it scans the AUDIT log for the most recent `agent_<type>_confirmed` entry and
+  // parses that entry's detail (dashboard/src/pages/DeviceDetailPage.jsx:40-49).
+  // Express writes one per executed command (server/src/routes/agent.js:525-534), so
+  // without this the panel was dark on the serverless backend no matter what the
+  // command record held — which made the effectiveness fields restored in sessions
+  // 185-186 unreachable from the UI.
+  if (result_status === 'executed') {
+    await addAuditEntry(
+      env,
+      device.id,
+      `agent_${command.command_type}_confirmed`,
+      JSON.stringify({
+        command_id,
+        command_uuid: command.command_uuid ?? undefined,
+        boot_lock_status: command.boot_lock_status ?? undefined,
+        boot_lock_detail: command.boot_lock_detail ?? undefined,
+        lockdown_effective: command.lockdown_effective ?? undefined,
+        encryption_blocked_files: command.encryption_blocked_files ?? undefined,
+        lock_session_context: command.lock_session_context ?? undefined,
+      }),
+    );
+  }
+
   console.log(
     'ACK: device=%s command=%s status=%s boot_lock=%s',
     device.hostname,

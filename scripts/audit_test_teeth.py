@@ -468,6 +468,33 @@ MUTATIONS: list[dict] = [
         "new": "      } else if (commands[cmdIdx].command_type === 'track') {\n        devices[devIdx].status = 'active';  // MUTATION: tracking never shown",
         "why": "a device under covert tracking still reports as active",
     },
+    {
+        "path": "worker/ack-audit-action",
+        "label": "WRK/ack-audit-action",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "      `agent_${command.command_type}_confirmed`,",
+        "new": "      'command_acked',  // MUTATION: the action the dashboard scans for is gone",
+        "why": "the effectiveness panel finds no confirmation entry and stays dark",
+    },
+    {
+        "path": "worker/ack-audit-detail",
+        "label": "WRK/ack-audit-detail",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "        command_id,\n        command_uuid: command.command_uuid ?? undefined,",
+        "new": "        // MUTATION: the detail carries none of the fields the UI parses\n        command_uuid: command.command_uuid ?? undefined,",
+        "why": "the confirmation entry exists but says nothing about effectiveness",
+    },
+    {
+        "path": "worker/ack-audit-scope",
+        "label": "WRK/ack-audit-scope",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  if (result_status === 'executed') {\n    await addAuditEntry(",
+        "new": "  if (true) {  // MUTATION: failed commands also claim confirmation\n    await addAuditEntry(",
+        "why": "a failed lockdown is recorded as a confirmed one",
+    },
 ]
 
 

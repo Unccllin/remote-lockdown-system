@@ -4242,4 +4242,96 @@ describe('D-210: PBL route integration', () => {
       expect(afterTrack.status).toBe('tracking');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // The dashboard does not read the command record for lockdown effectiveness —
+  // it scans the audit log for `agent_<type>_confirmed` and parses that entry's
+  // detail (DeviceDetailPage.jsx:40-49). Express writes one per executed command;
+  // the Worker wrote none, so the panel was dark regardless of what the command
+  // held (session 187).
+  // -------------------------------------------------------------------------
+  describe('agent_<type>_confirmed audit entries', () => {
+    const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+    async function auditFor(deviceId: string) {
+      const resp = await worker.fetch(
+        makeRequest('GET', `/api/audit?device_id=${deviceId}`, undefined, ADMIN),
+        env,
+      );
+      return (await parseResponse(resp)) as any[];
+    }
+
+    async function lockdownAck(hostname: string, extra: object) {
+      const { device, apiKey } = await enrollDevice(worker, env, hostname);
+      await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/flag-stolen`, { hostname_confirm: hostname }, ADMIN),
+        env,
+      );
+      const body = JSON.stringify({ hostname });
+      const checkin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)),
+        env,
+      );
+      const cmdId = (await parseResponse(checkin) as any).command.id;
+      const ackBody = JSON.stringify({
+        hostname,
+        command_id: cmdId,
+        result_status: 'executed',
+        ...extra,
+      });
+      await worker.fetch(
+        makeRequest('POST', '/api/agent/command-ack', ackBody, signRequest(ackBody, apiKey)),
+        env,
+      );
+      return { device, cmdId };
+    }
+
+    it('writes agent_lockdown_confirmed with the effectiveness detail the UI parses', async () => {
+      const { device, cmdId } = await lockdownAck('AUDCONF-001', {
+        boot_lock_status: 'partial',
+        boot_lock_detail: { boot_lock_attempted: true, critical_applied_total: 0 },
+        encryption_blocked_files: ['locked.xlsx'],
+        lock_session_context: { session: 'console' },
+      });
+
+      const entries = await auditFor(device.id);
+      const confirmed = entries.find((e) => e.action === 'agent_lockdown_confirmed');
+      expect(confirmed).toBeTruthy();
+
+      const detail = JSON.parse(confirmed.detail);
+      expect(detail.command_id).toBe(cmdId);
+      expect(detail.lockdown_effective).toBe(false);
+      expect(detail.boot_lock_status).toBe('partial');
+      expect(detail.boot_lock_detail.boot_lock_attempted).toBe(true);
+      expect(detail.encryption_blocked_files).toEqual(['locked.xlsx']);
+      expect(detail.lock_session_context).toEqual({ session: 'console' });
+    });
+
+    it('does not write a confirmation for a failed command', async () => {
+      const { device, apiKey } = await enrollDevice(worker, env, 'AUDFAIL-001');
+      await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/flag-stolen`, { hostname_confirm: 'AUDFAIL-001' }, ADMIN),
+        env,
+      );
+      const body = JSON.stringify({ hostname: 'AUDFAIL-001' });
+      const checkin = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)),
+        env,
+      );
+      const cmdId = (await parseResponse(checkin) as any).command.id;
+
+      const ackBody = JSON.stringify({
+        hostname: 'AUDFAIL-001',
+        command_id: cmdId,
+        result_status: 'failed',
+      });
+      await worker.fetch(
+        makeRequest('POST', '/api/agent/command-ack', ackBody, signRequest(ackBody, apiKey)),
+        env,
+      );
+
+      const entries = await auditFor(device.id);
+      expect(entries.some((e) => e.action === 'agent_lockdown_confirmed')).toBe(false);
+    });
+  });
 });
