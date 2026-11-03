@@ -369,6 +369,42 @@ MUTATIONS: list[dict] = [
         "new": "  if (false) {  // MUTATION: unlink on an unlinked device reports success",
         "why": "an operator is told the unlink worked when there was nothing to unlink",
     },
+    {
+        "path": "worker/hw-artifact-ctrf",
+        "label": "WRK/hw-artifact-ctrf",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  const isCtrf = Boolean(artifact.results?.tool);",
+        "new": "  const isCtrf = false;  // MUTATION: CTRF artifacts are rejected",
+        "why": "the harness's current CTRF artifacts are refused as malformed",
+    },
+    {
+        "path": "worker/hw-artifact-device",
+        "label": "WRK/hw-artifact-device",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "    deviceId = devices.find((d) => d.hostname === hostname)?.id || null;",
+        "new": "    deviceId = null;  // MUTATION: never link the artifact to a device",
+        "why": "hardware evidence is uploaded but never attached to the machine it proves",
+    },
+    {
+        "path": "worker/hw-artifact-blob",
+        "label": "WRK/hw-artifact-list-blob",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "    .map(({ artifact_json, ...summaryRow }) => summaryRow);",
+        "new": "    .map((row) => row);  // MUTATION: the list carries full artifacts",
+        "why": "every list response carries the full artifact blobs",
+    },
+    {
+        "path": "worker/hw-artifact-404",
+        "label": "WRK/hw-artifact-lookup",
+        "runner": "vitest",
+        "file": "serverless/worker.ts",
+        "old": "  const artifact = artifacts.find((a) => a.id === id);",
+        "new": "  const artifact = artifacts[0];  // MUTATION: returns an arbitrary artifact",
+        "why": "asking for one artifact returns whichever was stored first",
+    },
 ]
 
 

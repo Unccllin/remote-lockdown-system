@@ -61,6 +61,24 @@ interface Device {
   firmware_audit_at?: string | null;
 }
 
+/** A hardware-test artifact uploaded by hw_test_harness v2.0 (D-129 evidence). */
+interface HwTestArtifact {
+  // Serial, rendered as a decimal string: the dashboard validates /^\d+$/.
+  id: string;
+  device_id: string | null;
+  admin_id: string | null;
+  hostname: string | null;
+  harness_version: string | null;
+  agent_hash: string | null;
+  total_tests: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  errors: number;
+  artifact_json: unknown;
+  created_at: string;
+}
+
 interface Command {
   id: string;
   device_id: string;
@@ -498,6 +516,7 @@ const COMMANDS_KEY = 'commands';
 const KEYS_KEY = 'encryption_keys';
 const LOCATIONS_KEY = 'locations';
 const AUDIT_KEY = 'audit_log';
+const HW_ARTIFACTS_KEY = 'hw_test_artifacts';
 
 // Agent release metadata for GET /api/agent/update, written at release time by
 // CI (see serverless/README.md). It holds the version, the binary's sha256/size
@@ -660,6 +679,10 @@ async function saveBiosPasswords(env: Env, pws: BiosPassword[]): Promise<void> {
 async function listLocations(env: Env): Promise<LocationReport[]> {
   const data = await env.LOCKDOWN_KV.get(LOCATIONS_KEY);
   return data ? parseKvJson<LocationReport[]>(data, LOCATIONS_KEY) : [];
+}
+
+async function saveHwArtifacts(env: Env, artifacts: HwTestArtifact[]): Promise<void> {
+  await env.LOCKDOWN_KV.put(HW_ARTIFACTS_KEY, JSON.stringify(artifacts));
 }
 
 async function saveLocations(env: Env, locations: LocationReport[]): Promise<void> {
@@ -2413,6 +2436,22 @@ export default {
     if (path === '/api/auth/login' && method === 'POST') {
       return handleAuthLogin(request, env);
     }
+    if (path === '/api/hw-test-artifact' && method === 'POST') {
+      return handleUploadHwArtifact(request, env);
+    }
+
+    if (path === '/api/hw-test-artifact' && method === 'GET') {
+      return handleListHwArtifacts(request, env);
+    }
+
+    if (path.startsWith('/api/hw-test-artifact/') && method === 'GET') {
+      return handleGetHwArtifact(
+        request,
+        env,
+        decodeURIComponent(path.substring('/api/hw-test-artifact/'.length)),
+      );
+    }
+
     if (path === '/api/setup/status' && method === 'GET') {
       return handleSetupStatus(env);
     }
@@ -2828,6 +2867,146 @@ async function handleLatestLocation(
     id: `loc-${deviceId}-0`,
     reported_at: latest.created_at,
   });
+}
+
+async function listHwArtifacts(env: Env): Promise<HwTestArtifact[]> {
+  const data = await env.LOCKDOWN_KV.get(HW_ARTIFACTS_KEY);
+  return data ? parseKvJson<HwTestArtifact[]>(data, HW_ARTIFACTS_KEY) : [];
+}
+
+/**
+ * POST /api/hw-test-artifact — receive a hardware-test artifact.
+ *
+ * This is the D-129 evidence path: the harness uploads a CTRF or legacy artifact
+ * and the dashboard displays it. Accepting both shapes matters because the harness
+ * emitted the legacy one for months before CTRF support landed, and a rejected
+ * artifact on window day is a lost hardware run.
+ */
+async function handleUploadHwArtifact(request: Request, env: Env): Promise<Response> {
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
+
+  const artifact = await readJsonBody<Record<string, any>>(request);
+  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+    return errorResponse('Artifact must be a JSON object', 400);
+  }
+
+  const isCtrf = Boolean(artifact.results?.tool);
+  const isLegacy = Boolean(artifact.harness_version);
+  if (!isCtrf && !isLegacy) {
+    return errorResponse(
+      'Invalid artifact format — expected CTRF ({results:{tool,...}}) or legacy ({harness_version,...})',
+      400,
+    );
+  }
+
+  const summary = isCtrf ? artifact.results?.summary : artifact.summary;
+  const environment = isCtrf ? artifact.results?.extra?.environment : artifact.environment;
+  const harnessVersion = isCtrf ? artifact.results?.tool?.version : artifact.harness_version;
+  if (!summary) {
+    return errorResponse('Artifact missing summary', 400);
+  }
+
+  const hostname = environment?.hostname || null;
+  const agentHash = environment?.agent_binary_hash || null;
+
+  // Attach the artifact to the device whose hostname matches, when there is one.
+  let deviceId: string | null = null;
+  if (hostname) {
+    const devices = await listDevices(env);
+    deviceId = devices.find((d) => d.hostname === hostname)?.id || null;
+  }
+
+  const artifacts = await listHwArtifacts(env);
+  const nextId = artifacts.reduce((max, a) => Math.max(max, parseInt(a.id, 10) || 0), 0) + 1;
+  const counts = {
+    total: summary.tests || summary.total || 0,
+    passed: summary.passed || 0,
+    failed: summary.failed || 0,
+    skipped: summary.skipped || 0,
+    errors: summary.errors || 0,
+  };
+
+  const record: HwTestArtifact = {
+    id: String(nextId),
+    device_id: deviceId,
+    admin_id: (auth as { id?: string }).id || null,
+    hostname,
+    harness_version: harnessVersion || null,
+    agent_hash: agentHash,
+    total_tests: counts.total,
+    passed: counts.passed,
+    failed: counts.failed,
+    skipped: counts.skipped,
+    errors: counts.errors,
+    artifact_json: artifact,
+    created_at: new Date().toISOString(),
+  };
+
+  artifacts.push(record);
+  await saveHwArtifacts(env, artifacts);
+
+  await addAuditEntry(
+    env,
+    deviceId || '',
+    'hw_test_artifact_upload',
+    `Harness v${harnessVersion}: ${counts.passed}/${counts.total} passed, ${counts.failed} failed, ${counts.skipped} skipped`,
+  );
+
+  return jsonResponse(
+    { id: record.id, device_id: deviceId, hostname, summary: counts },
+    201,
+  );
+}
+
+/** GET /api/hw-test-artifact — recent artifacts, newest first, optional device filter. */
+async function handleListHwArtifacts(request: Request, env: Env): Promise<Response> {
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
+
+  const url = new URL(request.url);
+  const deviceId = url.searchParams.get('device_id');
+  if (deviceId && !/^[0-9a-f-]{16,36}$/i.test(deviceId)) {
+    return errorResponse('Invalid device_id format', 400);
+  }
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 100);
+
+  const artifacts = (await listHwArtifacts(env))
+    .filter((a) => !deviceId || a.device_id === deviceId)
+    // Tie-break on the numeric id: two uploads can land in the same millisecond
+    // (the harness uploads a batch), and created_at alone then leaves "newest
+    // first" ambiguous. Ids are monotonic, so they order what the timestamp ties.
+    .sort(
+      (a, b) =>
+        b.created_at.localeCompare(a.created_at) ||
+        (parseInt(b.id, 10) || 0) - (parseInt(a.id, 10) || 0),
+    )
+    .slice(0, limit)
+    // The list view never returns the full artifact blob — only the summary.
+    .map(({ artifact_json, ...summaryRow }) => summaryRow);
+
+  return jsonResponse(artifacts);
+}
+
+/** GET /api/hw-test-artifact/:id — one artifact, including its full JSON. */
+async function handleGetHwArtifact(
+  request: Request,
+  env: Env,
+  id: string,
+): Promise<Response> {
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
+
+  if (!/^\d+$/.test(id)) {
+    return errorResponse('Invalid artifact ID', 400);
+  }
+
+  const artifacts = await listHwArtifacts(env);
+  const artifact = artifacts.find((a) => a.id === id);
+  if (!artifact) {
+    return errorResponse('Artifact not found', 404);
+  }
+  return jsonResponse(artifact);
 }
 
 /** PBL device ids are 32 bytes rendered as lowercase-hex (C1 §4). */

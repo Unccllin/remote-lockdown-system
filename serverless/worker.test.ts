@@ -3907,4 +3907,136 @@ describe('D-210: PBL route integration', () => {
       expect(data.max_location_retention).toBe(180);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Hardware-test artifacts (session 184). This is the D-129 evidence path: the
+  // harness uploads a CTRF or legacy artifact and the dashboard displays it. The
+  // harness emitted the legacy shape for months before CTRF support landed, so
+  // both must be accepted — a rejected artifact on window day is a lost run.
+  // -------------------------------------------------------------------------
+  describe('hardware-test artifacts', () => {
+    const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+    const ctrf = (hostname: string) => ({
+      results: {
+        tool: { name: 'hw_test_harness', version: '2.0' },
+        summary: { tests: 12, passed: 10, failed: 1, skipped: 1, errors: 0 },
+        extra: { environment: { hostname, agent_binary_hash: 'deadbeef' } },
+      },
+    });
+    const legacy = (hostname: string) => ({
+      harness_version: '1.0',
+      summary: { total: 5, passed: 5, failed: 0, skipped: 0 },
+      environment: { hostname },
+    });
+
+    it('stores a CTRF artifact and links it to the matching device', async () => {
+      const { device } = await enrollDevice(worker, env, 'HWCTRF-001');
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/hw-test-artifact', ctrf('HWCTRF-001'), ADMIN),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(201);
+      expect(data.hostname).toBe('HWCTRF-001');
+      expect(data.device_id).toBe(device.id);
+      expect(data.summary).toEqual({ total: 12, passed: 10, failed: 1, skipped: 1, errors: 0 });
+    });
+
+    it('stores a legacy artifact', async () => {
+      await enrollDevice(worker, env, 'HWLEGACY-001');
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/hw-test-artifact', legacy('HWLEGACY-001'), ADMIN),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(201);
+      expect(data.summary.total).toBe(5);
+    });
+
+    it('rejects a body that is not a harness artifact', async () => {
+      const notFormatted = await worker.fetch(
+        makeRequest('POST', '/api/hw-test-artifact', { hello: 'world' }, ADMIN),
+        env,
+      );
+      expect(notFormatted.status).toBe(400);
+
+      const noSummary = await worker.fetch(
+        makeRequest('POST', '/api/hw-test-artifact', { harness_version: '1.0' }, ADMIN),
+        env,
+      );
+      expect(noSummary.status).toBe(400);
+    });
+
+    it('requires admin auth', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/hw-test-artifact', ctrf('HWCTRF-001')),
+        env,
+      );
+      expect(resp.status).toBe(401);
+    });
+
+    it('lists newest first without the full artifact blob', async () => {
+      await enrollDevice(worker, env, 'HWLIST-001');
+      await worker.fetch(makeRequest('POST', '/api/hw-test-artifact', legacy('HWLIST-001'), ADMIN), env);
+      await worker.fetch(makeRequest('POST', '/api/hw-test-artifact', ctrf('HWLIST-001'), ADMIN), env);
+
+      const resp = await worker.fetch(
+        makeRequest('GET', '/api/hw-test-artifact', undefined, ADMIN),
+        env,
+      );
+      const rows: any[] = (await parseResponse(resp)) as any[];
+      expect(resp.status).toBe(200);
+      expect(rows.length).toBe(2);
+      // Newest (the CTRF one) first.
+      expect(rows[0].total_tests).toBe(12);
+      // The list must stay small: no artifact_json on summary rows.
+      expect(rows[0].artifact_json).toBeUndefined();
+    });
+
+    it('filters by device and rejects a malformed device_id', async () => {
+      const { device } = await enrollDevice(worker, env, 'HWFILTER-001');
+      await worker.fetch(makeRequest('POST', '/api/hw-test-artifact', ctrf('HWFILTER-001'), ADMIN), env);
+
+      const okResp = await worker.fetch(
+        makeRequest('GET', `/api/hw-test-artifact?device_id=${device.id}`, undefined, ADMIN),
+        env,
+      );
+      expect(((await parseResponse(okResp)) as any[]).length).toBe(1);
+
+      const badResp = await worker.fetch(
+        makeRequest('GET', '/api/hw-test-artifact?device_id=nope', undefined, ADMIN),
+        env,
+      );
+      expect(badResp.status).toBe(400);
+    });
+
+    it('returns one artifact with its full JSON, and 404s for an unknown id', async () => {
+      await enrollDevice(worker, env, 'HWGET-001');
+      const created: any = await parseResponse(
+        await worker.fetch(makeRequest('POST', '/api/hw-test-artifact', ctrf('HWGET-001'), ADMIN), env),
+      );
+
+      const oneResp = await worker.fetch(
+        makeRequest('GET', `/api/hw-test-artifact/${created.id}`, undefined, ADMIN),
+        env,
+      );
+      const one: any = await parseResponse(oneResp);
+      expect(oneResp.status).toBe(200);
+      expect(one.id).toBe(created.id);
+      expect(one.artifact_json.results.tool.version).toBe('2.0');
+
+      const missing = await worker.fetch(
+        makeRequest('GET', '/api/hw-test-artifact/999999', undefined, ADMIN),
+        env,
+      );
+      expect(missing.status).toBe(404);
+
+      const badId = await worker.fetch(
+        makeRequest('GET', '/api/hw-test-artifact/not-a-number', undefined, ADMIN),
+        env,
+      );
+      expect(badId.status).toBe(400);
+    });
+  });
 });
