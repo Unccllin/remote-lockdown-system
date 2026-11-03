@@ -7667,3 +7667,137 @@ rebuilds byte-identically from it — without that, every firmware fix is unveri
 and D-116's residual cannot be closed with evidence.
 
 ---
+
+---
+
+## Session 201 — 2026-11-03 (EDK II was here all along; the firmware rebuilds byte-identically)
+
+### RULE-ZERO
+
+**Read**: session 200's `Next session opening` (add an EDK II checkout to
+`firmware/Dockerfile.qemu` because "a C change cannot be compiled here");
+`firmware/PblPkg/build-pbl.sh` (defaults `EDK2_DIR=~/.local/src/edk2`, nasm on
+PATH); `firmware/PblPkg/PblPkg.dsc`; `~/.local/src/edk2` (present:
+commit `2970e56`, BaseTools built, OVMF built); `NetworkPkg/HttpDxe/HttpsSupport.c`
+(`TlsConfigureSession`), `NetworkPkg/TlsDxe/TlsDriver.c`, `CryptoPkg/Library/TlsLib/
+{TlsInit,TlsConfig}.c`; `firmware/PblPkg/PblApp/HttpsClient.c`.
+
+**Finding 1 — S200's blocker was false.** I concluded "no EDK II build tool" after
+checking only inside the `pbl-qemu` Docker image and three guessed paths. EDK II is
+installed at `~/.local/src/edk2` (commit `2970e56`) with `nasm` 2.16.01 at
+`~/.local/bin` — exactly what `firmware/PblPkg/build-pbl.sh` defaults to, with
+BaseTools and OVMF already built. So the next opening ("add an edk2 checkout to the
+Docker image") was work that did not need doing.
+
+**Finding 2 — the firmware rebuilds byte-identically, and the committed binaries are
+current.** `cd firmware/PblPkg && ./build-pbl.sh --arch X64` exits 0 and
+`git status firmware/` is **empty**: all three outputs reproduce their committed
+SHA-256 exactly (`PblApp.efi 3906065d…`, `PblPersistDxe.efi 042f2914…`,
+`EnrollKeys.efi 418d7d8c…`). Two things follow: the reproducibility claim
+(SOURCE_DATE_EPOCH + `-ffile-prefix-map`) holds, and the QEMU harness has *not* been
+booting stale firmware.
+
+**Finding 3 — D-116's residual is the TLS *version floor*, not hostname binding.**
+Reading the local edk2 source corrected my own S200 correction:
+- Hostname binding **is** done by the stack: `HttpsSupport.c:666-668` sets
+  `VerifyHost.HostName` from `HttpInstance->RemoteHost` (the URI host) and
+  `:695-702` applies it via `SetSessionData(EfiTlsVerifyHost, …)`, next to
+  `VerifyMethod = EFI_TLS_VERIFY_PEER` (`:659`). PBL deferring to the stack is
+  correct, not a gap.
+- The floor is **TLS 1.0**: `TlsDriver.c:263` creates the context with
+  `TlsCtxNew(TLS10_PROTOCOL_VERSION_MAJOR, TLS10_PROTOCOL_VERSION_MINOR)` and
+  `TlsInit.c:107` applies it as `SSL_CTX_set_min_proto_version`, with only SSLv3
+  disabled (`:101`). C3 §4 asks for ≥ 1.2.
+- PBL **cannot** raise it: `HttpsClient.c` locates only `EFI_HTTP_PROTOCOL`
+  (`:479-491`); HttpDxe sets only ConnectionEnd/VerifyMethod/VerifyHost/
+  SessionState, exposing no `EfiTlsVersion`.
+
+### IMPLEMENT
+
+- `docs/adr/PBL-DEBT-LEDGER.md` — D-116 retitled **"TLS floor is 1.0 (chain pinning
+  and hostname binding are covered by the stack)"**, with both earlier wrong
+  statements recorded (the "empty stub" text and my S200 "hostname missing" claim),
+  every assertion citing a file:line in PBL *or* edk2, and residuals reduced to two:
+  decide the TLS-floor fix (drive `EFI_TLS_PROTOCOL` directly, patch the platform
+  TlsDxe minimum, or record an accepted risk) and decide `PblTlsVerifyCert`'s fate.
+- `Makefile` — `firmware-build` target wrapping `build-pbl.sh` (`PBL_ARCH`
+  override), so the build is discoverable instead of buried in a shell script the
+  DSC merely mentions.
+- `firmware/PblPkg/artifacts/build-reproducible-2026-11-03.txt` — the evidence:
+  edk2 commit, nasm version, the rebuild command, and the identical before/after
+  hashes for all three binaries.
+
+### Fog cleared
+
+- **Whether firmware changes can be built and verified here**: yes, with the repo's
+  own script; no Docker or edk2 clone needed.
+- **Whether the committed firmware matches its source**: yes, byte-identically.
+- **What C3 §4 still lacks**: only the TLS version floor; pinning and hostname are
+  both covered (and pinning is proven by a runtime artifact).
+
+### Fog remaining
+
+- The TLS floor decision is an architecture choice (bypass `EFI_HTTP_PROTOCOL` for
+  the verdict fetch vs patch the platform TlsDxe vs accept), not a code edit — it
+  needs an owner ruling before implementation, and it is the kind of change that
+  should go through `.devin/PENDING-RULING.md`.
+- `PblTlsVerifyCert` is still dead code (223 lines, no caller, no SAN support);
+  keeping it invites a future reader to believe it enforces something.
+- Unchanged blockers: `UPDATE_SIGNING_KEY` (no `gh`), KV publish (wrangler
+  unauthenticated), HP-box flip (no hardware); D-129/D-134 hardware.
+
+### Debt items closed
+
+- None. D-116 stays OPEN with a narrower subject; closing it needs the TLS-floor
+  decision plus an artifact.
+
+### Debt items still open
+
+- D-116 (TLS floor + dead-function decision), D-117, D-100, D-111…D-115,
+  D-118…D-129, D-134.
+
+### Blockers
+
+- An owner ruling on the TLS floor for D-116 (three options, one of them an accepted
+  risk). Everything else in the firmware path is reachable from this machine.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, fourth consecutive instance): I
+  declared a *capability* blocked without checking the tool the repo already
+  documents (`build-pbl.sh` names its default `EDK2_DIR`; one `ls` would have
+  settled it). The lesson from S200 was "don't cite the ledger as truth"; this
+  session shows it generalises to *my own* conclusions from a previous session —
+  the previous block is just another document that can be wrong.
+- **Layer 2 — context provision**: `build-pbl.sh` existed, worked, and was not in
+  the Makefile, so the build path was invisible to anyone reading `make help`. That
+  is now a target.
+
+### VERIFY
+
+- `cd firmware/PblPkg && ./build-pbl.sh --arch X64` → exit 0; `git status firmware/`
+  empty; hashes identical to the committed binaries (all three).
+- `make -n firmware-build` prints the intended command; the underlying script was
+  executed for real (above), and the target is a one-line wrapper over it.
+- edk2 citations verified by grep in `~/.local/src/edk2`: `HttpsSupport.c:659,666-668,695-702`,
+  `TlsDriver.c:263`, `TlsInit.c:101,107`; and in PBL: `HttpsClient.c:479-491`
+  (only `EFI_HTTP_PROTOCOL`).
+- `make graph-check`: all invariants pass (D-116 still OPEN — the closed count is
+  unchanged at 57/61).
+
+### Session artifacts
+
+- Changed: `docs/adr/PBL-DEBT-LEDGER.md`, `Makefile`,
+  `firmware/PblPkg/artifacts/build-reproducible-2026-11-03.txt` (new).
+- Commit: `0087c02`.
+
+### Next session opening
+
+D-116 is now down to one decision that needs the owner, not an implementation: how
+to enforce the TLS 1.2 floor (drive `EFI_TLS_PROTOCOL` directly for the verdict
+fetch, patch the platform TlsDxe minimum, or record an accepted risk). Open it in
+`.devin/PENDING-RULING.md` with the three options and their threat-model
+consequences; do not start coding it before the ruling, and do not re-derive the
+"firmware can't be built" claim that this session disproved.
+
+---

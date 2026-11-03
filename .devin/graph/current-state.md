@@ -53,81 +53,80 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 200 — 2026-11-03 (the ledger was wrong twice; the firmware harness works)
+## Latest session: 201 — 2026-11-03 (EDK II was here all along; the firmware rebuilds byte-identically)
 
 ### Fog cleared
 
-- **Whether the TLS pin is enforced at all**: yes, by construction and with runtime
-  proof (mismatched CA → abort, server sees nothing).
-- **What D-116 actually still needs**: hostname binding, and nothing else in the
-  pinning area.
-- **Whether firmware runtime testing is possible in this environment**: yes, via
-  Docker; the "cannot run locally" belief was three sessions old and wrong.
+- **Whether firmware changes can be built and verified here**: yes, with the repo's
+  own script; no Docker or edk2 clone needed.
+- **Whether the committed firmware matches its source**: yes, byte-identically.
+- **What C3 §4 still lacks**: only the TLS version floor; pinning and hostname are
+  both covered (and pinning is proven by a runtime artifact).
 
 ### Fog remaining
 
-- **A C change cannot be compiled here**: the `pbl-qemu` image carries qemu, swtpm
-  and OVMF but **no EDK II build tool and no `/edk2`** (`command -v build` → absent,
-  `ls /edk2` → absent). So fixing D-116's hostname binding needs an EDK II checkout
-  (pinned commit) before the change can be built or verified — that is the next
-  unblocker, not a code question.
-- D-117's host-side unit tests remain unwritten (the QEMU smoke run is available, but
-  it is one end-to-end run, not per-module assertions).
-- Unchanged blockers on the update thread: `UPDATE_SIGNING_KEY` (no `gh`), KV publish
-  (wrangler unauthenticated), HP-box flip (no hardware).
+- The TLS floor decision is an architecture choice (bypass `EFI_HTTP_PROTOCOL` for
+  the verdict fetch vs patch the platform TlsDxe vs accept), not a code edit — it
+  needs an owner ruling before implementation, and it is the kind of change that
+  should go through `.devin/PENDING-RULING.md`.
+- `PblTlsVerifyCert` is still dead code (223 lines, no caller, no SAN support);
+  keeping it invites a future reader to believe it enforces something.
+- Unchanged blockers: `UPDATE_SIGNING_KEY` (no `gh`), KV publish (wrangler
+  unauthenticated), HP-box flip (no hardware); D-129/D-134 hardware.
 
 ### Debt items closed
 
-- None. D-116 stays OPEN, narrowed; closing it would require the hostname artifact and
-  would be a false close today.
+- None. D-116 stays OPEN with a narrower subject; closing it needs the TLS-floor
+  decision plus an artifact.
 
 ### Debt items still open
 
-- D-116 (narrowed to hostname binding + dead-function decision), D-117 (host-side
-  unit tests), D-100, D-111…D-115, D-118…D-129, D-134 — with the resource-blocked set
-  unchanged (D-120/D-129/D-130/D-134).
+- D-116 (TLS floor + dead-function decision), D-117, D-100, D-111…D-115,
+  D-118…D-129, D-134.
 
 ### Blockers
 
-- EDK II checkout for building firmware changes; hardware for D-129/D-134; owner
-  credentials for the update-thread steps.
+- An owner ruling on the TLS floor for D-116 (three options, one of them an accepted
+  risk). Everything else in the firmware path is reachable from this machine.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, and now a repeat offender): I cited
-  the *ledger* as truth twice without reading the code — first claiming D-132 was
-  open work (S199), then trusting D-116's "empty stub" and D-117's "cannot run
-  locally". AGENTS.md already warns that the ledger goes stale; the durable fix is
-  the procedure used here: read the code, cite file:line, and attach a run artifact.
-  Two of the three sessions' stale-claim incidents would not have happened.
-- **Layer 1 — task specification**: my S199 next-opening sentence ("the only
-  remaining code-shaped item") asserted a ledger state I had not enumerated. Listing
-  the OPEN set takes one grep.
+- **Layer 4 — verification feedback** (primary, fourth consecutive instance): I
+  declared a *capability* blocked without checking the tool the repo already
+  documents (`build-pbl.sh` names its default `EDK2_DIR`; one `ls` would have
+  settled it). The lesson from S200 was "don't cite the ledger as truth"; this
+  session shows it generalises to *my own* conclusions from a previous session —
+  the previous block is just another document that can be wrong.
+- **Layer 2 — context provision**: `build-pbl.sh` existed, worked, and was not in
+  the Makefile, so the build path was invisible to anyone reading `make help`. That
+  is now a target.
 
 ### VERIFY
 
-- `make firmware-qemu`: **17 PASS / 0 FAIL**, twice (once interactively, once writing
-  `artifacts/qemu-harness-2026-11-03.txt`, 35 lines).
-- Code citations verified by grep: `PblInstallTlsCaCertificate` defined
-  `TlsVerify.c:56`, called `PblApp.c:600`; `PblTlsVerifyCert` defined
-  `TlsVerify.c:129`, declared `PblApp.h:866`, **called nowhere**; `TlsCaPin`
-  NULL-checked at `HttpsClient.c:434` and used nowhere else; no `SetSessionData` in
-  `HttpsClient.c`.
-- `make graph-check`: all invariants pass (D-116 remains OPEN, so the closed-count is
+- `cd firmware/PblPkg && ./build-pbl.sh --arch X64` → exit 0; `git status firmware/`
+  empty; hashes identical to the committed binaries (all three).
+- `make -n firmware-build` prints the intended command; the underlying script was
+  executed for real (above), and the target is a one-line wrapper over it.
+- edk2 citations verified by grep in `~/.local/src/edk2`: `HttpsSupport.c:659,666-668,695-702`,
+  `TlsDriver.c:263`, `TlsInit.c:101,107`; and in PBL: `HttpsClient.c:479-491`
+  (only `EFI_HTTP_PROTOCOL`).
+- `make graph-check`: all invariants pass (D-116 still OPEN — the closed count is
   unchanged at 57/61).
 
 ### Session artifacts
 
 - Changed: `docs/adr/PBL-DEBT-LEDGER.md`, `Makefile`,
-  `firmware/PblPkg/artifacts/qemu-harness-2026-11-03.txt` (new).
-- Commit: `88e659e`.
+  `firmware/PblPkg/artifacts/build-reproducible-2026-11-03.txt` (new).
+- Commit: `0087c02`.
 
 ### Next session opening
 
-Make firmware changes buildable before attempting D-116's hostname binding: add an
-EDK II checkout (pinned commit) to `firmware/Dockerfile.qemu` and prove `PblApp.efi`
-rebuilds byte-identically from it — without that, every firmware fix is unverifiable
-and D-116's residual cannot be closed with evidence.
+D-116 is now down to one decision that needs the owner, not an implementation: how
+to enforce the TLS 1.2 floor (drive `EFI_TLS_PROTOCOL` directly for the verdict
+fetch, patch the platform TlsDxe minimum, or record an accepted risk). Open it in
+`.devin/PENDING-RULING.md` with the three options and their threat-model
+consequences; do not start coding it before the ruling, and do not re-derive the
+"firmware can't be built" claim that this session disproved.
 
 ---
 
