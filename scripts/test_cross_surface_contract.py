@@ -85,8 +85,6 @@ WORKER_ONLY_BY_DESIGN = {
 # test until the entry is deleted (the same discipline as the graph's
 # orphaned-commit-refs baseline).
 KNOWN_GAPS = {
-    ("POST", "/api/rearm"): "hardware-UUID-bound re-arm for PblPersistDxe; Express has no rearm route",
-    ("POST", "/api/agent/efs-cert"): "agent-side EFS certificate upload; Express has no efs-cert route",
     ("POST", "/api/enroll"): "admin enrolment by path; Express enrols via POST /api/devices + /api/enroll/{token,claim}",
 }
 

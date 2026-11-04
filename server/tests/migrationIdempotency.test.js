@@ -38,6 +38,7 @@ const EXPECTED_VERSIONS = [
   '014_update_verification',
   '015_enrollment_tokens',
   '016_device_serial',
+  '017_device_efs_certs',
 ];
 
 async function appliedVersions() {
@@ -96,6 +97,44 @@ describe('SQLite migration idempotency (S140)', () => {
     expect(await tableNames()).toEqual(
       expect.arrayContaining(['hw_test_artifacts', 'pbl_kv_store'])
     );
+  });
+
+  test('the EFS certificate store is in the SQLite schema (S208)', async () => {
+    await runMigrations(sqlitePool, { dialect: 'sqlite' });
+
+    const columns = (await sqlitePool.query('PRAGMA table_info(device_efs_certs)')).rows.map(
+      (c) => c.name
+    );
+    expect(columns).toEqual(
+      expect.arrayContaining([
+        'device_id',
+        'cert_base64',
+        'cert_password',
+        'cert_password_enc',
+        'cert_password_nonce',
+        'cert_password_tag',
+        'uploaded_at',
+      ])
+    );
+
+    // One backup per device: the constraint is the "newest wins" semantic, so a
+    // second insert for the same device must be rejected rather than duplicated.
+    await sqlitePool.query(
+      `INSERT INTO devices (id, hostname, owner_name, status) VALUES ('dev-c1','DEV-C1','O','active')`
+    );
+    await sqlitePool.query(
+      `INSERT INTO device_efs_certs (device_id, cert_base64, uploaded_at)
+       VALUES ('dev-c1','QUJD','2026-01-01T00:00:00Z')`
+    );
+    await expect(
+      sqlitePool.query(
+        `INSERT INTO device_efs_certs (device_id, cert_base64, uploaded_at)
+         VALUES ('dev-c1','REVG','2026-01-02T00:00:00Z')`
+      )
+    ).rejects.toThrow();
+
+    await sqlitePool.query("DELETE FROM device_efs_certs WHERE device_id = 'dev-c1'");
+    await sqlitePool.query("DELETE FROM devices WHERE id = 'dev-c1'");
   });
 
   test('token enrolment and the device serial are in the SQLite schema (S205)', async () => {

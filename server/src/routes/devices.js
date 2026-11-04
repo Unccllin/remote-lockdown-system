@@ -191,6 +191,56 @@ router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
   }
 });
 
+/**
+ * GET /api/devices/:id/efs-cert — the admin downloads a device's EFS backup.
+ *
+ * Super-admin only: the response is a recovery secret (the .pfx and the password
+ * that unlocks it), which is the same gate the Worker puts on it. The password is
+ * decrypted from the encrypted columns when present and falls back to the
+ * plaintext column for rows written before field encryption was configured.
+ */
+router.get('/:id/efs-cert', requireAuth, requireRole('super-admin'), async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT * FROM device_efs_certs WHERE device_id = $1', [
+      req.params.id,
+    ]);
+    const cert = result.rows[0];
+    if (!cert) {
+      return res.status(404).json({ error: 'No EFS certificate backup for this device' });
+    }
+
+    let password = '';
+    try {
+      password =
+        readDualMode(
+          cert,
+          'cert_password',
+          'cert_password_enc',
+          'cert_password_nonce',
+          'cert_password_tag'
+        ) || '';
+    } catch (err) {
+      // A key that can no longer decrypt (rotated FIELD_ENCRYPTION_KEY) must not
+      // hand back a wrong password as if it were the right one.
+      return res.status(500).json({ error: 'EFS certificate password cannot be decrypted' });
+    }
+
+    await pool.query(
+      'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
+      [req.params.id, req.admin?.id || null, 'efs_cert_downloaded', {}]
+    );
+
+    return res.json({
+      device_id: cert.device_id,
+      cert_base64: cert.cert_base64,
+      cert_password: password,
+      uploaded_at: cert.uploaded_at,
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.patch('/:id', requireAuth, requireRole('operator'), async (req, res) => {
   const { owner_name } = req.body;
   if (owner_name !== undefined && (typeof owner_name !== 'string' || owner_name.length > 200)) {

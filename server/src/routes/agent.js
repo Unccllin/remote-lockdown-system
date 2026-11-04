@@ -863,6 +863,82 @@ router.get('/update', agentAuth, async (req, res) => {
  *
  * Auth: agentAuth (per-device key or legacy shared key).
  */
+/**
+ * POST /api/agent/efs-cert — the agent escrows its EFS recovery certificate.
+ *
+ * Body: { cert_base64, cert_password? } — the .pfx (already an encrypted
+ * container) plus the password that protects it. Agent-authenticated: the device
+ * is identified by its own key, so an agent can only store *its own* backup.
+ *
+ * The Worker has had this route all along and agent.py posts to it, but Express
+ * had none, so on a self-hosted deployment every upload 404'd and no backup was
+ * ever kept (S208, found by the cross-surface audit). The password is encrypted at
+ * rest when FIELD_ENCRYPTION_KEY is configured, using the repo's dual-mode pattern.
+ */
+router.post('/efs-cert', agentAuth, hmacVerify(), async (req, res, next) => {
+  const device = req.device;
+  const { cert_base64: certBase64, cert_password: certPassword } = req.body || {};
+
+  if (typeof certBase64 !== 'string' || certBase64.length === 0) {
+    return res.status(400).json({ error: 'Missing cert_base64 field' });
+  }
+
+  try {
+    // Encrypt the password that protects the .pfx (the .pfx is already encrypted).
+    let enc = null;
+    if (certPassword) {
+      try {
+        enc = encryptField(certPassword);
+      } catch (err) {
+        // No FIELD_ENCRYPTION_KEY configured (dev). The plaintext column keeps the
+        // backup usable; the column is marked as such by the null enc columns.
+        req.log?.warn?.({ err: err.message }, 'EFS cert password stored unencrypted');
+      }
+    }
+
+    const now = new Date().toISOString();
+    const params = [
+      device.id,
+      certBase64,
+      // The plaintext column is only used when encryption is unavailable. Keeping
+      // the password in BOTH columns would leave the secret readable at rest,
+      // which is exactly what encrypting it was meant to prevent.
+      enc ? null : certPassword || null,
+      enc ? enc.ciphertext : null,
+      enc ? enc.nonce : null,
+      enc ? enc.tag : null,
+      now,
+    ];
+
+    // One row per device (the newest backup wins) — update, then insert if absent.
+    const updated = await pool.query(
+      `UPDATE device_efs_certs
+          SET cert_base64 = $2, cert_password = $3, cert_password_enc = $4,
+              cert_password_nonce = $5, cert_password_tag = $6, uploaded_at = $7
+        WHERE device_id = $1`,
+      params
+    );
+    if (updated.rowCount === 0) {
+      await pool.query(
+        `INSERT INTO device_efs_certs
+           (device_id, cert_base64, cert_password, cert_password_enc,
+            cert_password_nonce, cert_password_tag, uploaded_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        params
+      );
+    }
+
+    await pool.query(
+      'INSERT INTO audit_log (device_id, admin_id, action, detail) VALUES ($1, $2, $3, $4)',
+      [device.id, null, 'efs_cert_uploaded', {}]
+    );
+
+    res.json({ device: { id: device.id, hostname: device.hostname }, stored: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/download', agentAuth, async (req, res) => {
   const agentPlatform = req.query.platform || 'linux';
 
