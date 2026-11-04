@@ -908,13 +908,24 @@ debt_items:
     artifact_ref: "RFC 8949 vectors + policy/verdict CBOR parse in QEMU boots"
 
   - id: D-116
-    description: "TLS certificate pin verification not implemented (C3 §4)"
-    close_criteria: "Certificate pin extraction from C4 policy + TLS \
-                    handshake verification"
+    description: >-
+      TLS floor (C3 §4). Chain pinning and hostname binding are covered, and the
+      version floor is enforced at the terminator: PblInstallTlsCaCertificate
+      (D-132) rebuilds the platform trust store from C4 key 78, EDK2's HttpDxe
+      applies EfiTlsVerifyHost for the URI host, and Caddy states
+      protocols tls1.2 tls1.3 (Cloudflare's zone minimum is documented). The device
+      cannot raise its own floor: PBL holds only EFI_HTTP_PROTOCOL and TlsDxe
+      defaults its minimum to TLS 1.0.
+    close_criteria: >-
+      A terminator configured with the repository's stated floor refuses TLS 1.0
+      and 1.1 and accepts 1.2/1.3, with the client-side limitation documented and
+      the accepted residual recorded (verdict integrity rests on the COSE
+      signature, so a downgrade cannot forge a decision).
     status: CLOSED
     category: SECURITY
-    commit_ref: "684d7eb — TlsVerify.c"
-    artifact_ref: "firmware/PblPkg/test-output-d116-tls-pin.log (committed)"
+    commit_ref: "b397cad — Caddyfile TLS floor + scripts/test_tls_floor.py"
+    artifact_ref: "firmware/PblPkg/artifacts/d116-tls-floor-server-side.txt; \
+                  firmware/PblPkg/artifacts/d132-mismatched-ca-results.txt"
 
   - id: D-117
     description: "No runtime tests for PBL modules"

@@ -7801,3 +7801,136 @@ consequences; do not start coding it before the ruling, and do not re-derive the
 "firmware can't be built" claim that this session disproved.
 
 ---
+
+---
+
+## Session 202 — 2026-11-03 (D-116 closed by ruling; the drift was in the markdown)
+
+### RULE-ZERO
+
+**Read**: session 201's opening; `.devin/PENDING-RULING.md`;
+`firmware/PblPkg/PblApp/HttpsClient.c` (TLS handle usage);
+`~/.local/src/edk2` `NetworkPkg/HttpDxe/HttpsSupport.c`, `NetworkPkg/TlsDxe/
+TlsDriver.c`, `CryptoPkg/Library/TlsLib/TlsInit.c`; `Caddyfile`;
+`.devin/graph/GRAPH-SPEC.yaml` (D-116, D-117) and `graph_assert.py` (I2: commit_ref
+must resolve via `git rev-parse --verify`, every plain path in artifact_ref must
+exist); `docs/adr/PBL-DEBT-LEDGER.md` D-116.
+
+**Finding 1 — the enforcement point is a ruling, and it is now decided.** The device
+cannot raise its own TLS floor: `PblHttpsPost` holds only `EFI_HTTP_PROTOCOL`
+(`HttpsClient.c:479-491`), HttpDxe sets ConnectionEnd/VerifyMethod/VerifyHost/
+SessionState and exposes no `EfiTlsVersion`, and `TlsDriver.c:263` creates the
+context as `TLS10_…` which `TlsInit.c:107` applies as the `SSL_CTX` minimum. Owner
+ruling: **enforce at the terminator, document the client limitation.**
+
+**Finding 2 — a test for this is easy to write vacuously.** OpenSSL 3 at its default
+security level refuses to *offer* TLS 1.0 (`no protocols available`), so a naive
+`openssl s_client -tls1` check "passes" while the server is never consulted. The test
+forces the offer with `-cipher DEFAULT@SECLEVEL=0` and treats `no protocols
+available` as a **failure**.
+
+**Finding 3 — the status drift was in the markdown, not the spec.** `GRAPH-SPEC.yaml`
+has carried D-116 (and D-117) as **CLOSED** for many sessions; the markdown ledger
+said OPEN. Since `graph_assert.py` reads the spec, the invariants never noticed, and
+my S200/S201 "narrowing" edits were rewriting the *non-authoritative* record.
+
+### IMPLEMENT
+
+- `Caddyfile` — `tls { protocols tls1.2 tls1.3 }`, with the reason (client cannot
+  enforce; default is not a decision), validated against the real binary
+  (`caddy validate`, exit "Valid configuration").
+- `scripts/test_tls_floor.py` — two tests: (1) the repository *states* the floor
+  (`protocols tls1.2`), (2) a Caddy carrying that line refuses TLS 1.0/1.1 and
+  accepts 1.2/1.3, with the vacuity guard above. Skips loudly when docker/openssl are
+  absent rather than faking a terminator.
+- `serverless/README.md` — the Cloudflare counterpart: zone *Minimum TLS Version*
+  must be 1.2 (a dashboard action, documented as a deployment step, not assumed), and
+  the note that verdict integrity rests on the COSE signature.
+- `docs/adr/PBL-DEBT-LEDGER.md` — D-116 **CLOSED**, aligned to the spec, with all
+  three C3 §4 parts placed (pinning = D-132 in firmware; hostname = EDK2; floor =
+  terminator), the accepted residual recorded, and `PblTlsVerifyCert` flagged as
+  redundant dead code.
+- `.devin/graph/GRAPH-SPEC.yaml` — D-116's `commit_ref`/`artifact_ref` updated from
+  the weak original evidence (`684d7eb` + a log that shows an `http://` fetch) to the
+  closing evidence (`b397cad`, two artifacts that resolve).
+- `.devin/PENDING-RULING.md` — ruling recorded and closed (no open items).
+- `firmware/PblPkg/artifacts/d116-tls-floor-server-side.txt` — the run artifact.
+
+### Fog cleared
+
+- **Where the floor is enforced**: at the terminator (Caddy stated, Cloudflare
+  documented), because the client structurally cannot.
+- **Whether a TLS-floor test can be trusted**: only with the SECLEVEL=0 forcing and
+  the "client refused to offer" guard; both are now in the test.
+- **Which record was stale**: the markdown, not the spec — and D-117 has the same
+  drift, unreconciled here.
+
+### Fog remaining
+
+- **D-117 drift is unresolved**: `GRAPH-SPEC.yaml` says CLOSED, the markdown ledger
+  says OPEN. Nothing reconciles the two, which is why this drifted for many sessions.
+- **`PblTlsVerifyCert` is dead code** (223 lines, no caller, no SAN support) and now
+  redundant — it needs a decision: delete it, or call it as defence in depth.
+- **The Cloudflare zone setting is an owner action** (dashboard; credentials blocked
+  here), so the serverless floor is documented but not verified on a live zone.
+- Unchanged blockers: `UPDATE_SIGNING_KEY` (no `gh`), KV publish (wrangler
+  unauthenticated), HP box (no hardware); D-129/D-134.
+
+### Debt items closed
+
+- **D-116** — closed by ruling, with `commit_ref: b397cad` and two resolving
+  artifacts; the markdown and the spec now agree.
+
+### Debt items still open
+
+- D-117 (markdown/spec disagreement), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None for the code. Cloudflare's zone minimum and the hardware items remain
+  owner/environment actions.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the markdown ledger and
+  `GRAPH-SPEC.yaml` disagree on at least two items (D-116, D-117) and nothing checks
+  them against each other, so the invariants stayed green while the human record
+  said the opposite of the machine record. Two sessions of "correcting D-116" were
+  spent editing the wrong file. A consistency check (spec status vs ledger status,
+  per id) is cheap and would have caught it.
+- **Layer 1 — task specification**: my S200/S201 entries re-stated D-116 as OPEN
+  without checking the spec's status field, which I had already read for the graph
+  invariants. Reading the authoritative field first would have framed the work as
+  "close the evidence gap", not "reopen a closed item".
+
+### VERIFY
+
+- `scripts/test_tls_floor.py`: **2 passed** (~2 s); auto-discovered by
+  `make test-scripts` (`=== scripts/test_tls_floor.py === 2 passed`).
+- Non-vacuity: lowering the Caddyfile floor to `tls1.0` fails **both** tests
+  (`assert 'tls1.0' == 'tls1.2'`, and `_server_refused` false), then restored.
+- `caddy validate` on the real `Caddyfile` with `DOMAIN` supplied: "Valid
+  configuration".
+- `make graph-check`: all invariants pass — including I2, which resolves `b397cad`
+  and both artifact paths.
+- Handshake evidence (probe, then encoded in the test): TLS 1.2 → `Protocol :
+  TLSv1.2`; TLS 1.0/1.1 forced → `alert protocol version` (alert 70) from the
+  server; TLS 1.0 unforced → `no protocols available` (the vacuous case).
+
+### Session artifacts
+
+- Changed: `Caddyfile`, `scripts/test_tls_floor.py` (new),
+  `serverless/README.md`, `docs/adr/PBL-DEBT-LEDGER.md`,
+  `.devin/graph/GRAPH-SPEC.yaml`, `.devin/PENDING-RULING.md`,
+  `firmware/PblPkg/artifacts/d116-tls-floor-server-side.txt` (new).
+- Commit: `b397cad` (code) — the session's own record follows in the graph commit.
+
+### Next session opening
+
+Close the harness gap this session exposed: add a consistency check that compares
+`GRAPH-SPEC.yaml`'s debt status with the markdown ledger's `**Status**` line per id
+(it would have caught the D-116/D-117 drift), then reconcile D-117 and decide
+`PblTlsVerifyCert`'s fate (delete, or call it as defence in depth). No hardware or
+credentials needed for either.
+
+---

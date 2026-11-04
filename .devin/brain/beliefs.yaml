@@ -1049,3 +1049,31 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-057
+  statement: 'The TLS 1.2 floor for the verdict fetch is enforced at the terminator, not by the device:
+    Caddy states ''tls { protocols tls1.2 tls1.3 }'' (validated by the real caddy binary) and Cloudflare''s
+    zone Minimum TLS Version must be 1.2 (a dashboard step, documented in serverless/README.md). The device
+    structurally cannot raise it — PBL holds only EFI_HTTP_PROTOCOL, HttpDxe exposes no EfiTlsVersion,
+    and EDK2''s TlsDxe creates its context as TLS10 (TlsDriver.c:263) which TlsInit.c:107 applies as the
+    SSL_CTX minimum with only SSLv3 disabled. scripts/test_tls_floor.py proves the floor behaviourally
+    AND must force the offer with ''-cipher DEFAULT@SECLEVEL=0'' because OpenSSL 3 refuses to offer TLS
+    1.0 at its default security level: without that, the test passes with the server never consulted.
+    Also: docs/adr/PBL-DEBT-LEDGER.md (markdown) and .devin/graph/GRAPH-SPEC.yaml disagreed about D-116
+    and D-117 status — the spec is authoritative for graph invariants and the markdown had drifted, which
+    graph_assert cannot detect.'
+  domain: firmware/tls
+  status: confirmed
+  evidence_level: code-read
+  provenance: test_tls_floor.py 2 passed and auto-discovered; falsified by lowering the Caddyfile floor
+    to tls1.0 (both tests fail); caddy validate clean; handshake probe recorded alert 70 for forced 1.0/1.1
+    and 'no protocols available' unforced; graph-check passes with b397cad
+  source: Caddyfile; scripts/test_tls_floor.py; serverless/README.md; firmware/PblPkg/PblApp/HttpsClient.c;
+    ~/.local/src/edk2 NetworkPkg/HttpDxe/HttpsSupport.c + NetworkPkg/TlsDxe/TlsDriver.c + CryptoPkg/Library/TlsLib/TlsInit.c;
+    .devin/graph/GRAPH-SPEC.yaml; docs/adr/PBL-DEBT-LEDGER.md
+  asserted: '2026-11-04'
+  last_verified: '2026-11-04'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

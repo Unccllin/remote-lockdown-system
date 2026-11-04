@@ -53,80 +53,84 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 201 — 2026-11-03 (EDK II was here all along; the firmware rebuilds byte-identically)
+## Latest session: 202 — 2026-11-03 (D-116 closed by ruling; the drift was in the markdown)
 
 ### Fog cleared
 
-- **Whether firmware changes can be built and verified here**: yes, with the repo's
-  own script; no Docker or edk2 clone needed.
-- **Whether the committed firmware matches its source**: yes, byte-identically.
-- **What C3 §4 still lacks**: only the TLS version floor; pinning and hostname are
-  both covered (and pinning is proven by a runtime artifact).
+- **Where the floor is enforced**: at the terminator (Caddy stated, Cloudflare
+  documented), because the client structurally cannot.
+- **Whether a TLS-floor test can be trusted**: only with the SECLEVEL=0 forcing and
+  the "client refused to offer" guard; both are now in the test.
+- **Which record was stale**: the markdown, not the spec — and D-117 has the same
+  drift, unreconciled here.
 
 ### Fog remaining
 
-- The TLS floor decision is an architecture choice (bypass `EFI_HTTP_PROTOCOL` for
-  the verdict fetch vs patch the platform TlsDxe vs accept), not a code edit — it
-  needs an owner ruling before implementation, and it is the kind of change that
-  should go through `.devin/PENDING-RULING.md`.
-- `PblTlsVerifyCert` is still dead code (223 lines, no caller, no SAN support);
-  keeping it invites a future reader to believe it enforces something.
+- **D-117 drift is unresolved**: `GRAPH-SPEC.yaml` says CLOSED, the markdown ledger
+  says OPEN. Nothing reconciles the two, which is why this drifted for many sessions.
+- **`PblTlsVerifyCert` is dead code** (223 lines, no caller, no SAN support) and now
+  redundant — it needs a decision: delete it, or call it as defence in depth.
+- **The Cloudflare zone setting is an owner action** (dashboard; credentials blocked
+  here), so the serverless floor is documented but not verified on a live zone.
 - Unchanged blockers: `UPDATE_SIGNING_KEY` (no `gh`), KV publish (wrangler
-  unauthenticated), HP-box flip (no hardware); D-129/D-134 hardware.
+  unauthenticated), HP box (no hardware); D-129/D-134.
 
 ### Debt items closed
 
-- None. D-116 stays OPEN with a narrower subject; closing it needs the TLS-floor
-  decision plus an artifact.
+- **D-116** — closed by ruling, with `commit_ref: b397cad` and two resolving
+  artifacts; the markdown and the spec now agree.
 
 ### Debt items still open
 
-- D-116 (TLS floor + dead-function decision), D-117, D-100, D-111…D-115,
-  D-118…D-129, D-134.
+- D-117 (markdown/spec disagreement), D-100, D-111…D-115, D-118…D-129, D-134.
 
 ### Blockers
 
-- An owner ruling on the TLS floor for D-116 (three options, one of them an accepted
-  risk). Everything else in the firmware path is reachable from this machine.
+- None for the code. Cloudflare's zone minimum and the hardware items remain
+  owner/environment actions.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, fourth consecutive instance): I
-  declared a *capability* blocked without checking the tool the repo already
-  documents (`build-pbl.sh` names its default `EDK2_DIR`; one `ls` would have
-  settled it). The lesson from S200 was "don't cite the ledger as truth"; this
-  session shows it generalises to *my own* conclusions from a previous session —
-  the previous block is just another document that can be wrong.
-- **Layer 2 — context provision**: `build-pbl.sh` existed, worked, and was not in
-  the Makefile, so the build path was invisible to anyone reading `make help`. That
-  is now a target.
+- **Layer 4 — verification feedback** (primary): the markdown ledger and
+  `GRAPH-SPEC.yaml` disagree on at least two items (D-116, D-117) and nothing checks
+  them against each other, so the invariants stayed green while the human record
+  said the opposite of the machine record. Two sessions of "correcting D-116" were
+  spent editing the wrong file. A consistency check (spec status vs ledger status,
+  per id) is cheap and would have caught it.
+- **Layer 1 — task specification**: my S200/S201 entries re-stated D-116 as OPEN
+  without checking the spec's status field, which I had already read for the graph
+  invariants. Reading the authoritative field first would have framed the work as
+  "close the evidence gap", not "reopen a closed item".
 
 ### VERIFY
 
-- `cd firmware/PblPkg && ./build-pbl.sh --arch X64` → exit 0; `git status firmware/`
-  empty; hashes identical to the committed binaries (all three).
-- `make -n firmware-build` prints the intended command; the underlying script was
-  executed for real (above), and the target is a one-line wrapper over it.
-- edk2 citations verified by grep in `~/.local/src/edk2`: `HttpsSupport.c:659,666-668,695-702`,
-  `TlsDriver.c:263`, `TlsInit.c:101,107`; and in PBL: `HttpsClient.c:479-491`
-  (only `EFI_HTTP_PROTOCOL`).
-- `make graph-check`: all invariants pass (D-116 still OPEN — the closed count is
-  unchanged at 57/61).
+- `scripts/test_tls_floor.py`: **2 passed** (~2 s); auto-discovered by
+  `make test-scripts` (`=== scripts/test_tls_floor.py === 2 passed`).
+- Non-vacuity: lowering the Caddyfile floor to `tls1.0` fails **both** tests
+  (`assert 'tls1.0' == 'tls1.2'`, and `_server_refused` false), then restored.
+- `caddy validate` on the real `Caddyfile` with `DOMAIN` supplied: "Valid
+  configuration".
+- `make graph-check`: all invariants pass — including I2, which resolves `b397cad`
+  and both artifact paths.
+- Handshake evidence (probe, then encoded in the test): TLS 1.2 → `Protocol :
+  TLSv1.2`; TLS 1.0/1.1 forced → `alert protocol version` (alert 70) from the
+  server; TLS 1.0 unforced → `no protocols available` (the vacuous case).
 
 ### Session artifacts
 
-- Changed: `docs/adr/PBL-DEBT-LEDGER.md`, `Makefile`,
-  `firmware/PblPkg/artifacts/build-reproducible-2026-11-03.txt` (new).
-- Commit: `0087c02`.
+- Changed: `Caddyfile`, `scripts/test_tls_floor.py` (new),
+  `serverless/README.md`, `docs/adr/PBL-DEBT-LEDGER.md`,
+  `.devin/graph/GRAPH-SPEC.yaml`, `.devin/PENDING-RULING.md`,
+  `firmware/PblPkg/artifacts/d116-tls-floor-server-side.txt` (new).
+- Commit: `b397cad` (code) — the session's own record follows in the graph commit.
 
 ### Next session opening
 
-D-116 is now down to one decision that needs the owner, not an implementation: how
-to enforce the TLS 1.2 floor (drive `EFI_TLS_PROTOCOL` directly for the verdict
-fetch, patch the platform TlsDxe minimum, or record an accepted risk). Open it in
-`.devin/PENDING-RULING.md` with the three options and their threat-model
-consequences; do not start coding it before the ruling, and do not re-derive the
-"firmware can't be built" claim that this session disproved.
+Close the harness gap this session exposed: add a consistency check that compares
+`GRAPH-SPEC.yaml`'s debt status with the markdown ledger's `**Status**` line per id
+(it would have caught the D-116/D-117 drift), then reconcile D-117 and decide
+`PblTlsVerifyCert`'s fate (delete, or call it as defence in depth). No hardware or
+credentials needed for either.
 
 ---
 
