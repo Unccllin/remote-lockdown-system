@@ -8718,3 +8718,128 @@ resolving any existing duplicates) and correcting the message, and prove the cho
 behaviour with a test — then the S202 objective.
 
 ---
+
+---
+
+## Session 209 — 2026-11-03 (why the installers would not download: one missing binary, and an opaque error)
+
+### RULE-ZERO
+
+**Read**: `dashboard/src/pages/EnrollPage.jsx` (the two download paths and
+`useServerlessMode`); `server/src/routes/installer.js` (`/agent-version`,
+`resolveAgentBinary`, `findNsis`, the NSIS and ZIP routes); `agent/dist` contents;
+`docs/adr/PBL-…` not relevant; the live API's own responses.
+
+**Finding 1 — both symptoms have one cause, and it is the host, not the UI.** The
+operator reported "cannot download the setup wizard" and "the PowerShell command
+does not work". `agent/dist` holds `lockdown-agent.exe` but **no
+`lockdown-installer.exe`** — the CLI installer that the `.ps1` wrapper runs and that
+the NSIS script embeds. So `GET /api/installer/:id`, `/:id?platform=win` and
+`/:id/nsis` all answer **503** with the same message. A Linux agent ZIP
+(`?platform=linux`) works: 200, 27 MB.
+
+Correction to an assumption in S200/S208: **`makensis` is installed** at
+`~/.local/nsis/usr/bin/makensis` (outside `PATH`, so `which makensis` misses it).
+`findNsis()` looks there. So the GUI wizard needs exactly one thing: the
+Windows-built installer binary.
+
+**Finding 2 — the repo publishes no releases**, so the missing binary cannot be
+fetched: `https://api.github.com/repos/Unccllin/remote-lockdown-system/releases`
+returns `[]`. It has to be built on Windows (`agent/build.ps1` /
+`agent/installer.spec`) and staged.
+
+**Finding 3 — the real defect was legibility.** The page offered a button, let the
+operator click, and toasted the raw server error. Nothing told them which artefact
+was missing, that the host cannot produce it, or what would fix it.
+
+### IMPLEMENT
+
+- `GET /api/installer/agent-version` now reports
+  `installer_available`, `nsis_available`, `windows_installer_ready` and
+  `installer_unavailable_reason`, from a **local existence check only**
+  (`localBinaryPath`) — unlike `resolveAgentBinary` it never tries a GitHub
+  release, because this answers a probe on every page load.
+- `EnrollPage` probes it on mount and, when Windows installers cannot be produced,
+  renders an amber notice naming the missing artefact and the remedy
+  (`agent/build.ps1` / `agent/installer.spec`, place it in `agent/dist` or
+  `AGENT_BINARIES_DIR`, install `makensis` for the wizard), and disables the two
+  Windows buttons with the reason as their `title`.
+- **Unknown is not "unavailable"**: a failed probe leaves the buttons enabled, so a
+  transient probe error cannot block a server that works.
+- Dropped an unused `React` default import from the page (0 references; the JSX
+  runtime makes it unnecessary, as the repo's other pages already assume).
+
+### Fog cleared
+
+- **What was broken**: the host cannot build Windows installers (missing
+  `lockdown-installer.exe`); the API said so, the UI did not.
+- **Whether makensis was the blocker**: no — it is installed outside `PATH`, and
+  `findNsis()` finds it. Only the installer binary is missing.
+- **Whether a released binary could be fetched**: no — the repository has no
+  releases at all.
+
+### Fog remaining
+
+- **Producing `lockdown-installer.exe` requires a Windows host** (`agent/build.ps1`
+  → PyInstaller). It cannot be built here, and there is nothing to download, so the
+  Windows one-click/`.ps1` installers stay unavailable on this machine until that
+  binary is staged. The notice now says exactly that.
+- `make build` would build it on Windows; the harness has no Windows runner
+  reachable from here (the HP box is the obvious candidate).
+- Unchanged: `devices.hostname` uniqueness decision; the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- A Windows host to build `lockdown-installer.exe` (the same class of blocker as
+  D-129/D-134, but a *build* dependency rather than a hardware-test one).
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): every test asserted that the
+  download routes *exist*; none asserted that they can *succeed*, and nothing
+  surfaced the prerequisite. The routes' 503s were correct and well-worded — and
+  invisible until someone clicked. A probe the page can call before offering an
+  action is the fix, and it is now tested from both sides.
+- **Layer 2 — context provision** (secondary): the requirement (a Windows-built
+  `lockdown-installer.exe`, plus makensis for the wrapper) was documented nowhere an
+  operator or agent would look; it lived in a route's error string.
+
+### VERIFY
+
+- Live, after restarting the API (the first probe call proved the running process
+  predated the change — it answered without the new fields):
+  `GET /api/installer/agent-version?platform=win` →
+  `installer_available: false, nsis_available: true, windows_installer_ready: false,
+  installer_unavailable_reason: "lockdown-installer.exe is not staged in the server
+  agent binaries directory"`; the Windows ZIP still answers **503** (correct — the
+  binary is genuinely absent), and the Linux ZIP still answers **200**.
+- `server`: **769 passed** (767 + 2); `dashboard`: **216 passed** (214 + 2);
+  eslint clean on both.
+- The two new dashboard tests pin the behaviour that matters: the notice renders and
+  the wizard is disabled when unavailable, and the wizard stays **enabled** when the
+  probe fails (unknown ≠ unavailable).
+
+### Session artifacts
+
+- Changed: `server/src/routes/installer.js`,
+  `server/tests/installer.routes.test.js`, `dashboard/src/pages/EnrollPage.jsx`,
+  `dashboard/tests/EnrollPage.test.jsx`.
+- Commit: `f19852e`.
+
+### Next session opening
+
+Decide where `lockdown-installer.exe` comes from, because it is the last thing
+blocking the Windows installers on a self-hosted server: either build it on the HP
+box and stage it (`agent/build.ps1`, then copy to `agent/dist`), or add it to the
+release pipeline's staged assets so a self-hosted operator can fetch it. Then take
+the `devices.hostname` uniqueness decision.
+
+---

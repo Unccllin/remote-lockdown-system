@@ -53,30 +53,26 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 208 — 2026-11-03 (the audit's first two findings, closed)
+## Latest session: 209 — 2026-11-03 (why the installers would not download: one missing binary, and an opaque error)
 
 ### Fog cleared
 
-- **Whether a self-hosted device could recover encrypted files after a wipe**: it
-  could not before (no backup was stored). It can now — upload, encrypted at rest,
-  audited download.
-- **Whether a wiped machine could re-arm against a self-hosted server**: it can now,
-  and only while flagged.
-- **What the re-arm response must be**: plain text, not JSON — established from the
-  firmware's `Invoke-RestMethod` + `Set-Content`, not assumed.
+- **What was broken**: the host cannot build Windows installers (missing
+  `lockdown-installer.exe`); the API said so, the UI did not.
+- **Whether makensis was the blocker**: no — it is installed outside `PATH`, and
+  `findNsis()` finds it. Only the installer binary is missing.
+- **Whether a released binary could be fetched**: no — the repository has no
+  releases at all.
 
 ### Fog remaining
 
-- `POST /api/enroll` (the Worker's admin enrolment path) remains the last
-  `KNOWN_GAPS` entry. It is a path difference rather than a missing capability
-  (Express enrols through `POST /api/devices` + `/api/enroll/{token,claim}`), so it
-  stays listed with that reason until someone decides whether to alias it.
-- The re-arm route is unauthenticated by design; its safety rests on the
-  flagged-only rule plus the rate limit. A hostile caller who learns a hardware UUID
-  of a *flagged* device can re-key it — the Computrace trade-off, accepted and
-  documented in the route.
-- Unchanged: `devices.hostname` uniqueness decision; the S202 objective
-  (spec-vs-ledger consistency check, D-117 reconciliation, `PblTlsVerifyCert`'s fate).
+- **Producing `lockdown-installer.exe` requires a Windows host** (`agent/build.ps1`
+  → PyInstaller). It cannot be built here, and there is nothing to download, so the
+  Windows one-click/`.ps1` installers stay unavailable on this machine until that
+  binary is staged. The notice now says exactly that.
+- `make build` would build it on Windows; the harness has no Windows runner
+  reachable from here (the HP box is the obvious candidate).
+- Unchanged: `devices.hostname` uniqueness decision; the S202 objective.
 
 ### Debt items closed
 
@@ -88,56 +84,49 @@
 
 ### Blockers
 
-- None.
+- A Windows host to build `lockdown-installer.exe` (the same class of blocker as
+  D-129/D-134, but a *build* dependency rather than a hardware-test one).
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, and this time the harness did its
-  job): the cross-surface audit is what defined the work — two `KNOWN_GAPS` entries
-  became the session's scope, and the shrink-only rule will fail the suite if either
-  route is ever removed. This is the first session where the *fix* was found for me
-  rather than by accident.
-- **Layer 3 — execution environment**: the encryption-at-rest defect was invisible to
-  the unit test (which asserted the encrypted columns were populated) and only
-  appeared when the row was read out of the real database. Asserting *absence* of the
-  plaintext is now part of the test, not just presence of the ciphertext.
+- **Layer 4 — verification feedback** (primary): every test asserted that the
+  download routes *exist*; none asserted that they can *succeed*, and nothing
+  surfaced the prerequisite. The routes' 503s were correct and well-worded — and
+  invisible until someone clicked. A probe the page can call before offering an
+  action is the fix, and it is now tested from both sides.
+- **Layer 2 — context provision** (secondary): the requirement (a Windows-built
+  `lockdown-installer.exe`, plus makensis for the wrapper) was documented nowhere an
+  operator or agent would look; it lived in a route's error string.
 
 ### VERIFY
 
-- `server`: **767 passed** (47 suites), eslint clean.
-- `scripts/test_cross_surface_contract.py`: **6 passed** with both entries removed
-  from `KNOWN_GAPS`.
-- Live against the restarted API (migration 017 applied at boot):
-  1. agent upload with the device key → **200** `{stored: true}`
-  2. super-admin download → `cert_base64` plus the **decrypted** password
-  3. at rest → `plaintext col: None`, encrypted columns populated
-  4. re-arm of a `stolen` device by hardware UUID → **200 text/plain**, script body
-     starting `# PowerShell install script for Remote Lockdown Agent`
-  5. re-arm of an **active** device → **404** (same body as unknown — no probing)
-  6. unknown hardware UUID → **404**
-  7. test device deleted afterwards; the local device list is back to its three rows
-- `make graph-check`: all invariants pass.
+- Live, after restarting the API (the first probe call proved the running process
+  predated the change — it answered without the new fields):
+  `GET /api/installer/agent-version?platform=win` →
+  `installer_available: false, nsis_available: true, windows_installer_ready: false,
+  installer_unavailable_reason: "lockdown-installer.exe is not staged in the server
+  agent binaries directory"`; the Windows ZIP still answers **503** (correct — the
+  binary is genuinely absent), and the Linux ZIP still answers **200**.
+- `server`: **769 passed** (767 + 2); `dashboard`: **216 passed** (214 + 2);
+  eslint clean on both.
+- The two new dashboard tests pin the behaviour that matters: the notice renders and
+  the wizard is disabled when unavailable, and the wizard stays **enabled** when the
+  probe fails (unknown ≠ unavailable).
 
 ### Session artifacts
 
-- Changed: `server/src/db/migrations/017_device_efs_certs.sql`,
-  `server/src/db/migrations-sqlite/017_device_efs_certs.sql`,
-  `server/src/routes/rearm.js` (new), `server/src/routes/agent.js`,
-  `server/src/routes/devices.js`, `server/src/index.js`,
-  `server/tests/rearm.routes.test.js` (new),
-  `server/tests/efsCert.routes.test.js` (new),
-  `server/tests/migrationIdempotency.test.js`,
-  `scripts/test_cross_surface_contract.py`.
-- Commit: `2c99973`.
+- Changed: `server/src/routes/installer.js`,
+  `server/tests/installer.routes.test.js`, `dashboard/src/pages/EnrollPage.jsx`,
+  `dashboard/tests/EnrollPage.test.jsx`.
+- Commit: `f19852e`.
 
 ### Next session opening
 
-Take the `devices.hostname` uniqueness decision, which has now been deferred twice:
-`devices.js` returns 409 "Hostname already registered" on a `23505` that the schema
-cannot produce for a hostname (`hostname` has no UNIQUE constraint; only
-`mac_address` and `hardware_uuid` do). Decide between a partial unique index (after
-resolving any existing duplicates) and correcting the message, and prove the chosen
-behaviour with a test — then the S202 objective.
+Decide where `lockdown-installer.exe` comes from, because it is the last thing
+blocking the Windows installers on a self-hosted server: either build it on the HP
+box and stage it (`agent/build.ps1`, then copy to `agent/dist`), or add it to the
+release pipeline's staged assets so a self-hosted operator can fetch it. Then take
+the `devices.hostname` uniqueness decision.
 
 ---
 

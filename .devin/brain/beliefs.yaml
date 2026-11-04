@@ -1229,3 +1229,30 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-064
+  statement: 'The Windows installers on a self-hosted server need exactly one artefact that a Linux host
+    cannot produce: lockdown-installer.exe (the CLI installer that the .ps1 wrapper runs and the NSIS
+    script embeds). makensis IS available at ~/.local/nsis/usr/bin/makensis (outside PATH, so ''which
+    makensis'' misses it) and findNsis() looks there, so once that binary is staged the GUI wizard works.
+    agent/dist contains lockdown-agent.exe but not lockdown-installer.exe, which is why GET /api/installer/:id,
+    /:id?platform=win and /:id/nsis answer 503 while the Linux ZIP answers 200; the repository publishes
+    no GitHub releases, so the binary cannot be downloaded and must be built on Windows (agent/build.ps1
+    / agent/installer.spec). GET /api/installer/agent-version now reports installer_available / nsis_available
+    / windows_installer_ready / installer_unavailable_reason from a local existence check only (no release
+    fetch), and the Enroll page renders the reason and remedy and disables the Windows buttons — while
+    a FAILED probe leaves them enabled, because unknown is not unavailable.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'live probe: installer_available false / nsis_available true / windows_installer_ready false
+    with the reason; win ZIP 503 vs linux ZIP 200; GitHub releases API returns []; server 769 (+2), dashboard
+    216 (+2)'
+  source: server/src/routes/installer.js; dashboard/src/pages/EnrollPage.jsx; server/tests/installer.routes.test.js;
+    dashboard/tests/EnrollPage.test.jsx; agent/dist
+  asserted: '2026-11-04'
+  last_verified: '2026-11-04'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

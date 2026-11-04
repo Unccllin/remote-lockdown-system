@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-04 13:37:39 — 63 beliefs
+Generated: 2026-11-04 14:25:15 — 64 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -145,6 +145,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-063 | confirmed | code-read | The self-hosted server now matches the Worker on the two capabilities the cross-surface audit recorded: (1) EFS certificate escrow — POST /api/agent/efs-cert (agent auth) stores one backup per device (base64 .pfx plus a password encrypted at rest via FIELD_ENCRYPTION_KEY, with the plaintext column left NULL whenever encryption succeeds), and GET /api/devices/:id/efs-cert (super-admin, audited) is the recovery half so the store is not write-only; (2) firmware re-arm — POST /api/rearm is unauthenticated by necessity, allows ONLY flagged devices (stolen/locked/recovering/tracking), answers an identical 404 for unknown and active devices so it cannot be probed, replaces the key hash, audits the action, and returns the install script as text/plain because the PblPersistDxe bootstrap writes the body straight to a .ps1 file. KNOWN_GAPS in scripts/test_cross_surface_contract.py is now down to POST /api/enroll, which is a path difference (Express enrols via /api/devices + /api/enroll/{token,claim}) rather than a missing capability. |
+| B-064 | confirmed | code-read | The Windows installers on a self-hosted server need exactly one artefact that a Linux host cannot produce: lockdown-installer.exe (the CLI installer that the .ps1 wrapper runs and the NSIS script embeds). makensis IS available at ~/.local/nsis/usr/bin/makensis (outside PATH, so 'which makensis' misses it) and findNsis() looks there, so once that binary is staged the GUI wizard works. agent/dist contains lockdown-agent.exe but not lockdown-installer.exe, which is why GET /api/installer/:id, /:id?platform=win and /:id/nsis answer 503 while the Linux ZIP answers 200; the repository publishes no GitHub releases, so the binary cannot be downloaded and must be built on Windows (agent/build.ps1 / agent/installer.spec). GET /api/installer/agent-version now reports installer_available / nsis_available / windows_installer_ready / installer_unavailable_reason from a local existence check only (no release fetch), and the Enroll page renders the reason and remedy and disables the Windows buttons — while a FAILED probe leaves them enabled, because unknown is not unavailable. |
 
 ## integrations/ui
 
