@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-04 12:32:54 — 61 beliefs
+Generated: 2026-11-04 13:07:36 — 62 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -164,6 +164,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-018 | confirmed | code-read | Harnesses that check log output rather than security outcomes pass vulnerable code — the D-220 bypass and the MOR no-op both survived green harnesses. |
+
+## testing/contract
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-062 | confirmed | code-read | Three surfaces must agree and nothing was comparing them: scripts/test_cross_surface_contract.py now asserts (1) every /api call in dashboard/src resolves to an Express route, with the receiver deciding the base (api -> /api, pblApi -> root /v1/*, because a filename-based rule mis-reads page-level pblApi calls and repeats the Signing Keys bug), and (2) every Worker /api route exists in Express or is listed either as WORKER_ONLY_BY_DESIGN (KV binary/script delivery, legacy /api/ping and /api/command-ack aliases) or in KNOWN_GAPS, which is shrink-only so a closed gap fails the test until its entry is deleted. Current KNOWN_GAPS: POST /api/rearm and POST /api/agent/efs-cert are real capabilities Express lacks (POST /api/enroll is path-difference only). Parser anchors are asserted first because a silent parse failure makes the whole audit vacuous. |
 
 ## testing/e2e
 

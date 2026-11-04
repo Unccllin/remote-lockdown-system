@@ -53,31 +53,26 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 206 — 2026-11-03 (the inventory is ours, and it lives under PBL)
+## Latest session: 207 — 2026-11-03 (the cross-surface audit exists, and it found a third class)
 
 ### Fog cleared
 
-- **Whether MeshCentral was wired into the interface**: only the backend was. The
-  UI half had never been built.
-- **Whether the integration is MeshCentral-specific**: no — the registry already
-  carries a second connector (Graph/Intune), which is why the section binds to
-  "any enabled + configured source" rather than a hardcoded id.
-- **What a fresh install should show**: "No inventory source is connected", not a
-  disabled switch — verified against the live API, where both connectors report
-  `enabled: false` until a URL/tenant is configured.
+- **Whether the UI and both backends agree**: they do today for the UI→server
+  direction (41 calls, 0 unresolved), and the Worker/Express differences are now
+  enumerated rather than unknown.
+- **Whether the TLS-floor test was trustworthy**: it was not (3/9 flaky). It is now
+  deterministic across 8 consecutive runs.
 
 ### Fog remaining
 
-- **The "ready" path is unit-tested only**: no upstream is configured here
-  (`/api/integrations/meshcentral/devices` answers the documented 503), so real
-  inventory rows have not been rendered from a live source.
-- **Inventory ↔ PBL device linking is not built.** `agent-mapping` links a PBL
-  device to an agent device; nothing links an inventory row to either, so the
-  inventory is a separate read-only list rather than a column on the PBL table.
-- The queued items are unchanged: automate the cross-backend route audit (defects in
-  three consecutive sessions), the `devices.hostname` uniqueness decision, and the
-  S202 objective (spec-vs-ledger consistency check, D-117 reconciliation,
-  `PblTlsVerifyCert`'s fate).
+- **`POST /api/rearm` and `POST /api/agent/efs-cert` are missing on Express** — the
+  two `KNOWN_GAPS` entries. Implementing them is the next parity work; the baseline
+  will fail loudly when they land, forcing the list to shrink.
+- **The parser is source-based**, so it cannot see routes assembled dynamically, and
+  a route removed from a router it does not parse would go unnoticed. The anchor
+  list is the guard; extending it is cheap.
+- Unchanged: `devices.hostname` uniqueness decision; the S202 objective
+  (spec-vs-ledger consistency check, D-117 reconciliation, `PblTlsVerifyCert`'s fate).
 
 ### Debt items closed
 
@@ -89,45 +84,45 @@
 
 ### Blockers
 
-- A configured upstream is needed to see live inventory. That is a credential
-  question (`MESHCENTRAL_URL` + token, or a Graph tenant/client/secret), not a code
-  one.
+- None.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, and the same shape again): the
-  backend had tests and the UI had none *because the UI did not exist*. Nothing
-  compares "capabilities the server exposes" with "capabilities the interface
-  offers", so a server-only feature can sit finished and invisible indefinitely.
-  This is a third variant of the boundary gap (S204's UI→server 404s, S205's
-  Worker→Express parity); automating one cross-surface audit would cover all three.
-- **Layer 1 — task specification**: the S142-era work was recorded as "integration
-  surface" without a UI acceptance criterion, so "done" meant the routes answered.
+- **Layer 4 — verification feedback** (primary, and finally addressed): four sessions
+  of boundary defects went undetected because nothing compared the surfaces. The
+  audit now does, and it proved itself by finding a third class on the day it was
+  written.
+- **Layer 3 — execution environment** (secondary, for the flake): the TLS test
+  depended on an environment capability (`tls internal` issuing a certificate) that
+  this sandbox lacks, and encoded a success condition that was really "the sandbox
+  works". Running it repeatedly is what exposed both the flakiness and the wrong
+  assertion.
 
 ### VERIFY
 
-- `dashboard`: **214 passed** (210 + 4), eslint clean.
-- Live against the running API: `GET /api/integrations` returns both connectors
-  `{enabled: false, configured: false}` (no URL/tenant set), and
-  `GET /api/integrations/meshcentral/devices` → **503** as documented — so the page
-  renders the honest "nothing connected" state today.
-- The section is read-only by construction: no write route is called; lockdown,
-  unlock and policy changes remain on our command queue and audit log.
+- `scripts/test_cross_surface_contract.py`: **6 passed** (0.2 s), auto-discovered by
+  `make test-scripts`.
+- Falsification, both directions:
+  - a UI call to `/definitely-not-a-route` → fails naming `GET /api/definitely-not-a-route`;
+  - a `KNOWN_GAPS` entry that Express serves (`GET /api/devices`) → fails with
+    "delete the entry so the baseline keeps shrinking".
+- `scripts/test_tls_floor.py`: **8 consecutive runs green** (was 3 failures in 9).
+- `make test-scripts`: all suites green (cross-surface 6, generic installer 17,
+  graph-session 40, memory 44, secrets ok, sign-metadata 18, tls-floor 2).
+- `make graph-check`: all invariants pass.
 
 ### Session artifacts
 
-- Changed: `dashboard/src/api/inventory.js` (new),
-  `dashboard/src/pages/PblDevicesPage.jsx`,
-  `dashboard/tests/PblDevicesPage.inventory.test.jsx` (new).
-- Commit: `df1bd33`.
+- Changed: `scripts/test_cross_surface_contract.py` (new),
+  `scripts/test_tls_floor.py`.
+- Commit: `3bb0593`.
 
 ### Next session opening
 
-Automate the cross-surface audit that has now produced defects in four consecutive
-sessions (S204 UI→server 404s, S205 Worker→Express parity, S206 server-only
-capability): one script test asserting that every route the server exposes has a UI
-caller or a documented exception, and that the UI calls only routes that exist.
-Then the `devices.hostname` uniqueness decision.
+Close the two `KNOWN_GAPS` the new audit recorded: implement `POST /api/rearm` and
+`POST /api/agent/efs-cert` on Express (matching the Worker's semantics), watch the
+cross-surface test demand both entries be deleted, then take the
+`devices.hostname` uniqueness decision.
 
 ---
 

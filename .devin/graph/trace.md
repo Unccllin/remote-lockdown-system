@@ -8451,3 +8451,131 @@ caller or a documented exception, and that the UI calls only routes that exist.
 Then the `devices.hostname` uniqueness decision.
 
 ---
+
+---
+
+## Session 207 — 2026-11-03 (the cross-surface audit exists, and it found a third class)
+
+### RULE-ZERO
+
+**Read**: `dashboard/src/api/{client,pblClient}.js` and every page's API calls;
+`server/src/index.js` (mounts) + `server/src/routes/*` (routers);
+`serverless/worker.ts` (route table); `scripts/test_tls_floor.py`;
+`docs/adr/INTEGRATION-OWNERSHIP.md` for the read-only boundary.
+
+**Finding 1 — the audit is now automated, and it pays for itself immediately.** A
+new `scripts/test_cross_surface_contract.py` compares all three surfaces. Writing it
+found the **third** kind of gap, in the opposite direction from S205:
+
+| Worker route | Express |
+|---|---|
+| `POST /api/rearm` | **absent** — re-arm is serverless-only |
+| `POST /api/agent/efs-cert` | **absent** — the agent's EFS cert upload has no Express route |
+| `POST /api/enroll` (admin) | absent by design (Express enrols via `POST /api/devices` + `/api/enroll/{token,claim}`) |
+
+So "Worker has something Express lacks" is not only a delivery mechanism; two real
+capabilities are missing self-hosted.
+
+**Finding 2 — four sessions, one shape.** S204 (UI→server 404s), S205 (Worker→Express
+enrolment parity), S206 (server-only capability), S207 (Worker-only capabilities).
+Every one is a contract *between* surfaces, and each surface's own suite was green.
+
+**Finding 3 — `test_tls_floor.py` was flaky, and the flakiness was mine.** The
+behavioural test decided "refused" by grepping a verbose `s_client` transcript, but a
+terminator refuses TLS 1.0 in three ways — `alert protocol version` (70),
+`write:errno=104` (reset), or `unexpected eof while reading` (bare close). It also
+raced Caddy's startup. Running it repeatedly exposed 3 failures in ~9 runs.
+
+### IMPLEMENT
+
+- `scripts/test_cross_surface_contract.py` (new, auto-discovered, ~0.2 s):
+  - **UI → server**: every `/api` call in `dashboard/src` must resolve to an Express
+    route. The **receiver** decides the base (`api` → `/api`, `pblApi` → root
+    `/v1/*`) — a filename-based heuristic produced 7 false positives, which is the
+    same mistake the Signing Keys bug was made of.
+  - **Worker → Express**: each Worker route must exist in Express or be listed, with
+    two lists because the reasons differ: `WORKER_ONLY_BY_DESIGN` (KV delivery,
+    legacy aliases) and `KNOWN_GAPS` (real capabilities Express lacks). The gap list
+    is **shrink-only**: closing a gap fails the test until its entry is removed.
+  - **Parser sanity**: anchors (`POST /api/auth/login`, `GET /v1/policy`, …) are
+    asserted first, because a silent parse failure would make every check vacuous.
+    This mattered: an early version composed `/api/auth//login` (double slash) and
+    reported 41 "missing" routes; another prefixed page-level `pblApi` calls with
+    `/api`.
+- `scripts/test_tls_floor.py`: readiness now waits until the terminator is
+  **handshaking** (a bare EOF means "not ready", not "refused"); all three refusal
+  shapes count; and the positive direction asserts "not protocol-refused" with the
+  reason stated — Caddy's `tls internal` cannot issue a usable certificate in this
+  sandbox (`alert 80`, `Cipher is (NONE)` for *every* version), so asserting a
+  completed handshake here would assert the sandbox rather than the floor.
+
+### Fog cleared
+
+- **Whether the UI and both backends agree**: they do today for the UI→server
+  direction (41 calls, 0 unresolved), and the Worker/Express differences are now
+  enumerated rather than unknown.
+- **Whether the TLS-floor test was trustworthy**: it was not (3/9 flaky). It is now
+  deterministic across 8 consecutive runs.
+
+### Fog remaining
+
+- **`POST /api/rearm` and `POST /api/agent/efs-cert` are missing on Express** — the
+  two `KNOWN_GAPS` entries. Implementing them is the next parity work; the baseline
+  will fail loudly when they land, forcing the list to shrink.
+- **The parser is source-based**, so it cannot see routes assembled dynamically, and
+  a route removed from a router it does not parse would go unnoticed. The anchor
+  list is the guard; extending it is cheap.
+- Unchanged: `devices.hostname` uniqueness decision; the S202 objective
+  (spec-vs-ledger consistency check, D-117 reconciliation, `PblTlsVerifyCert`'s fate).
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, and finally addressed): four sessions
+  of boundary defects went undetected because nothing compared the surfaces. The
+  audit now does, and it proved itself by finding a third class on the day it was
+  written.
+- **Layer 3 — execution environment** (secondary, for the flake): the TLS test
+  depended on an environment capability (`tls internal` issuing a certificate) that
+  this sandbox lacks, and encoded a success condition that was really "the sandbox
+  works". Running it repeatedly is what exposed both the flakiness and the wrong
+  assertion.
+
+### VERIFY
+
+- `scripts/test_cross_surface_contract.py`: **6 passed** (0.2 s), auto-discovered by
+  `make test-scripts`.
+- Falsification, both directions:
+  - a UI call to `/definitely-not-a-route` → fails naming `GET /api/definitely-not-a-route`;
+  - a `KNOWN_GAPS` entry that Express serves (`GET /api/devices`) → fails with
+    "delete the entry so the baseline keeps shrinking".
+- `scripts/test_tls_floor.py`: **8 consecutive runs green** (was 3 failures in 9).
+- `make test-scripts`: all suites green (cross-surface 6, generic installer 17,
+  graph-session 40, memory 44, secrets ok, sign-metadata 18, tls-floor 2).
+- `make graph-check`: all invariants pass.
+
+### Session artifacts
+
+- Changed: `scripts/test_cross_surface_contract.py` (new),
+  `scripts/test_tls_floor.py`.
+- Commit: `3bb0593`.
+
+### Next session opening
+
+Close the two `KNOWN_GAPS` the new audit recorded: implement `POST /api/rearm` and
+`POST /api/agent/efs-cert` on Express (matching the Worker's semantics), watch the
+cross-surface test demand both entries be deleted, then take the
+`devices.hostname` uniqueness decision.
+
+---
