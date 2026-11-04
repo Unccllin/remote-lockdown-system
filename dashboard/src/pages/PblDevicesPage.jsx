@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import pblApi from '../api/pblClient';
+import { getInventoryStatus, getInventoryDevices } from '../api/inventory';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 
 const STATUS_BADGE = {
@@ -26,6 +27,9 @@ export default function PblDevicesPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [actionLoading, setActionLoading] = useState(null);
+  // Inventory reported by a connected management source. Part of OUR PBL surface:
+  // the upstream connector is an implementation detail and is never named here.
+  const [inventory, setInventory] = useState({ state: 'loading', devices: [], fetchedAt: null });
   const currentUser = useCurrentUser();
   const navigate = useNavigate();
 
@@ -46,8 +50,35 @@ export default function PblDevicesPage() {
     }
   }
 
+  async function loadInventory() {
+    try {
+      const sources = await getInventoryStatus();
+      const usable = sources.find((source) => source.enabled && source.configured);
+      if (!usable) {
+        // Nothing connected is a normal state, not an error: the page still lists
+        // PBL-enrolled devices.
+        setInventory({
+          state: sources.some((source) => source.enabled) ? 'not-configured' : 'disabled',
+          devices: [],
+          fetchedAt: null,
+        });
+        return;
+      }
+      const { devices, fetchedAt } = await getInventoryDevices(usable.id);
+      setInventory({ state: 'ready', devices: devices || [], fetchedAt: fetchedAt || null });
+    } catch (err) {
+      const code = err.response?.data?.code;
+      setInventory({
+        state: code === 'NOT_CONFIGURED' ? 'not-configured' : 'unreachable',
+        devices: [],
+        fetchedAt: null,
+      });
+    }
+  }
+
   useEffect(() => {
     load();
+    loadInventory();
   }, []);
 
   async function handleLock(deviceId) {
@@ -263,6 +294,93 @@ export default function PblDevicesPage() {
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* Device inventory — read-only devices reported by a connected management
+          source. Our own endpoints; the upstream is never named because it is an
+          implementation detail, and every action stays on our command queue. */}
+      <div className="card">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <div className="flex items-center gap-2">
+            <Cpu size={16} className="text-slate-400" />
+            <h2 className="text-sm font-semibold text-slate-200">Device inventory</h2>
+            <span className="text-xs text-slate-500">read-only</span>
+          </div>
+          {inventory.state === 'ready' && inventory.fetchedAt && (
+            <span className="text-xs text-slate-500">
+              {inventory.devices.length} reported · fetched{' '}
+              {new Date(inventory.fetchedAt).toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+
+        {inventory.state === 'loading' && (
+          <p className="text-sm text-slate-500">
+            <Loader size={14} className="animate-spin inline mr-2" />
+            Loading inventory…
+          </p>
+        )}
+
+        {inventory.state === 'disabled' && (
+          <p className="text-sm text-slate-500">
+            No inventory source is connected to this server. Devices reported by a managed
+            source appear here once one is configured; enforcement runs through our own
+            command queue either way.
+          </p>
+        )}
+
+        {inventory.state === 'not-configured' && (
+          <p className="text-sm text-slate-500">
+            An inventory source is connected but not authorised — add its credentials on the
+            server to list its devices here.
+          </p>
+        )}
+
+        {inventory.state === 'unreachable' && (
+          <p className="text-sm text-amber-300/90">
+            Inventory source unreachable — showing PBL-enrolled devices only. Enforcement
+            is unaffected.
+          </p>
+        )}
+
+        {inventory.state === 'ready' && inventory.devices.length === 0 && (
+          <p className="text-sm text-slate-500">The connected source reports no devices.</p>
+        )}
+
+        {inventory.state === 'ready' && inventory.devices.length > 0 && (
+          <div className="overflow-x-auto rounded-xl border border-slate-800">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-slate-800/50 text-slate-400 text-left">
+                  <th className="px-4 py-2.5 font-medium">Name</th>
+                  <th className="px-4 py-2.5 font-medium">Platform</th>
+                  <th className="px-4 py-2.5 font-medium">Last seen</th>
+                  <th className="px-4 py-2.5 font-medium">State</th>
+                </tr>
+              </thead>
+              <tbody>
+                {inventory.devices.map((device) => (
+                  <tr key={device.id} className="border-t border-slate-800">
+                    <td className="px-4 py-2.5 font-mono text-xs text-slate-300">{device.name}</td>
+                    <td className="px-4 py-2.5 text-slate-400 text-xs">{device.platform || '—'}</td>
+                    <td className="px-4 py-2.5 text-slate-400 text-xs">
+                      {device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : '—'}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span
+                        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${
+                          device.online ? 'badge-active' : 'badge-inactive'
+                        }`}
+                      >
+                        {device.online ? 'online' : 'offline'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
