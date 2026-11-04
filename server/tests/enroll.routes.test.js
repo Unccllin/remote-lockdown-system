@@ -98,6 +98,49 @@ describe('POST /api/enroll/claim', () => {
     expect(res.body.error).toMatch(/hostname required/i);
   });
 
+  test('distinguishes an unknown token from one that was already used', async () => {
+    // "invalid" and "spent" need different operator actions: one is a typo, the
+    // other needs a fresh token. Merging them made a retry look like a bad token.
+    mockPool.query.setResult('SELECT * FROM enrollment_tokens', { rows: [] });
+    const unknown = await request(app)
+      .post('/api/enroll/claim')
+      .send({ token: 'nope', hostname: 'PC-1' });
+    expect(unknown.status).toBe(401);
+    expect(unknown.body.error).toBe('Invalid enrollment token');
+
+    mockPool.query.reset();
+    mockPool.query.setResult('SELECT * FROM enrollment_tokens', {
+      rows: [tokenRow({ used_at: new Date().toISOString() })],
+    });
+    const used = await request(app)
+      .post('/api/enroll/claim')
+      .send({ token: 'spent', hostname: 'PC-2' });
+    expect(used.status).toBe(401);
+    expect(used.body.error).toMatch(/already used — generate a new one/);
+  });
+
+  test('trims whitespace around the token before hashing it', async () => {
+    // A token copied out of the dashboard and pasted into a shell arrives padded
+    // more often than not; hashing " abc" never matches.
+    mockPool.query.setResult('SELECT * FROM enrollment_tokens', { rows: [tokenRow()] });
+    mockPool.query.setResult('UPDATE enrollment_tokens', { rows: [], rowCount: 1 });
+    mockPool.query.setResult('INSERT INTO devices', {
+      rows: [{ id: 'dev-9', hostname: 'PC-9', status: 'active' }],
+    });
+
+    const res = await request(app)
+      .post('/api/enroll/claim')
+      .send({ token: '  padded-token  ', hostname: 'PC-9' });
+
+    expect(res.status).toBe(201);
+    const lookup = mockPool.query.mock.calls.find((c) =>
+      /SELECT \* FROM enrollment_tokens/.test(c[0])
+    );
+    // The hash must be of the trimmed value, not of the padded one.
+    const { createHash } = require('crypto');
+    expect(lookup[1][0]).toBe(createHash('sha256').update('padded-token').digest('hex'));
+  });
+
   test('rejects an unknown token', async () => {
     mockPool.query.setResult('SELECT * FROM enrollment_tokens', { rows: [] });
 
@@ -106,7 +149,9 @@ describe('POST /api/enroll/claim', () => {
       .send({ token: 'nope', hostname: 'PC-1' });
 
     expect(res.status).toBe(401);
-    expect(res.body.error).toMatch(/Invalid or already-used/);
+    // Deliberately not "or already-used": an unknown token is a different problem
+    // from a spent one, and the two need different operator actions (S211).
+    expect(res.body.error).toBe('Invalid enrollment token');
   });
 
   test('rejects an already-used token', async () => {

@@ -98,6 +98,48 @@ def test_enroll_with_token_expired_raises(mock_post):
 
 
 @patch("installer.requests.post")
+def test_enroll_with_token_already_used_tells_the_operator_to_get_a_new_one(mock_post):
+    """A spent token is not a typo: tokens are single-use, so say what to do.
+
+    The server distinguishes "invalid" from "already used" (S211); the installer
+    used to collapse both into "may be invalid or already used", which leaves the
+    operator guessing after a retry.
+    """
+    mock_post.return_value = _mock_response(
+        401, {"error": "Enrollment token already used — generate a new one"}
+    )
+
+    with pytest.raises(Exception, match="generate a new token"):
+        installer.enroll_device_with_token("https://example.com", "spent", "HOST", "Owner")
+
+
+@patch("installer.requests.post")
+def test_enroll_with_token_accepts_a_re_association(mock_post):
+    """HTTP 200 with reassociated=true is success, not failure (S211).
+
+    Re-running the installer on a machine whose hardware identity is already
+    enrolled makes the server re-issue credentials and answer 200. The installer
+    required exactly 201, so a perfectly good re-enrolment reported
+    "Enrollment failed (HTTP 200)".
+    """
+    mock_post.return_value = _mock_response(
+        200,
+        {
+            "device": {"id": "dev-1", "hostname": "HOST", "status": "active"},
+            "api_key": "secret-key",
+            "reassociated": True,
+        },
+    )
+
+    result = installer.enroll_device_with_token(
+        "https://example.com", "fresh-token", "HOST", "Owner"
+    )
+
+    assert result["api_key"] == "secret-key"
+    assert result["reassociated"] is True
+
+
+@patch("installer.requests.post")
 def test_enroll_with_token_invalid_raises(mock_post):
     """Invalid/used token produces a rejection error."""
     mock_post.return_value = _mock_response(

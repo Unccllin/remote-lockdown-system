@@ -229,8 +229,13 @@ def enroll_device_with_token(
             pass
         if "expired" in body.lower():
             raise Exception("Enrollment token has expired. Generate a new one in the dashboard.")
-        raise Exception("Enrollment token rejected — it may be invalid or already used.")
-    if resp.status_code != 201:
+        if "already used" in body.lower():
+            raise Exception(
+                "Enrollment token already used — generate a new token in the dashboard."
+            )
+        raise Exception("Enrollment token rejected. Check the token and try again.")
+    # 200 = re-associated with an already-enrolled hardware identity; both are success.
+    if resp.status_code not in (200, 201):
         raise Exception(f"Enrollment failed (HTTP {resp.status_code}): {resp.text}")
     return resp.json()
 

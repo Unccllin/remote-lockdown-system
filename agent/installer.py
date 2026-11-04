@@ -371,14 +371,26 @@ def enroll_device_with_token(server_url: str, token: str, hostname: str, owner_n
             pass
         if "expired" in body.lower():
             raise Exception("Enrollment token has expired — ask the admin to generate a new one")
-        raise Exception("Enrollment token rejected — it may be invalid or already used")
+        if "already used" in body.lower():
+            # The token was real and has been spent. Tokens are single-use, so a
+            # retry after a partial run needs a fresh one — say so instead of
+            # making the operator guess between "wrong" and "used".
+            raise Exception("Enrollment token already used — generate a new token in the dashboard")
+        raise Exception("Enrollment token rejected — check the token and try again")
     if resp.status_code == 409:
         raise Exception(f"Device '{hostname}' is already enrolled on this server")
-    if resp.status_code != 201:
+    # 201 = new device; 200 = the hardware identity was already enrolled and the
+    # server re-issued credentials for it (re-associated). Both are success — the
+    # server returned a usable api_key. Requiring exactly 201 made a legitimate
+    # re-enrolment report "Enrollment failed (HTTP 200)" (S211).
+    if resp.status_code not in (200, 201):
         raise Exception(f"Enrollment failed (HTTP {resp.status_code}): {resp.text}")
 
     data = resp.json()
-    print_ok(f"Device enrolled: id={data['device']['id']}")
+    if data.get("reassociated"):
+        print_ok(f"Device re-enrolled (existing hardware identity): id={data['device']['id']}")
+    else:
+        print_ok(f"Device enrolled: id={data['device']['id']}")
     print(f"      Hardware UUID: {hardware_uuid or 'N/A'}")
     print(f"      Serial Number: {serial_number or 'N/A'}")
     print(f"      MAC Address: {mac_address or 'N/A'}")

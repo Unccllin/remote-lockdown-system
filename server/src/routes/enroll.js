@@ -91,7 +91,10 @@ router.post('/claim', async (req, res, next) => {
   const { token, hostname, owner_name, hardware_uuid, mac_address, serial_number } =
     req.body || {};
 
-  if (typeof token !== 'string' || token.length === 0) {
+  // Trim: a token copied out of the dashboard and pasted into a shell arrives with
+  // whitespace far more often than not, and a hash of " abc" never matches.
+  const normalizedToken = typeof token === 'string' ? token.trim() : '';
+  if (normalizedToken.length === 0) {
     return res.status(400).json({ error: 'Enrollment token required' });
   }
   if (typeof hostname !== 'string' || hostname.trim().length === 0) {
@@ -101,12 +104,20 @@ router.post('/claim', async (req, res, next) => {
   try {
     const found = await pool.query(
       'SELECT * FROM enrollment_tokens WHERE token_hash = $1',
-      [hashToken(token)]
+      [hashToken(normalizedToken)]
     );
     const record = found.rows[0];
 
-    if (!record || record.used_at) {
-      return res.status(401).json({ error: 'Invalid or already-used enrollment token' });
+    if (!record) {
+      return res.status(401).json({ error: 'Invalid enrollment token' });
+    }
+    if (record.used_at) {
+      // Distinct from "invalid": the token was real and has been spent. Tokens are
+      // single-use, so a retry after a partial run needs a fresh one — telling the
+      // operator that is the difference between a guess and a next step.
+      return res.status(401).json({
+        error: 'Enrollment token already used — generate a new one',
+      });
     }
     // Expiry is compared in JS, not SQL: both dialects then treat the timestamp
     // the same way, whatever their native datetime formatting is.
@@ -121,7 +132,10 @@ router.post('/claim', async (req, res, next) => {
       [new Date().toISOString(), record.id]
     );
     if (consumed.rowCount !== 1) {
-      return res.status(401).json({ error: 'Invalid or already-used enrollment token' });
+      // Lost the race: another claim consumed it between our read and this update.
+      return res.status(401).json({
+        error: 'Enrollment token already used — generate a new one',
+      });
     }
 
     const apiKey = generateApiKey();
