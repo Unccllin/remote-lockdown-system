@@ -87,7 +87,10 @@ def _shell32() -> Any:
 # Constants — shared with installer.py
 # ---------------------------------------------------------------------------
 
-DEFAULT_SERVER_URL = "https://lockdown-serverless.mainacollins196.workers.dev"
+# Deliberately empty: prefilling a backend silently enrolled devices into a server
+# that had never issued the operator's token (S213). An empty field with a
+# placeholder makes the operator choose.
+DEFAULT_SERVER_URL = ""
 INSTALL_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
 CONFIG_FILE = INSTALL_DIR / "config.json"
 AGENT_EXE_NAME = "lockdown-agent.exe"
@@ -829,6 +832,15 @@ class SetupWizard:
 
                 if "Enrolling" in msg:
                     # Actual enrollment
+                    # The field has no default on purpose (S213): prefilling a
+                    # backend silently sent enrollments to a server that had never
+                    # issued the operator's token. Fail here, with what to type,
+                    # rather than at the network call.
+                    if not self.server_url.get().strip():
+                        raise Exception(
+                            "No server URL set. Enter the address of your server "
+                            "(for example http://192.168.1.20:3001) and try again."
+                        )
                     if not self.token.get():
                         raise Exception("No enrollment token provided")
                     data = enroll_device_with_token(

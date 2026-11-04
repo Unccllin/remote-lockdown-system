@@ -75,7 +75,13 @@ import requests
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_SERVER_URL = "https://lockdown-serverless.mainacollins196.workers.dev"
+# No default backend. This used to be the deployed Worker, which silently pointed
+# a self-hosted operator's enrolment at a server that had never issued their token
+# — the claim went there, came back 401, and read as "invalid token" (S213). A
+# wrong default that *looks* filled in is worse than an empty field: the operator
+# has to state which server they mean. The per-device installers bake it via
+# config.json, and the CLI takes --server-url.
+DEFAULT_SERVER_URL = ""
 INSTALL_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
 CONFIG_FILE = INSTALL_DIR / "config.json"
 AGENT_EXE_NAME = "lockdown-agent.exe"
@@ -923,7 +929,13 @@ def main():
     admin_token = args.admin_token
 
     if args.silent:
-        server_url = args.server_url or DEFAULT_SERVER_URL
+        server_url = (args.server_url or DEFAULT_SERVER_URL or "").strip()
+        if not server_url:
+            print_fail(
+                "No server URL. Pass --server-url http://your-server:3001 "
+                "(a per-device installer bakes it into config.json)."
+            )
+            sys.exit(1)
         admin_token = args.admin_token
         enroll_token = args.token
         owner_name = args.owner or "Auto-enrolled"

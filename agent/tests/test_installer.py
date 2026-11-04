@@ -615,3 +615,33 @@ def test_baked_install_pins_the_installed_copy_not_the_download_folder(tmp_path,
     # The download copy is irrelevant once installed — a cleaned folder changes nothing.
     (downloads / installer.UPDATE_KEY_FILENAME).unlink()
     assert Path(written["update_public_key"]).is_file()
+
+
+# ---------------------------------------------------------------------------
+# No backend is baked in (S213)
+# ---------------------------------------------------------------------------
+
+
+def test_no_default_server_url_is_compiled_in():
+    """The installers must not default to any backend.
+
+    Both used to default to the deployed Worker. A self-hosted operator pasted a
+    token minted by *their* server, the claim went to the Worker, and the reply was
+    401 "token rejected" — while their own server saw no request at all. A wrong
+    default that looks filled in is worse than an empty field.
+    """
+    import installer_gui
+
+    assert installer.DEFAULT_SERVER_URL == ""
+    assert installer_gui.DEFAULT_SERVER_URL == ""
+
+
+def test_silent_mode_without_a_server_url_fails_with_guidance(monkeypatch):
+    """--silent + --token alone must say what is missing instead of guessing."""
+    monkeypatch.setattr(sys, "argv", ["installer", "--silent", "--token", "TOK"])
+
+    with pytest.raises(SystemExit) as exc:
+        installer.main()
+
+    # Exit code 1 (usage failure), not a network error deeper in.
+    assert exc.value.code == 1
