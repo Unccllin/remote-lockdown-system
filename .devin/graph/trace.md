@@ -7934,3 +7934,135 @@ Close the harness gap this session exposed: add a consistency check that compare
 credentials needed for either.
 
 ---
+
+---
+
+## Session 203 — 2026-11-03 (admin interface on the machine; one username contract)
+
+### RULE-ZERO
+
+**Read**: `server/.env` + `dashboard/.env` (non-secret keys only), `Makefile`
+(`dev-secrets`, `dev-up`), `server/package.json` and `dashboard/package.json`
+scripts, `server/src/routes/auth.js` (login), `setup.js` (create-admin),
+`admins.js` (create), `dashboard/src/pages/{LoginPage,SetupPage}.jsx`,
+`dashboard/tests/LoginPage.test.jsx`, `dashboard/src/api/*`.
+
+**Finding 1 — the local UI was pointed at the deployment, not at a local backend.**
+`dashboard/.env` sets `VITE_API_URL` to the live Cloudflare Worker. `server/.env`
+is a complete local dev config (SQLite, `CORS_ORIGIN=http://localhost:5173`) and the
+local DB already held 1 admin and 3 devices. The UI was therefore started with a
+per-process `VITE_API_URL=http://localhost:3001/api` override, leaving both `.env`
+files untouched (both are gitignored).
+
+**Finding 2 — the first login failed on whitespace, and that was a symptom of three
+disagreeing rules.** The reported `local-admin` rejection came from the login
+route's charset check applied to a padded value:
+
+| input | before |
+|---|---|
+| `local-admin` | passes validation (401 = wrong password) |
+| ` local-admin` / `local-admin ` / `local<tab>admin` | **400 "username contains invalid characters"** |
+
+and the routes did not agree with each other:
+`auth.js` (login) allowed `_ @ . -`; `setup.js` and `admins.js` allowed only `_ -`;
+none trimmed. A username created by one path could be rejected at login, and the
+message for whitespace read exactly like a bad password.
+
+### IMPLEMENT
+
+- `server/src/validation/username.js` — the single contract: trimmed, allowed set
+  letters/digits/`_ @ . -`, length 3–100 on creation, shorter allowed on **login**
+  so a legacy account can still sign in; the password is never trimmed (whitespace
+  can be deliberate).
+- `routes/auth.js`, `routes/setup.js`, `routes/admins.js` — use it; login normalises
+  before the SQL lookup, so `"  local-admin  "` resolves to the same account.
+- `dashboard/src/pages/LoginPage.jsx` — trims the username on submit (never the
+  password).
+- `dashboard/src/pages/SetupPage.jsx` — validates the trimmed value, mirrors the
+  shared allowed set (it was narrower than login), and drops an unused `React`
+  default import.
+- Tests: validator contract (trim, charset, length semantics, non-string), a login
+  route test proving the trimmed value reaches the lookup, and two dashboard tests
+  (padded username submitted trimmed; password **not** trimmed).
+
+### Operational state (not repository state)
+
+- API on `http://localhost:3001` (SQLite `server/lockdown.db`), UI on
+  `http://localhost:5173`, verified end-to-end: health → login → `GET /api/devices`
+  returns the 3 local devices, CORS preflight from `:5173` → 204.
+- A separate `local-admin` (super-admin) account was created **non-destructively**
+  (the pre-existing `admin` password was not touched); it can be removed with
+  `DELETE FROM admins WHERE username='local-admin'`. The password is deliberately
+  not recorded here.
+- `REGISTRATION_ENABLED=true` in `server/.env` is misleading: there is no
+  `/api/auth/register` route (only `/api/setup/create-admin`, which 403s once an
+  admin exists). Stale config/doc promise — recorded, not acted on.
+
+### Fog cleared
+
+- **Why the first login failed on a correct password**: padded username vs a
+  strict, inconsistent charset check.
+- **Whether the local data was usable**: yes — the local SQLite DB already had an
+  admin and three devices, so the UI works against real rows rather than an empty
+  schema.
+
+### Fog remaining
+
+- The queued objective from S202 is still open: a consistency check between
+  `GRAPH-SPEC.yaml` debt status and the markdown ledger (it would have caught the
+  D-116/D-117 drift), D-117 reconciliation, and `PblTlsVerifyCert`'s fate.
+- `REGISTRATION_ENABLED` has no consumer; either the flag or the docs should go.
+- Unchanged blockers: `UPDATE_SIGNING_KEY` (no `gh`), KV publish (wrangler
+  unauthenticated), HP box.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None for local use. Hardware/credentials unchanged for the fleet work.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the dashboard had no test for what
+  it submits. A single assertion that the login form posts a trimmed username would
+  have caught this before a user met it, and the three server routes had no shared
+  test for their common contract — each route's own tests passed while the contract
+  between them was broken. That is the same "defect lives between two correct
+  pieces" shape as S193/S194/S198.
+- **Layer 1 — task specification**: "set up the admin interface" was specified as an
+  outcome, so the first-run path (create admin → log in) had to be discovered; the
+  failure only surfaced because the setup was performed end-to-end rather than
+  handed over as instructions.
+
+### VERIFY
+
+- `server`: **739 passed** (733 + 6), eslint clean.
+- `dashboard`: **205 passed** (203 + 2), eslint clean.
+- Live check against the restarted API: `"  local-admin  "` + correct password →
+  **token issued**; `"bad name"` → 400 with
+  "username may contain only letters, numbers, and the characters _ @ . - (no
+  spaces or other punctuation)."
+- `make graph-check`: all invariants pass.
+
+### Session artifacts
+
+- Changed: `server/src/validation/username.js` (new), `server/src/routes/auth.js`,
+  `server/src/routes/setup.js`, `server/src/routes/admins.js`,
+  `server/tests/auth.routes.test.js`, `dashboard/src/pages/LoginPage.jsx`,
+  `dashboard/src/pages/SetupPage.jsx`, `dashboard/tests/LoginPage.test.jsx`.
+- Commit: `56cd490`.
+
+### Next session opening
+
+Take the S202 objective, which this session displaced: add the spec-vs-ledger
+consistency check (parse `GRAPH-SPEC.yaml` debt ids/statuses against the markdown
+ledger's `**Status**` lines), then reconcile D-117 and decide `PblTlsVerifyCert`'s
+fate. The local admin stack keeps running on `:3001`/`:5173` until stopped.
+
+---

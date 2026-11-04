@@ -1077,3 +1077,26 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-058
+  statement: 'Admin usernames follow one contract, defined in server/src/validation/username.js: the value
+    is TRIMMED before use, allowed characters are letters, digits and _ @ . -, length is 3-100 on creation
+    while login accepts shorter values so a legacy account can still sign in, and the password is never
+    trimmed. Before S203 three routes each had their own rule (login allowed _ @ . -, setup/create-admin
+    and admins/create allowed only _ -) and none trimmed, so a username accepted at creation could be
+    rejected at login, and padded input failed with ''username contains invalid characters'' — a message
+    that reads like a wrong password. The dashboard also submitted the username untrimmed and its setup
+    form used a narrower allowlist than login.'
+  domain: auth/username
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'server 739 (+6) and dashboard 205 (+2) tests; live API check: padded username + correct
+    password issues a token, ''bad name'' returns the specific rule'
+  source: server/src/validation/username.js; server/src/routes/auth.js, setup.js, admins.js; dashboard/src/pages/LoginPage.jsx,
+    SetupPage.jsx; server/tests/auth.routes.test.js; dashboard/tests/LoginPage.test.jsx; commit 56cd490
+  asserted: '2026-11-04'
+  last_verified: '2026-11-04'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

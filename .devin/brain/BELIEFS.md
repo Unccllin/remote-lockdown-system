@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-04 09:14:49 — 57 beliefs
+Generated: 2026-11-04 10:45:59 — 58 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -33,6 +33,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-020 | confirmed | code-read | Everything a UEFI application reads can be forged by earlier DXE/SMM code — the only trust anchors are TPM-sealed/measured state, server-side verdicts, and cross-layer disagreement. |
 | B-021 | confirmed | code-read | A user-mode agent cannot defeat a kernel/admin adversary — it can only detect, delay, and re-assert; real anchors are TPM, PBL, and the server. |
+
+## auth/username
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-058 | confirmed | code-read | Admin usernames follow one contract, defined in server/src/validation/username.js: the value is TRIMMED before use, allowed characters are letters, digits and _ @ . -, length is 3-100 on creation while login accepts shorter values so a legacy account can still sign in, and the password is never trimmed. Before S203 three routes each had their own rule (login allowed _ @ . -, setup/create-admin and admins/create allowed only _ -) and none trimmed, so a username accepted at creation could be rejected at login, and padded input failed with 'username contains invalid characters' — a message that reads like a wrong password. The dashboard also submitted the username untrimmed and its setup form used a narrower allowlist than login. |
 
 ## deployment/windows
 

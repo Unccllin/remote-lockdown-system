@@ -53,84 +53,74 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 202 — 2026-11-03 (D-116 closed by ruling; the drift was in the markdown)
+## Latest session: 203 — 2026-11-03 (admin interface on the machine; one username contract)
 
 ### Fog cleared
 
-- **Where the floor is enforced**: at the terminator (Caddy stated, Cloudflare
-  documented), because the client structurally cannot.
-- **Whether a TLS-floor test can be trusted**: only with the SECLEVEL=0 forcing and
-  the "client refused to offer" guard; both are now in the test.
-- **Which record was stale**: the markdown, not the spec — and D-117 has the same
-  drift, unreconciled here.
+- **Why the first login failed on a correct password**: padded username vs a
+  strict, inconsistent charset check.
+- **Whether the local data was usable**: yes — the local SQLite DB already had an
+  admin and three devices, so the UI works against real rows rather than an empty
+  schema.
 
 ### Fog remaining
 
-- **D-117 drift is unresolved**: `GRAPH-SPEC.yaml` says CLOSED, the markdown ledger
-  says OPEN. Nothing reconciles the two, which is why this drifted for many sessions.
-- **`PblTlsVerifyCert` is dead code** (223 lines, no caller, no SAN support) and now
-  redundant — it needs a decision: delete it, or call it as defence in depth.
-- **The Cloudflare zone setting is an owner action** (dashboard; credentials blocked
-  here), so the serverless floor is documented but not verified on a live zone.
+- The queued objective from S202 is still open: a consistency check between
+  `GRAPH-SPEC.yaml` debt status and the markdown ledger (it would have caught the
+  D-116/D-117 drift), D-117 reconciliation, and `PblTlsVerifyCert`'s fate.
+- `REGISTRATION_ENABLED` has no consumer; either the flag or the docs should go.
 - Unchanged blockers: `UPDATE_SIGNING_KEY` (no `gh`), KV publish (wrangler
-  unauthenticated), HP box (no hardware); D-129/D-134.
+  unauthenticated), HP box.
 
 ### Debt items closed
 
-- **D-116** — closed by ruling, with `commit_ref: b397cad` and two resolving
-  artifacts; the markdown and the spec now agree.
+- None.
 
 ### Debt items still open
 
-- D-117 (markdown/spec disagreement), D-100, D-111…D-115, D-118…D-129, D-134.
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
 
 ### Blockers
 
-- None for the code. Cloudflare's zone minimum and the hardware items remain
-  owner/environment actions.
+- None for local use. Hardware/credentials unchanged for the fleet work.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the markdown ledger and
-  `GRAPH-SPEC.yaml` disagree on at least two items (D-116, D-117) and nothing checks
-  them against each other, so the invariants stayed green while the human record
-  said the opposite of the machine record. Two sessions of "correcting D-116" were
-  spent editing the wrong file. A consistency check (spec status vs ledger status,
-  per id) is cheap and would have caught it.
-- **Layer 1 — task specification**: my S200/S201 entries re-stated D-116 as OPEN
-  without checking the spec's status field, which I had already read for the graph
-  invariants. Reading the authoritative field first would have framed the work as
-  "close the evidence gap", not "reopen a closed item".
+- **Layer 4 — verification feedback** (primary): the dashboard had no test for what
+  it submits. A single assertion that the login form posts a trimmed username would
+  have caught this before a user met it, and the three server routes had no shared
+  test for their common contract — each route's own tests passed while the contract
+  between them was broken. That is the same "defect lives between two correct
+  pieces" shape as S193/S194/S198.
+- **Layer 1 — task specification**: "set up the admin interface" was specified as an
+  outcome, so the first-run path (create admin → log in) had to be discovered; the
+  failure only surfaced because the setup was performed end-to-end rather than
+  handed over as instructions.
 
 ### VERIFY
 
-- `scripts/test_tls_floor.py`: **2 passed** (~2 s); auto-discovered by
-  `make test-scripts` (`=== scripts/test_tls_floor.py === 2 passed`).
-- Non-vacuity: lowering the Caddyfile floor to `tls1.0` fails **both** tests
-  (`assert 'tls1.0' == 'tls1.2'`, and `_server_refused` false), then restored.
-- `caddy validate` on the real `Caddyfile` with `DOMAIN` supplied: "Valid
-  configuration".
-- `make graph-check`: all invariants pass — including I2, which resolves `b397cad`
-  and both artifact paths.
-- Handshake evidence (probe, then encoded in the test): TLS 1.2 → `Protocol :
-  TLSv1.2`; TLS 1.0/1.1 forced → `alert protocol version` (alert 70) from the
-  server; TLS 1.0 unforced → `no protocols available` (the vacuous case).
+- `server`: **739 passed** (733 + 6), eslint clean.
+- `dashboard`: **205 passed** (203 + 2), eslint clean.
+- Live check against the restarted API: `"  local-admin  "` + correct password →
+  **token issued**; `"bad name"` → 400 with
+  "username may contain only letters, numbers, and the characters _ @ . - (no
+  spaces or other punctuation)."
+- `make graph-check`: all invariants pass.
 
 ### Session artifacts
 
-- Changed: `Caddyfile`, `scripts/test_tls_floor.py` (new),
-  `serverless/README.md`, `docs/adr/PBL-DEBT-LEDGER.md`,
-  `.devin/graph/GRAPH-SPEC.yaml`, `.devin/PENDING-RULING.md`,
-  `firmware/PblPkg/artifacts/d116-tls-floor-server-side.txt` (new).
-- Commit: `b397cad` (code) — the session's own record follows in the graph commit.
+- Changed: `server/src/validation/username.js` (new), `server/src/routes/auth.js`,
+  `server/src/routes/setup.js`, `server/src/routes/admins.js`,
+  `server/tests/auth.routes.test.js`, `dashboard/src/pages/LoginPage.jsx`,
+  `dashboard/src/pages/SetupPage.jsx`, `dashboard/tests/LoginPage.test.jsx`.
+- Commit: `56cd490`.
 
 ### Next session opening
 
-Close the harness gap this session exposed: add a consistency check that compares
-`GRAPH-SPEC.yaml`'s debt status with the markdown ledger's `**Status**` line per id
-(it would have caught the D-116/D-117 drift), then reconcile D-117 and decide
-`PblTlsVerifyCert`'s fate (delete, or call it as defence in depth). No hardware or
-credentials needed for either.
+Take the S202 objective, which this session displaced: add the spec-vs-ledger
+consistency check (parse `GRAPH-SPEC.yaml` debt ids/statuses against the markdown
+ledger's `**Status**` lines), then reconcile D-117 and decide `PblTlsVerifyCert`'s
+fate. The local admin stack keeps running on `:3001`/`:5173` until stopped.
 
 ---
 
