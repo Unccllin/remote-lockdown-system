@@ -8579,3 +8579,142 @@ cross-surface test demand both entries be deleted, then take the
 `devices.hostname` uniqueness decision.
 
 ---
+
+---
+
+## Session 208 — 2026-11-03 (the audit's first two findings, closed)
+
+### RULE-ZERO
+
+**Read**: `serverless/worker.ts` (`handleRearm`, `handleUploadEfsCert`,
+`handleDownloadEfsCert`); `firmware/PblPkg/PblPersistDxe/PblPersistDxe.c` (the
+bootstrap that posts to `/api/rearm` and writes the response to a file);
+`agent/agent.py` (`upload_efs_certificate`); `server/src/routes/{agent,devices,
+installer}.js`; `server/src/db/fieldCrypto.js` (dual-mode encryption);
+`scripts/test_cross_surface_contract.py` (the `KNOWN_GAPS` baseline).
+
+**Finding 1 — `POST /api/agent/efs-cert` had no Express route.** `agent.py` has
+always posted the EFS recovery certificate (a base64 `.pfx` plus its password) and
+the Worker has always stored it; Express returned 404, so a self-hosted deployment
+silently kept **no recovery backup at all**.
+
+**Finding 2 — `POST /api/rearm` had no Express route.** The firmware bootstrap on
+the ESP identifies the machine by `hardware_uuid` and runs the plain-text
+`install.ps1` the server returns; without the route, a wiped or replaced disk could
+never re-arm on a self-hosted server.
+
+**Finding 3 — the store would have been write-only.** The Worker also serves
+`GET /api/devices/:id/efs-cert` (super-admin). Storing without a download path leaves
+a backup nobody can use, so both halves were implemented.
+
+**Finding 4 — my own first version defeated encryption-at-rest.** It wrote the
+certificate password to *both* the plaintext column and the encrypted columns. The
+live check (`at rest -> plaintext col`) caught it; the plaintext column is now NULL
+whenever encryption succeeded, and the test asserts that.
+
+### IMPLEMENT
+
+- **Migration 017** (both dialects): `device_efs_certs`, one row per device
+  (`device_id` PK, `ON DELETE CASCADE`), the `.pfx` as base64, and the repo's
+  dual-mode password columns (`cert_password` for rows written without a key,
+  `cert_password_enc/nonce/tag` otherwise).
+- **`POST /api/agent/efs-cert`** (`agentAuth` + `hmacVerify`): validates
+  `cert_base64`, encrypts the password when `FIELD_ENCRYPTION_KEY` is set, upserts
+  (newest backup wins, matching the KV overwrite), audits `efs_cert_uploaded`.
+- **`GET /api/devices/:id/efs-cert`** (super-admin): returns the `.pfx` and the
+  decrypted password, audits `efs_cert_downloaded`, and answers 500 rather than
+  handing back a wrong password if a rotated key can no longer decrypt.
+- **`POST /api/rearm`** (unauthenticated by necessity, 20/15 min limiter): finds the
+  device by `hardware_uuid`, allows only **flagged** statuses
+  (`stolen`/`locked`/`recovering`/`tracking`), answers the *same* 404 for unknown and
+  active devices so it cannot be probed for which UUIDs exist, replaces the key hash,
+  audits `rearm`, and returns the install script as `text/plain` — the shape the
+  firmware needs, because it writes the body straight to a `.ps1` file.
+- `scripts/test_cross_surface_contract.py`: both entries removed from `KNOWN_GAPS`
+  (the list is shrink-only, and it is what forced this session's scope).
+
+### Fog cleared
+
+- **Whether a self-hosted device could recover encrypted files after a wipe**: it
+  could not before (no backup was stored). It can now — upload, encrypted at rest,
+  audited download.
+- **Whether a wiped machine could re-arm against a self-hosted server**: it can now,
+  and only while flagged.
+- **What the re-arm response must be**: plain text, not JSON — established from the
+  firmware's `Invoke-RestMethod` + `Set-Content`, not assumed.
+
+### Fog remaining
+
+- `POST /api/enroll` (the Worker's admin enrolment path) remains the last
+  `KNOWN_GAPS` entry. It is a path difference rather than a missing capability
+  (Express enrols through `POST /api/devices` + `/api/enroll/{token,claim}`), so it
+  stays listed with that reason until someone decides whether to alias it.
+- The re-arm route is unauthenticated by design; its safety rests on the
+  flagged-only rule plus the rate limit. A hostile caller who learns a hardware UUID
+  of a *flagged* device can re-key it — the Computrace trade-off, accepted and
+  documented in the route.
+- Unchanged: `devices.hostname` uniqueness decision; the S202 objective
+  (spec-vs-ledger consistency check, D-117 reconciliation, `PblTlsVerifyCert`'s fate).
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, and this time the harness did its
+  job): the cross-surface audit is what defined the work — two `KNOWN_GAPS` entries
+  became the session's scope, and the shrink-only rule will fail the suite if either
+  route is ever removed. This is the first session where the *fix* was found for me
+  rather than by accident.
+- **Layer 3 — execution environment**: the encryption-at-rest defect was invisible to
+  the unit test (which asserted the encrypted columns were populated) and only
+  appeared when the row was read out of the real database. Asserting *absence* of the
+  plaintext is now part of the test, not just presence of the ciphertext.
+
+### VERIFY
+
+- `server`: **767 passed** (47 suites), eslint clean.
+- `scripts/test_cross_surface_contract.py`: **6 passed** with both entries removed
+  from `KNOWN_GAPS`.
+- Live against the restarted API (migration 017 applied at boot):
+  1. agent upload with the device key → **200** `{stored: true}`
+  2. super-admin download → `cert_base64` plus the **decrypted** password
+  3. at rest → `plaintext col: None`, encrypted columns populated
+  4. re-arm of a `stolen` device by hardware UUID → **200 text/plain**, script body
+     starting `# PowerShell install script for Remote Lockdown Agent`
+  5. re-arm of an **active** device → **404** (same body as unknown — no probing)
+  6. unknown hardware UUID → **404**
+  7. test device deleted afterwards; the local device list is back to its three rows
+- `make graph-check`: all invariants pass.
+
+### Session artifacts
+
+- Changed: `server/src/db/migrations/017_device_efs_certs.sql`,
+  `server/src/db/migrations-sqlite/017_device_efs_certs.sql`,
+  `server/src/routes/rearm.js` (new), `server/src/routes/agent.js`,
+  `server/src/routes/devices.js`, `server/src/index.js`,
+  `server/tests/rearm.routes.test.js` (new),
+  `server/tests/efsCert.routes.test.js` (new),
+  `server/tests/migrationIdempotency.test.js`,
+  `scripts/test_cross_surface_contract.py`.
+- Commit: `2c99973`.
+
+### Next session opening
+
+Take the `devices.hostname` uniqueness decision, which has now been deferred twice:
+`devices.js` returns 409 "Hostname already registered" on a `23505` that the schema
+cannot produce for a hostname (`hostname` has no UNIQUE constraint; only
+`mac_address` and `hardware_uuid` do). Decide between a partial unique index (after
+resolving any existing duplicates) and correcting the message, and prove the chosen
+behaviour with a test — then the S202 objective.
+
+---

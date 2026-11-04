@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-04 13:07:36 — 62 beliefs
+Generated: 2026-11-04 13:37:00 — 63 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -139,6 +139,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-027 | confirmed | code-read | PblBootmgrSvn is demoted to advisory-only telemetry: PblReadBootmgrSvn now reports a Trusted flag from the variable's TIME_BASED_AUTHENTICATED attribute (BootmgrSvnTrusted in PBL_PLATFORM_STATE); the value must not drive decisions. |
 | B-031 | confirmed | emulated | KernelDmaProtection UEFI variable is unauthenticated — plantable by any OS/shell writer for spoof-to-pass on the Decision.c BLOCK gate; PBL now treats it as advisory telemetry only, with DMAR (Intel VT-d) / IVRS (AMD-Vi) ACPI tables as the authoritative firmware-authored signal. |
 | B-032 | confirmed | code-read | PblBootmgrSvn remains attacker-writable (unauthenticated by design) but is now advisory-only: Trusted flag from TBA attribute travels with the value in PBL_PLATFORM_STATE (hashed into attestation digest); no decision path consumes it. |
+
+## general
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-063 | confirmed | code-read | The self-hosted server now matches the Worker on the two capabilities the cross-surface audit recorded: (1) EFS certificate escrow — POST /api/agent/efs-cert (agent auth) stores one backup per device (base64 .pfx plus a password encrypted at rest via FIELD_ENCRYPTION_KEY, with the plaintext column left NULL whenever encryption succeeds), and GET /api/devices/:id/efs-cert (super-admin, audited) is the recovery half so the store is not write-only; (2) firmware re-arm — POST /api/rearm is unauthenticated by necessity, allows ONLY flagged devices (stolen/locked/recovering/tracking), answers an identical 404 for unknown and active devices so it cannot be probed, replaces the key hash, audits the action, and returns the install script as text/plain because the PblPersistDxe bootstrap writes the body straight to a .ps1 file. KNOWN_GAPS in scripts/test_cross_surface_contract.py is now down to POST /api/enroll, which is a path difference (Express enrols via /api/devices + /api/enroll/{token,claim}) rather than a missing capability. |
 
 ## integrations/ui
 

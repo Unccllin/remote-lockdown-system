@@ -53,24 +53,28 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 207 — 2026-11-03 (the cross-surface audit exists, and it found a third class)
+## Latest session: 208 — 2026-11-03 (the audit's first two findings, closed)
 
 ### Fog cleared
 
-- **Whether the UI and both backends agree**: they do today for the UI→server
-  direction (41 calls, 0 unresolved), and the Worker/Express differences are now
-  enumerated rather than unknown.
-- **Whether the TLS-floor test was trustworthy**: it was not (3/9 flaky). It is now
-  deterministic across 8 consecutive runs.
+- **Whether a self-hosted device could recover encrypted files after a wipe**: it
+  could not before (no backup was stored). It can now — upload, encrypted at rest,
+  audited download.
+- **Whether a wiped machine could re-arm against a self-hosted server**: it can now,
+  and only while flagged.
+- **What the re-arm response must be**: plain text, not JSON — established from the
+  firmware's `Invoke-RestMethod` + `Set-Content`, not assumed.
 
 ### Fog remaining
 
-- **`POST /api/rearm` and `POST /api/agent/efs-cert` are missing on Express** — the
-  two `KNOWN_GAPS` entries. Implementing them is the next parity work; the baseline
-  will fail loudly when they land, forcing the list to shrink.
-- **The parser is source-based**, so it cannot see routes assembled dynamically, and
-  a route removed from a router it does not parse would go unnoticed. The anchor
-  list is the guard; extending it is cheap.
+- `POST /api/enroll` (the Worker's admin enrolment path) remains the last
+  `KNOWN_GAPS` entry. It is a path difference rather than a missing capability
+  (Express enrols through `POST /api/devices` + `/api/enroll/{token,claim}`), so it
+  stays listed with that reason until someone decides whether to alias it.
+- The re-arm route is unauthenticated by design; its safety rests on the
+  flagged-only rule plus the rate limit. A hostile caller who learns a hardware UUID
+  of a *flagged* device can re-key it — the Computrace trade-off, accepted and
+  documented in the route.
 - Unchanged: `devices.hostname` uniqueness decision; the S202 objective
   (spec-vs-ledger consistency check, D-117 reconciliation, `PblTlsVerifyCert`'s fate).
 
@@ -88,41 +92,52 @@
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, and finally addressed): four sessions
-  of boundary defects went undetected because nothing compared the surfaces. The
-  audit now does, and it proved itself by finding a third class on the day it was
-  written.
-- **Layer 3 — execution environment** (secondary, for the flake): the TLS test
-  depended on an environment capability (`tls internal` issuing a certificate) that
-  this sandbox lacks, and encoded a success condition that was really "the sandbox
-  works". Running it repeatedly is what exposed both the flakiness and the wrong
-  assertion.
+- **Layer 4 — verification feedback** (primary, and this time the harness did its
+  job): the cross-surface audit is what defined the work — two `KNOWN_GAPS` entries
+  became the session's scope, and the shrink-only rule will fail the suite if either
+  route is ever removed. This is the first session where the *fix* was found for me
+  rather than by accident.
+- **Layer 3 — execution environment**: the encryption-at-rest defect was invisible to
+  the unit test (which asserted the encrypted columns were populated) and only
+  appeared when the row was read out of the real database. Asserting *absence* of the
+  plaintext is now part of the test, not just presence of the ciphertext.
 
 ### VERIFY
 
-- `scripts/test_cross_surface_contract.py`: **6 passed** (0.2 s), auto-discovered by
-  `make test-scripts`.
-- Falsification, both directions:
-  - a UI call to `/definitely-not-a-route` → fails naming `GET /api/definitely-not-a-route`;
-  - a `KNOWN_GAPS` entry that Express serves (`GET /api/devices`) → fails with
-    "delete the entry so the baseline keeps shrinking".
-- `scripts/test_tls_floor.py`: **8 consecutive runs green** (was 3 failures in 9).
-- `make test-scripts`: all suites green (cross-surface 6, generic installer 17,
-  graph-session 40, memory 44, secrets ok, sign-metadata 18, tls-floor 2).
+- `server`: **767 passed** (47 suites), eslint clean.
+- `scripts/test_cross_surface_contract.py`: **6 passed** with both entries removed
+  from `KNOWN_GAPS`.
+- Live against the restarted API (migration 017 applied at boot):
+  1. agent upload with the device key → **200** `{stored: true}`
+  2. super-admin download → `cert_base64` plus the **decrypted** password
+  3. at rest → `plaintext col: None`, encrypted columns populated
+  4. re-arm of a `stolen` device by hardware UUID → **200 text/plain**, script body
+     starting `# PowerShell install script for Remote Lockdown Agent`
+  5. re-arm of an **active** device → **404** (same body as unknown — no probing)
+  6. unknown hardware UUID → **404**
+  7. test device deleted afterwards; the local device list is back to its three rows
 - `make graph-check`: all invariants pass.
 
 ### Session artifacts
 
-- Changed: `scripts/test_cross_surface_contract.py` (new),
-  `scripts/test_tls_floor.py`.
-- Commit: `3bb0593`.
+- Changed: `server/src/db/migrations/017_device_efs_certs.sql`,
+  `server/src/db/migrations-sqlite/017_device_efs_certs.sql`,
+  `server/src/routes/rearm.js` (new), `server/src/routes/agent.js`,
+  `server/src/routes/devices.js`, `server/src/index.js`,
+  `server/tests/rearm.routes.test.js` (new),
+  `server/tests/efsCert.routes.test.js` (new),
+  `server/tests/migrationIdempotency.test.js`,
+  `scripts/test_cross_surface_contract.py`.
+- Commit: `2c99973`.
 
 ### Next session opening
 
-Close the two `KNOWN_GAPS` the new audit recorded: implement `POST /api/rearm` and
-`POST /api/agent/efs-cert` on Express (matching the Worker's semantics), watch the
-cross-surface test demand both entries be deleted, then take the
-`devices.hostname` uniqueness decision.
+Take the `devices.hostname` uniqueness decision, which has now been deferred twice:
+`devices.js` returns 409 "Hostname already registered" on a `23505` that the schema
+cannot produce for a hostname (`hostname` has no UNIQUE constraint; only
+`mac_address` and `hardware_uuid` do). Decide between a partial unique index (after
+resolving any existing duplicates) and correcting the message, and prove the chosen
+behaviour with a test — then the S202 objective.
 
 ---
 

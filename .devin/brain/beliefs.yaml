@@ -1201,3 +1201,31 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-063
+  statement: 'The self-hosted server now matches the Worker on the two capabilities the cross-surface
+    audit recorded: (1) EFS certificate escrow — POST /api/agent/efs-cert (agent auth) stores one backup
+    per device (base64 .pfx plus a password encrypted at rest via FIELD_ENCRYPTION_KEY, with the plaintext
+    column left NULL whenever encryption succeeds), and GET /api/devices/:id/efs-cert (super-admin, audited)
+    is the recovery half so the store is not write-only; (2) firmware re-arm — POST /api/rearm is unauthenticated
+    by necessity, allows ONLY flagged devices (stolen/locked/recovering/tracking), answers an identical
+    404 for unknown and active devices so it cannot be probed, replaces the key hash, audits the action,
+    and returns the install script as text/plain because the PblPersistDxe bootstrap writes the body straight
+    to a .ps1 file. KNOWN_GAPS in scripts/test_cross_surface_contract.py is now down to POST /api/enroll,
+    which is a path difference (Express enrols via /api/devices + /api/enroll/{token,claim}) rather than
+    a missing capability.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'live: upload 200, download returns decrypted password, plaintext NULL at rest, re-arm stolen
+    200 text/plain, active 404, unknown 404; server 767 (47 suites); cross-surface 6 passed with both
+    gaps removed'
+  source: server/src/routes/rearm.js; server/src/routes/agent.js; server/src/routes/devices.js; server/src/db/migrations/017_device_efs_certs.sql;
+    server/tests/{rearm,efsCert}.routes.test.js; serverless/worker.ts handleRearm/handleUploadEfsCert/handleDownloadEfsCert;
+    firmware/PblPkg/PblPersistDxe/PblPersistDxe.c
+  asserted: '2026-11-04'
+  last_verified: '2026-11-04'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
