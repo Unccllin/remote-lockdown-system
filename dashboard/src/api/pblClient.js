@@ -1,18 +1,32 @@
 /**
  * PBL API client — for /v1/* endpoints (PBL firmware + admin management).
  *
- * The PBL endpoints use a different base URL than the agent /api/* endpoints.
- * In serverless mode, both are served by the same Worker, so the base URL
- * is the same minus the /api suffix. In local mode, the Express server
- * doesn't serve PBL endpoints (they're Worker-only), so we use the
- * electronApiUrl or VITE_API_URL directly.
+ * The PBL endpoints live at the SERVER ROOT (/v1/*), not under /api/*, and both
+ * backends serve them: the Express server mounts `/v1` (server/src/index.js) and
+ * the Worker answers the same paths. So the base is the configured API URL with
+ * its trailing `/api` removed.
+ *
+ * This is the bug that made the dashboard's "Signing Keys" panel 404 with
+ * "Available routes are under /api/...": the base was used verbatim, so
+ * `/v1/admin/key-info` became `/api/v1/admin/key-info`, which matches no route.
+ * The comment above the code had always said "without the /api suffix" — only the
+ * code disagreed with it.
  */
 
 import axios from 'axios';
 
-// PBL base URL: same origin as the main API but without the /api suffix
+/**
+ * Strip a trailing `/api` (and any trailing slash) from a base URL.
+ * A base with no /api suffix is returned unchanged; an empty base stays empty so
+ * the client resolves against the current origin.
+ */
+export function pblBaseUrl(raw) {
+  if (!raw) return '';
+  return raw.replace(/\/api\/?$/, '').replace(/\/$/, '');
+}
+
 const electronApiUrl = typeof window !== 'undefined' && window.electronApp?.apiBaseUrl;
-const pblBaseURL = electronApiUrl || import.meta.env.VITE_API_URL || '';
+const pblBaseURL = pblBaseUrl(electronApiUrl || import.meta.env.VITE_API_URL || '');
 
 const pblApi = axios.create({ baseURL: pblBaseURL });
 

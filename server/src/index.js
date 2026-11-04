@@ -130,18 +130,29 @@ const agentLimiter = rateLimit({
 });
 
 // Apply limiters per route group.
-app.use('/api/auth', authLimiter, authRoutes);
-app.use('/api/setup', authLimiter, setupRoutes); // setup is one-time, keep strict
-app.use('/api/devices', dashboardLimiter, devicesRoutes);
-app.use('/api/agent', agentLimiter, agentRoutes);
-app.use('/api/audit', dashboardLimiter, auditRoutes);
-app.use('/api/installer', dashboardLimiter, installerRoutes);
-app.use('/api/health', healthRoutes); // No rate limit — health checks
+//
+// `mountApi` records each prefix so the JSON 404 can *derive* the route list.
+// The list used to be a hardcoded sentence, and it went stale the moment
+// /api/hw-test-artifact, /api/installer and /api/integrations were added — the
+// error then actively misled the reader (S203). Deriving it cannot drift.
+const mountedApiPrefixes = [];
+function mountApi(prefix, ...handlers) {
+  mountedApiPrefixes.push(prefix);
+  app.use(prefix, ...handlers);
+}
+
+mountApi('/api/auth', authLimiter, authRoutes);
+mountApi('/api/setup', authLimiter, setupRoutes); // setup is one-time, keep strict
+mountApi('/api/devices', dashboardLimiter, devicesRoutes);
+mountApi('/api/agent', agentLimiter, agentRoutes);
+mountApi('/api/audit', dashboardLimiter, auditRoutes);
+mountApi('/api/installer', dashboardLimiter, installerRoutes);
+mountApi('/api/health', healthRoutes); // No rate limit — health checks
 app.use('/metrics', metricsRoutes);    // No rate limit — Prometheus scraping
-app.use('/api/admins', dashboardLimiter, adminsRoutes);
-app.use('/api/hw-test-artifact', dashboardLimiter, hwTestArtifactRoutes);
+mountApi('/api/admins', dashboardLimiter, adminsRoutes);
+mountApi('/api/hw-test-artifact', dashboardLimiter, hwTestArtifactRoutes);
 // S142: read-only integration inventory (ours — see docs/adr/INTEGRATION-OWNERSHIP.md)
-app.use('/api/integrations', dashboardLimiter, integrationsRoutes);
+mountApi('/api/integrations', dashboardLimiter, integrationsRoutes);
 
 // D-200/D-201/D-202/D-210: PBL routes (/v1/*) — CBOR/COSE firmware protocol.
 // Mounted at /v1 (not /api) to match the serverless Worker URL scheme.
@@ -226,7 +237,12 @@ if (fs.existsSync(dashboardDistPath)) {
 // 404 JSON for unmatched API routes — prevents API clients from receiving
 // index.html (the SPA fallback) for non-existent endpoints.
 app.all('/api/*', (_req, res) => {
-  res.status(404).json({ error: 'Not found. Check the API endpoint path and method. Available routes are under /api/devices, /api/agent, /api/auth, /api/admins, /api/audit, /api/setup, /api/health.' });
+  res.status(404).json({
+    error:
+      'Not found. Check the API endpoint path and method. ' +
+      // Derived from the mounts above — listing them by hand went stale once.
+      `Available routes are under ${mountedApiPrefixes.join(', ')}.`,
+  });
 });
 
 app.use((err, _req, res, _next) => {
