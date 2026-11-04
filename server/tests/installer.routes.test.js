@@ -329,3 +329,58 @@ describe('update-key pinning in generated installers (B-006)', () => {
       .not.toHaveProperty('update_public_key');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Installer availability probe (S209)
+//
+// The dashboard asks this before rendering the installer cards, so a server that
+// cannot produce a Windows installer can explain why instead of failing on click.
+// ---------------------------------------------------------------------------
+
+describe('GET /api/installer/agent-version — availability probe', () => {
+  const fsLocal = require('fs');
+  const osLocal = require('os');
+  const pathLocal = require('path');
+  const request = require('supertest');
+  const { makeToken, createApp } = require('./helpers');
+
+  let tmp;
+  let app;
+
+  beforeEach(() => {
+    tmp = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'avail-'));
+    fsLocal.writeFileSync(pathLocal.join(tmp, 'lockdown-agent'), Buffer.from('MZ-agent'));
+    process.env.AGENT_BINARIES_DIR = tmp;
+    app = createApp({ installer });
+  });
+
+  afterEach(() => {
+    delete process.env.AGENT_BINARIES_DIR;
+    fsLocal.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test('reports the Windows installer as unavailable, with a reason', async () => {
+    const res = await request(app)
+      .get('/api/installer/agent-version')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.installer_available).toBe(false);
+    // The reason must name the missing artefact — the UI renders it verbatim.
+    expect(res.body.installer_unavailable_reason).toMatch(/lockdown-installer\.exe/);
+    expect(res.body.windows_installer_ready).toBe(false);
+  });
+
+  test('reports it available once the binary is staged', async () => {
+    fsLocal.writeFileSync(pathLocal.join(tmp, 'lockdown-installer.exe'), Buffer.from('MZ-inst'));
+    // nsis_available depends on the host, so only assert the half we control.
+    const res = await request(app)
+      .get('/api/installer/agent-version')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.body.installer_available).toBe(true);
+    // When the binary is staged the reason is null (or names only the NSIS
+    // toolchain) — `toMatch` cannot take null, which is what caught this.
+    expect(res.body.installer_unavailable_reason || '').not.toMatch(/lockdown-installer\.exe/);
+  });
+});

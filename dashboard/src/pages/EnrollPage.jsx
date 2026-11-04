@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Download, Copy, Check, Key, AlertTriangle, Package } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -8,11 +8,40 @@ import { useServerlessMode } from '../hooks/useServerlessMode';
 export default function EnrollPage() {
   const navigate = useNavigate();
   const { serverless } = useServerlessMode();
+  // What this server can actually produce for Windows, probed up front so the page
+  // can explain a missing installer instead of failing on click with a raw 503
+  // (S209): the GUI wizard needs makensis AND lockdown-installer.exe, the .ps1
+  // needs lockdown-installer.exe, and a Linux-hosted server often has neither.
+  const [winInstall, setWinInstall] = useState(null);
   const [form, setForm] = useState({ hostname: '', owner_name: '' });
   const [loading, setLoading] = useState(false);
   const [enrolled, setEnrolled] = useState(null); // { device, apiKey }
   const [copied, setCopied] = useState(false);
   const [downloadingInstaller, setDownloadingInstaller] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get('/installer/agent-version', { params: { platform: 'win' } })
+      .then(({ data }) => {
+        if (!cancelled) setWinInstall(data);
+      })
+      .catch(() => {
+        // Unknown is not "unavailable": a failed probe must not block a working
+        // server, so leave the buttons enabled.
+        if (!cancelled) setWinInstall(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Only a definite "no" disables anything.
+  const installerReady = winInstall ? winInstall.installer_available !== false : true;
+  const wizardReady = winInstall
+    ? winInstall.installer_available !== false && winInstall.nsis_available !== false
+    : true;
+  const unavailableReason = winInstall?.installer_unavailable_reason || null;
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -332,6 +361,28 @@ echo "Done!"
           </div>
         </div>
 
+        {/* Honest availability: say why Windows installers cannot be produced
+            here, and what to do, instead of letting the click 503. */}
+        {winInstall && (!installerReady || !wizardReady) && (
+          <div className="card mb-6 border-amber-700/40 bg-amber-950/20">
+            <h3 className="text-sm font-medium text-amber-200 mb-1">
+              Windows installers unavailable on this server
+            </h3>
+            <p className="text-xs text-amber-200/70">
+              {unavailableReason || 'The installer binaries are not staged on this server.'}
+            </p>
+            <p className="text-xs text-slate-400 mt-2">
+              Remedy: build <code className="text-slate-300">lockdown-installer.exe</code> on a
+              Windows host (<code className="text-slate-300">agent/build.ps1</code> /{' '}
+              <code className="text-slate-300">agent/installer.spec</code>) and place it in the
+              agent binaries directory (<code className="text-slate-300">agent/dist</code>, or the
+              path in <code className="text-slate-300">AGENT_BINARIES_DIR</code>); install{' '}
+              <code className="text-slate-300">makensis</code> for the GUI wizard. The Linux ZIP
+              below works without either.
+            </p>
+          </div>
+        )}
+
         {/* One-click installer (primary — for non-IT users).
             Serverless: the Worker has no NSIS/zip toolchain, so instead of a
             .exe it serves a self-contained install.ps1 (S4-serverless P4). */}
@@ -348,7 +399,8 @@ echo "Done!"
             </p>
             <button
               onClick={downloadServerlessInstaller}
-              disabled={downloadingInstaller}
+              disabled={downloadingInstaller || !installerReady}
+              title={!installerReady ? unavailableReason || 'Installer binary unavailable' : undefined}
               className="w-full flex items-center gap-3 px-4 py-4 rounded-lg bg-emerald-900/30 hover:bg-emerald-900/50 border border-emerald-700/50 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Download size={20} className="text-emerald-400" />
@@ -376,7 +428,8 @@ echo "Done!"
               </p>
               <button
                 onClick={downloadOneClickInstaller}
-                disabled={downloadingInstaller}
+                disabled={downloadingInstaller || !wizardReady}
+                title={!wizardReady ? unavailableReason || 'GUI wizard unavailable' : undefined}
                 className="w-full flex items-center gap-3 px-4 py-4 rounded-lg bg-emerald-900/30 hover:bg-emerald-900/50 border border-emerald-700/50 text-sm text-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Download size={20} className="text-emerald-400" />

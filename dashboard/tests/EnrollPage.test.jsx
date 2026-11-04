@@ -149,6 +149,48 @@ describe('EnrollPage', () => {
       expect(screen.getByText('Linux ZIP')).toBeTruthy();
     });
 
+    it('explains why Windows installers are unavailable and disables the wizard', async () => {
+      // A Linux-hosted server usually has no lockdown-installer.exe and no
+      // makensis; the page must say so instead of letting the click 503 (S209).
+      api.get.mockImplementation((url) => {
+        if (url === '/installer/agent-version') {
+          return Promise.resolve({
+            data: {
+              installer_available: false,
+              nsis_available: false,
+              windows_installer_ready: false,
+              installer_unavailable_reason:
+                'lockdown-installer.exe is not staged in the server agent binaries directory; makensis (NSIS) is not installed on this server',
+            },
+          });
+        }
+        return Promise.resolve({ data: new Blob(['fake-zip'], { type: 'application/zip' }) });
+      });
+
+      await enrollDevice();
+
+      expect(screen.getByText('Windows installers unavailable on this server')).toBeTruthy();
+      expect(screen.getByText(/lockdown-installer\.exe is not staged/)).toBeTruthy();
+      // The remedy names the build command, so the operator is not stuck.
+      expect(screen.getByText(/agent\/build\.ps1/)).toBeTruthy();
+
+      const wizard = screen.getByText('Download Windows Installer (.exe)').closest('button');
+      expect(wizard.disabled).toBe(true);
+    });
+
+    it('leaves the wizard enabled when the probe fails (unknown is not "unavailable")', async () => {
+      api.get.mockImplementation((url) => {
+        if (url === '/installer/agent-version') return Promise.reject(new Error('probe failed'));
+        return Promise.resolve({ data: new Blob(['fake-zip'], { type: 'application/zip' }) });
+      });
+
+      await enrollDevice();
+
+      expect(screen.queryByText('Windows installers unavailable on this server')).toBeNull();
+      const wizard = screen.getByText('Download Windows Installer (.exe)').closest('button');
+      expect(wizard.disabled).toBe(false);
+    });
+
     it('shows View Device Details and Enroll Another buttons', async () => {
       await enrollDevice();
       expect(screen.getByText('View Device Details')).toBeTruthy();

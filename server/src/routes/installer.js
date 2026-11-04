@@ -1610,6 +1610,43 @@ function crc32(buf) {
 // `/agent-version` and answer `404 {"error":"Device not found"}`.
 
 /**
+ * Is a binary staged locally? Existence check only — unlike resolveAgentBinary it
+ * never tries a GitHub release, because this answers a UI probe on every page load.
+ */
+function localBinaryPath(name) {
+  const dir = getAgentBinariesDir();
+  if (!dir) return null;
+  const candidate = path.join(dir, name);
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+/**
+ * What Windows installers this server can actually produce, and why not.
+ *
+ * The dashboard offers a GUI wizard (.exe, needs makensis AND the CLI installer)
+ * and a PowerShell script (.ps1, needs the CLI installer). On a Linux host with no
+ * staged Windows binaries both fail with 503 — and until this probe existed the UI
+ * could only report the raw error after the user clicked (S209).
+ */
+function windowsInstallerAvailability() {
+  const installer = localBinaryPath('lockdown-installer.exe');
+  const nsis = findNsis();
+  const reasons = [];
+  if (!installer) {
+    reasons.push(
+      'lockdown-installer.exe is not staged in the server agent binaries directory'
+    );
+  }
+  if (!nsis) reasons.push('makensis (NSIS) is not installed on this server');
+  return {
+    installer_available: Boolean(installer),
+    nsis_available: Boolean(nsis),
+    windows_installer_ready: Boolean(installer) && Boolean(nsis),
+    installer_unavailable_reason: reasons.length ? reasons.join('; ') : null,
+  };
+}
+
+/**
  * GET /api/installer/agent-version
  *
  * Returns the current version of the bundled agent binary.
@@ -1619,8 +1656,10 @@ router.get('/agent-version', requireAuth, async (req, res) => {
   const plat = getPlatformConfig(req.query.platform);
   const agentBinPath = await resolveAgentBinary(plat.platform, plat.agentName, 'lockdown-agent');
 
+  const windows = windowsInstallerAvailability();
+
   if (!agentBinPath) {
-    return res.json({ version: null, available: false });
+    return res.json({ version: null, available: false, ...windows });
   }
 
   const stat = fs.statSync(agentBinPath);
@@ -1635,6 +1674,7 @@ router.get('/agent-version', requireAuth, async (req, res) => {
     built_at: stat.mtime.toISOString(),
     platform: plat.platform,
     source: agentBinPath.includes('agent-cache') ? 'cache' : 'local',
+    ...windows,
   });
 });
 
