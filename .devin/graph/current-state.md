@@ -53,27 +53,30 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 204 — 2026-11-03 (the Signing Keys 404, and what the audit found behind it)
+## Latest session: 205 — 2026-11-03 (token enrolment reaches the self-hosted server)
 
 ### Fog cleared
 
-- **What the "Signing Keys" 404 was**: `/api/v1/...` instead of `/v1/...`, caused by
-  a base URL used verbatim against a comment that said otherwise.
-- **Which routes exist**: 10 `/api` groups on Express plus `/v1` (PBL) and
-  `/metrics`; the Worker additionally has `/api/enroll{,/token,/claim}`.
-- **Whether `REGISTRATION_ENABLED` does anything**: no.
+- **Whether the Enroll page works on self-hosted**: yes now — mint → claim →
+  provisioned, verified live.
+- **What the installer needs**: `{device, api_key}` from `/api/enroll/claim`, with
+  `reassociated` tolerated; both shapes are returned.
+- **Which schema gaps existed**: `enrollment_tokens` entirely absent, and
+  `devices.serial_number` never created.
 
 ### Fog remaining
 
-- **Token enrolment on Express** (Finding 4) — the one real functional gap. Options:
-  (a) implement `/api/enroll/token` + `/api/enroll/claim` with a table-backed
-  single-use token and rate limits; (b) document enrolment as Worker-only and have
-  the dashboard say so on self-hosted; (c) make the Enroll page fall back to
-  `POST /api/devices`. (a) is the honest parity fix; it needs a migration and tests.
-- The **UI↔server route audit is still manual** — it found two defects and would
-  find the next one. Worth automating the way the Worker's route-contract test works.
+- **Hostname uniqueness** (Finding 3): either add a UNIQUE index/constraint to
+  `devices.hostname` (a data migration — existing duplicates would need resolving)
+  or correct the 409 message so it stops promising a constraint the schema lacks.
+- **The UI↔server route audit is still manual** — it found the S204 defects and
+  would find the next one. Automating it (the way the Worker's route-contract test
+  works) remains the highest-value harness addition here.
 - The S202 objective (spec-vs-ledger consistency check, D-117 reconciliation,
   `PblTlsVerifyCert`'s fate) is still queued.
+- `serial_number` is now stored but not surfaced by the Express device API responses
+  beyond `SELECT *` — the dashboard will show it for token-enrolled devices; older
+  rows stay NULL.
 
 ### Debt items closed
 
@@ -85,43 +88,55 @@
 
 ### Blockers
 
-- A design decision on token enrolment for self-hosted deployments (Finding 4).
+- None. (The hostname-uniqueness decision is a design question, not a blocker.)
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, fifth instance of one shape): nothing
-  compared what the UI calls with what the server serves. Both defects are invisible
-  to each side's own tests — the client tests mock the API and the route tests never
-  see the client. The 404 derivation now protects the *server's* statement about
-  itself, but the cross-boundary check is still manual.
-- **Layer 2 — context provision**: `pblClient.js`'s comment contradicted its code and
-  nothing reconciled the two; the comment was read as documentation for months.
+- **Layer 4 — verification feedback** (primary, sixth instance of one shape): the
+  two backends were never compared. The Worker had three enrolment endpoints the
+  Express server lacked, and nothing — no test, no check — compared their route
+  tables or the dashboard's calls against either. Each backend's own suite was
+  green. Automating that comparison is the durable fix, and it is now the top of the
+  next opening for the third session running.
+- **Layer 2 — context provision**: `installer.py` and the dashboard both encoded the
+  contract, but no document said "Express is missing these two routes", so the gap
+  only appeared when a human used the page.
 
 ### VERIFY
 
-- `server`: **742 passed** (739 + 3), eslint clean.
-- `dashboard`: **210 passed** (205 + 5), eslint clean.
-- Live, after restarting the API: 404 message lists all ten mounted groups
-  (`/api/auth, /api/setup, /api/devices, /api/agent, /api/audit, /api/installer,
-  /api/health, /api/admins, /api/hw-test-artifact, /api/integrations`);
-  `GET /v1/admin/key-info` → **200** with a super-admin token;
-  `GET /api/v1/admin/key-info` → **404** (the reported failure).
-- Vite confirmed serving the fixed `pblClient` module (hot reloaded).
+- `server`: **754 passed**, 45 suites, eslint clean (was 739; +15: 11 route cases
+  including the single-use race, re-association, expired/used/unknown tokens and
+  hash-only storage; +4 schema cases that also exercise the conditional UPDATE at
+  the SQL layer).
+- Live, against the restarted API (migrations applied at boot —
+  `schema_migrations` now ends at `016_device_serial`):
+  1. admin login → 248-char token
+  2. mint → `expires_in=900`
+  3. claim with **no admin auth** → **201**, device created with `serial: SN-TOKEN-1`
+  4. agent check-in with the issued key → **200**
+  5. same token reused → **401**
+  6. unknown token → **401**
+  7. mint without auth → **401**
+- The verification device was deleted afterwards; the local device list is back to
+  the three pre-existing rows.
 
 ### Session artifacts
 
-- Changed: `dashboard/src/api/pblClient.js`, `dashboard/tests/pblClient.test.js`
-  (new), `server/src/index.js`, `server/tests/apiNotFound.test.js` (new),
-  `server/.env.example`.
-- Commit: `54cfdc1`.
+- Changed: `server/src/db/migrations/015_enrollment_tokens.sql`,
+  `server/src/db/migrations-sqlite/015_enrollment_tokens.sql`,
+  `server/src/db/migrations/016_device_serial.sql`,
+  `server/src/db/migrations-sqlite/016_device_serial.sql`,
+  `server/src/routes/enroll.js` (new), `server/src/index.js`,
+  `server/tests/enroll.routes.test.js` (new),
+  `server/tests/migrationIdempotency.test.js`.
+- Commit: `e48c09b`.
 
 ### Next session opening
 
-Decide token enrolment for self-hosted deployments — the only functional gap this
-audit found. Recommend (a): implement `/api/enroll/token` and `/api/enroll/claim` in
-Express to match the Worker (single-use, 15-minute, table-backed, rate-limited), then
-automate the UI↔server route audit so the next mismatch is caught by a test instead of
-by the user.
+Automate the cross-backend audit that has now surfaced defects in three consecutive
+sessions: a script test that compares (a) the UI's API calls against the Express
+route table, (b) the Worker's route table against Express's, and fails on a mismatch
+it cannot explain. Then decide the hostname-uniqueness question (Finding 3).
 
 ---
 

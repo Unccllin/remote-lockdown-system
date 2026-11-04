@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-04 11:05:24 — 59 beliefs
+Generated: 2026-11-04 11:34:38 — 60 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -26,6 +26,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-048 | confirmed | code-read | Update authenticity is end-to-end only when a signing key is provisioned: every config generator (agent/installer.py, agent/installer_gui.py, server routes/installer.js, the Worker's generated script and the generic NSIS installer) names update_public_key only when update_signing.pub is actually staged, and both installers copy it into C:\ProgramData\LockdownAgent and pin that installed path — never the staging/download folder, because the agent fails closed on a configured-but-unreadable key and would refuse every future update. Unpinned agents accept SHA-256-only updates and report update_verification (signature \| sha256-only \| key-unreadable) at check-in; both backends store it (Express COALESCE, Worker merge) and the dashboard shows it per device and per row. |
 | B-049 | confirmed | code-read | Agent release metadata is produced by scripts/sign-release-metadata.py with one detached Ed25519 signature PER PLATFORM, because the signed message is 'v1:{version}:{sha256}' and therefore binds exactly one hash: a single top-level signature cannot be valid for both a Windows and a Linux build. CI (release.yml publish-agent-release-metadata) signs with the UPDATE_SIGNING_KEY secret, skips the companion binaries (the glob matches lockdown-agent-windows-x64-watchdog.exe before .exe), and attaches agent-release.json to the release; without the secret it publishes unsigned metadata behind a warning annotation, which a pinned agent refuses. The Worker serves platforms[<X-Agent-Platform>].signature first and falls back to the top-level signature only for metadata published before per-platform signing. |
 | B-053 | confirmed | code-read | The Worker's update path was structurally broken until S198: /api/agent/update advertised download_url '/api/agent/download?platform=...' while the Worker only implemented '/api/download/agent', so every serverless update download 404'd; and agent.py's download_update called tmp_file.unlink() in its except handler although tmp_file is created only after requests.get() returns, so any pre-response failure raised UnboundLocalError (not in the except tuple) and escaped check_for_update. Both were found only when an end-to-end test followed the advertised URL. Fixes: an agent-authenticated /api/agent/download route serving binary:agent:<platform> with a shared binary:agent fallback (plus x-content-sha256), and a guarded cleanup. The Worker requires full HMAC auth (all four X- headers) unlike Express's transition-tolerant hmacAuth. |
+
+## api/enrolment
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-060 | confirmed | code-read | Token enrolment now exists on the Express server with the same contract the Worker and clients already used: POST /api/enroll/token (operator auth) mints a 44-char token for 900s and stores only its SHA-256 (so a DB read cannot be replayed), and POST /api/enroll/claim (unauthenticated — the token is the credential, behind a 30/15min limiter) consumes it with a conditional UPDATE (single use; a concurrent claim updates 0 rows) and either creates the device or re-associates by hardware_uuid (200 + reassociated:true), attributing the audit row to the admin who minted the token. Migrations 015 (enrollment_tokens) and 016 (devices.serial_number) exist in both dialects; serial_number had never existed in the Express schema although the Worker stored it and the dashboard renders it. Separately: devices.hostname is NOT unique in the schema (only mac_address and hardware_uuid are), so devices.js's 23505 'Hostname already registered' branch cannot fire for a hostname collision — it can only fire for a MAC or hardware-UUID conflict. |
 
 ## api/routing
 

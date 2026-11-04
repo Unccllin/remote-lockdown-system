@@ -8188,3 +8188,142 @@ automate the UI↔server route audit so the next mismatch is caught by a test in
 by the user.
 
 ---
+
+---
+
+## Session 205 — 2026-11-03 (token enrolment reaches the self-hosted server)
+
+### RULE-ZERO
+
+**Read**: `serverless/worker.ts` (`handleEnrollToken`, `handleEnrollClaim`);
+`agent/installer.py` (`enroll_device_with_token` — the client contract);
+`server/src/routes/devices.js` (device creation, `publicDevice`, audit insert);
+`server/src/db/apiKey.js`; `server/src/db/migrations/*` (schema, `admins.id`,
+`devices` columns, `audit_log` nullability); `server/src/index.js` (rate limiters,
+`mountApi`); `dashboard/src/pages/EnrollDevicePage.jsx`.
+
+**Finding 1 — the parity gap was real and is now closed.** The Worker implements
+`POST /api/enroll/token` and `/api/enroll/claim`; the dashboard's Enroll page and
+`installer.py --token` are written against them; the Express server implemented
+neither. Token enrolment now works on self-hosted deployments.
+
+**Finding 2 — a fourth gap surfaced while implementing: `devices.serial_number`
+did not exist.** The Worker's device record carries it, the dashboard renders a
+"Serial Number" row, and `installer.py` sends it — but no Express migration ever
+added the column, so the row was permanently "N/A" and the claim had nowhere to
+store what it received. Added as migration 016.
+
+**Finding 3 — `hostname` is not actually unique, though the API claims it is.**
+`001_base.sql` marks `mac_address` and `hardware_uuid` UNIQUE and leaves `hostname`
+plain `VARCHAR(255) NOT NULL`. So `devices.js`'s `23505` branch ("Hostname already
+registered…") cannot fire for a hostname collision — it can only fire for a MAC or
+hardware-UUID conflict. Recorded as the next decision rather than silently changing
+a constraint on a live table.
+
+### IMPLEMENT
+
+- **Migrations** (both dialects, the pattern `014` established):
+  `015_enrollment_tokens` (id, token_hash UNIQUE, created_by, created_at,
+  expires_at, used_at + index) and `016_device_serial`
+  (`devices.serial_number`, nullable).
+- **`server/src/routes/enroll.js`**:
+  - `POST /token` (operator auth) mints a 44-char token valid 900 s and stores only
+    its **SHA-256** — a database read cannot be replayed as an enrolment. The
+    Worker stores plaintext in KV; hashing is strictly better and the contract the
+    clients see is identical (`{ token, expires_at, expires_in }`).
+  - `POST /claim` (no admin auth — the token is the credential): validates,
+    rejects unknown/used/expired (expiry compared in JS so both dialects agree),
+    consumes the token with a **conditional UPDATE** so two concurrent claims cannot
+    both win, then creates the device or **re-associates by `hardware_uuid`**
+    (200 + `reassociated: true`) exactly as the Worker does. The audit row is
+    attributed to the admin who minted the token (`created_by`), not to nobody.
+  - 409 on a unique-constraint conflict, 400 on missing token/hostname, 401 on every
+    token failure.
+- **`server/src/index.js`** — a dedicated `enrollLimiter` (30 / 15 min) for the one
+  unauthenticated write in the API, mounted through `mountApi()` so the derived 404
+  list keeps naming it.
+
+### Fog cleared
+
+- **Whether the Enroll page works on self-hosted**: yes now — mint → claim →
+  provisioned, verified live.
+- **What the installer needs**: `{device, api_key}` from `/api/enroll/claim`, with
+  `reassociated` tolerated; both shapes are returned.
+- **Which schema gaps existed**: `enrollment_tokens` entirely absent, and
+  `devices.serial_number` never created.
+
+### Fog remaining
+
+- **Hostname uniqueness** (Finding 3): either add a UNIQUE index/constraint to
+  `devices.hostname` (a data migration — existing duplicates would need resolving)
+  or correct the 409 message so it stops promising a constraint the schema lacks.
+- **The UI↔server route audit is still manual** — it found the S204 defects and
+  would find the next one. Automating it (the way the Worker's route-contract test
+  works) remains the highest-value harness addition here.
+- The S202 objective (spec-vs-ledger consistency check, D-117 reconciliation,
+  `PblTlsVerifyCert`'s fate) is still queued.
+- `serial_number` is now stored but not surfaced by the Express device API responses
+  beyond `SELECT *` — the dashboard will show it for token-enrolled devices; older
+  rows stay NULL.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None. (The hostname-uniqueness decision is a design question, not a blocker.)
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, sixth instance of one shape): the
+  two backends were never compared. The Worker had three enrolment endpoints the
+  Express server lacked, and nothing — no test, no check — compared their route
+  tables or the dashboard's calls against either. Each backend's own suite was
+  green. Automating that comparison is the durable fix, and it is now the top of the
+  next opening for the third session running.
+- **Layer 2 — context provision**: `installer.py` and the dashboard both encoded the
+  contract, but no document said "Express is missing these two routes", so the gap
+  only appeared when a human used the page.
+
+### VERIFY
+
+- `server`: **754 passed**, 45 suites, eslint clean (was 739; +15: 11 route cases
+  including the single-use race, re-association, expired/used/unknown tokens and
+  hash-only storage; +4 schema cases that also exercise the conditional UPDATE at
+  the SQL layer).
+- Live, against the restarted API (migrations applied at boot —
+  `schema_migrations` now ends at `016_device_serial`):
+  1. admin login → 248-char token
+  2. mint → `expires_in=900`
+  3. claim with **no admin auth** → **201**, device created with `serial: SN-TOKEN-1`
+  4. agent check-in with the issued key → **200**
+  5. same token reused → **401**
+  6. unknown token → **401**
+  7. mint without auth → **401**
+- The verification device was deleted afterwards; the local device list is back to
+  the three pre-existing rows.
+
+### Session artifacts
+
+- Changed: `server/src/db/migrations/015_enrollment_tokens.sql`,
+  `server/src/db/migrations-sqlite/015_enrollment_tokens.sql`,
+  `server/src/db/migrations/016_device_serial.sql`,
+  `server/src/db/migrations-sqlite/016_device_serial.sql`,
+  `server/src/routes/enroll.js` (new), `server/src/index.js`,
+  `server/tests/enroll.routes.test.js` (new),
+  `server/tests/migrationIdempotency.test.js`.
+- Commit: `e48c09b`.
+
+### Next session opening
+
+Automate the cross-backend audit that has now surfaced defects in three consecutive
+sessions: a script test that compares (a) the UI's API calls against the Express
+route table, (b) the Worker's route table against Express's, and fails on a mismatch
+it cannot explain. Then decide the hostname-uniqueness question (Finding 3).
+
+---

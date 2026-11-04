@@ -1124,3 +1124,30 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-060
+  statement: 'Token enrolment now exists on the Express server with the same contract the Worker and clients
+    already used: POST /api/enroll/token (operator auth) mints a 44-char token for 900s and stores only
+    its SHA-256 (so a DB read cannot be replayed), and POST /api/enroll/claim (unauthenticated — the token
+    is the credential, behind a 30/15min limiter) consumes it with a conditional UPDATE (single use; a
+    concurrent claim updates 0 rows) and either creates the device or re-associates by hardware_uuid (200
+    + reassociated:true), attributing the audit row to the admin who minted the token. Migrations 015
+    (enrollment_tokens) and 016 (devices.serial_number) exist in both dialects; serial_number had never
+    existed in the Express schema although the Worker stored it and the dashboard renders it. Separately:
+    devices.hostname is NOT unique in the schema (only mac_address and hardware_uuid are), so devices.js''s
+    23505 ''Hostname already registered'' branch cannot fire for a hostname collision — it can only fire
+    for a MAC or hardware-UUID conflict.'
+  domain: api/enrolment
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'live: mint 200/900s, unauthenticated claim 201 with serial, agent check-in 200 with the
+    issued key, reuse 401, bad token 401, unauthenticated mint 401; migrations at boot; server 754 (+15)'
+  source: server/src/routes/enroll.js; server/src/db/migrations/015_enrollment_tokens.sql; server/src/db/migrations/016_device_serial.sql;
+    server/tests/enroll.routes.test.js; server/tests/migrationIdempotency.test.js; serverless/worker.ts
+    handleEnrollToken/handleEnrollClaim; agent/installer.py; server/src/db/migrations/001_base.sql
+  asserted: '2026-11-04'
+  last_verified: '2026-11-04'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
