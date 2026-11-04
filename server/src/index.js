@@ -38,6 +38,7 @@ const metricsRoutes = require('./routes/metrics');
 const adminsRoutes = require('./routes/admins');
 const enrollRoutes = require('./routes/enroll');
 const rearmRoutes = require('./routes/rearm');
+const downloadRoutes = require('./routes/downloads');
 const hwTestArtifactRoutes = require('./routes/hwTestArtifact');
 const pblRoutes = require('./routes/pbl');
 const integrationsRoutes = require('./routes/integrations');
@@ -177,6 +178,10 @@ mountApi('/api/hw-test-artifact', dashboardLimiter, hwTestArtifactRoutes);
 mountApi('/api/integrations', dashboardLimiter, integrationsRoutes);
 mountApi('/api/enroll', enrollLimiter, enrollRoutes);
 mountApi('/api/rearm', rearmLimiter, rearmRoutes);
+// Public binary downloads, matching the Worker's /api/download/* paths
+// (deploy-agent.sh fetches from these). Rate-limited, not authenticated:
+// a machine with no credential yet has to be able to bootstrap.
+mountApi('/api/download', dashboardLimiter, downloadRoutes);
 
 // D-200/D-201/D-202/D-210: PBL routes (/v1/*) — CBOR/COSE firmware protocol.
 // Mounted at /v1 (not /api) to match the serverless Worker URL scheme.

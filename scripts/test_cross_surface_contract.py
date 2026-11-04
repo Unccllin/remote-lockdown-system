@@ -70,15 +70,19 @@ ANCHORS = [
 # Worker-only by design: a delivery mechanism that only exists serverless, or a
 # legacy path kept for agents already in the field.
 WORKER_ONLY_BY_DESIGN = {
-    ("GET", "/api/download/agent"): "KV-backed binary delivery; Express serves per-device installers under /api/installer",
-    ("GET", "/api/download/agent-installer"): "KV-backed binary delivery (installer wrapper)",
-    ("GET", "/api/download/installer"): "KV-backed binary delivery (NSIS setup)",
-    ("GET", "/api/download/lockscreen"): "KV-backed binary delivery",
-    ("GET", "/api/download/deploy.ps1"): "KV-backed script delivery",
-    ("GET", "/api/download/quick.ps1"): "KV-backed script delivery",
-    ("GET", "/api/download/reenroll.ps1"): "KV-backed script delivery",
+    # No Express route exists at all.
     ("POST", "/api/ping"): "legacy alias of POST /api/agent/checkin",
     ("POST", "/api/command-ack"): "legacy alias of POST /api/agent/command-ack",
+}
+
+# Routed by Express but not produced there: /api/download/:name serves the four
+# binaries and answers 404 with guidance for anything else. The Worker *generates*
+# these three scripts from KV; Express has no generator, so the path is routed and
+# deliberately unsupported rather than missing.
+ROUTED_NOT_PRODUCED = {
+    ("GET", "/api/download/deploy.ps1"): "Worker generates this script; Express routes /api/download/:name and answers 404 with guidance",
+    ("GET", "/api/download/quick.ps1"): "Worker generates this script; Express routes /api/download/:name and answers 404 with guidance",
+    ("GET", "/api/download/reenroll.ps1"): "Worker generates this script; Express routes /api/download/:name and answers 404 with guidance",
 }
 
 # Real capabilities Express does not have. Shrink-only: closing one must fail this
@@ -153,7 +157,25 @@ def worker_routes() -> set[tuple[str, str]]:
 
 
 def resolves(table: set[tuple[str, str]], method: str, path: str) -> bool:
-    return any(p == path and m in (method, "ALL") for m, p in table)
+    """Does an Express route cover this method+path, treating `:x` as one segment?
+
+    Segment-wise matching matters: `/api/download/:name` is how a router serves
+    `/api/download/agent`, and an exact-string comparison would call that missing
+    (which is exactly what happened when the downloads router was added).
+    """
+    target = [seg for seg in path.strip("/").split("/") if seg != ""]
+    for route_method, route_path in table:
+        if route_method not in (method, "ALL"):
+            continue
+        route_segs = [seg for seg in route_path.strip("/").split("/") if seg != ""]
+        if len(route_segs) != len(target):
+            continue
+        # strict=True: the length guard above already ensures equal sizes, and
+        # asserting it here means a future edit that drops the guard fails loudly
+        # instead of silently comparing only the shared prefix.
+        if all(rs == ts or rs == ":x" for rs, ts in zip(route_segs, target, strict=True)):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +210,11 @@ def test_every_worker_api_route_exists_in_express_or_is_documented():
     for method, path in sorted(worker_routes()):
         if resolves(table, method, path):
             continue
-        if (method, path) in WORKER_ONLY_BY_DESIGN or (method, path) in KNOWN_GAPS:
+        if (
+            (method, path) in WORKER_ONLY_BY_DESIGN
+            or (method, path) in ROUTED_NOT_PRODUCED
+            or (method, path) in KNOWN_GAPS
+        ):
             continue
         unexplained.append(f"{method} {path}")
 
@@ -228,6 +254,35 @@ def test_by_design_entries_are_still_absent_from_express():
     assert present == [], (
         "Express now serves these, so they are no longer Worker-only:\n  " + "\n  ".join(present)
     )
+
+
+def test_routed_not_produced_entries_are_actually_routed():
+    """The middle category means "reached, deliberately 404", not "missing"."""
+    table = express_routes()
+    unrouted = [
+        f"{method} {path}"
+        for (method, path) in ROUTED_NOT_PRODUCED
+        if not resolves(table, method, path)
+    ]
+    assert unrouted == [], (
+        "recorded as routed-but-not-produced, but no Express route reaches them "
+        "(move them to WORKER_ONLY_BY_DESIGN):\n  " + "\n  ".join(unrouted)
+    )
+
+
+def test_the_three_lists_do_not_overlap():
+    sets = {
+        "by design": set(WORKER_ONLY_BY_DESIGN),
+        "routed not produced": set(ROUTED_NOT_PRODUCED),
+        "known gaps": set(KNOWN_GAPS),
+    }
+    overlaps = [
+        f"{name} ∩ {other}: {sorted(entries & other_entries)}"
+        for name, entries in sets.items()
+        for other, other_entries in sets.items()
+        if name < other and entries & other_entries
+    ]
+    assert overlaps == [], "an entry belongs to two lists: " + "; ".join(overlaps)
 
 
 if __name__ == "__main__":
