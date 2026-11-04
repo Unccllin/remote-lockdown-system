@@ -339,3 +339,42 @@ describe('generateNsisScript — the per-device installer delegates', () => {
     expect(licence).not.toMatch(/Remove the agent at any time via Add\/Remove Programs/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// publicServerUrl — the URL baked into generated installers (S212)
+//
+// `req.get('host')` is `localhost:3001` when the dashboard is opened on the server
+// itself, and an installer carrying that only works on the server: on the target,
+// localhost is the target. Reported as "token rejected" while the server log showed
+// zero non-local requests.
+// ---------------------------------------------------------------------------
+
+describe('publicServerUrl', () => {
+  const { publicServerUrl } = require('../src/routes/installer').helpers;
+  const req = (host) => ({ protocol: 'http', get: () => host });
+  const original = process.env.PUBLIC_SERVER_URL;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.PUBLIC_SERVER_URL;
+    else process.env.PUBLIC_SERVER_URL = original;
+  });
+
+  test('uses PUBLIC_SERVER_URL when set, and strips a trailing slash', () => {
+    process.env.PUBLIC_SERVER_URL = 'http://192.168.1.20:3001/';
+    expect(publicServerUrl(req('localhost:3001'))).toBe('http://192.168.1.20:3001');
+  });
+
+  test('falls back to the request host when no override is configured', () => {
+    delete process.env.PUBLIC_SERVER_URL;
+    expect(publicServerUrl(req('lockdown.example.com'))).toBe('http://lockdown.example.com');
+  });
+
+  test('detects the loopback case that made installers unusable elsewhere', () => {
+    delete process.env.PUBLIC_SERVER_URL;
+    // The value is still returned (it is what the browser used), but the server
+    // logs a warning — the assertion here is that the fallback is the host header,
+    // which is exactly why PUBLIC_SERVER_URL exists.
+    expect(publicServerUrl(req('localhost:3001'))).toBe('http://localhost:3001');
+    expect(publicServerUrl(req('127.0.0.1:3001'))).toBe('http://127.0.0.1:3001');
+  });
+});

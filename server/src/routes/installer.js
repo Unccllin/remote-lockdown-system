@@ -1678,6 +1678,37 @@ router.get('/agent-version', requireAuth, async (req, res) => {
   });
 });
 
+/** Loopback hosts: an installer baked with one only works on the server itself. */
+const LOOPBACK_HOST = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+
+/**
+ * The URL a *target machine* must use to reach this server.
+ *
+ * `req.get('host')` is whatever the admin's browser used — `localhost:3001` when the
+ * dashboard is opened on the server itself. Baking that into an installer makes it
+ * unusable on any other machine: on the target, `localhost` is the target, so the
+ * enrolment request never leaves the box. Reported as "token rejected" while the
+ * server log showed zero non-local requests (S212).
+ *
+ * PUBLIC_SERVER_URL overrides it — set it to an address targets can reach
+ * (e.g. http://192.168.1.20:3001). Without an override the request host is used,
+ * and a loopback value is logged as a warning so the cause is visible server-side.
+ */
+function publicServerUrl(req) {
+  const override = (process.env.PUBLIC_SERVER_URL || '').trim().replace(/\/+$/, '');
+  if (override) return override;
+
+  const derived = `${req.protocol}://${req.get('host')}`;
+  if (LOOPBACK_HOST.test(derived)) {
+    logger.warn(
+      { serverUrl: derived },
+      '[installer] baking a loopback server URL — this installer will only work on the ' +
+        'server itself. Set PUBLIC_SERVER_URL to an address targets can reach.',
+    );
+  }
+  return derived;
+}
+
 /**
  * GET /api/installer/:deviceId?platform=win|linux
  *
@@ -1723,10 +1754,7 @@ router.get('/:deviceId', requireAuth, async (req, res) => {
     device.id, req.admin.id, 'installer_generated', { platform }
   );
 
-  // Determine server URL — use the request origin (what the admin browser sees)
-  const protocol = req.protocol;
-  const host = req.get('host');
-  const serverUrl = `${protocol}://${host}`;
+  const serverUrl = publicServerUrl(req);
 
   // Build the device-specific config (shared helper)
   // Optional pinned update key (UPDATE_PUBLIC_KEY_PEM). Null when the operator
@@ -1798,10 +1826,7 @@ router.get('/:deviceId/nsis', requireAuth, async (req, res) => {
     device.id, req.admin.id, 'nsis_installer_generated', { platform }
   );
 
-  // Determine server URL
-  const protocol = req.protocol;
-  const host = req.get('host');
-  const serverUrl = `${protocol}://${host}`;
+  const serverUrl = publicServerUrl(req);
 
   // Build the device-specific config (shared helper)
   const updateKeyPath = resolveUpdatePublicKey();
@@ -1850,6 +1875,7 @@ router.helpers = {
   escapeSh,
   escapePs1,
   buildDeviceConfig,
+  publicServerUrl,
   assembleZipFiles,
   generateInstallSh,
   generateInstallPs1,
