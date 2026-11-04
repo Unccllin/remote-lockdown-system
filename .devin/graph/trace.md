@@ -9204,3 +9204,119 @@ Anything that still fails after reachability is confirmed is a code problem wort
 session of its own.
 
 ---
+
+---
+
+## Session 213 — 2026-11-03 ("keeps failing": the installer defaulted to someone else's server)
+
+### RULE-ZERO
+
+**Read**: `agent/installer.py` and `agent/installer_gui.py` (`DEFAULT_SERVER_URL`,
+the GUI's URL field and its enrollment step); the running API's request log; the
+Windows peer's SSH config entry and open service ports.
+
+**Finding 1 — the claim never reached this server, and the log proved it.** Of the
+156 requests logged by the current API process, exactly **one** came from the
+Windows peer (`100.104.11.34`): `GET /api/download/installer`, user-agent Chrome —
+i.e. the operator downloading the wizard in a browser. **No `POST /api/enroll/claim`
+ever arrived from that machine.**
+
+**Finding 2 — the installers bake in the deployed Worker as their default.**
+`agent/installer.py:78` and `agent/installer_gui.py:90` both had
+
+    DEFAULT_SERVER_URL = "https://lockdown-serverless.mainacollins196.workers.dev"
+
+and the GUI prefills its Server URL field with it. A token minted by this server was
+therefore sent to the Worker, which has never seen it, and the reply was 401
+"Enrollment token rejected". A wrong default that *looks* filled in is worse than an
+empty field: the operator has no reason to change it.
+
+**Finding 3 — the machines are on different subnets.** `Test-NetConnection
+192.168.124.65` failed because the target is on `192.168.1.253` while this host is on
+`192.168.124.0/20`. The working path is the tailnet: `tailscale ping` to the peer
+answers `pong … in 49 ms`, and this host serves on `100.99.13.53:3001`
+(`PUBLIC_SERVER_URL` was switched there in S212).
+
+**Finding 4 — I cannot drive the Windows box yet.** The SSH config already has an
+entry (`Host win`, user `newark`, MagicDNS name), but port 22 times out; only SMB 445
+is open. `sshd` is not running, so the offered access needs one enablement step first.
+
+### IMPLEMENT
+
+- `agent/installer.py` — `DEFAULT_SERVER_URL = ""` with the reason recorded; silent
+  mode now refuses to guess: without `--server-url` (and no baked `config.json`) it
+  exits 1 with "No server URL. Pass --server-url http://your-server:3001".
+- `agent/installer_gui.py` — same empty default, and the enrollment step refuses with
+  "No server URL set. Enter the address of your server (for example
+  http://192.168.1.20:3001)" instead of failing later at the network call.
+- Tests: no backend default is compiled into either module; silent mode without a URL
+  exits 1 with guidance.
+
+### Fog cleared
+
+- **What "keeps failing" was**: the wizard submitting to the Worker because that URL
+  was prefilled; our server was never asked.
+- **Why the LAN address failed**: different subnets — not a firewall, not the token.
+- **What path works**: the tailnet (`100.99.13.53:3001`), confirmed end-to-end by
+  `tailscale ping` and by fetching the 18.6 MB wizard over it.
+
+### Fog remaining
+
+- **The already-downloaded wizard still prefills the Worker.** The field is editable,
+  so overwriting it works today; rebuilt binaries get the empty field.
+- **No successful enrolment from a real second machine yet** — the one piece of
+  evidence that closes this thread.
+- `sshd` on the Windows peer is not running (port 22 times out); driving that machine
+  needs it enabled, plus a key or password.
+- Unchanged: `lockdown-installer.exe` missing (Windows per-device installers, S209);
+  a partially-failed install still spends its token (S211); `devices.hostname`
+  uniqueness; the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- A running `sshd` (or an equivalent) on the Windows peer if the operator wants me to
+  drive it directly. Nothing blocks the operator doing it themselves.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, third session on this thread): no test
+  asserted that the *default* the installer ships is a server the operator's token
+  belongs to — or even that a default should exist. The suites covered the claim
+  protocol and the crafted URL, never the value the wizard starts with.
+- **Layer 2 — context provision**: "which backend is this installer for?" was answered
+  by a hardcoded constant with no comment, so nobody noticed it encoded a product
+  decision. It now carries its reasoning.
+
+### VERIFY
+
+- Request log, quantified: 156 requests, **156 from `::1`/tailnet-local**; the Windows
+  peer (`100.104.11.34`) made exactly **1** request — `GET /api/download/installer`,
+  200 — and **0** claims.
+- `tailscale ping 100.104.11.34` → `pong … via 192.168.1.52:41641 in 49ms`;
+  `curl http://100.99.13.53:3001/api/health` → 200; the wizard downloads over the
+  tailnet (18 628 686 bytes, PE32+ GUI).
+- `agent`: **772 passed** (+2), ruff check + format clean.
+
+### Session artifacts
+
+- Changed: `agent/installer.py`, `agent/installer_gui.py`,
+  `agent/tests/test_installer.py`.
+- Commit: `4e4b744`.
+
+### Next session opening
+
+Get one enrolment to succeed from the Windows peer and read the claim in the log:
+overwrite the wizard's Server URL with `http://100.99.13.53:3001` (or, after a rebuild,
+with the now-empty field), use a fresh token, and confirm the request arrives from
+`100.104.11.34`. If the operator wants the agent to drive that machine directly,
+enable `sshd` on it first (port 22 currently times out) and hand over a key.
+
+---

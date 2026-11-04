@@ -53,29 +53,27 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 212 — 2026-11-03 ("token still refuses"; the server log said nobody called it)
+## Latest session: 213 — 2026-11-03 ("keeps failing": the installer defaulted to someone else's server)
 
 ### Fog cleared
 
-- **Why enrolment "refused the token"**: the claim never arrived; the installer was
-  pointed at a URL that is only valid on the server itself.
-- **Whether the API was reachable over the LAN**: yes — it listens on `*:3001` and
-  `http://192.168.124.65:3001/api/health` answers from this host's own LAN address.
-- **Whether the fix works**: a generated linux ZIP now carries
-  `"server_url": "http://192.168.124.65:3001"`.
+- **What "keeps failing" was**: the wizard submitting to the Worker because that URL
+  was prefilled; our server was never asked.
+- **Why the LAN address failed**: different subnets — not a firewall, not the token.
+- **What path works**: the tailnet (`100.99.13.53:3001`), confirmed end-to-end by
+  `tailscale ping` and by fetching the 18.6 MB wizard over it.
 
 ### Fog remaining
 
-- **Reachability from the target is unverified.** The next failure mode is Windows
-  Firewall blocking inbound TCP 3001 on this host, and nothing here can prove
-  otherwise; `Test-NetConnection 192.168.124.65 -Port 3001` on the target answers it
-  in one line.
-- **The baked URL is still the wrong default for most self-hosted deployments.** A
-  warning is honest, but an installer generated while an admin browses `localhost`
-  is unusable elsewhere by construction; a bootstrap-time or first-run prompt for the
-  public URL would be better than an env var an operator must know about.
-- A partially-failed install still spends its token (S211's open design question).
-- Unchanged: `devices.hostname` uniqueness decision; the S202 objective.
+- **The already-downloaded wizard still prefills the Worker.** The field is editable,
+  so overwriting it works today; rebuilt binaries get the empty field.
+- **No successful enrolment from a real second machine yet** — the one piece of
+  evidence that closes this thread.
+- `sshd` on the Windows peer is not running (port 22 times out); driving that machine
+  needs it enabled, plus a key or password.
+- Unchanged: `lockdown-installer.exe` missing (Windows per-device installers, S209);
+  a partially-failed install still spends its token (S211); `devices.hostname`
+  uniqueness; the S202 objective.
 
 ### Debt items closed
 
@@ -87,44 +85,42 @@
 
 ### Blockers
 
-- Verification from the target machine (either the operator runs one connectivity
-  command, or SSH access to the target for the CLI installer path).
+- A running `sshd` (or an equivalent) on the Windows peer if the operator wants me to
+  drive it directly. Nothing blocks the operator doing it themselves.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): every installer test asserted that
-  the generated file *contains* a `server_url`; none asserted that the URL is usable
-  by the machine the installer is for. The API could therefore produce an artefact
-  that is unusable anywhere but the server, and all tests passed.
-- **Layer 2 — context provision**: the deployment requirement (targets need an
-  address they can reach; the admin's browser address is not it) was nowhere in the
-  code or docs until this session.
+- **Layer 4 — verification feedback** (primary, third session on this thread): no test
+  asserted that the *default* the installer ships is a server the operator's token
+  belongs to — or even that a default should exist. The suites covered the claim
+  protocol and the crafted URL, never the value the wizard starts with.
+- **Layer 2 — context provision**: "which backend is this installer for?" was answered
+  by a hardcoded constant with no comment, so nobody noticed it encoded a product
+  decision. It now carries its reasoning.
 
 ### VERIFY
 
-- The log, quantified: 133 requests in the API process, **all** `::1`; 3 claim
-  attempts, all mine; **0** from any other address.
-- `GET /api/installer/<device>?platform=linux` → 200, 27 320 740 bytes; the ZIP's
-  `config.json` now reads `"server_url": "http://192.168.124.65:3001"`.
-- `curl http://192.168.124.65:3001/api/health` → 200 (the API binds `*:3001`).
-- `server`: **779 passed** (48 suites; +3), eslint clean.
-- `make graph-check`: all invariants pass.
+- Request log, quantified: 156 requests, **156 from `::1`/tailnet-local**; the Windows
+  peer (`100.104.11.34`) made exactly **1** request — `GET /api/download/installer`,
+  200 — and **0** claims.
+- `tailscale ping 100.104.11.34` → `pong … via 192.168.1.52:41641 in 49ms`;
+  `curl http://100.99.13.53:3001/api/health` → 200; the wizard downloads over the
+  tailnet (18 628 686 bytes, PE32+ GUI).
+- `agent`: **772 passed** (+2), ruff check + format clean.
 
 ### Session artifacts
 
-- Changed: `server/src/routes/installer.js`,
-  `server/tests/installer.helpers.test.js`, `server/.env.example` (and the local
-  `server/.env`, gitignored).
-- Commit: `e7eca96`.
+- Changed: `agent/installer.py`, `agent/installer_gui.py`,
+  `agent/tests/test_installer.py`.
+- Commit: `4e4b744`.
 
 ### Next session opening
 
-Get one enrolment to succeed end-to-end from a real second machine, because that is
-the only evidence that closes this thread: from the target, confirm
-`Test-NetConnection 192.168.124.65 -Port 3001` (a firewall answer, not a code one),
-then run the installer with a fresh token and read the server log for the claim.
-Anything that still fails after reachability is confirmed is a code problem worth a
-session of its own.
+Get one enrolment to succeed from the Windows peer and read the claim in the log:
+overwrite the wizard's Server URL with `http://100.99.13.53:3001` (or, after a rebuild,
+with the now-empty field), use a fresh token, and confirm the request arrives from
+`100.104.11.34`. If the operator wants the agent to drive that machine directly,
+enable `sshd` on it first (port 22 currently times out) and hand over a key.
 
 ---
 

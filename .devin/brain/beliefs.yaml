@@ -1329,3 +1329,28 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-068
+  statement: 'Installers must not ship a default backend. agent/installer.py and agent/installer_gui.py
+    both hardcoded DEFAULT_SERVER_URL=https://lockdown-serverless.mainacollins196.workers.dev and the
+    GUI prefilled its Server URL field with it, so a self-hosted operator''s token was sent to the Worker
+    (which never issued it) and came back 401 ''token rejected'' while their own server saw zero claim
+    requests (S213). Both defaults are now empty: the CLI''s silent mode exits 1 with ''Pass --server-url
+    http://your-server:3001'' and the GUI refuses at the enrollment step with what to type. A prefilled
+    value that is wrong is worse than an empty field because the operator has no reason to change it.
+    Separately: on this deployment the Windows peer (100.104.11.34, user newark, SSH config alias ''win'')
+    has no sshd running (port 22 times out, only SMB 445 open), and the two machines are on different
+    subnets so the LAN address is unreachable — the tailnet address 100.99.13.53:3001 is the working path.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'log: 1 request from 100.104.11.34 (wizard download) and 0 claims; tailscale ping pong 49ms;
+    wizard fetched over tailnet; agent 772 green; ports 22/3389/5985/5986 closed, 445 open'
+  source: agent/installer.py; agent/installer_gui.py; agent/tests/test_installer.py; API request log;
+    ~/.ssh/config; tailscale status
+  asserted: '2026-11-04'
+  last_verified: '2026-11-04'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
