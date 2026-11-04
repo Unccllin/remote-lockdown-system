@@ -465,3 +465,92 @@ def test_download_lockscreen_exe_uses_the_verified_path(tmp_path):
 
     assert result == tmp_path / "lockdown-lockscreen.exe"
     assert get.call_args[0][0] == "https://x/api/download/lockscreen"
+
+
+# ---------------------------------------------------------------------------
+# Headless install (--silent) — the path a PowerShell one-liner drives (S214)
+# ---------------------------------------------------------------------------
+
+
+def test_parser_accepts_the_silent_install_flags():
+    import installer_gui
+
+    args = installer_gui.build_parser().parse_args(
+        [
+            "--server-url",
+            "https://lockdown.example.com",
+            "--token",
+            "TOKEN123",
+            "--silent",
+        ]
+    )
+
+    assert args.server_url == "https://lockdown.example.com"
+    assert args.token == "TOKEN123"
+    assert args.silent is True
+    assert args.no_boot_lock is False
+
+
+def test_silent_without_credentials_is_a_usage_error(monkeypatch):
+    """--silent must not guess a server or a token: exit 2 with a message."""
+    import installer_gui
+
+    monkeypatch.setattr(installer_gui.platform, "system", lambda: "Windows")
+
+    with pytest.raises(SystemExit) as exc:
+        installer_gui.main(["--silent"])
+
+    assert exc.value.code == 2
+
+
+def test_run_headless_uses_the_same_primitives_the_wizard_uses(monkeypatch):
+    """One implementation per step: the sequence the GUI performs, without tkinter."""
+    import installer_gui
+
+    calls = []
+    monkeypatch.setattr(
+        installer_gui,
+        "enroll_device_with_token",
+        lambda *a, **k: (
+            calls.append(("enroll", a[1]))
+            or {
+                "device": {"id": "dev-1"},
+                "api_key": "KEY",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        installer_gui, "write_config", lambda *a, **k: calls.append(("write_config", a[1]))
+    )
+    monkeypatch.setattr(
+        installer_gui, "add_defender_exclusions", lambda: calls.append(("defender",))
+    )
+    monkeypatch.setattr(installer_gui, "find_agent_exe", lambda: "/agent.exe")
+    monkeypatch.setattr(
+        installer_gui, "install_files", lambda p: calls.append(("install_files", p)) or p
+    )
+    monkeypatch.setattr(installer_gui, "create_lockdown_folder", lambda: calls.append(("folder",)))
+    monkeypatch.setattr(installer_gui, "install_service", lambda: (True, "ok"))
+    monkeypatch.setattr(installer_gui, "launch_agent", lambda p: calls.append(("launch", p)))
+
+    rc = installer_gui.run_headless("https://lockdown.example.com", "TOKEN123", "HOST-1")
+
+    assert rc == 0
+    # The token reached the claim, and the api_key the server issued reached the config.
+    assert ("enroll", "TOKEN123") in calls
+    assert ("write_config", "KEY") in calls
+    # The service is installed before the agent is launched.
+    assert calls.index(("install_files", "/agent.exe")) < calls.index(("launch", "/agent.exe"))
+
+
+def test_run_headless_reports_failure_without_a_traceback(monkeypatch):
+    import installer_gui
+
+    def boom(*_a, **_k):
+        raise Exception("Enrollment token already used — generate a new one")
+
+    monkeypatch.setattr(installer_gui, "enroll_device_with_token", boom)
+
+    rc = installer_gui.run_headless("https://x", "T", "HOST-1")
+
+    assert rc == 1  # the operator gets one line, not a stack trace

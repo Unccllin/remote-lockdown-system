@@ -557,7 +557,7 @@ class SetupWizard:
     PAGE_COMPLETE = 5
     PAGE_ERROR = 6
 
-    def __init__(self):
+    def __init__(self, initial_server_url: str | None = None):
         self.root = tk.Tk()
         self.root.title("Remote Lockdown System — Setup Wizard")
         self.root.geometry("640x520")
@@ -576,7 +576,7 @@ class SetupWizard:
         # State
         self.current_page = self.PAGE_WELCOME
         self.token = tk.StringVar()
-        self.server_url = tk.StringVar(value=DEFAULT_SERVER_URL)
+        self.server_url = tk.StringVar(value=initial_server_url or DEFAULT_SERVER_URL)
         self.owner_name = tk.StringVar(value="Hardware Test")
         self.hostname = tk.StringVar(value=get_hostname())
         self.hardware_uuid = ""
@@ -1143,10 +1143,120 @@ class SetupWizard:
 # ---------------------------------------------------------------------------
 
 
-def main():
+def build_parser():
+    """CLI surface for the wizard.
+
+    Exists so one PowerShell command can drive the whole install: download the
+    wizard, then run `--server-url <url> --token <token> --silent`. Without it the
+    operator has to launch a GUI and hand-type the server address — which is how a
+    mistyped tailnet hostname (`desktop-q4pcdhk.ta?06a7e9`) turned into a
+    "cannot resolve" failure (S214).
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Lockdown Agent setup wizard (omit flags for the GUI)"
+    )
+    parser.add_argument("--server-url", help="server base URL, e.g. https://lockdown.example.com")
+    parser.add_argument("--token", help="enrollment token (single use, 15 minutes)")
+    parser.add_argument("--hostname", help="hostname to report (default: this machine)")
+    parser.add_argument(
+        "--owner", default="Auto-enrolled", help="owner name recorded on the device"
+    )
+    parser.add_argument("--no-boot-lock", action="store_true", help="do not enable boot lockdown")
+    parser.add_argument(
+        "--silent",
+        action="store_true",
+        help="install without the GUI (requires --server-url and --token)",
+    )
+    return parser
+
+
+def run_headless(
+    server_url: str,
+    token: str,
+    hostname: str,
+    owner_name: str = "Auto-enrolled",
+    boot_lock: bool = True,
+) -> int:
+    """The wizard's install sequence without tkinter.
+
+    Calls exactly the primitives the GUI calls, in the same order — one
+    implementation of each step, so the two entry points cannot drift. Returns a
+    process exit code.
+    """
+    try:
+        print(f"[1/6] Enrolling {hostname} with {server_url} ...")
+        data = enroll_device_with_token(
+            server_url,
+            token,
+            hostname,
+            owner_name,
+            None,  # hardware_uuid: collected by enroll_device_with_token
+            None,
+            None,
+        )
+        api_key = data["api_key"]
+        print(
+            f"      device_id={data['device']['id']} reassociated={data.get('reassociated', False)}"
+        )
+
+        print("[2/6] Writing configuration ...")
+        write_config(
+            server_url,
+            api_key,
+            hostname,
+            data["device"]["id"],
+            boot_lock_enabled=boot_lock,
+            update_public_key=staged_update_public_key(),
+        )
+
+        print("[3/6] Adding Defender exclusions ...")
+        add_defender_exclusions()
+
+        print("[4/6] Installing the agent binary ...")
+        agent_exe = find_agent_exe() or download_agent_exe(server_url, INSTALL_DIR)
+        if not agent_exe:
+            raise Exception(
+                f"agent binary unavailable from {server_url}/api/download/agent?platform=win"
+            )
+        installed = install_files(agent_exe)
+
+        print("[5/6] Creating lockdown folder and service ...")
+        create_lockdown_folder()
+        ok, message = install_service()
+        if not ok:
+            raise Exception(f"service install failed: {message}")
+
+        print("[6/6] Starting the agent ...")
+        launch_agent(installed)
+        print("OK: installed")
+        return 0
+    except Exception as exc:  # the operator gets one line, not a traceback
+        print(f"FAILED: {exc}")
+        return 1
+
+
+def main(argv: list[str] | None = None):
+    args = build_parser().parse_args(argv)
+
     if platform.system() != "Windows":
         print("This installer is for Windows only.")
         sys.exit(1)
+
+    if args.silent:
+        if not args.server_url or not args.token:
+            print("--silent requires --server-url and --token", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(
+            run_headless(
+                args.server_url,
+                args.token,
+                args.hostname or get_hostname(),
+                args.owner,
+                boot_lock=not args.no_boot_lock,
+            )
+        )
 
     if not TKINTER_AVAILABLE:
         print("tkinter is not available. Install it with: pip install tk")
@@ -1154,7 +1264,7 @@ def main():
 
     # Check for admin — if not admin, the wizard will offer to relaunch
     # (relaunch happens when the user clicks "Get Started" on the welcome page)
-    app = SetupWizard()
+    app = SetupWizard(initial_server_url=args.server_url)
     app.run()
 
 
