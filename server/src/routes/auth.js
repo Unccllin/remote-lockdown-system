@@ -1,4 +1,5 @@
 const express = require('express');
+const { normalizeUsername } = require('../validation/username');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
@@ -12,7 +13,8 @@ const router = express.Router();
 // unauthenticated-admin-creation vulnerability fixed in this patch.
 
 router.post('/login', async (req, res) => {
-  const { username, password } = req.body;
+  let { username } = req.body;
+  const { password } = req.body;
 
   // Input validation
   if (!username || !password) {
@@ -21,15 +23,16 @@ router.post('/login', async (req, res) => {
   if (typeof username !== 'string' || typeof password !== 'string') {
     return res.status(400).json({ error: 'username and password must be strings.' });
   }
-  if (username.length < 1 || username.length > 100) {
-    return res.status(400).json({ error: 'username must be 1-100 characters.' });
+  // Trimmed and charset-checked by the shared validator, so a username that was
+  // accepted at creation can always sign in — and a pasted " local-admin" is the
+  // same account instead of an "invalid characters" dead end.
+  const normalized = normalizeUsername(username, { enforceLength: false });
+  if (!normalized.ok) {
+    return res.status(400).json({ error: normalized.error });
   }
+  username = normalized.value;
   if (password.length < 1 || password.length > 1000) {
     return res.status(400).json({ error: 'password must be 1-1000 characters.' });
-  }
-  // Prevent username injection (SQL wildcard abuse, log injection)
-  if (!/^[a-zA-Z0-9_@.-]+$/.test(username)) {
-    return res.status(400).json({ error: 'username contains invalid characters. Allowed: letters, numbers, _ @ . -' });
   }
 
   try {

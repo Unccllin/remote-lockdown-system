@@ -35,6 +35,35 @@ function renderWithRouter() {
   );
 }
 
+describe('LoginPage username normalisation', () => {
+  it('trims a padded username before submitting', async () => {
+    renderWithRouter();
+
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: '  local-admin  ' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret-password' } });
+    fireEvent.click(screen.getByRole('button', { name: /sign in|log in|login/i }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    // The server's charset check would reject " local-admin" and report
+    // "invalid characters", which reads like a wrong password. Trim it here.
+    expect(api.post).toHaveBeenCalledWith('/auth/login', {
+      username: 'local-admin',
+      password: 'secret-password',
+    });
+  });
+
+  it('does not trim the password', async () => {
+    renderWithRouter();
+
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'admin' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: ' has spaces ' } });
+    fireEvent.click(screen.getByRole('button', { name: /sign in|log in|login/i }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(api.post.mock.calls[0][1].password).toBe(' has spaces ');
+  });
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();

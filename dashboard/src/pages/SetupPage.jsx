@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Shield, Lock, User, Eye, EyeOff, AlertCircle, CheckCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -33,10 +33,13 @@ export default function SetupPage() {
 
   function validate() {
     const errs = {};
-    if (!form.username || form.username.length < 3) {
+    const username = (form.username || '').trim();
+    if (username.length < 3) {
       errs.username = 'Username must be at least 3 characters';
-    } else if (!/^[a-zA-Z0-9_-]+$/.test(form.username)) {
-      errs.username = 'Only letters, numbers, underscores, and hyphens';
+    } else if (!/^[a-zA-Z0-9_@.-]+$/.test(username)) {
+      // Mirrors server/src/validation/username.js — one contract, or a name is
+      // accepted at creation and rejected at login (or the reverse).
+      errs.username = 'Only letters, numbers, and the characters _ @ . -';
     }
     if (!form.password || form.password.length < 8) {
       errs.password = 'Password must be at least 8 characters';
@@ -53,7 +56,7 @@ export default function SetupPage() {
     if (!validate()) return;
     setLoading(true);
     try {
-      await setupApi.createAdmin(form.username, form.password);
+      await setupApi.createAdmin(form.username.trim(), form.password);
       toast.success('Admin account created! Please log in.');
       navigate('/login', { replace: true });
     } catch (err) {

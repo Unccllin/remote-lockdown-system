@@ -28,7 +28,14 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      const { data } = await api.post('/auth/login', form);
+      // A leading/trailing space (copy-paste, autocomplete) would otherwise hit
+      // the server's charset check and read as "invalid characters" — i.e. like a
+      // wrong credential. The password is never trimmed: spaces there are
+      // deliberate.
+      const { data } = await api.post('/auth/login', {
+        ...form,
+        username: form.username.trim(),
+      });
       localStorage.setItem('token', data.token);
       // Store user info for non-JWT auth (Worker returns { user: { username, role } })
       if (data.user) {

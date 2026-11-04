@@ -15,6 +15,7 @@
  */
 
 const express = require('express');
+const { normalizeUsername } = require('../validation/username');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
@@ -53,18 +54,18 @@ router.get('/status', async (req, res) => {
  *   - password: minimum 8 chars
  */
 router.post('/create-admin', async (req, res) => {
-  const { username, password } = req.body;
+  let { username } = req.body;
+  const { password } = req.body;
 
   // Validate input
   if (!username || !password) {
     return res.status(400).json({ error: 'username and password are required. Provide both fields in the request body.' });
   }
-  if (typeof username !== 'string' || username.length < 3 || username.length > 100) {
-    return res.status(400).json({ error: 'Username must be 3-100 characters. Choose a shorter or longer username.' });
+  const normalized = normalizeUsername(username);
+  if (!normalized.ok) {
+    return res.status(400).json({ error: normalized.error });
   }
-  if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
-    return res.status(400).json({ error: 'Username can only contain letters, numbers, underscores, and hyphens. Remove any special characters.' });
-  }
+  username = normalized.value;
   if (typeof password !== 'string' || password.length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters. Choose a longer password.' });
   }
