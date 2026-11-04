@@ -1180,7 +1180,7 @@ beliefs:
 - id: B-062
   statement: 'Three surfaces must agree and nothing was comparing them: scripts/test_cross_surface_contract.py
     now asserts (1) every /api call in dashboard/src resolves to an Express route, with the receiver deciding
-    the base (api -> /api, pblApi -> root /v1/*, because a filename-based rule mis-reads page-level pblApi
+    the base (api -> /api, pblApi -> root /v1/*, because a filename-based rule misreads page-level pblApi
     calls and repeats the Signing Keys bug), and (2) every Worker /api route exists in Express or is listed
     either as WORKER_ONLY_BY_DESIGN (KV binary/script delivery, legacy /api/ping and /api/command-ack
     aliases) or in KNOWN_GAPS, which is shrink-only so a closed gap fails the test until its entry is
