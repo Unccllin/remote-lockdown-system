@@ -8066,3 +8066,125 @@ ledger's `**Status**` lines), then reconcile D-117 and decide `PblTlsVerifyCert`
 fate. The local admin stack keeps running on `:3001`/`:5173` until stopped.
 
 ---
+
+---
+
+## Session 204 — 2026-11-03 (the Signing Keys 404, and what the audit found behind it)
+
+### RULE-ZERO
+
+**Read**: `server/src/index.js` (mounts, the `/api/*` 404 handler, the nested `/v1`
+mount); `dashboard/src/api/client.js` (baseURL) and `api/pblClient.js`;
+`dashboard/src/pages/PblPolicyPage.jsx` ("Signing Keys" section) and
+`EnrollDevicePage.jsx`; `server/src/routes/pbl.js` (route table);
+`serverless/worker.ts` (route table for `/api/enroll*`); `server/.env.example`;
+`server/src/routes/{auth,setup,admins}.js` (the username work from S203).
+
+**Finding 1 — "Signing Keys" 404'd because the PBL client kept the `/api` suffix.**
+`pblClient.js` documented "same origin as the main API but without the /api suffix"
+and then used `import.meta.env.VITE_API_URL` verbatim, so
+`pblApi.get('/v1/admin/key-info')` became `http://localhost:3001/api/v1/admin/key-info`
+— no such route. The same comment claimed "the Express server doesn't serve PBL
+endpoints (they're Worker-only)", which is also false: `index.js` mounts
+`app.use('/v1', …, pblRoutes.router)`. Verified both ways: `/v1/admin/key-info` → 200,
+`/api/v1/admin/key-info` → 404 (the reported message).
+
+**Finding 2 — the 404 message itself was stale.** The hardcoded sentence listed 7
+groups and omitted `/api/hw-test-artifact`, `/api/installer` and
+`/api/integrations`. An error that misreports the API surface sends the reader
+looking in the wrong place — which is exactly what happened.
+
+**Finding 3 — `REGISTRATION_ENABLED` was a dead promise.** Nothing in the codebase
+reads it, and no `/api/auth/register` route exists (the first admin comes from
+`POST /api/setup/create-admin`, which then permanently disables itself).
+
+**Finding 4 — a real parity gap: token enrolment is Worker-only.** The Worker
+implements `POST /api/enroll`, `/api/enroll/token` and `/api/enroll/claim`; the
+Express server implements **none** of them (its only enrol path is
+`POST /api/devices`). So on a self-hosted deployment the dashboard's **Enroll** page
+(`api.post('/enroll/token')`) and `installer.py --token` (which claims at
+`/api/enroll/claim`) both 404. Not fixed here: it needs a design decision (see
+below), not a path change.
+
+### IMPLEMENT
+
+- `dashboard/src/api/pblClient.js` — `pblBaseUrl()` strips a trailing `/api` (and
+  only that: a base ending in `myapi` is untouched), documented with the failure it
+  prevents; the stale "Worker-only" comment corrected.
+- `server/src/index.js` — `mountApi()` records each `/api` prefix and the 404
+  derives its list from it, so the message cannot drift again.
+- `server/.env.example` — `REGISTRATION_ENABLED` replaced with what actually exists.
+- Tests: `server/tests/apiNotFound.test.js` (the 404 derives, no group bypasses the
+  recorder, the three previously-missed groups are recorded — a source invariant,
+  because `index.js` exports nothing), `dashboard/tests/pblClient.test.js` (5 cases
+  for the base derivation).
+
+### Fog cleared
+
+- **What the "Signing Keys" 404 was**: `/api/v1/...` instead of `/v1/...`, caused by
+  a base URL used verbatim against a comment that said otherwise.
+- **Which routes exist**: 10 `/api` groups on Express plus `/v1` (PBL) and
+  `/metrics`; the Worker additionally has `/api/enroll{,/token,/claim}`.
+- **Whether `REGISTRATION_ENABLED` does anything**: no.
+
+### Fog remaining
+
+- **Token enrolment on Express** (Finding 4) — the one real functional gap. Options:
+  (a) implement `/api/enroll/token` + `/api/enroll/claim` with a table-backed
+  single-use token and rate limits; (b) document enrolment as Worker-only and have
+  the dashboard say so on self-hosted; (c) make the Enroll page fall back to
+  `POST /api/devices`. (a) is the honest parity fix; it needs a migration and tests.
+- The **UI↔server route audit is still manual** — it found two defects and would
+  find the next one. Worth automating the way the Worker's route-contract test works.
+- The S202 objective (spec-vs-ledger consistency check, D-117 reconciliation,
+  `PblTlsVerifyCert`'s fate) is still queued.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- A design decision on token enrolment for self-hosted deployments (Finding 4).
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, fifth instance of one shape): nothing
+  compared what the UI calls with what the server serves. Both defects are invisible
+  to each side's own tests — the client tests mock the API and the route tests never
+  see the client. The 404 derivation now protects the *server's* statement about
+  itself, but the cross-boundary check is still manual.
+- **Layer 2 — context provision**: `pblClient.js`'s comment contradicted its code and
+  nothing reconciled the two; the comment was read as documentation for months.
+
+### VERIFY
+
+- `server`: **742 passed** (739 + 3), eslint clean.
+- `dashboard`: **210 passed** (205 + 5), eslint clean.
+- Live, after restarting the API: 404 message lists all ten mounted groups
+  (`/api/auth, /api/setup, /api/devices, /api/agent, /api/audit, /api/installer,
+  /api/health, /api/admins, /api/hw-test-artifact, /api/integrations`);
+  `GET /v1/admin/key-info` → **200** with a super-admin token;
+  `GET /api/v1/admin/key-info` → **404** (the reported failure).
+- Vite confirmed serving the fixed `pblClient` module (hot reloaded).
+
+### Session artifacts
+
+- Changed: `dashboard/src/api/pblClient.js`, `dashboard/tests/pblClient.test.js`
+  (new), `server/src/index.js`, `server/tests/apiNotFound.test.js` (new),
+  `server/.env.example`.
+- Commit: `54cfdc1`.
+
+### Next session opening
+
+Decide token enrolment for self-hosted deployments — the only functional gap this
+audit found. Recommend (a): implement `/api/enroll/token` and `/api/enroll/claim` in
+Express to match the Worker (single-use, 15-minute, table-backed, rate-limited), then
+automate the UI↔server route audit so the next mismatch is caught by a test instead of
+by the user.
+
+---

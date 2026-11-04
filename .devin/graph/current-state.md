@@ -53,24 +53,27 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 203 — 2026-11-03 (admin interface on the machine; one username contract)
+## Latest session: 204 — 2026-11-03 (the Signing Keys 404, and what the audit found behind it)
 
 ### Fog cleared
 
-- **Why the first login failed on a correct password**: padded username vs a
-  strict, inconsistent charset check.
-- **Whether the local data was usable**: yes — the local SQLite DB already had an
-  admin and three devices, so the UI works against real rows rather than an empty
-  schema.
+- **What the "Signing Keys" 404 was**: `/api/v1/...` instead of `/v1/...`, caused by
+  a base URL used verbatim against a comment that said otherwise.
+- **Which routes exist**: 10 `/api` groups on Express plus `/v1` (PBL) and
+  `/metrics`; the Worker additionally has `/api/enroll{,/token,/claim}`.
+- **Whether `REGISTRATION_ENABLED` does anything**: no.
 
 ### Fog remaining
 
-- The queued objective from S202 is still open: a consistency check between
-  `GRAPH-SPEC.yaml` debt status and the markdown ledger (it would have caught the
-  D-116/D-117 drift), D-117 reconciliation, and `PblTlsVerifyCert`'s fate.
-- `REGISTRATION_ENABLED` has no consumer; either the flag or the docs should go.
-- Unchanged blockers: `UPDATE_SIGNING_KEY` (no `gh`), KV publish (wrangler
-  unauthenticated), HP box.
+- **Token enrolment on Express** (Finding 4) — the one real functional gap. Options:
+  (a) implement `/api/enroll/token` + `/api/enroll/claim` with a table-backed
+  single-use token and rate limits; (b) document enrolment as Worker-only and have
+  the dashboard say so on self-hosted; (c) make the Enroll page fall back to
+  `POST /api/devices`. (a) is the honest parity fix; it needs a migration and tests.
+- The **UI↔server route audit is still manual** — it found two defects and would
+  find the next one. Worth automating the way the Worker's route-contract test works.
+- The S202 objective (spec-vs-ledger consistency check, D-117 reconciliation,
+  `PblTlsVerifyCert`'s fate) is still queued.
 
 ### Debt items closed
 
@@ -82,45 +85,43 @@
 
 ### Blockers
 
-- None for local use. Hardware/credentials unchanged for the fleet work.
+- A design decision on token enrolment for self-hosted deployments (Finding 4).
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the dashboard had no test for what
-  it submits. A single assertion that the login form posts a trimmed username would
-  have caught this before a user met it, and the three server routes had no shared
-  test for their common contract — each route's own tests passed while the contract
-  between them was broken. That is the same "defect lives between two correct
-  pieces" shape as S193/S194/S198.
-- **Layer 1 — task specification**: "set up the admin interface" was specified as an
-  outcome, so the first-run path (create admin → log in) had to be discovered; the
-  failure only surfaced because the setup was performed end-to-end rather than
-  handed over as instructions.
+- **Layer 4 — verification feedback** (primary, fifth instance of one shape): nothing
+  compared what the UI calls with what the server serves. Both defects are invisible
+  to each side's own tests — the client tests mock the API and the route tests never
+  see the client. The 404 derivation now protects the *server's* statement about
+  itself, but the cross-boundary check is still manual.
+- **Layer 2 — context provision**: `pblClient.js`'s comment contradicted its code and
+  nothing reconciled the two; the comment was read as documentation for months.
 
 ### VERIFY
 
-- `server`: **739 passed** (733 + 6), eslint clean.
-- `dashboard`: **205 passed** (203 + 2), eslint clean.
-- Live check against the restarted API: `"  local-admin  "` + correct password →
-  **token issued**; `"bad name"` → 400 with
-  "username may contain only letters, numbers, and the characters _ @ . - (no
-  spaces or other punctuation)."
-- `make graph-check`: all invariants pass.
+- `server`: **742 passed** (739 + 3), eslint clean.
+- `dashboard`: **210 passed** (205 + 5), eslint clean.
+- Live, after restarting the API: 404 message lists all ten mounted groups
+  (`/api/auth, /api/setup, /api/devices, /api/agent, /api/audit, /api/installer,
+  /api/health, /api/admins, /api/hw-test-artifact, /api/integrations`);
+  `GET /v1/admin/key-info` → **200** with a super-admin token;
+  `GET /api/v1/admin/key-info` → **404** (the reported failure).
+- Vite confirmed serving the fixed `pblClient` module (hot reloaded).
 
 ### Session artifacts
 
-- Changed: `server/src/validation/username.js` (new), `server/src/routes/auth.js`,
-  `server/src/routes/setup.js`, `server/src/routes/admins.js`,
-  `server/tests/auth.routes.test.js`, `dashboard/src/pages/LoginPage.jsx`,
-  `dashboard/src/pages/SetupPage.jsx`, `dashboard/tests/LoginPage.test.jsx`.
-- Commit: `56cd490`.
+- Changed: `dashboard/src/api/pblClient.js`, `dashboard/tests/pblClient.test.js`
+  (new), `server/src/index.js`, `server/tests/apiNotFound.test.js` (new),
+  `server/.env.example`.
+- Commit: `54cfdc1`.
 
 ### Next session opening
 
-Take the S202 objective, which this session displaced: add the spec-vs-ledger
-consistency check (parse `GRAPH-SPEC.yaml` debt ids/statuses against the markdown
-ledger's `**Status**` lines), then reconcile D-117 and decide `PblTlsVerifyCert`'s
-fate. The local admin stack keeps running on `:3001`/`:5173` until stopped.
+Decide token enrolment for self-hosted deployments — the only functional gap this
+audit found. Recommend (a): implement `/api/enroll/token` and `/api/enroll/claim` in
+Express to match the Worker (single-use, 15-minute, table-backed, rate-limited), then
+automate the UI↔server route audit so the next mismatch is caught by a test instead of
+by the user.
 
 ---
 

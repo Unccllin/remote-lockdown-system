@@ -1100,3 +1100,27 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-059
+  statement: 'The dashboard''s PBL client must target the server ROOT (/v1/*), not /api: index.js mounts
+    app.use(''/v1'', ..., pblRoutes.router) and the Worker answers the same paths, while the main API
+    client''s base ends in /api. Using VITE_API_URL verbatim there turned ''/v1/admin/key-info'' into
+    ''/api/v1/admin/key-info'' and produced the ''Signing Keys'' 404. Also: the server''s /api 404 message
+    must derive its route list from the mounts (mountApi records them) because the hardcoded sentence
+    had gone stale, omitting /api/hw-test-artifact, /api/installer and /api/integrations. REGISTRATION_ENABLED
+    has no consumer and no /api/auth/register route exists. And a real parity gap: the Worker implements
+    /api/enroll, /api/enroll/token and /api/enroll/claim while the Express server implements none, so
+    token enrolment (dashboard Enroll page, installer.py --token) 404s on self-hosted deployments.'
+  domain: api/routing
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'live API: /v1/admin/key-info 200 vs /api/v1/... 404; derived 404 lists 10 groups; server
+    742 (+3) + dashboard 210 (+5) green'
+  source: dashboard/src/api/pblClient.js; server/src/index.js; server/tests/apiNotFound.test.js; dashboard/tests/pblClient.test.js;
+    serverless/worker.ts route table; server/.env.example; commit 54cfdc1
+  asserted: '2026-11-04'
+  last_verified: '2026-11-04'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
