@@ -1282,3 +1282,26 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-066
+  statement: 'Token enrolment has two operator-visible contracts that were wrong until S211: (1) a claim
+    401 must distinguish an UNKNOWN token from a SPENT one, because tokens are single-use and a retry
+    after a partially-failed install always lands in the spent case — the server now answers ''Invalid
+    enrollment token'' vs ''Enrollment token already used — generate a new one'', and trims the token
+    before hashing; (2) a re-enrolment of an already-enrolled hardware_uuid is HTTP 200 with reassociated:true
+    and is SUCCESS, so both installers must accept 200 or 201 (requiring exactly 201 reported a good re-enrolment
+    as ''Enrollment failed (HTTP 200)''). A partially-failed install still spends its token (the claim
+    is step 1), so the operator needs a fresh token per attempt unless the claim is made idempotent per
+    hardware_uuid within the TTL or moved to the last step — the Worker has the same behaviour.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: live repro before/after; server 776 (48 suites) and agent 770 green; ruff clean
+  source: server/src/routes/enroll.js; agent/installer.py; agent/installer_gui.py; server/tests/enroll.routes.test.js;
+    agent/tests/test_installer.py; serverless/worker.ts handleEnrollClaim
+  asserted: '2026-11-04'
+  last_verified: '2026-11-04'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

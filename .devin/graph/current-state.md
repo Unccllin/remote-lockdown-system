@@ -53,23 +53,25 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 210 — 2026-11-03 (/api/download/* was classified "by design" and was not)
+## Latest session: 211 — 2026-11-03 ("token rejected" was two defects and one guess)
 
 ### Fog cleared
 
-- **Why `/api/download/installer` 404'd**: Express never implemented the path, and
-  the audit had reasoned it away rather than recording it as a gap.
-- **Which of these paths are genuinely serverless-only**: only the three generated
-  `.ps1` helpers (the Worker builds them from KV); the four binary routes are now
-  served by both backends.
+- **What "token rejected" meant**: either an unknown token or a spent one; the
+  message could not be acted on because it named both.
+- **Whether the dev origin broke enrolment**: no — Vite proxies `/api`.
+- **Whether re-enrolling a known machine failed**: it does now succeed; before, the
+  server answered 200 and both clients called it an error.
 
 ### Fog remaining
 
-- `deploy-agent.sh` still targets `$WORKER_BASE`; it now *works* against a
-  self-hosted base too, but nothing documents that. Worth a comment or a parameter.
-- `lockdown-installer.exe` is still absent (S209), so `/api/download/agent-installer`
-  answers 404 with the remedy. The Windows one-click/`.ps1` installers stay blocked on
-  that one Windows-built binary.
+- **A partially-failed install still spends the token.** The claim is the *first*
+  step of the installer, so if a later step fails (agent download, service
+  registration) the operator must mint a new token for every retry. Two designs
+  worth considering: make the claim idempotent for the same `hardware_uuid` within
+  the token's TTL, or move the claim to the last step. The Worker has the same
+  behaviour, so this is a product decision, not a bug.
+- The 15-minute TTL is unchanged (it matches the Worker's contract).
 - Unchanged: `devices.hostname` uniqueness decision; the S202 objective.
 
 ### Debt items closed
@@ -82,55 +84,42 @@
 
 ### Blockers
 
-- The Windows-built `lockdown-installer.exe` (same blocker as S209).
+- None for this fix.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the audit I built to catch
-  cross-surface drift contained a classification that excused drift. It was only
-  caught because a user hit the URL — exactly the failure mode the audit exists to
-  prevent. The lesson is about *reason quality*: an allowlist entry that explains a
-  difference away is weaker than one that records a missing capability, and only the
-  latter can shrink.
-- **Layer 3 — execution environment** (secondary): the latent `entry` NameError sat in
-  a branch that requires a failure to execute. Falsifying it (forcing an overlap) is
-  now part of how I check a guard.
+- **Layer 4 — verification feedback** (primary): S205's tests asserted that a used
+  token is refused (`401`), which is true and which is exactly why the *merged*
+  message survived — the test never asked what the message said, and no test covered
+  the 200 re-association path at all. The suite tested the mechanism and not the
+  operator's next step.
+- **Layer 2 — context provision**: the single-use contract was documented in the
+  route's own comment, but nothing told the installer (or the page) that a retry
+  needs a fresh token.
 
 ### VERIFY
 
-- Live against the restarted API, including the reported URL:
-  - `GET /api/download/installer` → **200**, 18 628 686 bytes, `x-content-sha256:
-    4b1be636076bc891…`
-  - `GET /api/download/agent?platform=linux` → **200**, 18 272 456 bytes;
-    `?platform=win` → **200**, 15 636 034 bytes
-  - `GET /api/download/agent-installer` → **404** naming
-    `lockdown-installer.exe`, the directory searched, and `AGENT_BINARIES_DIR`
-  - `GET /api/download/deploy.ps1` → **404** listing
-    `agent, agent-installer, installer, lockscreen` and stating the generated
-    helpers are serverless-only
-- `server`: **774 passed** (48 suites), eslint clean.
-- `scripts/test_cross_surface_contract.py`: **8 passed**; falsified both new branches
-  (a forced overlap prints the offending entry; a lowered floor of router coverage
-  fails the routed-not-produced assertion).
-- `make test-scripts`: all suites green.
+- Reproduced before the fix: mint → claim **201**; same token again → **401
+  "Invalid or already-used enrollment token"**; a fresh token for an enrolled
+  `hardware_uuid` → **200 reassociated: true** (which the clients called a failure).
+- After: server **776 passed** (48 suites; +2 and one assertion deliberately
+  updated), agent **770 passed** (+2), `ruff check` + `ruff format --check` clean.
+- `make graph-check`: all invariants pass.
 
-### Session artifacts
+### Next session artifacts
 
-- Changed: `server/src/routes/downloads.js` (new), `server/src/index.js`,
-  `server/tests/downloads.routes.test.js` (new),
-  `scripts/test_cross_surface_contract.py`.
-- Commit: `b39159d`. (Its message says "S211" for this session's audit reference; the
-  recorded history shows the previous session was 209, so this is 210 — noted here
-  because commit messages cannot be edited retroactively without rewriting history.)
+- Changed: `server/src/routes/enroll.js`, `server/tests/enroll.routes.test.js`,
+  `agent/installer.py`, `agent/installer_gui.py`, `agent/tests/test_installer.py`.
+- Commit: `c3bf738`.
 
 ### Next session opening
 
-Two small honesty items before anything new: document (or parameterise) that
-`deploy-agent.sh` can target a self-hosted base now that `/api/download/*` exists on
-both backends, and record `lockdown-installer.exe` as the single artefact blocking
-self-hosted Windows installers — ideally by adding it to the release assets or
-staging it from the HP box, whichever is cheaper. Then the `devices.hostname`
-uniqueness decision.
+Decide the token-retry question this session surfaced: a partially-failed install
+still spends its token, so the operator needs a new one per attempt. Either make the
+claim idempotent for the same `hardware_uuid` within the token's TTL, or move the
+claim to the last step of the installer — and apply the same decision to the Worker,
+or record deliberately that the two backends differ. Then the `devices.hostname`
+uniqueness decision, still deferred.
 
 ---
 

@@ -8976,3 +8976,116 @@ staging it from the HP box, whichever is cheaper. Then the `devices.hostname`
 uniqueness decision.
 
 ---
+
+---
+
+## Session 211 — 2026-11-03 ("token rejected" was two defects and one guess)
+
+### RULE-ZERO
+
+**Read**: `agent/installer.py` and `agent/installer_gui.py`
+(`enroll_device_with_token` and their status handling); `server/src/routes/enroll.js`
+(the claim I wrote in S205); `serverless/worker.ts` (`handleEnrollClaim`);
+`dashboard/vite.config.js` (proxy) and the enroll pages (`window.location.origin`).
+
+**Finding 1 — the 401 merged two different facts.** The claim answered
+"Invalid or already-used enrollment token" for both an unknown token and a spent
+one. Tokens are **single-use**, so a retry after a partially-failed run *always*
+lands in the second case — and the operator cannot tell a typo from a spent token.
+Reproduced: first claim → 201; same token again → 401 with that exact message.
+
+**Finding 2 — a legitimate re-enrolment was reported as a failure.** When the
+machine's `hardware_uuid` is already enrolled, `/api/enroll/claim` re-issues
+credentials and answers **200** with `reassociated: true`. Both installers required
+exactly **201**, so re-running on an already-enrolled machine raised
+"Enrollment failed (HTTP 200)".
+
+**Finding 3 — the token was not trimmed.** A token copied out of the dashboard and
+pasted into a shell arrives padded more often than not, and `sha256(" abc")` never
+matches — the same class as the username bug in S203.
+
+**Ruled out**: the dev origin. `dashboard/vite.config.js` proxies `/api` to
+`:3001`, so a command pointing at `:5173` does reach the API; that was not the cause.
+
+### IMPLEMENT
+
+- `server/src/routes/enroll.js` — three distinct answers instead of one: unknown →
+  **401 "Invalid enrollment token"**; consumed →
+  **401 "Enrollment token already used — generate a new one"** (the single-use race
+  path gives the same); expired unchanged. The token is trimmed before hashing.
+- `agent/installer.py` / `agent/installer_gui.py` — accept **200 or 201** for a
+  claim (a re-association is success: the server returned a usable `api_key`), and
+  print "Device re-enrolled (existing hardware identity)" when
+  `reassociated: true`. The 401 handler now distinguishes "already used" and tells
+  the operator to generate a new token.
+- Tests: the unknown-vs-used distinction and a padded token being trimmed (asserted
+  against the stored SHA-256), plus two client tests — a 401 saying "already used"
+  produces the actionable message, and a 200 re-association is accepted.
+
+### Fog cleared
+
+- **What "token rejected" meant**: either an unknown token or a spent one; the
+  message could not be acted on because it named both.
+- **Whether the dev origin broke enrolment**: no — Vite proxies `/api`.
+- **Whether re-enrolling a known machine failed**: it does now succeed; before, the
+  server answered 200 and both clients called it an error.
+
+### Fog remaining
+
+- **A partially-failed install still spends the token.** The claim is the *first*
+  step of the installer, so if a later step fails (agent download, service
+  registration) the operator must mint a new token for every retry. Two designs
+  worth considering: make the claim idempotent for the same `hardware_uuid` within
+  the token's TTL, or move the claim to the last step. The Worker has the same
+  behaviour, so this is a product decision, not a bug.
+- The 15-minute TTL is unchanged (it matches the Worker's contract).
+- Unchanged: `devices.hostname` uniqueness decision; the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None for this fix.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): S205's tests asserted that a used
+  token is refused (`401`), which is true and which is exactly why the *merged*
+  message survived — the test never asked what the message said, and no test covered
+  the 200 re-association path at all. The suite tested the mechanism and not the
+  operator's next step.
+- **Layer 2 — context provision**: the single-use contract was documented in the
+  route's own comment, but nothing told the installer (or the page) that a retry
+  needs a fresh token.
+
+### VERIFY
+
+- Reproduced before the fix: mint → claim **201**; same token again → **401
+  "Invalid or already-used enrollment token"**; a fresh token for an enrolled
+  `hardware_uuid` → **200 reassociated: true** (which the clients called a failure).
+- After: server **776 passed** (48 suites; +2 and one assertion deliberately
+  updated), agent **770 passed** (+2), `ruff check` + `ruff format --check` clean.
+- `make graph-check`: all invariants pass.
+
+### Next session artifacts
+
+- Changed: `server/src/routes/enroll.js`, `server/tests/enroll.routes.test.js`,
+  `agent/installer.py`, `agent/installer_gui.py`, `agent/tests/test_installer.py`.
+- Commit: `c3bf738`.
+
+### Next session opening
+
+Decide the token-retry question this session surfaced: a partially-failed install
+still spends its token, so the operator needs a new one per attempt. Either make the
+claim idempotent for the same `hardware_uuid` within the token's TTL, or move the
+claim to the last step of the installer — and apply the same decision to the Worker,
+or record deliberately that the two backends differ. Then the `devices.hostname`
+uniqueness decision, still deferred.
+
+---
