@@ -8327,3 +8327,127 @@ route table, (b) the Worker's route table against Express's, and fails on a mism
 it cannot explain. Then decide the hostname-uniqueness question (Finding 3).
 
 ---
+
+---
+
+## Session 206 — 2026-11-03 (the inventory is ours, and it lives under PBL)
+
+### RULE-ZERO
+
+**Read**: `docs/adr/INTEGRATION-OWNERSHIP.md` (the decision that we own the
+integration contract and MeshCentral is an optional upstream, never a host);
+`server/src/routes/integrations.js`; `server/src/integrations/{index,meshcentral,
+graph}.js` (`status()`, `isEnabled()`, `isConfigured()`, `normalizeNode`);
+`dashboard/src/pages/PblDevicesPage.jsx`; `dashboard/src/App.jsx` and
+`components/DashboardLayout.jsx` (the PBL routes and nav).
+
+**Finding 1 — the feature was server-only, which is why it looked absent.** The
+registry has **two** connectors (`meshcentral` and `graph`/Microsoft Intune) behind
+two operator-gated read-only routes (`GET /api/integrations`,
+`GET /api/integrations/:id/devices`). `dashboard/src` contained **zero** references
+to any of it: no page, no nav item, no API call. A working backend was invisible.
+
+**Finding 2 — where it belongs, per the owner.** "It should work under pbl not mesh
+coz its now part of us": the inventory is presented on the **PBL Devices** page in
+our vocabulary, with the upstream never named, and with any enabled+configured
+source usable — so adding or swapping an upstream changes nothing in the UI. This
+is the ADR's own position (upstream-agnostic contract), which the UI had simply
+never implemented.
+
+**Finding 3 — the three degraded states are not the same state.**
+`isEnabled()` requires a URL (or a Graph tenant) in the environment and
+`isConfigured()` additionally requires credentials, so a fresh install is
+*"nothing connected"*, not *"someone disabled it"*, and a URL-without-credentials
+install is *"connected but not authorised"*. The page must distinguish them, and
+must say that enforcement is unaffected in all three cases.
+
+### IMPLEMENT
+
+- `dashboard/src/api/inventory.js` — `getInventoryStatus()` /
+  `getInventoryDevices(sourceId)` against our own endpoints; named for the
+  capability, not a vendor.
+- `dashboard/src/pages/PblDevicesPage.jsx` — a **Device inventory** card
+  (read-only): name, platform, last seen, online/offline, with the source chosen as
+  "the first enabled + configured connector". Degraded notices for *nothing
+  connected*, *connected but not authorised*, and *source unreachable* (502), each
+  stating that enforcement still runs through our command queue.
+- `dashboard/tests/PblDevicesPage.inventory.test.jsx` — four cases: the
+  unauthorised-vs-none distinction, the normalised table, the 502 degradation (the
+  PBL table must still render), and no-source-at-all. One test asserts the
+  upstream's `name` is **never** rendered.
+
+### Fog cleared
+
+- **Whether MeshCentral was wired into the interface**: only the backend was. The
+  UI half had never been built.
+- **Whether the integration is MeshCentral-specific**: no — the registry already
+  carries a second connector (Graph/Intune), which is why the section binds to
+  "any enabled + configured source" rather than a hardcoded id.
+- **What a fresh install should show**: "No inventory source is connected", not a
+  disabled switch — verified against the live API, where both connectors report
+  `enabled: false` until a URL/tenant is configured.
+
+### Fog remaining
+
+- **The "ready" path is unit-tested only**: no upstream is configured here
+  (`/api/integrations/meshcentral/devices` answers the documented 503), so real
+  inventory rows have not been rendered from a live source.
+- **Inventory ↔ PBL device linking is not built.** `agent-mapping` links a PBL
+  device to an agent device; nothing links an inventory row to either, so the
+  inventory is a separate read-only list rather than a column on the PBL table.
+- The queued items are unchanged: automate the cross-backend route audit (defects in
+  three consecutive sessions), the `devices.hostname` uniqueness decision, and the
+  S202 objective (spec-vs-ledger consistency check, D-117 reconciliation,
+  `PblTlsVerifyCert`'s fate).
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- A configured upstream is needed to see live inventory. That is a credential
+  question (`MESHCENTRAL_URL` + token, or a Graph tenant/client/secret), not a code
+  one.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, and the same shape again): the
+  backend had tests and the UI had none *because the UI did not exist*. Nothing
+  compares "capabilities the server exposes" with "capabilities the interface
+  offers", so a server-only feature can sit finished and invisible indefinitely.
+  This is a third variant of the boundary gap (S204's UI→server 404s, S205's
+  Worker→Express parity); automating one cross-surface audit would cover all three.
+- **Layer 1 — task specification**: the S142-era work was recorded as "integration
+  surface" without a UI acceptance criterion, so "done" meant the routes answered.
+
+### VERIFY
+
+- `dashboard`: **214 passed** (210 + 4), eslint clean.
+- Live against the running API: `GET /api/integrations` returns both connectors
+  `{enabled: false, configured: false}` (no URL/tenant set), and
+  `GET /api/integrations/meshcentral/devices` → **503** as documented — so the page
+  renders the honest "nothing connected" state today.
+- The section is read-only by construction: no write route is called; lockdown,
+  unlock and policy changes remain on our command queue and audit log.
+
+### Session artifacts
+
+- Changed: `dashboard/src/api/inventory.js` (new),
+  `dashboard/src/pages/PblDevicesPage.jsx`,
+  `dashboard/tests/PblDevicesPage.inventory.test.jsx` (new).
+- Commit: `df1bd33`.
+
+### Next session opening
+
+Automate the cross-surface audit that has now produced defects in four consecutive
+sessions (S204 UI→server 404s, S205 Worker→Express parity, S206 server-only
+capability): one script test asserting that every route the server exposes has a UI
+caller or a documented exception, and that the UI calls only routes that exist.
+Then the `devices.hostname` uniqueness decision.
+
+---

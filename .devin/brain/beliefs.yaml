@@ -1151,3 +1151,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-061
+  statement: 'The device-inventory integration is presented as part of OUR PBL surface (on PblDevicesPage),
+    in our own vocabulary, with the upstream never named: server/src/integrations/ holds a connector registry
+    with TWO connectors (meshcentral and graph/Intune) behind GET /api/integrations and GET /api/integrations/:id/devices
+    (operator-gated, read-only), and the dashboard binds to ''any enabled and configured source'' rather
+    than a hardcoded id, so swapping an upstream changes nothing in the UI. Three degraded states are
+    distinct and must stay so: nothing connected (isEnabled() requires MESHCENTRAL_URL or a Graph tenant),
+    connected-but-not-authorised (URL set, no credentials), and source unreachable (502) — and in every
+    one of them enforcement is unaffected because lockdown/unlock/policy stay on our command queue, never
+    a third-party API. Before S206 the backend was finished and invisible: dashboard/src had zero references
+    to the integration surface.'
+  domain: integrations/ui
+  status: confirmed
+  evidence_level: code-read
+  provenance: dashboard 214 (+4) covering the three degraded states, the normalised table and the 502
+    degradation, plus the upstream-name-never-rendered assertion; live API shows both connectors enabled:false
+    and /devices -> 503
+  source: dashboard/src/api/inventory.js; dashboard/src/pages/PblDevicesPage.jsx; dashboard/tests/PblDevicesPage.inventory.test.jsx;
+    server/src/routes/integrations.js; server/src/integrations/{index,meshcentral,graph}.js; docs/adr/INTEGRATION-OWNERSHIP.md
+  asserted: '2026-11-04'
+  last_verified: '2026-11-04'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

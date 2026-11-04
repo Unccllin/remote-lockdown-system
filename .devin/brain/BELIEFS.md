@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-04 11:34:38 — 60 beliefs
+Generated: 2026-11-04 12:32:54 — 61 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -139,6 +139,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-027 | confirmed | code-read | PblBootmgrSvn is demoted to advisory-only telemetry: PblReadBootmgrSvn now reports a Trusted flag from the variable's TIME_BASED_AUTHENTICATED attribute (BootmgrSvnTrusted in PBL_PLATFORM_STATE); the value must not drive decisions. |
 | B-031 | confirmed | emulated | KernelDmaProtection UEFI variable is unauthenticated — plantable by any OS/shell writer for spoof-to-pass on the Decision.c BLOCK gate; PBL now treats it as advisory telemetry only, with DMAR (Intel VT-d) / IVRS (AMD-Vi) ACPI tables as the authoritative firmware-authored signal. |
 | B-032 | confirmed | code-read | PblBootmgrSvn remains attacker-writable (unauthenticated by design) but is now advisory-only: Trusted flag from TBA attribute travels with the value in PBL_PLATFORM_STATE (hashed into attestation digest); no decision path consumes it. |
+
+## integrations/ui
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-061 | confirmed | code-read | The device-inventory integration is presented as part of OUR PBL surface (on PblDevicesPage), in our own vocabulary, with the upstream never named: server/src/integrations/ holds a connector registry with TWO connectors (meshcentral and graph/Intune) behind GET /api/integrations and GET /api/integrations/:id/devices (operator-gated, read-only), and the dashboard binds to 'any enabled and configured source' rather than a hardcoded id, so swapping an upstream changes nothing in the UI. Three degraded states are distinct and must stay so: nothing connected (isEnabled() requires MESHCENTRAL_URL or a Graph tenant), connected-but-not-authorised (URL set, no credentials), and source unreachable (502) — and in every one of them enforcement is unaffected because lockdown/unlock/policy stay on our command queue, never a third-party API. Before S206 the backend was finished and invisible: dashboard/src had zero references to the integration surface. |
 
 ## meta/process
 

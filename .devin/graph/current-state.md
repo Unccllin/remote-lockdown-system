@@ -53,30 +53,31 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 205 — 2026-11-03 (token enrolment reaches the self-hosted server)
+## Latest session: 206 — 2026-11-03 (the inventory is ours, and it lives under PBL)
 
 ### Fog cleared
 
-- **Whether the Enroll page works on self-hosted**: yes now — mint → claim →
-  provisioned, verified live.
-- **What the installer needs**: `{device, api_key}` from `/api/enroll/claim`, with
-  `reassociated` tolerated; both shapes are returned.
-- **Which schema gaps existed**: `enrollment_tokens` entirely absent, and
-  `devices.serial_number` never created.
+- **Whether MeshCentral was wired into the interface**: only the backend was. The
+  UI half had never been built.
+- **Whether the integration is MeshCentral-specific**: no — the registry already
+  carries a second connector (Graph/Intune), which is why the section binds to
+  "any enabled + configured source" rather than a hardcoded id.
+- **What a fresh install should show**: "No inventory source is connected", not a
+  disabled switch — verified against the live API, where both connectors report
+  `enabled: false` until a URL/tenant is configured.
 
 ### Fog remaining
 
-- **Hostname uniqueness** (Finding 3): either add a UNIQUE index/constraint to
-  `devices.hostname` (a data migration — existing duplicates would need resolving)
-  or correct the 409 message so it stops promising a constraint the schema lacks.
-- **The UI↔server route audit is still manual** — it found the S204 defects and
-  would find the next one. Automating it (the way the Worker's route-contract test
-  works) remains the highest-value harness addition here.
-- The S202 objective (spec-vs-ledger consistency check, D-117 reconciliation,
-  `PblTlsVerifyCert`'s fate) is still queued.
-- `serial_number` is now stored but not surfaced by the Express device API responses
-  beyond `SELECT *` — the dashboard will show it for token-enrolled devices; older
-  rows stay NULL.
+- **The "ready" path is unit-tested only**: no upstream is configured here
+  (`/api/integrations/meshcentral/devices` answers the documented 503), so real
+  inventory rows have not been rendered from a live source.
+- **Inventory ↔ PBL device linking is not built.** `agent-mapping` links a PBL
+  device to an agent device; nothing links an inventory row to either, so the
+  inventory is a separate read-only list rather than a column on the PBL table.
+- The queued items are unchanged: automate the cross-backend route audit (defects in
+  three consecutive sessions), the `devices.hostname` uniqueness decision, and the
+  S202 objective (spec-vs-ledger consistency check, D-117 reconciliation,
+  `PblTlsVerifyCert`'s fate).
 
 ### Debt items closed
 
@@ -88,55 +89,45 @@
 
 ### Blockers
 
-- None. (The hostname-uniqueness decision is a design question, not a blocker.)
+- A configured upstream is needed to see live inventory. That is a credential
+  question (`MESHCENTRAL_URL` + token, or a Graph tenant/client/secret), not a code
+  one.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, sixth instance of one shape): the
-  two backends were never compared. The Worker had three enrolment endpoints the
-  Express server lacked, and nothing — no test, no check — compared their route
-  tables or the dashboard's calls against either. Each backend's own suite was
-  green. Automating that comparison is the durable fix, and it is now the top of the
-  next opening for the third session running.
-- **Layer 2 — context provision**: `installer.py` and the dashboard both encoded the
-  contract, but no document said "Express is missing these two routes", so the gap
-  only appeared when a human used the page.
+- **Layer 4 — verification feedback** (primary, and the same shape again): the
+  backend had tests and the UI had none *because the UI did not exist*. Nothing
+  compares "capabilities the server exposes" with "capabilities the interface
+  offers", so a server-only feature can sit finished and invisible indefinitely.
+  This is a third variant of the boundary gap (S204's UI→server 404s, S205's
+  Worker→Express parity); automating one cross-surface audit would cover all three.
+- **Layer 1 — task specification**: the S142-era work was recorded as "integration
+  surface" without a UI acceptance criterion, so "done" meant the routes answered.
 
 ### VERIFY
 
-- `server`: **754 passed**, 45 suites, eslint clean (was 739; +15: 11 route cases
-  including the single-use race, re-association, expired/used/unknown tokens and
-  hash-only storage; +4 schema cases that also exercise the conditional UPDATE at
-  the SQL layer).
-- Live, against the restarted API (migrations applied at boot —
-  `schema_migrations` now ends at `016_device_serial`):
-  1. admin login → 248-char token
-  2. mint → `expires_in=900`
-  3. claim with **no admin auth** → **201**, device created with `serial: SN-TOKEN-1`
-  4. agent check-in with the issued key → **200**
-  5. same token reused → **401**
-  6. unknown token → **401**
-  7. mint without auth → **401**
-- The verification device was deleted afterwards; the local device list is back to
-  the three pre-existing rows.
+- `dashboard`: **214 passed** (210 + 4), eslint clean.
+- Live against the running API: `GET /api/integrations` returns both connectors
+  `{enabled: false, configured: false}` (no URL/tenant set), and
+  `GET /api/integrations/meshcentral/devices` → **503** as documented — so the page
+  renders the honest "nothing connected" state today.
+- The section is read-only by construction: no write route is called; lockdown,
+  unlock and policy changes remain on our command queue and audit log.
 
 ### Session artifacts
 
-- Changed: `server/src/db/migrations/015_enrollment_tokens.sql`,
-  `server/src/db/migrations-sqlite/015_enrollment_tokens.sql`,
-  `server/src/db/migrations/016_device_serial.sql`,
-  `server/src/db/migrations-sqlite/016_device_serial.sql`,
-  `server/src/routes/enroll.js` (new), `server/src/index.js`,
-  `server/tests/enroll.routes.test.js` (new),
-  `server/tests/migrationIdempotency.test.js`.
-- Commit: `e48c09b`.
+- Changed: `dashboard/src/api/inventory.js` (new),
+  `dashboard/src/pages/PblDevicesPage.jsx`,
+  `dashboard/tests/PblDevicesPage.inventory.test.jsx` (new).
+- Commit: `df1bd33`.
 
 ### Next session opening
 
-Automate the cross-backend audit that has now surfaced defects in three consecutive
-sessions: a script test that compares (a) the UI's API calls against the Express
-route table, (b) the Worker's route table against Express's, and fails on a mismatch
-it cannot explain. Then decide the hostname-uniqueness question (Finding 3).
+Automate the cross-surface audit that has now produced defects in four consecutive
+sessions (S204 UI→server 404s, S205 Worker→Express parity, S206 server-only
+capability): one script test asserting that every route the server exposes has a UI
+caller or a documented exception, and that the UI calls only routes that exist.
+Then the `devices.hostname` uniqueness decision.
 
 ---
 
