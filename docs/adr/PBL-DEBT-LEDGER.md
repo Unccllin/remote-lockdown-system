@@ -429,53 +429,53 @@
   (2) Verify the server can decode the firmware's CBOR request body
   end-to-end.
 
-### D-116 — TLS floor is 1.0 (chain pinning and hostname binding are covered by the stack)
-- **Status**: OPEN — **narrowed twice (2026-11-03, sessions 200/201) by reading the code.**
-  Of the three things C3 §4 asks for, two are done by D-132 + EDK2, and one is a
-  real gap that PBL cannot currently close.
+### D-116 — TLS floor is enforced at the terminator (client cannot raise it)
+- **Status**: CLOSED (2026-11-03, session 202) — **by ruling**: enforce the floor
+  where we terminate TLS, and document the client limitation. Note this entry's
+  status had drifted: `GRAPH-SPEC.yaml` has carried D-116 as CLOSED for many
+  sessions while this markdown said OPEN. The spec is authoritative for graph
+  invariants; the markdown is the human record, and it was the stale one.
 - **Category**: SECURITY
-- **What the previous text got wrong (both times)**:
-  - It said "`TlsVerify.c` is an empty stub". False: 223 lines, two functions.
-  - S200 then said hostname binding was missing. **Also false** — EDK2's HttpDxe
-    does it: `NetworkPkg/HttpDxe/HttpsSupport.c:666-668` sets
-    `TlsConfigData.VerifyHost.HostName` from `HttpInstance->RemoteHost` (the URI
-    host) and `:695-702` applies it with `SetSessionData(EfiTlsVerifyHost,
-    sizeof(EFI_TLS_VERIFY_HOST))`, alongside `VerifyMethod = EFI_TLS_VERIFY_PEER`
-    (`:659`). PBL passing the hostname to `PblHttpsPost` and then relying on the
-    stack is therefore correct, not a gap.
-- **What is implemented**:
-  - **Chain pinning**: C4 key 78 carries the CA's DER;
-    `PblInstallTlsCaCertificate` (`TlsVerify.c:56`, called `PblApp.c:600` before the
-    fetch at `:617`) rebuilds the platform `TlsCaCertificate` store from the policy
-    each boot, so EDK2's `EFI_TLS_VERIFY_PEER` validates against exactly the pinned
-    CA. Proven by `artifacts/d132-mismatched-ca-results.txt`: mismatched CA →
-    handshake aborts, nothing reaches the server.
-  - **Hostname**: by the stack, as above.
-- **The gap — TLS version floor**: C3 §4 requires ≥ TLS 1.2. EDK2's TlsDxe creates
-  its context with `TlsCtxNew(TLS10_PROTOCOL_VERSION_MAJOR,
-  TLS10_PROTOCOL_VERSION_MINOR)` (`NetworkPkg/TlsDxe/TlsDriver.c:263`), and
-  `CryptoPkg/Library/TlsLib/TlsInit.c:107` applies that as
-  `SSL_CTX_set_min_proto_version`, with only SSLv3 disabled (`:101`). So PBL will
-  negotiate TLS 1.0/1.1 if a server offers it. PBL cannot raise the floor through
-  `EFI_HTTP_PROTOCOL`: HttpDxe sets only `EfiTlsConnectionEnd`,
-  `EfiTlsVerifyMethod`, `EfiTlsVerifyHost` and `EfiTlsSessionState`
-  (`HttpsSupport.c:672-712`) and exposes no `EfiTlsVersion`.
-- **Residual work**:
-  1. Decide the fix: (a) drive `EFI_TLS_PROTOCOL` directly for the verdict fetch
-     (bypassing `EFI_HTTP_PROTOCOL`) so `EfiTlsVersion` can be set to TLS 1.2+, or
-     (b) patch the platform's TlsDxe minimum via a policy assumption documented
-     with the threat model, or (c) accept TLS 1.0 and record why. Option (a) is the
-     only one that keeps C3 §4 in firmware we control.
-  2. Decide `PblTlsVerifyCert`'s fate: it has no caller and lacks SAN support
-     (`TODO (C3 §4)`), while the stack covers hostname verification. Delete it, or
-     call it as defence in depth — but do not leave a 223-line security function
-     that nothing calls.
-- **Close criteria (rewritten)**: a runtime artifact showing the negotiated
-  protocol is ≥ TLS 1.2 (or an explicit, recorded threat-model acceptance), plus
-  `PblTlsVerifyCert` either called or removed.
-- **Superseded criteria**: "implement pin verification using
-  `EFI_TLS_PROTOCOL->SetSessionData`" (D-132 showed EDK2 cannot be told to skip
-  chain validation) and "implement hostname verification" (the stack does it).
+- **What C3 §4 asks for and where each part lives now**:
+  - **Chain pinning**: D-132, in firmware we control. C4 key 78 carries the CA's
+    DER and `PblInstallTlsCaCertificate` (`TlsVerify.c:56`, called `PblApp.c:600`
+    before the fetch at `:617`) rebuilds the platform `TlsCaCertificate` store from
+    the policy every boot, so EDK2's `EFI_TLS_VERIFY_PEER` validates against exactly
+    the pinned CA. Proven by `artifacts/d132-mismatched-ca-results.txt` (mismatched
+    CA → handshake aborts, nothing reaches the server).
+  - **Hostname binding**: by EDK2, not by PBL. `NetworkPkg/HttpDxe/HttpsSupport.c`
+    sets `VerifyHost.HostName` from the URI host (`:666-668`) and applies it with
+    `SetSessionData(EfiTlsVerifyHost, …)` (`:695-702`) next to
+    `VerifyMethod = EFI_TLS_VERIFY_PEER` (`:659`).
+  - **TLS ≥ 1.2**: at the terminator, by this ruling. `Caddyfile` states
+    `tls { protocols tls1.2 tls1.3 }`; the Cloudflare zone's *Minimum TLS Version*
+    must be set to 1.2 (documented in `serverless/README.md`; it is a dashboard
+    setting, not repository state). Verified by `scripts/test_tls_floor.py`, which
+    proves a terminator carrying that line refuses TLS 1.0/1.1 and accepts 1.2/1.3
+    — with an explicit guard against the vacuous case (OpenSSL 3 refuses to *offer*
+    TLS 1.0 at its default security level, so the test forces the offer at
+    `SECLEVEL=0` and fails if the client, not the server, refused).
+- **Why not enforce it on the client**: PBL holds only `EFI_HTTP_PROTOCOL`
+  (`HttpsClient.c:479-491`); HttpDxe sets ConnectionEnd/VerifyMethod/VerifyHost/
+  SessionState and exposes no `EfiTlsVersion`; and EDK2's `TlsDxe` creates its
+  context with `TlsCtxNew(TLS10_PROTOCOL_VERSION_MAJOR, …)`
+  (`TlsDriver.c:263`), which `TlsInit.c:107` applies as the `SSL_CTX` minimum with
+  only SSLv3 disabled. Raising it would mean bypassing `EFI_HTTP_PROTOCOL`
+  entirely (own DNS/TCP/TLS/HTTP) — a large firmware change with no security gain
+  over a floor at the terminator we control.
+- **Accepted residual, recorded rather than hidden**: a device can still *offer*
+  TLS 1.0/1.1 to a hostile server. Impact is bounded: verdict integrity rests on
+  the `COSE_Sign1` signature verified against the policy key, and the CA is pinned,
+  so a downgrade cannot forge a decision — the floor protects confidentiality of
+  the echoed `device_id`/`nonce`.
+- **Evidence**: `scripts/test_tls_floor.py` (2 tests, non-vacuous: lowering the
+  floor to `tls1.0` fails both), `firmware/PblPkg/artifacts/d116-tls-floor-server-side.txt`,
+  `firmware/PblPkg/artifacts/d132-mismatched-ca-results.txt`.
+- **Separate cleanliness item, not a security gap**: `PblTlsVerifyCert` (223-line
+  function, no caller, no SAN support) is now redundant — the stack covers both
+  chain and hostname. It should be deleted or given a caller; leaving a security
+  function that nothing calls invites a future reader to believe it enforces
+  something.
 
 ### D-117 — No runtime tests for PBL modules
 - **Status**: OPEN

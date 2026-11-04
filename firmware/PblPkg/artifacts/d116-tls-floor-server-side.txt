@@ -1,0 +1,8 @@
+# D-116 TLS floor — server-side enforcement, 2026-11-03 (session 202)
+# Ruling: enforce the floor where we terminate TLS, and document the client limitation.
+# Why not the client: PBL holds only EFI_HTTP_PROTOCOL (HttpDxe sets ConnectionEnd/
+# VerifyMethod/VerifyHost/SessionState, no version) and EDK2's TlsDxe defaults its
+# minimum to TLS 1.0 (NetworkPkg/TlsDxe/TlsDriver.c:263 -> TlsCtxNew(TLS10...)).
+
+$ scripts/test_tls_floor.py
+2 passed in 2.47s

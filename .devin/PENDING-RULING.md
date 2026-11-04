@@ -383,3 +383,18 @@ constraint that follows from the ruling and must not be lost: a config may only
 name `update_public_key` when the `.pub` file is actually staged on the target,
 because a configured-but-missing key fails closed and silently stops every future
 update. Unpinned installs stay hash-only, now visible per device.
+
+## D-116 TLS-floor ruling (opened + closed 2026-11-03, session 202)
+
+The device cannot raise its own TLS floor (PBL holds only `EFI_HTTP_PROTOCOL`;
+EDK2's TlsDxe defaults its minimum to TLS 1.0). The floor therefore belongs where
+we terminate TLS.
+
+- [x] Q1 — enforcement point → **server-side floor + document** (recommended).
+      `Caddyfile` states `protocols tls1.2 tls1.3`; Cloudflare's zone *Minimum TLS
+      Version* set to 1.2 (documented in `serverless/README.md`); the client-side
+      limitation recorded in D-116, with the note that verdict integrity rests on
+      the COSE signature, not on TLS. Verified by `scripts/test_tls_floor.py`,
+      including a guard against the vacuous "client refused to offer" result.
+
+**Ruling closed 2026-11-03, session 202** — no open items.

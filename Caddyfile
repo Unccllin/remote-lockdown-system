@@ -9,6 +9,18 @@
 #   3. docker compose -f docker-compose.prod.yml up -d
 
 {$DOMAIN} {
+	# TLS floor (C3 §4 / D-116). The *device* cannot raise its own floor: PBL holds
+	# only EFI_HTTP_PROTOCOL, whose HttpDxe sets ConnectionEnd/VerifyMethod/
+	# VerifyHost/SessionState and exposes no version, and EDK2's TlsDxe defaults its
+	# minimum to TLS 1.0 (NetworkPkg/TlsDxe/TlsDriver.c:263 -> TlsCtxNew(TLS10...)).
+	# So the floor is enforced here, where we terminate TLS, and a downgrade cannot
+	# succeed even though the client offers it. Caddy's default already excludes
+	# TLS < 1.2; stating it makes it auditable and gives scripts/test_tls_floor.py
+	# something to verify against a live proxy.
+	tls {
+		protocols tls1.2 tls1.3
+	}
+
 	# Reverse proxy to the admin server
 	reverse_proxy server:3001
 

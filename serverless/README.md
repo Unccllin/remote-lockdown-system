@@ -103,6 +103,23 @@ Behaviour worth knowing:
   from a CI run without `UPDATE_SIGNING_KEY` is exactly this case, and the job emits
   a warning annotation saying so.
 
+## Deployment: TLS floor (C3 §4 / D-116)
+
+The device cannot enforce a TLS version floor — PBL only holds
+`EFI_HTTP_PROTOCOL`, and EDK2's `TlsDxe` defaults its minimum to TLS 1.0 — so the
+floor belongs at the terminator. For this Worker that is the Cloudflare zone
+setting, which is **not** in this repository and must be set once per zone:
+
+> Cloudflare dashboard → SSL/TLS → Edge Certificates → **Minimum TLS Version**:
+> **TLS 1.2** (the account default allows 1.0).
+
+The self-hosted deployment states the same floor in `Caddyfile`
+(`tls { protocols tls1.2 tls1.3 }`), and `scripts/test_tls_floor.py` proves a
+terminator carrying that line refuses TLS 1.0/1.1 and accepts 1.2/1.3. Verdict
+*integrity* does not depend on this: the verdict is a `COSE_Sign1` verified against
+the policy key, so a downgrade cannot forge a decision — the floor protects
+confidentiality of the echoed `device_id`/`nonce`.
+
 ## What this backend does not implement
 
 **Integrations inventory** (`GET /api/integrations`,
