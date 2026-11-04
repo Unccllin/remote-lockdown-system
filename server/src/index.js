@@ -36,6 +36,7 @@ const setupRoutes = require('./routes/setup');
 const healthRoutes = require('./routes/health');
 const metricsRoutes = require('./routes/metrics');
 const adminsRoutes = require('./routes/admins');
+const enrollRoutes = require('./routes/enroll');
 const hwTestArtifactRoutes = require('./routes/hwTestArtifact');
 const pblRoutes = require('./routes/pbl');
 const integrationsRoutes = require('./routes/integrations');
@@ -114,6 +115,16 @@ const dashboardLimiter = rateLimit({
 // all devices into one rate-limit bucket. To prevent that, we also include
 // the hostname from the request body (available because express.json() runs
 // before route-level middleware) in the key when a shared key is used.
+// Enrolment is token-authenticated rather than session-authenticated, and /claim
+// is the one unauthenticated write in the API. A 44-char random token is not
+// brute-forceable, but the endpoint still should not be a free oracle.
+const enrollLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  message: { error: 'Too many enrolment attempts — try again later' },
+});
+
 const agentLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 600, // 600 req / 15 min per device (40/min — enough for 30s polling + retries)
@@ -153,6 +164,7 @@ mountApi('/api/admins', dashboardLimiter, adminsRoutes);
 mountApi('/api/hw-test-artifact', dashboardLimiter, hwTestArtifactRoutes);
 // S142: read-only integration inventory (ours — see docs/adr/INTEGRATION-OWNERSHIP.md)
 mountApi('/api/integrations', dashboardLimiter, integrationsRoutes);
+mountApi('/api/enroll', enrollLimiter, enrollRoutes);
 
 // D-200/D-201/D-202/D-210: PBL routes (/v1/*) — CBOR/COSE firmware protocol.
 // Mounted at /v1 (not /api) to match the serverless Worker URL scheme.

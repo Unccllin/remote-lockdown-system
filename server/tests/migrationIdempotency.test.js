@@ -36,6 +36,8 @@ const EXPECTED_VERSIONS = [
   '012_pbl_kv_store',
   '013_firmware_audit',
   '014_update_verification',
+  '015_enrollment_tokens',
+  '016_device_serial',
 ];
 
 async function appliedVersions() {
@@ -94,6 +96,43 @@ describe('SQLite migration idempotency (S140)', () => {
     expect(await tableNames()).toEqual(
       expect.arrayContaining(['hw_test_artifacts', 'pbl_kv_store'])
     );
+  });
+
+  test('token enrolment and the device serial are in the SQLite schema (S205)', async () => {
+    await runMigrations(sqlitePool, { dialect: 'sqlite' });
+
+    // Token enrolment (S204's parity gap): the claim route reads and updates this
+    // table, so a SQLite deployment without it fails every enrolment.
+    const columns = (await sqlitePool.query('PRAGMA table_info(enrollment_tokens)')).rows.map(
+      (c) => c.name
+    );
+    expect(columns).toEqual(
+      expect.arrayContaining(['id', 'token_hash', 'created_by', 'created_at', 'expires_at', 'used_at'])
+    );
+
+    // The claim stores what the installer reports, and the dashboard's Device detail
+    // renders a Serial Number row — the column did not exist before this migration.
+    const deviceColumns = (await sqlitePool.query('PRAGMA table_info(devices)')).rows.map(
+      (c) => c.name
+    );
+    expect(deviceColumns).toContain('serial_number');
+
+    // Exercise the real column, not just its name: a token round-trips and is
+    // consumable exactly once at the storage layer.
+    await sqlitePool.query(
+      `INSERT INTO enrollment_tokens (id, token_hash, created_by, created_at, expires_at)
+       VALUES ('tok-1', 'abc123', 'admin-1', '2026-01-01T00:00:00Z', '2026-01-01T00:15:00Z')`
+    );
+    const consumed = await sqlitePool.query(
+      `UPDATE enrollment_tokens SET used_at = '2026-01-01T00:05:00Z'
+        WHERE id = 'tok-1' AND used_at IS NULL`
+    );
+    expect(consumed.rowCount).toBe(1);
+    const second = await sqlitePool.query(
+      `UPDATE enrollment_tokens SET used_at = '2026-01-01T00:06:00Z'
+        WHERE id = 'tok-1' AND used_at IS NULL`
+    );
+    expect(second.rowCount).toBe(0); // single use holds at the SQL level too
   });
 
   test('the SQLite schema can store how a device verifies updates (B-006)', async () => {
