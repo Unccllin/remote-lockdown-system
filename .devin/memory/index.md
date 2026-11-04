@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-04 11:34:53
-Active memories: 925 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-04 14:52:48
+Active memories: 946 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -34,25 +34,46 @@ Active memories: 925 | Superseded: 0 | Decayed: 20
 | m-040 | The EFI_HTTP_PROTOCOL uses token-based async API ( |  | 0.60 | 2026-08-18 | 0.252 | 0 |  |
 | m-016 | MISTAKE: Used wrong MSS1 signature byte order (0x4 |  | 0.60 | 2026-08-18 | 0.252 | 0 |  |
 | m-001 | EDK2 GenerateCapsule --signer-private-cert needs a |  | 0.60 | 2026-08-18 | 0.252 | 0 |  |
+| m-959 | When a download fails, name the missing artefact a |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-952 | An allowlist of known gaps should be shrink-only,  |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-963 | An allowlist entry that explains a difference away |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-953 | If a test's success condition depends on a sandbox |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-965 | Cross-backend URL parity is a contract when a scri |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-962 | MISTAKE: mistake: earlier concluded makensis was a |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-931 | Check which record is authoritative before editing |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-958 | MISTAKE: mistake: left the plaintext password in p |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-964 | A test whose failure path is never executed can hi |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-954 | MISTAKE: mistake: shipped two broken parsers into  |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-945 | MISTAKE: mistake: did not check the migration vers |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-961 | Check for locally installed tooling outside PATH b |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-935 | Validation contracts must live in one place: per-r |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-956 | Encryption at rest means the plaintext column must |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-955 | Implement a cross-surface capability as a pair: pr |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-927 | Check the tool the repo documents (build-pbl.sh na |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-946 | A server-only feature is not shipped: if no UI ref |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-939 | Comments that contradict their code are a reliable |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-936 | Trim identifiers, never secrets; state that rule w |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-930 | MISTAKE: mistake: concluded 'no EDK II build tool' |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-940 | An audit script must be validated against known-go |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-960 | Probe availability before offering an action, and  |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-937 | Reproduce the user's exact input before theorising |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-928 | 'No tool inside the container' is not 'no tool': t |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-929 | A dependency's source is evidence: reading HttpDxe |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-966 | MISTAKE: mistake: accepted 'Express serves it diff |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-938 | Check the client's base URL against the server's m |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-942 | Implement a cross-backend feature from the client' |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-932 | A TLS-floor test that does not force the client of |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-934 | MISTAKE: mistake: rewrote D-116 as OPEN in the mar |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-948 | Degraded states that mean different things to an o |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-941 | MISTAKE: mistake: trusted the first audit output ( |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-957 | Unauthenticated endpoints that identify a machine  |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-944 | Hash tokens at rest even when the reference implem |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-951 | Always anchor a source parser to known-good facts  |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-947 | Present third-party data in our vocabulary and bin |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-943 | Single-use tokens need a conditional update; a SEL |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-933 | Enforce protocol floors at the terminator you cont |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-949 | MISTAKE: mistake: initially wrote the not-configur |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
+| m-950 | Cross-surface contracts need a test that reads bot |  | 0.50 | 2026-11-04 | 0.250 | 0 |  |
 | m-854 | Worker Device gains pbl_device_id?: string | null; |  | 0.50 | 2026-11-03 | 0.247 | 0 |  |
 | m-847 | All eight KV readers now use parseKvJson(raw, key) |  | 0.50 | 2026-11-03 | 0.247 | 0 |  |
 | m-901 | Prefer source-level fixes (getattr-resolved Window |  | 0.50 | 2026-11-03 | 0.247 | 0 |  |

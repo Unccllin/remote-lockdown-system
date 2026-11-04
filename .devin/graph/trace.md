@@ -8843,3 +8843,136 @@ release pipeline's staged assets so a self-hosted operator can fetch it. Then ta
 the `devices.hostname` uniqueness decision.
 
 ---
+
+---
+
+## Session 210 — 2026-11-03 (/api/download/* was classified "by design" and was not)
+
+### RULE-ZERO
+
+**Read**: the reported 404 (`GET /api/download/installer` → the derived route list);
+`serverless/worker.ts` (`/api/download/*` handlers and the KV keys they serve);
+`server/src/routes/installer.js` and `agent.js` (what Express serves instead);
+`deploy-agent.sh` (which fetches these URLs); `scripts/test_cross_surface_contract.py`
+(the `WORKER_ONLY_BY_DESIGN` classification I wrote in S207).
+
+**Finding 1 — a misclassification, not a missing route.** S207's audit put the four
+`/api/download/*` binary routes in `WORKER_ONLY_BY_DESIGN` with the reason "KV-backed
+binary delivery; Express serves per-device installers under /api/installer". The
+report disproves it: `deploy-agent.sh` in this repository fetches
+`/api/download/{installer,agent,lockscreen}`, so those paths are a **contract**, and
+"Express has a different way to do it" is not the same as "this URL is not needed".
+
+**Finding 2 — the audit had a modelling gap that hid the difference.** `resolves()`
+compared paths exactly, so a router mounted at `/api/download` with a `/:name` route
+would have looked like it did NOT serve `/api/download/agent`. Adding the router made
+that visible immediately.
+
+**Finding 3 — a latent crash in my own audit test.** The "three lists do not overlap"
+check built its failure message from `sorted(entry)` — an undefined name. It had never
+run, because the list comprehension's expression is only evaluated when an overlap
+exists. A check that can only crash when it is supposed to fire is not a check.
+
+### IMPLEMENT
+
+- **`server/src/routes/downloads.js`** — `GET /api/download/:name` for `agent`
+  (platform-aware: `.exe` for `win`, bare binary otherwise), `agent-installer`,
+  `installer` and `lockscreen`, read from the agent binaries directory. Public and
+  rate-limited, matching the Worker: this is the bootstrap path for a machine with no
+  credential, and the binaries are already distributed to every target.
+  - Every response carries `x-content-sha256` over exactly the bytes served, so a
+    client can refuse a bad body before executing it (the same contract as the
+    Worker's download route and as S192's installer verification).
+  - A missing artefact answers 404 naming the file, the directory it searched and the
+    remedy (`agent/build.ps1`, or set `AGENT_BINARIES_DIR`) — not a generic
+    "Not found". An unknown name lists what *is* available and says the generated
+    `.ps1` helpers are serverless-only.
+- **`scripts/test_cross_surface_contract.py`** — three fixes:
+  1. `resolves()` now treats `:x` as one path segment, so a parameterised route is
+     correctly seen to cover a concrete path (and the length guard uses
+     `zip(..., strict=True)` so a future edit that drops it fails loudly);
+  2. the Worker-only list split into `WORKER_ONLY_BY_DESIGN` (no route at all:
+     `/api/ping`, `/api/command-ack`), `ROUTED_NOT_PRODUCED` (reached, deliberately
+     404: the three generated `.ps1` helpers) and `KNOWN_GAPS`, with an assertion for
+     each and a test forbidding an entry in two lists;
+  3. the overlap check's undefined-name bug fixed, and the branch falsified by forcing
+     an overlap so the message is actually exercised.
+
+### Fog cleared
+
+- **Why `/api/download/installer` 404'd**: Express never implemented the path, and
+  the audit had reasoned it away rather than recording it as a gap.
+- **Which of these paths are genuinely serverless-only**: only the three generated
+  `.ps1` helpers (the Worker builds them from KV); the four binary routes are now
+  served by both backends.
+
+### Fog remaining
+
+- `deploy-agent.sh` still targets `$WORKER_BASE`; it now *works* against a
+  self-hosted base too, but nothing documents that. Worth a comment or a parameter.
+- `lockdown-installer.exe` is still absent (S209), so `/api/download/agent-installer`
+  answers 404 with the remedy. The Windows one-click/`.ps1` installers stay blocked on
+  that one Windows-built binary.
+- Unchanged: `devices.hostname` uniqueness decision; the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- The Windows-built `lockdown-installer.exe` (same blocker as S209).
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the audit I built to catch
+  cross-surface drift contained a classification that excused drift. It was only
+  caught because a user hit the URL — exactly the failure mode the audit exists to
+  prevent. The lesson is about *reason quality*: an allowlist entry that explains a
+  difference away is weaker than one that records a missing capability, and only the
+  latter can shrink.
+- **Layer 3 — execution environment** (secondary): the latent `entry` NameError sat in
+  a branch that requires a failure to execute. Falsifying it (forcing an overlap) is
+  now part of how I check a guard.
+
+### VERIFY
+
+- Live against the restarted API, including the reported URL:
+  - `GET /api/download/installer` → **200**, 18 628 686 bytes, `x-content-sha256:
+    4b1be636076bc891…`
+  - `GET /api/download/agent?platform=linux` → **200**, 18 272 456 bytes;
+    `?platform=win` → **200**, 15 636 034 bytes
+  - `GET /api/download/agent-installer` → **404** naming
+    `lockdown-installer.exe`, the directory searched, and `AGENT_BINARIES_DIR`
+  - `GET /api/download/deploy.ps1` → **404** listing
+    `agent, agent-installer, installer, lockscreen` and stating the generated
+    helpers are serverless-only
+- `server`: **774 passed** (48 suites), eslint clean.
+- `scripts/test_cross_surface_contract.py`: **8 passed**; falsified both new branches
+  (a forced overlap prints the offending entry; a lowered floor of router coverage
+  fails the routed-not-produced assertion).
+- `make test-scripts`: all suites green.
+
+### Session artifacts
+
+- Changed: `server/src/routes/downloads.js` (new), `server/src/index.js`,
+  `server/tests/downloads.routes.test.js` (new),
+  `scripts/test_cross_surface_contract.py`.
+- Commit: `b39159d`. (Its message says "S211" for this session's audit reference; the
+  recorded history shows the previous session was 209, so this is 210 — noted here
+  because commit messages cannot be edited retroactively without rewriting history.)
+
+### Next session opening
+
+Two small honesty items before anything new: document (or parameterise) that
+`deploy-agent.sh` can target a self-hosted base now that `/api/download/*` exists on
+both backends, and record `lockdown-installer.exe` as the single artefact blocking
+self-hosted Windows installers — ideally by adding it to the release assets or
+staging it from the HP box, whichever is cheaper. Then the `devices.hostname`
+uniqueness decision.
+
+---

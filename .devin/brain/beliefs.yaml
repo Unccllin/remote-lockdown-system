@@ -1256,3 +1256,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-065
+  statement: 'The public binary downloads (/api/download/{installer,agent,agent-installer,lockscreen})
+    are a cross-backend contract, not a Worker implementation detail: deploy-agent.sh fetches those URLs,
+    so Express now serves them from the agent binaries directory (platform-aware for agent: .exe on win)
+    with x-content-sha256 over exactly the bytes served, unauthenticated and rate-limited like the Worker
+    because it is the bootstrap path for a machine with no credential. A missing artefact 404s naming
+    the file, the directory searched and the remedy (build on Windows via agent/build.ps1, or set AGENT_BINARIES_DIR);
+    only the three generated .ps1 helpers stay serverless-only. Two audit lessons: resolves() must model
+    path parameters (:x = one segment) or a parameterised router looks like it serves nothing, and an
+    allowlist entry that explains a difference away (''Express serves it differently'') hides a contract
+    — record a missing capability, so the list can shrink.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'live: /api/download/installer 200 with digest, agent per platform 200, agent-installer
+    404 with remedy, deploy.ps1 404 listing names; server 774 (48 suites); audit 8/8 with both branches
+    falsified'
+  source: server/src/routes/downloads.js; server/src/index.js; server/tests/downloads.routes.test.js;
+    scripts/test_cross_surface_contract.py; deploy-agent.sh; serverless/worker.ts
+  asserted: '2026-11-04'
+  last_verified: '2026-11-04'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

@@ -53,25 +53,23 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 209 — 2026-11-03 (why the installers would not download: one missing binary, and an opaque error)
+## Latest session: 210 — 2026-11-03 (/api/download/* was classified "by design" and was not)
 
 ### Fog cleared
 
-- **What was broken**: the host cannot build Windows installers (missing
-  `lockdown-installer.exe`); the API said so, the UI did not.
-- **Whether makensis was the blocker**: no — it is installed outside `PATH`, and
-  `findNsis()` finds it. Only the installer binary is missing.
-- **Whether a released binary could be fetched**: no — the repository has no
-  releases at all.
+- **Why `/api/download/installer` 404'd**: Express never implemented the path, and
+  the audit had reasoned it away rather than recording it as a gap.
+- **Which of these paths are genuinely serverless-only**: only the three generated
+  `.ps1` helpers (the Worker builds them from KV); the four binary routes are now
+  served by both backends.
 
 ### Fog remaining
 
-- **Producing `lockdown-installer.exe` requires a Windows host** (`agent/build.ps1`
-  → PyInstaller). It cannot be built here, and there is nothing to download, so the
-  Windows one-click/`.ps1` installers stay unavailable on this machine until that
-  binary is staged. The notice now says exactly that.
-- `make build` would build it on Windows; the harness has no Windows runner
-  reachable from here (the HP box is the obvious candidate).
+- `deploy-agent.sh` still targets `$WORKER_BASE`; it now *works* against a
+  self-hosted base too, but nothing documents that. Worth a comment or a parameter.
+- `lockdown-installer.exe` is still absent (S209), so `/api/download/agent-installer`
+  answers 404 with the remedy. The Windows one-click/`.ps1` installers stay blocked on
+  that one Windows-built binary.
 - Unchanged: `devices.hostname` uniqueness decision; the S202 objective.
 
 ### Debt items closed
@@ -84,49 +82,55 @@
 
 ### Blockers
 
-- A Windows host to build `lockdown-installer.exe` (the same class of blocker as
-  D-129/D-134, but a *build* dependency rather than a hardware-test one).
+- The Windows-built `lockdown-installer.exe` (same blocker as S209).
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): every test asserted that the
-  download routes *exist*; none asserted that they can *succeed*, and nothing
-  surfaced the prerequisite. The routes' 503s were correct and well-worded — and
-  invisible until someone clicked. A probe the page can call before offering an
-  action is the fix, and it is now tested from both sides.
-- **Layer 2 — context provision** (secondary): the requirement (a Windows-built
-  `lockdown-installer.exe`, plus makensis for the wrapper) was documented nowhere an
-  operator or agent would look; it lived in a route's error string.
+- **Layer 4 — verification feedback** (primary): the audit I built to catch
+  cross-surface drift contained a classification that excused drift. It was only
+  caught because a user hit the URL — exactly the failure mode the audit exists to
+  prevent. The lesson is about *reason quality*: an allowlist entry that explains a
+  difference away is weaker than one that records a missing capability, and only the
+  latter can shrink.
+- **Layer 3 — execution environment** (secondary): the latent `entry` NameError sat in
+  a branch that requires a failure to execute. Falsifying it (forcing an overlap) is
+  now part of how I check a guard.
 
 ### VERIFY
 
-- Live, after restarting the API (the first probe call proved the running process
-  predated the change — it answered without the new fields):
-  `GET /api/installer/agent-version?platform=win` →
-  `installer_available: false, nsis_available: true, windows_installer_ready: false,
-  installer_unavailable_reason: "lockdown-installer.exe is not staged in the server
-  agent binaries directory"`; the Windows ZIP still answers **503** (correct — the
-  binary is genuinely absent), and the Linux ZIP still answers **200**.
-- `server`: **769 passed** (767 + 2); `dashboard`: **216 passed** (214 + 2);
-  eslint clean on both.
-- The two new dashboard tests pin the behaviour that matters: the notice renders and
-  the wizard is disabled when unavailable, and the wizard stays **enabled** when the
-  probe fails (unknown ≠ unavailable).
+- Live against the restarted API, including the reported URL:
+  - `GET /api/download/installer` → **200**, 18 628 686 bytes, `x-content-sha256:
+    4b1be636076bc891…`
+  - `GET /api/download/agent?platform=linux` → **200**, 18 272 456 bytes;
+    `?platform=win` → **200**, 15 636 034 bytes
+  - `GET /api/download/agent-installer` → **404** naming
+    `lockdown-installer.exe`, the directory searched, and `AGENT_BINARIES_DIR`
+  - `GET /api/download/deploy.ps1` → **404** listing
+    `agent, agent-installer, installer, lockscreen` and stating the generated
+    helpers are serverless-only
+- `server`: **774 passed** (48 suites), eslint clean.
+- `scripts/test_cross_surface_contract.py`: **8 passed**; falsified both new branches
+  (a forced overlap prints the offending entry; a lowered floor of router coverage
+  fails the routed-not-produced assertion).
+- `make test-scripts`: all suites green.
 
 ### Session artifacts
 
-- Changed: `server/src/routes/installer.js`,
-  `server/tests/installer.routes.test.js`, `dashboard/src/pages/EnrollPage.jsx`,
-  `dashboard/tests/EnrollPage.test.jsx`.
-- Commit: `f19852e`.
+- Changed: `server/src/routes/downloads.js` (new), `server/src/index.js`,
+  `server/tests/downloads.routes.test.js` (new),
+  `scripts/test_cross_surface_contract.py`.
+- Commit: `b39159d`. (Its message says "S211" for this session's audit reference; the
+  recorded history shows the previous session was 209, so this is 210 — noted here
+  because commit messages cannot be edited retroactively without rewriting history.)
 
 ### Next session opening
 
-Decide where `lockdown-installer.exe` comes from, because it is the last thing
-blocking the Windows installers on a self-hosted server: either build it on the HP
-box and stage it (`agent/build.ps1`, then copy to `agent/dist`), or add it to the
-release pipeline's staged assets so a self-hosted operator can fetch it. Then take
-the `devices.hostname` uniqueness decision.
+Two small honesty items before anything new: document (or parameterise) that
+`deploy-agent.sh` can target a self-hosted base now that `/api/download/*` exists on
+both backends, and record `lockdown-installer.exe` as the single artefact blocking
+self-hosted Windows installers — ideally by adding it to the release assets or
+staging it from the HP box, whichever is cheaper. Then the `devices.hostname`
+uniqueness decision.
 
 ---
 
