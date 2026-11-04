@@ -1305,3 +1305,27 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-067
+  statement: 'A generated installer''s server_url must be an address the TARGET can reach, not the admin
+    browser''s Host. Express derived it from req.get(''host''), which is http://localhost:3001 when the
+    dashboard is opened on the server itself — so the artefact was unusable on any other machine and the
+    enrolment claim never left the target (S212: the API log had zero requests from any non-local address
+    while the operator saw ''token rejected''). server/src/routes/installer.js now has one publicServerUrl(req)
+    helper for both install paths: PUBLIC_SERVER_URL overrides it (trailing slash stripped), otherwise
+    the request host is used and a loopback value logs a warning naming the env var and the consequence.
+    This host''s LAN address is 192.168.124.65:3001 and the API binds *:3001; Windows Firewall on the
+    server is the next unverified failure mode.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'API log: 133 requests all ::1, 0 non-local; ZIP config now bakes http://192.168.124.65:3001;
+    curl to that address 200; server 779 (48 suites)'
+  source: server/src/routes/installer.js publicServerUrl; server/tests/installer.helpers.test.js; server/.env.example;
+    agent/installer.py enroll_device_with_token
+  asserted: '2026-11-04'
+  last_verified: '2026-11-04'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

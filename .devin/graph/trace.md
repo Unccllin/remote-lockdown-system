@@ -9089,3 +9089,118 @@ or record deliberately that the two backends differ. Then the `devices.hostname`
 uniqueness decision, still deferred.
 
 ---
+
+---
+
+## Session 212 — 2026-11-03 ("token still refuses"; the server log said nobody called it)
+
+### RULE-ZERO
+
+**Read**: the running API's request log (`bg_logs` on the server task, then the full
+output file); `agent/installer.py` (`enroll_device_with_token`); `server/src/routes/
+installer.js` (how the generated installer's `server_url` is derived);
+`dashboard/vite.config.js` (proxy); the host's listening sockets and addresses.
+
+**Finding 1 — the installer never reached this server.** The server log for the
+current API process contained **zero requests from any non-local address**; every
+line was `"remoteAddress":"::1"`. The three `POST /api/enroll/claim` entries in it
+were my own curl reproductions from S211, not the operator's. So "token refused" was
+not a token problem at all.
+
+**Finding 2 — the generated installer baked `localhost`.** `server/src/routes/
+installer.js` derived the baked `server_url` from `req.get('host')`, which is
+`http://localhost:3001` whenever the dashboard is opened on the server itself. On the
+target machine `localhost` is the target, so the claim never left the box. Nothing
+in the system said so: not the installer, not the API, not the browser.
+
+**Finding 3 — there was no way to configure the public URL.** No
+`PUBLIC_SERVER_URL`/`PUBLIC_URL` override existed, so a self-hosted server reached
+over a LAN address could not generate a usable installer — a structural gap, not a
+typo.
+
+### IMPLEMENT
+
+- `server/src/routes/installer.js` — one `publicServerUrl(req)` helper used by both
+  install paths (ZIP and NSIS): `PUBLIC_SERVER_URL` wins (trailing slash stripped),
+  otherwise the request host is used **and a loopback value logs a warning** naming
+  the env var and the consequence ("this installer will only work on the server
+  itself"). The warning is the durable part: the cause becomes visible in the server
+  log instead of only at the target.
+- `server/.env.example` — documents `PUBLIC_SERVER_URL` with the reasoning.
+- `server/.env` (local, gitignored) — `PUBLIC_SERVER_URL=http://192.168.124.65:3001`,
+  this host's LAN address.
+- Tests: 3 for the helper (override wins and strips a trailing slash; request-host
+  fallback; the loopback cases that caused this).
+
+### Fog cleared
+
+- **Why enrolment "refused the token"**: the claim never arrived; the installer was
+  pointed at a URL that is only valid on the server itself.
+- **Whether the API was reachable over the LAN**: yes — it listens on `*:3001` and
+  `http://192.168.124.65:3001/api/health` answers from this host's own LAN address.
+- **Whether the fix works**: a generated linux ZIP now carries
+  `"server_url": "http://192.168.124.65:3001"`.
+
+### Fog remaining
+
+- **Reachability from the target is unverified.** The next failure mode is Windows
+  Firewall blocking inbound TCP 3001 on this host, and nothing here can prove
+  otherwise; `Test-NetConnection 192.168.124.65 -Port 3001` on the target answers it
+  in one line.
+- **The baked URL is still the wrong default for most self-hosted deployments.** A
+  warning is honest, but an installer generated while an admin browses `localhost`
+  is unusable elsewhere by construction; a bootstrap-time or first-run prompt for the
+  public URL would be better than an env var an operator must know about.
+- A partially-failed install still spends its token (S211's open design question).
+- Unchanged: `devices.hostname` uniqueness decision; the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- Verification from the target machine (either the operator runs one connectivity
+  command, or SSH access to the target for the CLI installer path).
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): every installer test asserted that
+  the generated file *contains* a `server_url`; none asserted that the URL is usable
+  by the machine the installer is for. The API could therefore produce an artefact
+  that is unusable anywhere but the server, and all tests passed.
+- **Layer 2 — context provision**: the deployment requirement (targets need an
+  address they can reach; the admin's browser address is not it) was nowhere in the
+  code or docs until this session.
+
+### VERIFY
+
+- The log, quantified: 133 requests in the API process, **all** `::1`; 3 claim
+  attempts, all mine; **0** from any other address.
+- `GET /api/installer/<device>?platform=linux` → 200, 27 320 740 bytes; the ZIP's
+  `config.json` now reads `"server_url": "http://192.168.124.65:3001"`.
+- `curl http://192.168.124.65:3001/api/health` → 200 (the API binds `*:3001`).
+- `server`: **779 passed** (48 suites; +3), eslint clean.
+- `make graph-check`: all invariants pass.
+
+### Session artifacts
+
+- Changed: `server/src/routes/installer.js`,
+  `server/tests/installer.helpers.test.js`, `server/.env.example` (and the local
+  `server/.env`, gitignored).
+- Commit: `e7eca96`.
+
+### Next session opening
+
+Get one enrolment to succeed end-to-end from a real second machine, because that is
+the only evidence that closes this thread: from the target, confirm
+`Test-NetConnection 192.168.124.65 -Port 3001` (a firewall answer, not a code one),
+then run the installer with a fresh token and read the server log for the claim.
+Anything that still fails after reachability is confirmed is a code problem worth a
+session of its own.
+
+---

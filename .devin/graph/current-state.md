@@ -53,25 +53,28 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 211 — 2026-11-03 ("token rejected" was two defects and one guess)
+## Latest session: 212 — 2026-11-03 ("token still refuses"; the server log said nobody called it)
 
 ### Fog cleared
 
-- **What "token rejected" meant**: either an unknown token or a spent one; the
-  message could not be acted on because it named both.
-- **Whether the dev origin broke enrolment**: no — Vite proxies `/api`.
-- **Whether re-enrolling a known machine failed**: it does now succeed; before, the
-  server answered 200 and both clients called it an error.
+- **Why enrolment "refused the token"**: the claim never arrived; the installer was
+  pointed at a URL that is only valid on the server itself.
+- **Whether the API was reachable over the LAN**: yes — it listens on `*:3001` and
+  `http://192.168.124.65:3001/api/health` answers from this host's own LAN address.
+- **Whether the fix works**: a generated linux ZIP now carries
+  `"server_url": "http://192.168.124.65:3001"`.
 
 ### Fog remaining
 
-- **A partially-failed install still spends the token.** The claim is the *first*
-  step of the installer, so if a later step fails (agent download, service
-  registration) the operator must mint a new token for every retry. Two designs
-  worth considering: make the claim idempotent for the same `hardware_uuid` within
-  the token's TTL, or move the claim to the last step. The Worker has the same
-  behaviour, so this is a product decision, not a bug.
-- The 15-minute TTL is unchanged (it matches the Worker's contract).
+- **Reachability from the target is unverified.** The next failure mode is Windows
+  Firewall blocking inbound TCP 3001 on this host, and nothing here can prove
+  otherwise; `Test-NetConnection 192.168.124.65 -Port 3001` on the target answers it
+  in one line.
+- **The baked URL is still the wrong default for most self-hosted deployments.** A
+  warning is honest, but an installer generated while an admin browses `localhost`
+  is unusable elsewhere by construction; a bootstrap-time or first-run prompt for the
+  public URL would be better than an env var an operator must know about.
+- A partially-failed install still spends its token (S211's open design question).
 - Unchanged: `devices.hostname` uniqueness decision; the S202 objective.
 
 ### Debt items closed
@@ -84,42 +87,44 @@
 
 ### Blockers
 
-- None for this fix.
+- Verification from the target machine (either the operator runs one connectivity
+  command, or SSH access to the target for the CLI installer path).
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): S205's tests asserted that a used
-  token is refused (`401`), which is true and which is exactly why the *merged*
-  message survived — the test never asked what the message said, and no test covered
-  the 200 re-association path at all. The suite tested the mechanism and not the
-  operator's next step.
-- **Layer 2 — context provision**: the single-use contract was documented in the
-  route's own comment, but nothing told the installer (or the page) that a retry
-  needs a fresh token.
+- **Layer 4 — verification feedback** (primary): every installer test asserted that
+  the generated file *contains* a `server_url`; none asserted that the URL is usable
+  by the machine the installer is for. The API could therefore produce an artefact
+  that is unusable anywhere but the server, and all tests passed.
+- **Layer 2 — context provision**: the deployment requirement (targets need an
+  address they can reach; the admin's browser address is not it) was nowhere in the
+  code or docs until this session.
 
 ### VERIFY
 
-- Reproduced before the fix: mint → claim **201**; same token again → **401
-  "Invalid or already-used enrollment token"**; a fresh token for an enrolled
-  `hardware_uuid` → **200 reassociated: true** (which the clients called a failure).
-- After: server **776 passed** (48 suites; +2 and one assertion deliberately
-  updated), agent **770 passed** (+2), `ruff check` + `ruff format --check` clean.
+- The log, quantified: 133 requests in the API process, **all** `::1`; 3 claim
+  attempts, all mine; **0** from any other address.
+- `GET /api/installer/<device>?platform=linux` → 200, 27 320 740 bytes; the ZIP's
+  `config.json` now reads `"server_url": "http://192.168.124.65:3001"`.
+- `curl http://192.168.124.65:3001/api/health` → 200 (the API binds `*:3001`).
+- `server`: **779 passed** (48 suites; +3), eslint clean.
 - `make graph-check`: all invariants pass.
 
-### Next session artifacts
+### Session artifacts
 
-- Changed: `server/src/routes/enroll.js`, `server/tests/enroll.routes.test.js`,
-  `agent/installer.py`, `agent/installer_gui.py`, `agent/tests/test_installer.py`.
-- Commit: `c3bf738`.
+- Changed: `server/src/routes/installer.js`,
+  `server/tests/installer.helpers.test.js`, `server/.env.example` (and the local
+  `server/.env`, gitignored).
+- Commit: `e7eca96`.
 
 ### Next session opening
 
-Decide the token-retry question this session surfaced: a partially-failed install
-still spends its token, so the operator needs a new one per attempt. Either make the
-claim idempotent for the same `hardware_uuid` within the token's TTL, or move the
-claim to the last step of the installer — and apply the same decision to the Worker,
-or record deliberately that the two backends differ. Then the `devices.hostname`
-uniqueness decision, still deferred.
+Get one enrolment to succeed end-to-end from a real second machine, because that is
+the only evidence that closes this thread: from the target, confirm
+`Test-NetConnection 192.168.124.65 -Port 3001` (a firewall answer, not a code one),
+then run the installer with a fresh token and read the server log for the claim.
+Anything that still fails after reachability is confirmed is a code problem worth a
+session of its own.
 
 ---
 
