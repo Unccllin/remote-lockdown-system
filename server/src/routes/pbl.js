@@ -655,7 +655,16 @@ router.get('/policy', requireAuth, requireRole('operator'), async (req, res) => 
     // Fallback: just return the latest
     if (latest) versions.push(latest);
   }
-  res.json({ latest_version: latest, versions });
+  // A firmware GET /v1/policy/latest synthesises a signed default policy (version 1)
+  // when the store is empty, so reporting "nothing here" contradicts what devices
+  // actually receive — the dashboard then showed an empty policy page while serving a
+  // downloadable blob (S229). Report the effective policy and say where it came from.
+  const stored = Boolean(latest) || versions.length > 0;
+  res.json({
+    latest_version: stored ? latest : '1',
+    versions: stored ? versions : ['1'],
+    source: stored ? 'stored' : 'default',
+  });
 });
 
 // ---------------------------------------------------------------------------

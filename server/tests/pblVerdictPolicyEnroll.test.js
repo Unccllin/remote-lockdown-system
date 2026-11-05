@@ -537,6 +537,37 @@ describe('D-209: Policy version list endpoint', () => {
     expect(resp.body.latest_version).toBe('5');
   });
 
+  it('GET /policy reports the built-in default when nothing is stored', async () => {
+    // /v1/policy/latest synthesises a signed default for bootstrapping, so the list must
+    // not claim the store is empty while that blob is downloadable (S229).
+    const app = createApp(createEnv());
+
+    const resp = await request(app)
+      .get('/v1/policy')
+      .set('Authorization', 'Bearer ' + makeToken());
+
+    expect(resp.status).toBe(200);
+    expect(resp.body.source).toBe('default');
+    expect(resp.body.latest_version).toBe('1');
+    expect(resp.body.versions).toEqual(['1']);
+  });
+
+  it('GET /policy reports stored versions as stored', async () => {
+    const env = createEnv();
+    await env.LOCKDOWN_KV.put('pbl_policy:latest_version', '7');
+    await env.LOCKDOWN_KV.put('pbl_policy:7', Buffer.from('v7').toString('base64'));
+    const app = createApp(env);
+
+    const resp = await request(app)
+      .get('/v1/policy')
+      .set('Authorization', 'Bearer ' + makeToken());
+
+    expect(resp.status).toBe(200);
+    expect(resp.body.source).toBe('stored');
+    expect(resp.body.latest_version).toBe('7');
+    expect(resp.body.versions).toContain('7');
+  });
+
   it('GET /policy returns 401 without auth', async () => {
     const app = createApp();
     const resp = await request(app).get('/v1/policy');

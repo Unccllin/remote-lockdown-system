@@ -22,6 +22,10 @@ function PblPolicyPage() {
   const [uploadFile, setUploadFile] = useState(null);
   const [policyVersions, setPolicyVersions] = useState([]);
   const [policyLatestVersion, setPolicyLatestVersion] = useState(null);
+  // 'stored' or 'default'. A firmware GET /v1/policy/latest synthesises a signed
+  // default policy when the store is empty, so the page must not claim there is no
+  // policy while that blob is downloadable (S229).
+  const [policySource, setPolicySource] = useState('stored');
 
   // D-209: Form-based policy creation state
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -91,6 +95,7 @@ function PblPolicyPage() {
       const resp = await pblPolicy.list();
       setPolicyVersions(resp.data.versions || []);
       setPolicyLatestVersion(resp.data.latest_version || null);
+      setPolicySource(resp.data.source === 'default' ? 'default' : 'stored');
     } catch {
       // Policy list endpoint may not be available in all environments
     }
@@ -690,10 +695,23 @@ function PblPolicyPage() {
         >
           Refresh
         </button>
+        {policySource === 'default' && (
+          <div
+            className="mb-3 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded p-2"
+            data-testid="policy-default-notice"
+          >
+            Devices are receiving the <strong>built-in default policy</strong> (version 1).
+            Nothing has been uploaded yet, so this is what firmware validates against until
+            you store a signed policy below.
+          </div>
+        )}
         {policyVersions.length > 0 ? (
           <div className="space-y-1">
             <div className="text-sm text-gray-500">
               Latest: <code className="bg-gray-200 px-1 rounded">{policyLatestVersion || '—'}</code>
+              {policySource === 'default' && (
+                <span className="ml-2 text-xs text-amber-700">(built-in default)</span>
+              )}
             </div>
             <ul className="text-sm font-mono">
               {policyVersions.map((v) => (
