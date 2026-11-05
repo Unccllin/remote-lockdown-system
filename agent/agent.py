@@ -3709,6 +3709,32 @@ def _start_watchdog() -> subprocess.Popen | None:
     return None
 
 
+def _service_provides_restart() -> bool:
+    """True when the agent runs under the Windows service that already restarts it.
+
+    The service is registered with SCM crash recovery
+    (restart/5000/10000/30000, reset daily), so a second watchdog process would duplicate
+    the mechanism — and it made every healthy service install log
+    "Watchdog not running — attempting restart" on each poll (S226). Interactive runs
+    (no service) keep the watchdog: there the SCM is not there to help.
+    """
+    if platform.system() != "Windows":
+        return False
+    try:
+        ctx = _detect_session_context()
+        if not ctx.get("is_session_zero"):
+            return False
+        result = subprocess.run(
+            ["sc", "query", "LockdownAgent"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (subprocess.SubprocessError, OSError, AttributeError):
+        return False
+
+
 def check_watchdog_health() -> None:
     """Check if the watchdog is alive; restart it if not.
 
@@ -3717,9 +3743,14 @@ def check_watchdog_health() -> None:
     check — this is the "mutual watchdog" pattern. Killing one triggers
     the other to restart it.
     """
-    if not _is_watchdog_running():
-        log.warning("Watchdog not running — attempting restart")
-        _start_watchdog()
+    if _is_watchdog_running():
+        return
+    if _service_provides_restart():
+        # Normal for a service install: the SCM restarts the agent if it exits.
+        log.debug("No watchdog process — the Windows service provides restart")
+        return
+    log.warning("Watchdog not running — attempting restart")
+    _start_watchdog()
 
 
 def _run_tamper_check(cfg: dict, current_status: str) -> None:
