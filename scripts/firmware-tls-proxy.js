@@ -56,9 +56,32 @@ if (!['http:', 'https:'].includes(targetUrl.protocol)) {
   process.exit(2);
 }
 
-const server = https.createServer(
-  { cert: fs.readFileSync(certPath), key: fs.readFileSync(keyPath) },
-  (req, res) => {
+// EDK2's TCP/TLS stack is old and opinionated. S232 proved the firmware works against a
+// Python ssl server; against Node's defaults it completes the handshake and then resets
+// before sending the request (S234). These knobs exist so the peer can be matched to what
+// the firmware expects, one hypothesis at a time:
+//   --tls12-only        cap at TLSv1.2 (EDK2 has no TLS 1.3)
+//   --cipher <name>     pin the suite the firmware negotiated
+//   --no-tickets        disable session tickets / resumption
+const tlsOptions = {
+  cert: fs.readFileSync(certPath),
+  key: fs.readFileSync(keyPath),
+};
+if (process.argv.includes('--tls12-only')) {
+  tlsOptions.maxVersion = 'TLSv1.2';
+  tlsOptions.minVersion = 'TLSv1.2';
+}
+const cipherArg = arg('cipher');
+if (cipherArg) {
+  tlsOptions.ciphers = cipherArg;
+  tlsOptions.honorCipherOrder = true;
+}
+if (process.argv.includes('--no-tickets')) {
+  tlsOptions.sessionTimeout = 0;
+  tlsOptions.ticketKeys = undefined;
+}
+
+const server = https.createServer(tlsOptions, (req, res) => {
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
