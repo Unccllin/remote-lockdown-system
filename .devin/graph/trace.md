@@ -10368,3 +10368,104 @@ check to the same build so a locked device stops re-issuing `tsdiscon` into a se
 that is already disconnected.
 
 ---
+
+---
+
+## Session 223 — 2026-11-05 (dashboard cleaned; FRANKENSTEIN recorded as the first device)
+
+### RULE-ZERO
+
+**Read**: the device table and its schema on the live server, the dependent tables that
+carry `device_id`, the dashboard's `/api/devices` response, and the hardware section of
+`AGENTS.md`.
+
+### FINDING
+
+The dashboard held five rows, four of which were artefacts of this debugging effort:
+
+| Hostname | Last check-in | Verdict |
+|---|---|---|
+| `HP-ELITEBOOK-840-G7` | 2026-08-21 | stale test enrolment (months old) |
+| `REPRO-REASSOC` | 2026-08-24 | synthetic (re-association repro) |
+| `TEST-HOST-01` | never | synthetic |
+| `REPRO-01` | never | synthetic |
+| **`FRANKENSTEIN`** | **2026-11-05 08:21** | the only live device |
+
+Two `device_efs_certs` rows were also orphaned — their `device_id` values matched no
+device.
+
+### DONE
+
+- Deleted the four stale/synthetic devices with their dependents: `commands` 7 → 0,
+  `encryption_keys` 2 → 0, `audit_log` 50 → 24, `location_reports`/`hw_test_artifacts`/
+  `bios_passwords` already empty, and the 2 orphan `device_efs_certs` rows removed.
+- Verified through the API the UI uses: `GET /api/devices` → **1 device**
+  (`FRANKENSTEIN`, active, hw `113A3A7C…`, last check-in `2026-11-05 08:21:31`).
+- Recorded FRANKENSTEIN in `AGENTS.md` as the first production device, with its identity
+  (hostname, OS build, hardware UUID, serial, reported MAC, device id), the service-based
+  install, the lab server URL, and the evidence that matters: it starts at boot with
+  nobody logged on, runs windowless in session 0, and the installer's AC power policy
+  keeps it reachable.
+- The same entry names what is still known-wrong on it: two agent processes (no
+  single-instance guard in the frozen binary), no TPM (DPAPI fallback),
+  `tamper_protection` not bundled, and the port-proxy that must be re-created after a WSL
+  restart.
+
+### Fog cleared
+
+- **What the dashboard was showing**: four debugging artefacts around one real device.
+- **Which device is the reference**: FRANKENSTEIN, now written down with identifiers
+  rather than prose.
+
+### Fog remaining
+
+- **Stacked behind one Windows build** (unchanged from S220–S222): `lockdown-service.exe`,
+  the agent's single-instance guard, an agent-side power request, and the WSL/port-proxy
+  note above.
+- **The first device is reachable only on the LAN** through the Windows port-proxy; a
+  remote operator still needs the tailnet path or a public URL.
+- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
+  the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None. The product now has one clean, documented, service-installed device.
+
+### Failure attribution
+
+- **Layer 5 — state management** (primary): the synthetic rows existed because each
+  debugging session created a device and never cleaned up. A "delete the row you created"
+  habit, or a `dev:` hostname convention the dashboard could filter, would have kept this
+  from accumulating across nine sessions.
+- **Layer 2 — context provision**: the machine's identity lived only in chat until now;
+  `AGENTS.md` names it with UUID, serial and MAC so a later session does not have to
+  rediscover it.
+
+### VERIFY
+
+- `GET /api/devices` → 1 device (`FRANKENSTEIN`, active, last check-in 08:21:31).
+- Table counts after cleanup: `commands` 0, `encryption_keys` 0, `audit_log` 24,
+  `device_efs_certs` 0 (orphans removed).
+- `AGENTS.md` gained the first-device section (line 579) above the historical HP record.
+- No code changes; suites unchanged (agent 801, server 793, dashboard 220).
+
+### Session artifacts
+
+- Changed: `AGENTS.md`; server database rows (destructive, intentional, verified above).
+
+### Next session opening
+
+One Windows build to clear the queue: `lockdown-service.exe` (so the service works
+without Python), the agent's single-instance guard, an agent-side power request, and the
+guardian's WTS session-state check — then re-run the boot test on FRANKENSTEIN to confirm
+one process starts unattended.
+
+---

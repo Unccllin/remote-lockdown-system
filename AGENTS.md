@@ -576,6 +576,39 @@ The harness is at `agent/hw_test_harness.py` (v2.0).
 - ~~No timeout protection~~ → per-test timeout with threading
 - ~~No test for covert tracking (E-TRACK)~~ → tracked via E-INTEGRATION
 
+### First production device — FRANKENSTEIN (enrolled 2026-11-05)
+
+The first machine enrolled as a **service-based** install, and the reference
+configuration for every later one:
+
+| Field | Value |
+|---|---|
+| Hostname | `FRANKENSTEIN` |
+| OS | Windows 11 Pro 10.0.26300 (AMD64) |
+| Hardware UUID | `113A3A7C-FD08-4D6F-B1A7-917C60531D3B` |
+| Serial | `5CG2422FJR` |
+| MAC (reported) | `BD:8C:14:74:A3:51` |
+| Device id | `45108abcc29625addf14b2f2ff78d0a2` |
+| Install | Windows service `LockdownAgent`, `LocalSystem`, auto-start |
+| Server URL | `http://192.168.1.43:3001` (lab; plain HTTP ⇒ `verify_tls: false`) |
+
+Evidence that matters:
+
+- The service starts the agent **at boot with nobody logged on** (verified by reboot:
+  uptime 63 s, console session disconnected, service `RUNNING`, agent pids in session 0,
+  server recorded `last_checkin` 43 s after boot).
+- Installed in session 0 with no window: every process has an empty `MainWindowTitle`.
+- The AC power policy is set to never sleep/hibernate by the installer, because the
+  Balanced scheme hibernated after one hour and took the device out of reach.
+- The dashboard holds **only this device**; the four stale test rows
+  (`HP-ELITEBOOK-840-G7`, `REPRO-01`, `REPRO-REASSOC`, `TEST-HOST-01`) and their
+  dependents were removed on 2026-11-05.
+
+Known on this machine: two agent processes start (no single-instance guard in the frozen
+binary), no TPM (DPAPI fallback), and `tamper_protection` is skipped because the module is
+not bundled. The agent is reachable only over the LAN through a Windows port-proxy
+(`0.0.0.0:3001 → <WSL address>:3001`), which must be re-created after a WSL restart.
+
 ### Hardware testing status (as of 2026-08-28)
 - HP machine (DESKTOP-RUDJGI6) successfully enrolled via one-click installer
 - Hardware UUID: B1198844-32B1-419B-B6BB-07371BE2DDD0, MAC: 74:70:FD:17:B7:67

@@ -1595,3 +1595,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-078
+  statement: 'The dashboard''s device list must contain only real devices: on 2026-11-05 the live server
+    held five rows — FRANKENSTEIN (live, last check-in 2026-11-05 08:21) plus four artefacts of this debugging
+    effort (HP-ELITEBOOK-840-G7 from August, REPRO-01, REPRO-REASSOC, TEST-HOST-01) and two orphaned device_efs_certs
+    rows. The four were deleted with their dependents (commands 7->0, encryption_keys 2->0, audit_log
+    50->24) and GET /api/devices now returns exactly one. FRANKENSTEIN is the first production device
+    and its identity is recorded in AGENTS.md: Windows 11 Pro 10.0.26300, hardware UUID 113A3A7C-FD08-4D6F-B1A7-917C60531D3B,
+    serial 5CG2422FJR, reported MAC BD:8C:14:74:A3:51, device id 45108abcc29625addf14b2f2ff78d0a2, installed
+    as service LockdownAgent (LocalSystem, auto-start), server URL http://192.168.1.43:3001 with verify_tls
+    false, reachable over the LAN via a Windows port-proxy that must be re-created after a WSL restart;
+    known on it: two agent processes (no single-instance guard), no TPM (DPAPI fallback), tamper_protection
+    not bundled.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'executed on the live DB: 4 devices + dependents deleted (counts printed), orphan efs certs
+    removed, GET /api/devices returns 1 (FRANKENSTEIN, checked in 08:21:31); AGENTS.md records its identity'
+  source: server/lockdown.db (devices, commands, encryption_keys, audit_log, device_efs_certs); GET /api/devices
+    response; AGENTS.md hardware section
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

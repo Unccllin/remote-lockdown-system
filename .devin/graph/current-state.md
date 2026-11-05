@@ -53,30 +53,23 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 222 — 2026-11-05 ("the screen times out after a few seconds" was the agent)
+## Latest session: 223 — 2026-11-05 (dashboard cleaned; FRANKENSTEIN recorded as the first device)
 
 ### Fog cleared
 
-- **Why the screen went away**: the lock guardian disconnecting the console session, not
-  a power or saver setting.
-- **Why it persisted across reboots**: the latch lived in a file, and startup trusted it
-  without consulting the server.
-- **Whether data was at risk**: no — only the agent's own `README.txt` was in the
-  lockdown folder.
+- **What the dashboard was showing**: four debugging artefacts around one real device.
+- **Which device is the reference**: FRANKENSTEIN, now written down with identifiers
+  rather than prose.
 
 ### Fog remaining
 
-- **The guardian still issues `tsdiscon` every tick while locked**, even when the console
-  session is already disconnected. The right fix is a WTS session-state check
-  (`WTSQuerySessionInformationW`), which needs ctypes work **and a rebuild**; it is
-  recorded rather than half-done in a frozen binary.
-- **The agent has no single-instance guard** (two processes still start; S220).
-- **The agent holds no power request**; reachability depends on the `powercfg` policy set
-  by the installer (S221).
-- Frozen `lockdown-service.exe` still needed for targets without Python (S220).
-- A corrupt deadman file is treated as `stolen`, which is fail-secure by design — but it
-  now costs at most one check-in instead of a permanent lock, because the server's status
-  can clear it.
+- **Stacked behind one Windows build** (unchanged from S220–S222): `lockdown-service.exe`,
+  the agent's single-instance guard, an agent-side power request, and the WSL/port-proxy
+  note above.
+- **The first device is reachable only on the LAN** through the Windows port-proxy; a
+  remote operator still needs the tailnet path or a public URL.
+- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
+  the S202 objective.
 
 ### Debt items closed
 
@@ -88,39 +81,36 @@
 
 ### Blockers
 
-- None. The live machine is usable and enrolled.
+- None. The product now has one clean, documented, service-installed device.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the agent logged its re-locking every ten
-  seconds, in plain text, and nobody was reading that log. A health signal — "locked while
-  the server says active" — would have surfaced this without the user noticing their
-  screen first.
-- **Layer 2 — context provision**: "the sentinel is authoritative" was an implicit
-  assumption in three code paths. It is now explicit that the *server* is authoritative
-  and the sentinel is a cache of a previous decision.
+- **Layer 5 — state management** (primary): the synthetic rows existed because each
+  debugging session created a device and never cleaned up. A "delete the row you created"
+  habit, or a `dev:` hostname convention the dashboard could filter, would have kept this
+  from accumulating across nine sessions.
+- **Layer 2 — context provision**: the machine's identity lived only in chat until now;
+  `AGENTS.md` names it with UUID, serial and MAC so a later session does not have to
+  rediscover it.
 
 ### VERIFY
 
-- Before: D-007 `tsdiscon` lines every ~10 s (11:13:28 … 11:16:00); dashboard status
-  `active`; sentinel `{"locked": true, "deadman": true, "tamper_detected": true,
-  "original_last_seen": "corrupt"}`; `lockdown_folder` = 1 file (`README.txt`).
-- Remediation: service stopped, `.locked`/`.deadman`/`.heartbeat` removed, service
-  started → `STATE: 4 RUNNING`, console session `NEWARK USER` **Active**, no D-007 entries
-  after 11:16:28, agent polling (`Adaptive polling: 30s -> 300s (status=active)`).
-- Tests: agent **801** (+7), server 793, dashboard 220; ruff clean.
-- Commit: `28daffe`.
+- `GET /api/devices` → 1 device (`FRANKENSTEIN`, active, last check-in 08:21:31).
+- Table counts after cleanup: `commands` 0, `encryption_keys` 0, `audit_log` 24,
+  `device_efs_certs` 0 (orphans removed).
+- `AGENTS.md` gained the first-device section (line 579) above the historical HP record.
+- No code changes; suites unchanged (agent 801, server 793, dashboard 220).
 
 ### Session artifacts
 
-- Changed: `agent/agent.py`, `agent/tests/test_lock_reconcile.py` (new).
+- Changed: `AGENTS.md`; server database rows (destructive, intentional, verified above).
 
 ### Next session opening
 
-Three agent-side changes now sit behind one Windows build: `lockdown-service.exe`, the
-single-instance guard, and a real power request. Add the guardian's WTS session-state
-check to the same build so a locked device stops re-issuing `tsdiscon` into a session
-that is already disconnected.
+One Windows build to clear the queue: `lockdown-service.exe` (so the service works
+without Python), the agent's single-instance guard, an agent-side power request, and the
+guardian's WTS session-state check — then re-run the boot test on FRANKENSTEIN to confirm
+one process starts unattended.
 
 ---
 
