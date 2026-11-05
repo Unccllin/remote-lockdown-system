@@ -53,30 +53,26 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 218 — 2026-11-05 (the machine's scheduler is broken; the Run key is what works)
+## Latest session: 219 — 2026-11-05 (why nothing survives a logon: the install dir is read-only to users)
 
 ### Fog cleared
 
-- **Why nothing survived a reboot test**: the machine's scheduler is broken; it is not
-  our task definition, principal, action, or repetition.
-- **Why a remote install left no daemon**: the SSH session's process tree is killed on
-  disconnect.
-- **What still gives persistence here**: the HKLM Run key.
+- **Why the agent vanished without a log line**: it could not create its log file.
+  Nothing writes, nothing to read — consistent with `Users:(RX)` on `agent.log`.
+- **Why the machine looked "auto-logged-in"**: the console account `NEWARK USER` is a
+  different local user from the SSH account `user`; the installer ran as `user`, so the
+  install is private to that account in practice even though the path is shared.
 
 ### Fog remaining
 
-- **The scheduler defect is environmental and unfixed**: `sfc`/`DISM`/reboot or a
-  different machine would show whether it is a corrupted component store (this is a
-  Windows 11 build 26300 insider-era image). Not something the installer can repair.
-- **Logon-start is unverified** because confirming it needs a logoff/reboot, which
-  would drop the console session ("NEWARK USER" on session 5) that the machine is
-  sitting at.
-- **On a healthy machine the task path is still unproven** — every task-based result we
-  have comes from this broken scheduler.
-- `TAMPER DETECTED … service_missing=True` (agent expects a service; we register a
-  task) still needs an agent rebuild; no TPM on this box (DPAPI fallback).
-- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
-  the S202 objective.
+- **Fixing it is a product decision, not a bug fix**: either (a) grant the interactive
+  user modify rights on `C:\ProgramData\LockdownAgent`, (b) run the agent as SYSTEM
+  through a working scheduler, or (c) install a real Windows service — which is what the
+  agent's own tamper check already expects (`service_missing=True` on every healthy
+  install). Option (c) is the honest answer to "runs at boot without a logon".
+- The scheduler defect on this image remains unaddressed (`sfc`/`DISM`/another machine).
+- Unchanged: `TAMPER DETECTED service_missing=True`; no TPM (DPAPI fallback);
+  `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness; S202 objective.
 
 ### Debt items closed
 
@@ -88,41 +84,37 @@
 
 ### Blockers
 
-- Verifying unattended start requires either a working scheduler on that machine or a
-  logoff/reboot, which is the operator's call.
+- A product decision on the persistence mechanism (permissions grant vs SYSTEM task vs
+  service).
 
 ### Failure attribution
 
-- **Layer 3 — execution environment** (primary): the machine's Task Scheduler is
-  non-functional and reports success while doing nothing. Two sessions were spent
-  attributing that to our task definition.
-- **Layer 4 — verification feedback**: the control probe (`cmd /c echo > file`) is what
-  proved it — a five-second experiment that should have come before touching the task
-  at all.
+- **Layer 3 — execution environment** (primary): a read-only install directory plus a
+  broken scheduler means no persistence path exists on this machine, and neither
+  condition is visible from the code or the tests.
+- **Layer 4 — verification feedback**: the ACL check (`icacls`) took seconds and
+  explained a symptom two sessions had attributed to the scheduler alone.
 
 ### VERIFY
 
-- Control probe: task ran (`Last Result: 0`), **no file** → scheduler non-functional.
-- `ONLOGON` task in the user's context: same, no process.
-- wscript + VBS: agent started (pid 14140) and was gone 30 s after the SSH session
-  ended.
-- Run key present and correct (command string quoted above).
-- Installer now warns on the broken scheduler and completes: `OK: installed`.
-- Suites: agent **787** (+1), server 793, dashboard 220; ruff + eslint clean.
-- Commits: `65422d0`, `cf45d89`.
+- After reboot (uptime 84 s, console `NEWARK USER` id 1 active): `tasklist` → no agent;
+  `agent.log` → no line since the previous manual start; no launch-related event.
+- `icacls` output quoted above shows `Users:(RX)` on the log and config.
+- Same exe from an elevated session: runs (pid 12684).
+- Run key still present and correct.
+- No code changes this session; suites unchanged (agent 787, server 793, dashboard 220).
 
 ### Session artifacts
 
-- Changed: `agent/service_installer.py`, `agent/tests/test_service_installer.py`.
+- Changed: none (diagnosis only).
 
 ### Next session opening
 
-Two things in order: (1) reboot FRANKENSTEIN (or log off and back on) and confirm the
-Run key starts the agent unattended — that is the only persistence mechanism this
-machine can actually exercise; (2) test the task path on a Windows box whose scheduler
-works, so `\SystemHealthMonitor` is proven somewhere. If the Run key proves reliable,
-make it the documented primary for desktop installs and keep the task as the
-server-class mechanism.
+Decide the persistence mechanism: write the install directory so the interactive user
+can maintain state (smallest change, weakest protection), or make the agent a real
+Windows service so it runs as SYSTEM at boot without a logon (matches what its own
+tamper check expects, and removes the dependency on both the scheduler and the Run
+key). Recommend the service and record why.
 
 ---
 

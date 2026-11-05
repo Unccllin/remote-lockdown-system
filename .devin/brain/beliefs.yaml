@@ -1485,3 +1485,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-074
+  statement: 'On FRANKENSTEIN the lockdown install directory is read-only for ordinary users (icacls:
+    agent.log and config.json grant BUILTIN\Users only RX; the directory grants Users RX plus create),
+    so the HKLM Run key — which launches the agent non-elevated at logon — starts a process that cannot
+    write its log or state and exits before logging anything. Measured after a reboot: console session
+    NEWARK USER (a local account distinct from the SSH user ''user'', both present under C:\Users) logged
+    on, Run key present and correct, yet no agent process, no new agent.log line, and no launch-related
+    event; the same exe started from an elevated session runs normally (pid 12684). This completes the
+    picture of why nothing survives: the scheduler executes nothing (S218), the Run key cannot write (here),
+    and SSH-launched processes die with the session (S218). Persistence therefore requires a product decision:
+    grant the interactive user modify rights, run as SYSTEM via a working scheduler, or install a real
+    Windows service — the last being what the agent''s own tamper check already expects (service_missing=True).'
+  domain: general
+  status: confirmed
+  evidence_level: real-media
+  provenance: 'live after reboot: icacls shows Users:(RX) on agent.log/config.json, no agent process,
+    no new log line, no events; elevated start works (pid 12684)'
+  source: live FRANKENSTEIN (icacls, tasklist, agent.log, qwinsta, event logs); agent/agent.py start-up
+    path
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

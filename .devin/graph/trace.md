@@ -9905,3 +9905,105 @@ make it the documented primary for desktop installs and keep the task as the
 server-class mechanism.
 
 ---
+
+---
+
+## Session 219 — 2026-11-05 (why nothing survives a logon: the install dir is read-only to users)
+
+### RULE-ZERO
+
+**Read**: the live state on FRANKENSTEIN after its reboot (`qwinsta`, Run key value,
+`icacls` on the install directory, `agent.log`, `tasklist`), and `agent/agent.py`'s
+start-up path for any elevation requirement (none exists).
+
+### FINDING
+
+**The install directory is read-only for ordinary users, and the Run key runs
+non-elevated.**
+
+```
+C:\ProgramData\LockdownAgent            SYSTEM:(F)  Administrators:(F)  Users:(RX + create)
+C:\ProgramData\LockdownAgent\agent.log SYSTEM:(F)  Administrators:(F)  Users:(RX)
+C:\ProgramData\LockdownAgent\config.json SYSTEM:(F) Administrators:(F) Users:(RX)
+```
+
+The machine rebooted (uptime 84 s, console session **NEWARK USER** on id 1, a *different
+local account* from the SSH user `user` — `C:\Users` contains both). The HKLM Run key
+fired for that logon, the agent was launched **without elevation**, could not write
+`agent.log` or its state files, and exited before logging anything: `tasklist` shows no
+process and `agent.log` has no line after the previous session's manual start. No
+Application/System event mentions the launch.
+
+Started from my (elevated) SSH session the same exe runs — pid 12684 observed.
+
+So the three persistence paths on this machine are all blocked, for three different
+reasons:
+
+| Path | Why it does not work here |
+|---|---|
+| Scheduled task (SYSTEM) | the machine's scheduler executes nothing (S218) |
+| Run key (logon, non-elevated) | cannot write the install dir → exits before logging (this session) |
+| SSH-driven launch | process tree is killed when the session closes (S218) |
+
+### Fog cleared
+
+- **Why the agent vanished without a log line**: it could not create its log file.
+  Nothing writes, nothing to read — consistent with `Users:(RX)` on `agent.log`.
+- **Why the machine looked "auto-logged-in"**: the console account `NEWARK USER` is a
+  different local user from the SSH account `user`; the installer ran as `user`, so the
+  install is private to that account in practice even though the path is shared.
+
+### Fog remaining
+
+- **Fixing it is a product decision, not a bug fix**: either (a) grant the interactive
+  user modify rights on `C:\ProgramData\LockdownAgent`, (b) run the agent as SYSTEM
+  through a working scheduler, or (c) install a real Windows service — which is what the
+  agent's own tamper check already expects (`service_missing=True` on every healthy
+  install). Option (c) is the honest answer to "runs at boot without a logon".
+- The scheduler defect on this image remains unaddressed (`sfc`/`DISM`/another machine).
+- Unchanged: `TAMPER DETECTED service_missing=True`; no TPM (DPAPI fallback);
+  `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness; S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- A product decision on the persistence mechanism (permissions grant vs SYSTEM task vs
+  service).
+
+### Failure attribution
+
+- **Layer 3 — execution environment** (primary): a read-only install directory plus a
+  broken scheduler means no persistence path exists on this machine, and neither
+  condition is visible from the code or the tests.
+- **Layer 4 — verification feedback**: the ACL check (`icacls`) took seconds and
+  explained a symptom two sessions had attributed to the scheduler alone.
+
+### VERIFY
+
+- After reboot (uptime 84 s, console `NEWARK USER` id 1 active): `tasklist` → no agent;
+  `agent.log` → no line since the previous manual start; no launch-related event.
+- `icacls` output quoted above shows `Users:(RX)` on the log and config.
+- Same exe from an elevated session: runs (pid 12684).
+- Run key still present and correct.
+- No code changes this session; suites unchanged (agent 787, server 793, dashboard 220).
+
+### Session artifacts
+
+- Changed: none (diagnosis only).
+
+### Next session opening
+
+Decide the persistence mechanism: write the install directory so the interactive user
+can maintain state (smallest change, weakest protection), or make the agent a real
+Windows service so it runs as SYSTEM at boot without a logon (matches what its own
+tamper check expects, and removes the dependency on both the scheduler and the Run
+key). Recommend the service and record why.
+
+---
