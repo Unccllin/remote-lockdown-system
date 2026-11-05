@@ -12488,3 +12488,78 @@ start the agent and let it re-apply protection — then prove it live by letting
 stage a signed update and watching the host apply it.
 
 ---
+
+---
+
+## Session 244 — 2026-11-05 (the three failing CI checks, and why 13 were skipped)
+
+### RULE-ZERO
+
+**Read**: the failing-check list from the GitHub UI, `.github/workflows/ci.yml`
+(graph-check job and its `needs:` graph), `.github/workflows/pbl-ci.yml` (both build jobs and
+the QEMU job), `firmware/PblPkg/build-pbl.sh`, `scripts/...` helper usage, and
+`git log origin/master` / `git rev-list --count origin/master..master`.
+
+**The decisive context**: CI evaluated **`origin/master` = `9e06d37`**, while local `master` is
+**145 commits ahead**. None of this arc (installer, service, PBL, firmware, update pinning) is
+pushed, so the failures belong to older code.
+
+### The three real failures (not the test suites — CI skipped those)
+
+| Check | Time | Cause |
+|---|---|---|
+| Build PblApp (X64, GCC) | ~3m | fresh clone has **no compiled EDK II BaseTools** (so `build` dies immediately) **and** the script built all of OVMF first |
+| Build PblApp (AARCH64, GCC) | ~3m | the same BaseTools gap (its cross compiler was already installed) |
+| Graph Invariant Sweep | 12s | the job checks out **shallow**, while I2 verifies that cited commits exist |
+
+**Why 13 checks were "skipped"**: every other job in `ci.yml` declares `needs: graph-check`
+(server-tests, pg-smoke, dashboard-tests, agent-tests, electron-tests, serverless-tests,
+script-tests, hw-harness-dry-run, env-verify, the e2e jobs). A 12-second failure in the graph
+sweep gated the entire pipeline.
+
+### IMPLEMENT
+
+- `build-pbl.sh`: bootstrap BaseTools when `${EDK_TOOLS_PATH}/BinWrappers/PosixLike/build` is
+  absent; OVMF is now **opt-in** (`--with-ovmf` / `PBL_BUILD_OVMF=1`). A job named "Build
+  PblApp" that uploads `PblApp.efi` should not spend ten minutes producing OVMF, and its
+  failure was being reported as a PblApp failure.
+- `pbl-ci.yml`: the QEMU smoke job *does* boot OVMF, so it now passes `--with-ovmf` explicitly.
+- `ci.yml`: graph-check checks out with `fetch-depth: 0`, because I2's whole point is verifying
+  that cited hashes resolve. Weakening the invariant in CI would have been the wrong fix.
+
+### VERIFY
+
+- **Reproduced the graph failure exactly**: `git clone --depth 1` of that commit →
+  `python3 .devin/graph/graph_assert.py` reports
+  `[I2] … D-133 cites commit 6cff1ff, which does not exist in this repository` (also D-135,
+  D-136, …). The same commit on a full clone passes.
+- **Firmware build with the fixed script** (worktree at `9e06d37`, real EDK II):
+  `=== Build successful ===`, `PblApp.efi` **1 363 968 bytes**,
+  `SHA-256 3906065d77d9e763…` — the same hash the QEMU harness reports as its self-image — plus
+  `PblPersistDxe.efi` and `EnrollKeys.efi`, with OVMF skipped.
+- `make lint-workflows` clean. It also caught a duplicated `with:` key in my first graph-check
+  edit (two `with:` blocks after adding `fetch-depth`), which is exactly why that gate exists.
+- **Ruled out by measurement**, not assumption: graph-check, OpenAPI (76/76), the secret scan
+  over that push range, worker `tsc --noEmit`, and the agent suite all pass at `9e06d37`.
+
+### CORRECTION
+
+Before your list arrived I hypothesised the failures were the worker typecheck, the secret scan
+or the server/agent suites. All four pass at that commit — the hypotheses were wrong, and
+guessing would have "fixed" things that were already correct.
+
+### Fog remaining
+
+- **AARCH64 is unverified here** (no `aarch64-linux-gnu-gcc` on this host). CI installs it and
+  the BaseTools fix is toolchain-agnostic, but that path has not been executed.
+- **Nothing turns green until the 145 local commits are pushed** — CI is evaluating code from
+  before this entire arc.
+- D-117 (markdown/spec drift); firmware still QEMU-only (I3).
+
+### Next session opening
+
+Push `master` and watch the re-run: graph-check should pass on full history, both firmware jobs
+should complete (BaseTools bootstrapped, OVMF only in the QEMU job), and the ten jobs gated
+behind graph-check should finally execute for the first time in this arc.
+
+---

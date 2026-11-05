@@ -2199,3 +2199,39 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-099
+  statement: 'The three failing CI checks on origin/master 9e06d37 were both PblApp builds and the graph
+    invariant sweep, not the test suites (which CI skipped), and 13 checks showed ''skipped'' because
+    every job in ci.yml declares needs: graph-check — so a 12-second graph failure gated the whole pipeline.
+    The graph job failed because it checks out shallow (default fetch-depth 1) while invariant I2 verifies
+    that every debt item''s cited commit exists: on a one-commit clone D-133, D-135, D-136 and others
+    ''cite a commit that does not exist'' — reproduced exactly with a depth-1 clone of that commit, passing
+    on a full clone; the fix is fetch-depth: 0 rather than weakening the invariant. Both firmware jobs
+    failed for one shared reason plus one X64-specific: a fresh clone has no compiled EDK II BaseTools
+    (build cannot run), and build-pbl.sh additionally built ALL of OVMF (NetworkPkg+TLS+TPM2+Secure Boot)
+    before PblApp.efi, which cannot finish in a 3-minute budget and reports its failure as a PblApp failure.
+    build-pbl.sh now bootstraps BaseTools when /BinWrappers/PosixLike/build is absent and OVMF is opt-in
+    via --with-ovmf/PBL_BUILD_OVMF=1, with the QEMU smoke job requesting it explicitly. Verified: X64
+    build at that commit with the fixed script reports ''Build successful'', PblApp.efi 1,363,968 bytes,
+    SHA-256 3906065d77d9e763… (the hash the QEMU harness reports as its self-image), plus PblPersistDxe.efi
+    and EnrollKeys.efi, with OVMF skipped; make lint-workflows clean (and it caught a duplicated with:
+    key in the first edit). Also measured: graph-check, OpenAPI 76/76, the secret scan for that push range,
+    worker tsc --noEmit and the agent suite all pass at 9e06d37, so earlier hypotheses about the worker
+    typecheck, secret scan and test suites were wrong. AARCH64 remains unverified locally (no aarch64-linux-gnu-gcc
+    here).'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: reproduced the shallow-clone I2 failure at 9e06d37 and the full-clone pass; X64 build with
+    the fixed script succeeded (PblApp.efi 1,363,968 bytes, sha 3906065d77d9e763…, OVMF skipped); lint-workflows
+    clean; worker tsc/OpenAPI/secret scan/agent suite all pass at that commit
+  source: '.github/workflows/ci.yml (graph-check, needs: graph-check); .github/workflows/pbl-ci.yml (build-x64,
+    build-aarch64, qemu-smoke-test); firmware/PblPkg/build-pbl.sh; /tmp/ci-shallow and /tmp/ci-master
+    worktrees; background build log b5f0c545c'
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

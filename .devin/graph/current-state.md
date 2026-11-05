@@ -53,38 +53,36 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 243 — 2026-11-05 (verifying the update chain end to end: verify works, apply has no component)
+## Latest session: 244 — 2026-11-05 (the three failing CI checks, and why 13 were skipped)
 
 ### VERIFY
 
-- Live: signed metadata fetched with the device's API key; verifier True for the pinned key,
-  False (with a logged warning) for another key.
-- Device: no `UPDATE_PENDING_FILE` yet (the update check runs on its own cadence, not on every
-  poll); `update_signing.pub` present, `update_verification: signature`.
-- `grep check_and_apply_update agent/*.py` → definition at `watchdog.py:127`, single call at
-  `:238`, nothing else.
-- `server/.env` is gitignored, so the signing configuration is local-only; no tracked change
-  this session.
+- **Reproduced the graph failure exactly**: `git clone --depth 1` of that commit →
+  `python3 .devin/graph/graph_assert.py` reports
+  `[I2] … D-133 cites commit 6cff1ff, which does not exist in this repository` (also D-135,
+  D-136, …). The same commit on a full clone passes.
+- **Firmware build with the fixed script** (worktree at `9e06d37`, real EDK II):
+  `=== Build successful ===`, `PblApp.efi` **1 363 968 bytes**,
+  `SHA-256 3906065d77d9e763…` — the same hash the QEMU harness reports as its self-image — plus
+  `PblPersistDxe.efi` and `EnrollKeys.efi`, with OVMF skipped.
+- `make lint-workflows` clean. It also caught a duplicated `with:` key in my first graph-check
+  edit (two `with:` blocks after adding `fetch-depth`), which is exactly why that gate exists.
+- **Ruled out by measurement**, not assumption: graph-check, OpenAPI (76/76), the secret scan
+  over that push range, worker `tsc --noEmit`, and the agent suite all pass at `9e06d37`.
 
 ### Fog remaining
 
-- **The applier is missing** for service installs. Recommended fix: give the *service host*
-  the applier role — it already supervises the agent, it can stop it, replace the binary while
-  stopped and start it again, and it can verify the pinned Ed25519 signature with the same
-  rules the agent uses (failing closed on a missing or unreadable key). Shipping the watchdog
-  instead would re-introduce a second supervisor we deliberately removed.
-- **Whichever applier is used must unlock tamper protection** before replacing and let the
-  agent re-apply it — the S242 `unlock_for_upgrade` pattern.
-- **The CI secret still needs the same key** (`UPDATE_SIGNING_KEY`), which cannot be set from
-  this host.
-- D-117 (markdown/spec drift); firmware remains QEMU-only (I3).
+- **AARCH64 is unverified here** (no `aarch64-linux-gnu-gcc` on this host). CI installs it and
+  the BaseTools fix is toolchain-agnostic, but that path has not been executed.
+- **Nothing turns green until the 145 local commits are pushed** — CI is evaluating code from
+  before this entire arc.
+- D-117 (markdown/spec drift); firmware still QEMU-only (I3).
 
 ### Next session opening
 
-Give the service host the pending-update applier: on start (and on the supervisor loop),
-verify `UPDATE_PENDING_FILE` with the pinned key, unlock tamper protection, swap the binary,
-start the agent and let it re-apply protection — then prove it live by letting FRANKENSTEIN
-stage a signed update and watching the host apply it.
+Push `master` and watch the re-run: graph-check should pass on full history, both firmware jobs
+should complete (BaseTools bootstrapped, OVMF only in the QEMU job), and the ten jobs gated
+behind graph-check should finally execute for the first time in this arc.
 
 ---
 
