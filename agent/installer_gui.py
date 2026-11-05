@@ -1280,7 +1280,12 @@ def run_headless(
             hostname,
             data["device"]["id"],
             boot_lock_enabled=boot_lock,
-            update_public_key=staged_update_public_key(),
+            # install_- not staged_: the pin must name a path that outlives this run. Naming
+            # the staging path (C:\Users\<user>\update_signing.pub) left the key unreadable
+            # at the installed location, so the device reported sha256-only and — because the
+            # agent fails closed on a pinned-but-missing key — would have refused every
+            # future update (S241).
+            update_public_key=install_update_public_key(),
             verify_tls=verify_tls,
         )
 

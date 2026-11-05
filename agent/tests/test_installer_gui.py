@@ -676,3 +676,42 @@ def test_stop_running_agent_stops_the_service_and_kills_the_process(monkeypatch)
     joined = [" ".join(c) for c in calls]
     assert any("sc.exe stop LockdownAgent" in j for j in joined)
     assert any("taskkill /F /IM lockdown-agent.exe" in j for j in joined)
+
+
+def test_headless_pins_the_installed_key_path_not_the_staging_one(monkeypatch):
+    """The pin must outlive the install run (S241).
+
+    Naming the staging path left the key unreadable where the agent looks, so the device
+    reported sha256-only and — since the agent fails closed on a pinned-but-missing key —
+    would have refused every future update.
+    """
+    import installer_gui
+
+    seen = {}
+    installed = r"C:\ProgramData\LockdownAgent\update_signing.pub"
+    monkeypatch.setattr(
+        installer_gui,
+        "enroll_device_with_token",
+        lambda *a, **k: {"device": {"id": "dev-1"}, "api_key": "KEY"},
+    )
+    monkeypatch.setattr(installer_gui, "get_hardware_uuid", lambda: "HW")
+    monkeypatch.setattr(installer_gui, "get_mac_address", lambda: "MAC")
+    monkeypatch.setattr(installer_gui, "get_serial_number", lambda: "SN")
+    monkeypatch.setattr(installer_gui, "write_config", lambda *a, **k: seen.update(k) or True)
+    monkeypatch.setattr(installer_gui, "stop_running_agent", lambda: None)
+    monkeypatch.setattr(installer_gui, "add_defender_exclusions", lambda: None)
+    monkeypatch.setattr(installer_gui, "find_agent_exe", lambda: "/agent.exe")
+    monkeypatch.setattr(installer_gui, "install_files", lambda p: p)
+    monkeypatch.setattr(installer_gui, "create_lockdown_folder", lambda: None)
+    monkeypatch.setattr(installer_gui, "install_service", lambda: (True, "ok"))
+    monkeypatch.setattr(installer_gui, "launch_agent", lambda p: None)
+
+    # The staging path is what a naive implementation would return.
+    monkeypatch.setattr(
+        installer_gui, "staged_update_public_key", lambda: r"C:\Users\user\update_signing.pub"
+    )
+    monkeypatch.setattr(installer_gui, "install_update_public_key", lambda: installed)
+
+    assert installer_gui.run_headless("https://x", "TOK", "HOST-1") == 0
+    assert seen["update_public_key"] == installed
+    assert "Users" not in seen["update_public_key"]
