@@ -1648,3 +1648,31 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-080
+  statement: 'Tamper detection must not fire on a healthy device: in agent/tamper_protection.py check_tamper()
+    listed .locked among ''critical_files'', but the sentinel exists only while the device is locked,
+    so every unlocked machine reported TAMPER DETECTED files_missing=[''.locked''] on every check-in —
+    the signal the S222 relock loop fed on — and it treated the service and the scheduled task as cumulative
+    although the service replaced the task in S220, making task_missing permanently true. The check now
+    protects assets (config.json) rather than state, and computes persistence as service_missing AND task_missing
+    with a separate persistence_missing flag. Similarly, _lock_workstation() issued tsdiscon on every
+    guardian tick even when no console session was connected; _console_session_active() (WTSQuerySessionInformationW
+    WTSConnectState, failing open) now gates it. Also established: agent.spec already listed tamper_protection
+    as a hidden import, so the ''module not available'' message came from a stale shipped binary, and
+    rebuilding from the spec (PyInstaller, 15,362,718 bytes) bundled it. Verified live: no TAMPER DETECTED
+    and no tsdiscon lines after the new binary, console session Active, service RUNNING, check-in 27 seconds
+    old.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live FRANKENSTEIN with the rebuilt agent: no TAMPER/D-007 lines after 11:42:37, console
+    Active, service RUNNING, check-in 27s old; agent 815 tests (8 new)'
+  source: agent/tamper_protection.py check_tamper; agent/agent.py _lock_workstation/_console_session_active;
+    agent/agent.spec hiddenimports; live agent.log and process state on FRANKENSTEIN
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

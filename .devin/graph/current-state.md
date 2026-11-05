@@ -53,32 +53,31 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 224 — 2026-11-05 (frozen service, keep-awake, and a correction worth making)
+## Latest session: 225 — 2026-11-05 (the false alarms were in the tamper check)
 
 ### Fog cleared
 
-- **The service needs no Python** on the target any more.
-- **The device cannot sleep its way out of reach**, because the host (not a power plan)
-  holds the request.
-- **Process counts were being misread** — the diagnostic habit this corrects is "count
-  entries in tasklist", when onefile builds double themselves.
+- **Why a healthy device looked tampered**: two logic errors, not a real intrusion.
+- **Why the module "was not available"**: a stale binary, not a missing spec entry.
+- **Why the screen kept dropping**: the guardian's unconditional `tsdiscon` (S222) plus
+  the lock latch; both are now gated or cleared.
 
 ### Fog remaining
 
-- **The guardian still issues `tsdiscon` every tick while locked**, even with the console
-  session already disconnected — needs the WTS session-state check and an agent rebuild.
-- **`tamper_protection` is not bundled** in the agent build, so ACL/registry hardening is
-  skipped on every install.
-- **No TPM on this machine** (DPAPI fallback) — environmental.
-- **Port-proxy durability**: the Windows rule points at the WSL address and must be
-  re-created after a WSL restart.
+- **No TPM on this machine** → `TPM seal failed — falling back to DPAPI/plaintext`
+  (environmental).
+- **"Watchdog not running — attempting restart"** still appears: the agent expects a
+  watchdog process we do not install, but the service plus SCM crash recovery already
+  provides that. Either ship `watchdog.exe` (there is a spec for it) or stop expecting it
+  — an agent-side decision to make explicitly.
+- **Port-proxy durability** after a WSL restart is unchanged.
 - Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
   the S202 objective.
 
 ### Debt items closed
 
-- The S220/S221 "duplicate agent instance" item — **withdrawn**, not fixed: it was a
-  measurement artifact.
+- The S222 follow-up "guardian should not re-issue tsdiscon into a dead session" — closed.
+- The "tamper_protection not bundled" note in `AGENTS.md` — closed by the rebuild.
 
 ### Debt items still open
 
@@ -86,40 +85,37 @@
 
 ### Blockers
 
-- None for install, wakefulness or silence. The remaining items need an agent build.
+- None. First device runs the current agent from a frozen service, unattended.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): "two processes" was accepted as evidence
-  four times without checking parentage. A parent-process column in the diagnostic would
-  have shown the bootloader immediately.
-- **Layer 3 — execution environment**: the SCM's empty argv is invisible from a shell
-  (every manual start passes arguments), which is why only the real service start
-  exposed it.
+- **Layer 4 — verification feedback** (primary): the agent logged `TAMPER DETECTED` on
+  every check-in for weeks and it was read as noise. A test asserting "a healthy device is
+  not tampered" would have caught both logic errors the day they were written.
+- **Layer 2 — context provision**: the code never said which files are assets and which
+  are state, so `.locked` looked reasonable in a list called `critical_files`.
 
 ### VERIFY
 
-- `sc qc` → `BINARY_PATH_NAME: "C:\ProgramData\LockdownAgent\lockdown-service.exe"
-  --service`; `sc query` → `STATE: 4 RUNNING`; `python.exe` count 0.
-- `[SERVICE] keep-awake acquired (ES_SYSTEM_REQUIRED|ES_CONTINUOUS)`, then
-  `[SERVICE] starting agent: …lockdown-agent.exe --silent --config …`.
-- Parent chain captured (above) → one agent, not two.
-- Server `last_checkin 2026-11-05 08:33:13`, 36 s before observation.
-- Tests: agent **807** (+6 host), all suites green, ruff clean.
-- Commit: `c2f9c0b`.
+- New binary on the device: 15 362 718 bytes, 11:42:37.
+- Since that binary: **no** `TAMPER` line, **no** `D-007`/`tsdiscon` line; console session
+  `NEWARK USER` (id 1) **Active**; `sc query` → `STATE: 4 RUNNING`; server
+  `last_checkin 2026-11-05 08:42:52`, 27 s before observation.
+- Suites: agent **815** (+8), server 793, dashboard 220; ruff clean.
+- Commit: `ef826a7`.
 
 ### Session artifacts
 
-- Changed: `agent/service_host.py`, `agent/service_installer.py`,
-  `agent/tests/test_service_host.py` (new), `agent/tests/test_service_installer.py`,
-  `AGENTS.md`.
+- Changed: `agent/tamper_protection.py`, `agent/agent.py`,
+  `agent/tests/test_tamper_check.py` (new), `agent/tests/test_lock_workstation.py` (new);
+  rebuilt + installed `lockdown-agent.exe` on FRANKENSTEIN.
 
 ### Next session opening
 
-Rebuild the agent once, carrying two changes together: the guardian's WTS session-state
-check (stop re-issuing `tsdiscon` into an already-disconnected session) and
-`tamper_protection` bundled into the build so ACL/registry hardening actually runs. Then
-re-run the boot test on FRANKENSTEIN with the frozen service.
+Decide the watchdog question explicitly: either ship `watchdog.exe` (spec exists) or teach
+the agent that a Windows service with SCM crash recovery already provides restart, so it
+stops logging "Watchdog not running" on a healthy install. Then the queue is empty except
+D-117 and the installer artefact from S209.
 
 ---
 
