@@ -313,6 +313,10 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
             ),
             critical=True,
         )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+            critical=False,
+        )
         .sign(ca_key, hashes.SHA256())
     )
     ca_der = ca_cert.public_bytes(serialization.Encoding.DER)
@@ -357,6 +361,14 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
                 decipher_only=False,
             ),
             critical=True,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+            critical=False,
         )
         .sign(ca_key, hashes.SHA256())
     )
@@ -406,6 +418,10 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
             ),
             critical=True,
         )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(verdict_ca_key.public_key()),
+            critical=False,
+        )
         .sign(verdict_ca_key, hashes.SHA256())
     )
     verdict_ca_der = verdict_ca.public_bytes(serialization.Encoding.DER)
@@ -422,6 +438,14 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
         .not_valid_before(now - datetime.timedelta(days=1))
         .not_valid_after(now + datetime.timedelta(days=30))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(verdict_key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(verdict_ca_key.public_key()),
+            critical=False,
+        )
         .sign(verdict_ca_key, hashes.SHA256())
     )
     verdict_leaf_der = verdict_leaf.public_bytes(serialization.Encoding.DER)
@@ -527,15 +551,28 @@ def build_signed_verdict(assets: str, request_body: bytes) -> bytes:
     if not isinstance(request, dict):
         request = {}
 
-    device_id = request.get(1) if isinstance(request.get(1), bytes) else b"\x00" * 32
-    nonce = request.get(2) if isinstance(request.get(2), bytes) else b"\x00" * 32
-    policy_version = request.get(4) if isinstance(request.get(4), int) else 1
-    if isinstance(policy_version, bool) or not isinstance(policy_version, int):
-        policy_version = 1
-
-    meta = json.loads(
-        pathlib.Path(os.path.join(assets, "verdict-meta.json")).read_text(encoding="utf-8")
+    # Extract once, then narrow: a `request.get(n)` inside the isinstance() guard is a
+    # different call as far as a type checker is concerned, so the narrowed value could not
+    # be followed (pyright: "Unknown | bytes | None" passed to cb_bstr).
+    raw_device = request.get(1)
+    device_id = raw_device if isinstance(raw_device, bytes) else b"\x00" * 32
+    raw_nonce = request.get(2)
+    nonce = raw_nonce if isinstance(raw_nonce, bytes) else b"\x00" * 32
+    raw_version = request.get(4)
+    policy_version = (
+        raw_version
+        if isinstance(raw_version, int) and not isinstance(raw_version, bool)
+        else 1
     )
+
+    # A missing or unreadable verdict-meta.json used to raise here, taking the whole
+    # capture server down mid-run with a traceback instead of saying what was wrong.
+    meta_path = pathlib.Path(os.path.join(assets, "verdict-meta.json"))
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"[SERVER] cannot read {meta_path}: {exc}", file=sys.stderr)
+        meta = {}
     now = int(time.time())
 
     payload = cb_map([
