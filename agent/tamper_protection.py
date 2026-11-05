@@ -508,20 +508,25 @@ def check_tamper(state_dir: Path) -> dict:
         - files_missing: list of protected files that are gone
         - service_missing: True if the service registration is gone
         - task_missing: True if the scheduled task is gone
+        - persistence_missing: True only when BOTH are gone (they are alternatives)
         - tampered: True if any tamper detected
     """
     result = {
         "files_missing": [],
         "service_missing": False,
         "task_missing": False,
+        "persistence_missing": False,
         "tampered": False,
     }
 
     if not _is_windows():
         return result
 
-    # Check if critical state files are missing (may indicate deletion attempt)
-    critical_files = [".deadman", ".locked"]
+    # Protected assets a thief would delete to disable the agent. The sentinel
+    # (`.locked`) and the deadman file are STATE, not assets: `.locked` exists only while
+    # the device is locked, so requiring it made every unlocked, healthy device report
+    # tampering — the false alarm that fed the relock loop in S222.
+    critical_files = ["config.json"]
     for fname in critical_files:
         fpath = state_dir / fname
         if not fpath.exists():
@@ -551,8 +556,9 @@ def check_tamper(state_dir: Path) -> dict:
     except (subprocess.SubprocessError, OSError, FileNotFoundError):
         result["service_missing"] = True
 
-    result["tampered"] = (
-        len(result["files_missing"]) > 0 or result["service_missing"] or result["task_missing"]
-    )
+    # The service and the scheduled task are alternative persistence mechanisms (the
+    # service replaced the task in S220), so only their absence *together* is tampering.
+    result["persistence_missing"] = result["service_missing"] and result["task_missing"]
+    result["tampered"] = len(result["files_missing"]) > 0 or result["persistence_missing"]
 
     return result

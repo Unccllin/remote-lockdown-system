@@ -712,6 +712,53 @@ def _detect_session_context() -> dict:
     return result
 
 
+def _console_session_active() -> bool:
+    """True when a console session is connected and active.
+
+    The lock guardian re-asserts the lock on a timer. Without this check it issued
+    `tsdiscon` on every tick even when the console session was already disconnected —
+    session churn and a log line every ten seconds while the device sat at the login
+    screen (S222). Fail-open on purpose: if the WTS call cannot be made, assume the
+    session is active so locking still happens.
+    """
+    if platform.system() != "Windows":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        wtsapi32 = ctypes.windll.wtsapi32
+
+        # 0xFFFFFFFF means "no active console session".
+        session_id = kernel32.WTSGetActiveConsoleSessionId()
+        if session_id == 0xFFFFFFFF:
+            return False
+
+        WTS_CURRENT_SERVER_HANDLE = 0
+        WTS_INFO_CLASS_CONNECT_STATE = 8  # WTSConnectState
+        WTS_CONNECTSTATE_CLASS_ACTIVE = 0
+
+        buffer = ctypes.POINTER(ctypes.c_void_p)()
+        returned = wintypes.DWORD()
+        ok = wtsapi32.WTSQuerySessionInformationW(
+            WTS_CURRENT_SERVER_HANDLE,
+            session_id,
+            WTS_INFO_CLASS_CONNECT_STATE,
+            ctypes.byref(buffer),
+            ctypes.byref(returned),
+        )
+        if not ok:
+            return True
+        try:
+            state = ctypes.cast(buffer, ctypes.POINTER(wintypes.DWORD))[0]
+            return state == WTS_CONNECTSTATE_CLASS_ACTIVE
+        finally:
+            wtsapi32.WTSFreeMemory(buffer)
+    except (AttributeError, OSError, ValueError):
+        return True
+
+
 def _lock_workstation() -> None:
     """Platform-specific workstation lock. Best-effort, no banner.
 
@@ -729,7 +776,12 @@ def _lock_workstation() -> None:
         if ctx["is_session_zero"]:
             # D-007: Running as a service in Session 0.
             # LockWorkStation() would only lock Session 0 (invisible).
-            # Use tsdiscon to disconnect the active console session instead.
+            # Use tsdiscon to disconnect the active console session instead — but only
+            # when there is an active session to disconnect (S222: the guardian used to
+            # issue tsdiscon every ten seconds into an already-disconnected session).
+            if not _console_session_active():
+                log.debug("D-007: no active console session — skipping tsdiscon")
+                return
             log.info(
                 "D-007: Session 0 detected (session_id=%s) — using tsdiscon "
                 "to disconnect active console session",
