@@ -2013,3 +2013,30 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-093
+  statement: 'The PBL device list must read the KV interface, not env._store: createSharedEnv() exposes
+    _store as the in-memory Map but builds LOCKDOWN_KV over the pbl_kv_store table whenever a database
+    pool exists (kvStore.js useDb), so enrolment wrote to the table while GET /v1/devices scanned the
+    empty Map and reported zero devices with devices enrolled — which is what the dashboard showed. Proven
+    before the fix with the same enrolled device: the table held pbl_devices:abab... (198 bytes), POST
+    /v1/verdict answered 200 with a COSE_Sign1 and a 64-byte signature (so the verdict path found the
+    device), and GET /v1/devices still returned {"devices":[]}. The route now uses LOCKDOWN_KV.list()/get()
+    with the Map scan kept only as a fallback for a bare-Map env, skips non-JSON values individually,
+    and excludes pbl_device_mapping keys; live after restart the list returns the enrolled device and
+    a verdict for it is signed. Also: POST /v1/enroll stores ek_cert and ak_public without verifying them,
+    so any caller who knows a 32-byte device id can create a row — recorded as a threat-model question.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live: enrolled row present in pbl_kv_store, GET /v1/devices returned [] before the fix
+    and the device after it, POST /v1/verdict 200 with 64-byte signature; server 800 tests (48 suites,
+    +2)'
+  source: server/src/routes/pbl.js (GET /devices, POST /enroll); server/src/pbl/kvStore.js (createSharedEnv,
+    createDbKv); live pbl_kv_store contents and endpoint responses
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

@@ -53,28 +53,27 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 237 — 2026-11-05 (the public key a firmware policy needs, now published)
+## Latest session: 238 — 2026-11-05 ("PBL devices show zero" was a wrong-store read)
 
 ### Fog cleared
 
-- **Why no policy could pin this server**: the public key was never published, only its hash.
-  Verified live: after restart, `GET /v1/policy` signs the default policy and
-  `GET /v1/admin/key-info` reports `policy_signing_key kid 7aeafb435e1fac91…, spki 91 bytes,
-  kid_matches_spki true`.
-- **Whether the SPKI derivation is sound**: `kid_matches_spki` is computed from the derived
-  SPKI and is true for a live key, so the backfill path and the stored kid agree.
+- **Why the PBL device list showed zero with devices enrolled**: a wrong-store read.
+- **That enrolment works and persists**: the row is in `pbl_kv_store` and survives restarts.
+- **That this server signs verdicts**: `POST /v1/verdict` for the enrolled id returned a
+  COSE_Sign1 with a 64-byte signature, and `kid c19157d8… / spki 91B` is now published by
+  key-info.
 
 ### Fog remaining
 
-- **Attestation enrolment is now the only blocker** for a firmware-verified verdict from this
-  deployment: `POST /v1/enroll` is the sole writer of `pbl_devices:<hex>` (S236), the KV is
-  in-memory, and no admin seeding path exists. The verdict key also stays `null` until a
-  verdict is actually signed, which needs that enrolment.
+- **The firmware still verifies the harness's key, not this server's.** Building a policy that
+  pins our verdict SPKI (`kid c19157d8…`, 91 bytes from key-info) is the next step, after
+  which a QEMU run can show `Verdict signature verified` against this deployment.
+- **Enrolment is unauthenticated** (see the observation) — a threat-model question.
 - QEMU/emulation only; I3 unsatisfied. D-117 untouched.
 
 ### Debt items closed
 
-- The S236 "key-info must expose the SPKI" item.
+- The user-facing "PBL devices show zero" — root cause found and fixed.
 
 ### Debt items still open
 
@@ -82,25 +81,25 @@
 
 ### Blockers
 
-- Attestation enrolment (design work: an orchestrated `POST /v1/enroll` with real nonce and
-  platform state).
+- None for the list. The firmware-side verification needs a policy built from our key-info.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the server could not be used as a
-  firmware-verifiable signer for lack of a *published public key*, and nothing in the endpoint's
-  contract said so. A policy-pinning design needs its key distribution written down.
-- **Layer 3 — execution environment**: the module-level key cache made a fresh-env test read
-  another test's key; the seam exists now so that class of flake is deliberate rather than
-  intermittent.
+- **Layer 4 — verification feedback** (primary): the route's bug was invisible while the
+  registry was empty; only enrolling something exposed it. A test asserting "a device written
+  to the KV appears in the list" would have caught it on the day it was written, and that test
+  now exists.
+- **Layer 2 — context provision**: the KV shim has two storage shapes (Map and table) and
+  nothing said `_store` only reflects one of them.
 
 ### VERIFY
 
-- Live: `GET /v1/policy` → `{"latest_version":"1","versions":["1"],"source":"default"}`;
-  `GET /v1/admin/key-info` → `policy_signing_key: kid=7aeafb435e1fac91… alg=ES256 spki=91B
-  matches=True`; `verdict_signing_key: null` (nothing signed yet).
-- Suites: server **798** (48 suites; +3), eslint clean on the project.
-- Commit: `5489ae8`.
+- Before the fix: 1 row in `pbl_kv_store`, verdict 200 signed, `GET /v1/devices` → `[]`.
+- After the fix (live): `GET /v1/devices` → `[{device_id: abababab…, status: active,
+  enrolled_at: 2026-11-05T12:20:15Z}]`; `POST /v1/verdict` → 200, verdict 0, signature 64 B;
+  key-info → `verdict_signing_key kid c19157d8…, spki 91 B, kid_matches_spki true`.
+- Suites: server **800** (48 suites; +2), eslint clean.
+- Commit: `188d706`.
 
 ### Session artifacts
 
@@ -108,11 +107,11 @@
 
 ### Next session opening
 
-Run attestation enrolment against this deployment so `pbl_devices:<hex>` gets its first row:
-take the AK-derived device id the firmware uses (000babab…), produce the nonce + platform
-state the enrol handler expects, and confirm the firmware then receives a verdict signed by
-this server — which will also publish a verdict SPKI in key-info and give the dashboard's PBL
-page its first device.
+Build a firmware policy that pins this server's verdict key: take `kid`/`spki` from
+`GET /v1/admin/key-info`, put them in policy keys 71/76 with our TLS CA in key 78 and
+`lock_service_uri` pointing at the Python TLS front, boot PblApp and confirm
+`Verdict signature verified` against this deployment — the last step of the arc, and the one
+that also proves the enrolment row is usable by firmware.
 
 ---
 

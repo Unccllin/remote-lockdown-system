@@ -11940,3 +11940,112 @@ this server — which will also publish a verdict SPKI in key-info and give the 
 page its first device.
 
 ---
+
+---
+
+## Session 238 — 2026-11-05 ("PBL devices show zero" was a wrong-store read)
+
+### RULE-ZERO
+
+**Read**: `server/src/routes/pbl.js` (`POST /enroll`, `GET /devices`, `POST /verdict`),
+`server/src/pbl/kvStore.js` (`createSharedEnv`, `createDbKv`), and the live database.
+
+**Starting point**: S229 answered "zero devices" with "the registry is empty, and only
+`POST /v1/enroll` writes it". This session enrolled a device for real — and the list still
+said zero.
+
+### FINDING — the list read the in-memory Map, the KV is a table
+
+`createSharedEnv()` exposes `_store` as the in-memory `sharedStore` **and** builds
+`LOCKDOWN_KV` over the `pbl_kv_store` table when a database pool exists (`kvStore.js`:
+`useDb`). `GET /v1/devices` iterated `env._store`.
+
+Proven end to end:
+
+| Step | Result |
+|---|---|
+| `POST /v1/enroll` for the AK-derived id (`ab` × 32) | 200, row written |
+| `pbl_kv_store` contents | `pbl_devices:abab…` (198 bytes) — **present** |
+| `POST /v1/verdict` for that device | 200, COSE_Sign1, 64-byte signature — **found** |
+| `GET /v1/devices` | `{"devices":[]}` — **empty** |
+
+So the verdict path found the device while the list could not. The dashboard's "PBL devices:
+0" was this bug, not an empty registry — S229's explanation was half right (nothing had been
+enrolled) and half wrong (had it been, it still would have shown zero).
+
+### IMPLEMENT
+
+- `GET /v1/devices` reads through the KV interface (`list` + `get`), which behaves correctly
+  for both the DB-backed and in-memory shapes. The Map scan survives only as a fallback for a
+  bare-Map env with no `list()`.
+- Non-JSON values are skipped individually (one malformed row no longer hides the list), and
+  `pbl_device_mapping:` keys stay excluded.
+- Tests: +2 built on an env whose `_store` is empty while the KV has records — the DB-backed
+  shape that produced the bug.
+
+### OBSERVATION (recorded, not changed)
+
+`POST /v1/enroll` stores `ek_cert` and `ak_public` **without verifying them**, so any caller
+who knows a 32-byte device id can create a row. That is a question for the PBL threat model
+(does the verdict path authenticate the device some other way?), not something to change in
+passing.
+
+### Fog cleared
+
+- **Why the PBL device list showed zero with devices enrolled**: a wrong-store read.
+- **That enrolment works and persists**: the row is in `pbl_kv_store` and survives restarts.
+- **That this server signs verdicts**: `POST /v1/verdict` for the enrolled id returned a
+  COSE_Sign1 with a 64-byte signature, and `kid c19157d8… / spki 91B` is now published by
+  key-info.
+
+### Fog remaining
+
+- **The firmware still verifies the harness's key, not this server's.** Building a policy that
+  pins our verdict SPKI (`kid c19157d8…`, 91 bytes from key-info) is the next step, after
+  which a QEMU run can show `Verdict signature verified` against this deployment.
+- **Enrolment is unauthenticated** (see the observation) — a threat-model question.
+- QEMU/emulation only; I3 unsatisfied. D-117 untouched.
+
+### Debt items closed
+
+- The user-facing "PBL devices show zero" — root cause found and fixed.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None for the list. The firmware-side verification needs a policy built from our key-info.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the route's bug was invisible while the
+  registry was empty; only enrolling something exposed it. A test asserting "a device written
+  to the KV appears in the list" would have caught it on the day it was written, and that test
+  now exists.
+- **Layer 2 — context provision**: the KV shim has two storage shapes (Map and table) and
+  nothing said `_store` only reflects one of them.
+
+### VERIFY
+
+- Before the fix: 1 row in `pbl_kv_store`, verdict 200 signed, `GET /v1/devices` → `[]`.
+- After the fix (live): `GET /v1/devices` → `[{device_id: abababab…, status: active,
+  enrolled_at: 2026-11-05T12:20:15Z}]`; `POST /v1/verdict` → 200, verdict 0, signature 64 B;
+  key-info → `verdict_signing_key kid c19157d8…, spki 91 B, kid_matches_spki true`.
+- Suites: server **800** (48 suites; +2), eslint clean.
+- Commit: `188d706`.
+
+### Session artifacts
+
+- Changed: `server/src/routes/pbl.js`, `server/tests/pblVerdictPolicyEnroll.test.js`.
+
+### Next session opening
+
+Build a firmware policy that pins this server's verdict key: take `kid`/`spki` from
+`GET /v1/admin/key-info`, put them in policy keys 71/76 with our TLS CA in key 78 and
+`lock_service_uri` pointing at the Python TLS front, boot PblApp and confirm
+`Verdict signature verified` against this deployment — the last step of the arc, and the one
+that also proves the enrolment row is usable by firmware.
+
+---
