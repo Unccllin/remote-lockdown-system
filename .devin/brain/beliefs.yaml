@@ -1841,3 +1841,32 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-087
+  statement: 'Provisioning PBL_AK_NAME into TPM NV requires the index auth value the firmware uses, not
+    the platform hierarchy. scripts/provision-qemu-tpm.sh defined index 0x01C00003 with attribute AUTHWRITE
+    (0x4) but set no auth value and then wrote with ''-C p'', producing tpm:error(2.0) 0x149 ''NV access
+    authorization fails''; and while fixing that, using ''-P'' for the index auth produced 0x9A2 because
+    tpm2_nvdefine takes the hierarchy auth in -P and the index auth in -p. With the index defined with
+    -p ''hex:50424c5f4445565f4e565f415554485f4b45595f3332425f4c4f4e472121'' (PBL_DEV_NV_AUTH_KEY_32B_LONG!!)
+    and written/read back with ''-C 0x01C00003 -P hex:...'', provisioning verifies (''AK Name verified
+    in NV 0x01C00003: 000babab...''). That unblocked the D-131 wire harness, which now passes 8/8 for
+    the first time: policy loaded from the ESP, device_id derived from the AK Name, verdict request posted
+    over real TLS to 10.0.2.2:8443 with the CA pinned via policy key 78 (D-132), server received the request,
+    the wire device_id matches the AK Name, the verdict is decoded by the firmware and its signature verified,
+    with the request body and a 5475-byte pcap retained. The exchange used the harness''s bundled TLS
+    server, not this deployment''s Express /v1/verdict, so firmware-to-live-server and POST /v1/enroll
+    remain untested.'
+  domain: general
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'executed: provisioning readback verified (AK Name in NV 0x01C00003); test-d131-wire-harness.sh
+    8 PASS / 0 FAIL with serial/server logs, wire.pcap 5475 bytes and the captured request body'
+  source: scripts/provision-qemu-tpm.sh; firmware/PblPkg/test-d131-wire-harness.sh; firmware/PblPkg/d131-wire-capture.py;
+    firmware/PblPkg/PblPkg.dec (PcdPblTpmNvAuthValue)
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

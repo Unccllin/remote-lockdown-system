@@ -53,31 +53,26 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 231 — 2026-11-05 (the firmware harness proved banners, not an exchange)
+## Latest session: 232 — 2026-11-05 (the firmware talks to a TLS server, and verifies the verdict)
 
 ### Fog cleared
 
-- **What the QEMU harness actually proves**: boot, platform-state read, policy parse, TPM NV
-  read, the suppressed-request path, decision, PCR extend, action, NV provisioning, HMAC
-  session, self-image measurement, lock screen, unprovisioned handling, and TPM NV
-  persistence across a reboot. It does **not** prove an online verdict exchange.
-- **What a real online test needs** (established by reading `PblApp.inf`): the firmware
-  trusts the UEFI variable `gEfiTlsCaCertificateGuid`, so a test CA requires **no rebuild** —
-  it needs the variable provisioned in the QEMU NVRAM, a `device_id` from `POST /v1/enroll`,
-  and a TLS verdict endpoint.
+- **Whether the firmware can do a real TLS verdict exchange**: yes — proven on the wire, with
+  the device_id and the signature check both asserted, not inferred from banners.
+- **Why the AK Name was never provisioned**: the provisioning script had never successfully
+  written the index; every earlier "unprovisioned" result was this bug, not the firmware.
 
 ### Fog remaining
 
-- **The online verdict path has never been exercised** in any harness.
-- **`POST /v1/enroll` has never been exercised against this deployment**, so the PBL device
-  registry stays empty (S229).
-- **Not hardware-verified**: QEMU + swtpm is below real media, so I3 stays unsatisfied for
-  these paths.
+- **The exchange went to the harness's own TLS server**, not to this deployment's Express
+  `/v1/verdict`. Pointing it there needs the same CA pinned into a policy the server issues,
+  plus `POST /v1/enroll` so the PBL device registry is populated — the remaining work.
+- **Hardware**: still QEMU + swtpm, one rung below real media; I3 unsatisfied.
 - D-117 (markdown/spec drift) untouched.
 
 ### Debt items closed
 
-- None.
+- The "online verdict path never exercised" item from S231.
 
 ### Debt items still open
 
@@ -85,36 +80,34 @@
 
 ### Blockers
 
-- A real firmware↔server test needs the NVRAM CA variable + enrolment + TLS endpoint; none of
-  that is a code change to PblApp, but all of it is work.
+- None for the firmware side. The next step is wiring the harness at the live server.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the checks were written against strings that
-  print unconditionally, so they could not fail. A check that cannot fail is worse than no
-  check, because it produces PASS lines that get quoted in session records.
-- **Layer 1 — task specification**: "verified in QEMU" was never defined. The harness needed
-  to state which paths it covers and which it deliberately does not.
+- **Layer 4 — verification feedback** (primary): the provisioning script never verified its
+  own write until now (it does a readback), and the harness failed loudly instead of
+  skipping — that combination is what made this fixable. The earlier "unprovisioned" results
+  were read as a firmware property for several sessions.
+- **Layer 2 — context provision**: `tpm2_nvdefine`'s `-P`/`-p` distinction and the AUTHWRITE
+  implication were not documented anywhere in the script; they are now in comments.
 
 ### VERIFY
 
-- Smoke: `=== Results: 19 PASS / 0 FAIL ===` with the two banner checks labelled and the two
-  behavioural checks asserting suppression and skipped verification.
-- Persistence: `=== Results: 18 PASS / 0 FAIL ===` including the four two-boot assertions.
-- Serial evidence quoted above.
-- Commit: `12e2f4a`.
+- Provisioning: `AK Name verified in NV 0x01C00003: 000babababab…`
+- Wire harness: 8 PASS / 0 FAIL (list above), with serial/server logs and `wire.pcap`
+  (5475 bytes) retained.
+- Commit: `e53680e`.
 
 ### Session artifacts
 
-- Changed: `firmware/PblPkg/ci-harness-docker.sh`,
-  `firmware/PblPkg/ci-harness-persistence.sh`.
+- Changed: `scripts/provision-qemu-tpm.sh`.
 
 ### Next session opening
 
-Exercise the online path for real: provision `gEfiTlsCaCertificateGuid` in the QEMU NVRAM
-with a test CA, run a TLS verdict endpoint the firmware can reach (10.0.2.2), obtain a
-`device_id` via `POST /v1/enroll`, and assert `Online fetch succeeded` plus a verified
-verdict — the first time either would be true.
+Point the wire harness at this deployment instead of its bundled TLS server: mint a policy
+whose `lock_service_uri` is the server, pin the CA the server presents, and confirm the
+Express `/v1/verdict` route answers the firmware — then `POST /v1/enroll` so the PBL device
+registry has its first row, which is also what makes the dashboard's PBL page non-empty.
 
 ---
 

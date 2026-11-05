@@ -11324,3 +11324,111 @@ with a test CA, run a TLS verdict endpoint the firmware can reach (10.0.2.2), ob
 verdict — the first time either would be true.
 
 ---
+
+---
+
+## Session 232 — 2026-11-05 (the firmware talks to a TLS server, and verifies the verdict)
+
+### RULE-ZERO
+
+**Read**: `d131-wire-capture.py` (modes, the C4 policy keys, why key 78 exists),
+`test-d131-wire-harness.sh` (requirements, mounts, checks), `scripts/provision-qemu-tpm.sh`
+(NV define/write), `PblPkg.dec` (`PcdPblTpmNvAuthValue`).
+
+**Starting point**: S231 recorded that the online verdict path had never been exercised —
+the QEMU harness only ever proved banners on a suppressed request.
+
+### BUGS FIXED — provisioning could not write the AK Name at all
+
+`scripts/provision-qemu-tpm.sh` failed with
+
+```
+ERROR: Tss2_Sys_NV_Write(0x149) - tpm:error(2.0): NV access authorization fails
+```
+
+- The index is defined with **AUTHWRITE** (attribute `0x4`), so the *index's own* auth
+  value authorizes the write — but the define set none, and the write used the platform
+  hierarchy (`-C p`), which is not authorized for AUTHWRITE. The firmware uses
+  `PcdPblTpmNvAuthValue` (`PBL_DEV_NV_AUTH_KEY_32B_LONG!!`), so provisioning must too.
+- While fixing that I introduced a second error worth naming: `tpm2_nvdefine` takes the
+  **hierarchy** auth in `-P` and the **index** auth in `-p`. Using `-P` for the index value
+  failed with `0x9A2 authorization failure without DA implications`.
+
+Both the host and the container path are fixed, and the readback uses the same
+authorization. Verified: `AK Name verified in NV 0x01C00003: 000babab…`.
+
+### RESULT — the online path runs, first time
+
+```
+=== Wire checks ===
+  [PASS] policy blob loaded from ESP
+  [PASS] device_id derived from AK Name
+  [PASS] verdict request posted over TLS
+  [PASS] server received a request
+  [PASS] wire device_id matches AK Name
+  [PASS] verdict decoded by firmware
+  [PASS] verdict signature verified
+  [PASS] request body captured (1 file(s))
+=== Results: 8 PASS / 0 FAIL ===
+```
+
+Artifacts: serial log 2859 bytes, server log 221 bytes, `wire.pcap` 5475 bytes, and the raw
+request body. So the firmware, over **real TLS** with the CA pinned through policy key 78
+(the D-132 design), posts `/v1/verdict`, the server receives it, the `device_id` on the wire
+matches the AK Name, and the returned verdict is **decoded and signature-verified**.
+
+### Fog cleared
+
+- **Whether the firmware can do a real TLS verdict exchange**: yes — proven on the wire, with
+  the device_id and the signature check both asserted, not inferred from banners.
+- **Why the AK Name was never provisioned**: the provisioning script had never successfully
+  written the index; every earlier "unprovisioned" result was this bug, not the firmware.
+
+### Fog remaining
+
+- **The exchange went to the harness's own TLS server**, not to this deployment's Express
+  `/v1/verdict`. Pointing it there needs the same CA pinned into a policy the server issues,
+  plus `POST /v1/enroll` so the PBL device registry is populated — the remaining work.
+- **Hardware**: still QEMU + swtpm, one rung below real media; I3 unsatisfied.
+- D-117 (markdown/spec drift) untouched.
+
+### Debt items closed
+
+- The "online verdict path never exercised" item from S231.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None for the firmware side. The next step is wiring the harness at the live server.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the provisioning script never verified its
+  own write until now (it does a readback), and the harness failed loudly instead of
+  skipping — that combination is what made this fixable. The earlier "unprovisioned" results
+  were read as a firmware property for several sessions.
+- **Layer 2 — context provision**: `tpm2_nvdefine`'s `-P`/`-p` distinction and the AUTHWRITE
+  implication were not documented anywhere in the script; they are now in comments.
+
+### VERIFY
+
+- Provisioning: `AK Name verified in NV 0x01C00003: 000babababab…`
+- Wire harness: 8 PASS / 0 FAIL (list above), with serial/server logs and `wire.pcap`
+  (5475 bytes) retained.
+- Commit: `e53680e`.
+
+### Session artifacts
+
+- Changed: `scripts/provision-qemu-tpm.sh`.
+
+### Next session opening
+
+Point the wire harness at this deployment instead of its bundled TLS server: mint a policy
+whose `lock_service_uri` is the server, pin the CA the server presents, and confirm the
+Express `/v1/verdict` route answers the firmware — then `POST /v1/enroll` so the PBL device
+registry has its first row, which is also what makes the dashboard's PBL page non-empty.
+
+---
