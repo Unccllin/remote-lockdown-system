@@ -53,65 +53,71 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 249 — 2026-11-05 (reconciled all 22 ledger disagreements; and a self-inflicted I4 break)
+## Latest session: 250 — 2026-11-05 (5 cooldown findings fixed; and what the 102 alerts actually are)
 
 ### Fog cleared
 
-- **The ledger is now self-consistent**: 0 of 46 items disagree, enforced by
-  `scripts/check_debt_ledger.py` in `make lint` and CI.
-- **Which source was stale**: the markdown entries, not the table and not the graph.
+- **What the 102 code-scanning alerts are**: CodeQL's default suite. The repo's enforced gate is
+  Semgrep, and it is **clean at ERROR level** (0 of 50 findings), which is why `sast-semgrep`
+  passes.
+- **What the 5 remaining Dependabot vulnerabilities are not**: nothing an audit can reach — npm
+  across four components, pip for both requirement sets, Actions pins and Dockerfile bases are
+  all clean. They are most likely Docker base-image OS packages, which Dependabot tracks and
+  npm/pip audits cannot see.
 
 ### Fog remaining
 
-- **D-117 stays OPEN** and is not part of this reconciliation: it needs real host-side unit
-  tests (CMocka/unity) for the PBL modules. The QEMU integration harness is not a substitute.
-- **D-129** (real-hardware validation) now carries the emulated-only residual for eight items;
-  it is the honest place for "passes in QEMU, not on a real machine".
-- The remaining Dependabot highs still need the security page (S247).
-- Firmware remains QEMU-only, so I3 stays unsatisfied.
+- **The 5 Dependabot vulnerabilities are still unidentified** — confirming them needs the
+  Dependabot page (package, advisory id, manifest). Guessing would repeat S247's mistake of
+  theorising where a measurement was available.
+- **CodeQL's 102 alerts are untriaged.** Without UI access the security-severity split is
+  unknown; most in a codebase like this are maintainability (unused variables, empty blocks),
+  but that is an expectation, not a measurement.
+- **40 WARNING + 5 INFO Semgrep findings remain unfixed.** `sast-gate.py` documents most as
+  expected (`dynamic-urllib-use` for an agent posting to an operator-configured server,
+  `path-join-resolve-traversal` in the installer). The 10 path-traversal and 11
+  credential-disclosure hits deserve a deliberate review rather than a blanket "expected".
+- D-117 (host-side PBL unit tests) and D-129 (real-hardware validation) remain open.
+- Firmware is still QEMU-only, so I3 is unsatisfied.
 
 ### Debt items closed
 
-- **None by this session.** The 22 items were already closed in the graph; this session
-  reconciled their *documentation* to match. Claiming them as closes would double-count work
-  done in earlier sessions and would fail I2's evidence rule, which is exactly the discipline
-  that made the reconciliation possible.
+- None.
 
 ### Debt items still open
 
-- D-117 (no host-side unit tests for PBL modules), D-129 (real-hardware validation),
-  and the PBL tail tracked in `GRAPH-SPEC.yaml`.
+- D-117 (no host-side unit tests for PBL modules), D-129 (real-hardware validation), and the
+  PBL tail tracked in `GRAPH-SPEC.yaml`.
 
 ### Blockers
 
-- None for the ledger. The Dependabot remainder is blocked on access to the security page.
+- The five Dependabot findings cannot be identified without the security page (or a token);
+  CodeQL's alerts likewise.
 
 ### Failure attribution
 
-- **Layer 5 — state management** (primary): I broke invariant I4 by writing sessions 245–248
-  without the mandated `Debt items closed` / `Debt items still open` / `Blockers` sections.
-  The generator copies only those state sections into `current-state.md`, so the compact
-  artifact lost them and `graph_assert.py` refused. The fix is this block; the lesson is that
-  the template is load-bearing, not decorative.
-- **Layer 4 — verification feedback**: `make graph-check` caught it immediately, which is the
-  gate doing its job — a session that never ran the gate would have silently shipped a
-  `current-state.md` missing its state sections.
+- **Layer 4 — verification feedback** (primary): the 5 MEDIUM findings had been visible in the
+  SAST output since the job was written, printed but never acted on, because the gate only fails
+  on ERROR. A summary line that says "5 MEDIUM" without anyone reading it is a half-gate.
+- **Layer 2 — context provision**: nothing said the `sast-semgrep` job uploads no SARIF, so the
+  origin of "102 code scanning alerts" was not documented and had to be derived.
 
 ### VERIFY
 
-- `python3 scripts/check_debt_ledger.py --update-baseline` → `baseline written: 0 known
-  mismatch(es)`; the check then reports `mismatches now: 0 | recorded: 0 | new: 0 |
-  stale baseline: 0` and exits 0.
-- `make graph-check` → all invariants pass after this block (I4 included).
-- `make lint` passes with the ledger gate in it.
-- Evidence for the closes: `commit_ref 684d7eb` resolves (I2), artifact text per item in
-  `GRAPH-SPEC.yaml`, and the implementations counted above.
+- Before: `semgrep --config=p/default` → 50 findings, `{'MEDIUM': 5, 'INFO': 5, 'WARNING': 40}`,
+  0 ERROR.
+- After: 45 findings, `{'INFO': 5, 'WARNING': 40}`, **0 MEDIUM, 0 ERROR**; the five entries carry
+  `cooldown={'default-days': 7}` (verified by parsing the YAML).
+- `sast-gate.py` still passes (ERROR-only gate).
+- Audit sweep for the vulnerabilities: npm 0 high across four components, `pip-audit` clean for
+  `agent/requirements.txt` and `firmware/PblPkg/requirements.txt`, all `uses:` SHA-pinned.
 
 ### Next session opening
 
-Take D-117 itself: add a host-side unit-test harness for the PBL modules (CBOR/COSE codec,
-TPM command construction, decision logic) so the emulated integration path stops being the only
-test, then the debt ledger has no remaining OPEN item that this host can finish.
+Take the 40 WARNING findings seriously enough to classify them: fix the ones that are real
+(starting with the 10 `path-join-resolve-traversal` hits in the installer and the 11
+credential-disclosure hits), and record the rest as reviewed with a reason — then the SAST
+surface has evidence behind "expected" instead of a comment.
 
 ---
 

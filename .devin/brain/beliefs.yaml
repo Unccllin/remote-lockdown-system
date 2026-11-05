@@ -2366,3 +2366,33 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-104
+  statement: 'The repository''s enforceable SAST gate is Semgrep (semgrep==1.182.1, --config=p/default)
+    gated by scripts/sast-gate.py on ERROR severity only, and it uploads no SARIF — so GitHub''s ''code
+    scanning'' alert count belongs to CodeQL''s default suite, which is advisory here, not to the gate
+    that can fail a build. Running the CI-pinned scanner locally gives 0 ERROR findings, which is why
+    sast-semgrep passes. Its 5 MEDIUM findings were all dependabot-missing-cooldown against the five ecosystems
+    in .github/dependabot.yml, which is a real supply-chain path (a bot proposing versions the moment
+    they are published can propose a compromised or soon-yanked release before anyone notices); adding
+    cooldown default-days: 7 to all five cleared them (45 findings: 0 MEDIUM, 0 ERROR, 40 WARNING, 5 INFO).
+    The remaining Dependabot vulnerabilities are not reachable by any local audit: npm reports 0 high
+    across server/dashboard/electron/serverless, pip-audit is clean for agent/requirements.txt AND firmware/PblPkg/requirements.txt,
+    every Actions uses: is SHA-pinned, and the Dockerfile bases are current — so what remains is most
+    likely Docker base-image OS packages, which Dependabot tracks and npm/pip audits cannot see; identifying
+    them needs the Dependabot page.'
+  domain: general
+  status: proposed
+  evidence_level: assumed
+  provenance: 'executed: local scan with semgrep 1.182.1 p/default before (50 findings: MEDIUM 5, INFO
+    5, WARNING 40, ERROR 0) and after the cooldown change (45 findings: MEDIUM 0, ERROR 0); YAML parsed
+    to confirm cooldown={''default-days'': 7} on all five ecosystems; npm/pip audits and Actions/Docker
+    sweeps clean'
+  source: .github/dependabot.yml; .github/workflows/lint.yml (sast-semgrep); scripts/sast-gate.py; firmware/PblPkg/requirements.txt;
+    agent/requirements.txt; /tmp/semgrep.json and /tmp/semgrep2.json
+  asserted: '2026-11-05'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

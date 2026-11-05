@@ -12928,3 +12928,99 @@ TPM command construction, decision logic) so the emulated integration path stops
 test, then the debt ledger has no remaining OPEN item that this host can finish.
 
 ---
+
+---
+
+## Session 250 — 2026-11-05 (5 cooldown findings fixed; and what the 102 alerts actually are)
+
+### RULE-ZERO
+
+**Read**:
+- `.github/dependabot.yml` — the five ecosystem entries and their schedules
+- `.github/workflows/lint.yml` — how `sast-semgrep` scans, and whether it uploads SARIF
+- `scripts/sast-gate.py` — the policy: fail on ERROR only, print WARNING/MEDIUM/INFO
+- `firmware/PblPkg/requirements.txt` — the Python surface never audited before
+- `/tmp/semgrep.json` — the scan output this session produced
+
+**Finding**: the SAST job runs `semgrep scan --config=p/default` and gates through
+`sast-gate.py`; it uploads **no SARIF**, so the 102 code-scanning alerts are **CodeQL's**
+(which now runs successfully), not Semgrep's.
+
+### Finding — the 5 MEDIUM findings were one real rule, five times
+
+All five were `dependabot-missing-cooldown` against `.github/dependabot.yml`. That is not
+noise: a bot that proposes a version the moment it is published is a supply-chain path, because
+a compromised or soon-yanked release can be proposed and merged before anyone notices.
+
+### Implement
+
+- Added `cooldown: default-days: 7` to all five ecosystems (npm ×3, pip, github-actions), each
+  with a comment saying why. A version must now have been public for a week before Dependabot
+  suggests it.
+- No code changed; this is configuration plus its justification.
+
+### Fog cleared
+
+- **What the 102 code-scanning alerts are**: CodeQL's default suite. The repo's enforced gate is
+  Semgrep, and it is **clean at ERROR level** (0 of 50 findings), which is why `sast-semgrep`
+  passes.
+- **What the 5 remaining Dependabot vulnerabilities are not**: nothing an audit can reach — npm
+  across four components, pip for both requirement sets, Actions pins and Dockerfile bases are
+  all clean. They are most likely Docker base-image OS packages, which Dependabot tracks and
+  npm/pip audits cannot see.
+
+### Fog remaining
+
+- **The 5 Dependabot vulnerabilities are still unidentified** — confirming them needs the
+  Dependabot page (package, advisory id, manifest). Guessing would repeat S247's mistake of
+  theorising where a measurement was available.
+- **CodeQL's 102 alerts are untriaged.** Without UI access the security-severity split is
+  unknown; most in a codebase like this are maintainability (unused variables, empty blocks),
+  but that is an expectation, not a measurement.
+- **40 WARNING + 5 INFO Semgrep findings remain unfixed.** `sast-gate.py` documents most as
+  expected (`dynamic-urllib-use` for an agent posting to an operator-configured server,
+  `path-join-resolve-traversal` in the installer). The 10 path-traversal and 11
+  credential-disclosure hits deserve a deliberate review rather than a blanket "expected".
+- D-117 (host-side PBL unit tests) and D-129 (real-hardware validation) remain open.
+- Firmware is still QEMU-only, so I3 is unsatisfied.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (no host-side unit tests for PBL modules), D-129 (real-hardware validation), and the
+  PBL tail tracked in `GRAPH-SPEC.yaml`.
+
+### Blockers
+
+- The five Dependabot findings cannot be identified without the security page (or a token);
+  CodeQL's alerts likewise.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the 5 MEDIUM findings had been visible in the
+  SAST output since the job was written, printed but never acted on, because the gate only fails
+  on ERROR. A summary line that says "5 MEDIUM" without anyone reading it is a half-gate.
+- **Layer 2 — context provision**: nothing said the `sast-semgrep` job uploads no SARIF, so the
+  origin of "102 code scanning alerts" was not documented and had to be derived.
+
+### VERIFY
+
+- Before: `semgrep --config=p/default` → 50 findings, `{'MEDIUM': 5, 'INFO': 5, 'WARNING': 40}`,
+  0 ERROR.
+- After: 45 findings, `{'INFO': 5, 'WARNING': 40}`, **0 MEDIUM, 0 ERROR**; the five entries carry
+  `cooldown={'default-days': 7}` (verified by parsing the YAML).
+- `sast-gate.py` still passes (ERROR-only gate).
+- Audit sweep for the vulnerabilities: npm 0 high across four components, `pip-audit` clean for
+  `agent/requirements.txt` and `firmware/PblPkg/requirements.txt`, all `uses:` SHA-pinned.
+
+### Next session opening
+
+Take the 40 WARNING findings seriously enough to classify them: fix the ones that are real
+(starting with the 10 `path-join-resolve-traversal` hits in the installer and the 11
+credential-disclosure hits), and record the rest as reviewed with a reason — then the SAST
+surface has evidence behind "expected" instead of a comment.
+
+---
