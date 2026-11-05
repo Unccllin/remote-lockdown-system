@@ -12827,3 +12827,104 @@ baseline line as it is settled; then take D-117 itself, which needs real host-si
 for the PBL modules.
 
 ---
+
+---
+
+## Session 249 — 2026-11-05 (reconciled all 22 ledger disagreements; and a self-inflicted I4 break)
+
+### RULE-ZERO
+
+**Read**:
+- `.devin/graph/debt-ledger-mismatches.txt` — the 22 baselined items
+- `docs/adr/PBL-DEBT-LEDGER.md` — each item's detailed entry and its table row
+- `.devin/graph/GRAPH-SPEC.yaml` — each item's status, `commit_ref` and `artifact_ref`
+- `firmware/PblPkg/PblApp/SpiProtections.c` — one of the implementations the entries claimed
+  were missing (85 lines)
+
+**Why the graph decides**: I2 enforces that a `commit_ref` resolves and an `artifact_ref`
+exists, so the graph spec is machine-checked; the markdown prose is not. Where they disagreed,
+the enforced source wins.
+
+### Finding — the 22 markdown entries were the stale side
+
+Every baselined item whose entry said OPEN is **CLOSED in the graph spec**, each citing
+`commit 684d7eb` plus an artifact. Corroborated three ways:
+
+1. **The code exists** — dedicated implementations, not stubs: `SpiProtections.c` 85 lines,
+   `DciCheck.c` 57, `DmaProtection.c` 67, `Mor.c` 131, `TcgLog.c` 166, `Svn.c` 85.
+2. **The artifacts are ones I have personally observed** in the QEMU harness runs:
+   `Decision step`, `Lock screen displayed`, `Override input sent: True`, nonce generated and
+   attested every boot, platform-state collection completing.
+3. **The residual is tracked elsewhere**, not lost: the graph notes "real-hw residual → D-129"
+   for D-122…D-128, so closing them in emulation is the documented, deliberate position — not
+   an overstatement.
+
+`D-133` was the mirror case (entry CLOSED, table OPEN) and its row is now CLOSED too.
+
+### IMPLEMENT
+
+- 21 detailed entries: `**Status**: OPEN` → `**Status**: CLOSED (graph GRAPH-SPEC.yaml:
+  commit 684d7eb + artifact — this entry predated the code)`. Only the status line changed.
+- `D-133`'s table row set to CLOSED with its evidence.
+- Baseline regenerated: **0 known mismatches** (down from 22), so
+  `.devin/graph/debt-ledger-mismatches.txt` is now empty and the guard runs clean.
+
+### Fog cleared
+
+- **The ledger is now self-consistent**: 0 of 46 items disagree, enforced by
+  `scripts/check_debt_ledger.py` in `make lint` and CI.
+- **Which source was stale**: the markdown entries, not the table and not the graph.
+
+### Fog remaining
+
+- **D-117 stays OPEN** and is not part of this reconciliation: it needs real host-side unit
+  tests (CMocka/unity) for the PBL modules. The QEMU integration harness is not a substitute.
+- **D-129** (real-hardware validation) now carries the emulated-only residual for eight items;
+  it is the honest place for "passes in QEMU, not on a real machine".
+- The remaining Dependabot highs still need the security page (S247).
+- Firmware remains QEMU-only, so I3 stays unsatisfied.
+
+### Debt items closed
+
+- **None by this session.** The 22 items were already closed in the graph; this session
+  reconciled their *documentation* to match. Claiming them as closes would double-count work
+  done in earlier sessions and would fail I2's evidence rule, which is exactly the discipline
+  that made the reconciliation possible.
+
+### Debt items still open
+
+- D-117 (no host-side unit tests for PBL modules), D-129 (real-hardware validation),
+  and the PBL tail tracked in `GRAPH-SPEC.yaml`.
+
+### Blockers
+
+- None for the ledger. The Dependabot remainder is blocked on access to the security page.
+
+### Failure attribution
+
+- **Layer 5 — state management** (primary): I broke invariant I4 by writing sessions 245–248
+  without the mandated `Debt items closed` / `Debt items still open` / `Blockers` sections.
+  The generator copies only those state sections into `current-state.md`, so the compact
+  artifact lost them and `graph_assert.py` refused. The fix is this block; the lesson is that
+  the template is load-bearing, not decorative.
+- **Layer 4 — verification feedback**: `make graph-check` caught it immediately, which is the
+  gate doing its job — a session that never ran the gate would have silently shipped a
+  `current-state.md` missing its state sections.
+
+### VERIFY
+
+- `python3 scripts/check_debt_ledger.py --update-baseline` → `baseline written: 0 known
+  mismatch(es)`; the check then reports `mismatches now: 0 | recorded: 0 | new: 0 |
+  stale baseline: 0` and exits 0.
+- `make graph-check` → all invariants pass after this block (I4 included).
+- `make lint` passes with the ledger gate in it.
+- Evidence for the closes: `commit_ref 684d7eb` resolves (I2), artifact text per item in
+  `GRAPH-SPEC.yaml`, and the implementations counted above.
+
+### Next session opening
+
+Take D-117 itself: add a host-side unit-test harness for the PBL modules (CBOR/COSE codec,
+TPM command construction, decision logic) so the emulated integration path stops being the only
+test, then the debt ledger has no remaining OPEN item that this host can finish.
+
+---

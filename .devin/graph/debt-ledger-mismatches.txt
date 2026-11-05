@@ -6,25 +6,3 @@
 # baseline entries that no longer apply, so this file cannot quietly overstate the
 # drift either. Regenerate with: python3 scripts/check_debt_ledger.py --update-baseline
 
-D-100 detail=PARTIAL table=CLOSED
-D-111 detail=OPEN table=CLOSED
-D-112 detail=OPEN table=CLOSED
-D-113 detail=OPEN table=CLOSED
-D-114 detail=OPEN table=CLOSED
-D-115 detail=OPEN table=CLOSED
-D-118 detail=OPEN table=CLOSED
-D-119 detail=OPEN table=CLOSED
-D-121 detail=OPEN table=CLOSED
-D-122 detail=OPEN table=CLOSED
-D-123 detail=OPEN table=CLOSED
-D-124 detail=OPEN table=CLOSED
-D-125 detail=OPEN table=CLOSED
-D-126 detail=OPEN table=CLOSED
-D-127 detail=OPEN table=CLOSED
-D-128 detail=OPEN table=CLOSED
-D-133 detail=CLOSED table=OPEN
-D-201 detail=OPEN table=CLOSED
-D-202 detail=OPEN table=CLOSED
-D-203 detail=OPEN table=CLOSED
-D-204 detail=OPEN table=CLOSED
-D-211 detail=OPEN table=CLOSED

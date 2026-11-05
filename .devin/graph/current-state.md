@@ -53,55 +53,65 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 248 — 2026-11-05 (the ledger disagreed with itself on 23 of 46 items)
+## Latest session: 249 — 2026-11-05 (reconciled all 22 ledger disagreements; and a self-inflicted I4 break)
 
 ### Fog cleared
 
-- **What D-117's actual state is**: OPEN, and now stated the same way in both places, with the
-  verified reason (no unit tests) rather than a QEMU log count standing in for one.
-- **How far the drift goes**: 23 of 46, quantified instead of discovered one item at a time.
+- **The ledger is now self-consistent**: 0 of 46 items disagree, enforced by
+  `scripts/check_debt_ledger.py` in `make lint` and CI.
+- **Which source was stale**: the markdown entries, not the table and not the graph.
 
 ### Fog remaining
 
-- **The other 22 disagreements are not fixed** — only recorded and made visible. Reconciling
-  each means verifying it against the codebase (as was done for D-117), which is per-item work
-  the baseline now tracks honestly.
-- D-117 itself stays OPEN: it needs host-side unit tests (CMocka/unity) for the PBL modules,
-  which is a real work item, not a documentation fix.
+- **D-117 stays OPEN** and is not part of this reconciliation: it needs real host-side unit
+  tests (CMocka/unity) for the PBL modules. The QEMU integration harness is not a substitute.
+- **D-129** (real-hardware validation) now carries the emulated-only residual for eight items;
+  it is the honest place for "passes in QEMU, not on a real machine".
 - The remaining Dependabot highs still need the security page (S247).
-- D-117's sibling: firmware remains QEMU-only (I3).
+- Firmware remains QEMU-only, so I3 stays unsatisfied.
+
+### Debt items closed
+
+- **None by this session.** The 22 items were already closed in the graph; this session
+  reconciled their *documentation* to match. Claiming them as closes would double-count work
+  done in earlier sessions and would fail I2's evidence rule, which is exactly the discipline
+  that made the reconciliation possible.
+
+### Debt items still open
+
+- D-117 (no host-side unit tests for PBL modules), D-129 (real-hardware validation),
+  and the PBL tail tracked in `GRAPH-SPEC.yaml`.
+
+### Blockers
+
+- None for the ledger. The Dependabot remainder is blocked on access to the security page.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the ledger is a document that *describes* the
-  state of work, and nothing had ever checked that it describes it consistently. One table cell
-  was wrong for months because no test read the file.
-- **Layer 5 — state management**: two sources of truth for the same fact, with no rule about
-  which wins. They now have one, enforced by `make lint` and CI.
+- **Layer 5 — state management** (primary): I broke invariant I4 by writing sessions 245–248
+  without the mandated `Debt items closed` / `Debt items still open` / `Blockers` sections.
+  The generator copies only those state sections into `current-state.md`, so the compact
+  artifact lost them and `graph_assert.py` refused. The fix is this block; the lesson is that
+  the template is load-bearing, not decorative.
+- **Layer 4 — verification feedback**: `make graph-check` caught it immediately, which is the
+  gate doing its job — a session that never ran the gate would have silently shipped a
+  `current-state.md` missing its state sections.
 
 ### VERIFY
 
-- `python3 scripts/check_debt_ledger.py` → `mismatches now: 22 | recorded: 22 | new: 0 |
-  stale baseline: 0`, exit 0.
-- `python3 scripts/test_check_debt_ledger.py` → **8 passed**; the suite also caught a real bug
-  in the checker (`fixed = bool(current) and not new` made an empty ledger exit 1).
-- `make test-scripts` → all suites pass, including the auto-discovered new one and the
-  "every script test has a runner" rule.
-- `make lint` (which now includes the new gate) passes; `make lint-workflows` clean.
-- Commit: `4b3c31f`.
-
-### Session artifacts
-
-- Changed: `docs/adr/PBL-DEBT-LEDGER.md`, `Makefile`, `.github/workflows/ci.yml`;
-  new: `scripts/check_debt_ledger.py`, `scripts/test_check_debt_ledger.py`,
-  `.devin/graph/debt-ledger-mismatches.txt`.
+- `python3 scripts/check_debt_ledger.py --update-baseline` → `baseline written: 0 known
+  mismatch(es)`; the check then reports `mismatches now: 0 | recorded: 0 | new: 0 |
+  stale baseline: 0` and exits 0.
+- `make graph-check` → all invariants pass after this block (I4 included).
+- `make lint` passes with the ledger gate in it.
+- Evidence for the closes: `commit_ref 684d7eb` resolves (I2), artifact text per item in
+  `GRAPH-SPEC.yaml`, and the implementations counted above.
 
 ### Next session opening
 
-Reconcile the 22 baselined disagreements one at a time, verifying each against the code the way
-D-117 was (a claim of CLOSED needs a commit and an artifact, not a table entry), deleting each
-baseline line as it is settled; then take D-117 itself, which needs real host-side unit tests
-for the PBL modules.
+Take D-117 itself: add a host-side unit-test harness for the PBL modules (CBOR/COSE codec,
+TPM command construction, decision logic) so the emulated integration path stops being the only
+test, then the debt ledger has no remaining OPEN item that this host can finish.
 
 ---
 

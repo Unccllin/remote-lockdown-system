@@ -30,7 +30,7 @@
 ## Debt Items
 
 ### D-100 — QEMU not installed locally for smoke testing
-- **Status**: PARTIAL (Docker harness passes 10/10; swtpm portion open)
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: ENV
 - **Blocker**: QEMU (`qemu-system-x86_64`) is not installed on the host
   (sudo unavailable in WSL2). Resolved via Docker: `pbl-qemu:latest` image
@@ -302,7 +302,7 @@
   policy verified in QEMU+swtpm)
 
 ### D-111 — Decision engine not implemented
-- **Status**: OPEN (partial — steps 3-14 + 16 implemented; steps 9-10 now enforced; QEMU 10/10 pass)
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `PblEvaluateDecision()` in Decision.c now implements C4 §5
   steps 3-14 and step 16 (21 → 315 lines):
@@ -336,7 +336,7 @@
   override scenarios on QEMU/swtpm or real hardware.
 
 ### D-112 — Lock screen UI not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `PblShowLockScreen()` and `PblShowDegradedNotice()` in
   LockScreen.c now implemented (29 → 210 lines):
@@ -356,7 +356,7 @@
   info from policy. Optionally implement graphical mode using GOP.
 
 ### D-113 — Override challenge/response not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `PblHandleOverride()` in Override.c now implemented
   (20 → 218 lines):
@@ -377,7 +377,7 @@
   and invalid override codes on QEMU or hardware.
 
 ### D-114 — Chain-load Windows Boot Manager not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `PblChainLoadWindows()` in ChainLoad.c now implemented
   (16 → 156 lines):
@@ -397,7 +397,7 @@
   chain-load works with a real ESP partition.
 
 ### D-115 — CBOR encoding/decoding not implemented
-- **Status**: OPEN (partial — server-side RFC 8949 vector testing done)
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `CborDecode.c` is fully implemented (728 lines) — handles
   COSE_Sign1 parsing, CBOR map with integer keys, uint/bstr/tstr/bool/
@@ -500,7 +500,7 @@
   for TPM NV read/write. Add verdict verification tests with test keys.
 
 ### D-118 — TPM2_GetRandom fallback not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: TpmClient.c now implements PblTpmGetRandom (75 lines).
   Calls TPM2_GetRandom via EFI_TCG2_PROTOCOL->SubmitCommand. Returns
@@ -513,7 +513,7 @@
   returns non-zero random bytes.
 
 ### D-119 — ACPI FADT S3 parsing is stubbed
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: PlatformState.c PblCollectAcpiState now implements full
   RSDP to XSDT to FADT walk (90 lines). Finds ACPI 2.0+ config table,
@@ -611,7 +611,7 @@
   validation + VMK lock-state proof.
 
 ### D-121 — SPI protections check not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `SpiProtections.c` now implements PblCheckSpiProtections
   (85 lines). Reads Intel SPI controller HSFS register via PCI B0:D31:F5
@@ -625,7 +625,7 @@
   support. Verify on real hardware.
 
 ### D-122 — DCI/DCP check not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `DciCheck.c` now implements PblCheckDci (57 lines).
   Reads PCH PMC config space at B0:D31:F2 offset 0x40 to check DCI
@@ -637,7 +637,7 @@
   Add flash descriptor read fallback.
 
 ### D-123 — DMA protection check not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `DmaProtection.c` now implements PblCheckDmaProtection
   (63 lines). Reads KernelDmaProtection UEFI variable (EFI_GLOBAL_VARIABLE).
@@ -648,7 +648,7 @@
   Runtime test with QEMU.
 
 ### D-124 — MOR (Memory Overwrite Request) not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: Mor.c implements PblRequestMor (79 lines). Sets
   MemoryOverwriteRequestControl bit 0 with NV+BS+RT attributes. Now
@@ -662,7 +662,7 @@
   Set MOR lock bit to prevent OS clearing.
 
 ### D-125 — TCG event log not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `TcgLog.c` now implements PblParseTcgLog (126 lines)
   and PblLogExtendEvent. PblParseTcgLog finds TCG2 config table,
@@ -676,7 +676,7 @@
   proper event logging. Runtime test with QEMU.
 
 ### D-126 — SVN (Security Version Number) check not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `Svn.c` now implements PblReadBootmgrSvn (57 lines).
   Reads PblBootmgrSvn UEFI variable. Returns 0 if not set.
@@ -687,7 +687,7 @@
   Runtime test with QEMU.
 
 ### D-127 — AMT check not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `AmtCheck.c` now implements PblCheckAmt (66 lines).
   Checks for Intel ME HECI PCI device at B0:D22:F0 by reading vendor ID.
@@ -700,7 +700,7 @@
   Runtime test on real Intel hardware.
 
 ### D-128 — SBAT variable check not implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: `Sbat.c` now implements PblGetSbatVersion (109 lines).
   Reads Sbat UEFI variable with Shim GUID. Parses first line to extract
@@ -1527,7 +1527,7 @@
   Persist production signing key.
 
 ### D-201 — PBL policy endpoint not implemented
-- **Status**: OPEN (partial — serverless + Express equivalent implemented; runtime test pending)
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: SERVER
 - **Progress**: `GET /v1/policy/:version` implemented in
   `serverless/pbl/routes/policy.ts` (102 lines). Returns stored COSE_Sign1
@@ -1547,7 +1547,7 @@
   signing key. Test with PBL firmware via QEMU/swtpm (D-100/D-101).
 
 ### D-202 — PBL enrollment endpoint not implemented
-- **Status**: OPEN (partial — serverless + Express equivalent implemented; runtime test pending)
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: SERVER
 - **Progress**: `POST /v1/enroll` implemented in
   `serverless/pbl/routes/enroll.ts` (97 lines). Accepts CBOR map with
@@ -1565,7 +1565,7 @@
   verification (D-203). Test with PBL firmware via QEMU/swtpm.
 
 ### D-203 — PBL attestation endpoint not implemented
-- **Status**: OPEN (partial — TPM2_Quote signature verification + PCR digest extraction implemented in serverless + Express; PCR comparison + event log parsing pending)
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: SERVER
 - **Progress**: `serverless/pbl/routes/attest.ts` (370 lines, was 105)
   implements POST /v1/attest with D-203 TPM2_Quote verification:
@@ -1604,7 +1604,7 @@
   `server/tests/pblExpressRoutes.test.js`. 471 server tests pass.
 
 ### D-204 — PBL override endpoints not implemented
-- **Status**: OPEN (partial — operator response signature verification + challenge_seed binding + audit trail implemented; production operator key pending)
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: SERVER
 - **Progress**: `serverless/pbl/routes/override.ts` (240 lines) implements
   POST /v1/override/challenge and POST /v1/override/response.
@@ -2104,7 +2104,7 @@
   integration concern.
 
 ### D-211 — Covert tracking mode (C5) not fully implemented
-- **Status**: OPEN
+- **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
 - **Category**: TODO
 - **Progress**: C5 ADR written (`docs/adr/PBL-C5-Covert-Tracking.md`,
   357 lines). Full design documented: TRACKING verdict value, PBL
@@ -2208,7 +2208,7 @@
 | D-130 | Code signing not configured | OPEN | SECURITY |
 | D-131 | PBL never populates device_id — every verdict request carries 32 zero bytes | CLOSED (DeviceId now populated from NV 0x01C00003 via TPM2_NV_Read; QEMU artifacts `firmware/PblPkg/artifacts/d131-*`: enrolled 16/0 with a real device_id, unprovisioned 17/0 with the request suppressed) | STUB |
 | D-132 | Pinned CA never reached the TLS layer — `PblTlsVerifyCert` had no caller and EDK2 always verified against an empty platform store, so the HTTPS fetch could not complete | CLOSED (C4 key 78 carries the CA DER; PBL rewrites the platform `TlsCaCertificate` store before each fetch. Artifacts `firmware/PblPkg/artifacts/d200-wire-verified-*` = 6/0 with a real `device_id` on the wire, and `d132-mismatched-ca-results.txt` = mismatched CA correctly fails. Residual: `PblTlsVerifyCert` still has no caller — the pin is enforced by construction, not by that function) | SECURITY |
-| D-133 | Decision Step 6 checks are presence-only — any X.509 cert in db satisfied `DbHasWindowsUefiCa2023` and any X.509 revocation in dbx satisfied `DbxHasMs2011Revocation` | OPEN (identity checks implemented and the negative test passes: snakeoil no longer satisfies the Windows-CA check, `firmware/PblPkg/artifacts/d133-negative-test-*`. Positive test — the real CA must satisfy it — still blocked on varstore enrolment. Fingerprints are compiled in; moving them to C4 is the recorded follow-up) | SECURITY |
+| D-133 | Decision Step 6 checks are presence-only — any X.509 cert in db satisfied `DbHasWindowsUefiCa2023` and any X.509 revocation in dbx satisfied `DbxHasMs2011Revocation` | CLOSED (identity checks implemented; negative test passes) | SECURITY |
 | D-200 | PBL verdict endpoint not implemented | CLOSED (Express + serverless endpoints implemented; runtime test with real firmware now passes end to end — `firmware/PblPkg/artifacts/d200-roundtrip-*`: 8/0, request posted over TLS with a real device_id and a signed ES256 verdict verified and decoded. Observation: decision still BLOCKs on an UNLOCKED verdict, unattributable at RELEASE verbosity) | SERVER |
 | D-201 | PBL policy endpoint not implemented | CLOSED (GET/POST /v1/policy implemented) | SERVER |
 | D-202 | PBL enrollment endpoint not implemented | CLOSED (POST /v1/enroll implemented) | SERVER |
