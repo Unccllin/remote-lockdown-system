@@ -1757,3 +1757,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-084
+  statement: 'The PBL devices page shows zero because there are two separate device registries: GET /v1/devices
+    scans KV keys prefixed ''pbl_devices:'', which only POST /v1/enroll (the PBL firmware programme) writes,
+    while the agent flow (POST /api/enroll/claim) writes the devices table read by GET /api/devices; an
+    agent-enrolled machine such as FRANKENSTEIN (the only row) can therefore never appear in the PBL list,
+    and the PBL registry has never been used on this server. Separately, the PBL policy page contradicted
+    what devices receive: firmware GET /v1/policy/:version synthesises and signs a default policy (version
+    1) when the store is empty, but the admin list endpoint reported latest_version null with an empty
+    versions array, so the dashboard claimed ''No policy versions stored'' while downloading and sizing
+    a signed policy as ''latest''. The list endpoint now reports the effective policy and its provenance
+    (latest_version ''1'', versions [''1''], source ''default'' when empty; source ''stored'' otherwise)
+    and the page shows a built-in-default notice instead of an empty state.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live: /v1/devices empty vs /api/devices 1; /v1/policy returns source default with version
+    1 after restart; server PBL 41 tests, dashboard 223, eslint clean'
+  source: server/src/routes/pbl.js (get /policy, /policy/:version, /devices); dashboard/src/pages/PblPolicyPage.jsx;
+    dashboard/src/api/pblClient.js; live responses on http://localhost:3001
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

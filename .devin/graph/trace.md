@@ -10997,3 +10997,112 @@ two files S227 staged by hand) — that closes the loop between the repository a
 `agent/dist/`. After that the only open item is D-117.
 
 ---
+
+---
+
+## Session 229 — 2026-11-05 (why PBL devices are zero, and the policy page's contradiction)
+
+### RULE-ZERO
+
+**Read**: `dashboard/src/api/pblClient.js` (base URL and the `/v1/*` paths),
+`dashboard/src/pages/PblPolicyPage.jsx` (data loading and rendering),
+`server/src/routes/pbl.js` (`GET /policy`, `GET /policy/:version`, `GET /devices`), and the
+live responses of both registries.
+
+### FINDING 1 — "PBL devices show zero" is correct behaviour
+
+There are **two device registries**:
+
+| Registry | Written by | Read by | Live state |
+|---|---|---|---|
+| `devices` table | `POST /api/enroll/claim` (agent flow) | `GET /api/devices` | 1 device: FRANKENSTEIN |
+| KV `pbl_devices:*` | `POST /v1/enroll` (PBL firmware programme) | `GET /v1/devices` | `{"devices":[]}` |
+
+`GET /v1/devices` iterates `env._store` for keys prefixed `pbl_devices:`, so an
+agent-enrolled machine can never appear there. Nothing is broken: the PBL registry has
+simply never been used on this server.
+
+### FINDING 2 — the policy page contradicted what devices receive
+
+Firmware `GET /v1/policy/:version` synthesises and signs a **default policy (version 1)**
+when nothing is stored — deliberate bootstrapping, commented as such in the route. But the
+admin list endpoint reported `{"latest_version":null,"versions":[]}`, so the dashboard said
+"No policy versions stored" while `pblPolicy.get('latest')` returned a signed blob and the
+page displayed its size. The page was describing an empty store and a downloadable policy
+at the same time.
+
+### IMPLEMENT
+
+- `GET /v1/policy` now reports the **effective** policy and its provenance:
+  `{"latest_version":"1","versions":["1"],"source":"default"}` when the store is empty, and
+  `source:"stored"` with the real list otherwise.
+- `PblPolicyPage` renders that: an amber notice ("Devices are receiving the built-in
+  default policy (version 1) … until you store a signed policy below") and the version list
+  marks the entry `(built-in default)` instead of showing an empty state.
+- Tests: server +2 (`source:"default"` when empty; `source:"stored"` with a real version),
+  dashboard +3 (the notice; stored versions without it; and a page that survives
+  `/v1/admin/key-info` returning `verdict_signing_key: null`, which is what the live server
+  returns until that key is generated).
+
+### Fog cleared
+
+- **Zero PBL devices**: an unused registry, not a bug — and now the distinction is written
+  down, with the entry point that populates it (`/v1/enroll`).
+- **The policy page's contradiction**: the list endpoint was not reporting the policy the
+  read endpoint serves.
+
+### Fog remaining
+
+- **No PBL enrolment has ever been performed against this server.** If the firmware
+  programme is meant to run here, the next step is an actual `POST /v1/enroll` (attestation
+  + nonce), not a UI change.
+- **No policy has ever been stored**, so every device validates against the synthesised
+  default. Uploading a signed policy is an operational task.
+- D-117 (markdown/spec drift) untouched.
+- No TPM on FRANKENSTEIN (DPAPI fallback); the WSL port-proxy still needs re-creating after
+  a WSL restart.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the dashboard had **no test** for the
+  policy page, so an endpoint pair that disagreed about the same subject went unnoticed.
+  The three new tests pin the agreement.
+- **Layer 1 — task specification**: "PBL devices show zero" had no answer written anywhere,
+  which is why it read as a defect. Two registries with different entry points is a
+  documentation failure as much as a UI one.
+
+### VERIFY
+
+- `GET /v1/policy` → `{"latest_version":"1","versions":["1"],"source":"default"}` (was
+  `null`/`[]`).
+- `GET /v1/devices` → `{"devices":[]}`; `GET /api/devices` → 1 device (FRANKENSTEIN) —
+  the two registries are visibly distinct.
+- Suites: server **41** in the PBL file, dashboard **223** total (+3), eslint clean.
+- Commit: `a7d1c92`.
+
+### Session artifacts
+
+- Changed: `server/src/routes/pbl.js`, `server/tests/pblVerdictPolicyEnroll.test.js`,
+  `dashboard/src/pages/PblPolicyPage.jsx`,
+  `dashboard/tests/PblPolicyPage.defaultPolicy.test.jsx` (new).
+
+### Next session opening
+
+Decide what the PBL programme is meant to do on this deployment: if firmware enrolment
+matters, exercise `POST /v1/enroll` end to end and store a real signed policy; if it does
+not, say so on the page ("the PBL programme is not enabled on this server") so the empty
+registry stops looking like a fault. D-117 remains the only other open item.
+
+---

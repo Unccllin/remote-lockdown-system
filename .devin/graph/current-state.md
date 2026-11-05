@@ -53,27 +53,29 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 228 — 2026-11-05 (reproducible Windows artefacts, and a release-path bug)
+## Latest session: 229 — 2026-11-05 (why PBL devices are zero, and the policy page's contradiction)
 
 ### Fog cleared
 
-- **How the missing artefact is produced**: one script, one CI job, one `make` target.
-- **Whether the generic installer can bake a wrong URL**: it could, silently, and now
-  cannot.
-- **Why the first draft of the script failed on the target**: em dashes in a BOM-less
-  UTF-8 file, decoded as ANSI by Windows PowerShell 5.1. Pinned by a test.
+- **Zero PBL devices**: an unused registry, not a bug — and now the distinction is written
+  down, with the entry point that populates it (`/v1/enroll`).
+- **The policy page's contradiction**: the list endpoint was not reporting the policy the
+  read endpoint serves.
 
 ### Fog remaining
 
-- **The CI job has never run** — it cannot, on this host. The script is proven on the
-  target; the workflow is linted (actionlint + shellcheck) but unexecuted until pushed.
-- **D-117** (markdown/spec drift) untouched.
-- **No TPM on FRANKENSTEIN** (DPAPI fallback), and the WSL port-proxy still needs
-  re-creating after a WSL restart.
+- **No PBL enrolment has ever been performed against this server.** If the firmware
+  programme is meant to run here, the next step is an actual `POST /v1/enroll` (attestation
+  + nonce), not a UI change.
+- **No policy has ever been stored**, so every device validates against the synthesised
+  default. Uploading a signed policy is an operational task.
+- D-117 (markdown/spec drift) untouched.
+- No TPM on FRANKENSTEIN (DPAPI fallback); the WSL port-proxy still needs re-creating after
+  a WSL restart.
 
 ### Debt items closed
 
-- None newly (S209 was closed in S227).
+- None.
 
 ### Debt items still open
 
@@ -81,40 +83,38 @@
 
 ### Blockers
 
-- None. Producing the artefacts automatically needs a push (CI runs on GitHub, not here).
+- None.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the build script had no test of its URL
-  extraction, so a one-character regex error shipped a wrong value into every generic
-  installer for ten sessions. The new assertion — "an empty default must refuse" — is the
-  test that was missing.
-- **Layer 3 — execution environment**: the first script draft was correct Python-side and
-  broken PowerShell-side; only running it on the target exposed the encoding trap.
+- **Layer 4 — verification feedback** (primary): the dashboard had **no test** for the
+  policy page, so an endpoint pair that disagreed about the same subject went unnoticed.
+  The three new tests pin the agreement.
+- **Layer 1 — task specification**: "PBL devices show zero" had no answer written anywhere,
+  which is why it read as a defect. Two registries with different entry points is a
+  documentation failure as much as a UI one.
 
 ### VERIFY
 
-- Target run of the script: `-Only agent` → `lockdown-agent.exe 15 363 404 bytes PE=True`;
-  `-Only service` → `lockdown-service.exe 7 849 440 bytes`; a copy outside the repo →
-  `!!  agent/ not found next to scripts/ - run this from the repository.`
-- `make windows-artifacts` on Linux → `windows-artifacts needs PowerShell: …` exit 1.
-- `make lint-workflows` → clean (actionlint + shellcheck).
-- `make test-scripts` → 8, 18, 40/0, 44, 18, 2, 5 skipped — all green.
-- New guards: 6 passed. Generic-installer suite: 18 passed.
-- Commit: `61a8347`.
+- `GET /v1/policy` → `{"latest_version":"1","versions":["1"],"source":"default"}` (was
+  `null`/`[]`).
+- `GET /v1/devices` → `{"devices":[]}`; `GET /api/devices` → 1 device (FRANKENSTEIN) —
+  the two registries are visibly distinct.
+- Suites: server **41** in the PBL file, dashboard **223** total (+3), eslint clean.
+- Commit: `a7d1c92`.
 
 ### Session artifacts
 
-- Changed: `scripts/build-windows-artifacts.ps1` (new),
-  `.github/workflows/windows-artifacts.yml` (new),
-  `scripts/test_build_windows_artifacts.py` (new), `Makefile`,
-  `scripts/build-generic-installer.sh`, `scripts/test_generic_installer.py`.
+- Changed: `server/src/routes/pbl.js`, `server/tests/pblVerdictPolicyEnroll.test.js`,
+  `dashboard/src/pages/PblPolicyPage.jsx`,
+  `dashboard/tests/PblPolicyPage.defaultPolicy.test.jsx` (new).
 
 ### Next session opening
 
-Push and watch the `Windows artifacts` job produce the binaries, then stage them (the same
-two files S227 staged by hand) — that closes the loop between the repository and
-`agent/dist/`. After that the only open item is D-117.
+Decide what the PBL programme is meant to do on this deployment: if firmware enrolment
+matters, exercise `POST /v1/enroll` end to end and store a real signed policy; if it does
+not, say so on the page ("the PBL programme is not enabled on this server") so the empty
+registry stops looking like a fault. D-117 remains the only other open item.
 
 ---
 
