@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-05 17:06:37 — 102 beliefs
+Generated: 2026-11-05 17:11:01 — 103 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -226,6 +226,7 @@ mkfs.fat 4.2 (2021-01-31)
   [PASS] Self-image hash matches PblApp.efi (3906065d77d9e763...)
 
 === Results: 19 PASS / 0 FAIL === — the other half of the entry — does exist. The detailed entry is authoritative because it carries evidence and a named blocker; the table is what rots. scripts/check_debt_ledger.py now compares the two (normalising status qualifiers), treats the entry as the source of truth, and runs under make lint and the CI graph-check job; the 22 unreconciled disagreements live in .devin/graph/debt-ledger-mismatches.txt as a shrink-only baseline so a new mismatch fails and a reconciled item whose baseline line survives is reported as stale. Its 8 tests caught a real bug before shipping ( made an empty ledger exit 1). Reconciling the other 22 means verifying each against the codebase, item by item. |
+| B-103 | proposed | assumed | When the PBL debt ledger's summary table and its detailed entries disagree, the machine-checked graph spec decides: GRAPH-SPEC.yaml is the only source where invariant I2 forces every commit_ref to resolve and every artifact_ref to exist, so prose that contradicts it is the stale side. All 22 baselined disagreements resolved this way — every item whose entry said OPEN is CLOSED in the graph citing commit 684d7eb plus a QEMU artifact, corroborated by non-stub implementations (SpiProtections.c 85 lines, DciCheck.c 57, DmaProtection.c 67, Mor.c 131, TcgLog.c 166, Svn.c 85) and by artifacts the harness actually prints (Decision step, Lock screen displayed, Override input sent: True, nonce attested every boot), with the real-hardware residual explicitly tracked by D-129 so emulated closure is not an overstatement. D-133 was the mirror case and its table row is now CLOSED. No debt item was closed by that work — they were already closed in the graph, so declaring them closes again would double-count and break I2's evidence rule. Separately: the session-block template is load-bearing, not decorative — sessions 245-248 omitted the Fog cleared / Fog remaining / Debt items closed / Debt items still open / Blockers / Next session sections, so the generator dropped them from current-state.md and I4 refused, and RULE-ZERO reads must be bullet lines containing paths for I5's quality check. |
 
 ## integrations/ui
 
