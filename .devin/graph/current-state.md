@@ -53,34 +53,29 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 246 — 2026-11-05 (Dependabot's highs: two in electron, both patched)
+## Latest session: 247 — 2026-11-05 (chasing the other six Dependabot highs: a negative result worth recording)
 
 ### VERIFY
 
-- electron: **0 high / 0 critical**, `npm audit --audit-level=high` exit 0; 24 low/moderate
-  remain (babel-jest / @jest/transform / istanbul and friends — build tooling).
-- electron tests: **3 suites / 30 tests pass** (previously one suite could not load).
-- `node --check` on main.js, preload.js, setup-preload.js, setup-wizard.js, server-starter.js,
-  config.js, updater.js — all pass.
-- server gate exit 0; dashboard gate exit 0; agent `pip-audit` clean.
+- `grep -hoE "uses: [^ ]+" .github/workflows/*.yml | grep -vE "@[0-9a-f]{40}"` → empty.
+- `grep -rn "^FROM" --include="Dockerfile*"` → the four bases above, none stale.
+- `npm audit --json --package-lock-only` on the HEAD~1 lockfile → `{'low': 1, 'moderate': 2}`,
+  no high.
+- `pip-audit -r agent/requirements.txt` → no known vulnerabilities.
 
 ### Fog remaining
 
-- **GitHub said 8 high; I could reproduce 2.** The rest are not in any local audit I can run
-  (server/dashboard/serverless/agent/electron all report 0 high now). Reconciling needs the
-  Dependabot page: it may count per-manifest duplicates, or cover GitHub Actions / Docker base
-  images, which `npm audit` cannot see.
-- **The Electron binary could not be installed here** (install.js is ESM, Node 20), so
-  electron-builder packaging and any Electron-runtime test remain unverified on this host — the
-  stub deliberately covers unit tests only, not runtime behaviour.
-- 24 low/moderate electron findings remain, all in build tooling.
+- **The actual six.** Unresolvable without the Dependabot page (package, advisory id, severity
+  and manifest). With that, each is a targeted fix rather than a search.
+- The electron **binary** still cannot be installed here (ESM `install.js` + Node 20), so
+  packaging and Electron-runtime behaviour remain unverified on this host.
+- 24 low/moderate electron findings remain, all build tooling.
 - D-117 (markdown/spec drift).
 
 ### Next session opening
 
-Reconcile the remaining Dependabot highs from the security page (they are not reproducible by
-`npm audit` locally, so the likely surfaces are Actions pins, Docker base images or per-manifest
-duplication), and decide whether the electron 24 moderates are worth a tooling upgrade.
+Ask for the Dependabot page (or set a token) so the remaining highs can be attacked by name;
+otherwise D-117 is the only item on the board that this host can actually finish.
 
 ---
 

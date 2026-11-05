@@ -12679,3 +12679,62 @@ Reconcile the remaining Dependabot highs from the security page (they are not re
 duplication), and decide whether the electron 24 moderates are worth a tooling upgrade.
 
 ---
+
+---
+
+## Session 247 — 2026-11-05 (chasing the other six Dependabot highs: a negative result worth recording)
+
+### RULE-ZERO
+
+**Read**: the per-component `npm audit` results, every `FROM` line in the repository's
+Dockerfiles, every `uses:` pin in `.github/workflows/*.yml`, `agent/requirements.txt` against
+the installed versions, and `pip-audit` output. Then audited the **pre-fix** lockfile
+(`git show HEAD~1:electron/package-lock.json`) with `npm audit --package-lock-only`.
+
+### FINDING — the remaining highs are not reproducible from this host
+
+| Surface | Result |
+|---|---|
+| Docker base images | `node:20-slim`, `node:20-alpine` ×2, `ubuntu:24.04` — current, no obviously stale base |
+| GitHub Actions pins | **every** `uses:` is SHA-pinned (no tag-pinned actions remain) |
+| Agent `pip` deps | `cryptography==50.0.0`, `requests==2.34.2` — current, `pip-audit` clean |
+| Pre-fix electron lockfile (npm's advisory DB) | **1 low, 2 moderate — zero high** |
+
+That last row is the important one. It means the "8 high" are **not** the two packages I fixed
+counted per advisory (my first hypothesis): npm's own database did not flag a single high
+advisory on the pre-fix lockfile, even though the *installed* tree did report two. The most
+likely explanation — recorded as a hypothesis, not a finding — is that Dependabot uses the
+GitHub Advisory Database including advisories npm's audit does not serve, plus ecosystems npm
+cannot see. Confirming it needs the Dependabot page or an API token; neither is available here.
+
+### What this session still achieved
+
+- Ruled out three plausible surfaces with measurements rather than reasoning: Actions pins,
+  Docker bases, Python deps.
+- Established that "npm audit is clean" is not evidence that Dependabot is clean, and wrote it
+  down so the next session does not spend its time re-running `npm audit` and concluding the
+  same nothing.
+
+### VERIFY
+
+- `grep -hoE "uses: [^ ]+" .github/workflows/*.yml | grep -vE "@[0-9a-f]{40}"` → empty.
+- `grep -rn "^FROM" --include="Dockerfile*"` → the four bases above, none stale.
+- `npm audit --json --package-lock-only` on the HEAD~1 lockfile → `{'low': 1, 'moderate': 2}`,
+  no high.
+- `pip-audit -r agent/requirements.txt` → no known vulnerabilities.
+
+### Fog remaining
+
+- **The actual six.** Unresolvable without the Dependabot page (package, advisory id, severity
+  and manifest). With that, each is a targeted fix rather than a search.
+- The electron **binary** still cannot be installed here (ESM `install.js` + Node 20), so
+  packaging and Electron-runtime behaviour remain unverified on this host.
+- 24 low/moderate electron findings remain, all build tooling.
+- D-117 (markdown/spec drift).
+
+### Next session opening
+
+Ask for the Dependabot page (or set a token) so the remaining highs can be attacked by name;
+otherwise D-117 is the only item on the board that this host can actually finish.
+
+---

@@ -2265,3 +2265,31 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-101
+  statement: 'GitHub''s reported high Dependabot findings are not reproducible from this host, and ''npm
+    audit is clean'' is therefore not evidence that Dependabot is clean. Measurements: all GitHub Actions
+    pins are SHA-pinned (no tag-pinned uses: remain), the Docker base images are node:20-slim, node:20-alpine
+    (x2) and ubuntu:24.04 with nothing obviously stale, the agent pins cryptography==50.0.0 and requests==2.34.2
+    (current, pip-audit clean), and — decisively — auditing the pre-fix electron lockfile with npm''s
+    advisory database reports only 1 low and 2 moderate advisories with ZERO high, even though the installed
+    tree reported two high packages. That rules out the hypothesis that GitHub''s 8 highs were the two
+    electron packages counted per advisory. The likely explanation, recorded as a hypothesis rather than
+    a finding, is that Dependabot uses the GitHub Advisory Database (including advisories npm''s audit
+    does not serve) plus ecosystems npm cannot see; confirming it requires the Dependabot page or an API
+    token. What was reproducible is fixed: electron ~41.7.1 -> ^42.11.18 removed both highs (electron''s
+    ProtocolResponse/sandbox cluster and extract-zip''s symlink traversal), leaving 0 high/critical in
+    electron, 0 high in server/dashboard/serverless and a clean agent.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'executed: pinned-action scan empty, docker FROM scan current, pre-fix lockfile audit {low:1,
+    moderate:2, high:0}, agent deps current and pip-audit clean'
+  source: .github/workflows/*.yml; server/Dockerfile; Dockerfile.server; firmware/Dockerfile.qemu; agent/requirements.txt;
+    electron/package-lock.json at HEAD~1; npm audit and pip-audit output
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
