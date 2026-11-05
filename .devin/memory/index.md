@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-05 13:32:15
-Active memories: 1024 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-05 14:48:45
+Active memories: 1044 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -22,14 +22,20 @@ Active memories: 1024 | Superseded: 0 | Decayed: 20
 | m-249 | Build passes: PblApp.efi = 28,672 bytes, SHA-256 4 |  | 0.50 | 2026-09-07 | 0.260 | 0 |  |
 | m-1001 | Persistence design must match the privilege level  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-998 | MISTAKE: mistake: attributed the start failure to  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1051 | Existing harnesses often contain the exact machine |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-971 | 'The server rejected my token' may mean 'the serve |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-995 | Control experiments beat inference: prove the mech |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-989 | A task that exits 0 may have started nothing; veri |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1013 | Fail-secure defaults need an unwind path that does |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-978 | MISTAKE: mistake: spent S211/S212 fixing token sem |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1053 | Verify generated certificates with a strict client |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1047 | Absence of an error string is not success. |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1063 | Validate per-request inputs even when startup vali |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1031 | Cross-platform fallback paths must not be Windows- |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1062 | EDK2's client is picky in a way that survives vers |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1006 | MISTAKE: mistake: shipped a binPath and a stop-eve |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1027 | When verifying against a log that spans versions,  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1058 | 'TLS works' is server-specific; record which serve |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1023 | Alternatives must be modelled as OR in the failure |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1043 | Record TLS requirements as work items, not as obst |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-984 | A served script should delegate to the installer,  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -42,6 +48,7 @@ Active memories: 1024 | Superseded: 0 | Decayed: 20
 | m-1018 | Check process parentage before concluding duplicat |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1029 | A missing artefact named by a probe is a build tas |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-980 | Gate a new capability behind an explicit flag when |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1056 | MISTAKE: mistake: probed https://127.0.0.1 with a  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-977 | A prefilled wrong value is worse than an empty fie |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-982 | MISTAKE: mistake: initially let the dashboard comp |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-991 | Verify the effect (a running process), not the exi |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -53,15 +60,24 @@ Active memories: 1024 | Superseded: 0 | Decayed: 20
 | m-972 | Artefacts that embed a callback URL must embed one |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1040 | MISTAKE: mistake: ran pkill with a pattern present |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1010 | MISTAKE: mistake: chased the download endpoint whe |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1046 | State coverage explicitly in a harness, including  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1057 | A harness must distinguish evidence it produced fr |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1060 | MISTAKE: mistake: grepped a shared log and counted |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1030 | Frozen bundles need their runtime-copied files dec |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1009 | Remove legacy mechanisms when replacing them, or t |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1061 | Attribute transport success to the specific peer t |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1055 | A TLS front is the smallest change when a consumer |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1052 | MISTAKE: mistake: used -P for the index auth in tp |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-988 | Measure a machine's identity (detect-virt, TTL, SS |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1019 | A service executable must handle the SCM's empty a |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-967 | Make error messages name the state and the next ac |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1024 | A security alarm that fires on healthy state train |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1020 | Put keep-awake where the longest-lived process is  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1042 | Sibling scripts diverge: a fix applied to one vari |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1059 | Log the transport layer's events, or a missing req |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1045 | A check must fail when the behaviour is absent; ba |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1004 | Win32 handles and threading.Event are not intercha |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1048 | MISTAKE: mistake: quoted 'fetch/verify verified' f |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-981 | A second entry point over the same primitives is c |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-990 | MISTAKE: mistake: inferred the target OS from a ge |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1035 | Verify artefacts by content (PE header, size), not |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -69,6 +85,7 @@ Active memories: 1024 | Superseded: 0 | Decayed: 20
 | m-979 | Commands shown in a UI are an interface with the T |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1034 | Write PowerShell scripts in ASCII (or with a BOM); |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-976 | Never ship a default backend in an installer: the  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1049 | Verify a provisioning write with a readback or you |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1021 | MISTAKE: mistake: recorded a duplicate-instance de |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-985 | State the mode matrix (gui/silent) before writing  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-970 | MISTAKE: mistake: patched a file with duplicated b |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -84,11 +101,14 @@ Active memories: 1024 | Superseded: 0 | Decayed: 20
 | m-1012 | A log line repeating every ten seconds is a sympto |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-986 | MISTAKE: mistake: asserted Read-Host in the GUI-mo |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1033 | Test the build path, not just the product: a one-c |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1054 | Put the chain check next to the pin in the generat |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-999 | A shared path (ProgramData) is not a shared permis |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1015 | Clean up the rows a repro creates; otherwise the p |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-994 | MISTAKE: mistake: attributed my own duplicate Star |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1050 | TPM NV AUTHWRITE authorizes with the index value,  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-974 | MISTAKE: mistake: spent S211 fixing token semantic |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1016 | Record identity with identifiers, and include know |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1064 | MISTAKE: mistake: read S232's success as evidence  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1039 | Kill background services by task id, not by a patt |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1036 | MISTAKE: mistake: trusted the URL extraction becau |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-996 | Verify effects (processes, files), never exit code |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
