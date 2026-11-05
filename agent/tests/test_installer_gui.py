@@ -451,7 +451,7 @@ def test_download_agent_exe_uses_the_verified_path(tmp_path):
         result = installer_gui.download_agent_exe("https://x", tmp_path)
 
     assert result == tmp_path / installer_gui.AGENT_EXE_NAME
-    assert get.call_args[0][0] == "https://x/api/download/agent"
+    assert get.call_args[0][0] == "https://x/api/download/agent?platform=win"
 
 
 def test_download_lockscreen_exe_uses_the_verified_path(tmp_path):
@@ -512,7 +512,7 @@ def test_run_headless_uses_the_same_primitives_the_wizard_uses(monkeypatch):
         installer_gui,
         "enroll_device_with_token",
         lambda *a, **k: (
-            calls.append(("enroll", a[1]))
+            calls.append(("enroll", a[1], a[4:7]))
             or {
                 "device": {"id": "dev-1"},
                 "api_key": "KEY",
@@ -522,6 +522,11 @@ def test_run_headless_uses_the_same_primitives_the_wizard_uses(monkeypatch):
     monkeypatch.setattr(
         installer_gui, "write_config", lambda *a, **k: calls.append(("write_config", a[1]))
     )
+    # The identity the GUI reports. Omitting it made every run look like a brand-new
+    # machine, so the same box enrolled twice (S216).
+    monkeypatch.setattr(installer_gui, "get_hardware_uuid", lambda: "HW-UUID-1")
+    monkeypatch.setattr(installer_gui, "get_mac_address", lambda: "AA-BB-CC-DD-EE-FF")
+    monkeypatch.setattr(installer_gui, "get_serial_number", lambda: "SN-1")
     monkeypatch.setattr(
         installer_gui, "add_defender_exclusions", lambda: calls.append(("defender",))
     )
@@ -537,7 +542,10 @@ def test_run_headless_uses_the_same_primitives_the_wizard_uses(monkeypatch):
 
     assert rc == 0
     # The token reached the claim, and the api_key the server issued reached the config.
-    assert ("enroll", "TOKEN123") in calls
+    enroll = next(c for c in calls if c[0] == "enroll")
+    assert enroll[1] == "TOKEN123"
+    # hardware_uuid, mac, serial — all three, or the server cannot recognise the box.
+    assert enroll[2] == ("HW-UUID-1", "AA-BB-CC-DD-EE-FF", "SN-1")
     assert ("write_config", "KEY") in calls
     # The service is installed before the agent is launched.
     assert calls.index(("install_files", "/agent.exe")) < calls.index(("launch", "/agent.exe"))
@@ -554,3 +562,67 @@ def test_run_headless_reports_failure_without_a_traceback(monkeypatch):
     rc = installer_gui.run_headless("https://x", "T", "HOST-1")
 
     assert rc == 1  # the operator gets one line, not a stack trace
+
+
+# ---------------------------------------------------------------------------
+# Plain-HTTP lab servers (S216)
+# ---------------------------------------------------------------------------
+
+
+def test_headless_refuses_http_without_the_override(monkeypatch, capsys):
+    """The agent requires TLS; say so instead of installing an agent that dies."""
+    import installer_gui
+
+    called = []
+    monkeypatch.setattr(
+        installer_gui, "enroll_device_with_token", lambda *a, **k: called.append(1) or {}
+    )
+
+    rc = installer_gui.run_headless("http://192.168.1.43:3001", "TOK", "HOST-1")
+
+    assert rc == 1
+    assert called == []  # nothing was claimed
+    out = capsys.readouterr().out
+    assert "requires https://" in out
+    assert "--allow-insecure-http" in out
+
+
+def test_headless_accepts_http_with_the_override(monkeypatch):
+    """With the explicit flag, verify_tls is written False so the agent will run."""
+    import installer_gui
+
+    seen = {}
+    monkeypatch.setattr(
+        installer_gui,
+        "enroll_device_with_token",
+        lambda *a, **k: {"device": {"id": "dev-1"}, "api_key": "KEY"},
+    )
+    monkeypatch.setattr(installer_gui, "get_hardware_uuid", lambda: "HW")
+    monkeypatch.setattr(installer_gui, "get_mac_address", lambda: "MAC")
+    monkeypatch.setattr(installer_gui, "get_serial_number", lambda: "SN")
+    monkeypatch.setattr(installer_gui, "write_config", lambda *a, **k: seen.update(k) or True)
+    monkeypatch.setattr(installer_gui, "add_defender_exclusions", lambda: None)
+    monkeypatch.setattr(installer_gui, "find_agent_exe", lambda: "/agent.exe")
+    monkeypatch.setattr(installer_gui, "install_files", lambda p: p)
+    monkeypatch.setattr(installer_gui, "create_lockdown_folder", lambda: None)
+    monkeypatch.setattr(installer_gui, "install_service", lambda: (True, "ok"))
+    monkeypatch.setattr(installer_gui, "launch_agent", lambda p: None)
+
+    rc = installer_gui.run_headless(
+        "http://192.168.1.43:3001", "TOK", "HOST-1", allow_insecure_http=True
+    )
+
+    assert rc == 0
+    assert seen["verify_tls"] is False
+
+
+def test_write_config_keeps_tls_on_by_default(monkeypatch, tmp_path):
+    import installer_gui
+
+    monkeypatch.setattr(installer_gui, "CONFIG_FILE", tmp_path / "config.json")
+    installer_gui.write_config("https://example.com", "KEY", "HOST", "dev-1")
+
+    import json
+
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written["verify_tls"] is True

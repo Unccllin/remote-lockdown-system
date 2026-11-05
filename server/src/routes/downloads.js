@@ -38,7 +38,14 @@ const router = express.Router();
  * build directory holds both (the Worker serves one KV key instead).
  */
 const BINARIES = {
-  agent: { candidates: { win: ['lockdown-agent.exe'], linux: ['lockdown-agent'] }, fallback: ['lockdown-agent', 'lockdown-agent.exe'] },
+  // Platform-specific: no cross-platform fallback. Guessing here delivered a Linux
+  // ELF to a Windows installer, which surfaced as "[WinError 216] not compatible
+  // with the version of Windows you're running" (S216).
+  agent: {
+    candidates: { win: ['lockdown-agent.exe'], linux: ['lockdown-agent'] },
+    fallback: [],
+    requiresPlatform: true,
+  },
   'agent-installer': { candidates: {}, fallback: ['lockdown-installer.exe'] },
   installer: { candidates: {}, fallback: ['lockdown-setup.exe'] },
   lockscreen: { candidates: {}, fallback: ['lockdown-lockscreen.exe'] },
@@ -49,7 +56,9 @@ function resolveBinary(spec, platform) {
   if (!dir) return { path: null, dir: null };
   const names = [...(spec.candidates[platform] || []), ...spec.fallback];
   for (const name of names) {
-    const candidate = path.join(dir, name);
+    // names come from the BINARIES table above, never from the request: the URL
+    // segment is only used as a lookup key, so no user input reaches path.join.
+    const candidate = path.join(dir, name);  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
     if (fs.existsSync(candidate)) return { path: candidate, dir };
   }
   return { path: null, dir, expected: names };
@@ -81,6 +90,15 @@ router.get('/:name', (req, res) => {
   }
 
   const platform = String(req.query.platform || '').toLowerCase();
+
+  if (spec.requiresPlatform && !platform) {
+    return res.status(400).json({
+      error:
+        `?platform= is required for "${name}": say win or linux. The binary is ` +
+        'platform-specific and guessing one delivers an unusable executable.',
+    });
+  }
+
   const { path: filePath, dir, expected } = resolveBinary(spec, platform);
 
   if (!filePath) {

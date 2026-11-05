@@ -34,6 +34,10 @@ from pathlib import Path
 
 log = logging.getLogger("lockdown-agent")
 
+# CREATE_NO_WINDOW exists only on Windows. getattr keeps the reference valid (and
+# statically resolvable) when this module is imported on another platform.
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 # Tamper protection — applied after service install to harden against deletion
 try:
     from tamper_protection import apply_all_protection, remove_all_protection
@@ -41,6 +45,19 @@ try:
     _HAS_TAMPER_PROTECTION = True
 except ImportError:
     _HAS_TAMPER_PROTECTION = False
+
+    # Define the names in the failure branch too. Every call site is already guarded
+    # by _HAS_TAMPER_PROTECTION, but leaving them unbound means the guard is the only
+    # thing between a missing module and a NameError — invisible to static analysis
+    # and easy to break by editing one call site.
+    # Same return shape as the real functions (dict), so call sites such as
+    # `remove_all_protection(...).get("protection_removed")` stay type-correct.
+    def apply_all_protection(*_args: object, **_kwargs: object) -> dict:
+        return {}
+
+    def remove_all_protection(*_args: object, **_kwargs: object) -> dict:
+        return {}
+
 
 # Task name — innocuous to avoid drawing attention
 TASK_NAME = "SystemHealthMonitor"
@@ -116,33 +133,58 @@ def _get_config_path() -> Path | None:
     return None
 
 
-def _build_agent_command() -> str:
-    """Build the command string to launch the agent."""
-    agent_path = _get_agent_path()
-    config_path = _get_config_path()
+def _install_dir() -> Path:
+    """Where the agent, config and watchdog script live on the target."""
+    return Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "LockdownAgent"
 
-    if getattr(sys, "frozen", False):
-        # PyInstaller exe — run directly
-        cmd = f'"{agent_path}" --silent'
+
+def _ps_quote(value: str) -> str:
+    """Single-quote a PowerShell literal (doubling any single quote)."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _agent_launch_parts() -> tuple[str, list[str]]:
+    """(executable, arguments) for the agent, preferring the INSTALLED binary.
+
+    Running the installer from source left `sys.frozen` False, so the scheduled task
+    was written with the *source* path (``...\\agent.py``) — which does not exist on
+    the target. The task then reported success (exit 0) and started nothing, and the
+    agent never came up (S216, FRANKENSTEIN).
+    """
+    installed = _install_dir() / "lockdown-agent.exe"
+
+    if installed.exists():
+        exe, args = str(installed), ["--silent"]
+    elif getattr(sys, "frozen", False):
+        exe, args = str(_get_agent_path()), ["--silent"]
     else:
-        # Python script — run with Python
-        python_path = _get_python_path()
-        cmd = f'"{python_path}" "{agent_path}" --silent'
+        exe, args = _get_python_path(), [str(_get_agent_path()), "--silent"]
 
+    config_path = _get_config_path()
     if config_path:
-        cmd += f' --config "{config_path}"'
+        args += ["--config", str(config_path)]
 
-    return cmd
+    return exe, args
+
+
+def _build_agent_command() -> str:
+    """The agent command as one string (for logs and the registry Run key)."""
+    exe, args = _agent_launch_parts()
+    parts = [exe, *args]
+    return " ".join(f'"{p}"' if " " in p else p for p in parts)
 
 
 def _build_watchdog_command() -> str:
     """Build the watchdog PowerShell command that checks and restarts the agent."""
-    agent_cmd = _build_agent_command()
+    exe, args = _agent_launch_parts()
 
     # PowerShell script that:
     # 1. Checks if the agent process is running
     # 2. If not, launches it
     # 3. Runs silently (no window)
+    # Start-Process on the executable directly. Going through `cmd /c "C:\Program
+    # Files\..."` mangles quoted paths containing spaces.
+    launch = ", ".join(_ps_quote(p) for p in args)
     ps_script = f"""
 $ErrorActionPreference = 'SilentlyContinue'
 $agentProcess = Get-Process -Name 'lockdown-agent' -ErrorAction SilentlyContinue
@@ -152,18 +194,33 @@ if (-not $agentProcess) {{
         -Filter "Name='python.exe' OR Name='python3.exe'" `
         | Where-Object {{ $_.CommandLine -like '*agent.py*' }}
     if (-not $pythonProcs) {{
-        Start-Process -FilePath 'cmd.exe' `
-            -ArgumentList '/c {agent_cmd}' `
-            -WindowStyle Hidden -CreateNoWindow
+        Start-Process -FilePath {_ps_quote(exe)} `
+            -ArgumentList @({launch}) `
+            -WindowStyle Hidden
     }}
 }}
 """.strip()
 
-    # Encode for schtasks (use base64 to avoid quoting issues)
-    import base64
+    # The script goes in a FILE and the task points at it. schtasks caps the /TR
+    # action at 261 characters, and an inline -EncodedCommand (base64 of this script)
+    # blows past that as soon as the agent path is long — which is exactly what
+    # happened on a machine whose Python lives in "C:\Program Files\Python312":
+    #   ERROR: Value for '/TR' option cannot be more than 261 character(s)  (S216)
+    try:
+        state_dir = _install_dir()
+        state_dir.mkdir(parents=True, exist_ok=True)
+        script_path = state_dir / "watchdog-task.ps1"
+        # utf-8-sig: Windows PowerShell 5.1 misreads BOM-less UTF-8 in some locales.
+        script_path.write_text(ps_script, encoding="utf-8-sig")
+        return f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_path}"'
+    except OSError as exc:
+        # Falling back is better than refusing to install, but the caller should know
+        # the action may exceed the limit.
+        log.warning("Could not write the watchdog script (%s) — using -EncodedCommand", exc)
+        import base64
 
-    encoded = base64.b64encode(ps_script.encode("utf-16LE")).decode("ascii")
-    return f"powershell.exe -NoProfile -EncodedCommand {encoded}"
+        encoded = base64.b64encode(ps_script.encode("utf-16LE")).decode("ascii")
+        return f"powershell.exe -NoProfile -EncodedCommand {encoded}"
 
 
 def install() -> bool:
@@ -309,15 +366,17 @@ Set-ScheduledTask -TaskName '{TASK_NAME}' -Trigger $task.Triggers
         # wscript.exe runs in its own session, so the agent survives
         # even if the installer/parent process is killed or the terminal
         # is closed. This is the most reliable detachment method on Windows.
-        install_dir = Path(agent_cmd.split('"')[1]).parent
+        # Was `Path(agent_cmd.split('"')[1]).parent`, which assumed the command began
+        # with a quoted path and raised IndexError when it did not (a python.exe with
+        # no spaces in its path) — S216.
+        install_dir = _install_dir()
+        install_dir.mkdir(parents=True, exist_ok=True)
         vbs_path = install_dir / "launch_agent.vbs"
         vbs_content = f'Set sh = CreateObject("WScript.Shell")\nsh.Run "{agent_cmd}", 0, False\n'
         vbs_path.write_text(vbs_content, encoding="utf-8")
         subprocess.Popen(
             ["wscript.exe", str(vbs_path)],
-            creationflags=subprocess.CREATE_NO_WINDOW
-            if hasattr(subprocess, "CREATE_NO_WINDOW")
-            else 0,
+            creationflags=_CREATE_NO_WINDOW,
             close_fds=True,
         )
     except (FileNotFoundError, OSError) as e:

@@ -396,7 +396,7 @@ export default function EnrollDevicePage() {
                 Download Setup Wizard (.exe)
               </a>
               <a
-                href={`${serverBaseUrl}/api/download/agent`}
+                href={`${serverBaseUrl}/api/download/agent?platform=${navigator.userAgent.includes('Windows') ? 'win' : 'linux'}`}
                 className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200 transition-colors"
                 data-testid="download-agent-btn"
               >

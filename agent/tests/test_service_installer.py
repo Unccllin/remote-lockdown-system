@@ -82,10 +82,30 @@ class TestCommandBuilding:
             assert "--config" in cmd
             assert "config.json" in cmd
 
-    def test_build_watchdog_command_includes_powershell(self):
+    def test_build_watchdog_command_includes_powershell(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
         cmd = service_installer._build_watchdog_command()
         assert "powershell" in cmd.lower()
-        assert "EncodedCommand" in cmd
+        # The script is a FILE now, not an inline -EncodedCommand: schtasks caps the
+        # /TR action at 261 characters and the base64 form exceeded it as soon as the
+        # agent path was long (S216: "Value for '/TR' option cannot be more than
+        # 261 character(s)" on a machine with Python in Program Files).
+        assert "-File" in cmd
+        assert "watchdog-task.ps1" in cmd
+
+    def test_watchdog_command_fits_the_schtasks_tr_limit(self, monkeypatch, tmp_path):
+        """A /TR action over 261 chars makes schtasks refuse to create the task."""
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        cmd = service_installer._build_watchdog_command()
+        assert len(cmd) <= 261, f"/TR would be rejected: {len(cmd)} chars"
+
+    def test_watchdog_script_is_written_next_to_the_config(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
+        service_installer._build_watchdog_command()
+        script = tmp_path / "LockdownAgent" / "watchdog-task.ps1"
+        assert script.exists()
+        # utf-8-sig: Windows PowerShell 5.1 misreads BOM-less UTF-8 in some locales.
+        assert script.read_bytes().startswith(b"\xef\xbb\xbf")
 
 
 class TestInstallFlow:

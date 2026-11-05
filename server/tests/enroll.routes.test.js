@@ -423,6 +423,8 @@ describe('GET /api/enroll/setup.ps1 and setup.cmd', () => {
     expect(cmd).toContain('-ExecutionPolicy Bypass');
     expect(cmd).not.toMatch(/Set-ExecutionPolicy/i);
     expect(cmd).toContain("https://lockdown.example.com/api/enroll/setup.ps1");
+    expect(cmd).toContain('iex (irm ');
+    expect(cmd).not.toContain('| iex');
   });
 
   test('/setup-command advertises the one-liner and both file URLs', async () => {
@@ -433,7 +435,10 @@ describe('GET /api/enroll/setup.ps1 and setup.cmd', () => {
       .set('Authorization', `Bearer ${makeToken()}`);
 
     expect(res.body.one_liner).toContain('https://lockdown.example.com/api/enroll/setup.ps1');
-    expect(res.body.one_liner).toContain('| iex');
+    // Parenthesised, not a nested `powershell -Command "... | iex"`: pasting that into
+    // an existing prompt has the quotes eaten and feeds iex an array with empty strings.
+    expect(res.body.one_liner).toMatch(/^iex \(irm '/);
+    expect(res.body.one_liner).not.toContain('powershell -');
     expect(res.body.ps1_url).toBe('https://lockdown.example.com/api/enroll/setup.ps1');
     expect(res.body.cmd_url).toBe('https://lockdown.example.com/api/enroll/setup.cmd');
   });

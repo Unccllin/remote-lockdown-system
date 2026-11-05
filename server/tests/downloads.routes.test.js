@@ -59,6 +59,16 @@ describe('GET /api/download/:name', () => {
     expect(linux.body.toString()).toBe('\x7fELF-linux-agent');
   });
 
+  test('refuses to guess a platform for the agent binary', async () => {
+    // Guessing delivered the Linux ELF to a Windows installer, which failed at launch
+    // with "[WinError 216] not compatible with the version of Windows" (S216).
+    const res = await request(app).get('/api/download/agent');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/\?platform= is required/);
+    expect(res.body.error).toMatch(/win or linux/);
+  });
+
   test('serves the lock-screen helper', async () => {
     const res = await request(app).get('/api/download/lockscreen');
     expect(res.status).toBe(200);

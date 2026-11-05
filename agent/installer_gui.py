@@ -291,6 +291,7 @@ def write_config(
     device_id: str,
     boot_lock_enabled: bool = True,
     update_public_key: str = "",
+    verify_tls: bool = True,
 ) -> Path:
     """Write the agent config file atomically.
 
@@ -308,7 +309,10 @@ def write_config(
         "pending_ack_file": str(INSTALL_DIR / ".pending_ack"),
         "recovery_key_file": str(INSTALL_DIR / ".recovery_key"),
         "boot_lock_enabled": boot_lock_enabled,
-        "verify_tls": True,
+        # The agent refuses http:// unless this is False (agent.py: "http:// only when
+        # verify_tls is False — explicit dev override"). Written only when the caller
+        # opted in to a plain-HTTP lab server.
+        "verify_tls": verify_tls,
         "server_supports_ack_dedup": True,
     }
     # Only present when a key was actually provisioned — a configured-but-missing
@@ -400,7 +404,9 @@ def download_agent_exe(server_url: str, dest_dir: Path) -> Path | None:
     The binary is stored in Cloudflare KV and served by the Worker, together with
     the digest that :func:`_download_verified` checks.
     """
-    url = f"{server_url.rstrip('/')}/api/download/agent"
+    # Windows-only installer, so name the platform: without it the server used to
+    # hand back the Linux binary (S216, WinError 216 on launch).
+    url = f"{server_url.rstrip('/')}/api/download/agent?platform=win"
     dest_dir.mkdir(parents=True, exist_ok=True)
     return _download_verified(url, dest_dir / AGENT_EXE_NAME)
 
@@ -1169,6 +1175,12 @@ def build_parser():
         action="store_true",
         help="install without the GUI (requires --server-url and --token)",
     )
+    parser.add_argument(
+        "--allow-insecure-http",
+        action="store_true",
+        help="lab only: accept an http:// server and disable TLS verification "
+        "(the agent refuses http otherwise)",
+    )
     return parser
 
 
@@ -1178,6 +1190,7 @@ def run_headless(
     hostname: str,
     owner_name: str = "Auto-enrolled",
     boot_lock: bool = True,
+    allow_insecure_http: bool = False,
 ) -> int:
     """The wizard's install sequence without tkinter.
 
@@ -1185,16 +1198,34 @@ def run_headless(
     implementation of each step, so the two entry points cannot drift. Returns a
     process exit code.
     """
+    # The agent refuses plain http:// unless verification is explicitly off
+    # (agent.py: "http:// only when verify_tls is False — explicit dev override").
+    # Refuse here with what to do, rather than installing an agent that exits on
+    # start with "SERVER_URL must use https://" (S216, FRANKENSTEIN).
+    verify_tls = True
+    if server_url.lower().startswith("http://"):
+        if not allow_insecure_http:
+            print(
+                "FAILED: this server URL is http:// and the agent requires https://.\n"
+                "        Use an https URL, or pass --allow-insecure-http for a lab "
+                "server (TLS verification will be off)."
+            )
+            return 1
+        verify_tls = False
+        print("WARNING: plain HTTP server — TLS verification disabled (lab only)")
+
     try:
         print(f"[1/6] Enrolling {hostname} with {server_url} ...")
+        # The same identity the GUI sends. Passing None here made every run look
+        # like a brand-new machine, so the same box enrolled twice (S216).
         data = enroll_device_with_token(
             server_url,
             token,
             hostname,
             owner_name,
-            None,  # hardware_uuid: collected by enroll_device_with_token
-            None,
-            None,
+            get_hardware_uuid(),
+            get_mac_address(),
+            get_serial_number(),
         )
         api_key = data["api_key"]
         print(
@@ -1209,6 +1240,7 @@ def run_headless(
             data["device"]["id"],
             boot_lock_enabled=boot_lock,
             update_public_key=staged_update_public_key(),
+            verify_tls=verify_tls,
         )
 
         print("[3/6] Adding Defender exclusions ...")
@@ -1255,6 +1287,7 @@ def main(argv: list[str] | None = None):
                 args.hostname or get_hostname(),
                 args.owner,
                 boot_lock=not args.no_boot_lock,
+                allow_insecure_http=args.allow_insecure_http,
             )
         )
 
