@@ -254,7 +254,15 @@ def describe_request(body: bytes) -> str:
 # --gen-assets (host side: cryptography + cbor2 available)
 # ============================================================================
 
-def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") -> int:
+def generate_assets(
+    out_dir: str,
+    host: str,
+    port: int,
+    key_type: str = "ec",
+    verdict_kid_hex: str | None = None,
+    verdict_spki_hex: str | None = None,
+    verdict_chain_hex: str | None = None,
+) -> int:
     import datetime
     import ipaddress
 
@@ -396,79 +404,108 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
     # Ed25519), and COSE alg -7 means ECDSA P-256 SHA-256. Reusing the TLS key
     # type produced an RSA PKCS#1 signature, which is not a DER ECDSA sequence
     # and cannot be reshaped into r || s.
-    verdict_ca_key = ec.generate_private_key(ec.SECP256R1())
-    verdict_ca_name = x509.Name(
-        [x509.NameAttribute(NameOID.COMMON_NAME, "PBL Verdict Signing CA")]
-    )
-    verdict_ca = (
-        x509.CertificateBuilder()
-        .subject_name(verdict_ca_name)
-        .issuer_name(verdict_ca_name)
-        .public_key(verdict_ca_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(days=1))
-        .not_valid_after(now + datetime.timedelta(days=30))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
-        .add_extension(
-            x509.KeyUsage(
-                digital_signature=False, content_commitment=False,
-                key_encipherment=False, data_encipherment=False,
-                key_agreement=False, key_cert_sign=True, crl_sign=True,
-                encipher_only=False, decipher_only=False,
+    # An external signer means the *deployment* signs verdicts and its public key is
+    # already published (GET /v1/admin/key-info -> kid + spki). Generating a local key in
+    # that case would pin a signer that never answers, which is exactly what kept the
+    # firmware from verifying this server's verdicts (S239).
+    external_signer = bool(verdict_kid_hex and verdict_spki_hex)
+    if external_signer:
+        verdict_kid = bytes.fromhex(verdict_kid_hex)
+        verdict_spki = bytes.fromhex(verdict_spki_hex)
+        # The firmware fails closed on an absent chain (D-205), so an external signer
+        # must supply one whose leaf carries its own public key.
+        verdict_chain = []
+        if verdict_chain_hex:
+            chain_der = bytes.fromhex(verdict_chain_hex)
+            off = 0
+            while off + 2 <= len(chain_der):
+                if chain_der[off] != 0x30:
+                    break
+                if chain_der[off + 1] & 0x80:
+                    n = chain_der[off + 1] & 0x7F
+                    length = int.from_bytes(chain_der[off + 2:off + 2 + n], "big")
+                    total = 2 + n + length
+                else:
+                    length = chain_der[off + 1]
+                    total = 2 + length
+                verdict_chain.append(chain_der[off:off + total])
+                off += total
+        print(f"  verdict signer: EXTERNAL kid {verdict_kid.hex()[:16]}… "
+              f"spki {len(verdict_spki)} bytes")
+    else:
+        verdict_ca_key = ec.generate_private_key(ec.SECP256R1())
+        verdict_ca_name = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, "PBL Verdict Signing CA")]
+        )
+        verdict_ca = (
+            x509.CertificateBuilder()
+            .subject_name(verdict_ca_name)
+            .issuer_name(verdict_ca_name)
+            .public_key(verdict_ca_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=30))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=False, content_commitment=False,
+                    key_encipherment=False, data_encipherment=False,
+                    key_agreement=False, key_cert_sign=True, crl_sign=True,
+                    encipher_only=False, decipher_only=False,
+                ),
+                critical=True,
+            )
+            .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(verdict_ca_key.public_key()),
+                critical=False,
+            )
+            .sign(verdict_ca_key, hashes.SHA256())
+        )
+        verdict_ca_der = verdict_ca.public_bytes(serialization.Encoding.DER)
+
+        verdict_key = ec.generate_private_key(ec.SECP256R1())
+        verdict_leaf = (
+            x509.CertificateBuilder()
+            .subject_name(
+                x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "PBL Verdict Signer")])
+            )
+            .issuer_name(verdict_ca_name)
+            .public_key(verdict_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=30))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(verdict_key.public_key()),
+                critical=False,
+            )
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_public_key(verdict_ca_key.public_key()),
+                critical=False,
+            )
+            .sign(verdict_ca_key, hashes.SHA256())
+        )
+        verdict_leaf_der = verdict_leaf.public_bytes(serialization.Encoding.DER)
+        verdict_spki = verdict_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        verdict_kid_digest = hashes.Hash(hashes.SHA256())
+        verdict_kid_digest.update(verdict_spki)
+        verdict_kid = verdict_kid_digest.finalize()
+
+        write_file(
+            os.path.join(out_dir, "verdict-key.pem"),
+            verdict_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.NoEncryption(),
             ),
-            critical=True,
         )
-        .add_extension(
-            x509.SubjectKeyIdentifier.from_public_key(verdict_ca_key.public_key()),
-            critical=False,
+        write_file(
+            os.path.join(out_dir, "verdict-meta.json"),
+            json.dumps({"kid": verdict_kid.hex(), "alg": -7}).encode("utf-8"),
         )
-        .sign(verdict_ca_key, hashes.SHA256())
-    )
-    verdict_ca_der = verdict_ca.public_bytes(serialization.Encoding.DER)
-
-    verdict_key = ec.generate_private_key(ec.SECP256R1())
-    verdict_leaf = (
-        x509.CertificateBuilder()
-        .subject_name(
-            x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "PBL Verdict Signer")])
-        )
-        .issuer_name(verdict_ca_name)
-        .public_key(verdict_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(days=1))
-        .not_valid_after(now + datetime.timedelta(days=30))
-        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-        .add_extension(
-            x509.SubjectKeyIdentifier.from_public_key(verdict_key.public_key()),
-            critical=False,
-        )
-        .add_extension(
-            x509.AuthorityKeyIdentifier.from_issuer_public_key(verdict_ca_key.public_key()),
-            critical=False,
-        )
-        .sign(verdict_ca_key, hashes.SHA256())
-    )
-    verdict_leaf_der = verdict_leaf.public_bytes(serialization.Encoding.DER)
-    verdict_spki = verdict_key.public_key().public_bytes(
-        serialization.Encoding.DER,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    )
-    verdict_kid_digest = hashes.Hash(hashes.SHA256())
-    verdict_kid_digest.update(verdict_spki)
-    verdict_kid = verdict_kid_digest.finalize()
-
-    write_file(
-        os.path.join(out_dir, "verdict-key.pem"),
-        verdict_key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.TraditionalOpenSSL,
-            serialization.NoEncryption(),
-        ),
-    )
-    write_file(
-        os.path.join(out_dir, "verdict-meta.json"),
-        json.dumps({"kid": verdict_kid.hex(), "alg": -7}).encode("utf-8"),
-    )
 
     uri = f"https://{host}:{port}{VERDICT_PATH}"
     # C4 keys: 1 version, 2 issued_at, 70 lock_service_uri, 73 tls_ca_pin,
@@ -485,7 +522,7 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
         78: ca_der,  # D-132: the CA itself, which EDK2 can consume
         71: verdict_kid,                   # SHA-256 of the signing key's SPKI
         76: verdict_spki,                  # signing key SPKI (C1 kid resolution)
-        77: [verdict_leaf_der, verdict_ca_der],  # leaf first, ROOT last
+        77: verdict_chain,                 # leaf first, ROOT last (empty for an external signer)
     }
     digest = hashes.Hash(hashes.SHA256())
     digest.update(ca_der)
@@ -505,7 +542,10 @@ def generate_assets(out_dir: str, host: str, port: int, key_type: str = "ec") ->
     print(f"  tls_ca_pin (sha256 of CA DER): {policy_map[73].hex()}")
     print(f"  tls_ca_cert (key 78): {len(ca_der)} bytes DER (the CA)")
     print(f"  server leaf: CN={host} with SAN, signed by the CA")
-    print(f"  verdict signer: kid {verdict_kid.hex()[:16]}..., chain [leaf, root]")
+    print(
+        f"  verdict signer: kid {verdict_kid.hex()[:16]}..., "
+        f"chain {'[leaf, root]' if verdict_chain else 'none (external signer)'}"
+    )
     return 0
 
 
@@ -585,9 +625,18 @@ def build_signed_verdict(assets: str, request_body: bytes) -> bytes:
         (cb_uint(7), cb_uint(now + 604800)),      # grace_until (7 days)
         (cb_uint(8), cb_tstr("wire-test")),       # reason
     ])
+    # The meta read above degrades to {} rather than raising, so these two lookups must
+    # tolerate its absence: a capture server that dies on a missing file records nothing.
+    try:
+        verdict_alg = int(meta["alg"])
+        verdict_kid_bytes = bytes.fromhex(meta["kid"])
+    except (KeyError, TypeError, ValueError):
+        verdict_alg = -7                        # ES256 is the only algorithm in use
+        verdict_kid_bytes = b""
+
     protected = cb_map([
-        (cb_uint(1), cb_int(int(meta["alg"]))),   # alg -7 = ES256
-        (cb_uint(4), cb_bstr(bytes.fromhex(meta["kid"]))),
+        (cb_uint(1), cb_int(verdict_alg)),       # alg -7 = ES256
+        (cb_uint(4), cb_bstr(verdict_kid_bytes)),
     ])
     sig_structure = cb_array([
         cb_tstr("Signature1"),
@@ -687,10 +736,33 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--port", type=int, default=8443)
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--out", metavar="DIR", default=None)
+    parser.add_argument(
+        "--verdict-kid",
+        metavar="HEX",
+        help="pin an EXTERNAL verdict signer by kid (SHA-256 of its SPKI, hex)",
+    )
+    parser.add_argument(
+        "--verdict-spki",
+        metavar="HEX",
+        help="the external signer's SPKI in DER, hex",
+    )
+    parser.add_argument(
+        "--verdict-chain",
+        metavar="HEX",
+        help="concatenated DER cert chain for the external signer (leaf first)",
+    )
     args = parser.parse_args(argv[1:])
 
     if args.gen_assets:
-        return generate_assets(args.gen_assets, args.host, args.port, args.key_type)
+        return generate_assets(
+            args.gen_assets,
+            args.host,
+            args.port,
+            args.key_type,
+            verdict_kid_hex=args.verdict_kid,
+            verdict_spki_hex=args.verdict_spki,
+            verdict_chain_hex=args.verdict_chain,
+        )
     if args.serve:
         if not args.assets:
             print("ERROR: --serve needs --assets DIR", file=sys.stderr)

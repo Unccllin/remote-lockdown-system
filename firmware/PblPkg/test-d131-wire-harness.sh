@@ -278,9 +278,12 @@ if [ "${EXTERNAL_SERVER}" = "1" ]; then
   if grep -qE "Verdict decoded: verdict=" "${SERIAL_LOG}"; then
     echo "  [PASS] verdict decoded by firmware"
     PASS=$((PASS + 1))
+    # The whole point of an external server: its signature must verify against the SPKI
+    # the policy pins, not merely decode (S239).
+    check "verdict signature verified (external signer)" "Verdict signature verified"
   else
     echo "  [INFO] no verdict decoded — the external server did not issue one"
-    grep -aE "Online fetch failed|unknown_device|Verdict request suppressed" "${SERIAL_LOG}" | head -3 | sed 's/^/        /'
+    grep -aE "Online fetch failed|unknown_device|Verdict request suppressed|Verdict rejected" "${SERIAL_LOG}" | head -3 | sed 's/^/        /'
   fi
 else
   # The server's own record is the artifact: it parsed the request it received.
