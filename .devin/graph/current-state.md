@@ -53,26 +53,32 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 232 — 2026-11-05 (the firmware talks to a TLS server, and verifies the verdict)
+## Latest session: 233 — 2026-11-05 (a TLS front for the live server; a chain strict clients accept)
 
 ### Fog cleared
 
-- **Whether the firmware can do a real TLS verdict exchange**: yes — proven on the wire, with
-  the device_id and the signature check both asserted, not inferred from banners.
-- **Why the AK Name was never provisioned**: the provisioning script had never successfully
-  written the index; every earlier "unprovisioned" result was this bug, not the firmware.
+- **Whether the firmware can reach this deployment at all**: yes — the missing piece was a
+  TLS front plus a chain strict clients accept, not a firmware change.
+- **Why the S232 assets could not be reused as-is**: their certificate chain was
+  EDK2-acceptable but not OpenSSL-acceptable, which would have made any non-EDK2 client (my
+  probes, a browser, curl) fail for reasons unrelated to the firmware.
 
 ### Fog remaining
 
-- **The exchange went to the harness's own TLS server**, not to this deployment's Express
-  `/v1/verdict`. Pointing it there needs the same CA pinned into a policy the server issues,
-  plus `POST /v1/enroll` so the PBL device registry is populated — the remaining work.
-- **Hardware**: still QEMU + swtpm, one rung below real media; I3 unsatisfied.
+- **The QEMU firmware has not been pointed at the proxy yet** — the verified request above
+  came from a Python client sending firmware-shaped bytes. The next run boots PblApp with a
+  policy whose `lock_service_uri` is the proxy and checks the proxy log.
+- **A successful verdict needs enrolment**: `pbl_devices:<hex>` must exist, and the server's
+  verdict signing key must be the one the policy pins — otherwise the firmware will reach
+  the server and reject the verdict's signature, which is the correct behaviour but a
+  different result.
+- Still QEMU/emulation for the firmware, and the live server is a lab HTTP origin behind the
+  proxy; I3 remains unsatisfied.
 - D-117 (markdown/spec drift) untouched.
 
 ### Debt items closed
 
-- The "online verdict path never exercised" item from S231.
+- None.
 
 ### Debt items still open
 
@@ -80,34 +86,37 @@
 
 ### Blockers
 
-- None for the firmware side. The next step is wiring the harness at the live server.
+- None; the remaining steps are wiring, not discovery.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the provisioning script never verified its
-  own write until now (it does a readback), and the harness failed loudly instead of
-  skipping — that combination is what made this fixable. The earlier "unprovisioned" results
-  were read as a firmware property for several sessions.
-- **Layer 2 — context provision**: `tpm2_nvdefine`'s `-P`/`-p` distinction and the AUTHWRITE
-  implication were not documented anywhere in the script; they are now in comments.
+- **Layer 4 — verification feedback** (primary): the leaf-certificate defect was invisible to
+  the firmware but fatal to every other TLS client. A chain check (`openssl verify`) belongs
+  in the asset generator's own output, next to the pin it prints.
+- **Layer 3 — execution environment**: my first probe failed on hostname mismatch because the
+  SAN is the QEMU host address (10.0.2.2) and I connected to 127.0.0.1 — correct behaviour,
+  wrong test. The probe now verifies the chain with `check_hostname=False` and says why.
 
 ### VERIFY
 
-- Provisioning: `AK Name verified in NV 0x01C00003: 000babababab…`
-- Wire harness: 8 PASS / 0 FAIL (list above), with serial/server logs and `wire.pcap`
-  (5475 bytes) retained.
-- Commit: `e53680e`.
+- `openssl verify -CAfile ca-cert.pem server-cert.pem` -> `OK`; leaf shows both
+  `Subject Key Identifier` and `Authority Key Identifier`.
+- Proxy: `[proxy] listening on 127.0.0.1:9443 -> http://127.0.0.1:3001`, then a 112-byte
+  POST and a 90-byte 404 response logged.
+- Express: `{"error":"unknown_device","detail":"device_id is not enrolled; no verdict will be issued"}`.
+- Arg validation: `invalid --target (expected scheme://host[:port]): not a url`,
+  `invalid --port: abc`.
+- Commit: `f74055a`.
 
 ### Session artifacts
 
-- Changed: `scripts/provision-qemu-tpm.sh`.
+- Changed: `scripts/firmware-tls-proxy.js` (new), `firmware/PblPkg/d131-wire-capture.py`.
 
 ### Next session opening
 
-Point the wire harness at this deployment instead of its bundled TLS server: mint a policy
-whose `lock_service_uri` is the server, pin the CA the server presents, and confirm the
-Express `/v1/verdict` route answers the firmware — then `POST /v1/enroll` so the PBL device
-registry has its first row, which is also what makes the dashboard's PBL page non-empty.
+Boot PblApp with a policy pointing at the proxy (QEMU) and read the proxy log — then enrol
+the derived device id so Express issues a real signed verdict, using the verdict signing key
+the policy pins, and confirm the firmware verifies it end to end.
 
 ---
 

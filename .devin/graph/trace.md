@@ -11432,3 +11432,112 @@ Express `/v1/verdict` route answers the firmware — then `POST /v1/enroll` so t
 registry has its first row, which is also what makes the dashboard's PBL page non-empty.
 
 ---
+
+---
+
+## Session 233 — 2026-11-05 (a TLS front for the live server; a chain strict clients accept)
+
+### RULE-ZERO
+
+**Read**: `PblApp/HttpsClient.c` (plaintext rejected), `d131-wire-capture.py` (cert and
+policy generation, the capture server), `test-d131-wire-harness.sh` (what it asserts),
+`server/src/routes/pbl.js` (`POST /verdict` and its `unknown_device` branch).
+
+**Starting point**: S232 proved the firmware's TLS verdict exchange against the *harness's*
+server. The next step was to point it at this deployment, which needs TLS because PblApp
+rejects `http://` (C3 §4).
+
+### IMPLEMENT
+
+- **`scripts/firmware-tls-proxy.js`** (new, no dependencies): terminates TLS with the
+  certificate the policy pins and forwards to the Express API, logging every request with
+  its byte count and body digest. That log is the observable proof that the firmware reached
+  *our* server rather than a bundled one. `--port` and `--target` are validated (a relative
+  target now prints a message instead of a `TypeError` from `new URL()`).
+- **Certificate chain fixed**: the generated leaf had no **Authority Key Identifier**. EDK2
+  accepted the chain (S232 passed), but OpenSSL 3 — and therefore Python's `ssl` — rejected
+  it with *"Missing Authority Key Identifier"*. Both CAs now carry a Subject Key Identifier
+  and both leaves carry SKI + AKI; `openssl verify` reports OK.
+- **Capture server hardened**: request fields are narrowed once (the
+  `isinstance(request.get(n))` pattern also defeated the type checker, which reported
+  `Unknown | bytes | None` passed to `cb_bstr`), and a missing or unreadable
+  `verdict-meta.json` now reports and continues instead of raising mid-run.
+
+### RESULT (verified, host side)
+
+A firmware-shaped CBOR `POST /v1/verdict` over TLS with chain validation reaches **our**
+Express route:
+
+```
+[proxy] POST /v1/verdict from 127.0.0.1 -> 112 bytes
+[proxy] <- 404 90 bytes
+chain verified -> HTTP 404: {"error":"unknown_device","detail":"device_id is not enrolled; no verdict will be issued"}
+```
+
+`404 unknown_device` is the correct, well-formed answer — the route found no
+`pbl_devices:<hex>` row for that id (S229's empty registry).
+
+### Fog cleared
+
+- **Whether the firmware can reach this deployment at all**: yes — the missing piece was a
+  TLS front plus a chain strict clients accept, not a firmware change.
+- **Why the S232 assets could not be reused as-is**: their certificate chain was
+  EDK2-acceptable but not OpenSSL-acceptable, which would have made any non-EDK2 client (my
+  probes, a browser, curl) fail for reasons unrelated to the firmware.
+
+### Fog remaining
+
+- **The QEMU firmware has not been pointed at the proxy yet** — the verified request above
+  came from a Python client sending firmware-shaped bytes. The next run boots PblApp with a
+  policy whose `lock_service_uri` is the proxy and checks the proxy log.
+- **A successful verdict needs enrolment**: `pbl_devices:<hex>` must exist, and the server's
+  verdict signing key must be the one the policy pins — otherwise the firmware will reach
+  the server and reject the verdict's signature, which is the correct behaviour but a
+  different result.
+- Still QEMU/emulation for the firmware, and the live server is a lab HTTP origin behind the
+  proxy; I3 remains unsatisfied.
+- D-117 (markdown/spec drift) untouched.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None; the remaining steps are wiring, not discovery.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the leaf-certificate defect was invisible to
+  the firmware but fatal to every other TLS client. A chain check (`openssl verify`) belongs
+  in the asset generator's own output, next to the pin it prints.
+- **Layer 3 — execution environment**: my first probe failed on hostname mismatch because the
+  SAN is the QEMU host address (10.0.2.2) and I connected to 127.0.0.1 — correct behaviour,
+  wrong test. The probe now verifies the chain with `check_hostname=False` and says why.
+
+### VERIFY
+
+- `openssl verify -CAfile ca-cert.pem server-cert.pem` -> `OK`; leaf shows both
+  `Subject Key Identifier` and `Authority Key Identifier`.
+- Proxy: `[proxy] listening on 127.0.0.1:9443 -> http://127.0.0.1:3001`, then a 112-byte
+  POST and a 90-byte 404 response logged.
+- Express: `{"error":"unknown_device","detail":"device_id is not enrolled; no verdict will be issued"}`.
+- Arg validation: `invalid --target (expected scheme://host[:port]): not a url`,
+  `invalid --port: abc`.
+- Commit: `f74055a`.
+
+### Session artifacts
+
+- Changed: `scripts/firmware-tls-proxy.js` (new), `firmware/PblPkg/d131-wire-capture.py`.
+
+### Next session opening
+
+Boot PblApp with a policy pointing at the proxy (QEMU) and read the proxy log — then enrol
+the derived device id so Express issues a real signed verdict, using the verdict signing key
+the policy pins, and confirm the firmware verifies it end to end.
+
+---

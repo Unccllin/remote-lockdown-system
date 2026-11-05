@@ -1870,3 +1870,33 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-088
+  statement: 'PblApp rejects plaintext http:// in release builds (C3 section 4), so reaching this deployment''s
+    Express API requires a TLS front that presents a certificate the policy pins and a chain that strict
+    clients accept. scripts/firmware-tls-proxy.js terminates TLS (no dependencies), forwards to the API,
+    and logs every request with size and body digest; a firmware-shaped CBOR POST through it reaches POST
+    /v1/verdict and receives the correct answer for an unenrolled device (404 {"error":"unknown_device"}),
+    with the proxy logging the 112-byte request and 90-byte response. Two asset defects were fixed on
+    the way: d131-wire-capture.py generated a leaf certificate with no Authority Key Identifier, which
+    EDK2 accepts but OpenSSL 3 (and therefore Python ssl) rejects with ''Missing Authority Key Identifier''
+    -- both CAs now carry Subject Key Identifier and both leaves SKI+AKI so openssl verify passes; and
+    the capture server parsed request fields and read verdict-meta.json without guards, so a malformed
+    field or missing file took it down with a traceback (fields are narrowed once, which also fixes the
+    ''Unknown | bytes | None'' type error, and the meta read reports instead of raising). Remaining: the
+    QEMU firmware itself has not yet been pointed at the proxy (the verified request was a Python client
+    sending firmware-shaped bytes), and a successful verdict needs pbl_devices:<hex> to exist plus the
+    server''s verdict signing key to be the one the policy pins.'
+  domain: general
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'executed: openssl verify OK with SKI+AKI; proxy logged the 112-byte POST and 90-byte 404;
+    Express returned unknown_device; arg validation observed'
+  source: scripts/firmware-tls-proxy.js; firmware/PblPkg/d131-wire-capture.py; firmware/PblPkg/PblApp/HttpsClient.c;
+    server/src/routes/pbl.js
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
