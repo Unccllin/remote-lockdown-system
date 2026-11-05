@@ -1984,3 +1984,32 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-092
+  statement: 'A firmware policy pins its signer by SPKI (policy key 76) and identifies it by kid = SHA-256(SPKI)
+    (key 71), so any server that wants firmware to verify its verdicts must publish its public key. This
+    deployment previously stored only the PKCS#8 and reported only the kid, which made it impossible to
+    build a policy pinning it; cose.generateSigningKey() computed the SPKI and the route discarded it.
+    Now getSigningKeys()/getPolicySigningKeys() keep the SPKI on the cached key and persist it as pbl_signing_key:spki
+    / pbl_policy_signing_key:spki on generation, spkiFor() backfills older keys by deriving the SPKI from
+    the stored PKCS#8 (import private -> export JWK -> import public -> export SPKI) and persisting it
+    once, and GET /v1/admin/key-info reports kid, algorithm, spki (base64 DER) and kid_matches_spki. Verified
+    live: after restart, GET /v1/policy signs the default policy and key-info reports policy_signing_key
+    kid 7aeafb435e1fac91..., spki 91 bytes, kid_matches_spki true, while verdict_signing_key stays null
+    until a verdict is signed. The only remaining blocker for a firmware-verified verdict from this deployment
+    is attestation enrolment: POST /v1/enroll is the sole writer of pbl_devices:<hex>, the KV is an in-memory
+    singleton, and no admin seeding path exists. Also: module-level signing-key caches need an explicit
+    reset seam for tests that build a fresh env per case.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live: GET /v1/policy signed the default; key-info reports policy_signing_key kid 7aeafb435e1fac91…,
+    spki 91B, kid_matches_spki true; verdict key null pending enrolment; server 798 tests, eslint clean'
+  source: server/src/routes/pbl.js (spkiFor, getSigningKeys, getPolicySigningKeys, /admin/key-info); server/src/pbl/cose.js;
+    server/tests/pblVerdictPolicyEnroll.test.js; live endpoints on http://localhost:3001
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

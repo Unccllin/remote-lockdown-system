@@ -11849,3 +11849,94 @@ server; (2) run the attestation enrolment (`POST /v1/enroll`) for one device so 
 has a row — after which the firmware can verify a verdict signed by this deployment.
 
 ---
+
+---
+
+## Session 237 — 2026-11-05 (the public key a firmware policy needs, now published)
+
+### RULE-ZERO
+
+**Read**: `server/src/routes/pbl.js` (`getSigningKeys`, `getPolicySigningKeys`,
+`/admin/key-info`), `server/src/pbl/cose.js` (`generateSigningKey` returns spki/pkcs8/kid),
+`d131-wire-capture.py` (policy keys 71 = kid, 76 = SPKI), and the existing PBL test helpers.
+
+**Starting point**: S236 recorded two blockers for a firmware-verified verdict from this
+deployment — the missing SPKI exposure, and attestation enrolment. This session closed the
+first.
+
+### IMPLEMENT
+
+- **SPKI persisted with the key.** `getSigningKeys()` and `getPolicySigningKeys()` now keep
+  `spki` on the cached key and write `pbl_signing_key:spki` / `pbl_policy_signing_key:spki`
+  when a key is generated. (`cose.generateSigningKey()` had always computed it; the route was
+  discarding it.)
+- **`spkiFor()` backfills older keys**: derive from the stored PKCS#8 (import private → export
+  JWK → import the public half → export SPKI), persist once, return thereafter.
+- **`GET /v1/admin/key-info`** now reports per key: `kid`, `algorithm`, `spki` (base64 DER) and
+  `kid_matches_spki` — the last so an operator can see key/kid drift instead of inferring it
+  from a firmware rejection.
+- **`__resetSigningKeyCaches()`** exported as a documented test seam. The caches are
+  module-level, which is correct in production (one process, one KV) and wrong for a test that
+  builds a fresh env per case: without the reset, a key generated for another env is reused and
+  never appears in the env under test.
+
+### Fog cleared
+
+- **Why no policy could pin this server**: the public key was never published, only its hash.
+  Verified live: after restart, `GET /v1/policy` signs the default policy and
+  `GET /v1/admin/key-info` reports `policy_signing_key kid 7aeafb435e1fac91…, spki 91 bytes,
+  kid_matches_spki true`.
+- **Whether the SPKI derivation is sound**: `kid_matches_spki` is computed from the derived
+  SPKI and is true for a live key, so the backfill path and the stored kid agree.
+
+### Fog remaining
+
+- **Attestation enrolment is now the only blocker** for a firmware-verified verdict from this
+  deployment: `POST /v1/enroll` is the sole writer of `pbl_devices:<hex>` (S236), the KV is
+  in-memory, and no admin seeding path exists. The verdict key also stays `null` until a
+  verdict is actually signed, which needs that enrolment.
+- QEMU/emulation only; I3 unsatisfied. D-117 untouched.
+
+### Debt items closed
+
+- The S236 "key-info must expose the SPKI" item.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- Attestation enrolment (design work: an orchestrated `POST /v1/enroll` with real nonce and
+  platform state).
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the server could not be used as a
+  firmware-verifiable signer for lack of a *published public key*, and nothing in the endpoint's
+  contract said so. A policy-pinning design needs its key distribution written down.
+- **Layer 3 — execution environment**: the module-level key cache made a fresh-env test read
+  another test's key; the seam exists now so that class of flake is deliberate rather than
+  intermittent.
+
+### VERIFY
+
+- Live: `GET /v1/policy` → `{"latest_version":"1","versions":["1"],"source":"default"}`;
+  `GET /v1/admin/key-info` → `policy_signing_key: kid=7aeafb435e1fac91… alg=ES256 spki=91B
+  matches=True`; `verdict_signing_key: null` (nothing signed yet).
+- Suites: server **798** (48 suites; +3), eslint clean on the project.
+- Commit: `5489ae8`.
+
+### Session artifacts
+
+- Changed: `server/src/routes/pbl.js`, `server/tests/pblVerdictPolicyEnroll.test.js`.
+
+### Next session opening
+
+Run attestation enrolment against this deployment so `pbl_devices:<hex>` gets its first row:
+take the AK-derived device id the firmware uses (000babab…), produce the nonce + platform
+state the enrol handler expects, and confirm the firmware then receives a verdict signed by
+this server — which will also publish a verdict SPKI in key-info and give the dashboard's PBL
+page its first device.
+
+---
