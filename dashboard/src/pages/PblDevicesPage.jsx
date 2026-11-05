@@ -213,7 +213,22 @@ export default function PblDevicesPage() {
             ) : filtered.length === 0 ? (
               <tr>
                 <td colSpan={isOperator ? 7 : 6} className="px-4 py-8 text-center text-slate-500">
-                  No PBL devices found
+                  {devices.length === 0 ? (
+                    <div data-testid="pbl-empty-registry" className="max-w-lg mx-auto text-left space-y-2">
+                      <p className="text-slate-300 font-medium text-center">
+                        No devices have enrolled through the PBL firmware programme
+                      </p>
+                      <p className="text-xs">
+                        This list is populated only by <code className="font-mono">POST /v1/enroll</code> — the
+                        attestation flow firmware uses. A machine enrolled with the agent
+                        (<code className="font-mono">/api/enroll/claim</code>) is deliberately a different
+                        record and appears under <strong>Devices</strong> instead. An empty list here is
+                        normal on a deployment that has only used agent enrolment.
+                      </p>
+                    </div>
+                  ) : (
+                    'No PBL devices match the current filter'
+                  )}
                 </td>
               </tr>
             ) : (

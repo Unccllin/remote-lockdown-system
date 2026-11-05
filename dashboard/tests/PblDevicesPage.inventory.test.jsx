@@ -87,8 +87,9 @@ describe('PblDevicesPage — device inventory (part of the PBL surface)', () => 
     await waitFor(() => {
       expect(screen.getByText(/Inventory source unreachable/i)).toBeInTheDocument();
     });
-    // The PBL device table must still render — enforcement is unaffected.
-    expect(screen.getByText(/No PBL devices found/i)).toBeInTheDocument();
+    // The PBL device table must still render — enforcement is unaffected. The empty
+    // state now explains the two registries (S229) instead of a bare "no devices".
+    expect(screen.getByTestId('pbl-empty-registry')).toBeInTheDocument();
   });
 
   it('says nothing is connected when no source is enabled at all', async () => {
