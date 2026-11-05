@@ -40,7 +40,7 @@ hiddenimports = collect_submodules('cryptography') + [
 ]
 
 # Data files
-datas = []
+datas = [('service_host.py', '.')]
 
 # Binaries — the agent exe is NOT bundled in the installer.
 # Instead, the installer downloads it from the Worker at install time

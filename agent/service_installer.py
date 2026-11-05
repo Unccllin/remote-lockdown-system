@@ -169,8 +169,21 @@ def _agent_running() -> bool:
 
 
 def _install_dir() -> Path:
-    """Where the agent, config and watchdog script live on the target."""
-    return Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "LockdownAgent"
+    r"""Where the agent, config and watchdog script live on the target.
+
+    Off Windows there is no `%PROGRAMDATA%`; falling back to the literal string
+    ``C:\ProgramData`` (a relative path) used to create a directory with that name in
+    whatever the working directory was — it appeared inside `agent/dist/` after a test
+    run (S227). A temp directory is the honest equivalent.
+    """
+    programdata = os.environ.get("PROGRAMDATA")
+    if programdata:
+        return Path(programdata) / "LockdownAgent"
+    if _is_windows():
+        return Path(r"C:\ProgramData") / "LockdownAgent"
+    import tempfile
+
+    return Path(tempfile.gettempdir()) / "LockdownAgent"
 
 
 def _ps_quote(value: str) -> str:

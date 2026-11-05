@@ -50,7 +50,9 @@ a = Analysis(
     ['installer.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    # service_installer copies service_host.py beside the agent to register the
+    # service; without it a frozen installer cannot create the service at all.
+    datas=[('service_host.py', '.')],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
