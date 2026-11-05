@@ -602,6 +602,7 @@ def test_headless_accepts_http_with_the_override(monkeypatch):
     monkeypatch.setattr(installer_gui, "get_mac_address", lambda: "MAC")
     monkeypatch.setattr(installer_gui, "get_serial_number", lambda: "SN")
     monkeypatch.setattr(installer_gui, "write_config", lambda *a, **k: seen.update(k) or True)
+    monkeypatch.setattr(installer_gui, "stop_running_agent", lambda: None)
     monkeypatch.setattr(installer_gui, "add_defender_exclusions", lambda: None)
     monkeypatch.setattr(installer_gui, "find_agent_exe", lambda: "/agent.exe")
     monkeypatch.setattr(installer_gui, "install_files", lambda p: p)
@@ -660,3 +661,18 @@ def test_launch_agent_starts_when_nothing_is_running(monkeypatch):
     installer_gui.launch_agent(Path("/agent.exe"))
 
     assert spawned and spawned[0][0] == "/agent.exe"
+
+
+def test_stop_running_agent_stops_the_service_and_kills_the_process(monkeypatch):
+    """A running agent locks its own exe, so the replace must be preceded by a stop."""
+    import installer_gui
+
+    calls = []
+    monkeypatch.setattr(installer_gui.subprocess, "run", lambda a, **k: calls.append(a) or None)
+    monkeypatch.setattr(installer_gui.time, "sleep", lambda _s: None)
+
+    installer_gui.stop_running_agent()
+
+    joined = [" ".join(c) for c in calls]
+    assert any("sc.exe stop LockdownAgent" in j for j in joined)
+    assert any("taskkill /F /IM lockdown-agent.exe" in j for j in joined)

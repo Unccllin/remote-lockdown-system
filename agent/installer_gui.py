@@ -392,9 +392,35 @@ def _download_verified(url: str, dest: Path, *, timeout: int = 120) -> Path | No
             return None
         tmp.replace(dest)
         return dest
-    except (requests.RequestException, OSError):
+    except requests.RequestException as exc:
+        # Must come first: RequestException subclasses OSError.
+        print(f"      download failed: {exc}")
         tmp.unlink(missing_ok=True)
         return None
+    except OSError as exc:
+        # Most often a locked destination: the agent may still be running from it.
+        print(f"      download failed while replacing {dest.name}: {exc}")
+        tmp.unlink(missing_ok=True)
+        return None
+
+
+def stop_running_agent() -> None:
+    """Stop the service and any agent process before replacing the binary.
+
+    The agent runs *from* the install directory, so Windows refuses to replace the
+    locked executable. `_download_verified` swallows that as OSError and returns None,
+    which surfaced as the misleading "agent binary unavailable" on a reinstall (S221).
+    """
+    for cmd in (
+        ["sc.exe", "stop", "LockdownAgent"],
+        ["taskkill", "/F", "/IM", "lockdown-agent.exe"],
+    ):
+        try:
+            subprocess.run(cmd, capture_output=True, text=True)
+        except (FileNotFoundError, subprocess.SubprocessError):
+            # Neither binary exists off Windows; stopping is best-effort.
+            pass
+    time.sleep(2)
 
 
 def download_agent_exe(server_url: str, dest_dir: Path) -> Path | None:
@@ -1262,6 +1288,8 @@ def run_headless(
         add_defender_exclusions()
 
         print("[4/6] Installing the agent binary ...")
+        # A running agent locks the exe in the install directory (S221).
+        stop_running_agent()
         agent_exe = find_agent_exe() or download_agent_exe(server_url, INSTALL_DIR)
         if not agent_exe:
             raise Exception(

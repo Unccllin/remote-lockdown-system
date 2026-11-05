@@ -157,6 +157,43 @@ class TestServiceInstall:
         assert service_installer._service_bin_path() == f'"{tmp_path / "lockdown-service.exe"}"'
 
 
+class TestManagedDevice:
+    """A managed endpoint must stay reachable and stay quiet (S221)."""
+
+    def test_power_policy_clears_the_ac_idle_timeouts(self):
+        calls = []
+        completed = MagicMock(returncode=0, stdout="", stderr="")
+        with patch.object(
+            service_installer.subprocess,
+            "run",
+            side_effect=lambda a, **k: calls.append(a) or completed,
+        ):
+            assert service_installer.apply_managed_power_policy() is True
+
+        joined = [" ".join(c) for c in calls]
+        assert any("standby-timeout-ac 0" in c for c in joined)
+        assert any("hibernate-timeout-ac 0" in c for c in joined)
+
+    def test_power_policy_reports_failure_without_raising(self):
+        completed = MagicMock(returncode=1, stdout="", stderr="Access is denied")
+        with patch.object(service_installer.subprocess, "run", return_value=completed):
+            assert service_installer.apply_managed_power_policy() is False
+
+    def test_legacy_starters_are_removed(self):
+        calls = []
+        completed = MagicMock(returncode=0, stdout="", stderr="")
+        with patch.object(
+            service_installer.subprocess,
+            "run",
+            side_effect=lambda a, **k: calls.append(a) or completed,
+        ):
+            service_installer.remove_legacy_starters()
+
+        joined = [" ".join(c) for c in calls]
+        assert any("schtasks /Delete /TN SystemHealthMonitor" in c for c in joined)
+        assert any("reg delete" in c and "SystemHealthMonitor" in c for c in joined)
+
+
 class TestSingleInstance:
     """Two agents on one machine = two pollers for one device (S216)."""
 

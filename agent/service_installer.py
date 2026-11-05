@@ -51,12 +51,27 @@ except ImportError:
     # by _HAS_TAMPER_PROTECTION, but leaving them unbound means the guard is the only
     # thing between a missing module and a NameError — invisible to static analysis
     # and easy to break by editing one call site.
-    # Same return shape as the real functions (dict), so call sites such as
-    # `remove_all_protection(...).get("protection_removed")` stay type-correct.
-    def apply_all_protection(*_args: object, **_kwargs: object) -> dict:
+    # Same signatures and return shape as the real functions, so call sites such as
+    # `remove_all_protection(...).get("protection_removed")` stay type-correct and the
+    # no-op stubs remain drop-in replacements.
+    def apply_all_protection(
+        agent_path: Path,
+        config_path: Path | None = None,
+        state_dir: Path | None = None,
+        watchdog_path: Path | None = None,
+    ) -> dict:
         return {}
 
-    def remove_all_protection(*_args: object, **_kwargs: object) -> dict:
+    def remove_all_protection(
+        agent_path: Path,
+        config_path: Path | None = None,
+        state_dir: Path | None = None,
+        watchdog_path: Path | None = None,
+        uninstall_token: str | None = None,
+        server_url: str | None = None,
+        api_key: str | None = None,
+        device_id: str | None = None,
+    ) -> dict:
         return {}
 
 
@@ -178,7 +193,8 @@ def _agent_launch_parts() -> tuple[str, list[str]]:
     elif getattr(sys, "frozen", False):
         exe, args = str(_get_agent_path()), ["--silent"]
     else:
-        exe, args = _get_python_path(), [str(_get_agent_path()), "--silent"]
+        # _get_python_path() returns None when frozen; sys.executable is the fallback.
+        exe, args = _get_python_path() or sys.executable, [str(_get_agent_path()), "--silent"]
 
     config_path = _get_config_path()
     if config_path:
@@ -283,6 +299,52 @@ def _sc(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["sc.exe", *args], capture_output=True, text=True)
 
 
+def apply_managed_power_policy() -> bool:
+    """Stop the machine sleeping its way out of reach.
+
+    The default Balanced scheme on the live machine hibernates after one hour on AC
+    (`HIBERNATEIDLE 0xe10`) while `powercfg /requests` shows nothing holding it awake —
+    the agent never asks Windows to stay awake, so a managed device becomes unreachable
+    for lockdown, recovery and tracking (S221).
+
+    Only the AC timeouts are changed: on battery, sleeping is the operator's trade-off.
+    `0` means "never" for both.
+    """
+    ok = True
+    for setting in ("standby-timeout-ac", "hibernate-timeout-ac"):
+        result = subprocess.run(
+            ["powercfg", "/change", setting, "0"], capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            log.warning("powercfg %s failed: %s", setting, (result.stderr or "").strip())
+            ok = False
+    if ok:
+        log.info("AC power policy set: never sleep, never hibernate")
+    return ok
+
+
+def remove_legacy_starters() -> None:
+    """Delete the scheduled task and Run key an older install may have created.
+
+    With the service in place they are not only redundant: the Run key starts a
+    non-elevated agent that exits, and a task plus a service means two agents per
+    machine (S220). Cleanliness here is what makes the app silent and single-instance.
+    """
+    subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True, text=True)
+    subprocess.run(
+        [
+            "reg",
+            "delete",
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            "SystemHealthMonitor",
+            "/f",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+
 def install_service() -> bool:
     """Create, configure and start the agent as a Windows service.
 
@@ -376,6 +438,8 @@ def install() -> bool:
     # fallback for machines where service creation is blocked by policy.
     if install_service():
         log.info("Installed as a Windows service (%s)", SERVICE_NAME)
+        apply_managed_power_policy()
+        remove_legacy_starters()
         if _HAS_TAMPER_PROTECTION:
             log.info("Applying tamper protection (file ACLs + registry protection)...")
             try:
