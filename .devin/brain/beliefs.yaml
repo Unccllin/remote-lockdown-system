@@ -2134,3 +2134,37 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-097
+  statement: 'Three consequences of pinning an update key needed checking, and only two of them were as
+    stated. (1) The release pipeline DOES sign: .github/workflows/release.yml runs scripts/sign-release-metadata.py
+    with secrets.UPDATE_SIGNING_KEY and, when that secret is absent, publishes --unsigned behind a warning
+    that pinned agents will refuse the release — so the missing piece is not a signing step but the guarantee
+    that the CI secret holds the same key the fleet pins; a mismatch makes every pinned device refuse
+    every update with nothing in CI noticing, and the rotation order (stage the public key, let devices
+    adopt it, then sign with the new private key) is now documented in docs/CODE_SIGNING.md. (2) The tamper-protection
+    upgrade gap was real: Everyone:(DENY)(DE) plus Administrators:(RX) on lockdown-agent.exe and config.json
+    made a legitimate reinstall fail with ''Access is denied'' until ownership was taken by hand; installer_gui.unlock_for_upgrade()
+    now removes the DENY, takes ownership, grants Administrators write and verifies writability, install_files()/write_config()
+    call it before replacing, and the agent re-applies protection when it next starts — proven with two
+    runs on the device (run 1 applied protection, run 2 upgraded over it unattended and protection was
+    restored, device still reports update_verification signature). (3) The private key was at agent/dist/update_signing.key
+    and the generator defaulted its output to the working copy while .gitignore covered only agent/dist/,
+    so running it from the repository root produced a committable private key; it now lives at ~/.lockdown-secrets/update_signing.key
+    (mode 600), the generator defaults there, and .gitignore excludes update_signing.key/update_signing.pub/*.key
+    everywhere.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: release.yml:328/356-363 read directly; device two-run proof with icacls before/after and
+    update_verification still signature; git check-ignore proves *.key coverage; agent 822 / server 802
+    / dashboard 225 tests
+  source: .github/workflows/release.yml; scripts/sign-release-metadata.py; docs/CODE_SIGNING.md; agent/installer_gui.py
+    (install_files, write_config, unlock_for_upgrade); .gitignore; scripts/generate-update-keys.sh; live
+    icacls output on FRANKENSTEIN
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

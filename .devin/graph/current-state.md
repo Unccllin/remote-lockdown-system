@@ -53,33 +53,32 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 241 — 2026-11-05 ("SHA-256 only — unauthenticated": three causes, one line)
+## Latest session: 242 — 2026-11-05 (checking the three consequences of pinning)
 
 ### VERIFY
 
-- Live: `update_verification = signature`, `last_checkin 2026-11-05 12:57:55`, pinned key
-  readable at `C:\ProgramData\LockdownAgent\update_signing.pub` (113 bytes, PEM Ed25519).
-- Before: `update_verification = sha256-only` with config naming `C:\Users\user\…` and the
-  installed path absent.
-- Suites: agent **820** (+1), server 802, dashboard 225.
+- `release.yml:328` `UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}`; `:356-363` sign
+  when set, `--unsigned` with a warning when not.
+- Device run 1 → `Everyone:(DENY)(DE)` / `Administrators:(RX)` on both files; run 2 →
+  `OK: installed` with no manual step, protection restored afterwards.
+- `git check-ignore -v update_signing.key` → `.gitignore:146:*.key`.
+- Suites: agent **822** (+2), server 802, dashboard 225.
 
 ### Fog remaining
 
-- **Pinning changes behaviour**: the device now *refuses unsigned updates*. Release metadata
-  must be signed with `update_signing.key` (CI secret `UPDATE_SIGNING_KEY`) or no update will
-  apply — correct posture, but the signing step has to exist in the pipeline.
-- **Upgrading a tamper-protected install is manual** (takeown/grant, or server-authorized
-  uninstall). The installer should own that path.
-- **The private key currently lives on this host** at `agent/dist/update_signing.key`
-  (gitignored, mode 600). Production should hold it in CI secrets and keep no copy here.
-- D-117 untouched; firmware remains QEMU-only (I3).
+- **CI secret not configured** (cannot be from here): `UPDATE_SIGNING_KEY` must hold the
+  private key whose public half is `agent/dist/update_signing.pub`, or released updates will
+  be refused by the device that now pins it.
+- **`lockdown-service.exe` and `installer_gui` do not yet re-stage the public key** when the
+  operator rotates it; rotation today means re-running the installer per device.
+- D-117 (markdown/spec drift); firmware remains QEMU-only (I3).
 
 ### Next session opening
 
-Give the installer a legitimate upgrade path over tamper protection (server-authorized
-uninstall or an explicit unlock that re-applies protection afterwards), and wire
-`update_signing.key` into the release pipeline so the updates this pin now *demands* are
-actually signed.
+Put the generated keypair where the pipeline can use it: add the private key as the
+`UPDATE_SIGNING_KEY` secret, confirm `release.yml` signs a test release with it, and verify
+that the pinned FRANKENSTEIN accepts that release's metadata — the first end-to-end proof
+that the pin and the signer agree.
 
 ---
 

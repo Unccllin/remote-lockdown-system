@@ -12330,3 +12330,83 @@ uninstall or an explicit unlock that re-applies protection afterwards), and wire
 actually signed.
 
 ---
+
+---
+
+## Session 242 — 2026-11-05 (checking the three consequences of pinning)
+
+### RULE-ZERO
+
+**Read**: `.github/workflows/release.yml` (signing job), `scripts/sign-release-metadata.py`,
+`docs/CODE_SIGNING.md`, `agent/installer_gui.py` (`install_files`, `write_config`),
+`agent/tamper_protection.py` (`apply_file_acls` / `remove_file_acls`), `.gitignore`,
+`scripts/generate-update-keys.sh`, and the live ACLs on the device.
+
+**Task**: verify the three consequences I stated after pinning the update key, rather than
+restating them.
+
+### FINDING 1 — I was wrong: the pipeline does sign
+
+I had said "the signing step must exist in the pipeline — it doesn't yet". It does:
+`release.yml` runs `scripts/sign-release-metadata.py` with `secrets.UPDATE_SIGNING_KEY`, and
+when that secret is absent it publishes `--unsigned` behind an `::warning title=Unsigned
+release metadata` that names the consequence ("agents with a pinned update key will REFUSE
+this release").
+
+The real gap is narrower and different: the pipeline cannot check that the secret holds the
+**same** key the fleet pins. A mismatch means every pinned device refuses every update, and
+nothing in CI would notice. Documented in `docs/CODE_SIGNING.md` with the pin/signer
+agreement table and the rotation order (stage the public key, let devices adopt it, then sign
+with the new private key).
+
+### FINDING 2 — the tamper-protection upgrade gap was real, and is fixed
+
+Confirmed live: `Everyone:(DENY)(DE)` plus `BUILTIN\Administrators:(RX)` on
+`lockdown-agent.exe` **and** `config.json`, so a legitimate reinstall failed with
+"Access is denied" — twice in S241 — until ownership was taken by hand.
+
+- `installer_gui.unlock_for_upgrade()`: remove the DENY, `takeown`, grant Administrators
+  write, then **verify** the file is writable rather than assuming it.
+- `install_files()` and `write_config()` call it before replacing; the agent re-applies
+  protection when it next starts (`service_installer.apply_all_protection`), so the window is
+  the reinstall itself.
+- Proven with two runs on the device: run 1 applied protection; run 2 upgraded over it with
+  no manual step, and `icacls` afterwards showed `Everyone:(DENY)(DE)` restored. Device still
+  reports `update_verification: signature`.
+
+### FINDING 3 — the private key was one `git add -A` away, and is now out of the tree
+
+- Moved to `~/.lockdown-secrets/update_signing.key` (mode 600); `agent/dist/` keeps only the
+  public key.
+- `scripts/generate-update-keys.sh` defaulted its output to `$(pwd)`, and `.gitignore` only
+  covered `agent/dist/` — so running the generator from the repository root produced a
+  **committable private key**. Its default is now `~/.lockdown-secrets`.
+- `.gitignore` excludes `update_signing.key`, `update_signing.pub` and `*.key` everywhere
+  (verified with `git check-ignore`: a file created in the repo root matches `*.key`).
+
+### VERIFY
+
+- `release.yml:328` `UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}`; `:356-363` sign
+  when set, `--unsigned` with a warning when not.
+- Device run 1 → `Everyone:(DENY)(DE)` / `Administrators:(RX)` on both files; run 2 →
+  `OK: installed` with no manual step, protection restored afterwards.
+- `git check-ignore -v update_signing.key` → `.gitignore:146:*.key`.
+- Suites: agent **822** (+2), server 802, dashboard 225.
+
+### Fog remaining
+
+- **CI secret not configured** (cannot be from here): `UPDATE_SIGNING_KEY` must hold the
+  private key whose public half is `agent/dist/update_signing.pub`, or released updates will
+  be refused by the device that now pins it.
+- **`lockdown-service.exe` and `installer_gui` do not yet re-stage the public key** when the
+  operator rotates it; rotation today means re-running the installer per device.
+- D-117 (markdown/spec drift); firmware remains QEMU-only (I3).
+
+### Next session opening
+
+Put the generated keypair where the pipeline can use it: add the private key as the
+`UPDATE_SIGNING_KEY` secret, confirm `release.yml` signs a test release with it, and verify
+that the pinned FRANKENSTEIN accepts that release's metadata — the first end-to-end proof
+that the pin and the signer agree.
+
+---
