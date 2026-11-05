@@ -214,9 +214,9 @@ pre-push-check:
 	@bash scripts/pre-push-check.sh
 
 # Lint all components — server, dashboard, agent, workflows.
-.PHONY: lint lint-server lint-dashboard lint-agent lint-workflows check-firmware-todos
+.PHONY: lint lint-server lint-dashboard lint-agent lint-workflows check-firmware-todos check-debt-ledger
 
-lint: lint-server lint-dashboard lint-agent lint-workflows check-firmware-todos typecheck-worker check-openapi
+lint: lint-server lint-dashboard lint-agent lint-workflows check-firmware-todos check-debt-ledger typecheck-worker check-openapi
 
 # Workflow lint. CI runs actionlint v1.7.12 through raven-actions/actionlint,
 # which bundles shellcheck — so CI also checks the shell inside every `run:`
@@ -243,6 +243,14 @@ lint-server:
 # covered by scripts/test_check_firmware_todos.py, whose last test asserts this
 # real tree is clean — so a new untraceable deferral fails locally, not only in
 # CI.
+# The debt ledger states every item's status twice — a summary table and a detailed entry
+# whose blocker justifies it. They drifted (23 of 46 items disagreed on 2026-11-05, the table
+# calling items CLOSED that their own entry calls OPEN), so a guard compares them. Recorded
+# disagreements live in a shrink-only baseline.
+.PHONY: check-debt-ledger
+check-debt-ledger:
+	@python3 scripts/check_debt_ledger.py
+
 check-firmware-todos:
 	@python3 scripts/check-firmware-todos.py
 

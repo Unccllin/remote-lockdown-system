@@ -47,6 +47,13 @@ jobs:
       - name: Run graph invariant sweep
         run: python3 .devin/graph/graph_assert.py
 
+      - name: Debt ledger statuses agree with their entries
+        # The ledger states each status twice: a summary table, and a detailed entry whose
+        # blocker justifies it. They drifted — 23 of 46 items disagreed, the table calling
+        # items CLOSED that their own entry calls OPEN. Recorded disagreements sit in a
+        # shrink-only baseline, so a NEW one fails here.
+        run: python3 scripts/check_debt_ledger.py
+
   # ---------------------------------------------------------------------------
   # Server tests (Node.js + Jest)
   # ---------------------------------------------------------------------------

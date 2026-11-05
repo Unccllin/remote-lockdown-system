@@ -2192,7 +2192,7 @@
 | D-114 | Chain-load Windows Boot Manager not implemented | CLOSED | TODO |
 | D-115 | CBOR encoding/decoding not implemented | CLOSED | TODO |
 | D-116 | TLS certificate pin verification not implemented | CLOSED (PblHttpsPost accepts TlsCaPin + ExpectedHostname; PblTlsVerifyCert validates SHA-256 of server cert against pinned CA hash) | SECURITY |
-| D-117 | No runtime tests for PBL modules | CLOSED (QEMU+swtpm: 8 test-output logs) | TEST |
+| D-117 | No runtime tests for PBL modules | OPEN (QEMU integration passes; no host-side unit tests — see the detailed entry) | TEST |
 | D-118 | EFI_RNG_PROTOCOL nonce generation not implemented | CLOSED | SECURITY |
 | D-119 | ACPI FADT S3 parsing stubbed | CLOSED | STUB |
 | D-120 | BitLocker detection not implemented | OPEN (FVE-FS metadata inspection + disk-level AND partition-level boot-volume binding implemented in `Fve.c`/`Bcd.c` + QEMU 4-boot test incl. `partbind`; `osdevice` device-blob decoded per `NOTE-BCD-DEVICE-BLOB.md` — NG-T5 partition binding DONE commits `450d283`+`df91b56` any-match; residual: real-media validation + VMK lock-state proof) | TODO |
