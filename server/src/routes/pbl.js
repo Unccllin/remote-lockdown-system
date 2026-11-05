@@ -1096,16 +1096,39 @@ router.post('/override/response', async (req, res) => {
 
 router.get('/devices', requireAuth, requireRole('operator'), async (req, res) => {
   const env = req._pblEnv || createEnv();
-  // List all PBL devices from KV (prefix scan)
+  // Read through the KV INTERFACE, not env._store.
+  //
+  // createSharedEnv() exposes _store as the in-memory Map, but when a database pool is
+  // present the KV is backed by the pbl_kv_store table (kvStore.js: useDb). Enrolment
+  // therefore wrote to the table while this handler scanned the empty Map, so the PBL
+  // device list reported zero with devices enrolled — the dashboard's "PBL devices: 0"
+  // was this, not an empty registry (S238). list() + get() work in both modes.
   const devices = [];
-  // The KV shim uses a Map, so we iterate keys
-  const store = env._store;
-  if (store) {
-    for (const [key, value] of store.entries()) {
-      if (key.startsWith('pbl_devices:') && !key.includes('pbl_device_mapping:')) {
-        try {
-          devices.push(JSON.parse(value));
-        } catch { /* skip non-JSON */ }
+  const listed = env.LOCKDOWN_KV.list ? await env.LOCKDOWN_KV.list({ prefix: 'pbl_devices:' }) : null;
+  const keys = (listed?.keys || []).map((k) => k.name).filter((name) => !name.includes('pbl_device_mapping:'));
+
+  if (keys.length > 0) {
+    for (const key of keys) {
+      const value = await env.LOCKDOWN_KV.get(key, 'text');
+      if (value === null) continue;
+      try {
+        devices.push(JSON.parse(value));
+      } catch {
+        /* skip non-JSON values rather than failing the whole list */
+      }
+    }
+  } else {
+    // Legacy in-memory path: an env built from a bare Map has no list().
+    const store = env._store;
+    if (store && typeof store.entries === 'function') {
+      for (const [key, value] of store.entries()) {
+        if (key.startsWith('pbl_devices:') && !key.includes('pbl_device_mapping:')) {
+          try {
+            devices.push(JSON.parse(value));
+          } catch {
+            /* skip non-JSON */
+          }
+        }
       }
     }
   }

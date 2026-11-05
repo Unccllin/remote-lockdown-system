@@ -787,3 +787,77 @@ describe('D-209: key-info exposes the public key a firmware policy must pin', ()
     expect(resp.body.policy_signing_key).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// S238: the device list must read the KV interface, not env._store.
+//
+// With a database pool present the KV is backed by the pbl_kv_store table, while
+// env._store still exposes the in-memory Map. Enrolment wrote to the table, so the list
+// scanned an empty Map and reported zero devices with devices enrolled — which is what the
+// dashboard showed.
+// ---------------------------------------------------------------------------
+
+describe('S238: GET /v1/devices reads the KV interface', () => {
+  function envWithKvOnly(records) {
+    const map = new Map(Object.entries(records));
+    return {
+      LOCKDOWN_KV: {
+        async get(key, type) {
+          const value = map.get(key);
+          if (value === undefined || value === null) return null;
+          return type === 'text' ? String(value) : value;
+        },
+        async put(key, value) {
+          map.set(key, value);
+        },
+        async list({ prefix } = {}) {
+          return {
+            keys: [...map.keys()]
+              .filter((k) => !prefix || k.startsWith(prefix))
+              .map((name) => ({ name })),
+          };
+        },
+      },
+      // Deliberately empty: this is the DB-backed shape that produced the bug.
+      _store: new Map(),
+    };
+  }
+
+  it('lists a device that exists in KV even when _store is empty', async () => {
+    const deviceId = 'ab'.repeat(32);
+    const env = envWithKvOnly({
+      [`pbl_devices:${deviceId}`]: JSON.stringify({
+        device_id: deviceId,
+        status: 'active',
+        enrolled_at: '2026-11-05T00:00:00Z',
+      }),
+    });
+    const app = createApp(env);
+
+    const resp = await request(app)
+      .get('/v1/devices')
+      .set('Authorization', `Bearer ${makeToken('operator')}`);
+
+    expect(resp.status).toBe(200);
+    expect(resp.body.devices).toHaveLength(1);
+    expect(resp.body.devices[0].device_id).toBe(deviceId);
+  });
+
+  it('ignores agent mappings and non-JSON values', async () => {
+    const deviceId = 'cd'.repeat(32);
+    const env = envWithKvOnly({
+      [`pbl_devices:${deviceId}`]: JSON.stringify({ device_id: deviceId, status: 'active' }),
+      'pbl_devices:broken': 'not json',
+      'pbl_device_mapping:abc': JSON.stringify({ device_id: 'abc' }),
+    });
+    const app = createApp(env);
+
+    const resp = await request(app)
+      .get('/v1/devices')
+      .set('Authorization', `Bearer ${makeToken('operator')}`);
+
+    expect(resp.status).toBe(200);
+    expect(resp.body.devices).toHaveLength(1);
+    expect(resp.body.devices[0].device_id).toBe(deviceId);
+  });
+});
