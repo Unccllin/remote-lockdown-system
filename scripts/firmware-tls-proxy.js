@@ -97,6 +97,20 @@ const server = https.createServer(
   }
 );
 
+// TLS-level events matter as much as requests: "no request logged" is ambiguous between
+// "the guest never opened a connection" and "the handshake failed", and the firmware only
+// says "Online fetch failed: Aborted" either way (S234).
+server.on('tlsClientError', (err, socket) => {
+  console.log(
+    `[proxy] TLS handshake failed from ${socket?.remoteAddress || '?'}: ${err.code || err.message}`
+  );
+});
+server.on('secureConnection', (socket) => {
+  console.log(
+    `[proxy] TLS established from ${socket.remoteAddress} (${socket.getProtocol()} ${socket.getCipher()?.name || '?'})`
+  );
+});
+
 server.listen(port, '127.0.0.1', () => {
   console.log(`[proxy] listening on 127.0.0.1:${port} -> ${target}`);
 });

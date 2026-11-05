@@ -35,11 +35,20 @@
 set -eo pipefail
 
 TIMEOUT=60
+# --external-server: do not start the bundled capture server; the policy's
+# lock_service_uri points at some other TLS server (e.g. the deployment's own API behind
+# scripts/firmware-tls-proxy.js). --proxy-log names that server's log so the request can
+# still be proven.
+EXTERNAL_SERVER=0
+PROXY_LOG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --timeout)   TIMEOUT="${2:-60}"; shift 2 || shift ;;
     --timeout=*) TIMEOUT="${1#*=}"; shift ;;
     [0-9]*)      TIMEOUT="$1"; shift ;;
+    --external-server) EXTERNAL_SERVER=1; shift ;;
+    --proxy-log) PROXY_LOG="${2:-}"; shift 2 || shift ;;
+    --proxy-log=*) PROXY_LOG="${1#*=}"; shift ;;
     *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -128,6 +137,10 @@ trap cleanup EXIT
 
 # === TLS capture server (stdlib only; this image has no cryptography/cbor2) ===
 BIND="${PBL_WIRE_BIND:-127.0.0.1}"
+if [ "${EXTERNAL_SERVER}" = "1" ]; then
+  echo "=== External server mode: not starting the bundled capture server ==="
+  echo "    the policy points at the URI it was generated with; pass --proxy-log to prove the POST"
+else
 echo "=== Starting TLS capture server on ${BIND}:${PORT} ==="
 rm -rf "${CAPTURE_DIR}"
 # Bind address: slirp maps the guest's 10.0.2.2 to the QEMU process's own
@@ -143,6 +156,7 @@ for _ in $(seq 1 50); do
 done
 grep -q "listening on" "${SERVER_LOG}" || { cat "${SERVER_LOG}"; fail "capture server did not start"; }
 echo "  server PID ${SERVER_PID}"
+fi
 
 # === ESP: PblApp + policy blob ===
 echo "=== Creating ESP (PblApp + policy.cose) ==="
@@ -162,6 +176,11 @@ dd if="${DISK_ESP}" of="${DISK_IMG}" bs=512 seek=2048 conv=notrunc status=none
 cp "${OVMF_VARS_SRC}" "${BUILD_DIR}/vars.fd"
 
 # === Boot: TPM + NIC (DHCP) + RNG ===
+PROXY_LOG_OFFSET=0
+if [ -n "${PROXY_LOG}" ] && [ -f "${PROXY_LOG}" ]; then
+  PROXY_LOG_OFFSET=$(wc -c < "${PROXY_LOG}")
+fi
+
 echo "=== Booting PblApp (QEMU: slirp network, TPM, RNG; timeout ${TIMEOUT}s) ==="
 # OVMF's Secure Boot build requires SMM: without -machine q35,smm=on and the
 # secure pflash global the firmware stalls with no serial output at all (which is
@@ -198,7 +217,11 @@ timeout "${TIMEOUT}" qemu-system-x86_64 "${MACHINE_ARGS[@]}" \
   > "${SERIAL_LOG}" 2>&1 || true
 
 echo "  serial log: $(wc -c < "${SERIAL_LOG}") bytes"
-echo "  server log: $(wc -c < "${SERVER_LOG}") bytes"
+if [ -f "${SERVER_LOG}" ]; then
+  echo "  server log: $(wc -c < "${SERVER_LOG}") bytes"
+else
+  echo "  server log: (not used — external server mode)"
+fi
 # The pcap answers the one question the serial log cannot: did the guest put a
 # single packet on the wire toward the server? "No SYN" and "SYN unanswered"
 # are different defects, and guessing between them already cost this harness two
@@ -228,21 +251,54 @@ echo "=== Wire checks ==="
 # The firmware must actually have reached the network and posted.
 check "policy blob loaded from ESP"       "policy\.cose: [0-9]+ bytes"
 check "device_id derived from AK Name"    "device_id from AK Name: ${EXPECTED_DEVICE_PREFIX^^}"
-check "verdict request posted over TLS"   "POSTing verdict request to https://${HOST_IN_GUEST}:${PORT}"
-# The server's own record is the artifact: it parsed the request it received.
-check "server received a request"         "\\[SERVER\\] /v1/verdict [0-9]+ bytes" "${SERVER_LOG}"
-check "wire device_id matches AK Name"    "device_id=${EXPECTED_DEVICE_PREFIX}" "${SERVER_LOG}"
+check "verdict request posted over TLS"   "POSTing verdict request to https://${HOST_IN_GUEST}:[0-9]+"
 
-# D-200 response half: the firmware must decode AND verify the verdict the server
-# signed, not fall back to its cache. These are the two lines that distinguish
-# "got bytes" from "accepted a verdict".
-check "verdict decoded by firmware"       "Verdict decoded: verdict="
-check "verdict signature verified"        "Verdict signature verified"
+if [ "${EXTERNAL_SERVER}" = "1" ]; then
+  # The bundled capture server did not run, so its log cannot be consulted. What can be
+  # proven is that the request left the guest and arrived at the external server.
+  if [ -n "${PROXY_LOG}" ]; then
+    # Only what THIS run appended counts: an earlier probe in the same log previously
+    # produced a false PASS (S234).
+    PROXY_APPENDED="${BUILD_DIR}/proxy-appended.log"
+    if [ -f "${PROXY_LOG}" ]; then
+      tail -c +"$((PROXY_LOG_OFFSET + 1))" "${PROXY_LOG}" > "${PROXY_APPENDED}" 2>/dev/null || : > "${PROXY_APPENDED}"
+    else
+      : > "${PROXY_APPENDED}"
+    fi
+    if [ ! -s "${PROXY_APPENDED}" ]; then
+      echo "  [INFO] nothing was appended to ${PROXY_LOG} during this run"
+    fi
+    check "external server received the verdict request" "POST /v1/verdict .* [0-9]+ bytes" "${PROXY_APPENDED}"
+  else
+    echo "  [INFO] pass --proxy-log to prove the request reached the external server"
+  fi
+  # The response half depends on the external server's policy: an unenrolled device gets
+  # 404 unknown_device by design (D-131 Q2), so a missing verdict is the server's answer,
+  # not a firmware defect. Reported, not scored.
+  if grep -qE "Verdict decoded: verdict=" "${SERIAL_LOG}"; then
+    echo "  [PASS] verdict decoded by firmware"
+    PASS=$((PASS + 1))
+  else
+    echo "  [INFO] no verdict decoded — the external server did not issue one"
+    grep -aE "Online fetch failed|unknown_device|Verdict request suppressed" "${SERIAL_LOG}" | head -3 | sed 's/^/        /'
+  fi
+else
+  # The server's own record is the artifact: it parsed the request it received.
+  check "server received a request"       "\[SERVER\] /v1/verdict [0-9]+ bytes" "${SERVER_LOG}"
+  check "wire device_id matches AK Name"  "device_id=${EXPECTED_DEVICE_PREFIX}" "${SERVER_LOG}"
+
+  # D-200 response half: the firmware must decode AND verify the verdict the server
+  # signed, not fall back to its cache.
+  check "verdict decoded by firmware"     "Verdict decoded: verdict="
+  check "verdict signature verified"      "Verdict signature verified"
+fi
 # No separate "not all zero" assertion: matching the expected prefix already
 # proves it, and grep -E has no lookahead to express the negative cleanly.
 
 CAPTURED_COUNT=$(find "${CAPTURE_DIR}" -name '*.bin' -type f 2>/dev/null | wc -l)
-if [ "${CAPTURED_COUNT}" -ge 1 ]; then
+if [ "${EXTERNAL_SERVER}" = "1" ]; then
+  echo "  [INFO] body capture is a capture-server feature; not available in external mode"
+elif [ "${CAPTURED_COUNT}" -ge 1 ]; then
   echo "  [PASS] request body captured (${CAPTURED_COUNT} file(s))"
   PASS=$((PASS + 1))
 else
