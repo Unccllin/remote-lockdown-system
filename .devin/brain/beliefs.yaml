@@ -1431,3 +1431,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-072
+  statement: 'On FRANKENSTEIN (Windows 11 26300) a scheduled task cannot leave the lockdown agent running:
+    with the task action set to the watchdog script or directly to lockdown-agent.exe --silent --config
+    …, schtasks /Run returns success and Last Result 0, but no process appears, the agent writes no log
+    line, and Microsoft-Windows-TaskScheduler/Operational contains no events. The identical executable
+    and arguments started from an elevated interactive session run normally and check in (server last_checkin
+    2026-11-05 07:11:58). Therefore the agent binary and its config are healthy and the fault is the task''s
+    execution context (SYSTEM, session 0) or the scheduler''s configuration, not the installer. Also established:
+    schtasks /Change /RU requires a password, so changing the principal to the logged-on user cannot be
+    automated; and an ONSTART task plus /RI 5 /DU 24:00 does register a 5-minute repetition (verified
+    in the task variables).'
+  domain: general
+  status: confirmed
+  evidence_level: real-media
+  provenance: 'live on FRANKENSTEIN: three-way measurement (watchdog action, direct-exe action, interactive
+    start) with process counts, agent.log, task variables, empty scheduler log; server last_checkin 07:11:58
+    proved the interactive run'
+  source: agent/service_installer.py; agent/installer_gui.py; live FRANKENSTEIN task variables and agent.log;
+    TaskScheduler/Operational (empty)
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

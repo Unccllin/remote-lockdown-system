@@ -9688,3 +9688,107 @@ and make the tamper check stop reporting `service_missing` on a scheduled-task i
 Then reboot FRANKENSTEIN and confirm the agent comes up unattended.
 
 ---
+
+---
+
+## Session 217 — 2026-11-05 (one agent, one start mechanism, one open question)
+
+### RULE-ZERO
+
+**Read**: `agent/service_installer.py` (task creation, watchdog, launch, tamper hooks),
+`agent/installer_gui.py` (`launch_agent`, `run_headless`), and the live state on
+FRANKENSTEIN from S216 (task action, process list, `agent.log`, task variables).
+
+**Starting point**: S216 left the install working but with three recorded gaps —
+duplicate agent processes, an ONSTART-only task, and a false `TAMPER DETECTED`.
+
+### IMPLEMENT
+
+- **Single instance.** `service_installer._agent_running()` (tasklist probe, tolerant
+  of a missing `tasklist`) now guards `install()`, and `installer_gui.launch_agent`
+  carries the same check. Neither starts a second poller for one device.
+- **One start mechanism.** `install()` runs `schtasks /Run /TN SystemHealthMonitor`
+  instead of spawning the process itself; the VBS launcher is now only the fallback
+  when a task run fails. This also proves the task works at install time.
+- **The 5-minute repeat the comments always claimed.**
+  `schtasks /Change /TN … /RI 5 /DU 24:00`, verified live:
+  `Repeat: Every: 0 Hour(s), 5 Minute(s)`.
+- Tests: +5 (guard true/false, `tasklist` absent, no duplicate from `launch_agent`,
+  and the start path when nothing runs).
+
+### Fog cleared
+
+- **Duplicate instances**: the installer and the task both started the agent; both
+  paths are now guarded, and a clean install leaves exactly one process.
+- **"Nothing starts it until reboot"**: the install runs the task, and the task now
+  repeats every 5 minutes.
+- **The task does register the repetition** on this machine (it was in the code
+  comments but never applied).
+
+### Fog remaining
+
+- **A task launched as SYSTEM does not leave a running agent here.** Measured three
+  ways on FRANKENSTEIN: (a) watchdog script as the action → `Last Result: 0`, no
+  process, no log line; (b) task action pointed directly at
+  `lockdown-agent.exe --silent --config …` → same; (c) the *same* executable and
+  arguments started from an elevated interactive session → runs, logs
+  "Agent starting — hostname=FRANKENSTEIN", and the server records
+  `last_checkin 2026-11-05 07:11:58`. `Microsoft-Windows-TaskScheduler/Operational`
+  is empty (no events at all), so the scheduler gives no reason. `/Change /RU` prompts
+  for a password, so switching the principal to the logged-on user cannot be done
+  non-interactively.
+- **`TAMPER DETECTED … service_missing=True` on every healthy install.** The agent
+  expects a Windows *service*; this installer registers a *task*. Fixing that needs an
+  agent rebuild (its check is in the frozen binary).
+- **No TPM** on this machine → `TPM seal failed — falling back to DPAPI/plaintext`
+  (environmental; the fallback is silent in the UI).
+- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
+  the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- Persistence under the scheduler on this machine (SYSTEM launch), which is also the
+  last thing between "installed" and "runs after a reboot".
+
+### Failure attribution
+
+- **Layer 4 — verification feedback**: my S216 close called the duplicate a "follow-up"
+  without distinguishing *my test's* second process from the product's. Measuring
+  instance count after a clean install is what separated them.
+- **Layer 3 — execution environment**: the SYSTEM-launch failure is invisible from
+  Linux and from unit tests; only the live machine exhibits it.
+
+### VERIFY
+
+- Clean install on FRANKENSTEIN: `OK: installed`, `reassociated=True`, agent process
+  count **1** (the installer was the only starter), task `\SystemHealthMonitor` with
+  `Repeat: Every 0 Hour(s), 5 Minute(s)`.
+- Direct start of the same exe: `Agent starting — hostname=FRANKENSTEIN
+  server=http://192.168.1.43:3001 poll=30s`; server `last_checkin 2026-11-05
+  07:11:58` (25 s before observation), `status active`.
+- Task-launched start: `Last Result: 0`, no process, no log line, no scheduler event.
+- Suites: agent **786** (+5), server 793, dashboard 220; ruff + eslint clean.
+- Commit: `65422d0`.
+
+### Session artifacts
+
+- Changed: `agent/service_installer.py`, `agent/installer_gui.py`,
+  `agent/tests/test_service_installer.py`, `agent/tests/test_installer_gui.py`.
+
+### Next session opening
+
+Find out why a SYSTEM task cannot start the agent on FRANKENSTEIN — enable the
+TaskScheduler/Operational log, compare the task's environment (session 0, no desktop)
+against the interactive one, and try `schtasks /SC ONLOGON` (which runs in the user's
+session) as the likely fix; if that works, make it the default for desktop installs
+and keep ONSTART+repeat for servers.
+
+---
