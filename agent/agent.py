@@ -857,6 +857,40 @@ def stop_lock_guardian() -> None:
     _lock_guardian_thread = None
 
 
+def reconcile_lock_state(cfg: dict, server_status: str) -> None:
+    """Clear a latched lockdown the server no longer wants.
+
+    A sentinel written by a deadman or tamper event used to outlive the reason it was
+    written: startup re-asserted it without asking anyone ("Device was previously
+    locked — re-asserting lock screen"), so a healthy device disconnected its console
+    session every ten seconds while the dashboard showed "active" (S222). The corrupt
+    deadman file reported status "stolen", which is what re-latched it.
+
+    The server is authoritative for a managed device, so: if it says the device is not
+    locked, the latch is stale. The deadman state itself is rewritten by the caller's
+    update_deadman_timer() with the same server status, so removing the sentinel here
+    does not leave a fail-secure trap behind.
+    """
+    if server_status in ("stolen", "locked", "tracking"):
+        return
+
+    sentinel = cfg["lock_sentinel"]
+    if not sentinel.exists():
+        return
+
+    log.warning(
+        "Server reports '%s' but a lock sentinel exists — clearing the stale lockdown",
+        server_status,
+    )
+    stop_lock_guardian()
+    try:
+        sentinel.unlink()
+    except OSError as exc:
+        log.error("Could not remove the stale sentinel: %s", exc)
+        return
+    log.info("Stale lockdown cleared — device is '%s'", server_status)
+
+
 def _lock_guardian_loop(stop_event: threading.Event) -> None:
     """Background loop — re-lock the screen at regular intervals.
 
@@ -3906,6 +3940,8 @@ def main() -> None:
             # Update dead man's timer with current server-reported status;
             # anchor last_seen to the server's clock when provided (B-005)
             current_status = data.get("status", "active")
+            # A stale latch must not outlive the state that justified it (S222).
+            reconcile_lock_state(cfg, current_status)
             update_deadman_timer(current_status, server_time=data.get("server_time"))
 
             # Phase 5: Adaptive polling — use server-sent poll_interval if present.
