@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-05 11:12:45
-Active memories: 986 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-05 11:44:28
+Active memories: 1005 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -25,10 +25,16 @@ Active memories: 986 | Superseded: 0 | Decayed: 20
 | m-971 | 'The server rejected my token' may mean 'the serve |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-995 | Control experiments beat inference: prove the mech |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-989 | A task that exits 0 may have started nothing; veri |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1013 | Fail-secure defaults need an unwind path that does |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-978 | MISTAKE: mistake: spent S211/S212 fixing token sem |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1006 | MISTAKE: mistake: shipped a binPath and a stop-eve |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1023 | Alternatives must be modelled as OR in the failure |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-984 | A served script should delegate to the installer,  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1014 | MISTAKE: mistake: initially suspected the display  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1022 | Separate assets from state in any tamper/tripwire  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1011 | Two sources of truth need an explicit reconciliati |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-997 | A remote SSH session is not a durable launcher on  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1018 | Check process parentage before concluding duplicat |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-980 | Gate a new capability behind an explicit flag when |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-977 | A prefilled wrong value is worse than an empty fie |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-982 | MISTAKE: mistake: initially let the dashboard comp |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -37,24 +43,37 @@ Active memories: 986 | Superseded: 0 | Decayed: 20
 | m-987 | Environment assumptions (platform, TLS policy, sch |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-983 | Never put a credential in a URL that a server logs |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-972 | Artefacts that embed a callback URL must embed one |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1010 | MISTAKE: mistake: chased the download endpoint whe |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1009 | Remove legacy mechanisms when replacing them, or t |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-988 | Measure a machine's identity (detect-virt, TTL, SS |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1019 | A service executable must handle the SCM's empty a |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-967 | Make error messages name the state and the next ac |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1024 | A security alarm that fires on healthy state train |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1020 | Put keep-awake where the longest-lived process is  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1004 | Win32 handles and threading.Event are not intercha |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-981 | A second entry point over the same primitives is c |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-990 | MISTAKE: mistake: inferred the target OS from a ge |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-979 | Commands shown in a UI are an interface with the T |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-976 | Never ship a default backend in an installer: the  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1021 | MISTAKE: mistake: recorded a duplicate-instance de |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-985 | State the mode matrix (gui/silent) before writing  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-970 | MISTAKE: mistake: patched a file with duplicated b |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1017 | MISTAKE: mistake: earlier sessions created devices |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-973 | A loopback default should warn at generation time, |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1000 | When a daemon leaves no trace, suspect file permis |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1008 | Distinguish failure causes at the point they occur |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1025 | MISTAKE: mistake: recorded 'tamper_protection not  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-992 | Separate what the harness caused from what the pro |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-993 | An empty operational log is itself evidence: the s |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1012 | A log line repeating every ten seconds is a sympto |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-986 | MISTAKE: mistake: asserted Read-Host in the GUI-mo |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-999 | A shared path (ProgramData) is not a shared permis |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1015 | Clean up the rows a repro creates; otherwise the p |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-994 | MISTAKE: mistake: attributed my own duplicate Star |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-974 | MISTAKE: mistake: spent S211 fixing token semantic |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1016 | Record identity with identifiers, and include know |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-996 | Verify effects (processes, files), never exit code |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1007 | Diagnose sleep with powercfg rather than assuming  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1005 | Only a boot with no logon proves unattended start. |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-975 | Check the request log before theorising about toke |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1002 | MISTAKE: mistake: attributed the missing agent aft |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
