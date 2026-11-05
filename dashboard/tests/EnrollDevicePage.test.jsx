@@ -47,6 +47,12 @@ function setupCommandResponse() {
   return {
     server_url: 'https://lockdown.example.com',
     mode: 'gui',
+    one_liner:
+      'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm ' +
+      'https://lockdown.example.com/api/enroll/setup.ps1' +
+      ' | iex"',
+    ps1_url: 'https://lockdown.example.com/api/enroll/setup.ps1',
+    cmd_url: 'https://lockdown.example.com/api/enroll/setup.cmd',
     command: "$u = 'https://lockdown.example.com'\nSet-Clipboard $u\nStart-Process $e -Verb RunAs",
     notes: ['The wizard opens elevated.'],
   };
@@ -228,5 +234,51 @@ describe('EnrollDevicePage', () => {
     // Short form: the token + server URL, not the whole script.
     expect(qrSrc).toContain(encodeURIComponent('lockdown-installer.exe'));
     expect(qrSrc).not.toContain(encodeURIComponent('Set-Clipboard'));
+  });
+
+  it('shows the one-liner as the primary action, with the .cmd file beside it', async () => {
+    // MeshCentral's ergonomics: one line to paste, or a file to double-click.
+    api.post.mockResolvedValue({ data: tokenResponse() });
+    api.get.mockImplementation((url) => {
+      if (url === '/enroll/setup-command') return Promise.resolve({ data: setupCommandResponse() });
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+    await fireEvent.click(screen.getByRole('button', { name: /Generate Enrollment Token/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('enroll-oneliner-display')).toBeInTheDocument();
+    });
+
+    const oneLiner = screen.getByTestId('enroll-oneliner-display').textContent;
+    expect(oneLiner).toContain('| iex');
+    expect(oneLiner).toContain('/api/enroll/setup.ps1');
+    // No token, no URL composed in the browser.
+    expect(oneLiner).not.toMatch(/--token/);
+
+    expect(screen.getByTestId('download-setup-cmd')).toHaveAttribute(
+      'href',
+      'https://lockdown.example.com/api/enroll/setup.cmd'
+    );
+  });
+
+  it('copies the one-liner, not the long script', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    api.post.mockResolvedValue({ data: tokenResponse() });
+    api.get.mockImplementation((url) => {
+      if (url === '/enroll/setup-command') return Promise.resolve({ data: setupCommandResponse() });
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+    await fireEvent.click(screen.getByRole('button', { name: /Generate Enrollment Token/i }));
+    await waitFor(() => expect(screen.getByTestId('copy-command-btn')).toBeInTheDocument());
+    await fireEvent.click(screen.getByTestId('copy-command-btn'));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText.mock.calls[0][0]).toContain('| iex');
+    expect(writeText.mock.calls[0][0]).not.toContain('Set-Clipboard');
   });
 });

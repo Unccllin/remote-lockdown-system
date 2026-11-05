@@ -173,7 +173,9 @@ export default function EnrollDevicePage() {
   }
 
   function copyCommand() {
-    navigator.clipboard.writeText(installCommand).then(() => {
+    // Copy the one-liner when the server supplies it: that is the command an
+    // operator runs, and it is short enough to paste without scrutiny of a script.
+    navigator.clipboard.writeText(setupCommand?.one_liner || installCommand).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       toast.success('Command copied to clipboard');
@@ -325,12 +327,42 @@ export default function EnrollDevicePage() {
                 {copied ? 'Copied!' : 'Copy Command'}
               </button>
             </div>
-            <pre
-              className="block bg-slate-950/50 rounded-lg p-3 text-xs font-mono text-emerald-300 whitespace-pre-wrap break-all"
-              data-testid="enroll-command-display"
-            >
-              {installCommand}
-            </pre>
+            {setupCommand?.one_liner && (
+              <>
+                <p className="text-xs text-slate-400 mb-1">
+                  One command — copy it and paste into an elevated PowerShell on the target:
+                </p>
+                <pre
+                  className="block bg-slate-950/50 rounded-lg p-3 text-xs font-mono text-emerald-300 whitespace-pre-wrap break-all"
+                  data-testid="enroll-oneliner-display"
+                >
+                  {setupCommand.one_liner}
+                </pre>
+                <p className="text-xs text-slate-500 mt-2">
+                  Prefer a file?{' '}
+                  <a
+                    href={setupCommand.cmd_url}
+                    className="text-indigo-400 hover:text-indigo-300 underline"
+                    data-testid="download-setup-cmd"
+                  >
+                    Download setup.cmd
+                  </a>{' '}
+                  and double-click it (it runs the same one-liner).
+                </p>
+              </>
+            )}
+
+            <details className="mt-3">
+              <summary className="text-xs text-slate-400 cursor-pointer">
+                Or review the steps this runs
+              </summary>
+              <pre
+                className="block bg-slate-950/50 rounded-lg p-3 mt-2 text-xs font-mono text-slate-400 whitespace-pre-wrap break-all"
+                data-testid="enroll-command-display"
+              >
+                {installCommand}
+              </pre>
+            </details>
             {(setupCommand?.notes || []).map((note) => (
               <p key={note} className="text-xs text-slate-500 mt-2">
                 {note}

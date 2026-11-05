@@ -343,3 +343,98 @@ describe('GET /api/enroll/setup-command', () => {
     expect(res.body.server_url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/enroll/setup.ps1 + setup.cmd — the MeshCentral-style one-liner (S215)
+//
+// The script carries no secret (the token is prompted for on the target), so it is
+// public; a ?token= would have been written to this server's request log.
+// ---------------------------------------------------------------------------
+
+describe('GET /api/enroll/setup.ps1 and setup.cmd', () => {
+  const originalPublic = process.env.PUBLIC_SERVER_URL;
+  const originalSilent = process.env.INSTALLER_SILENT;
+
+  afterEach(() => {
+    if (originalPublic === undefined) delete process.env.PUBLIC_SERVER_URL;
+    else process.env.PUBLIC_SERVER_URL = originalPublic;
+    if (originalSilent === undefined) delete process.env.INSTALLER_SILENT;
+    else process.env.INSTALLER_SILENT = originalSilent;
+  });
+
+  test('the script is public and carries no token', async () => {
+    process.env.PUBLIC_SERVER_URL = 'https://lockdown.example.com';
+
+    const res = await request(app).get('/api/enroll/setup.ps1'); // no auth header
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/plain/);
+    expect(res.text).toContain("$u = 'https://lockdown.example.com'");
+    expect(res.text).toContain('Test-NetConnection');
+    expect(res.text).toContain('/api/download/installer');
+    // The token is never served: in this (GUI) mode the wizard asks for it, and in
+    // silent mode the script prompts with Read-Host (covered below).
+    expect(res.text).toContain('Paste the server URL');
+    expect(res.text).not.toMatch(/--token\s+[A-Za-z0-9+/=]{20,}/);
+  });
+
+  test('the GUI variant puts the URL on the clipboard and opens the wizard', async () => {
+    delete process.env.INSTALLER_SILENT;
+    process.env.PUBLIC_SERVER_URL = 'https://lockdown.example.com';
+
+    const res = await request(app).get('/api/enroll/setup.ps1');
+
+    expect(res.text).toContain('Set-Clipboard');
+    expect(res.text).toContain('Start-Process $e -Verb RunAs');
+    expect(res.text).not.toContain('--silent');
+  });
+
+  test('INSTALLER_SILENT=true serves the automated variant', async () => {
+    process.env.PUBLIC_SERVER_URL = 'https://lockdown.example.com';
+    process.env.INSTALLER_SILENT = 'true';
+
+    const res = await request(app).get('/api/enroll/setup.ps1');
+
+    expect(res.text).toContain("'--silent'");
+    expect(res.text).toContain('ExitCode');
+    expect(res.text).not.toContain('Set-Clipboard');
+  });
+
+  test('a malformed PUBLIC_SERVER_URL is explained, not thrown', async () => {
+    process.env.PUBLIC_SERVER_URL = 'lockdown.example.com'; // no scheme
+
+    const res = await request(app).get('/api/enroll/setup.ps1');
+
+    expect(res.status).toBe(500);
+    expect(res.text).toMatch(/PUBLIC_SERVER_URL/);
+  });
+
+  test('setup.cmd wraps the one-liner and is downloaded as a file', async () => {
+    process.env.PUBLIC_SERVER_URL = 'https://lockdown.example.com';
+
+    const res = await request(app).get('/api/enroll/setup.cmd');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('lockdown-setup.cmd');
+    // Served as a file, so the body is binary — supertest leaves res.text undefined.
+    const cmd = res.body.toString();
+    expect(cmd).toContain('@echo off');
+    // Bypass is scoped to this invocation; the machine policy is untouched.
+    expect(cmd).toContain('-ExecutionPolicy Bypass');
+    expect(cmd).not.toMatch(/Set-ExecutionPolicy/i);
+    expect(cmd).toContain("https://lockdown.example.com/api/enroll/setup.ps1");
+  });
+
+  test('/setup-command advertises the one-liner and both file URLs', async () => {
+    process.env.PUBLIC_SERVER_URL = 'https://lockdown.example.com';
+
+    const res = await request(app)
+      .get('/api/enroll/setup-command')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.body.one_liner).toContain('https://lockdown.example.com/api/enroll/setup.ps1');
+    expect(res.body.one_liner).toContain('| iex');
+    expect(res.body.ps1_url).toBe('https://lockdown.example.com/api/enroll/setup.ps1');
+    expect(res.body.cmd_url).toBe('https://lockdown.example.com/api/enroll/setup.cmd');
+  });
+});
