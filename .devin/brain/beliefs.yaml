@@ -1676,3 +1676,28 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-081
+  statement: 'A Windows service registered with SCM crash recovery is the product''s restart mechanism,
+    so the agent must not expect a separate watchdog process. Checked on FRANKENSTEIN: the service is
+    created with sc failure restart/5000/restart/10000/restart/30000 reset= 86400, which is exactly what
+    the watchdog implemented, and the mutual-watchdog design predates it. agent.py now has _service_provides_restart()
+    (session 0 AND  succeeds) and check_watchdog_health() returns quietly in that case, keeping the watchdog
+    for interactive runs (no SCM) and for session-0 processes where the service is absent. Verified live
+    after installing the rebuilt binary (15,362,267 bytes) at 11:48:31: no ''Watchdog not running'' line
+    (the only one in the log is 11:48:02, before the swap), no TAMPER line, no tsdiscon line, service
+    RUNNING, and a server check-in 31 seconds old. watchdog.spec stays in the tree but is not part of
+    the install.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live FRANKENSTEIN: rebuilt agent 15,362,267 bytes running; no watchdog/TAMPER/tsdiscon
+    lines after 11:48:31; check-in 08:48:35; agent 819 tests'
+  source: agent/agent.py _service_provides_restart/check_watchdog_health; agent/service_installer.py install_service
+    (sc failure config); agent/tests/test_watchdog_service.py; live agent.log on FRANKENSTEIN
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

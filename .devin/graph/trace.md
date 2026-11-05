@@ -10689,3 +10689,105 @@ stops logging "Watchdog not running" on a healthy install. Then the queue is emp
 D-117 and the installer artefact from S209.
 
 ---
+
+---
+
+## Session 226 — 2026-11-05 (the watchdog question, decided and implemented)
+
+### RULE-ZERO
+
+**Read**: `agent/agent.py` (`check_watchdog_health`, `_is_watchdog_running`,
+`_start_watchdog`, `_detect_session_context`), `agent/watchdog.spec`, and the live log of
+the service install.
+
+**Question carried from S225**: ship `watchdog.exe`, or teach the agent that the service
+already restarts it?
+
+### DECISION
+
+**The service provides restart; no second watchdog.** `service_installer.install_service()`
+registers SCM crash recovery (`sc failure … restart/5000/restart/10000/restart/30000`,
+`reset= 86400`), which is the same mechanism a watchdog would implement — and the repo's
+own rule is one mechanism per concern (S190/S191). Shipping a watchdog would add a second
+process to supervise, a second thing to keep alive, and a second way for the two to fight.
+
+The agent now recognises this instead of warning on every poll:
+
+- `_service_provides_restart()` — true when the agent is in session 0 **and** the
+  `LockdownAgent` service answers `sc query`.
+- `check_watchdog_health()` — returns quietly (debug log) in that case; otherwise keeps
+  the old behaviour, so an interactive run (no SCM) still starts the watchdog, and a
+  session-0 process *without* the service still falls back to it.
+
+### IMPLEMENT
+
+- `agent/agent.py`: helper + gated check as above.
+- `agent/tests/test_watchdog_service.py` (new): 4 tests — service install starts nothing,
+  interactive run starts it, session 0 without the service falls back, running watchdog is
+  left alone.
+- Rebuilt the agent on the target (`agent.spec`) and installed it: **15 362 267 bytes**.
+
+### Fog cleared
+
+- **"Watchdog not running" on a healthy install**: a duplicate-mechanism assumption, now
+  decided rather than tolerated.
+- **Which restart mechanism the product relies on**: SCM recovery. `watchdog.spec` stays in
+  the tree for anyone who wants it, but it is not part of the install.
+
+### Fog remaining
+
+- **No TPM on FRANKENSTEIN** → `TPM seal failed — falling back to DPAPI/plaintext`
+  (environmental; the fallback is a security downgrade worth surfacing in the UI
+  eventually).
+- **`lockdown-installer.exe`** (S209) — the last missing artefact for a per-device Windows
+  installer.
+- **D-117** (markdown/spec drift) and the long tail of PBL debt are untouched.
+- **Port-proxy durability** after a WSL restart is unchanged.
+
+### Debt items closed
+
+- The "watchdog expected but not installed" note (recorded since S225).
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None. The first device runs the current agent from a frozen service, unattended, with no
+  false alarms.
+
+### Failure attribution
+
+- **Layer 2 — context provision** (primary): nothing said whether the watchdog or the
+  service was the intended restart mechanism, so both existed in the code and neither was
+  authoritative. Writing the decision down was the fix.
+- **Layer 4 — verification feedback**: the check was "is there a `Watchdog not running`
+  line after the new binary started", with the timestamp boundary named explicitly —
+  because the same log contains older lines from the previous binary.
+
+### VERIFY
+
+- Binary on the device: **15 362 267 bytes**, `11:48:21`; service `STATE: 4 RUNNING`.
+- Since the new binary started (`11:48:31`): **no** `Watchdog not running`, **no**
+  `TAMPER`, **no** `tsdiscon`. The single watchdog line in the log is `11:48:02` — before
+  the swap — and is quoted in the record so the boundary is auditable.
+- Last lines: `Agent starting — hostname=FRANKENSTEIN server=http://192.168.1.43:3001`,
+  `Adaptive polling: 30s -> 300s (status=active)`.
+- Server: `last_checkin 2026-11-05 08:48:35`, 31 s before observation.
+- Suites: agent **819** (+4), server 793, dashboard 220; ruff clean.
+- Commit: `b27043c`.
+
+### Session artifacts
+
+- Changed: `agent/agent.py`, `agent/tests/test_watchdog_service.py` (new); rebuilt and
+  reinstalled `lockdown-agent.exe` on FRANKENSTEIN.
+
+### Next session opening
+
+The queue is empty except two items that need a Windows toolchain decision rather than more
+code: `lockdown-installer.exe` (S209) so a per-device Windows installer can be produced, and
+D-117 (markdown/spec drift). Pick one and finish it; everything else is documented as
+environmental (no TPM) or maintenance (port-proxy after a WSL restart).
+
+---

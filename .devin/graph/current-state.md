@@ -53,31 +53,28 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 225 — 2026-11-05 (the false alarms were in the tamper check)
+## Latest session: 226 — 2026-11-05 (the watchdog question, decided and implemented)
 
 ### Fog cleared
 
-- **Why a healthy device looked tampered**: two logic errors, not a real intrusion.
-- **Why the module "was not available"**: a stale binary, not a missing spec entry.
-- **Why the screen kept dropping**: the guardian's unconditional `tsdiscon` (S222) plus
-  the lock latch; both are now gated or cleared.
+- **"Watchdog not running" on a healthy install**: a duplicate-mechanism assumption, now
+  decided rather than tolerated.
+- **Which restart mechanism the product relies on**: SCM recovery. `watchdog.spec` stays in
+  the tree for anyone who wants it, but it is not part of the install.
 
 ### Fog remaining
 
-- **No TPM on this machine** → `TPM seal failed — falling back to DPAPI/plaintext`
-  (environmental).
-- **"Watchdog not running — attempting restart"** still appears: the agent expects a
-  watchdog process we do not install, but the service plus SCM crash recovery already
-  provides that. Either ship `watchdog.exe` (there is a spec for it) or stop expecting it
-  — an agent-side decision to make explicitly.
+- **No TPM on FRANKENSTEIN** → `TPM seal failed — falling back to DPAPI/plaintext`
+  (environmental; the fallback is a security downgrade worth surfacing in the UI
+  eventually).
+- **`lockdown-installer.exe`** (S209) — the last missing artefact for a per-device Windows
+  installer.
+- **D-117** (markdown/spec drift) and the long tail of PBL debt are untouched.
 - **Port-proxy durability** after a WSL restart is unchanged.
-- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
-  the S202 objective.
 
 ### Debt items closed
 
-- The S222 follow-up "guardian should not re-issue tsdiscon into a dead session" — closed.
-- The "tamper_protection not bundled" note in `AGENTS.md` — closed by the rebuild.
+- The "watchdog expected but not installed" note (recorded since S225).
 
 ### Debt items still open
 
@@ -85,37 +82,41 @@
 
 ### Blockers
 
-- None. First device runs the current agent from a frozen service, unattended.
+- None. The first device runs the current agent from a frozen service, unattended, with no
+  false alarms.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the agent logged `TAMPER DETECTED` on
-  every check-in for weeks and it was read as noise. A test asserting "a healthy device is
-  not tampered" would have caught both logic errors the day they were written.
-- **Layer 2 — context provision**: the code never said which files are assets and which
-  are state, so `.locked` looked reasonable in a list called `critical_files`.
+- **Layer 2 — context provision** (primary): nothing said whether the watchdog or the
+  service was the intended restart mechanism, so both existed in the code and neither was
+  authoritative. Writing the decision down was the fix.
+- **Layer 4 — verification feedback**: the check was "is there a `Watchdog not running`
+  line after the new binary started", with the timestamp boundary named explicitly —
+  because the same log contains older lines from the previous binary.
 
 ### VERIFY
 
-- New binary on the device: 15 362 718 bytes, 11:42:37.
-- Since that binary: **no** `TAMPER` line, **no** `D-007`/`tsdiscon` line; console session
-  `NEWARK USER` (id 1) **Active**; `sc query` → `STATE: 4 RUNNING`; server
-  `last_checkin 2026-11-05 08:42:52`, 27 s before observation.
-- Suites: agent **815** (+8), server 793, dashboard 220; ruff clean.
-- Commit: `ef826a7`.
+- Binary on the device: **15 362 267 bytes**, `11:48:21`; service `STATE: 4 RUNNING`.
+- Since the new binary started (`11:48:31`): **no** `Watchdog not running`, **no**
+  `TAMPER`, **no** `tsdiscon`. The single watchdog line in the log is `11:48:02` — before
+  the swap — and is quoted in the record so the boundary is auditable.
+- Last lines: `Agent starting — hostname=FRANKENSTEIN server=http://192.168.1.43:3001`,
+  `Adaptive polling: 30s -> 300s (status=active)`.
+- Server: `last_checkin 2026-11-05 08:48:35`, 31 s before observation.
+- Suites: agent **819** (+4), server 793, dashboard 220; ruff clean.
+- Commit: `b27043c`.
 
 ### Session artifacts
 
-- Changed: `agent/tamper_protection.py`, `agent/agent.py`,
-  `agent/tests/test_tamper_check.py` (new), `agent/tests/test_lock_workstation.py` (new);
-  rebuilt + installed `lockdown-agent.exe` on FRANKENSTEIN.
+- Changed: `agent/agent.py`, `agent/tests/test_watchdog_service.py` (new); rebuilt and
+  reinstalled `lockdown-agent.exe` on FRANKENSTEIN.
 
 ### Next session opening
 
-Decide the watchdog question explicitly: either ship `watchdog.exe` (spec exists) or teach
-the agent that a Windows service with SCM crash recovery already provides restart, so it
-stops logging "Watchdog not running" on a healthy install. Then the queue is empty except
-D-117 and the installer artefact from S209.
+The queue is empty except two items that need a Windows toolchain decision rather than more
+code: `lockdown-installer.exe` (S209) so a per-device Windows installer can be produced, and
+D-117 (markdown/spec drift). Pick one and finish it; everything else is documented as
+environmental (no TPM) or maintenance (port-proxy after a WSL restart).
 
 ---
 
