@@ -1379,3 +1379,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-070
+  statement: 'A served installer script must carry no secret: MeshCentral-style URLs embed a device id,
+    but a single-use 15-minute enrollment token in a URL would be written to this server''s request log
+    (query strings are logged), shell history and browser history. GET /api/enroll/setup.ps1 is therefore
+    public and token-free — it prompts with Read-Host — and delegates (reachability check, download the
+    wizard, then --silent when INSTALLER_SILENT=true or the GUI with the URL on the clipboard) rather
+    than re-implementing enrolment, config writing or service registration. The dashboard shows the one-liner
+    (powershell -NoProfile -ExecutionPolicy Bypass -Command "irm ''<server>/api/enroll/setup.ps1'' | iex")
+    as the primary action, copies it rather than the long script, and offers GET /api/enroll/setup.cmd
+    as a double-clickable file whose -ExecutionPolicy Bypass is scoped to the invocation (asserted: no
+    Set-ExecutionPolicy). GET /api/enroll/setup-command also returns one_liner, ps1_url and cmd_url so
+    the browser composes nothing.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'live: one_liner + setup.cmd headers/body + setup.ps1 steps over the tailnet; server 792
+    (48 suites), dashboard 220, eslint clean'
+  source: server/src/routes/enroll.js; server/tests/enroll.routes.test.js; dashboard/src/pages/EnrollDevicePage.jsx;
+    dashboard/tests/EnrollDevicePage.test.jsx; serverless/worker.ts (the Worker's served-script precedent)
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

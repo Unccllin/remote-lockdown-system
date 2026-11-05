@@ -9442,3 +9442,113 @@ then set `INSTALLER_SILENT=true` and confirm one pasted command installs a machi
 to end — the first success evidence for this whole enrolment thread.
 
 ---
+
+---
+
+## Session 215 — 2026-11-03 (one line, or one double-click — without a secret in the URL)
+
+### RULE-ZERO
+
+**Read**: the command block added in S214 (`/setup-command`, `EnrollDevicePage`
+rendering); the Worker's generated `.ps1` helpers (`serverless/worker.ts`) for the
+established shape of a served installer script; `agent/installer_gui.py` (the
+`--silent` entry point added in S214); this server's request logging (it records
+query strings).
+
+**Finding 1 — one command is better than a script block, and the served file is the
+place to put it.** The operator was copying a six-line script. A single line
+(`irm … | iex`) or a double-clickable `.cmd` is what MeshCentral offers and what an
+operator expects.
+
+**Finding 2 — the token must not travel in the URL.** MeshCentral embeds a device id
+in the download URL. Doing that with a single-use 15-minute token would put it in
+*this server's* request log (query strings are logged), in shell history and in
+browser history. So the served script prompts with `Read-Host` and the URL stays
+secret-free — which also makes the script safe to serve unauthenticated.
+
+**Finding 3 — two of my own new assertions were wrong**, not the code: GUI mode has no
+`Read-Host` (the wizard prompts), and a binary `.cmd` body leaves `res.text`
+undefined in supertest.
+
+### IMPLEMENT
+
+- `GET /api/enroll/setup.ps1` — server-composed script: reachability check on
+  host:port derived from `PUBLIC_SERVER_URL`, download of the wizard, then either
+  `--silent` (when `INSTALLER_SILENT=true` says the build supports it) or the GUI with
+  the URL on the clipboard. It delegates; it never re-implements enrolment, config
+  writing or service registration.
+- `GET /api/enroll/setup.cmd` — the same thing as a downloadable file
+  (`@echo off`, `-ExecutionPolicy Bypass` scoped to the invocation, `if errorlevel 1
+  pause`). A script must not change the host's execution policy to run itself.
+- `/api/enroll/setup-command` now also returns `one_liner`, `ps1_url` and `cmd_url`,
+  so the dashboard composes nothing.
+- `EnrollDevicePage` — the one-liner is the primary action; Copy copies *it*; a
+  "Download setup.cmd" link sits beside it; the full script moved into a collapsible.
+
+### Fog cleared
+
+- **What an operator actually pastes now**: one line, or a `.cmd` they double-click.
+- **Where the token lives**: on the target, entered at a prompt — not in a URL, not in
+  a log, not in history.
+- **Whether the served script duplicates the installer**: no, it delegates; the
+  `--silent` variant reuses S214's headless entry point.
+
+### Fog remaining
+
+- **`lockdown-setup.exe` still predates `--silent`**, so the served script currently
+  opens the wizard rather than installing silently. One rebuild on Windows
+  (`agent/build.ps1`) plus `INSTALLER_SILENT=true` completes that path.
+- **The operator's Windows box still cannot resolve the tailnet name** (MagicDNS off).
+  The script checks reachability and says so, but cannot fix DNS.
+- Unchanged: `lockdown-installer.exe` missing (S209); a partially-failed install spends
+  its token (S211); inbound 3001 is filtered on the tailnet, so the API is reached via
+  `tailscale serve` on 443 (S213); `devices.hostname` uniqueness; the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- A Windows build of the wizard for the silent path; MagicDNS (or a hosts entry) on the
+  target for name resolution.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback**: two of the six new tests asserted behaviour of
+  the wrong mode (GUI vs silent) and one asserted `res.text` on a binary body. They
+  failed immediately, which is the system working — but the lesson is that the mode
+  matrix needs stating before the assertions are written.
+
+### VERIFY
+
+- Live over the tailnet:
+  - `one_liner` → `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm
+    'https://desktop-g4pcdhh.tail06a7e9.ts.net/api/enroll/setup.ps1' | iex"`
+  - `GET /api/enroll/setup.cmd` → 200, `content-disposition: attachment;
+    filename="lockdown-setup.cmd"`, body with `@echo off`, `-ExecutionPolicy Bypass`,
+    `irm … | iex`, `if errorlevel 1 pause`
+  - `GET /api/enroll/setup.ps1` → the reachability check and download steps
+- `server`: **792 passed** (48 suites; +6). `dashboard`: **220 passed** (+2).
+  eslint clean on both.
+
+### Session artifacts
+
+- Changed: `server/src/routes/enroll.js`, `server/tests/enroll.routes.test.js`,
+  `dashboard/src/pages/EnrollDevicePage.jsx`,
+  `dashboard/tests/EnrollDevicePage.test.jsx`.
+- Commit: `5136f08`.
+
+### Next session opening
+
+Rebuild `lockdown-setup.exe` on the Windows box so `--silent` exists, set
+`INSTALLER_SILENT=true`, and then run the dashboard's one-liner end to end from
+scratch — that is the first complete success evidence for this enrolment thread. If
+MagicDNS is still off there, the hosts entry (name → 100.99.13.53) is the fallback that
+keeps the certificate valid.
+
+---

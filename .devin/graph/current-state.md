@@ -53,31 +53,26 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 214 — 2026-11-03 (one command to install, and the URL the server says to use)
+## Latest session: 215 — 2026-11-03 (one line, or one double-click — without a secret in the URL)
 
 ### Fog cleared
 
-- **Why the operator had to type a hostname**: the page offered a command built from
-  the browser's own origin, so nobody could copy a correct one.
-- **Whether a one-command install is possible today**: only the GUI variant is; the
-  silent variant needs a wizard built with the new flags.
-- **What a wrong `PUBLIC_SERVER_URL` looks like now**: a 500 that quotes the value and
-  the expected shape.
+- **What an operator actually pastes now**: one line, or a `.cmd` they double-click.
+- **Where the token lives**: on the target, entered at a prompt — not in a URL, not in
+  a log, not in history.
+- **Whether the served script duplicates the installer**: no, it delegates; the
+  `--silent` variant reuses S214's headless entry point.
 
 ### Fog remaining
 
-- **The shipped `lockdown-setup.exe` predates `--silent`**, so the automated command
-  needs one rebuild on Windows (`agent/build.ps1`). Until then the page's command
-  downloads the wizard and puts the URL on the clipboard, and the operator pastes
-  twice.
-- **The operator's Windows box cannot resolve the tailnet name** (MagicDNS off): the
-  named URL failed there while working from this host. A hosts entry or
-  `tailscale set --accept-dns=true` fixes it; the setup command cannot.
-- **Inbound TCP 3001 is filtered on the tailnet** — the reason the API is reached
-  through `tailscale serve` on 443. `tailscale serve` was repointed from a stale
-  `127.0.0.1:8787` to `127.0.0.1:3001`.
-- Unchanged: `lockdown-installer.exe` missing (S209); a partially-failed install still
-  spends its token (S211); `devices.hostname` uniqueness; the S202 objective.
+- **`lockdown-setup.exe` still predates `--silent`**, so the served script currently
+  opens the wizard rather than installing silently. One rebuild on Windows
+  (`agent/build.ps1`) plus `INSTALLER_SILENT=true` completes that path.
+- **The operator's Windows box still cannot resolve the tailnet name** (MagicDNS off).
+  The script checks reachability and says so, but cannot fix DNS.
+- Unchanged: `lockdown-installer.exe` missing (S209); a partially-failed install spends
+  its token (S211); inbound 3001 is filtered on the tailnet, so the API is reached via
+  `tailscale serve` on 443 (S213); `devices.hostname` uniqueness; the S202 objective.
 
 ### Debt items closed
 
@@ -89,47 +84,42 @@
 
 ### Blockers
 
-- A Windows build of the wizard to make the silent command usable end to end.
+- A Windows build of the wizard for the silent path; MagicDNS (or a hosts entry) on the
+  target for name resolution.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, same shape as S212): the enroll page's
-  command had a test asserting it *contains* a URL, not that the URL is reachable by
-  the machine the command is for. Both the browser-origin bug and the silent-mode gap
-  passed every test.
-- **Layer 2 — context provision**: nothing recorded that the command shown in the UI is
-  an interface with the *target's* network, not the admin's browser. It is now composed
-  server-side, where that knowledge lives.
+- **Layer 4 — verification feedback**: two of the six new tests asserted behaviour of
+  the wrong mode (GUI vs silent) and one asserted `res.text` on a binary body. They
+  failed immediately, which is the system working — but the lesson is that the mode
+  matrix needs stating before the assertions are written.
 
 ### VERIFY
 
-- `server`: **786 passed** (48 suites; +7 for `/setup-command`: URL from
-  `PUBLIC_SERVER_URL` not the request host, auth + role, GUI and silent variants, no
-  token embedded, malformed override named, request-host fallback). eslint clean.
-- `dashboard`: **218 passed** (+2 — the server-composed block and its notes render; the
-  QR still encodes the short form). eslint clean.
-- `agent`: **776 passed** (+4 — flags parse, `--silent` without credentials exits 2,
-  the headless sequence uses the issued `api_key` and installs the service before
-  launching, and a failed enrolment returns 1 without a traceback). ruff clean.
-- Live over the tailnet: `GET /api/enroll/setup-command` returns
-  `server_url: https://desktop-g4pcdhh.tail06a7e9.ts.net` with the reachability check,
-  the wizard download, the clipboard step and the token notes; `tailscale serve` maps
-  that HTTPS endpoint to `127.0.0.1:3001`.
+- Live over the tailnet:
+  - `one_liner` → `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm
+    'https://desktop-g4pcdhh.tail06a7e9.ts.net/api/enroll/setup.ps1' | iex"`
+  - `GET /api/enroll/setup.cmd` → 200, `content-disposition: attachment;
+    filename="lockdown-setup.cmd"`, body with `@echo off`, `-ExecutionPolicy Bypass`,
+    `irm … | iex`, `if errorlevel 1 pause`
+  - `GET /api/enroll/setup.ps1` → the reachability check and download steps
+- `server`: **792 passed** (48 suites; +6). `dashboard`: **220 passed** (+2).
+  eslint clean on both.
 
 ### Session artifacts
 
-- Changed: `agent/installer_gui.py`, `agent/tests/test_installer_gui.py`,
-  `server/src/routes/enroll.js`, `server/tests/enroll.routes.test.js`,
+- Changed: `server/src/routes/enroll.js`, `server/tests/enroll.routes.test.js`,
   `dashboard/src/pages/EnrollDevicePage.jsx`,
-  `dashboard/tests/EnrollDevicePage.test.jsx`; local `server/.env`
-  (`PUBLIC_SERVER_URL` = the tailnet HTTPS URL).
-- Commits: `1a17d2b` (headless `--silent`), `2ab662b` (server-composed command).
+  `dashboard/tests/EnrollDevicePage.test.jsx`.
+- Commit: `5136f08`.
 
 ### Next session opening
 
-Build the wizard on the Windows box (`agent/build.ps1`) so its `--silent` flag exists,
-then set `INSTALLER_SILENT=true` and confirm one pasted command installs a machine end
-to end — the first success evidence for this whole enrolment thread.
+Rebuild `lockdown-setup.exe` on the Windows box so `--silent` exists, set
+`INSTALLER_SILENT=true`, and then run the dashboard's one-liner end to end from
+scratch — that is the first complete success evidence for this enrolment thread. If
+MagicDNS is still off there, the hosts entry (name → 100.99.13.53) is the fallback that
+keeps the certificate valid.
 
 ---
 
