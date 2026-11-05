@@ -1405,7 +1405,17 @@ router.get('/admin/cert-chain', requireAuth, requireRole('super-admin'), async (
   }
   const der = Buffer.from(chainB64, 'base64');
   const certs = splitDerCerts(der);
-  res.json({ provisioned: true, cert_count: certs.length, cert_sizes: certs.map((c) => c.length) });
+  // The chain BYTES are returned, not just their sizes: a firmware policy carries the chain
+  // in key 77 (D-205 fails closed without it), so an operator must be able to build that
+  // policy from this server alone. Reporting only counts and sizes made the S239 run depend
+  // on a chain hand-assembled from the signing key's PKCS#8.
+  res.json({
+    provisioned: true,
+    cert_count: certs.length,
+    cert_sizes: certs.map((c) => c.length),
+    chain: chainB64,
+    chain_sha256: require('crypto').createHash('sha256').update(der).digest('hex'),
+  });
 });
 
 // DELETE /v1/admin/cert-chain — remove cert chain (D-205)

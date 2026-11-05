@@ -861,3 +861,47 @@ describe('S238: GET /v1/devices reads the KV interface', () => {
     expect(resp.body.devices[0].device_id).toBe(deviceId);
   });
 });
+
+// ---------------------------------------------------------------------------
+// S240: the stored chain must be retrievable, or no policy can be built from this server
+// alone — which is what forced a hand-assembled chain in S239.
+// ---------------------------------------------------------------------------
+
+describe('S240: GET /v1/admin/cert-chain returns the chain bytes', () => {
+  it('reports provisioned: false when nothing is stored', async () => {
+    const app = createApp(createEnv());
+    const resp = await request(app)
+      .get('/v1/admin/cert-chain')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(resp.status).toBe(200);
+    expect(resp.body.provisioned).toBe(false);
+  });
+
+  it('returns back the exact bytes that were stored, with their digest', async () => {
+    const env = createEnv();
+    const app = createApp(env);
+    // Two DER-shaped certificates: 0x30 <len> <body>
+    const certA = Buffer.from([0x30, 0x03, 0x01, 0x02, 0x03]);
+    const certB = Buffer.from([0x30, 0x02, 0xaa, 0xbb]);
+    const chain = Buffer.concat([certA, certB]);
+
+    const stored = await request(app)
+      .post('/v1/admin/cert-chain')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .set('Content-Type', 'application/json')
+      .send({ chain: chain.toString('base64') });
+    expect(stored.status).toBe(200);
+    expect(stored.body.cert_count).toBe(2);
+
+    const resp = await request(app)
+      .get('/v1/admin/cert-chain')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(resp.body.provisioned).toBe(true);
+    expect(resp.body.chain).toBe(chain.toString('base64'));
+    expect(resp.body.chain_sha256).toBe(
+      require('crypto').createHash('sha256').update(chain).digest('hex'),
+    );
+  });
+});
