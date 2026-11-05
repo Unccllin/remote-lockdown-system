@@ -243,6 +243,112 @@ if (-not $agentProcess) {{
         return f"powershell.exe -NoProfile -EncodedCommand {encoded}"
 
 
+SERVICE_NAME = "LockdownAgent"
+SERVICE_DISPLAY_NAME = "Lockdown Agent"
+SERVICE_DESCRIPTION = "Remote lockdown agent (device policy, EFS, tracking, recovery)."
+
+
+def _service_bin_path() -> str:
+    """Command line the SCM should run.
+
+    A frozen service build (`lockdown-service.exe`) is preferred. Otherwise the
+    service runs this interpreter with service_host.py from the install directory —
+    that path is what the lab/test machines use, and what produced the first
+    successful unattended start (S220).
+    """
+    service_exe = _install_dir() / "lockdown-service.exe"
+    if service_exe.exists():
+        return f'"{service_exe}"'
+    # --service makes the host bootstrap the SCM dispatcher; without it the SCM
+    # starts the process and immediately reports it stopped.
+    return f'"{sys.executable}" "{_install_dir() / "service_host.py"}" --service'
+
+
+def _copy_service_host() -> bool:
+    """Put service_host.py where the SCM command line can find it."""
+    src = Path(__file__).with_name("service_host.py")
+    if not src.exists():
+        return False
+    dest = _install_dir() / "service_host.py"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    except OSError as exc:
+        log.error("Could not stage service_host.py: %s", exc)
+        return False
+    return True
+
+
+def _sc(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["sc.exe", *args], capture_output=True, text=True)
+
+
+def install_service() -> bool:
+    """Create, configure and start the agent as a Windows service.
+
+    Runs as LocalSystem at boot, with no logon and no Task Scheduler involved — the
+    two mechanisms that failed on the live machine (S218, S219).
+    """
+    if not _copy_service_host():
+        log.error("service_host.py is missing — cannot register the service")
+        return False
+
+    bin_path = _service_bin_path()
+
+    # Recreate rather than reconfigure: a stale binary path is the usual leftover.
+    _sc("stop", SERVICE_NAME)
+    _sc("delete", SERVICE_NAME)
+
+    created = _sc(
+        "create",
+        SERVICE_NAME,
+        "binPath=",
+        bin_path,
+        "start=",
+        "auto",
+        "obj=",
+        "LocalSystem",
+        "DisplayName=",
+        SERVICE_DISPLAY_NAME,
+    )
+    if created.returncode != 0:
+        log.error("sc create failed: %s", (created.stdout or created.stderr).strip())
+        return False
+
+    _sc("description", SERVICE_NAME, SERVICE_DESCRIPTION)
+    # Restart on crash instead of relying on a watchdog script. reset= 86400 means the
+    # failure counter clears once a day.
+    _sc(
+        "failure",
+        SERVICE_NAME,
+        "reset=",
+        "86400",
+        "actions=",
+        "restart/5000/restart/10000/restart/30000",
+    )
+
+    started = _sc("start", SERVICE_NAME)
+    if started.returncode != 0:
+        log.error("sc start failed: %s", (started.stdout or started.stderr).strip())
+        return False
+
+    # sc start returns before the service reports RUNNING; believe the state, not the
+    # exit code (S218: schtasks reported success while doing nothing).
+    for _ in range(20):
+        time.sleep(1)
+        query = _sc("query", SERVICE_NAME)
+        if "RUNNING" in (query.stdout or ""):
+            log.info("Service '%s' is running", SERVICE_NAME)
+            return True
+    log.error("Service '%s' did not reach RUNNING", SERVICE_NAME)
+    return False
+
+
+def remove_service() -> None:
+    _sc("stop", SERVICE_NAME)
+    _sc("delete", SERVICE_NAME)
+
+
 def install() -> bool:
     """Install the scheduled task watchdog and registry run key.
 
@@ -265,6 +371,26 @@ def install() -> bool:
             log.error("Required binary '%s' not found on PATH", binary)
             return False
 
+    # --- 0. Preferred: a real Windows service ---
+    # Boot-time, no logon, no Task Scheduler. The task/Run key path below stays as a
+    # fallback for machines where service creation is blocked by policy.
+    if install_service():
+        log.info("Installed as a Windows service (%s)", SERVICE_NAME)
+        if _HAS_TAMPER_PROTECTION:
+            log.info("Applying tamper protection (file ACLs + registry protection)...")
+            try:
+                apply_all_protection(
+                    _install_dir() / "lockdown-agent.exe",
+                    _get_config_path(),
+                    _install_dir(),
+                    None,
+                )
+            except (OSError, RuntimeError) as exc:
+                log.warning("Tamper protection failed: %s", exc)
+        log.info("Installation complete — the service starts at boot without a logon")
+        return True
+
+    log.warning("Service registration failed — falling back to a scheduled task + Run key")
     watchdog_cmd = _build_watchdog_command()
     agent_cmd = _build_agent_command()
 
@@ -478,7 +604,7 @@ def uninstall(
     api_key: str | None = None,
     device_id: str | None = None,
 ) -> bool:
-    """Remove the scheduled task and registry run key.
+    """Remove the service (or the scheduled task and Run key).
 
     Requires a server-issued uninstall token when tamper protection is active.
     Without a valid token, the tamper protection (file ACLs, registry DENY
@@ -499,6 +625,8 @@ def uninstall(
     if not _is_admin():
         log.error("Service uninstallation requires admin privileges")
         return False
+
+    remove_service()
 
     # --- 0. Remove tamper protection (requires server token) ---
     if _HAS_TAMPER_PROTECTION:

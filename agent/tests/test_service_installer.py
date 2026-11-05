@@ -140,6 +140,23 @@ class TestTaskStartVerification:
         assert popen and popen[0][0][0] == "wscript.exe"
 
 
+class TestServiceInstall:
+    """The service replaces the task + Run key (S219/S220)."""
+
+    def test_bin_path_passes_the_service_flag(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(service_installer, "_install_dir", lambda: tmp_path)
+        path = service_installer._service_bin_path()
+
+        # Without --service the SCM starts the process and it stops immediately.
+        assert path.endswith("--service")
+
+    def test_bin_path_prefers_a_frozen_service_exe(self, monkeypatch, tmp_path):
+        (tmp_path / "lockdown-service.exe").write_text("x")
+        monkeypatch.setattr(service_installer, "_install_dir", lambda: tmp_path)
+
+        assert service_installer._service_bin_path() == f'"{tmp_path / "lockdown-service.exe"}"'
+
+
 class TestSingleInstance:
     """Two agents on one machine = two pollers for one device (S216)."""
 
@@ -166,7 +183,11 @@ class TestInstallFlow:
     @patch.object(service_installer, "_is_windows", return_value=True)
     @patch.object(service_installer, "_is_admin", return_value=True)
     @patch.object(service_installer, "subprocess")
-    def test_install_creates_task_and_registry_key(self, mock_subprocess, mock_admin, mock_win):
+    def test_install_creates_task_and_registry_key(
+        self, mock_subprocess, mock_admin, mock_win, monkeypatch
+    ):
+        """The task + Run key path is the fallback when a service cannot be created."""
+        monkeypatch.setattr(service_installer, "install_service", lambda: False)
         # Mock all subprocess.run calls to return success
         mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="", stdout="")
         mock_subprocess.Popen = MagicMock()
@@ -185,7 +206,26 @@ class TestInstallFlow:
     @patch.object(service_installer, "_is_windows", return_value=True)
     @patch.object(service_installer, "_is_admin", return_value=True)
     @patch.object(service_installer, "subprocess")
-    def test_install_fails_if_schtasks_create_fails(self, mock_subprocess, mock_admin, mock_win):
+    def test_install_prefers_the_service_and_creates_no_task(
+        self, mock_subprocess, mock_admin, mock_win, monkeypatch
+    ):
+        """A service runs at boot without a logon — the task/Run key cannot (S219)."""
+        monkeypatch.setattr(service_installer, "install_service", lambda: True)
+        mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+
+        assert service_installer.install() is True
+
+        calls = mock_subprocess.run.call_args_list
+        assert not [c for c in calls if "/Create" in str(c)], "no scheduled task expected"
+        assert not [c for c in calls if "reg" in str(c) and "add" in str(c)], "no Run key expected"
+
+    @patch.object(service_installer, "_is_windows", return_value=True)
+    @patch.object(service_installer, "_is_admin", return_value=True)
+    @patch.object(service_installer, "subprocess")
+    def test_install_fails_if_schtasks_create_fails(
+        self, mock_subprocess, mock_admin, mock_win, monkeypatch
+    ):
+        monkeypatch.setattr(service_installer, "install_service", lambda: False)
         # subprocess.run calls in order:
         # 1-3. where schtasks/reg/cmd (binary checks) — all succeed
         # 4. schtasks /Delete — succeeds
