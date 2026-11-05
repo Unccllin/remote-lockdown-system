@@ -9552,3 +9552,139 @@ MagicDNS is still off there, the hosts entry (name → 100.99.13.53) is the fall
 keeps the certificate valid.
 
 ---
+
+---
+
+## Session 216 — 2026-11-05 (installed on a real Windows machine; seven defects fell out)
+
+### RULE-ZERO
+
+**Read**: `agent/installer_gui.py` (`run_headless`, `write_config`,
+`download_agent_exe`), `agent/service_installer.py` (task creation, watchdog,
+launch), `server/src/routes/downloads.js`, `agent/agent.py` (the SERVER_URL guard and
+`verify_tls` handling), `dashboard/src/pages/EnrollDevicePage.jsx`.
+
+**Machine identified first**, because two failed sessions assumed wrongly:
+FRANKENSTEIN is `192.168.1.119`, **Windows 11 Pro 10.0.26300**, user
+`frankenstein\user` (elevated, local admin), hardware UUID
+`113A3A7C-FD08-4D6F-B1A7-917C60531D3B`, MAC `64-D6-9A-31-10-AF`, **no Python**, no
+agent. Not USB-C (no USB/Thunderbolt/RNDIS adapter exists on this laptop; the
+"store now, decrypt later" SSH banner is OpenSSH-for-Windows, not Linux — my earlier
+"it's Linux" was wrong). Reached over plain LAN: the Windows port-proxy
+`0.0.0.0:3001 → 192.168.124.65:3001` already existed, and an inbound rule
+"Lockdown Server" (TCP 3001, Allow, Any profile) was already present.
+
+### IMPLEMENT — seven defects, each observed live
+
+1. **schtasks `/TR` limit.** `Value for '/TR' option cannot be more than 261
+   character(s)`. The watchdog was an inline `-EncodedCommand` (base64 of the script),
+   which grows with the agent path. Now written to
+   `C:\ProgramData\LockdownAgent\watchdog-task.ps1` and the action is
+   `powershell -File …` (~105 chars).
+2. **Identity lost in headless mode.** `run_headless` passed `None, None, None` for
+   hardware_uuid/mac/serial, so each run looked like a new machine and FRANKENSTEIN
+   enrolled twice. It now sends the same identity the GUI does — the next run returned
+   `reassociated=True` on the same device id.
+3. **Wrong platform served.** `/api/download/agent` with no `?platform=` matched the
+   Linux binary first, so Windows got an ELF and failed at launch with
+   `[WinError 216] not compatible with the version of Windows you're running`. The
+   route now requires `?platform=` (400 with guidance), the installer asks for
+   `?platform=win`, the dashboard button names it.
+4. **TLS guard vs. lab server.** The agent refuses `http://` ("key material must be
+   transported over TLS") while `write_config` hardcoded `verify_tls: True`, so a lab
+   server could never work. `verify_tls` is a parameter now (default True); plain HTTP
+   needs the explicit `--allow-insecure-http`, prints a warning, and the served command
+   adds it when the server advertises `http://` — with a note saying TLS verification
+   is off.
+5. **Watchdog launched a non-existent path.** Running the installer from source left
+   `sys.frozen` False, so the task was written with `…\agent.py`. The task then
+   reported success (exit 0) and started nothing. The launcher prefers the installed
+   `lockdown-agent.exe`.
+6. **`IndexError` in the VBS launcher.** `Path(agent_cmd.split('"')[1]).parent` assumed
+   a quoted path; a `python.exe` with no space in its path crashed it. Replaced with
+   `_install_dir()`.
+7. **Unbound names in `service_installer`.** `apply_all_protection` /
+   `remove_all_protection` existed only in the successful-import branch, and
+   `subprocess.CREATE_NO_WINDOW` was reached through a `hasattr` ternary. Both are now
+   statically bound (no-op stubs returning `{}`, `getattr` at module scope).
+
+### Fog cleared
+
+- **Why every previous attempt "kept failing"**: four independent causes stacked —
+  wrong URL advertised, then HTTP refused by the agent, then the wrong binary served,
+  then a task that started nothing.
+- **Whether the product path works**: yes. On FRANKENSTEIN the run ended `OK: installed`,
+  the device re-associated as `45108abcc29625addf14b2f2ff78d0a2`, `config.json` carries
+  the server URL, `lockdown-agent.exe` is installed, `\SystemHealthMonitor` exists (as
+  SYSTEM) and runs the file-based watchdog, the agent process is up, and the server
+  recorded `last_checkin 2026-11-05 07:00:24` (~25 s before observation).
+
+### Fog remaining
+
+- **Duplicate agent instances.** Two `lockdown-agent` processes ran at once: the
+  installer's `launch_agent` and the watchdog both start it, and nothing enforces
+  single-instance. Needs a mutex (or `launch_agent` should run the task instead).
+- **The task is ONSTART-only.** Nothing starts the agent until reboot; the install only
+  appears to start it because `launch_agent` runs it directly. Either add a MINUTE
+  trigger or run the task once at install time.
+- **`TAMPER DETECTED: service_missing=True` on every fresh install.** The agent expects a
+  Windows *service*, but this installer creates a scheduled task — so the check reports
+  tampering on a healthy install.
+- **No TPM on this machine** (`TPM key creation failed … falling back to DPAPI/plaintext`)
+  — environmental, but the fallback is silent in the UI.
+- **A replay of the port-proxy is required after a WSL restart** (it points at the WSL
+  address), and adding one needs an elevated shell on the laptop.
+- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
+  the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None for the enrolment path. The above are follow-ups, not blockers.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (decisive, and the whole point of the session):
+  none of the seven defects was reachable from the unit suite. They are properties of a
+  *Windows environment* — schtasks' 261-char cap, ELF-vs-PE, `sys.frozen`, scheduled-task
+  context — and only a real install on a real machine exposed them. The suite tested the
+  code's shape; the environment tests its assumptions.
+- **Layer 2 — context provision**: I twice asserted the target was Linux from one
+  banner line. The machine's identity should be measured (`systemd-detect-virt`,
+  `ttl`, `SSH-2.0-OpenSSH_for_Windows_*`), not inferred.
+
+### VERIFY
+
+- Live, on FRANKENSTEIN: `OK: installed`; `reassociated=True`;
+  `config.json` → `server_url http://192.168.1.43:3001`, `verify_tls false`,
+  `api_key` present (44 chars); `lockdown-agent.exe` 15 636 034 bytes;
+  `watchdog-task.ps1` 668 bytes and its `Start-Process` names the installed exe;
+  `schtasks /run` → `Last Result: 0`; agent processes up (pids 7540, 22316); server
+  `last_checkin 2026-11-05 07:00:24`, `status active`.
+- Suites: agent **781** (+5), server **793** (+1), dashboard **220**; ruff + eslint clean.
+- Commit: `43fa424`.
+
+### Session artifacts
+
+- Changed: `agent/installer_gui.py`, `agent/service_installer.py`,
+  `agent/tests/test_installer_gui.py`, `agent/tests/test_service_installer.py`,
+  `server/src/routes/downloads.js`, `server/src/routes/enroll.js`,
+  `server/tests/downloads.routes.test.js`, `server/tests/enroll.routes.test.js`,
+  `dashboard/src/pages/EnrollDevicePage.jsx`.
+
+### Next session opening
+
+Fix the duplicate-instance and auto-start gaps the live install exposed: give the agent a
+single-instance guard (or have `launch_agent` trigger the scheduled task instead of
+spawning a second process), give the task a MINUTE trigger so it starts without a reboot,
+and make the tamper check stop reporting `service_missing` on a scheduled-task install.
+Then reboot FRANKENSTEIN and confirm the agent comes up unattended.
+
+---

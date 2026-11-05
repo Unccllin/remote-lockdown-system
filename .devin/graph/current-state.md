@@ -53,26 +53,36 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 215 — 2026-11-03 (one line, or one double-click — without a secret in the URL)
+## Latest session: 216 — 2026-11-05 (installed on a real Windows machine; seven defects fell out)
 
 ### Fog cleared
 
-- **What an operator actually pastes now**: one line, or a `.cmd` they double-click.
-- **Where the token lives**: on the target, entered at a prompt — not in a URL, not in
-  a log, not in history.
-- **Whether the served script duplicates the installer**: no, it delegates; the
-  `--silent` variant reuses S214's headless entry point.
+- **Why every previous attempt "kept failing"**: four independent causes stacked —
+  wrong URL advertised, then HTTP refused by the agent, then the wrong binary served,
+  then a task that started nothing.
+- **Whether the product path works**: yes. On FRANKENSTEIN the run ended `OK: installed`,
+  the device re-associated as `45108abcc29625addf14b2f2ff78d0a2`, `config.json` carries
+  the server URL, `lockdown-agent.exe` is installed, `\SystemHealthMonitor` exists (as
+  SYSTEM) and runs the file-based watchdog, the agent process is up, and the server
+  recorded `last_checkin 2026-11-05 07:00:24` (~25 s before observation).
 
 ### Fog remaining
 
-- **`lockdown-setup.exe` still predates `--silent`**, so the served script currently
-  opens the wizard rather than installing silently. One rebuild on Windows
-  (`agent/build.ps1`) plus `INSTALLER_SILENT=true` completes that path.
-- **The operator's Windows box still cannot resolve the tailnet name** (MagicDNS off).
-  The script checks reachability and says so, but cannot fix DNS.
-- Unchanged: `lockdown-installer.exe` missing (S209); a partially-failed install spends
-  its token (S211); inbound 3001 is filtered on the tailnet, so the API is reached via
-  `tailscale serve` on 443 (S213); `devices.hostname` uniqueness; the S202 objective.
+- **Duplicate agent instances.** Two `lockdown-agent` processes ran at once: the
+  installer's `launch_agent` and the watchdog both start it, and nothing enforces
+  single-instance. Needs a mutex (or `launch_agent` should run the task instead).
+- **The task is ONSTART-only.** Nothing starts the agent until reboot; the install only
+  appears to start it because `launch_agent` runs it directly. Either add a MINUTE
+  trigger or run the task once at install time.
+- **`TAMPER DETECTED: service_missing=True` on every fresh install.** The agent expects a
+  Windows *service*, but this installer creates a scheduled task — so the check reports
+  tampering on a healthy install.
+- **No TPM on this machine** (`TPM key creation failed … falling back to DPAPI/plaintext`)
+  — environmental, but the fallback is silent in the UI.
+- **A replay of the port-proxy is required after a WSL restart** (it points at the WSL
+  address), and adding one needs an elevated shell on the laptop.
+- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
+  the S202 objective.
 
 ### Debt items closed
 
@@ -84,42 +94,45 @@
 
 ### Blockers
 
-- A Windows build of the wizard for the silent path; MagicDNS (or a hosts entry) on the
-  target for name resolution.
+- None for the enrolment path. The above are follow-ups, not blockers.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback**: two of the six new tests asserted behaviour of
-  the wrong mode (GUI vs silent) and one asserted `res.text` on a binary body. They
-  failed immediately, which is the system working — but the lesson is that the mode
-  matrix needs stating before the assertions are written.
+- **Layer 4 — verification feedback** (decisive, and the whole point of the session):
+  none of the seven defects was reachable from the unit suite. They are properties of a
+  *Windows environment* — schtasks' 261-char cap, ELF-vs-PE, `sys.frozen`, scheduled-task
+  context — and only a real install on a real machine exposed them. The suite tested the
+  code's shape; the environment tests its assumptions.
+- **Layer 2 — context provision**: I twice asserted the target was Linux from one
+  banner line. The machine's identity should be measured (`systemd-detect-virt`,
+  `ttl`, `SSH-2.0-OpenSSH_for_Windows_*`), not inferred.
 
 ### VERIFY
 
-- Live over the tailnet:
-  - `one_liner` → `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm
-    'https://desktop-g4pcdhh.tail06a7e9.ts.net/api/enroll/setup.ps1' | iex"`
-  - `GET /api/enroll/setup.cmd` → 200, `content-disposition: attachment;
-    filename="lockdown-setup.cmd"`, body with `@echo off`, `-ExecutionPolicy Bypass`,
-    `irm … | iex`, `if errorlevel 1 pause`
-  - `GET /api/enroll/setup.ps1` → the reachability check and download steps
-- `server`: **792 passed** (48 suites; +6). `dashboard`: **220 passed** (+2).
-  eslint clean on both.
+- Live, on FRANKENSTEIN: `OK: installed`; `reassociated=True`;
+  `config.json` → `server_url http://192.168.1.43:3001`, `verify_tls false`,
+  `api_key` present (44 chars); `lockdown-agent.exe` 15 636 034 bytes;
+  `watchdog-task.ps1` 668 bytes and its `Start-Process` names the installed exe;
+  `schtasks /run` → `Last Result: 0`; agent processes up (pids 7540, 22316); server
+  `last_checkin 2026-11-05 07:00:24`, `status active`.
+- Suites: agent **781** (+5), server **793** (+1), dashboard **220**; ruff + eslint clean.
+- Commit: `43fa424`.
 
 ### Session artifacts
 
-- Changed: `server/src/routes/enroll.js`, `server/tests/enroll.routes.test.js`,
-  `dashboard/src/pages/EnrollDevicePage.jsx`,
-  `dashboard/tests/EnrollDevicePage.test.jsx`.
-- Commit: `5136f08`.
+- Changed: `agent/installer_gui.py`, `agent/service_installer.py`,
+  `agent/tests/test_installer_gui.py`, `agent/tests/test_service_installer.py`,
+  `server/src/routes/downloads.js`, `server/src/routes/enroll.js`,
+  `server/tests/downloads.routes.test.js`, `server/tests/enroll.routes.test.js`,
+  `dashboard/src/pages/EnrollDevicePage.jsx`.
 
 ### Next session opening
 
-Rebuild `lockdown-setup.exe` on the Windows box so `--silent` exists, set
-`INSTALLER_SILENT=true`, and then run the dashboard's one-liner end to end from
-scratch — that is the first complete success evidence for this enrolment thread. If
-MagicDNS is still off there, the hosts entry (name → 100.99.13.53) is the fallback that
-keeps the certificate valid.
+Fix the duplicate-instance and auto-start gaps the live install exposed: give the agent a
+single-instance guard (or have `launch_agent` trigger the scheduled task instead of
+spawning a second process), give the task a MINUTE trigger so it starts without a reboot,
+and make the tamper check stop reporting `service_missing` on a scheduled-task install.
+Then reboot FRANKENSTEIN and confirm the agent comes up unattended.
 
 ---
 

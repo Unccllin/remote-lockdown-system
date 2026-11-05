@@ -1405,3 +1405,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-071
+  statement: 'An installer''s correctness on Windows is decided by environment properties no unit test
+    reaches: schtasks caps the /TR action at 261 characters (so the watchdog must be a file, not an inline
+    -EncodedCommand), a platform-less binary download can serve a Linux ELF to Windows ([WinError 216]),
+    a service installer run from source sees sys.frozen False and writes a non-existent agent.py into
+    the task (the task then exits 0 and starts nothing), and the agent refuses http:// unless verify_tls
+    is explicitly false. On FRANKENSTEIN (Windows 11 build 26300, 192.168.1.119) the install now completes,
+    the device re-associates on the same id, the scheduled task exists as SYSTEM running a file-based
+    watchdog, and the server records check-ins — but two agent processes ran at once (no single-instance
+    guard), the task is ONSTART-only so nothing starts it without a reboot, and the agent reports TAMPER
+    DETECTED service_missing=True on a healthy scheduled-task install.'
+  domain: general
+  status: confirmed
+  evidence_level: real-media
+  provenance: 'live install on FRANKENSTEIN (real Windows 11 26300): OK installed, reassociated=True,
+    task as SYSTEM, agent running, server last_checkin 07:00:24; agent 781 / server 793 / dashboard 220
+    tests green'
+  source: agent/installer_gui.py; agent/service_installer.py; server/src/routes/downloads.js; server/src/routes/enroll.js;
+    agent/agent.py (http/verify_tls guard); live FRANKENSTEIN state and agent.log
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
