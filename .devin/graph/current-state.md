@@ -53,32 +53,29 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 220 — 2026-11-05 (the agent runs as a service; verified at boot with no logon)
+## Latest session: 221 — 2026-11-05 (awake, quiet, replaceable — and why it slept)
 
 ### Fog cleared
 
-- **The enrolment thread is closed**: FRANKENSTEIN enrolled, and after a reboot at
-  10:54:14 with **no user logged on** the service was RUNNING, two agent processes were
-  live in session 0 (started 10:54:37/39), and the server recorded
-  `last_checkin 07:54:57` — the first unattended check-in in this whole sequence.
-- **Why tasks and Run keys could never have worked here**: the scheduler executes
-  nothing (S218) and the Run key is non-elevated into a read-only directory (S219).
-  Both are now fallbacks, not the plan.
+- **Why it slept quickly**: the Balanced scheme hibernates after one hour on AC and
+  nothing — including the agent — asked Windows to stay awake.
+- **Whether the app is silent**: yes, structurally (session 0, no windows). Now it is
+  also single-purpose: no Run key, no task competing with the service.
+- **Why a reinstall claimed the binary was unavailable**: a locked destination file, not
+  a missing binary.
 
 ### Fog remaining
 
-- **Two agent processes still start** (pids 8584 and 10224, two seconds apart). The
-  frozen agent has no single-instance guard, and both the service host and the agent's
-  own watchdog start one. Needs either a guard inside the agent (rebuild) or a
-  host-side check before spawning.
-- **A frozen `lockdown-service.exe` is still required** for targets without Python; today
-  the service runs `python.exe service_host.py --service`, which is fine for the lab and
-  for the HP box (Python installed) but not for a clean customer machine. `agent/build.ps1`
-  needs a second PyInstaller target for the host.
-- Session 0 means the agent's `D-007` path activates (`tsdiscon` on the active console
-  session) — expected for a lockdown agent, but it should be verified deliberately.
-- Tamper protection is skipped on this box (`tamper_protection module not available`);
-  with the service now present, that module should become worth wiring properly.
+- **Two agent processes still start** (e.g. pids 1216 and 6248). The frozen agent has no
+  single-instance guard and its own watchdog starts a second. Needs a guard in the agent
+  (rebuild) or a host-side check.
+- **The agent should hold its own power request** (`SetThreadExecutionState` with
+  `ES_SYSTEM_REQUIRED|ES_CONTINUOUS`, or `PowerCreateRequest`/`PowerSetRequest`) so
+  reachability does not depend on a `powercfg` setting an operator can change. Agent
+  rebuild required.
+- **Battery policy unchanged** by design; a stolen laptop may still sleep on battery,
+  which interacts with tracking frequency.
+- Frozen `lockdown-service.exe` still needed for targets without Python (S220).
 - Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
   the S202 objective.
 
@@ -92,41 +89,40 @@
 
 ### Blockers
 
-- None for enrolment or unattended start. Remaining items are build/packaging work.
+- None for install, quiet operation, or wakefulness on AC. The two remaining items need
+  an agent build.
 
 ### Failure attribution
 
-- **Layer 3 — execution environment** (again, and now resolved by design rather than by
-  argument): the launch context was the defect; replacing the mechanism removed it.
-- **Layer 4 — verification feedback**: the decisive evidence was a *reboot with no
-  logon* plus the server's `last_checkin`. Any weaker check (service state alone, exit
-  code, process list on a logged-in machine) could have passed while the agent was
-  useless.
+- **Layer 4 — verification feedback** (primary): `_download_verified` collapsed four
+  different failures (status, missing digest, digest mismatch, locked destination) into
+  one `None`, so the installer reported "binary unavailable" for a file-lock. Separate
+  reasons would have saved the round-trip.
+- **Layer 2 — context provision**: the `except` ordering bug is the kind a reviewer
+  catches, not a test; `RequestException ⊂ OSError` belongs in the file's comments now.
 
 ### VERIFY
 
-- Install: `OK: installed`; `sc qc` → `START_TYPE: 2 AUTO_START`,
-  `SERVICE_START_NAME: LocalSystem`,
-  `BINARY_PATH_NAME: "C:\Program Files\Python312\python.exe" "C:\ProgramData\LockdownAgent\service_host.py" --service`;
-  `sc query` → `STATE: 4 RUNNING`; agent pids present in session 0.
-- Reboot (`shutdown /r /t 15`), then: uptime 63 s, **no user logged on** (console session
-  5 `Conn`, `NEWARK USER` session 1 `Disc`), service RUNNING, agent pids 8584 + 10224 in
-  session 0 started 10:54:37/39, server `last_checkin 2026-11-05 07:54:57` (20 s old).
-- Suites: agent **790** (+2), server 793, dashboard 220; ruff clean.
-- Commit: `d99b0b4`.
+- Live on FRANKENSTEIN after the install:
+  - `powercfg` AC `STANDBYIDLE` = `0x00000000`, `HIBERNATEIDLE` = `0x00000000`;
+  - Run key **removed**, task **removed**;
+  - `sc query LockdownAgent` → `STATE: 4 RUNNING`;
+  - processes `py 1936`, `lockdown-agent 1216/6248`, all session 0, empty window titles;
+  - server `last_checkin 2026-11-05 08:11:50` (11 s before observation).
+- Suites: agent **794** (+1), server 793, dashboard 220; ruff + eslint clean.
+- Commit: `7d2ab09`.
 
 ### Session artifacts
 
-- Changed: `agent/service_host.py` (new), `agent/service_installer.py`,
-  `agent/tests/test_service_installer.py`.
+- Changed: `agent/service_installer.py`, `agent/installer_gui.py`,
+  `agent/tests/test_installer_gui.py`.
 
 ### Next session opening
 
-Two packaging tasks and one correctness task, in that order: build
-`lockdown-service.exe` in `agent/build.ps1` so the service works without Python on the
-target; add a single-instance guard so the host and the agent's watchdog cannot both
-start one (pids 8584/10224); then wire tamper protection now that a service exists and
-`service_missing` should finally be false.
+Two agent-side items that need a Windows build: a single-instance guard so the host and
+the agent's watchdog cannot both run one, and a real power request
+(`ES_SYSTEM_REQUIRED|ES_CONTINUOUS`) so the device stays reachable whatever the power
+scheme says. Build `lockdown-service.exe` in the same pass.
 
 ---
 

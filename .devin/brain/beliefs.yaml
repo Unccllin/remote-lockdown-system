@@ -1540,3 +1540,32 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-076
+  statement: 'A managed endpoint must be held awake, keep exactly one starter, and be replaceable while
+    installed. On FRANKENSTEIN the Balanced power scheme hibernates after one hour on AC (HIBERNATEIDLE
+    0xe10) and powercfg /requests listed nothing blocking sleep, while the agent contains no SetThreadExecutionState
+    or PowerCreateRequest call — so the device dropped out of reach through the OS, not the app; the installer
+    now sets standby-timeout-ac and hibernate-timeout-ac to 0 (never) and leaves battery policy alone,
+    with an agent-side power request recorded as the deeper fix. Legacy starters from the task era (the
+    SystemHealthMonitor scheduled task and the HKLM Run value) are now deleted whenever the service install
+    succeeds, because they start a second non-elevated agent that exits; the processes themselves were
+    already silent (session 0, empty MainWindowTitle). Finally, reinstalling over a running agent failed
+    with the misleading ''agent binary unavailable'': the agent runs from the install directory, so Windows
+    refused to replace the locked .exe, and _download_verified collapsed that OSError (plus status/digest
+    failures) into None; run_headless now stops the service and kills the process first, and the download
+    distinguishes its failures — with requests.RequestException caught before OSError because it is a
+    subclass.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live FRANKENSTEIN: powercfg AC idle timeouts 0x0/0x0, Run key + task removed, service RUNNING,
+    session-0 silent processes, check-in 11s old; agent 794 tests'
+  source: agent/service_installer.py apply_managed_power_policy/remove_legacy_starters; agent/installer_gui.py
+    stop_running_agent/_download_verified; live powercfg, sc query, tasklist and agent.log on FRANKENSTEIN
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

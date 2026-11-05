@@ -10125,3 +10125,122 @@ start one (pids 8584/10224); then wire tamper protection now that a service exis
 `service_missing` should finally be false.
 
 ---
+
+---
+
+## Session 221 — 2026-11-05 (awake, quiet, replaceable — and why it slept)
+
+### RULE-ZERO
+
+**Read**: `agent/service_installer.py` (install/uninstall paths, legacy starters),
+`agent/installer_gui.py` (`run_headless`, `_download_verified`), the live power
+configuration on FRANKENSTEIN (`powercfg /q`, `/requests`, `/lastwake`), and the
+running process set.
+
+**Two questions asked**: why does the machine sleep quickly, and is the application
+silent on the machine?
+
+### FINDINGS
+
+1. **Sleep is the OS scheme, not the agent.** Balanced scheme: `STANDBYIDLE` AC
+   `0x2a30` (3 h), DC `0xe10` (1 h); **`HIBERNATEIDLE` AC `0xe10` (1 hour)**, DC never.
+   `powercfg /requests` → *None* for SYSTEM/DISPLAY/AWAYMODE, i.e. nothing holds the
+   machine awake, and the agent contains no `SetThreadExecutionState` /
+   `PowerCreateRequest` call at all. On AC the machine therefore hibernates after an
+   hour idle — and an agent that is hibernated is unreachable for lockdown/recovery.
+2. **The app was already silent, but not tidy.** All processes run in session 0 with an
+   empty `MainWindowTitle` (`lockdown-agent` ×2, `python` service host). What was *not*
+   clean: the legacy `SystemHealthMonitor` scheduled task and the HKLM Run key survived
+   from the task-based era — both start a second, non-elevated agent that exits.
+3. **A reinstall could not replace the binary.** `run_headless` printed
+   *"agent binary unavailable"* while a plain download of the same URL returned 200 with
+   a matching digest. Cause: the agent runs *from* `C:\ProgramData\LockdownAgent`, so the
+   `.exe` is locked; `tmp.replace(dest)` raised `OSError`, which `_download_verified`
+   swallowed into `None`. The message named the wrong problem.
+4. **Latent bug found while fixing (3)**: `except OSError` before
+   `except requests.RequestException` makes the second clause unreachable —
+   `RequestException` subclasses `OSError`.
+
+### IMPLEMENT
+
+- `service_installer.apply_managed_power_policy()` — AC `standby-timeout-ac 0` and
+  `hibernate-timeout-ac 0` (never). Battery deliberately untouched.
+- `service_installer.remove_legacy_starters()` — deletes the `SystemHealthMonitor` task
+  and the HKLM Run value whenever the service install succeeds, so exactly one starter
+  exists.
+- `installer_gui.stop_running_agent()` — `sc stop LockdownAgent` + `taskkill` (best
+  effort, tolerant of missing binaries) before fetching the binary.
+- `_download_verified` — reports the real reason for a failed replace, with
+  `RequestException` caught before `OSError`.
+- Tests: +1 (the stop step runs `sc stop` and `taskkill`).
+
+### Fog cleared
+
+- **Why it slept quickly**: the Balanced scheme hibernates after one hour on AC and
+  nothing — including the agent — asked Windows to stay awake.
+- **Whether the app is silent**: yes, structurally (session 0, no windows). Now it is
+  also single-purpose: no Run key, no task competing with the service.
+- **Why a reinstall claimed the binary was unavailable**: a locked destination file, not
+  a missing binary.
+
+### Fog remaining
+
+- **Two agent processes still start** (e.g. pids 1216 and 6248). The frozen agent has no
+  single-instance guard and its own watchdog starts a second. Needs a guard in the agent
+  (rebuild) or a host-side check.
+- **The agent should hold its own power request** (`SetThreadExecutionState` with
+  `ES_SYSTEM_REQUIRED|ES_CONTINUOUS`, or `PowerCreateRequest`/`PowerSetRequest`) so
+  reachability does not depend on a `powercfg` setting an operator can change. Agent
+  rebuild required.
+- **Battery policy unchanged** by design; a stolen laptop may still sleep on battery,
+  which interacts with tracking frequency.
+- Frozen `lockdown-service.exe` still needed for targets without Python (S220).
+- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
+  the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None for install, quiet operation, or wakefulness on AC. The two remaining items need
+  an agent build.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): `_download_verified` collapsed four
+  different failures (status, missing digest, digest mismatch, locked destination) into
+  one `None`, so the installer reported "binary unavailable" for a file-lock. Separate
+  reasons would have saved the round-trip.
+- **Layer 2 — context provision**: the `except` ordering bug is the kind a reviewer
+  catches, not a test; `RequestException ⊂ OSError` belongs in the file's comments now.
+
+### VERIFY
+
+- Live on FRANKENSTEIN after the install:
+  - `powercfg` AC `STANDBYIDLE` = `0x00000000`, `HIBERNATEIDLE` = `0x00000000`;
+  - Run key **removed**, task **removed**;
+  - `sc query LockdownAgent` → `STATE: 4 RUNNING`;
+  - processes `py 1936`, `lockdown-agent 1216/6248`, all session 0, empty window titles;
+  - server `last_checkin 2026-11-05 08:11:50` (11 s before observation).
+- Suites: agent **794** (+1), server 793, dashboard 220; ruff + eslint clean.
+- Commit: `7d2ab09`.
+
+### Session artifacts
+
+- Changed: `agent/service_installer.py`, `agent/installer_gui.py`,
+  `agent/tests/test_installer_gui.py`.
+
+### Next session opening
+
+Two agent-side items that need a Windows build: a single-instance guard so the host and
+the agent's watchdog cannot both run one, and a real power request
+(`ES_SYSTEM_REQUIRED|ES_CONTINUOUS`) so the device stays reachable whatever the power
+scheme says. Build `lockdown-service.exe` in the same pass.
+
+---
