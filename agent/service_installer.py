@@ -30,6 +30,7 @@ import os
 import platform
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 log = logging.getLogger("lockdown-agent")
@@ -392,8 +393,20 @@ Set-ScheduledTask -TaskName '{TASK_NAME}' -Trigger $task.Triggers
             ["schtasks", "/Run", "/TN", TASK_NAME], capture_output=True, text=True
         )
         if run_result.returncode == 0:
-            log.info("Scheduled task started the agent")
-            started = True
+            # schtasks reports success even when the scheduler executes nothing
+            # (FRANKENSTEIN: "Last Result: 0" with no process, and even a trivial
+            # `cmd /c echo` task wrote no file). Belief the process, not the exit code.
+            for _ in range(10):
+                time.sleep(1)
+                if _agent_running():
+                    log.info("Scheduled task started the agent")
+                    started = True
+                    break
+            if not started:
+                log.warning(
+                    "The task reported success but no agent appeared — this machine's "
+                    "Task Scheduler may be non-functional; launching directly"
+                )
         else:
             log.warning("Could not run the task (%s) — launching directly", run_result.stderr)
 

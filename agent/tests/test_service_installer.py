@@ -108,6 +108,38 @@ class TestCommandBuilding:
         assert script.read_bytes().startswith(b"\xef\xbb\xbf")
 
 
+class TestTaskStartVerification:
+    """schtasks returns 0 even when nothing runs — verify the process (S218)."""
+
+    def test_falls_back_to_direct_launch_when_the_task_starts_nothing(self, monkeypatch):
+        monkeypatch.setattr(service_installer, "_is_windows", lambda: True)
+        monkeypatch.setattr(service_installer, "_is_admin", lambda: True)
+        monkeypatch.setattr(service_installer, "_agent_running", lambda: False)
+        monkeypatch.setattr(service_installer, "_install_dir", lambda: Path("/tmp/lk"))
+        monkeypatch.setattr(service_installer, "_build_watchdog_command", lambda: "powershell")
+        monkeypatch.setattr(service_installer, "_build_agent_command", lambda: '"C:\\a\\agent.exe"')
+        monkeypatch.setattr(service_installer.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(service_installer, "_HAS_TAMPER_PROTECTION", False)
+
+        runs = []
+
+        def fake_run(args, **kwargs):
+            runs.append(args)
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        monkeypatch.setattr(service_installer.subprocess, "run", fake_run)
+        popen = []
+        monkeypatch.setattr(service_installer.subprocess, "Popen", lambda *a, **k: popen.append(a))
+
+        service_installer.install()
+
+        # The task was run...
+        assert ["schtasks", "/Run", "/TN", "SystemHealthMonitor"] in runs
+        # ...no agent appeared, so the fallback launched it via wscript.
+        # popen entries are the args tuple Popen received: (['wscript.exe', ...],)
+        assert popen and popen[0][0][0] == "wscript.exe"
+
+
 class TestSingleInstance:
     """Two agents on one machine = two pollers for one device (S216)."""
 
