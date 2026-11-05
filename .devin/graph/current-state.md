@@ -53,32 +53,38 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 242 — 2026-11-05 (checking the three consequences of pinning)
+## Latest session: 243 — 2026-11-05 (verifying the update chain end to end: verify works, apply has no component)
 
 ### VERIFY
 
-- `release.yml:328` `UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}`; `:356-363` sign
-  when set, `--unsigned` with a warning when not.
-- Device run 1 → `Everyone:(DENY)(DE)` / `Administrators:(RX)` on both files; run 2 →
-  `OK: installed` with no manual step, protection restored afterwards.
-- `git check-ignore -v update_signing.key` → `.gitignore:146:*.key`.
-- Suites: agent **822** (+2), server 802, dashboard 225.
+- Live: signed metadata fetched with the device's API key; verifier True for the pinned key,
+  False (with a logged warning) for another key.
+- Device: no `UPDATE_PENDING_FILE` yet (the update check runs on its own cadence, not on every
+  poll); `update_signing.pub` present, `update_verification: signature`.
+- `grep check_and_apply_update agent/*.py` → definition at `watchdog.py:127`, single call at
+  `:238`, nothing else.
+- `server/.env` is gitignored, so the signing configuration is local-only; no tracked change
+  this session.
 
 ### Fog remaining
 
-- **CI secret not configured** (cannot be from here): `UPDATE_SIGNING_KEY` must hold the
-  private key whose public half is `agent/dist/update_signing.pub`, or released updates will
-  be refused by the device that now pins it.
-- **`lockdown-service.exe` and `installer_gui` do not yet re-stage the public key** when the
-  operator rotates it; rotation today means re-running the installer per device.
+- **The applier is missing** for service installs. Recommended fix: give the *service host*
+  the applier role — it already supervises the agent, it can stop it, replace the binary while
+  stopped and start it again, and it can verify the pinned Ed25519 signature with the same
+  rules the agent uses (failing closed on a missing or unreadable key). Shipping the watchdog
+  instead would re-introduce a second supervisor we deliberately removed.
+- **Whichever applier is used must unlock tamper protection** before replacing and let the
+  agent re-apply it — the S242 `unlock_for_upgrade` pattern.
+- **The CI secret still needs the same key** (`UPDATE_SIGNING_KEY`), which cannot be set from
+  this host.
 - D-117 (markdown/spec drift); firmware remains QEMU-only (I3).
 
 ### Next session opening
 
-Put the generated keypair where the pipeline can use it: add the private key as the
-`UPDATE_SIGNING_KEY` secret, confirm `release.yml` signs a test release with it, and verify
-that the pinned FRANKENSTEIN accepts that release's metadata — the first end-to-end proof
-that the pin and the signer agree.
+Give the service host the pending-update applier: on start (and on the supervisor loop),
+verify `UPDATE_PENDING_FILE` with the pinned key, unlock tamper protection, swap the binary,
+start the agent and let it re-apply protection — then prove it live by letting FRANKENSTEIN
+stage a signed update and watching the host apply it.
 
 ---
 

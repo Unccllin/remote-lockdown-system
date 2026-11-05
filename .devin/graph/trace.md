@@ -12410,3 +12410,81 @@ that the pinned FRANKENSTEIN accepts that release's metadata — the first end-t
 that the pin and the signer agree.
 
 ---
+
+---
+
+## Session 243 — 2026-11-05 (verifying the update chain end to end: verify works, apply has no component)
+
+### RULE-ZERO
+
+**Read**: `server/src/routes/agent.js` (`GET /update`, the signing block),
+`agent/agent.py` (`verify_update_signature`, `update_verification_mode`, `download_update`,
+the update-check caller), `agent/watchdog.py` (`check_and_apply_update`), `server/.env`.
+
+**Task**: prove the pin and the signer agree, and check what the device does with a signed
+update.
+
+### VERIFIED (the parts that hold)
+
+Configured the server to sign with the pinned key's private half
+(`UPDATE_SIGNING_KEY=/home/cllin/.lockdown-secrets/update_signing.key`,
+`AGENT_LATEST_VERSION=1.0.1`) and fetched the metadata with the device's own API key:
+
+```
+GET /api/agent/update   -> update_available=True, latest_version=1.0.1,
+                           sha256=e4e5e2e9…, signature present (88 b64 chars)
+agent.verify_update_signature(..., pinned key)      -> True
+agent.verify_update_signature(..., a different key) -> False   (+ warning logged)
+```
+
+So the three layers agree: the server signs, the device pins, and the agent's **own verifier**
+accepts the signature only for the pinned key. That is the pin↔signer proof.
+
+### FINDING — nothing applies a signed update on a service install
+
+`download_update()` verifies SHA-256 + the detached signature and then writes
+`UPDATE_PENDING_FILE`. The only consumer of that file is
+`watchdog.check_and_apply_update()` (`agent/watchdog.py:127`), called from the watchdog's own
+loop (`:238`) — it stops the agent, backs up and moves the new binary into place, then
+restarts.
+
+S226 decided not to install the watchdog (the service plus SCM crash recovery covers
+*restart*). That decision was right for restarts and wrong for updates: on a service install
+the update pipeline ends at "pending file written", and no component acts on it.
+
+Worse, the applier it would need has the same defect S242 fixed in the installer: it
+`shutil.move`s the binary without clearing the tamper `Everyone:(DENY)(DE)`, so it would fail
+on exactly the installs that have protection enabled.
+
+### VERIFY
+
+- Live: signed metadata fetched with the device's API key; verifier True for the pinned key,
+  False (with a logged warning) for another key.
+- Device: no `UPDATE_PENDING_FILE` yet (the update check runs on its own cadence, not on every
+  poll); `update_signing.pub` present, `update_verification: signature`.
+- `grep check_and_apply_update agent/*.py` → definition at `watchdog.py:127`, single call at
+  `:238`, nothing else.
+- `server/.env` is gitignored, so the signing configuration is local-only; no tracked change
+  this session.
+
+### Fog remaining
+
+- **The applier is missing** for service installs. Recommended fix: give the *service host*
+  the applier role — it already supervises the agent, it can stop it, replace the binary while
+  stopped and start it again, and it can verify the pinned Ed25519 signature with the same
+  rules the agent uses (failing closed on a missing or unreadable key). Shipping the watchdog
+  instead would re-introduce a second supervisor we deliberately removed.
+- **Whichever applier is used must unlock tamper protection** before replacing and let the
+  agent re-apply it — the S242 `unlock_for_upgrade` pattern.
+- **The CI secret still needs the same key** (`UPDATE_SIGNING_KEY`), which cannot be set from
+  this host.
+- D-117 (markdown/spec drift); firmware remains QEMU-only (I3).
+
+### Next session opening
+
+Give the service host the pending-update applier: on start (and on the supervisor loop),
+verify `UPDATE_PENDING_FILE` with the pinned key, unlock tamper protection, swap the binary,
+start the agent and let it re-apply protection — then prove it live by letting FRANKENSTEIN
+stage a signed update and watching the host apply it.
+
+---

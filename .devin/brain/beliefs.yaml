@@ -2168,3 +2168,34 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-098
+  statement: 'Update verification is proven end to end up to the point of applying, and the applying step
+    has no component on a service install. With the server configured to sign with the pinned key''s private
+    half (UPDATE_SIGNING_KEY=/home/cllin/.lockdown-secrets/update_signing.key, AGENT_LATEST_VERSION=1.0.1),
+    GET /api/agent/update returns update_available=True, latest_version 1.0.1, sha256 e4e5e2e9… and an
+    88-char base64 signature; agent.verify_update_signature() with the pinned public key returns True
+    and with a different key returns False, so the pin and the signer agree. But download_update() only
+    verifies and writes UPDATE_PENDING_FILE, and the sole consumer of that file is watchdog.check_and_apply_update()
+    (agent/watchdog.py:127, called only at :238) — the watchdog S226 decided not to install because the
+    Windows service plus SCM crash recovery covers restart. That decision was right for restarts and wrong
+    for updates: on a service install nothing applies a signed update. The applier that would be needed
+    also has the S242 defect — it shutil.move()s the binary without clearing the tamper Everyone:(DENY)(DE),
+    so it would fail on protected installs. Recommended fix: give the service host the applier role (it
+    already supervises the agent, can stop and restart it, and can verify the pinned Ed25519 signature
+    with fail-closed semantics), unlocking tamper protection before the swap and letting the agent re-apply
+    it afterwards.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'executed: signed metadata fetched with the device''s key (88-char signature); agent verifier
+    True for the pinned key, False for an unrelated key; check_and_apply_update defined at watchdog.py:127
+    and called only at :238; device has no pending update file'
+  source: server/src/routes/agent.js (GET /update signing block); agent/agent.py (verify_update_signature,
+    download_update); agent/watchdog.py (check_and_apply_update); live device config and API responses
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
