@@ -53,23 +53,26 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 230 — 2026-11-05 (the firmware harnesses, run for real)
+## Latest session: 231 — 2026-11-05 (the firmware harness proved banners, not an exchange)
 
 ### Fog cleared
 
-- **Whether the firmware works**: yes, in QEMU + swtpm, at the level the harnesses assert.
-  Every step of the boot-time verdict path passes, including TPM NV persistence across a
-  reboot.
-- **Why the harnesses had never been run**: they need QEMU/swtpm, which exist only inside
-  the `pbl-qemu` images. That is a documentation gap, not a missing capability.
+- **What the QEMU harness actually proves**: boot, platform-state read, policy parse, TPM NV
+  read, the suppressed-request path, decision, PCR extend, action, NV provisioning, HMAC
+  session, self-image measurement, lock screen, unprovisioned handling, and TPM NV
+  persistence across a reboot. It does **not** prove an online verdict exchange.
+- **What a real online test needs** (established by reading `PblApp.inf`): the firmware
+  trusts the UEFI variable `gEfiTlsCaCertificateGuid`, so a test CA requires **no rebuild** —
+  it needs the variable provisioned in the QEMU NVRAM, a `device_id` from `POST /v1/enroll`,
+  and a TLS verdict endpoint.
 
 ### Fog remaining
 
-- **Firmware against the live server** is untested and blocked by the TLS requirement above.
-- **PBL devices remain zero** (S229): only `POST /v1/enroll` populates that registry, and
-  firmware enrolment has never run against this deployment.
-- **Nothing here is hardware-verified** — QEMU + swtpm is one rung below real media on the
-  evidence ladder; I3 stays unsatisfied for these paths.
+- **The online verdict path has never been exercised** in any harness.
+- **`POST /v1/enroll` has never been exercised against this deployment**, so the PBL device
+  registry stays empty (S229).
+- **Not hardware-verified**: QEMU + swtpm is below real media, so I3 stays unsatisfied for
+  these paths.
 - D-117 (markdown/spec drift) untouched.
 
 ### Debt items closed
@@ -82,37 +85,36 @@
 
 ### Blockers
 
-- Firmware↔live-server testing needs an HTTPS endpoint the firmware trusts.
+- A real firmware↔server test needs the NVRAM CA variable + enrolment + TLS endpoint; none of
+  that is a code change to PblApp, but all of it is work.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback**: both harnesses were broken in ways a first run
-  exposes instantly and no amount of reading finds. Neither had been executed since the
-  fixes to its sibling, which is how the fix reached one file and not the other.
-- **Layer 2 — context provision**: nothing said the tests require the `pbl-qemu` image;
-  the README mentions QEMU + swtpm without pointing at the Docker path that makes it
-  runnable here.
+- **Layer 4 — verification feedback** (primary): the checks were written against strings that
+  print unconditionally, so they could not fail. A check that cannot fail is worse than no
+  check, because it produces PASS lines that get quoted in session records.
+- **Layer 1 — task specification**: "verified in QEMU" was never defined. The harness needed
+  to state which paths it covers and which it deliberately does not.
 
 ### VERIFY
 
-- Smoke: `=== Results: 17 PASS / 0 FAIL ===`
-- Persistence: `=== Results: 16 PASS / 0 FAIL ===`, artifact at
-  `/tmp/pbl-ci-persist/pbl-persistence-result.txt`
-- D-205: `[OK] Policy blob generated: 1303 bytes`; POST → `HTTP 200, 205 bytes`,
-  `COSE structure: list, elements=4`, `verdict map keys: [1..8]`,
-  `device_id echoed: True`, `nonce echoed: True`, `verdict value: 0`, `signature length: 64`
-- Commit: `219f2cb`.
+- Smoke: `=== Results: 19 PASS / 0 FAIL ===` with the two banner checks labelled and the two
+  behavioural checks asserting suppression and skipped verification.
+- Persistence: `=== Results: 18 PASS / 0 FAIL ===` including the four two-boot assertions.
+- Serial evidence quoted above.
+- Commit: `12e2f4a`.
 
 ### Session artifacts
 
-- Changed: `firmware/PblPkg/ci-harness-persistence.sh`, `firmware/PblPkg/test-d205.py`.
+- Changed: `firmware/PblPkg/ci-harness-docker.sh`,
+  `firmware/PblPkg/ci-harness-persistence.sh`.
 
 ### Next session opening
 
-If firmware↔server testing matters, the next real step is an HTTPS endpoint the firmware
-trusts (mint a CA, pin it into the PBL policy per D-132, serve `/v1/verdict` over TLS) so
-`POST /v1/enroll` and the verdict path can run against this deployment — that would fill the
-PBL device registry for the first time. Otherwise D-117 remains.
+Exercise the online path for real: provision `gEfiTlsCaCertificateGuid` in the QEMU NVRAM
+with a test CA, run a TLS verdict endpoint the firmware can reach (10.0.2.2), obtain a
+`device_id` via `POST /v1/enroll`, and assert `Online fetch succeeded` plus a verified
+verdict — the first time either would be true.
 
 ---
 

@@ -1814,3 +1814,30 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-086
+  statement: 'A harness check must be written against a marker that only prints when the behaviour happened.
+    The PBL QEMU harnesses asserted ''\''''[4/8] Fetching verdict''\'''' and ''\''''[5/8] Verifying verdict''\''''
+    — step banners printed unconditionally — so they reported PASS on a run where the firmware, being
+    unenrolled, printed ''\''''Verdict request suppressed: no device_id''\'''' and ''\''''No cached verdict
+    — denied-boot-with-local-unlock''\'''', then ''\''''Skipping verification for cached verdict''\''''.
+    The harness therefore never proved an online verdict exchange, and S230''\''''s claim that fetch/verify
+    were verified was wrong. The banner checks are now labelled as banners, the suppressed-request and
+    skipped-verification paths are asserted explicitly, and the reporting prints the verdict-related serial
+    lines instead of inferring success from an absent string (smoke 19 PASS, persistence 18 PASS). Established
+    for the next step: PblApp trusts the UEFI variable gEfiTlsCaCertificateGuid (PblApp.inf), so a test
+    CA needs no firmware rebuild — a real online test needs that variable provisioned in the QEMU NVRAM,
+    a device_id from POST /v1/enroll, and a TLS verdict endpoint reachable at the QEMU host address.'
+  domain: general
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'executed: both harnesses re-run (19 PASS smoke, 18 PASS persistence) with the suppressed-request
+    and skipped-verification paths asserted; serial output quoted; TLS anchor read from PblApp.inf'
+  source: firmware/PblPkg/ci-harness-docker.sh; firmware/PblPkg/ci-harness-persistence.sh; firmware/PblPkg/PblApp/PblApp.c;
+    firmware/PblPkg/PblApp/PblApp.inf
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

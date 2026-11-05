@@ -11216,3 +11216,111 @@ trusts (mint a CA, pin it into the PBL policy per D-132, serve `/v1/verdict` ove
 PBL device registry for the first time. Otherwise D-117 remains.
 
 ---
+
+---
+
+## Session 231 — 2026-11-05 (the firmware harness proved banners, not an exchange)
+
+### RULE-ZERO
+
+**Read**: `ci-harness-docker.sh` and `ci-harness-persistence.sh` check lists,
+`PblApp/PblApp.c` around steps 4 and 5, `PblApp.inf` (TLS trust anchor), and the serial
+output of an actual run.
+
+### FINDING — S230 overclaimed, and the harness made it easy
+
+The harness asserted `\[4/8\] Fetching verdict` and `\[5/8\] Verifying verdict` — step
+**banners**, printed whether or not anything happens. The serial log of the run says what
+actually happened:
+
+```
+[4/8] Fetching verdict...
+  [WARN] Verdict request suppressed: no device_id (C2 §1.3)
+  [WARN] No cached verdict — denied-boot-with-local-unlock
+[5/8] Verifying verdict...
+  [INFO] Skipping verification for cached verdict
+```
+
+In the unenrolled image the firmware **never contacts a server and never verifies a
+verdict** — correctly, because there is no `device_id`. S230's "verdict fetch/verify
+verified" was therefore wrong, and my first attempt to fix the reporting repeated the
+mistake in miniature: it printed *"online verdict fetch appears to have completed"* purely
+because the string `Online fetch failed` was absent.
+
+### IMPLEMENT
+
+- Banner checks renamed to `Verdict step banner (fetch)` / `(verify)`, with a comment that a
+  PASS there is not a functional claim.
+- The real behaviour is now asserted: `Verdict request suppressed without a device_id` and
+  `Verification skipped for the cached verdict`.
+- The `else` branch prints the verdict-related serial lines instead of claiming success.
+
+### RESULTS (honest, both re-run)
+
+| Harness | Result |
+|---|---|
+| `ci-harness-docker.sh` | **19 PASS / 0 FAIL** (was "17" with two vacuous checks) |
+| `ci-harness-persistence.sh` | **18 PASS / 0 FAIL** |
+
+### Fog cleared
+
+- **What the QEMU harness actually proves**: boot, platform-state read, policy parse, TPM NV
+  read, the suppressed-request path, decision, PCR extend, action, NV provisioning, HMAC
+  session, self-image measurement, lock screen, unprovisioned handling, and TPM NV
+  persistence across a reboot. It does **not** prove an online verdict exchange.
+- **What a real online test needs** (established by reading `PblApp.inf`): the firmware
+  trusts the UEFI variable `gEfiTlsCaCertificateGuid`, so a test CA requires **no rebuild** —
+  it needs the variable provisioned in the QEMU NVRAM, a `device_id` from `POST /v1/enroll`,
+  and a TLS verdict endpoint.
+
+### Fog remaining
+
+- **The online verdict path has never been exercised** in any harness.
+- **`POST /v1/enroll` has never been exercised against this deployment**, so the PBL device
+  registry stays empty (S229).
+- **Not hardware-verified**: QEMU + swtpm is below real media, so I3 stays unsatisfied for
+  these paths.
+- D-117 (markdown/spec drift) untouched.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- A real firmware↔server test needs the NVRAM CA variable + enrolment + TLS endpoint; none of
+  that is a code change to PblApp, but all of it is work.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the checks were written against strings that
+  print unconditionally, so they could not fail. A check that cannot fail is worse than no
+  check, because it produces PASS lines that get quoted in session records.
+- **Layer 1 — task specification**: "verified in QEMU" was never defined. The harness needed
+  to state which paths it covers and which it deliberately does not.
+
+### VERIFY
+
+- Smoke: `=== Results: 19 PASS / 0 FAIL ===` with the two banner checks labelled and the two
+  behavioural checks asserting suppression and skipped verification.
+- Persistence: `=== Results: 18 PASS / 0 FAIL ===` including the four two-boot assertions.
+- Serial evidence quoted above.
+- Commit: `12e2f4a`.
+
+### Session artifacts
+
+- Changed: `firmware/PblPkg/ci-harness-docker.sh`,
+  `firmware/PblPkg/ci-harness-persistence.sh`.
+
+### Next session opening
+
+Exercise the online path for real: provision `gEfiTlsCaCertificateGuid` in the QEMU NVRAM
+with a test CA, run a TLS verdict endpoint the firmware can reach (10.0.2.2), obtain a
+`device_id` via `POST /v1/enroll`, and assert `Online fetch succeeded` plus a verified
+verdict — the first time either would be true.
+
+---

@@ -1,6 +1,6 @@
 # Memory Index
 
-Last rebuilt: 2026-11-05 13:10:30
+Last rebuilt: 2026-11-05 13:32:15
 Active memories: 1024 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
