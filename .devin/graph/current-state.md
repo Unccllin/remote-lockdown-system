@@ -53,63 +53,33 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 240 — 2026-11-05 (the chain is retrievable; the policy now comes from the server alone)
-
-### Fog cleared
-
-- **The verified-verdict procedure is now reproducible from the deployment**: kid, SPKI and
-  chain all come from authenticated admin endpoints. S239's hand-assembled chain is gone.
-- **Chain integrity is checkable**: the digest is returned with the bytes.
-
-### Fog remaining
-
-- **The chain itself is still a throwaway test root** minted during S239. The endpoint stores
-  and serves it, but a real deployment must mint a verdict-signing chain whose root it keeps —
-  and nothing generates that yet.
-- **`POST /v1/enroll` accepts unverified `ek_cert`/`ak_public`** (S238) — threat-model question.
-- QEMU/emulation only; I3 unsatisfied. D-117 untouched.
-
-### Debt items closed
-
-- The S239 "GET cert-chain must return the bytes" item.
-
-### Debt items still open
-
-- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
-
-### Blockers
-
-- None. Producing a *production* chain (key + certificates, root retained) is the next piece.
-
-### Failure attribution
-
-- **Layer 1 — task specification** (primary): S239 was allowed to call itself done with an
-  input that the product could not produce. "Verified" should mean "reproducible by the
-  operator", and the difference is exactly this endpoint.
-- **Layer 4 — verification feedback**: the round-trip test (POST the bytes, GET the same bytes)
-  is the assertion that would have prevented the gap, and it now exists.
+## Latest session: 241 — 2026-11-05 ("SHA-256 only — unauthenticated": three causes, one line)
 
 ### VERIFY
 
-- `POST /v1/admin/cert-chain` → `{"stored":true,"cert_count":2,"cert_sizes":[418,395]}`.
-- `GET /v1/admin/cert-chain` → `provisioned=true`, `chain=813 bytes`,
-  `chain_sha256=0afc396202a52455…`, digest matches the returned bytes.
-- Firmware run with a policy generated only from those endpoint values: signature verified,
-  verdict decoded (`verdict=0 policy_version=1`), `[OK] Verdict verified`; harness six PASS.
-- Suites: server **802** (48 suites; +2), eslint clean.
-- Commit: `455a44d`.
+- Live: `update_verification = signature`, `last_checkin 2026-11-05 12:57:55`, pinned key
+  readable at `C:\ProgramData\LockdownAgent\update_signing.pub` (113 bytes, PEM Ed25519).
+- Before: `update_verification = sha256-only` with config naming `C:\Users\user\…` and the
+  installed path absent.
+- Suites: agent **820** (+1), server 802, dashboard 225.
 
-### Session artifacts
+### Fog remaining
 
-- Changed: `server/src/routes/pbl.js`, `server/tests/pblVerdictPolicyEnroll.test.js`.
+- **Pinning changes behaviour**: the device now *refuses unsigned updates*. Release metadata
+  must be signed with `update_signing.key` (CI secret `UPDATE_SIGNING_KEY`) or no update will
+  apply — correct posture, but the signing step has to exist in the pipeline.
+- **Upgrading a tamper-protected install is manual** (takeown/grant, or server-authorized
+  uninstall). The installer should own that path.
+- **The private key currently lives on this host** at `agent/dist/update_signing.key`
+  (gitignored, mode 600). Production should hold it in CI secrets and keep no copy here.
+- D-117 untouched; firmware remains QEMU-only (I3).
 
 ### Next session opening
 
-Mint a real verdict-signing chain instead of the throwaway root: generate the key pair,
-issue leaf + root certificates, store them through `/v1/admin/cert-chain`, and make the key
-that signs verdicts the one whose leaf is in that chain — so a deployment can be pinned by an
-operator without any hand-made artefact. After that, real attestation at enrolment is the only
-firmware item left.
+Give the installer a legitimate upgrade path over tamper protection (server-authorized
+uninstall or an explicit unlock that re-applies protection afterwards), and wire
+`update_signing.key` into the release pipeline so the updates this pin now *demands* are
+actually signed.
 
 ---
 

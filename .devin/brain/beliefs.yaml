@@ -2100,3 +2100,37 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-096
+  statement: 'An agent that reports update_verification ''sha256-only'' has no pinned update key, so the
+    only check on an update is the hash served beside it — a hash from the same origin proves nothing
+    about who produced the bytes. On FRANKENSTEIN that state had three separate causes. First, run_headless()
+    passed staged_update_public_key() to write_config(), so config named the installer''s staging path
+    (C:\Users\user\update_signing.pub) while nothing copied the key into the install directory; because
+    the agent fails closed on a configured-but-unreadable key, that pin would have refused every future
+    update. The GUI path already used install_update_public_key(), which copies the key into INSTALL_DIR
+    and returns that path; run_headless now does the same. Second, the installed agent binary predated
+    the update_public_key plumbing — the staged source computed mode ''signature'' for the same config
+    while the device reported ''sha256-only'' — so it had to be rebuilt. Third, tamper protection (bundled
+    since S225) applies Everyone:(DENY)(DE) to lockdown-agent.exe and config.json with Administrators
+    at (RX), so a legitimate reinstall fails with Access is denied until ownership is taken and write
+    granted; removing the DENY alone is insufficient. After provisioning (scripts/generate-update-keys.sh
+    --out agent/dist with the private key mode 600 and gitignored, UPDATE_PUBLIC_KEY_PEM in server/.env,
+    update_signing.pub staged beside the installer), a generated installer bakes update_public_key C:\ProgramData\LockdownAgent\update_signing.pub,
+    and the device now reports update_verification ''signature''. Consequence to keep in mind: pinning
+    means unsigned updates are refused, so the release path must sign with update_signing.key.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live: before sha256-only with config naming C:\Users\user\… and key absent; after provisioning
+    + headless fix + agent rebuild + ACL unlock → signature, key readable 113-byte PEM, check-in 12:57:55;
+    agent 820 / server 802 / dashboard 225 tests'
+  source: agent/installer_gui.py (run_headless, install_update_public_key); agent/agent.py (update_verification_mode);
+    server/src/routes/installer.js (resolveUpdatePublicKey); server/src/routes/agent.js (normalizeUpdateVerification,
+    updateDeviceCheckin); live device ACLs, config and DB state
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

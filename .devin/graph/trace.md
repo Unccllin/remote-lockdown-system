@@ -12249,3 +12249,84 @@ operator without any hand-made artefact. After that, real attestation at enrolme
 firmware item left.
 
 ---
+
+---
+
+## Session 241 — 2026-11-05 ("SHA-256 only — unauthenticated": three causes, one line)
+
+### RULE-ZERO
+
+**Read**: `scripts/generate-update-keys.sh`, `server/src/routes/installer.js`
+(`resolveUpdatePublicKey`, `buildDeviceConfig`), `agent/installer_gui.py`
+(`staged_update_public_key`, `install_update_public_key`, `run_headless`),
+`agent/agent.py` (`update_verification_mode`, `_get_update_public_key`, the check-in body),
+`server/src/routes/agent.js` (`normalizeUpdateVerification`, `updateDeviceCheckin`).
+
+**What the message means**: `update_verification = sha256-only` is the agent's own report
+(C1 §5 / B-006): it holds no pinned update key, so the only check on an update is the
+SHA-256 served beside the binary — a hash from the same origin as the bytes, which proves
+nothing about who produced them.
+
+### CAUSE 1 — my bug: the pin named the staging path (S214)
+
+`run_headless()` passed `staged_update_public_key()` to `write_config()`, so the config named
+`C:\Users\user\update_signing.pub` — where the *installer* found the key — while nothing copied
+it into the install directory. The agent fails closed on a configured-but-unreadable key, so
+this pin would have **refused every future update**. The GUI path already used
+`install_update_public_key()` (copy into `INSTALL_DIR`, return that path); `run_headless` now
+does the same. Test added: the headless path must name the installed path and must not contain
+"Users".
+
+### CAUSE 2 — the installed binary was stale
+
+With the config fixed, the device still reported `sha256-only`. The staged source, run against
+the same config on the device, computed `mode: signature`; the installed binary did not. It
+predated the `update_public_key` plumbing. Rebuilt from current source (15 363 231 bytes) and
+reinstalled.
+
+### CAUSE 3 — tamper protection blocks its own upgrade
+
+The reinstall failed twice with `Access is denied`. `icacls` showed why: tamper protection
+(bundled since S225) had applied `Everyone:(DENY)(DE)` to `lockdown-agent.exe` and
+`config.json`, with `BUILTIN\Administrators` at `(RX)`. Removing the DENY was not enough —
+Administrators had no write ACE — so the upgrade needed `takeown` plus an explicit grant.
+
+The mechanism is doing exactly what it says: a local attacker cannot replace the agent. The
+gap is that the installer's own reinstall path cannot replace the files it protected, so a
+legitimate upgrade needs either the server-authorized uninstall or an explicit unlock step.
+
+### DONE
+
+- Provisioned for real: `scripts/generate-update-keys.sh --out agent/dist` (private key mode
+  600; both files gitignored), `UPDATE_PUBLIC_KEY_PEM` in `server/.env`,
+  `update_signing.pub` staged beside the installer. A generated installer now bakes
+  `update_public_key: C:\ProgramData\LockdownAgent\update_signing.pub`.
+- Fixed the headless pin path (+1 test), rebuilt and reinstalled the agent.
+
+### VERIFY
+
+- Live: `update_verification = signature`, `last_checkin 2026-11-05 12:57:55`, pinned key
+  readable at `C:\ProgramData\LockdownAgent\update_signing.pub` (113 bytes, PEM Ed25519).
+- Before: `update_verification = sha256-only` with config naming `C:\Users\user\…` and the
+  installed path absent.
+- Suites: agent **820** (+1), server 802, dashboard 225.
+
+### Fog remaining
+
+- **Pinning changes behaviour**: the device now *refuses unsigned updates*. Release metadata
+  must be signed with `update_signing.key` (CI secret `UPDATE_SIGNING_KEY`) or no update will
+  apply — correct posture, but the signing step has to exist in the pipeline.
+- **Upgrading a tamper-protected install is manual** (takeown/grant, or server-authorized
+  uninstall). The installer should own that path.
+- **The private key currently lives on this host** at `agent/dist/update_signing.key`
+  (gitignored, mode 600). Production should hold it in CI secrets and keep no copy here.
+- D-117 untouched; firmware remains QEMU-only (I3).
+
+### Next session opening
+
+Give the installer a legitimate upgrade path over tamper protection (server-authorized
+uninstall or an explicit unlock that re-applies protection afterwards), and wire
+`update_signing.key` into the release pipeline so the updates this pin now *demands* are
+actually signed.
+
+---
