@@ -386,8 +386,31 @@ check "PBL banner appears" "PBL — Pre-Boot Lock"
 check "Platform state step" "\[1/8\] Collecting platform state"
 check "Policy parse step" "\[2/8\] Parsing policy blob"
 check "TPM NV read step" "\[3/8\] Reading TPM NV state"
-check "Verdict fetch step" "\[4/8\] Fetching verdict"
-check "Verdict verify step" "\[5/8\] Verifying verdict"
+# The banner proves the firmware *attempted* a fetch, not that one succeeded. PblApp
+# prints "[INFO] Online fetch failed: ... falling back to cache" and carries on to the
+# verify step, so a bare banner check would report PASS on a machine that never reached
+# the network at all (S231).
+# These two are BANNER checks and are named so. In an unenrolled image the firmware
+# suppresses the verdict request ("no device_id") and skips verification of the cached
+# verdict, so a PASS here must never be read as "the firmware reached a server and verified
+# a verdict" (S231). The functional assertions are the suppressed/skipped ones below.
+check "Verdict step banner (fetch)" "\[4/8\] Fetching verdict"
+check "Verdict step banner (verify)" "\[5/8\] Verifying verdict"
+
+# What the unenrolled image actually does, asserted explicitly instead of implied.
+check "Verdict request suppressed without a device_id" "Verdict request suppressed: no device_id"
+check "Verification skipped for the cached verdict" "Skipping verification for cached verdict"
+
+# Say plainly which path ran. Without a verdict server configured the online fetch
+# cannot succeed, so the cache fallback is what is actually under test here.
+if grep -q "Online fetch failed" "${SERIAL_LOG}" 2>/dev/null; then
+  echo "  [INFO] no verdict server reached — exercising the cache fallback path"
+  check "Cache fallback taken" "falling back to cache"
+else
+  # Do not claim success from the absence of one string; show what the firmware said.
+  echo "  [INFO] no 'Online fetch failed' line; verdict-related serial output:"
+  grep -aiE "fetching verdict|online fetch|falling back|verdict" "${SERIAL_LOG}" 2>/dev/null | head -5 | sed 's/^/    /'
+fi
 check "Decision step" "\[6/8\] Evaluating decision"
 check "PCR extend step" "\[7/8\] Extending PCR 12/13"
 check "Decision action step" "\[8/8\] Decision:"
