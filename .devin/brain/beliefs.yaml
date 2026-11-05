@@ -2071,3 +2071,32 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-095
+  statement: 'A verification procedure is only reproducible if the deployment can hand out every input
+    it needs. S239 proved the firmware verifies this server''s verdict, but only with a certificate chain
+    assembled by hand from the signing key''s PKCS#8, because GET /v1/admin/cert-chain reported counts
+    and sizes while keeping the bytes closed — and a firmware policy carries the chain in key 77 (D-205
+    fails closed without it). The endpoint now returns chain (base64 DER) plus chain_sha256, with tests
+    for provisioned:false and a POST->GET round trip returning exactly the stored bytes with a matching
+    digest. Verified end to end: GET /v1/admin/key-info (verdict kid c19157d85a5ff886…, 91-byte SPKI)
+    plus GET /v1/admin/cert-chain (813 bytes, 2 certs 418+395, digest matches) were the only inputs used
+    to generate a policy, and the firmware then logged ''[OK] Verdict signature verified (ES256)'', ''[OK]
+    Verdict decoded: verdict=0 policy_version=1'', ''[OK] Verdict verified'' with six harness PASS lines.
+    The chain''s root remains a throwaway test root minted in S239: storing and serving it is not the
+    same as being able to produce it, which is the next piece.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live: cert-chain stored 2 certs (418+395), GET returned 813 bytes with matching sha256;
+    a policy generated only from key-info + cert-chain produced a firmware run with signature verified
+    and six harness PASS; server 802 tests'
+  source: server/src/routes/pbl.js (GET/POST /admin/cert-chain); server/tests/pblVerdictPolicyEnroll.test.js;
+    firmware/PblPkg/d131-wire-capture.py (--verdict-chain); live endpoint responses and firmware serial
+    log
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

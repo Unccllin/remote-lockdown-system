@@ -53,28 +53,25 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 239 — 2026-11-05 (the firmware verifies a verdict signed by this deployment)
+## Latest session: 240 — 2026-11-05 (the chain is retrievable; the policy now comes from the server alone)
 
 ### Fog cleared
 
-- **Firmware verifies this deployment's verdicts**: proven, with the signature check asserted
-  rather than inferred.
-- **Why the first attempt was rejected**: not the key, not TLS — the missing cert chain.
-- **What an operator needs to pin this server**: kid + SPKI from key-info (S237) and a chain
-  whose leaf carries that SPKI.
+- **The verified-verdict procedure is now reproducible from the deployment**: kid, SPKI and
+  chain all come from authenticated admin endpoints. S239's hand-assembled chain is gone.
+- **Chain integrity is checkable**: the digest is returned with the bytes.
 
 ### Fog remaining
 
-- **The chain's root is a throwaway test root** minted here. A deployment needs its real
-  verdict-signing chain provisioned (the `/v1/admin/cert-chain` endpoint stores one but does
-  not return its bytes, so nothing can currently build a policy from it — recorded).
-- **`POST /v1/enroll` still accepts unverified `ek_cert`/`ak_public`** (S238 observation).
+- **The chain itself is still a throwaway test root** minted during S239. The endpoint stores
+  and serves it, but a real deployment must mint a verdict-signing chain whose root it keeps —
+  and nothing generates that yet.
+- **`POST /v1/enroll` accepts unverified `ek_cert`/`ak_public`** (S238) — threat-model question.
 - QEMU/emulation only; I3 unsatisfied. D-117 untouched.
 
 ### Debt items closed
 
-- The S236 "attestation enrolment" blocker for a verified verdict is resolved *for testing*
-  (a row exists and firmware verifies against it); real attestation remains a threat-model item.
+- The S239 "GET cert-chain must return the bytes" item.
 
 ### Debt items still open
 
@@ -82,36 +79,37 @@
 
 ### Blockers
 
-- None for the demonstration. Production needs a real signer chain and verified enrolment.
+- None. Producing a *production* chain (key + certificates, root retained) is the next piece.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the first external run reported "verdict
-  decoded" as a PASS while the firmware had *rejected* the verdict one line earlier. The check
-  now asserts the verification itself, which is the only line that means anything here.
-- **Layer 2 — context provision**: D-205's fail-closed chain requirement was documented in the
-  firmware but not in the policy generator, so the generator happily emitted a chainless policy
-  for an external signer.
+- **Layer 1 — task specification** (primary): S239 was allowed to call itself done with an
+  input that the product could not produce. "Verified" should mean "reproducible by the
+  operator", and the difference is exactly this endpoint.
+- **Layer 4 — verification feedback**: the round-trip test (POST the bytes, GET the same bytes)
+  is the assertion that would have prevented the gap, and it now exists.
 
 ### VERIFY
 
-- Firmware serial: the four `[OK]` lines above; harness: six `[PASS]` lines; proxy: 149-byte
-  POST answered with 210 bytes.
-- Pinned kid `c19157d8…` matches `GET /v1/admin/key-info`; chain 813 bytes with the server's
-  SPKI in the leaf.
-- Commit: `d7d4949`.
+- `POST /v1/admin/cert-chain` → `{"stored":true,"cert_count":2,"cert_sizes":[418,395]}`.
+- `GET /v1/admin/cert-chain` → `provisioned=true`, `chain=813 bytes`,
+  `chain_sha256=0afc396202a52455…`, digest matches the returned bytes.
+- Firmware run with a policy generated only from those endpoint values: signature verified,
+  verdict decoded (`verdict=0 policy_version=1`), `[OK] Verdict verified`; harness six PASS.
+- Suites: server **802** (48 suites; +2), eslint clean.
+- Commit: `455a44d`.
 
 ### Session artifacts
 
-- Changed: `firmware/PblPkg/d131-wire-capture.py`,
-  `firmware/PblPkg/test-d131-wire-harness.sh`.
+- Changed: `server/src/routes/pbl.js`, `server/tests/pblVerdictPolicyEnroll.test.js`.
 
 ### Next session opening
 
-Make the chain a first-class deployment artefact: have `GET /v1/admin/cert-chain` return the
-stored chain bytes so a policy can be built from the server alone, and mint a real
-verdict-signing chain instead of the throwaway root used here. After that, the only remaining
-firmware item is real attestation at enrolment.
+Mint a real verdict-signing chain instead of the throwaway root: generate the key pair,
+issue leaf + root certificates, store them through `/v1/admin/cert-chain`, and make the key
+that signs verdicts the one whose leaf is in that chain — so a deployment can be pinned by an
+operator without any hand-made artefact. After that, real attestation at enrolment is the only
+firmware item left.
 
 ---
 

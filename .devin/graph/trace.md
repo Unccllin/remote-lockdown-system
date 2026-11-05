@@ -12156,3 +12156,96 @@ verdict-signing chain instead of the throwaway root used here. After that, the o
 firmware item is real attestation at enrolment.
 
 ---
+
+---
+
+## Session 240 — 2026-11-05 (the chain is retrievable; the policy now comes from the server alone)
+
+### RULE-ZERO
+
+**Read**: `server/src/routes/pbl.js` (`POST/GET /admin/cert-chain`, `splitDerCerts`),
+`d131-wire-capture.py` (`--verdict-chain`), and S239's outcome — a verified run whose chain
+had been assembled by hand from the signing key's PKCS#8.
+
+**Why this mattered**: S239 proved the firmware can verify *this* server's verdict, but the
+input it needed — the signer's certificate chain — was not obtainable from the server. The
+endpoint stored a chain and reported only its counts and sizes. A demonstration that needs an
+artefact the deployment cannot hand out is not a repeatable procedure.
+
+### IMPLEMENT
+
+- `GET /v1/admin/cert-chain` now returns `chain` (base64 DER) and `chain_sha256` alongside
+  `cert_count` / `cert_sizes`, so the stored chain can be used directly and its integrity
+  checked against the bytes.
+- Tests: +2 — `provisioned: false` with nothing stored; and a POST→GET round trip that returns
+  exactly the stored bytes with a digest matching them.
+
+### RESULT — built from the server's own endpoints, nothing hand-made
+
+```
+GET /v1/admin/key-info    -> verdict kid c19157d85a5ff886…, 91-byte SPKI
+GET /v1/admin/cert-chain  -> 813 bytes, 2 certs (418 + 395), digest matches
+policy generated from those alone
+firmware: [OK] Verdict signature verified (ES256)
+          [OK] Verdict decoded: verdict=0 policy_version=1
+          [OK] Verdict verified
+harness:  six PASS including "verdict signature verified (external signer)"
+```
+
+### Fog cleared
+
+- **The verified-verdict procedure is now reproducible from the deployment**: kid, SPKI and
+  chain all come from authenticated admin endpoints. S239's hand-assembled chain is gone.
+- **Chain integrity is checkable**: the digest is returned with the bytes.
+
+### Fog remaining
+
+- **The chain itself is still a throwaway test root** minted during S239. The endpoint stores
+  and serves it, but a real deployment must mint a verdict-signing chain whose root it keeps —
+  and nothing generates that yet.
+- **`POST /v1/enroll` accepts unverified `ek_cert`/`ak_public`** (S238) — threat-model question.
+- QEMU/emulation only; I3 unsatisfied. D-117 untouched.
+
+### Debt items closed
+
+- The S239 "GET cert-chain must return the bytes" item.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None. Producing a *production* chain (key + certificates, root retained) is the next piece.
+
+### Failure attribution
+
+- **Layer 1 — task specification** (primary): S239 was allowed to call itself done with an
+  input that the product could not produce. "Verified" should mean "reproducible by the
+  operator", and the difference is exactly this endpoint.
+- **Layer 4 — verification feedback**: the round-trip test (POST the bytes, GET the same bytes)
+  is the assertion that would have prevented the gap, and it now exists.
+
+### VERIFY
+
+- `POST /v1/admin/cert-chain` → `{"stored":true,"cert_count":2,"cert_sizes":[418,395]}`.
+- `GET /v1/admin/cert-chain` → `provisioned=true`, `chain=813 bytes`,
+  `chain_sha256=0afc396202a52455…`, digest matches the returned bytes.
+- Firmware run with a policy generated only from those endpoint values: signature verified,
+  verdict decoded (`verdict=0 policy_version=1`), `[OK] Verdict verified`; harness six PASS.
+- Suites: server **802** (48 suites; +2), eslint clean.
+- Commit: `455a44d`.
+
+### Session artifacts
+
+- Changed: `server/src/routes/pbl.js`, `server/tests/pblVerdictPolicyEnroll.test.js`.
+
+### Next session opening
+
+Mint a real verdict-signing chain instead of the throwaway root: generate the key pair,
+issue leaf + root certificates, store them through `/v1/admin/cert-chain`, and make the key
+that signs verdicts the one whose leaf is in that chain — so a deployment can be pinned by an
+operator without any hand-made artefact. After that, real attestation at enrolment is the only
+firmware item left.
+
+---
