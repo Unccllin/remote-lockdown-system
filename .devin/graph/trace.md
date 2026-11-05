@@ -11106,3 +11106,113 @@ not, say so on the page ("the PBL programme is not enabled on this server") so t
 registry stops looking like a fault. D-117 remains the only other open item.
 
 ---
+
+---
+
+## Session 230 — 2026-11-05 (the firmware harnesses, run for real)
+
+### RULE-ZERO
+
+**Read**: `firmware/PblPkg/README.md` (test section), `ci-harness-docker.sh`,
+`ci-harness-persistence.sh`, `test-d205.py`, `firmware/Dockerfile.qemu`, and
+`PblApp/HttpsClient.c` (what the firmware accepts as a URI).
+
+**Prerequisites already on this host**: QEMU/swtpm are *not* installed natively, but the
+`pbl-qemu` images are built (including `pbl-qemu:latest`, `:d131`, `:sb`), Docker 29.1.3
+works, and the custom OVMF build exists at
+`~/.local/src/edk2/Build/OvmfX64/RELEASE_GCC/FV`.
+
+### RESULTS (all real runs)
+
+| Harness | Result |
+|---|---|
+| `ci-harness-docker.sh --timeout 60` | **17 PASS / 0 FAIL** |
+| `ci-harness-persistence.sh --timeout 60` | **16 PASS / 0 FAIL** (after a fix) |
+| `test-d205.py --generate-keys --generate-policy` | policy blob **1303 bytes**, ES256-signing |
+| `test-d205.py --serve` + real CBOR POST | **200**, COSE_Sign1, nonce echoed, verdict 0, 64-byte sig |
+
+The smoke harness proves the firmware banner, platform-state read, policy parse, TPM NV
+read, verdict fetch and verify, decision, PCR extend, action, NV provisioning, HMAC
+session, self-image measurement, loaded-image digest, lock screen, unprovisioned detection,
+verdict-request suppression and the self-image hash match.
+The persistence harness adds the two-boot assertions: *Boot 1: no cached state*, *Boot 1:
+lock state cached*, *Boot 2: cached verdict used*, *Boot 2: lock state re-cached*.
+
+### BUGS FIXED (both found by running, not by reading)
+
+1. **`ci-harness-persistence.sh` died mid-run**: `TIMEOUT="${1:-45}"` took the flag as the
+   value, so the embedded Python emitted `if elapsed > --timeout:` and raised
+   `NameError: name 'timeout' is not defined`. `ci-harness-docker.sh` had already been
+   fixed for exactly this; its sibling had not. Now parses `45`, `--timeout 45` and
+   `--timeout=45` with validation.
+2. **`test-d205.py` silently skipped work**: the modes were an `if/elif` chain, so
+   `--generate-keys --generate-policy PATH` did only the first thing — no policy blob, no
+   complaint. The branches are sequential now.
+
+### CONSTRAINT (recorded, not worked around)
+
+`PblApp/HttpsClient.c` rejects `http://` in release builds (C3 §4: "Plaintext fallback:
+never"), so the firmware **cannot** be pointed at this deployment's `http://…:3001` to
+exercise `/v1/verdict` live. Doing that needs HTTPS plus the pinned CA — the D-132 design —
+which is a real piece of work, not a flag.
+
+### Fog cleared
+
+- **Whether the firmware works**: yes, in QEMU + swtpm, at the level the harnesses assert.
+  Every step of the boot-time verdict path passes, including TPM NV persistence across a
+  reboot.
+- **Why the harnesses had never been run**: they need QEMU/swtpm, which exist only inside
+  the `pbl-qemu` images. That is a documentation gap, not a missing capability.
+
+### Fog remaining
+
+- **Firmware against the live server** is untested and blocked by the TLS requirement above.
+- **PBL devices remain zero** (S229): only `POST /v1/enroll` populates that registry, and
+  firmware enrolment has never run against this deployment.
+- **Nothing here is hardware-verified** — QEMU + swtpm is one rung below real media on the
+  evidence ladder; I3 stays unsatisfied for these paths.
+- D-117 (markdown/spec drift) untouched.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- Firmware↔live-server testing needs an HTTPS endpoint the firmware trusts.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback**: both harnesses were broken in ways a first run
+  exposes instantly and no amount of reading finds. Neither had been executed since the
+  fixes to its sibling, which is how the fix reached one file and not the other.
+- **Layer 2 — context provision**: nothing said the tests require the `pbl-qemu` image;
+  the README mentions QEMU + swtpm without pointing at the Docker path that makes it
+  runnable here.
+
+### VERIFY
+
+- Smoke: `=== Results: 17 PASS / 0 FAIL ===`
+- Persistence: `=== Results: 16 PASS / 0 FAIL ===`, artifact at
+  `/tmp/pbl-ci-persist/pbl-persistence-result.txt`
+- D-205: `[OK] Policy blob generated: 1303 bytes`; POST → `HTTP 200, 205 bytes`,
+  `COSE structure: list, elements=4`, `verdict map keys: [1..8]`,
+  `device_id echoed: True`, `nonce echoed: True`, `verdict value: 0`, `signature length: 64`
+- Commit: `219f2cb`.
+
+### Session artifacts
+
+- Changed: `firmware/PblPkg/ci-harness-persistence.sh`, `firmware/PblPkg/test-d205.py`.
+
+### Next session opening
+
+If firmware↔server testing matters, the next real step is an HTTPS endpoint the firmware
+trusts (mint a CA, pin it into the PBL policy per D-132, serve `/v1/verdict` over TLS) so
+`POST /v1/enroll` and the verdict path can run against this deployment — that would fill the
+PBL device registry for the first time. Otherwise D-117 remains.
+
+---

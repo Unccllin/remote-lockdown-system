@@ -1783,3 +1783,34 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-085
+  statement: 'The PBL firmware is verified in QEMU + swtpm but only through harnesses that had two real
+    bugs. ci-harness-docker.sh reports 17 PASS / 0 FAIL (banner, platform state, policy parse, TPM NV
+    read, verdict fetch/verify, decision, PCR extend, action, NV provisioning, HMAC session, self-image
+    measured, loaded digest, lock screen, unprovisioned detection, verdict-request suppression, self-image
+    hash match) and ci-harness-persistence.sh reports 16 PASS / 0 FAIL including the two-boot assertions
+    (no cached state on boot 1, lock state cached, cached verdict used on boot 2, lock state re-cached)
+    -- but only after fixing its TIMEOUT="${1:-45}" parsing, which took the flag as the value and made
+    the embedded Python raise NameError on ''timeout''; ci-harness-docker.sh had already been fixed for
+    the identical bug. test-d205.py generated a 1303-byte ES256 policy blob only after its if/elif mode
+    chain was made sequential (''--generate-keys --generate-policy PATH'' silently did one thing), and
+    its mock verdict server answers a real CBOR POST with a COSE_Sign1 whose device_id and nonce are echoed,
+    verdict 0, 64-byte signature. Constraint: PblApp/HttpsClient.c rejects plaintext http:// in release
+    builds (C3 section 4), so the firmware cannot be pointed at this deployment''s http://192.168.1.43:3001;
+    live-server firmware testing requires HTTPS plus the pinned CA (D-132). QEMU + swtpm is below real
+    media on the evidence ladder, so these paths are not hardware-verified.'
+  domain: general
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'executed: pbl-qemu docker harnesses against the custom OVMF build (17 PASS smoke, 16 PASS
+    persistence after the timeout fix), test-d205 policy blob 1303 bytes and a live CBOR POST returning
+    COSE_Sign1 with echoed nonce'
+  source: firmware/PblPkg/ci-harness-docker.sh; firmware/PblPkg/ci-harness-persistence.sh; firmware/PblPkg/test-d205.py;
+    firmware/PblPkg/PblApp/HttpsClient.c; firmware/PblPkg/README.md
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
