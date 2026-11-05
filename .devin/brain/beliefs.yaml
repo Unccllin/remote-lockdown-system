@@ -1701,3 +1701,30 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-082
+  statement: 'A frozen PyInstaller installer needs service_host.py beside it as a bundled data file: service_installer._copy_service_host()
+    copies that file into the install directory to register the Windows service, and a frozen installer
+    has nothing next to it, so the copy fails and the install reports success without a service — a silent
+    degradation. Both installer.spec and installer_gui.spec now list (''service_host.py'', ''.'') in datas.
+    With lockdown-installer.exe built on the target from installer.spec (14,319,435 bytes) and staged
+    in the gitignored agent/dist/, the three routes blocked since S209 now work: the availability probe
+    reports installer_available/nsis_available/windows_installer_ready all true with no reason, the per-device
+    Windows ZIP returns 200 with eight entries including lockdown-installer.exe, lockdown-agent.exe and
+    lockdown-watchdog.exe, and /nsis returns a 36 MB PE32 GUI executable because makensis compiles with
+    the staged binary. Also: _install_dir() must not fall back to the literal ''C:\ProgramData'' off Windows
+    — a test run created a directory with that name inside agent/dist/, so it now uses a temp directory
+    unless %PROGRAMDATA% is set or the host is Windows.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live: availability probe all-true, Windows ZIP 200 with 8 entries incl lockdown-installer.exe,
+    /nsis 200 PE32 GUI; agent 819 tests; ruff clean'
+  source: agent/installer.spec; agent/installer_gui.spec; agent/service_installer.py _install_dir/_copy_service_host;
+    live /api/installer responses on http://localhost:3001
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

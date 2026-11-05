@@ -10791,3 +10791,100 @@ D-117 (markdown/spec drift). Pick one and finish it; everything else is document
 environmental (no TPM) or maintenance (port-proxy after a WSL restart).
 
 ---
+
+---
+
+## Session 227 — 2026-11-05 (S209 closed: the Windows installer routes work)
+
+### RULE-ZERO
+
+**Read**: `agent/installer.spec` and `agent/installer_gui.spec` (hidden imports and data
+files), `agent/installer.py`, `agent/service_installer.py` (`_copy_service_host`,
+`_install_dir`), the installer routes in `server/src/routes/installer.js`, and the live
+availability probe.
+
+**Starting point**: `lockdown-installer.exe` had never been staged, so three routes
+answered 503 since the start of this thread — the per-device Windows ZIP, the one-click
+NSIS build, and the dashboard's Windows installer buttons.
+
+### IMPLEMENT
+
+- Built the artefact on the target from the existing spec: PyInstaller
+  `installer.spec` → `dist/lockdown-installer.exe`, **14 319 435 bytes**. Staged into
+  `agent/dist/`, which is gitignored — the server serves binaries from disk, so no 36 MB
+  blob enters the repository.
+- **`installer.spec` and `installer_gui.spec` now bundle `service_host.py` as a data
+  file.** `service_installer._copy_service_host()` copies it beside the agent to register
+  the service, and a frozen installer has no such file next to it — a *silent* failure,
+  because that copy is best-effort. Without this fix a frozen installer would install a
+  config and then claim success with no service.
+- **`_install_dir()` no longer falls back to the literal string `C:\ProgramData` off
+  Windows.** A test run had created a directory actually named `C:\ProgramData` inside
+  `agent/dist/`; it now uses a temp directory unless `%PROGRAMDATA%` is set or the host is
+  Windows.
+
+### Fog cleared
+
+- **Why the Windows installer routes 503'd**: the artefact was missing, and the probe was
+  telling us precisely that (`installer_unavailable_reason`). Nothing else was wrong.
+- **Whether the NSIS path works at all**: yes — `/nsis` now returns a real PE32 GUI
+  executable, so `makensis` compiles with the staged binary.
+
+### Fog remaining
+
+- **The staged artefacts are not produced by CI.** `agent/dist/` is local, so a fresh clone
+  still has no Windows installers until someone runs the build. A release job (or a
+  `make`-able Windows build) is the durable answer — recorded, not attempted here because
+  it needs a Windows runner.
+- **D-117** (markdown/spec drift) untouched.
+- **No TPM on FRANKENSTEIN** → DPAPI fallback (environmental).
+- **Port-proxy durability** after a WSL restart.
+
+### Debt items closed
+
+- **S209: `lockdown-installer.exe` missing** — closed with live evidence (see VERIFY).
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None on this host. Producing these artefacts automatically needs a Windows build runner.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback**: the availability probe had been returning the
+  reason (`lockdown-installer.exe is not staged…`) for many sessions; it was correct every
+  time and simply not acted on. The probe was never the problem.
+- **Layer 2 — context provision**: nothing said that a frozen installer needs
+  `service_host.py` beside it, so the spec looked complete while a signature feature
+  (service registration) would have silently degraded.
+
+### VERIFY
+
+- `GET /api/installer/agent-version?platform=win` →
+  `installer_available: true`, `nsis_available: true`, `windows_installer_ready: true`,
+  `installer_unavailable_reason: null`.
+- `GET /api/installer/<device>?platform=win` → **200**, 36 636 083 bytes; ZIP entries:
+  `EULA.txt`, `PRIVACY_POLICY.txt`, `README.txt`, `config.json`, `install.ps1`,
+  `lockdown-agent.exe`, `lockdown-installer.exe`, `lockdown-watchdog.exe`.
+- `GET /api/installer/<device>/nsis` → **200**, 36 293 472 bytes, `PE32 executable for MS
+  Windows 4.00 (GUI)`.
+- Suites: agent **819**, server 793, dashboard 220; ruff clean.
+- Commit: `4378cd7`.
+
+### Session artifacts
+
+- Changed: `agent/installer.spec`, `agent/installer_gui.spec`,
+  `agent/service_installer.py`; staged `agent/dist/lockdown-installer.exe` (gitignored).
+
+### Next session opening
+
+Make the artefact reproducible without a human: either a Windows CI job that builds
+`lockdown-installer.exe`, `lockdown-service.exe` and the agent from their specs and
+publishes them as release assets, or a documented `make` target that does it on a Windows
+box. Until then `agent/dist/` is a local convenience and a fresh clone cannot produce a
+Windows installer.
+
+---

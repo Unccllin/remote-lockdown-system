@@ -53,28 +53,28 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 226 — 2026-11-05 (the watchdog question, decided and implemented)
+## Latest session: 227 — 2026-11-05 (S209 closed: the Windows installer routes work)
 
 ### Fog cleared
 
-- **"Watchdog not running" on a healthy install**: a duplicate-mechanism assumption, now
-  decided rather than tolerated.
-- **Which restart mechanism the product relies on**: SCM recovery. `watchdog.spec` stays in
-  the tree for anyone who wants it, but it is not part of the install.
+- **Why the Windows installer routes 503'd**: the artefact was missing, and the probe was
+  telling us precisely that (`installer_unavailable_reason`). Nothing else was wrong.
+- **Whether the NSIS path works at all**: yes — `/nsis` now returns a real PE32 GUI
+  executable, so `makensis` compiles with the staged binary.
 
 ### Fog remaining
 
-- **No TPM on FRANKENSTEIN** → `TPM seal failed — falling back to DPAPI/plaintext`
-  (environmental; the fallback is a security downgrade worth surfacing in the UI
-  eventually).
-- **`lockdown-installer.exe`** (S209) — the last missing artefact for a per-device Windows
-  installer.
-- **D-117** (markdown/spec drift) and the long tail of PBL debt are untouched.
-- **Port-proxy durability** after a WSL restart is unchanged.
+- **The staged artefacts are not produced by CI.** `agent/dist/` is local, so a fresh clone
+  still has no Windows installers until someone runs the build. A release job (or a
+  `make`-able Windows build) is the durable answer — recorded, not attempted here because
+  it needs a Windows runner.
+- **D-117** (markdown/spec drift) untouched.
+- **No TPM on FRANKENSTEIN** → DPAPI fallback (environmental).
+- **Port-proxy durability** after a WSL restart.
 
 ### Debt items closed
 
-- The "watchdog expected but not installed" note (recorded since S225).
+- **S209: `lockdown-installer.exe` missing** — closed with live evidence (see VERIFY).
 
 ### Debt items still open
 
@@ -82,41 +82,42 @@
 
 ### Blockers
 
-- None. The first device runs the current agent from a frozen service, unattended, with no
-  false alarms.
+- None on this host. Producing these artefacts automatically needs a Windows build runner.
 
 ### Failure attribution
 
-- **Layer 2 — context provision** (primary): nothing said whether the watchdog or the
-  service was the intended restart mechanism, so both existed in the code and neither was
-  authoritative. Writing the decision down was the fix.
-- **Layer 4 — verification feedback**: the check was "is there a `Watchdog not running`
-  line after the new binary started", with the timestamp boundary named explicitly —
-  because the same log contains older lines from the previous binary.
+- **Layer 4 — verification feedback**: the availability probe had been returning the
+  reason (`lockdown-installer.exe is not staged…`) for many sessions; it was correct every
+  time and simply not acted on. The probe was never the problem.
+- **Layer 2 — context provision**: nothing said that a frozen installer needs
+  `service_host.py` beside it, so the spec looked complete while a signature feature
+  (service registration) would have silently degraded.
 
 ### VERIFY
 
-- Binary on the device: **15 362 267 bytes**, `11:48:21`; service `STATE: 4 RUNNING`.
-- Since the new binary started (`11:48:31`): **no** `Watchdog not running`, **no**
-  `TAMPER`, **no** `tsdiscon`. The single watchdog line in the log is `11:48:02` — before
-  the swap — and is quoted in the record so the boundary is auditable.
-- Last lines: `Agent starting — hostname=FRANKENSTEIN server=http://192.168.1.43:3001`,
-  `Adaptive polling: 30s -> 300s (status=active)`.
-- Server: `last_checkin 2026-11-05 08:48:35`, 31 s before observation.
-- Suites: agent **819** (+4), server 793, dashboard 220; ruff clean.
-- Commit: `b27043c`.
+- `GET /api/installer/agent-version?platform=win` →
+  `installer_available: true`, `nsis_available: true`, `windows_installer_ready: true`,
+  `installer_unavailable_reason: null`.
+- `GET /api/installer/<device>?platform=win` → **200**, 36 636 083 bytes; ZIP entries:
+  `EULA.txt`, `PRIVACY_POLICY.txt`, `README.txt`, `config.json`, `install.ps1`,
+  `lockdown-agent.exe`, `lockdown-installer.exe`, `lockdown-watchdog.exe`.
+- `GET /api/installer/<device>/nsis` → **200**, 36 293 472 bytes, `PE32 executable for MS
+  Windows 4.00 (GUI)`.
+- Suites: agent **819**, server 793, dashboard 220; ruff clean.
+- Commit: `4378cd7`.
 
 ### Session artifacts
 
-- Changed: `agent/agent.py`, `agent/tests/test_watchdog_service.py` (new); rebuilt and
-  reinstalled `lockdown-agent.exe` on FRANKENSTEIN.
+- Changed: `agent/installer.spec`, `agent/installer_gui.spec`,
+  `agent/service_installer.py`; staged `agent/dist/lockdown-installer.exe` (gitignored).
 
 ### Next session opening
 
-The queue is empty except two items that need a Windows toolchain decision rather than more
-code: `lockdown-installer.exe` (S209) so a per-device Windows installer can be produced, and
-D-117 (markdown/spec drift). Pick one and finish it; everything else is documented as
-environmental (no TPM) or maintenance (port-proxy after a WSL restart).
+Make the artefact reproducible without a human: either a Windows CI job that builds
+`lockdown-installer.exe`, `lockdown-service.exe` and the agent from their specs and
+publishes them as release assets, or a documented `make` target that does it on a Windows
+box. Until then `agent/dist/` is a local convenience and a fresh clone cannot produce a
+Windows installer.
 
 ---
 
