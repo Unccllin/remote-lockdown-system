@@ -108,12 +108,16 @@ provision_body() {
 
   tpm2_startup -c >/dev/null 2>&1 || true
   # D-134 ruling: owner hierarchy + OWNERREAD, matching what PBL reads.
-tpm2_nvdefine 0x01C00003 -C o -s 34 -a 0x02060004
-  tpm2_nvwrite 0x01C00003 -C p -i "$bin"
+  # AUTHWRITE (0x4) means the INDEX's auth value authorizes the write, so the value
+  # PBL itself uses (PcdPblTpmNvAuthValue) must be set on define and supplied on write.
+  # Without it, `tpm2_nvwrite -C p` fails with tpm:error(2.0) 0x149 "NV access
+  # authorization fails" — the platform hierarchy is not authorized for AUTHWRITE.
+  tpm2_nvdefine 0x01C00003 -C o -s 34 -a 0x02060004 -p "hex:50424c5f4445565f4e565f415554485f4b45595f3332425f4c4f4e472121"
+  tpm2_nvwrite 0x01C00003 -C 0x01C00003 -P "hex:50424c5f4445565f4e565f415554485f4b45595f3332425f4c4f4e472121" -i "$bin"
 
   # Prove the write before claiming it.
   local readback
-  readback="$(tpm2_nvread 0x01C00003 -C p -s 34 | od -An -tx1 | tr -d ' \n')"
+  readback="$(tpm2_nvread 0x01C00003 -C 0x01C00003 -P "hex:50424c5f4445565f4e565f415554485f4b45595f3332425f4c4f4e472121" -s 34 | od -An -tx1 | tr -d ' \n')"
   if [ "$readback" != "$(printf '%s' "$hex" | tr 'A-F' 'a-f')" ]; then
     echo "ERROR: readback mismatch" >&2
     echo "  wrote: ${hex}" >&2
@@ -145,9 +149,9 @@ else
       export TPM2TOOLS_TCTI=swtpm:host=127.0.0.1,port=${DATA_PORT}
       tpm2_startup -c >/dev/null 2>&1 || true
       # D-134 ruling: owner hierarchy + OWNERREAD, matching what PBL reads.
-tpm2_nvdefine 0x01C00003 -C o -s 34 -a 0x02060004
-      tpm2_nvwrite 0x01C00003 -C p -i /prov/st/.ak-name.bin
-      readback=\$(tpm2_nvread 0x01C00003 -C p -s 34 | od -An -tx1 | tr -d ' \n')
+tpm2_nvdefine 0x01C00003 -C o -s 34 -a 0x02060004 -p "hex:50424c5f4445565f4e565f415554485f4b45595f3332425f4c4f4e472121"
+      tpm2_nvwrite 0x01C00003 -C 0x01C00003 -P "hex:50424c5f4445565f4e565f415554485f4b45595f3332425f4c4f4e472121" -i /prov/st/.ak-name.bin
+      readback=\$(tpm2_nvread 0x01C00003 -C 0x01C00003 -P "hex:50424c5f4445565f4e565f415554485f4b45595f3332425f4c4f4e472121" -s 34 | od -An -tx1 | tr -d ' \n')
       echo \"  AK Name verified in NV 0x01C00003: \${readback}\"
       kill \"\$(cat /prov/st/.provision.pid)\" 2>/dev/null || true
       sleep 2
