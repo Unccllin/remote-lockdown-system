@@ -1956,3 +1956,31 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-091
+  statement: 'A firmware-verified verdict from this deployment needs two things that do not exist yet,
+    and neither is a flag. First, the PBL device registry has exactly one writer: POST /v1/enroll writes
+    pbl_devices:<hex> (server/src/routes/pbl.js lines 383 and 708) via the attestation flow; there is
+    no admin endpoint that registers a PBL device, and the local KV is an in-memory Map singleton so it
+    cannot be seeded from outside the process — hence the firmware''s 404 unknown_device is correct and
+    unavoidable until attestation enrolment runs. Second, a firmware policy pins the verdict signer by
+    SPKI in key 76 (kid in key 71), but getPolicySigningKeys() persists only pbl_policy_signing_key:current
+    (pkcs8) and :kid, and GET /v1/admin/key-info returns only {kid, algorithm}; cose.js:35 computes the
+    SPKI at generation time and the route never stores it, so an operator has no way to obtain the public
+    key a policy must pin. The verified-verdict run in S232 therefore had to use the harness''s own generated
+    key. Dependency order for the fix: store and expose the SPKI (backfilling existing keys), then run
+    attestation enrolment, after which the firmware can verify a verdict signed by this deployment.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'pbl.js: registry writers at 383/708 only; createEnv returns a Map-backed KV; getPolicySigningKeys
+    stores pkcs8+kid; key-info returns kid+algorithm (no SPKI); cose.js:35 computes SPKI but the route
+    does not persist it'
+  source: server/src/routes/pbl.js; server/src/pbl/cose.js; firmware/PblPkg/d131-wire-capture.py; live
+    /v1/verdict response and /v1/admin/key-info output
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

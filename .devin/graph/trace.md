@@ -11752,3 +11752,100 @@ pins, and confirm the firmware logs `Verdict decoded` + `Verdict signature verif
 *this* deployment rather than the harness's own server.
 
 ---
+
+---
+
+## Session 236 — 2026-11-05 (what a verified verdict from this deployment actually requires)
+
+### RULE-ZERO
+
+**Read**: `server/src/routes/pbl.js` (`POST /verdict`, `getPolicySigningKeys`,
+`/admin/key-info`, the KV shim, and every writer of `pbl_devices:`),
+`d131-wire-capture.py` (the policy keys that pin a verdict signer), `cose.js`
+(`generateSigningKey` returns spki/pkcs8/kid).
+
+**Goal**: enrol the firmware's AK-derived device id so Express issues a verdict the firmware
+verifies — the last step of the S235 arc.
+
+### FINDINGS — two concrete blockers, neither a flag
+
+1. **The PBL registry has exactly one writer and it is the attestation flow.**
+   `POST /v1/enroll` writes `pbl_devices:<hex>` (lines 383 and 708). There is no admin
+   endpoint that registers a PBL device: the `/v1/devices/:id/...` routes act on devices that
+   already exist. The local KV is an **in-memory singleton**, so it cannot be seeded from
+   outside the process either. A verdict for an unenrolled device is a `404 unknown_device` by
+   design (D-131 Q2) — which is exactly what the firmware received in S235.
+
+2. **A policy cannot pin this server's verdict key yet.** The firmware verifies a verdict
+   against the SPKI in policy key 76 (kid in key 71). `cose.generateSigningKey()` *produces*
+   an SPKI, but `getPolicySigningKeys()` stores only `pkcs8` + `kid`, and
+   `GET /v1/admin/key-info` reports only `{kid, algorithm}` — so an operator has no way to
+   obtain the public key a firmware policy must pin. Today the only working pairing is the
+   harness's own generated key (S232), which is why the verified-verdict run used that server
+   rather than this deployment.
+
+### IMPLEMENT
+
+Nothing this session: both items are design work, and implementing half of either would have
+been guesswork. The investigation is the deliverable, and it is specific enough to act on.
+
+### Fog cleared
+
+- **Why the firmware gets 404 from this deployment**: nobody has ever enrolled a PBL device
+  here, and only the attestation flow can (S229's "empty registry" now has a mechanism, not
+  just a number).
+- **Why the verified-verdict run in S232 used the harness's server**: the policy has to pin a
+  key that the *responding* server signs with, and this server never exposes its public key.
+
+### Fog remaining
+
+- **Enrolment**: running `POST /v1/enroll` against this deployment is the unblock, and it
+  needs real attestation material (nonce + platform state + AK) — the firmware side exists,
+  the orchestration does not.
+- **Key-info must expose the SPKI** (and backfill it for keys generated before that change)
+  before a policy can pin this server at all.
+- QEMU/emulation only; I3 unsatisfied. D-117 untouched.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- Attestation enrolment (no admin seeding path, in-memory registry) and public-key exposure.
+
+### Failure attribution
+
+- **Layer 1 — task specification** (primary): "get the firmware to verify our verdict" reads
+  like a transport task, but it is an enrolment task plus a key-distribution task. Discovering
+  that after two sessions of transport work is a specification miss, not an execution one.
+- **Layer 2 — context provision**: nothing in `key-info`'s documentation said an operator
+  needs the SPKI to build a firmware policy; the endpoint's own comment says "returns the KID"
+  and stops there.
+
+### VERIFY
+
+- `grep "pbl_devices:" server/src/routes/pbl.js` -> writers at 383 (`enroll` handler) and 708
+  only; the `/v1/devices/:id/...` routes act on existing rows.
+- KV shim: `createEnv()` returns a Map-backed `LOCKDOWN_KV` (`store.set/get`), i.e. process
+  memory.
+- `getPolicySigningKeys()` persists `pbl_policy_signing_key:current` (pkcs8) and
+  `:kid`; `/v1/admin/key-info` returns `{kid, algorithm}` with no SPKI.
+- `cose.js:35` shows the SPKI is computed at generation time and then not stored by the route.
+
+### Session artifacts
+
+- Changed: none (investigation only).
+
+### Next session opening
+
+Two pieces, in dependency order: (1) store the SPKI with each generated signing key and expose
+it from `GET /v1/admin/key-info` (backfilling existing keys), so a firmware policy can pin this
+server; (2) run the attestation enrolment (`POST /v1/enroll`) for one device so the registry
+has a row — after which the firmware can verify a verdict signed by this deployment.
+
+---

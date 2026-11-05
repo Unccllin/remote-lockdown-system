@@ -53,29 +53,28 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 235 — 2026-11-05 (the firmware posts through Python's TLS, not Node's)
+## Latest session: 236 — 2026-11-05 (what a verified verdict from this deployment actually requires)
 
 ### Fog cleared
 
-- **Firmware ↔ this deployment works**: policy parsed, our CA pinned (386 B), TLS
-  established, request posted, Express answered — all measured, none inferred.
-- **Why the Node front failed**: a Node-vs-EDK2 interop detail that survives forcing TLS 1.2
-  and disabling tickets. Recorded as a fact, not a theory: Node is not a usable TLS front for
-  this firmware today; Python's ssl is.
+- **Why the firmware gets 404 from this deployment**: nobody has ever enrolled a PBL device
+  here, and only the attestation flow can (S229's "empty registry" now has a mechanism, not
+  just a number).
+- **Why the verified-verdict run in S232 used the harness's server**: the policy has to pin a
+  key that the *responding* server signs with, and this server never exposes its public key.
 
 ### Fog remaining
 
-- **Enrolment is now the only thing between here and a verified verdict.** Express answers
-  `404 unknown_device` until `pbl_devices:<hex>` exists, and the verdict it issues must be
-  signed by the key the policy pins.
-- **The Node/EDK2 detail is unexplained**, only characterised (handshake OK, then reset).
-  A packet capture would say whether the guest sends FIN/RST first.
-- QEMU/emulation only: I3 still unsatisfied. D-117 untouched.
+- **Enrolment**: running `POST /v1/enroll` against this deployment is the unblock, and it
+  needs real attestation material (nonce + platform state + AK) — the firmware side exists,
+  the orchestration does not.
+- **Key-info must expose the SPKI** (and backfill it for keys generated before that change)
+  before a policy can pin this server at all.
+- QEMU/emulation only; I3 unsatisfied. D-117 untouched.
 
 ### Debt items closed
 
-- The S234 blocker "firmware reaches our TLS front and then aborts" — characterised and
-  worked around with a front that works.
+- None.
 
 ### Debt items still open
 
@@ -83,35 +82,37 @@
 
 ### Blockers
 
-- None for transport. Enrolment is the next piece of work.
+- Attestation enrolment (no admin seeding path, in-memory registry) and public-key exposure.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the difference was found by swapping one
-  variable (the TLS implementation) while holding the certificate, policy and firmware
-  fixed. S234's "TLS works" claim was server-specific and had been recorded as general.
-- **Layer 3 — execution environment**: Node's TLS stack and EDK2's client disagree in a way
-  that no unit test on either side would reveal.
+- **Layer 1 — task specification** (primary): "get the firmware to verify our verdict" reads
+  like a transport task, but it is an enrolment task plus a key-distribution task. Discovering
+  that after two sessions of transport work is a specification miss, not an execution one.
+- **Layer 2 — context provision**: nothing in `key-info`'s documentation said an operator
+  needs the SPKI to build a firmware policy; the endpoint's own comment says "returns the KID"
+  and stops there.
 
 ### VERIFY
 
-- Node with TLS 1.2 + no tickets: handshake established, `ECONNRESET`, no request (unchanged).
-- Python front: `[PASS] external server received the verdict request`;
-  `POST /v1/verdict ... 149 bytes (TLSv1.2 ECDHE-ECDSA-AES256-GCM-SHA384)`, `<- 404 90 bytes`.
-- Firmware: `Online fetch failed: HTTP Error` (received a response) rather than `Aborted`.
-- Malformed `Content-Length` → `HTTP/1.1 400 Bad Request` (not a crash).
-- ruff clean on both proxies; commit `f6118ec`.
+- `grep "pbl_devices:" server/src/routes/pbl.js` -> writers at 383 (`enroll` handler) and 708
+  only; the `/v1/devices/:id/...` routes act on existing rows.
+- KV shim: `createEnv()` returns a Map-backed `LOCKDOWN_KV` (`store.set/get`), i.e. process
+  memory.
+- `getPolicySigningKeys()` persists `pbl_policy_signing_key:current` (pkcs8) and
+  `:kid`; `/v1/admin/key-info` returns `{kid, algorithm}` with no SPKI.
+- `cose.js:35` shows the SPKI is computed at generation time and then not stored by the route.
 
 ### Session artifacts
 
-- Changed: `scripts/firmware-tls-proxy.py` (new), `scripts/firmware-tls-proxy.js`.
+- Changed: none (investigation only).
 
 ### Next session opening
 
-Enrol the firmware's device id so Express issues a real verdict: seed or create
-`pbl_devices:<hex>` for the AK-derived id, make the server sign with the key the policy
-pins, and confirm the firmware logs `Verdict decoded` + `Verdict signature verified` against
-*this* deployment rather than the harness's own server.
+Two pieces, in dependency order: (1) store the SPKI with each generated signing key and expose
+it from `GET /v1/admin/key-info` (backfilling existing keys), so a firmware policy can pin this
+server; (2) run the attestation enrolment (`POST /v1/enroll`) for one device so the registry
+has a row — after which the firmware can verify a verdict signed by this deployment.
 
 ---
 
