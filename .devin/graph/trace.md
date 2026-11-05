@@ -9320,3 +9320,125 @@ with the now-empty field), use a fresh token, and confirm the request arrives fr
 enable `sshd` on it first (port 22 currently times out) and hand over a key.
 
 ---
+
+---
+
+## Session 214 — 2026-11-03 (one command to install, and the URL the server says to use)
+
+### RULE-ZERO
+
+**Read**: `dashboard/src/pages/EnrollDevicePage.jsx` (how the install command was
+composed — `window.location.origin`) and `EnrollPage.jsx`; `server/src/routes/
+installer.js` (`publicServerUrl`, added in S212); `agent/installer_gui.py` (entry
+point and its install sequence); `server/src/routes/enroll.js`.
+
+**Finding 1 — the dashboard composed the command in the browser.** `EnrollDevicePage`
+built `lockdown-installer.exe --token … --server-url ${serverBaseUrl}` where
+`serverBaseUrl` came from `window.location.origin` — the same defect S212 fixed in the
+installer generator: an admin browsing on the server copies `localhost`, which no
+target can reach. It is also what pushed the operator into hand-typing a tailnet
+hostname, which was then mistyped (`desktop-q4pcdhk.ta?06a7e9` → `getaddrinfo failed`).
+
+**Finding 2 — the wizard ignored argv, so nothing could be scripted.** `main()` built
+the GUI unconditionally; the only install path was "launch, then type the server URL
+and token by hand".
+
+**Finding 3 — `new URL()` on an operator-supplied value threw into a bare 500.** The
+new endpoint parses `PUBLIC_SERVER_URL`; a value without a scheme (an easy mistake)
+produced a 500 with no explanation.
+
+### IMPLEMENT
+
+- `agent/installer_gui.py` — `build_parser()` (`--server-url`, `--token`,
+  `--hostname`, `--owner`, `--no-boot-lock`, `--silent`), `run_headless()` (the
+  wizard's own sequence over the same module primitives: claim → config → Defender
+  exclusions → binary → lockdown folder + service → launch), and `main()` routing
+  `--silent` to it. The GUI path now also accepts `--server-url` to prefill the field,
+  so even interactive installs need no transcription. Failures print one line.
+- `server/src/routes/enroll.js` — `GET /setup-command` (operator auth) composes the
+  script with `publicServerUrl()`: reachability check against host:port derived from
+  the URL, download of the wizard, the URL on the clipboard, and the token's
+  single-use/15-minute rule as notes. `INSTALLER_SILENT=true` switches to the
+  automated variant (`Read-Host` for the token, `--silent`, exit code) — the token is
+  never embedded in the command. A malformed `PUBLIC_SERVER_URL` now names the value.
+- `dashboard/src/pages/EnrollDevicePage.jsx` — fetches that command, renders it as a
+  script block with its notes and a Copy button; the QR keeps encoding the short form
+  so it stays scannable.
+
+### Fog cleared
+
+- **Why the operator had to type a hostname**: the page offered a command built from
+  the browser's own origin, so nobody could copy a correct one.
+- **Whether a one-command install is possible today**: only the GUI variant is; the
+  silent variant needs a wizard built with the new flags.
+- **What a wrong `PUBLIC_SERVER_URL` looks like now**: a 500 that quotes the value and
+  the expected shape.
+
+### Fog remaining
+
+- **The shipped `lockdown-setup.exe` predates `--silent`**, so the automated command
+  needs one rebuild on Windows (`agent/build.ps1`). Until then the page's command
+  downloads the wizard and puts the URL on the clipboard, and the operator pastes
+  twice.
+- **The operator's Windows box cannot resolve the tailnet name** (MagicDNS off): the
+  named URL failed there while working from this host. A hosts entry or
+  `tailscale set --accept-dns=true` fixes it; the setup command cannot.
+- **Inbound TCP 3001 is filtered on the tailnet** — the reason the API is reached
+  through `tailscale serve` on 443. `tailscale serve` was repointed from a stale
+  `127.0.0.1:8787` to `127.0.0.1:3001`.
+- Unchanged: `lockdown-installer.exe` missing (S209); a partially-failed install still
+  spends its token (S211); `devices.hostname` uniqueness; the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- A Windows build of the wizard to make the silent command usable end to end.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, same shape as S212): the enroll page's
+  command had a test asserting it *contains* a URL, not that the URL is reachable by
+  the machine the command is for. Both the browser-origin bug and the silent-mode gap
+  passed every test.
+- **Layer 2 — context provision**: nothing recorded that the command shown in the UI is
+  an interface with the *target's* network, not the admin's browser. It is now composed
+  server-side, where that knowledge lives.
+
+### VERIFY
+
+- `server`: **786 passed** (48 suites; +7 for `/setup-command`: URL from
+  `PUBLIC_SERVER_URL` not the request host, auth + role, GUI and silent variants, no
+  token embedded, malformed override named, request-host fallback). eslint clean.
+- `dashboard`: **218 passed** (+2 — the server-composed block and its notes render; the
+  QR still encodes the short form). eslint clean.
+- `agent`: **776 passed** (+4 — flags parse, `--silent` without credentials exits 2,
+  the headless sequence uses the issued `api_key` and installs the service before
+  launching, and a failed enrolment returns 1 without a traceback). ruff clean.
+- Live over the tailnet: `GET /api/enroll/setup-command` returns
+  `server_url: https://desktop-g4pcdhh.tail06a7e9.ts.net` with the reachability check,
+  the wizard download, the clipboard step and the token notes; `tailscale serve` maps
+  that HTTPS endpoint to `127.0.0.1:3001`.
+
+### Session artifacts
+
+- Changed: `agent/installer_gui.py`, `agent/tests/test_installer_gui.py`,
+  `server/src/routes/enroll.js`, `server/tests/enroll.routes.test.js`,
+  `dashboard/src/pages/EnrollDevicePage.jsx`,
+  `dashboard/tests/EnrollDevicePage.test.jsx`; local `server/.env`
+  (`PUBLIC_SERVER_URL` = the tailnet HTTPS URL).
+- Commits: `1a17d2b` (headless `--silent`), `2ab662b` (server-composed command).
+
+### Next session opening
+
+Build the wizard on the Windows box (`agent/build.ps1`) so its `--silent` flag exists,
+then set `INSTALLER_SILENT=true` and confirm one pasted command installs a machine end
+to end — the first success evidence for this whole enrolment thread.
+
+---

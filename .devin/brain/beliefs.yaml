@@ -1354,3 +1354,28 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-069
+  statement: 'The install command an operator runs must be composed by the server, not the browser: dashboard/src/pages/EnrollDevicePage.jsx
+    built it from window.location.origin (localhost whenever the dashboard is opened on the server), which
+    no target can reach and which pushed operators into hand-typing a tailnet hostname (mistyped as desktop-q4pcdhk.ta?06a7e9).
+    GET /api/enroll/setup-command now composes it with publicServerUrl(), includes a reachability check
+    against host:port derived from that URL, puts the URL on the clipboard for the wizard, states the
+    token''s single-use 15-minute rule, and switches to an automated variant (Read-Host + --silent + exit
+    code) when INSTALLER_SILENT=true — the token is never embedded. The wizard gained build_parser/run_headless/main
+    --silent so the silent variant is possible once it is rebuilt on Windows; run_headless calls the GUI''s
+    own primitives in the same order, so the two entry points cannot drift. A malformed PUBLIC_SERVER_URL
+    returns a 500 naming the bad value.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: live endpoint over the tailnet returns the composed command with server_url https://desktop-g4pcdhh.tail06a7e9.ts.net;
+    server 786 (48 suites), dashboard 218, agent 776, eslint+ruff clean
+  source: server/src/routes/enroll.js; agent/installer_gui.py; dashboard/src/pages/EnrollDevicePage.jsx;
+    server/tests/enroll.routes.test.js; dashboard/tests/EnrollDevicePage.test.jsx; agent/tests/test_installer_gui.py
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

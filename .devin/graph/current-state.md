@@ -53,27 +53,31 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 213 — 2026-11-03 ("keeps failing": the installer defaulted to someone else's server)
+## Latest session: 214 — 2026-11-03 (one command to install, and the URL the server says to use)
 
 ### Fog cleared
 
-- **What "keeps failing" was**: the wizard submitting to the Worker because that URL
-  was prefilled; our server was never asked.
-- **Why the LAN address failed**: different subnets — not a firewall, not the token.
-- **What path works**: the tailnet (`100.99.13.53:3001`), confirmed end-to-end by
-  `tailscale ping` and by fetching the 18.6 MB wizard over it.
+- **Why the operator had to type a hostname**: the page offered a command built from
+  the browser's own origin, so nobody could copy a correct one.
+- **Whether a one-command install is possible today**: only the GUI variant is; the
+  silent variant needs a wizard built with the new flags.
+- **What a wrong `PUBLIC_SERVER_URL` looks like now**: a 500 that quotes the value and
+  the expected shape.
 
 ### Fog remaining
 
-- **The already-downloaded wizard still prefills the Worker.** The field is editable,
-  so overwriting it works today; rebuilt binaries get the empty field.
-- **No successful enrolment from a real second machine yet** — the one piece of
-  evidence that closes this thread.
-- `sshd` on the Windows peer is not running (port 22 times out); driving that machine
-  needs it enabled, plus a key or password.
-- Unchanged: `lockdown-installer.exe` missing (Windows per-device installers, S209);
-  a partially-failed install still spends its token (S211); `devices.hostname`
-  uniqueness; the S202 objective.
+- **The shipped `lockdown-setup.exe` predates `--silent`**, so the automated command
+  needs one rebuild on Windows (`agent/build.ps1`). Until then the page's command
+  downloads the wizard and puts the URL on the clipboard, and the operator pastes
+  twice.
+- **The operator's Windows box cannot resolve the tailnet name** (MagicDNS off): the
+  named URL failed there while working from this host. A hosts entry or
+  `tailscale set --accept-dns=true` fixes it; the setup command cannot.
+- **Inbound TCP 3001 is filtered on the tailnet** — the reason the API is reached
+  through `tailscale serve` on 443. `tailscale serve` was repointed from a stale
+  `127.0.0.1:8787` to `127.0.0.1:3001`.
+- Unchanged: `lockdown-installer.exe` missing (S209); a partially-failed install still
+  spends its token (S211); `devices.hostname` uniqueness; the S202 objective.
 
 ### Debt items closed
 
@@ -85,42 +89,47 @@
 
 ### Blockers
 
-- A running `sshd` (or an equivalent) on the Windows peer if the operator wants me to
-  drive it directly. Nothing blocks the operator doing it themselves.
+- A Windows build of the wizard to make the silent command usable end to end.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, third session on this thread): no test
-  asserted that the *default* the installer ships is a server the operator's token
-  belongs to — or even that a default should exist. The suites covered the claim
-  protocol and the crafted URL, never the value the wizard starts with.
-- **Layer 2 — context provision**: "which backend is this installer for?" was answered
-  by a hardcoded constant with no comment, so nobody noticed it encoded a product
-  decision. It now carries its reasoning.
+- **Layer 4 — verification feedback** (primary, same shape as S212): the enroll page's
+  command had a test asserting it *contains* a URL, not that the URL is reachable by
+  the machine the command is for. Both the browser-origin bug and the silent-mode gap
+  passed every test.
+- **Layer 2 — context provision**: nothing recorded that the command shown in the UI is
+  an interface with the *target's* network, not the admin's browser. It is now composed
+  server-side, where that knowledge lives.
 
 ### VERIFY
 
-- Request log, quantified: 156 requests, **156 from `::1`/tailnet-local**; the Windows
-  peer (`100.104.11.34`) made exactly **1** request — `GET /api/download/installer`,
-  200 — and **0** claims.
-- `tailscale ping 100.104.11.34` → `pong … via 192.168.1.52:41641 in 49ms`;
-  `curl http://100.99.13.53:3001/api/health` → 200; the wizard downloads over the
-  tailnet (18 628 686 bytes, PE32+ GUI).
-- `agent`: **772 passed** (+2), ruff check + format clean.
+- `server`: **786 passed** (48 suites; +7 for `/setup-command`: URL from
+  `PUBLIC_SERVER_URL` not the request host, auth + role, GUI and silent variants, no
+  token embedded, malformed override named, request-host fallback). eslint clean.
+- `dashboard`: **218 passed** (+2 — the server-composed block and its notes render; the
+  QR still encodes the short form). eslint clean.
+- `agent`: **776 passed** (+4 — flags parse, `--silent` without credentials exits 2,
+  the headless sequence uses the issued `api_key` and installs the service before
+  launching, and a failed enrolment returns 1 without a traceback). ruff clean.
+- Live over the tailnet: `GET /api/enroll/setup-command` returns
+  `server_url: https://desktop-g4pcdhh.tail06a7e9.ts.net` with the reachability check,
+  the wizard download, the clipboard step and the token notes; `tailscale serve` maps
+  that HTTPS endpoint to `127.0.0.1:3001`.
 
 ### Session artifacts
 
-- Changed: `agent/installer.py`, `agent/installer_gui.py`,
-  `agent/tests/test_installer.py`.
-- Commit: `4e4b744`.
+- Changed: `agent/installer_gui.py`, `agent/tests/test_installer_gui.py`,
+  `server/src/routes/enroll.js`, `server/tests/enroll.routes.test.js`,
+  `dashboard/src/pages/EnrollDevicePage.jsx`,
+  `dashboard/tests/EnrollDevicePage.test.jsx`; local `server/.env`
+  (`PUBLIC_SERVER_URL` = the tailnet HTTPS URL).
+- Commits: `1a17d2b` (headless `--silent`), `2ab662b` (server-composed command).
 
 ### Next session opening
 
-Get one enrolment to succeed from the Windows peer and read the claim in the log:
-overwrite the wizard's Server URL with `http://100.99.13.53:3001` (or, after a rebuild,
-with the now-empty field), use a fresh token, and confirm the request arrives from
-`100.104.11.34`. If the operator wants the agent to drive that machine directly,
-enable `sshd` on it first (port 22 currently times out) and hand over a key.
+Build the wizard on the Windows box (`agent/build.ps1`) so its `--silent` flag exists,
+then set `INSTALLER_SILENT=true` and confirm one pasted command installs a machine end
+to end — the first success evidence for this whole enrolment thread.
 
 ---
 
