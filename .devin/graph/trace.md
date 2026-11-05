@@ -12563,3 +12563,44 @@ should complete (BaseTools bootstrapped, OVMF only in the QEMU job), and the ten
 behind graph-check should finally execute for the first time in this arc.
 
 ---
+
+---
+
+## Session 245 — 2026-11-05 (pushed master; and what "No API key found" actually means)
+
+### DONE
+
+- **Pushed `master`**: `9e06d37..56744bb`, 147 commits, 439 files. Gates checked before pushing:
+  the CI secret scanner over exactly that range (`--base origin/master --head master`) exited 0
+  with zero findings, and the range carries no keys, binaries or databases.
+- GitHub reported **22 Dependabot vulnerabilities** on the default branch (8 high, 9 moderate,
+  5 low) in the push response — recorded as the next piece of work, not addressed here.
+
+### ENVIRONMENT FINDING — "No API key found for the selected model"
+
+- Stored auth covers **one provider**: `opencode-go` (`type: api_key`, 51 chars, no expiry).
+- The selected model `opencode-go/deepseek-v4.1-flash` **is** in that provider's catalogue
+  (31 models), and this session runs on it successfully — so the credential and the model are
+  both fine.
+- Therefore the message comes from selecting or pinning a model on **any other provider**, or
+  from a separate `pi` process with a different config directory. There is no repo-level config
+  override (`.pi/` holds only `tasks/`) and no extension pins another provider.
+
+Fix for an operator hitting it: `/model` and choose an `opencode-go` entry, or add credentials
+for the other provider before selecting its models.
+
+### VERIFY
+
+- `git push origin master` → `9e06d37..56744bb  master -> master`, exit 0;
+  `git log --oneline origin/master -1` → `56744bb`.
+- `python3 scripts/prepush_secrets.py --base origin/master --head master` → exit 0, 0 findings.
+- `auth.json` entries: `opencode-go` only; `models-store.json` contains `deepseek-v4.1-flash`
+  among 31 `opencode-go` models.
+
+### Next session opening
+
+Watch the first CI run against real code (it should now exercise the ten jobs gated behind
+graph-check, and both firmware builds with BaseTools bootstrapped), then work the Dependabot
+list — 8 high findings on the default branch is the largest open risk on the board.
+
+---
