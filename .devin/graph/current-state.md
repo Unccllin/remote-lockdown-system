@@ -53,28 +53,25 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 233 — 2026-11-05 (a TLS front for the live server; a chain strict clients accept)
+## Latest session: 234 — 2026-11-05 (the firmware reaches our TLS front and then aborts)
 
 ### Fog cleared
 
-- **Whether the firmware can reach this deployment at all**: yes — the missing piece was a
-  TLS front plus a chain strict clients accept, not a firmware change.
-- **Why the S232 assets could not be reused as-is**: their certificate chain was
-  EDK2-acceptable but not OpenSSL-acceptable, which would have made any non-EDK2 client (my
-  probes, a browser, curl) fail for reasons unrelated to the firmware.
+- **Firmware → this deployment TLS works**: the handshake completes against our proxy with
+  our CA pinned through the policy (D-132). The blocker is one layer up.
+- **Where exactly it stops**: after the handshake, before the request line. The firmware
+  reports `Aborted`; the proxy sees `ECONNRESET`.
 
 ### Fog remaining
 
-- **The QEMU firmware has not been pointed at the proxy yet** — the verified request above
-  came from a Python client sending firmware-shaped bytes. The next run boots PblApp with a
-  policy whose `lock_service_uri` is the proxy and checks the proxy log.
-- **A successful verdict needs enrolment**: `pbl_devices:<hex>` must exist, and the server's
-  verdict signing key must be the one the policy pins — otherwise the firmware will reach
-  the server and reject the verdict's signature, which is the correct behaviour but a
-  different result.
-- Still QEMU/emulation for the firmware, and the live server is a lab HTTP origin behind the
-  proxy; I3 remains unsatisfied.
-- D-117 (markdown/spec drift) untouched.
+- **The HTTP exchange aborts.** The harness's own *Python* TLS server works with this
+  firmware (S232), so the difference is the Node TLS server. Untried, recorded as the next
+  experiment: `maxVersion: 'TLSv1.2'` with the negotiated cipher, disabling session tickets,
+  or fronting Express with the Python server that is already known to work.
+- **Enrolment still never exercised**: even a working request would get `404
+  unknown_device` until `pbl_devices:<hex>` exists and the server signs with the policy's
+  verdict key.
+- QEMU/emulation only; I3 unsatisfied. D-117 untouched.
 
 ### Debt items closed
 
@@ -86,37 +83,39 @@
 
 ### Blockers
 
-- None; the remaining steps are wiring, not discovery.
+- An EDK2↔Node TLS interop detail, narrowed to "after handshake, before request".
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the leaf-certificate defect was invisible to
-  the firmware but fatal to every other TLS client. A chain check (`openssl verify`) belongs
-  in the asset generator's own output, next to the pin it prints.
-- **Layer 3 — execution environment**: my first probe failed on hostname mismatch because the
-  SAN is the QEMU host address (10.0.2.2) and I connected to 127.0.0.1 — correct behaviour,
-  wrong test. The probe now verifies the chain with `check_hostname=False` and says why.
+- **Layer 4 — verification feedback** (primary): my own check produced a false PASS by
+  grepping a log it had not written. A harness that cannot tell old evidence from new will
+  certify work that never happened — the same class as the banner checks in S231.
+- **Layer 2 — context provision**: nothing recorded that the firmware is picky about the
+  TLS peer's post-handshake behaviour; S232's success with Python's ssl server was read as
+  "TLS works", when it was "TLS works **with that server**".
 
 ### VERIFY
 
-- `openssl verify -CAfile ca-cert.pem server-cert.pem` -> `OK`; leaf shows both
-  `Subject Key Identifier` and `Authority Key Identifier`.
-- Proxy: `[proxy] listening on 127.0.0.1:9443 -> http://127.0.0.1:3001`, then a 112-byte
-  POST and a 90-byte 404 response logged.
-- Express: `{"error":"unknown_device","detail":"device_id is not enrolled; no verdict will be issued"}`.
-- Arg validation: `invalid --target (expected scheme://host[:port]): not a url`,
-  `invalid --port: abc`.
-- Commit: `f74055a`.
+- Harness: `[PASS] policy blob loaded from ESP`, `[PASS] device_id derived from AK Name`,
+  `[PASS] verdict request posted over TLS`, `[FAIL] external server received the verdict
+  request`, `[INFO] nothing was appended to /test/proxy.log during this run`,
+  `[INFO] no verdict decoded — the external server did not issue one`.
+- Serial: the three lines quoted above, plus `Using cached verdict: 0`.
+- Proxy: `TLS established … TLSv1.2 ECDHE-ECDSA-AES128-GCM-SHA256`, then
+  `TLS handshake failed from ?: ECONNRESET`.
+- Commit: `4879316`.
 
 ### Session artifacts
 
-- Changed: `scripts/firmware-tls-proxy.js` (new), `firmware/PblPkg/d131-wire-capture.py`.
+- Changed: `firmware/PblPkg/test-d131-wire-harness.sh`,
+  `scripts/firmware-tls-proxy.js`.
 
 ### Next session opening
 
-Boot PblApp with a policy pointing at the proxy (QEMU) and read the proxy log — then enrol
-the derived device id so Express issues a real signed verdict, using the verdict signing key
-the policy pins, and confirm the firmware verifies it end to end.
+Find the EDK2↔Node TLS interop detail: run the proxy with `maxVersion: 'TLSv1.2'` and the
+cipher EDK2 negotiated, session tickets disabled, and compare the proxy's TLS event log with
+S232's successful Python-server run; if Node cannot be made to suit EDK2, front Express with
+the Python capture server that is already proven to work.
 
 ---
 

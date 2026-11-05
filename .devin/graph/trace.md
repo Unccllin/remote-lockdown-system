@@ -11541,3 +11541,109 @@ the derived device id so Express issues a real signed verdict, using the verdict
 the policy pins, and confirm the firmware verifies it end to end.
 
 ---
+
+---
+
+## Session 234 — 2026-11-05 (the firmware reaches our TLS front and then aborts)
+
+### RULE-ZERO
+
+**Read**: `test-d131-wire-harness.sh` (arg parsing, server start, checks, QEMU recipe),
+`d131-wire-capture.py` (`--serve`), `PblApp.c` around step 4 (`Online fetch failed`),
+`HttpsClient.c`, and the proxy added in S233.
+
+**Starting point**: S233 proved a *firmware-shaped* request reaches Express through the TLS
+proxy. The last step was the firmware itself.
+
+### IMPLEMENT
+
+- `test-d131-wire-harness.sh` gained `--external-server` (do not start the bundled capture
+  server; the policy's `lock_service_uri` points elsewhere) and `--proxy-log PATH`.
+- Two honesty fixes that came out of using it:
+  * the external check greps the proxy log, and my first version matched a POST left by an
+    earlier probe — a **false PASS**. The harness now records the log size before booting and
+    matches only what was appended; when nothing was appended it says so and fails.
+  * `server log: $(wc -c …)` noisily errored in external mode, where that log does not exist.
+- `firmware-tls-proxy.js` now logs TLS events (`tlsClientError`, `secureConnection`) with the
+  negotiated protocol and cipher, because "no request logged" could not distinguish "the
+  guest never connected" from "the handshake failed".
+
+### RESULT — the boundary moved, and is now precisely located
+
+```
+firmware:  [2/8] Parsing policy blob...  policy.cose: 1518 bytes
+           [OK] Pinned CA installed as TLS trust anchor (386 bytes)
+           [INFO] POSTing verdict request to https://10.0.2.2:9443/v1/verdict
+           [INFO] Online fetch failed: Aborted — falling back to cache
+proxy:     [proxy] TLS established from 127.0.0.1 (TLSv1.2 ECDHE-ECDSA-AES128-GCM-SHA256)
+           [proxy] TLS handshake failed from ?: ECONNRESET
+```
+
+The firmware parses our policy, **pins our CA as its TLS trust anchor**, and **completes the
+TLS handshake with our proxy** — then aborts before sending any HTTP request. Nothing
+reached Express, and the harness says `[FAIL] external server received the verdict request`
+rather than inventing a pass.
+
+### Fog cleared
+
+- **Firmware → this deployment TLS works**: the handshake completes against our proxy with
+  our CA pinned through the policy (D-132). The blocker is one layer up.
+- **Where exactly it stops**: after the handshake, before the request line. The firmware
+  reports `Aborted`; the proxy sees `ECONNRESET`.
+
+### Fog remaining
+
+- **The HTTP exchange aborts.** The harness's own *Python* TLS server works with this
+  firmware (S232), so the difference is the Node TLS server. Untried, recorded as the next
+  experiment: `maxVersion: 'TLSv1.2'` with the negotiated cipher, disabling session tickets,
+  or fronting Express with the Python server that is already known to work.
+- **Enrolment still never exercised**: even a working request would get `404
+  unknown_device` until `pbl_devices:<hex>` exists and the server signs with the policy's
+  verdict key.
+- QEMU/emulation only; I3 unsatisfied. D-117 untouched.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- An EDK2↔Node TLS interop detail, narrowed to "after handshake, before request".
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): my own check produced a false PASS by
+  grepping a log it had not written. A harness that cannot tell old evidence from new will
+  certify work that never happened — the same class as the banner checks in S231.
+- **Layer 2 — context provision**: nothing recorded that the firmware is picky about the
+  TLS peer's post-handshake behaviour; S232's success with Python's ssl server was read as
+  "TLS works", when it was "TLS works **with that server**".
+
+### VERIFY
+
+- Harness: `[PASS] policy blob loaded from ESP`, `[PASS] device_id derived from AK Name`,
+  `[PASS] verdict request posted over TLS`, `[FAIL] external server received the verdict
+  request`, `[INFO] nothing was appended to /test/proxy.log during this run`,
+  `[INFO] no verdict decoded — the external server did not issue one`.
+- Serial: the three lines quoted above, plus `Using cached verdict: 0`.
+- Proxy: `TLS established … TLSv1.2 ECDHE-ECDSA-AES128-GCM-SHA256`, then
+  `TLS handshake failed from ?: ECONNRESET`.
+- Commit: `4879316`.
+
+### Session artifacts
+
+- Changed: `firmware/PblPkg/test-d131-wire-harness.sh`,
+  `scripts/firmware-tls-proxy.js`.
+
+### Next session opening
+
+Find the EDK2↔Node TLS interop detail: run the proxy with `maxVersion: 'TLSv1.2'` and the
+cipher EDK2 negotiated, session tickets disabled, and compare the proxy's TLS event log with
+S232's successful Python-server run; if Node cannot be made to suit EDK2, front Express with
+the Python capture server that is already proven to work.
+
+---

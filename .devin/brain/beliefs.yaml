@@ -1900,3 +1900,33 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-089
+  statement: 'PblApp can reach this deployment''s TLS front but aborts the HTTP exchange against a Node
+    TLS server. With a policy whose lock_service_uri is https://10.0.2.2:9443/v1/verdict and the deployment''s
+    CA pinned as policy key 78, the firmware prints ''[OK] Pinned CA installed as TLS trust anchor (386
+    bytes)'', then ''[INFO] POSTing verdict request to https://10.0.2.2:9443/v1/verdict'', then ''[INFO]
+    Online fetch failed: Aborted — falling back to cache''; scripts/firmware-tls-proxy.js logs ''[proxy]
+    TLS established from 127.0.0.1 (TLSv1.2 ECDHE-ECDSA-AES128-GCM-SHA256)'' followed by ''TLS handshake
+    failed from ?: ECONNRESET'', and no HTTP request line is ever logged. So the policy parse, the CA
+    pinning and the TLS handshake all work, and the abort happens after the handshake and before the request.
+    The harness''s own Python ssl server works with the same firmware (S232), so the difference is the
+    Node TLS server rather than the firmware''s TLS client; untried hypotheses are maxVersion TLSv1.2
+    with the negotiated cipher, disabling session tickets, or fronting Express with the Python server.
+    Also established: a harness check that greps a log it did not write can produce a false PASS — the
+    external-server check matched a POST left by an earlier probe until the harness began recording the
+    log size before boot.'
+  domain: general
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'live QEMU run against the Node proxy: firmware pinned the CA (386 bytes) and completed
+    TLSv1.2 ECDHE-ECDSA-AES128-GCM-SHA256, then ''Online fetch failed: Aborted''; proxy logged ECONNRESET;
+    external-server check correctly reported FAIL with nothing appended'
+  source: firmware/PblPkg/test-d131-wire-harness.sh; scripts/firmware-tls-proxy.js; firmware/PblPkg/PblApp/PblApp.c;
+    /tmp/fw-run/serial.log; /tmp/fw-live/proxy.log
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
