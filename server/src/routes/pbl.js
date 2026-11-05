@@ -252,9 +252,52 @@ function bytesToHex(bytes) {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Derive the SPKI (DER) of an ES256 private key held as PKCS#8 base64.
+ *
+ * A firmware policy pins the signing key by SPKI (policy key 76) and identifies it by
+ * kid = SHA-256(SPKI) (key 71), but only the PKCS#8 was ever stored — so an operator could
+ * not build a policy that pins this server (S236). cose.generateSigningKey() computes the
+ * SPKI at generation time; this recovers it for keys generated before that was persisted.
+ */
+async function deriveSpkiFromPkcs8(pkcs8B64) {
+  const privateKey = await crypto.subtle.importKey(
+    'pkcs8', Buffer.from(pkcs8B64, 'base64'),
+    { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign'],
+  );
+  const jwk = await crypto.subtle.exportKey('jwk', privateKey);
+  const publicKey = await crypto.subtle.importKey(
+    'jwk', { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y },
+    { name: 'ECDSA', namedCurve: 'P-256' }, true, ['verify'],
+  );
+  return Buffer.from(await crypto.subtle.exportKey('spki', publicKey));
+}
+
+/** The SPKI for a stored key, persisted on first use so it is computed once. */
+async function spkiFor(env, prefix, pkcs8B64) {
+  const stored = await env.LOCKDOWN_KV.get(`${prefix}:spki`, 'text');
+  if (stored) return Buffer.from(stored, 'base64');
+  if (!pkcs8B64) return null;
+  const spki = await deriveSpkiFromPkcs8(pkcs8B64);
+  await env.LOCKDOWN_KV.put(`${prefix}:spki`, spki.toString('base64'));
+  return spki;
+}
+
 /** In-memory signing key cache (generated on first request). */
 let signingKeysCache = null;
 let policySigningKeysCache = null;
+
+/**
+ * Test seam: drop the in-memory signing-key caches.
+ *
+ * The caches are module-level, so a key generated while serving one env is reused for the
+ * next — which is correct in production (one process, one KV) and wrong in tests that build
+ * a fresh env per case. Explicit and documented beats a test that passes depending on order.
+ */
+function __resetSigningKeyCaches() {
+  signingKeysCache = null;
+  policySigningKeysCache = null;
+}
 
 /** Get or generate the ES256 verdict signing key pair. */
 async function getSigningKeys(env) {
@@ -267,12 +310,17 @@ async function getSigningKeys(env) {
       'pkcs8', Buffer.from(storedPkcs8, 'base64'),
       { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign'],
     );
-    signingKeysCache = { privateKey, kid: Buffer.from(storedKid, 'hex') };
+    signingKeysCache = {
+      privateKey,
+      kid: Buffer.from(storedKid, 'hex'),
+      spki: await spkiFor(env, 'pbl_signing_key', storedPkcs8),
+    };
     return signingKeysCache;
   }
   // Generate new keys
   signingKeysCache = await cose.generateSigningKey();
   await env.LOCKDOWN_KV.put('pbl_signing_key:current', signingKeysCache.pkcs8.toString('base64'));
+  await env.LOCKDOWN_KV.put('pbl_signing_key:spki', signingKeysCache.spki.toString('base64'));
   await env.LOCKDOWN_KV.put('pbl_signing_key:kid', signingKeysCache.kid.toString('hex'));
   return signingKeysCache;
 }
@@ -289,11 +337,16 @@ async function getPolicySigningKeys(env) {
       'pkcs8', Buffer.from(storedPkcs8, 'base64'),
       { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign'],
     );
-    policySigningKeysCache = { privateKey, kid: Buffer.from(storedKid, 'hex') };
+    policySigningKeysCache = {
+      privateKey,
+      kid: Buffer.from(storedKid, 'hex'),
+      spki: await spkiFor(env, 'pbl_policy_signing_key', storedPkcs8),
+    };
     return policySigningKeysCache;
   }
   policySigningKeysCache = await cose.generateSigningKey();
   await env.LOCKDOWN_KV.put('pbl_policy_signing_key:current', policySigningKeysCache.pkcs8.toString('base64'));
+  await env.LOCKDOWN_KV.put('pbl_policy_signing_key:spki', policySigningKeysCache.spki.toString('base64'));
   await env.LOCKDOWN_KV.put('pbl_policy_signing_key:kid', policySigningKeysCache.kid.toString('hex'));
   return policySigningKeysCache;
 }
@@ -1224,9 +1277,25 @@ router.get('/admin/key-info', requireAuth, requireRole('super-admin'), async (re
   const env = req._pblEnv || createEnv();
   const verdictKid = await env.LOCKDOWN_KV.get('pbl_signing_key:kid', 'text');
   const policyKid = await env.LOCKDOWN_KV.get('pbl_policy_signing_key:kid', 'text');
+
+  // A firmware policy pins the signing key by SPKI (policy key 76) and identifies it by
+  // kid = SHA-256(SPKI) (key 71). Reporting only the kid left an operator unable to build
+  // a policy that pins this server (S236), so the SPKI is returned as base64 DER, together
+  // with whether the stored kid still matches it.
+  async function describe(prefix, kid) {
+    if (!kid) return null;
+    const spki = await spkiFor(env, prefix, await env.LOCKDOWN_KV.get(`${prefix}:current`, 'text'));
+    const spkiB64 = spki ? spki.toString('base64') : null;
+    let kidMatches = null;
+    if (spki) {
+      kidMatches = Buffer.from(await crypto.subtle.digest('SHA-256', spki)).toString('hex') === kid;
+    }
+    return { kid, algorithm: 'ES256', spki: spkiB64, kid_matches_spki: kidMatches };
+  }
+
   res.json({
-    verdict_signing_key: verdictKid ? { kid: verdictKid, algorithm: 'ES256' } : null,
-    policy_signing_key: policyKid ? { kid: policyKid, algorithm: 'ES256' } : null,
+    verdict_signing_key: await describe('pbl_signing_key', verdictKid),
+    policy_signing_key: await describe('pbl_policy_signing_key', policyKid),
   });
 });
 
@@ -1364,6 +1433,7 @@ router.all('*', (_req, res) => {
 // ---------------------------------------------------------------------------
 
 module.exports = {
+  __resetSigningKeyCaches,
   router,
   pblWafGuard,
   classifyPath,
