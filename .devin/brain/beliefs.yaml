@@ -1930,3 +1930,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-090
+  statement: 'EDK2''s firmware posts successfully through a Python ssl TLS front but not through Node''s
+    TLS server: with the same certificate, policy and firmware, the Node front completes the handshake
+    (TLSv1.2 ECDHE-ECDSA-AES128-GCM-SHA256) and then the guest resets before sending any HTTP request
+    (''Online fetch failed: Aborted'', proxy sees ECONNRESET), and forcing maxVersion/minVersion TLSv1.2
+    plus disabling session tickets changes nothing; the Python front receives ''POST /v1/verdict ... 149
+    bytes (TLSv1.2 ECDHE-ECDSA-AES256-GCM-SHA384)'' and the firmware reports ''Online fetch failed: HTTP
+    Error'', i.e. it received the 404 that Express returns for an unenrolled device. Therefore scripts/firmware-tls-proxy.py
+    is the working TLS front for firmware-to-deployment testing, the 404 unknown_device is the correct
+    answer while no pbl_devices row exists, and enrolment (plus signing the verdict with the key the policy
+    pins) is the only remaining step before a verified verdict can be observed against this deployment.'
+  domain: general
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'executed: identical assets/TPM/firmware through both fronts — Node established TLS then
+    ECONNRESET with no request; Python received the 149-byte POST and returned the 90-byte 404; harness
+    PASS only for the Python case; malformed Content-Length answered 400'
+  source: scripts/firmware-tls-proxy.py; scripts/firmware-tls-proxy.js; firmware/PblPkg/test-d131-wire-harness.sh;
+    /tmp/fw-live/proxy.log; /tmp/fw-run/serial.log
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

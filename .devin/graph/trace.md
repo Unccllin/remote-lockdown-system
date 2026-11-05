@@ -11647,3 +11647,108 @@ S232's successful Python-server run; if Node cannot be made to suit EDK2, front 
 the Python capture server that is already proven to work.
 
 ---
+
+---
+
+## Session 235 — 2026-11-05 (the firmware posts through Python's TLS, not Node's)
+
+### RULE-ZERO
+
+**Read**: S234's evidence (Node proxy: handshake established → `ECONNRESET`, no request),
+`d131-wire-capture.py --serve` (the Python server the firmware has always worked with),
+and `PblApp.c`'s fetch step.
+
+**Hypothesis under test**: S234 left "after handshake, before request" unexplained. TLS
+version and session tickets were the cheapest candidates, then the TLS *implementation*.
+
+### RESULT
+
+1. **Not version, not tickets.** Node with `maxVersion TLSv1.2`, `minVersion TLSv1.2` and
+   session tickets disabled produced exactly the same behaviour: handshake established,
+   `ECONNRESET`, no request.
+2. **The TLS implementation was the difference.** The same firmware, same policy, same
+   certificate, posting through a **Python ssl** front reaches this deployment:
+
+```
+firmware: [INFO] POSTing verdict request to https://10.0.2.2:9443/v1/verdict
+          [INFO] Online fetch failed: HTTP Error — falling back to cache
+proxy:    [proxy] POST /v1/verdict from 127.0.0.1 -> 149 bytes
+                (TLSv1.2 ECDHE-ECDSA-AES256-GCM-SHA384)
+          [proxy] <- 404 90 bytes
+```
+
+`HTTP Error` is the firmware **receiving our 404** — an answer, not an abort. The harness
+agrees: `[PASS] external server received the verdict request`.
+
+### IMPLEMENT
+
+- **`scripts/firmware-tls-proxy.py`** (new, stdlib only): TLS front that forwards to the
+  Express API and logs each request with its size plus the negotiated protocol and cipher.
+  The URL scheme is re-checked immediately before `urlopen` (a per-request URL is not
+  covered by a startup check), with the repo's `# noqa: S310` convention and a comment saying
+  why. `Content-Length` is validated: a non-numeric or unreasonable value answers 400/413
+  instead of raising inside the handler — verified with `openssl s_client`
+  (`HTTP/1.1 400 Bad Request`).
+- The Node proxy keeps its `--tls12-only` / `--cipher` / `--no-tickets` knobs and TLS event
+  logging. It is now the *record* of what EDK2 does and does not accept, and remains a
+  reasonable front for non-firmware clients.
+
+### Fog cleared
+
+- **Firmware ↔ this deployment works**: policy parsed, our CA pinned (386 B), TLS
+  established, request posted, Express answered — all measured, none inferred.
+- **Why the Node front failed**: a Node-vs-EDK2 interop detail that survives forcing TLS 1.2
+  and disabling tickets. Recorded as a fact, not a theory: Node is not a usable TLS front for
+  this firmware today; Python's ssl is.
+
+### Fog remaining
+
+- **Enrolment is now the only thing between here and a verified verdict.** Express answers
+  `404 unknown_device` until `pbl_devices:<hex>` exists, and the verdict it issues must be
+  signed by the key the policy pins.
+- **The Node/EDK2 detail is unexplained**, only characterised (handshake OK, then reset).
+  A packet capture would say whether the guest sends FIN/RST first.
+- QEMU/emulation only: I3 still unsatisfied. D-117 untouched.
+
+### Debt items closed
+
+- The S234 blocker "firmware reaches our TLS front and then aborts" — characterised and
+  worked around with a front that works.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None for transport. Enrolment is the next piece of work.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the difference was found by swapping one
+  variable (the TLS implementation) while holding the certificate, policy and firmware
+  fixed. S234's "TLS works" claim was server-specific and had been recorded as general.
+- **Layer 3 — execution environment**: Node's TLS stack and EDK2's client disagree in a way
+  that no unit test on either side would reveal.
+
+### VERIFY
+
+- Node with TLS 1.2 + no tickets: handshake established, `ECONNRESET`, no request (unchanged).
+- Python front: `[PASS] external server received the verdict request`;
+  `POST /v1/verdict ... 149 bytes (TLSv1.2 ECDHE-ECDSA-AES256-GCM-SHA384)`, `<- 404 90 bytes`.
+- Firmware: `Online fetch failed: HTTP Error` (received a response) rather than `Aborted`.
+- Malformed `Content-Length` → `HTTP/1.1 400 Bad Request` (not a crash).
+- ruff clean on both proxies; commit `f6118ec`.
+
+### Session artifacts
+
+- Changed: `scripts/firmware-tls-proxy.py` (new), `scripts/firmware-tls-proxy.js`.
+
+### Next session opening
+
+Enrol the firmware's device id so Express issues a real verdict: seed or create
+`pbl_devices:<hex>` for the AK-derived id, make the server sign with the key the policy
+pins, and confirm the firmware logs `Verdict decoded` + `Verdict signature verified` against
+*this* deployment rather than the harness's own server.
+
+---
