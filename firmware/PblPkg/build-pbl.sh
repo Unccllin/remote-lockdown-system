@@ -21,6 +21,7 @@ set -eo pipefail
 # === Defaults ===
 ARCH="${PBL_ARCH:-X64}"
 TOOLCHAIN="${PBL_TOOLCHAIN:-GCC}"
+BUILD_OVMF="${PBL_BUILD_OVMF:-0}"
 BUILD_TYPE="RELEASE"
 EDK2_DIR="${EDK2_DIR:-/home/cllin/.local/src/edk2}"
 FIRMWARE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -31,8 +32,9 @@ while [[ $# -gt 0 ]]; do
     --arch)      ARCH="$2"; shift 2 ;;
     --toolchain) TOOLCHAIN="$2"; shift 2 ;;
     --debug)     BUILD_TYPE="DEBUG"; shift ;;
+    --with-ovmf) BUILD_OVMF="1"; shift ;;
     --help|-h)
-      echo "Usage: $0 [--arch X64|AARCH64] [--toolchain GCC|VS2019] [--debug]"
+      echo "Usage: $0 [--arch X64|AARCH64] [--toolchain GCC|VS2019] [--debug] [--with-ovmf]"
       exit 0 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
@@ -69,8 +71,21 @@ if [ ! -d "${EDK2_DIR}" ]; then
   exit 1
 fi
 
-# === Build OVMF (for QEMU testing, X64 only) ===
-if [ "${ARCH}" = "X64" ]; then
+# === EDK II BaseTools ===
+# A fresh clone (which is what CI has) contains no compiled BaseTools, and `build`
+# fails immediately without them. Building them takes a minute; not building them
+# made the CI job look like a compile failure (S244).
+if [ ! -x "${EDK_TOOLS_PATH}/BinWrappers/PosixLike/build" ]; then
+  echo "=== Building EDK II BaseTools (first run) ==="
+  make -C "${EDK_TOOLS_PATH}" -j"$(nproc)" >/dev/null
+fi
+
+# === Build OVMF (QEMU harness only, X64 only, opt-in) ===
+# OVMF is what the QEMU harness boots; the PblApp build itself has no use for it.
+# Building it here by default made "Build PblApp" a 10+ minute job that a fresh CI
+# checkout could never finish, and its failure was reported as a PblApp failure.
+# Set PBL_BUILD_OVMF=1 (or pass --with-ovmf) when the harness needs a fresh OVMF.
+if [ "${ARCH}" = "X64" ] && [ "${BUILD_OVMF}" = "1" ]; then
   OVMF_DIR="${EDK2_DIR}/Build/OvmfX64/RELEASE_GCC/FV"
   if [ ! -f "${OVMF_DIR}/OVMF_CODE.fd" ]; then
     echo "=== Building OVMF (with HTTP+TLS for PBL network tests) ==="
@@ -87,6 +102,8 @@ if [ "${ARCH}" = "X64" ]; then
   else
     echo "=== OVMF already built — skipping ==="
   fi
+elif [ "${ARCH}" = "X64" ]; then
+  echo "=== OVMF build not requested — skipping (set PBL_BUILD_OVMF=1 to build it) ==="
 fi
 
 # === Build PblPkg ===

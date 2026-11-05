@@ -172,7 +172,10 @@ jobs:
         run: |
           set -o pipefail
           export EDK2_DIR="$HOME/.local/src/edk2"
-          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC 2>&1 \
+          # --with-ovmf is required here: the harness boots OVMF, while the PblApp
+          # build jobs skip it (building all of OVMF took longer than their 3-minute
+          # budget and reported its failure as a PblApp failure — S244).
+          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC --with-ovmf 2>&1 \
             | tee /tmp/pbl-build-qemu.log
 
       - name: Annotate build failure
