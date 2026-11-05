@@ -1,5 +1,36 @@
 # Code Signing Guide
 
+## Agent updates: the pin and the signer must be the same key
+
+An agent that has a pinned update key **refuses** every update whose release metadata is
+not signed by that key (B-006, `agent/agent.py` `verify_update_signature`). Three things
+therefore have to agree, and each has a failure mode worth naming:
+
+| Where | What | If it is wrong |
+|---|---|---|
+| Device | `C:\ProgramData\LockdownAgent\update_signing.pub`, named by `update_public_key` in `config.json` | Device reports `update_verification: sha256-only` (unpinned) or `key-unreadable` (fails closed — no update applies) |
+| Server | `UPDATE_PUBLIC_KEY_PEM` → path to the public key, staged into generated installers | Generated configs omit the pin entirely, so devices stay unpinned |
+| CI | `secrets.UPDATE_SIGNING_KEY` → the **private** key, used by `scripts/sign-release-metadata.py` | If unset, the release is published `--unsigned` and the workflow prints a loud warning; pinned agents will refuse it |
+
+`release.yml` already runs `scripts/sign-release-metadata.py` with `UPDATE_SIGNING_KEY` and
+falls back to `--unsigned` with an `::warning` annotation when the secret is absent, so the
+pipeline supports signing today — what it cannot check is whether the secret holds the same
+key the fleet pins.
+
+Operationally:
+
+- generate the pair once with `scripts/generate-update-keys.sh` (default output is
+  `~/.lockdown-secrets`, deliberately outside the working copy);
+- put the **public** key where the server stages installers (`UPDATE_PUBLIC_KEY_PEM`);
+- put the **private** key in CI secrets only, and keep no copy in the repository —
+  `update_signing.key`, `update_signing.pub`, `*.key` are ignored by `.gitignore`;
+- rotate the pair by staging the new public key first, letting devices adopt it, and only
+  then signing with the new private key. A device with the old pin rejects metadata signed
+  by the new key, which is the intended fail-closed behaviour and the reason rotation needs
+  an order.
+
+
+
 Code signing is required for production distribution. Without it:
 - **Windows**: SmartScreen warns users ("Windows protected your PC")
 - **macOS**: Gatekeeper blocks the app ("cannot be opened because it is from an unidentified developer")

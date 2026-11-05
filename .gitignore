@@ -137,3 +137,11 @@ site/
 
 # Semgrep report (make sast / CI)
 semgrep.json
+
+# Update-signing key material (S242): the private key signs releases and must
+# never be committed; the public key is generated per deployment and shipped to
+# devices, not stored in the repository.
+update_signing.key
+update_signing.pub
+*.key
+!**/fixtures/*.key

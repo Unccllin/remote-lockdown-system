@@ -715,3 +715,52 @@ def test_headless_pins_the_installed_key_path_not_the_staging_one(monkeypatch):
     assert installer_gui.run_headless("https://x", "TOK", "HOST-1") == 0
     assert seen["update_public_key"] == installed
     assert "Users" not in seen["update_public_key"]
+
+
+def test_upgrade_unlocks_a_protected_binary_before_replacing_it(monkeypatch, tmp_path):
+    """Tamper protection denies replacement; the installer must unlock first (S241).
+
+    Without this, a legitimate reinstall fails with "Access is denied" on a healthy device —
+    the security feature and the upgrade path collide.
+    """
+    import installer_gui
+
+    protected = tmp_path / "lockdown-agent.exe"
+    protected.write_bytes(b"old")
+    src = tmp_path / "new" / "lockdown-agent.exe"
+    src.parent.mkdir()
+    src.write_bytes(b"new")
+
+    calls = []
+    monkeypatch.setattr(installer_gui, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer_gui, "AGENT_EXE_NAME", "lockdown-agent.exe")
+    monkeypatch.setattr(installer_gui.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(installer_gui.subprocess, "run", lambda cmd, **k: calls.append(cmd) or None)
+
+    installer_gui.install_files(src)
+
+    joined = [" ".join(c) for c in calls]
+    assert any("/remove:d Everyone" in j for j in joined), "the DENY must be removed"
+    assert any(j.startswith("takeown /f") for j in joined), "ownership is required"
+    assert any("/grant BUILTIN\\Administrators:F" in j for j in joined), "write must be granted"
+    assert protected.read_bytes() == b"new"
+
+
+def test_unlock_reports_failure_when_the_file_stays_unwritable(monkeypatch, tmp_path):
+    import installer_gui
+
+    blocked = tmp_path / "blocked.exe"
+    blocked.write_bytes(b"x")
+    monkeypatch.setattr(installer_gui.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(installer_gui.subprocess, "run", lambda *a, **k: None)
+
+    real_open = Path.open
+
+    def deny(self, mode="r", *a, **k):
+        if self == blocked and "a" in mode:
+            raise PermissionError("denied")
+        return real_open(self, mode, *a, **k)
+
+    monkeypatch.setattr(Path, "open", deny)
+
+    assert installer_gui.unlock_for_upgrade(blocked) is False

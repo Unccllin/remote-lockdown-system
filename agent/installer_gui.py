@@ -321,6 +321,12 @@ def write_config(
         config["update_public_key"] = update_public_key
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
 
+    # config.json carries the same DENY/read-only ACEs as the binary once tamper
+    # protection has run, so the atomic replace below would fail with "Access is denied"
+    # on any upgrade (S241).
+    if CONFIG_FILE.exists():
+        unlock_for_upgrade(CONFIG_FILE)
+
     # Atomic write: write to temp file, then rename
     tmp_file = CONFIG_FILE.with_suffix(".json.tmp")
     try:
@@ -450,10 +456,55 @@ def download_lockscreen_exe(server_url: str, dest_dir: Path) -> Path | None:
     return _download_verified(url, dest_dir / "lockdown-lockscreen.exe")
 
 
+def unlock_for_upgrade(target: Path) -> bool:
+    """Make a tamper-protected file replaceable for this upgrade.
+
+    Tamper protection applies ``Everyone:(DENY)(DE)`` plus Administrators ``(RX)`` to the
+    agent binary and config (S241), so a legitimate reinstall fails with "Access is denied"
+    — the security feature and the upgrade path collide. Removing the DENY alone is not
+    enough: Administrators hold no write ACE, so ownership is taken and write granted.
+
+    This is the sanctioned local upgrade step. The protection is re-applied by the agent
+    when it next starts (service_installer.apply_all_protection), so the window is the
+    reinstall itself.
+
+    Returns True when the file is gone or was unlocked; False if it still cannot be written.
+    """
+    if not target.exists():
+        return True
+    if platform.system() != "Windows":
+        return True
+
+    for cmd in (
+        ["icacls", str(target), "/remove:d", "Everyone"],
+        ["takeown", "/f", str(target)],
+        ["icacls", str(target), "/grant", "BUILTIN\\Administrators:F"],
+    ):
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass
+
+    # Verify rather than assume: a file we still cannot open would fail later, inside a
+    # copy, with a message that says nothing about tamper protection.
+    try:
+        with target.open("ab"):
+            return True
+    except OSError:
+        return False
+
+
 def install_files(agent_exe: Path) -> Path:
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
     dest = INSTALL_DIR / AGENT_EXE_NAME
     if agent_exe.resolve() != dest.resolve():
+        # An existing install is tamper-protected; unlock before replacing it (S241).
+        if not unlock_for_upgrade(dest):
+            raise Exception(
+                f"{dest} is protected and could not be unlocked for the upgrade. "
+                "Run the installer as Administrator, or remove the tamper DENY with "
+                "icacls before upgrading."
+            )
         shutil.copy2(agent_exe, dest)
 
     # Also install the lock screen overlay if it's next to the agent exe

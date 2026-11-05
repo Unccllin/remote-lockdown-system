@@ -35,7 +35,10 @@
 
 set -euo pipefail
 
-OUT_DIR="$(pwd)"
+# Default OUTSIDE the working copy: run from the repository root, the old default
+# (pwd) dropped a private key into a tree where only agent/dist/ was ignored, so a
+# `git add -A` could have published it (S242).
+OUT_DIR="${HOME}/.lockdown-secrets"
 FORCE=0
 
 info() { printf '\033[36m[INFO]\033[0m  %s\n' "$*"; }
