@@ -44,6 +44,11 @@ function getServerBaseUrl() {
 export default function EnrollDevicePage() {
   const navigate = useNavigate();
   const [token, setToken] = useState(null);
+  // The setup command comes from the server (it owns PUBLIC_SERVER_URL), so the
+  // operator copies a URL this server can actually be reached at — the browser's
+  // own origin is `localhost` when the dashboard is opened on the server, and a
+  // transcribed tailnet name has already been mistyped once (S214).
+  const [setupCommand, setSetupCommand] = useState(null);
   const [expiresAt, setExpiresAt] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -69,19 +74,40 @@ export default function EnrollDevicePage() {
     };
   }, []);
 
+  // Fetch the command the server composes (URL + reachability check + download).
+  // Failure is not fatal: the locally composed short form below remains as a fallback.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get('/enroll/setup-command')
+      .then(({ data }) => {
+        if (!cancelled) setSetupCommand(data);
+      })
+      .catch(() => {
+        if (!cancelled) setSetupCommand(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const remainingMs = expiresAt ? expiresAt - now : 0;
   const expired = remainingMs <= 0;
   const remainingMin = Math.floor(Math.max(0, remainingMs) / 60000);
   const remainingSec = Math.floor((Math.max(0, remainingMs) % 60000) / 1000);
 
-  const installCommand = token
-    ? `lockdown-installer.exe --token ${token} --server-url ${serverBaseUrl}`
+  // Short form: kept for the QR code, which cannot usefully encode a whole script.
+  const shortCommand = token
+    ? `lockdown-installer.exe --token ${token} --server-url ${setupCommand?.server_url || serverBaseUrl}`
     : '';
+
+  // What the operator copies: the server-composed script when available.
+  const installCommand = setupCommand?.command || shortCommand;
 
   // QR code image URL — uses a lightweight public QR generation API.
   // The QR encodes the full install command so a mobile app can scan it.
   const qrUrl = token
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(installCommand)}`
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shortCommand)}`
     : '';
 
   async function generateToken() {
@@ -299,15 +325,21 @@ export default function EnrollDevicePage() {
                 {copied ? 'Copied!' : 'Copy Command'}
               </button>
             </div>
-            <code
-              className="block bg-slate-950/50 rounded-lg p-3 text-xs font-mono text-emerald-300 break-all"
+            <pre
+              className="block bg-slate-950/50 rounded-lg p-3 text-xs font-mono text-emerald-300 whitespace-pre-wrap break-all"
               data-testid="enroll-command-display"
             >
               {installCommand}
-            </code>
+            </pre>
+            {(setupCommand?.notes || []).map((note) => (
+              <p key={note} className="text-xs text-slate-500 mt-2">
+                {note}
+              </p>
+            ))}
             <p className="text-xs text-slate-500 mt-3">
-              Run this in an elevated PowerShell on the target Windows machine.
-              The installer enrolls the device and installs the agent service automatically.
+              Run this in an elevated PowerShell on the target Windows machine. It checks
+              the server is reachable, downloads the installer, and in silent mode installs
+              the agent service automatically.
             </p>
           </div>
 

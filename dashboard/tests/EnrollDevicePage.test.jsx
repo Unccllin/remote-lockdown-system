@@ -43,6 +43,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function setupCommandResponse() {
+  return {
+    server_url: 'https://lockdown.example.com',
+    mode: 'gui',
+    command: "$u = 'https://lockdown.example.com'\nSet-Clipboard $u\nStart-Process $e -Verb RunAs",
+    notes: ['The wizard opens elevated.'],
+  };
+}
+
 describe('EnrollDevicePage', () => {
   it('renders the generate token button initially', () => {
     renderWithRouter();
@@ -139,10 +148,20 @@ describe('EnrollDevicePage', () => {
 
   it('detects a new device and shows success message', async () => {
     api.post.mockResolvedValue({ data: tokenResponse() });
-    // First GET: initial snapshot (empty). Second GET: poll finds new device.
-    api.get.mockResolvedValueOnce({ data: [] });
-    api.get.mockResolvedValueOnce({
-      data: [{ id: 'new-1', hostname: 'NEW-DEVICE', status: 'active' }],
+    // URL-aware, not a queue: the page also fetches /enroll/setup-command on mount,
+    // so positional `mockResolvedValueOnce` values would be consumed out of order.
+    let devicePolls = 0;
+    api.get.mockImplementation((url) => {
+      if (url === '/enroll/setup-command') {
+        return Promise.resolve({ data: setupCommandResponse() });
+      }
+      devicePolls += 1;
+      return Promise.resolve({
+        data:
+          devicePolls === 1
+            ? []
+            : [{ id: 'new-1', hostname: 'NEW-DEVICE', status: 'active' }],
+      });
     });
 
     renderWithRouter();
@@ -168,5 +187,46 @@ describe('EnrollDevicePage', () => {
     const qrSrc = screen.getByTestId('enroll-qr-code').getAttribute('src');
     expect(qrSrc).toContain('api.qrserver.com');
     expect(qrSrc).toContain(encodeURIComponent('lockdown-installer.exe'));
+  });
+
+  it('shows the server-composed setup command instead of composing one locally', async () => {
+    // Both past failures came from the browser composing the URL: a host only the
+    // server could resolve, and a tailnet name mistyped out of a chat window.
+    api.post.mockResolvedValue({ data: tokenResponse() });
+    api.get.mockImplementation((url) => {
+      if (url === '/enroll/setup-command') return Promise.resolve({ data: setupCommandResponse() });
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+    await fireEvent.click(screen.getByRole('button', { name: /Generate Enrollment Token/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('enroll-command-display')).toBeInTheDocument();
+    });
+    const shown = screen.getByTestId('enroll-command-display').textContent;
+    expect(shown).toContain("https://lockdown.example.com");
+    expect(shown).toContain('Set-Clipboard');
+    // The server's note is shown too, so the operator knows what to paste where.
+    expect(screen.getByText(/The wizard opens elevated/)).toBeInTheDocument();
+  });
+
+  it('keeps the QR code on the short command so it stays scannable', async () => {
+    api.post.mockResolvedValue({ data: tokenResponse() });
+    api.get.mockImplementation((url) => {
+      if (url === '/enroll/setup-command') return Promise.resolve({ data: setupCommandResponse() });
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+    await fireEvent.click(screen.getByRole('button', { name: /Generate Enrollment Token/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('enroll-qr-code')).toBeInTheDocument();
+    });
+    const qrSrc = screen.getByTestId('enroll-qr-code').getAttribute('src');
+    // Short form: the token + server URL, not the whole script.
+    expect(qrSrc).toContain(encodeURIComponent('lockdown-installer.exe'));
+    expect(qrSrc).not.toContain(encodeURIComponent('Set-Clipboard'));
   });
 });

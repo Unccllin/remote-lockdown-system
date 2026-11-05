@@ -243,3 +243,103 @@ describe('POST /api/enroll/claim', () => {
     ).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/enroll/setup-command (S214)
+//
+// The command is composed server-side because both past failures came from the
+// browser composing it: a URL only this machine could resolve, and a hostname the
+// operator mistyped out of a chat window.
+// ---------------------------------------------------------------------------
+
+describe('GET /api/enroll/setup-command', () => {
+  const originalPublic = process.env.PUBLIC_SERVER_URL;
+  const originalSilent = process.env.INSTALLER_SILENT;
+
+  afterEach(() => {
+    if (originalPublic === undefined) delete process.env.PUBLIC_SERVER_URL;
+    else process.env.PUBLIC_SERVER_URL = originalPublic;
+    if (originalSilent === undefined) delete process.env.INSTALLER_SILENT;
+    else process.env.INSTALLER_SILENT = originalSilent;
+  });
+
+  test('requires auth', async () => {
+    const res = await request(app).get('/api/enroll/setup-command');
+    expect(res.status).toBe(401);
+  });
+
+  test('requires operator', async () => {
+    const res = await request(app)
+      .get('/api/enroll/setup-command')
+      .set('Authorization', `Bearer ${makeToken('admin-1', 'v', 'viewer')}`);
+    expect(res.status).toBe(403);
+  });
+
+  test('uses PUBLIC_SERVER_URL, not whatever host the admin browsed', async () => {
+    process.env.PUBLIC_SERVER_URL = 'https://desktop-g4pcdhh.tail06a7e9.ts.net';
+
+    const res = await request(app)
+      .get('/api/enroll/setup-command')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.server_url).toBe('https://desktop-g4pcdhh.tail06a7e9.ts.net');
+    // The URL appears as a literal, so nothing has to be transcribed.
+    expect(res.body.command).toContain("$u = 'https://desktop-g4pcdhh.tail06a7e9.ts.net'");
+    // Reachability is checked first, with the host and port derived from that URL.
+    expect(res.body.command).toContain(
+      "Test-NetConnection 'desktop-g4pcdhh.tail06a7e9.ts.net' -Port 443"
+    );
+    expect(res.body.command).toContain('/api/download/installer');
+    expect(res.body.mode).toBe('gui');
+  });
+
+  test('the GUI variant puts the URL on the clipboard', async () => {
+    process.env.PUBLIC_SERVER_URL = 'https://lockdown.example.com';
+    const res = await request(app)
+      .get('/api/enroll/setup-command')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.body.command).toContain('Set-Clipboard');
+    expect(res.body.command).not.toContain('--silent');
+  });
+
+  test('the silent variant prompts for the token and reports an exit code', async () => {
+    process.env.PUBLIC_SERVER_URL = 'https://lockdown.example.com';
+    process.env.INSTALLER_SILENT = 'true';
+
+    const res = await request(app)
+      .get('/api/enroll/setup-command')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.body.mode).toBe('silent');
+    expect(res.body.command).toContain('Read-Host');
+    expect(res.body.command).toContain("'--silent'");
+    expect(res.body.command).toContain('ExitCode');
+    // The token must never be embedded in the command.
+    expect(res.body.command).not.toMatch(/--token\s+[A-Za-z0-9+/=]{20,}/);
+  });
+
+  test('a malformed PUBLIC_SERVER_URL names the bad value instead of 500ing blindly', async () => {
+    process.env.PUBLIC_SERVER_URL = 'desktop-g4pcdhh.tail06a7e9.ts.net'; // no scheme
+
+    const res = await request(app)
+      .get('/api/enroll/setup-command')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain('PUBLIC_SERVER_URL');
+    expect(res.body.error).toContain('desktop-g4pcdhh.tail06a7e9.ts.net');
+    expect(res.body.error).toMatch(/scheme:\/\/host/);
+  });
+
+  test('falls back to the request host when no override is configured', async () => {
+    delete process.env.PUBLIC_SERVER_URL;
+    const res = await request(app)
+      .get('/api/enroll/setup-command')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.server_url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  });
+});

@@ -32,6 +32,7 @@ const crypto = require('crypto');
 const pool = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { generateApiKey, hashApiKey } = require('../db/apiKey');
+const installer = require('./installer');
 
 const router = express.Router();
 
@@ -78,6 +79,78 @@ router.post('/token', requireAuth, requireRole('operator'), async (req, res, nex
   } catch (err) {
     next(err);
   }
+});
+
+/**
+ * GET /api/enroll/setup-command — the command an operator pastes on the target.
+ *
+ * Composed here, not in the browser, for two reasons that have both already caused
+ * failures: the URL must be the one *targets* can reach (`publicServerUrl`, not the
+ * admin's `window.location.origin`), and an operator copy-pasting a tailnet hostname
+ * from a chat window mistyped it into `desktop-q4pcdhk.ta?06a7e9` (S214).
+ *
+ * The returned script also verifies reachability before downloading, so a machine
+ * without the tailnet up fails with a sentence instead of a resolver error.
+ *
+ * When INSTALLER_SILENT=true the wizard is assumed to be a build that supports
+ * `--silent` (S214) and the command installs without the GUI; otherwise it launches
+ * the wizard with the server URL already on the clipboard.
+ */
+router.get('/setup-command', requireAuth, requireRole('operator'), (req, res) => {
+  const serverUrl = installer.helpers.publicServerUrl(req);
+
+  // PUBLIC_SERVER_URL is operator-supplied, and `new URL()` throws on anything that
+  // is not an absolute URL (a missing scheme is the common mistake). Say which value
+  // is wrong instead of returning a bare 500.
+  let parsed;
+  try {
+    parsed = new URL(serverUrl);
+  } catch {
+    return res.status(500).json({
+      error:
+        `PUBLIC_SERVER_URL is not a valid absolute URL: ${JSON.stringify(serverUrl)}. ` +
+        'Use scheme://host[:port], e.g. https://lockdown.example.com',
+    });
+  }
+  const host = parsed.hostname;
+  const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+  const silent = (process.env.INSTALLER_SILENT || '').toLowerCase() === 'true';
+
+  const lines = [
+    `# Paste into PowerShell on the target machine (it elevates itself).`,
+    `$u = '${serverUrl}'`,
+    `if (-not (Test-NetConnection '${host}' -Port ${port}).TcpTestSucceeded) {`,
+    `    throw "Cannot reach $u on port ${port}. Check the VPN/Tailscale is connected, then try: Resolve-DnsName ${host}"`,
+    `}`,
+    `$e = Join-Path $env:TEMP 'lockdown-setup.exe'`,
+    `Invoke-WebRequest "$u/api/download/installer" -OutFile $e`,
+  ];
+
+  if (silent) {
+    lines.push(
+      `$t = Read-Host 'Enrollment token (from this page)'`,
+      `$p = Start-Process $e -Verb RunAs -Wait -PassThru -ArgumentList @('--server-url', $u, '--token', $t, '--silent')`,
+      `"exit code: $($p.ExitCode)"`
+    );
+  } else {
+    lines.push(
+      `Set-Clipboard $u`,
+      `Start-Process $e -Verb RunAs`,
+      `Write-Host 'Server URL is on the clipboard — paste it into the wizard, then paste the token.' -ForegroundColor Green`
+    );
+  }
+
+  res.json({
+    server_url: serverUrl,
+    mode: silent ? 'silent' : 'gui',
+    command: lines.join('\n'),
+    notes: silent
+      ? ['Installs without the GUI and reports an exit code: 0 = installed, 1 = failed.']
+      : [
+          'The wizard opens elevated; its Server URL field is filled from the clipboard.',
+          'The enrollment token is single use and expires in 15 minutes.',
+        ],
+  });
 });
 
 /**
