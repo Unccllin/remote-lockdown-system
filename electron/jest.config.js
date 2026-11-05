@@ -6,6 +6,12 @@ module.exports = {
   // relative path resolution works the same as in production.
   rootDir: '.',
   testTimeout: 10000,
+  // Unit tests run in Node, so the real `electron` module is not needed — and requiring
+  // it dragged in the 100 MB binary download (which failed to install on an upgrade,
+  // failing a URL-validation test for an unrelated reason). See tests/electron-stub.js.
+  moduleNameMapper: {
+    '^electron$': '<rootDir>/tests/electron-stub.js',
+  },
   collectCoverageFrom: [
     '*.js',
     '!main.js',
