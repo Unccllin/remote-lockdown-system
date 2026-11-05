@@ -53,28 +53,27 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 227 — 2026-11-05 (S209 closed: the Windows installer routes work)
+## Latest session: 228 — 2026-11-05 (reproducible Windows artefacts, and a release-path bug)
 
 ### Fog cleared
 
-- **Why the Windows installer routes 503'd**: the artefact was missing, and the probe was
-  telling us precisely that (`installer_unavailable_reason`). Nothing else was wrong.
-- **Whether the NSIS path works at all**: yes — `/nsis` now returns a real PE32 GUI
-  executable, so `makensis` compiles with the staged binary.
+- **How the missing artefact is produced**: one script, one CI job, one `make` target.
+- **Whether the generic installer can bake a wrong URL**: it could, silently, and now
+  cannot.
+- **Why the first draft of the script failed on the target**: em dashes in a BOM-less
+  UTF-8 file, decoded as ANSI by Windows PowerShell 5.1. Pinned by a test.
 
 ### Fog remaining
 
-- **The staged artefacts are not produced by CI.** `agent/dist/` is local, so a fresh clone
-  still has no Windows installers until someone runs the build. A release job (or a
-  `make`-able Windows build) is the durable answer — recorded, not attempted here because
-  it needs a Windows runner.
+- **The CI job has never run** — it cannot, on this host. The script is proven on the
+  target; the workflow is linted (actionlint + shellcheck) but unexecuted until pushed.
 - **D-117** (markdown/spec drift) untouched.
-- **No TPM on FRANKENSTEIN** → DPAPI fallback (environmental).
-- **Port-proxy durability** after a WSL restart.
+- **No TPM on FRANKENSTEIN** (DPAPI fallback), and the WSL port-proxy still needs
+  re-creating after a WSL restart.
 
 ### Debt items closed
 
-- **S209: `lockdown-installer.exe` missing** — closed with live evidence (see VERIFY).
+- None newly (S209 was closed in S227).
 
 ### Debt items still open
 
@@ -82,42 +81,40 @@
 
 ### Blockers
 
-- None on this host. Producing these artefacts automatically needs a Windows build runner.
+- None. Producing the artefacts automatically needs a push (CI runs on GitHub, not here).
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback**: the availability probe had been returning the
-  reason (`lockdown-installer.exe is not staged…`) for many sessions; it was correct every
-  time and simply not acted on. The probe was never the problem.
-- **Layer 2 — context provision**: nothing said that a frozen installer needs
-  `service_host.py` beside it, so the spec looked complete while a signature feature
-  (service registration) would have silently degraded.
+- **Layer 4 — verification feedback** (primary): the build script had no test of its URL
+  extraction, so a one-character regex error shipped a wrong value into every generic
+  installer for ten sessions. The new assertion — "an empty default must refuse" — is the
+  test that was missing.
+- **Layer 3 — execution environment**: the first script draft was correct Python-side and
+  broken PowerShell-side; only running it on the target exposed the encoding trap.
 
 ### VERIFY
 
-- `GET /api/installer/agent-version?platform=win` →
-  `installer_available: true`, `nsis_available: true`, `windows_installer_ready: true`,
-  `installer_unavailable_reason: null`.
-- `GET /api/installer/<device>?platform=win` → **200**, 36 636 083 bytes; ZIP entries:
-  `EULA.txt`, `PRIVACY_POLICY.txt`, `README.txt`, `config.json`, `install.ps1`,
-  `lockdown-agent.exe`, `lockdown-installer.exe`, `lockdown-watchdog.exe`.
-- `GET /api/installer/<device>/nsis` → **200**, 36 293 472 bytes, `PE32 executable for MS
-  Windows 4.00 (GUI)`.
-- Suites: agent **819**, server 793, dashboard 220; ruff clean.
-- Commit: `4378cd7`.
+- Target run of the script: `-Only agent` → `lockdown-agent.exe 15 363 404 bytes PE=True`;
+  `-Only service` → `lockdown-service.exe 7 849 440 bytes`; a copy outside the repo →
+  `!!  agent/ not found next to scripts/ - run this from the repository.`
+- `make windows-artifacts` on Linux → `windows-artifacts needs PowerShell: …` exit 1.
+- `make lint-workflows` → clean (actionlint + shellcheck).
+- `make test-scripts` → 8, 18, 40/0, 44, 18, 2, 5 skipped — all green.
+- New guards: 6 passed. Generic-installer suite: 18 passed.
+- Commit: `61a8347`.
 
 ### Session artifacts
 
-- Changed: `agent/installer.spec`, `agent/installer_gui.spec`,
-  `agent/service_installer.py`; staged `agent/dist/lockdown-installer.exe` (gitignored).
+- Changed: `scripts/build-windows-artifacts.ps1` (new),
+  `.github/workflows/windows-artifacts.yml` (new),
+  `scripts/test_build_windows_artifacts.py` (new), `Makefile`,
+  `scripts/build-generic-installer.sh`, `scripts/test_generic_installer.py`.
 
 ### Next session opening
 
-Make the artefact reproducible without a human: either a Windows CI job that builds
-`lockdown-installer.exe`, `lockdown-service.exe` and the agent from their specs and
-publishes them as release assets, or a documented `make` target that does it on a Windows
-box. Until then `agent/dist/` is a local convenience and a fresh clone cannot produce a
-Windows installer.
+Push and watch the `Windows artifacts` job produce the binaries, then stage them (the same
+two files S227 staged by hand) — that closes the loop between the repository and
+`agent/dist/`. After that the only open item is D-117.
 
 ---
 

@@ -1728,3 +1728,32 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-083
+  statement: 'Windows artefacts must be reproducible from the repository, and a build must never bake
+    a server URL nobody chose. scripts/build-windows-artifacts.ps1 builds lockdown-service.exe, lockdown-installer.exe
+    and lockdown-agent.exe from their specs and verifies each output by size and MZ/PE header (a zero-byte
+    or non-PE result fails the build, because the server serves whatever is staged and the failure would
+    only surface later as an installer that does nothing); .github/workflows/windows-artifacts.yml runs
+    it on windows-latest with if-no-files-found: error, pinned action SHAs and persist-credentials false;
+    make windows-artifacts delegates and reports when PowerShell is absent. Found while testing it: scripts/build-generic-installer.sh
+    extracted the default URL with sed -E ''s/.*"([^"]+)".*/\1/'', whose [^"]+ does not match an EMPTY
+    default, so sed passed the whole source line through and the build baked ''DEFAULT_SERVER_URL = ""''
+    as the URL — every generic installer built since S213 would have shipped that. The extraction is now
+    sed -nE with [^"]* and a http:// or https:// scheme check. Also pinned by test: the build script must
+    be ASCII-only, because Windows PowerShell 5.1 decodes BOM-less UTF-8 as ANSI and a three-byte em dash
+    swallowed a closing quote, breaking the parse on the target.'
+  domain: general
+  status: confirmed
+  evidence_level: emulated
+  provenance: script executed on FRANKENSTEIN (-Only agent 15,363,404 bytes PE true; -Only service 7,849,440
+    bytes), guard outside repo refused; make windows-artifacts refuses on Linux; lint-workflows clean;
+    test-scripts green incl 18 generic-installer tests and 6 new guards
+  source: scripts/build-windows-artifacts.ps1; .github/workflows/windows-artifacts.yml; Makefile; scripts/build-generic-installer.sh;
+    scripts/test_build_windows_artifacts.py; scripts/test_generic_installer.py
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

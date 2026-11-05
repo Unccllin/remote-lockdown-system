@@ -10888,3 +10888,112 @@ box. Until then `agent/dist/` is a local convenience and a fresh clone cannot pr
 Windows installer.
 
 ---
+
+---
+
+## Session 228 — 2026-11-05 (reproducible Windows artefacts, and a release-path bug)
+
+### RULE-ZERO
+
+**Read**: `agent/*.spec` (what each build needs), `scripts/build-generic-installer.sh`
+(URL extraction), `.github/workflows/lint.yml` (conventions: pinned actions, concurrency,
+`permissions: contents: read`), the `Makefile` (delegation rule), and
+`scripts/script_test_runner.py` (the `__main__` convention every `test_*.py` must follow).
+
+**Starting point**: S227 built `lockdown-installer.exe` by hand on a Windows box, because
+`agent/dist/` is gitignored. The recorded next step was to make that reproducible.
+
+### IMPLEMENT
+
+- **`scripts/build-windows-artifacts.ps1`** — one script for every Windows target
+  (`lockdown-service.exe`, `lockdown-installer.exe`, `lockdown-agent.exe`, optionally
+  `lockdown-setup.exe`), driven by the existing specs, with `-Only` and `-SkipDeps` for
+  local iteration. Every artefact is verified by size and MZ/PE header; a bad output fails
+  the build rather than being reported as success.
+- **`.github/workflows/windows-artifacts.yml`** — `windows-latest`, `workflow_dispatch` and
+  `v*` tags, runs the script, lists the results, uploads them with
+  `if-no-files-found: error`. Actions pinned to the SHAs already used in this repo;
+  `persist-credentials: false` (zizmor's `artipacked`).
+- **`Makefile`** — `make windows-artifacts` delegates and, when PowerShell is absent, says
+  so and exits 1 instead of pretending.
+- **`scripts/test_build_windows_artifacts.py`** — 6 guards: the script exists, is
+  **ASCII-only**, references every spec it claims to build, verifies PE output, the
+  workflow runs it on Windows and uploads, and the Makefile delegates instead of
+  duplicating build logic.
+
+### BUG FOUND (release path, pre-existing since S213)
+
+`scripts/build-generic-installer.sh` derived the default server URL with
+`sed -E 's/.*"([^"]+)".*/\1/'`. `[^"]+` requires at least one character, so an **empty**
+default does not match and sed passes the whole source line through — meaning the build
+baked `DEFAULT_SERVER_URL = ""` as the server URL. Since S213 removed the Worker default
+(an empty string), **every generic installer built from then on would have shipped that
+garbage URL**. Fixed with `sed -nE 's/^[^"]*"([^"]*)".*/\1/p'` plus a scheme check
+(`http://*|https://*`), which is the validation that would have caught it.
+
+The four existing tests that relied on the old pass-through now pass an explicit
+`--server-url` (via the helper), and the refusal case is a test of its own — the contract
+is "refuse to guess", not "guess something".
+
+### Fog cleared
+
+- **How the missing artefact is produced**: one script, one CI job, one `make` target.
+- **Whether the generic installer can bake a wrong URL**: it could, silently, and now
+  cannot.
+- **Why the first draft of the script failed on the target**: em dashes in a BOM-less
+  UTF-8 file, decoded as ANSI by Windows PowerShell 5.1. Pinned by a test.
+
+### Fog remaining
+
+- **The CI job has never run** — it cannot, on this host. The script is proven on the
+  target; the workflow is linted (actionlint + shellcheck) but unexecuted until pushed.
+- **D-117** (markdown/spec drift) untouched.
+- **No TPM on FRANKENSTEIN** (DPAPI fallback), and the WSL port-proxy still needs
+  re-creating after a WSL restart.
+
+### Debt items closed
+
+- None newly (S209 was closed in S227).
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None. Producing the artefacts automatically needs a push (CI runs on GitHub, not here).
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the build script had no test of its URL
+  extraction, so a one-character regex error shipped a wrong value into every generic
+  installer for ten sessions. The new assertion — "an empty default must refuse" — is the
+  test that was missing.
+- **Layer 3 — execution environment**: the first script draft was correct Python-side and
+  broken PowerShell-side; only running it on the target exposed the encoding trap.
+
+### VERIFY
+
+- Target run of the script: `-Only agent` → `lockdown-agent.exe 15 363 404 bytes PE=True`;
+  `-Only service` → `lockdown-service.exe 7 849 440 bytes`; a copy outside the repo →
+  `!!  agent/ not found next to scripts/ - run this from the repository.`
+- `make windows-artifacts` on Linux → `windows-artifacts needs PowerShell: …` exit 1.
+- `make lint-workflows` → clean (actionlint + shellcheck).
+- `make test-scripts` → 8, 18, 40/0, 44, 18, 2, 5 skipped — all green.
+- New guards: 6 passed. Generic-installer suite: 18 passed.
+- Commit: `61a8347`.
+
+### Session artifacts
+
+- Changed: `scripts/build-windows-artifacts.ps1` (new),
+  `.github/workflows/windows-artifacts.yml` (new),
+  `scripts/test_build_windows_artifacts.py` (new), `Makefile`,
+  `scripts/build-generic-installer.sh`, `scripts/test_generic_installer.py`.
+
+### Next session opening
+
+Push and watch the `Windows artifacts` job produce the binaries, then stage them (the same
+two files S227 staged by hand) — that closes the loop between the repository and
+`agent/dist/`. After that the only open item is D-117.
+
+---
