@@ -1511,3 +1511,32 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-075
+  statement: 'The lockdown agent must be installed as a Windows service, not a scheduled task or Run key:
+    on the live machine the Task Scheduler executed nothing while reporting success and the Run key launched
+    a non-elevated process into a directory that grants Users only (RX), so the agent died before logging.
+    The adopted design is agent/service_host.py — an SCM host that supervises the agent as a child process
+    with restart backoff, exposes a --service dispatcher mode (required: python.exe script.py does not
+    speak to the SCM, and without --service the SCM times out after 30s with event 7009), and adapts the
+    Win32 stop handle to is_set() (a raw handle has no such method; using one produced SERVICE_EXIT_CODE
+    0x20000001 with the service logging start and stop in the same second). service_installer installs
+    it with start=auto, obj=LocalSystem, description and crash recovery (restart/5000/10000/30000, reset
+    86400), then polls sc query for RUNNING rather than trusting an exit code, and keeps the task + Run
+    key only as a fallback. Verified live: after a reboot at 10:54:14 with no user logged on, the service
+    was RUNNING, agent processes were live in session 0, and the server recorded last_checkin 2026-11-05
+    07:54:57.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live FRANKENSTEIN reboot at 10:54:14 with no logon: service RUNNING (AUTO_START/LocalSystem/--service
+    binPath), agent pids 8584+10224 in session 0, server last_checkin 07:54:57; SCM events 7009 and 0x20000001
+    explained the two bugs; agent 790 tests'
+  source: agent/service_host.py; agent/service_installer.py; live sc query/qc output; agent.log [SERVICE]
+    lines; Service Control Manager events 7009/7024; server last_checkin
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

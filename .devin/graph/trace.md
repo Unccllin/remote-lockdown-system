@@ -10007,3 +10007,121 @@ tamper check expects, and removes the dependency on both the scheduler and the R
 key). Recommend the service and record why.
 
 ---
+
+---
+
+## Session 220 — 2026-11-05 (the agent runs as a service; verified at boot with no logon)
+
+### RULE-ZERO
+
+**Read**: `agent/service_installer.py` (task/Run-key path, launch, tamper hooks),
+`agent/installer_gui.py` (`install_service` → `service_installer.install`), the live
+SCM state on FRANKENSTEIN (service list, events, `sc qc`/`queryex`), and the agent's
+own session-0 handling (`D-007`).
+
+**Decision taken** (user-approved): make the agent a real Windows service. Rationale
+recorded in S219: it is the only mechanism that starts at boot without a logon, needs
+neither the scheduler nor a run key, does not require weakening the read-only install
+directory, and makes the agent's own `service_missing` tamper check truthful.
+
+### IMPLEMENT
+
+- **`agent/service_host.py` (new)** — SCM host that supervises the agent as a child
+  process: start, restart with 5/10/30/60 s backoff, stop on SCM stop, lifecycle lines
+  appended to `agent.log` as `[SERVICE] …`. Modes: `--service` (SCM dispatcher),
+  `debug` (foreground, for labs), `install|start|stop|remove` (pywin32 CLI).
+- **`service_installer.py`** — `install_service()` creates the service
+  (`start= auto`, `obj= LocalSystem`), sets the description, sets crash recovery
+  (`restart/5000/restart/10000/restart/30000`, `reset= 86400`), starts it, then **polls
+  `sc query` for RUNNING** rather than trusting an exit code. `remove_service()` stops
+  and deletes. `install()` tries the service first and keeps the task + Run key only as
+  a fallback; `uninstall()` removes the service.
+- Tests: +2 (binPath carries `--service`; a frozen `lockdown-service.exe` is preferred).
+
+### Two bugs the live machine found
+
+1. **binPath without `--service`**: the SCM started `python.exe service_host.py`, no
+   dispatcher ran, and 30 s later the SCM gave up — event 7009 *"A timeout was reached
+   while waiting for the Lockdown Agent service to connect"*, exit code 1066.
+   `python.exe script.py` does not speak to the SCM; `pythonservice.exe` normally does
+   that job, so the host must call `Initialize/PrepareToHostSingle/StartServiceCtrlDispatcher`.
+2. **`threading.Event` API used on a Win32 handle**: `run_supervisor` called
+   `stop_event.is_set()`, which a `win32event` handle does not have. `SvcDoRun` raised,
+   the service logged `[SERVICE] service starting` and `[SERVICE] service stopped` in the
+   same second, and reported `SERVICE_EXIT_CODE 0x20000001`. Fixed with a `_StopHandle`
+   adapter using `WaitForSingleObject`.
+
+### Fog cleared
+
+- **The enrolment thread is closed**: FRANKENSTEIN enrolled, and after a reboot at
+  10:54:14 with **no user logged on** the service was RUNNING, two agent processes were
+  live in session 0 (started 10:54:37/39), and the server recorded
+  `last_checkin 07:54:57` — the first unattended check-in in this whole sequence.
+- **Why tasks and Run keys could never have worked here**: the scheduler executes
+  nothing (S218) and the Run key is non-elevated into a read-only directory (S219).
+  Both are now fallbacks, not the plan.
+
+### Fog remaining
+
+- **Two agent processes still start** (pids 8584 and 10224, two seconds apart). The
+  frozen agent has no single-instance guard, and both the service host and the agent's
+  own watchdog start one. Needs either a guard inside the agent (rebuild) or a
+  host-side check before spawning.
+- **A frozen `lockdown-service.exe` is still required** for targets without Python; today
+  the service runs `python.exe service_host.py --service`, which is fine for the lab and
+  for the HP box (Python installed) but not for a clean customer machine. `agent/build.ps1`
+  needs a second PyInstaller target for the host.
+- Session 0 means the agent's `D-007` path activates (`tsdiscon` on the active console
+  session) — expected for a lockdown agent, but it should be verified deliberately.
+- Tamper protection is skipped on this box (`tamper_protection module not available`);
+  with the service now present, that module should become worth wiring properly.
+- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
+  the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None for enrolment or unattended start. Remaining items are build/packaging work.
+
+### Failure attribution
+
+- **Layer 3 — execution environment** (again, and now resolved by design rather than by
+  argument): the launch context was the defect; replacing the mechanism removed it.
+- **Layer 4 — verification feedback**: the decisive evidence was a *reboot with no
+  logon* plus the server's `last_checkin`. Any weaker check (service state alone, exit
+  code, process list on a logged-in machine) could have passed while the agent was
+  useless.
+
+### VERIFY
+
+- Install: `OK: installed`; `sc qc` → `START_TYPE: 2 AUTO_START`,
+  `SERVICE_START_NAME: LocalSystem`,
+  `BINARY_PATH_NAME: "C:\Program Files\Python312\python.exe" "C:\ProgramData\LockdownAgent\service_host.py" --service`;
+  `sc query` → `STATE: 4 RUNNING`; agent pids present in session 0.
+- Reboot (`shutdown /r /t 15`), then: uptime 63 s, **no user logged on** (console session
+  5 `Conn`, `NEWARK USER` session 1 `Disc`), service RUNNING, agent pids 8584 + 10224 in
+  session 0 started 10:54:37/39, server `last_checkin 2026-11-05 07:54:57` (20 s old).
+- Suites: agent **790** (+2), server 793, dashboard 220; ruff clean.
+- Commit: `d99b0b4`.
+
+### Session artifacts
+
+- Changed: `agent/service_host.py` (new), `agent/service_installer.py`,
+  `agent/tests/test_service_installer.py`.
+
+### Next session opening
+
+Two packaging tasks and one correctness task, in that order: build
+`lockdown-service.exe` in `agent/build.ps1` so the service works without Python on the
+target; add a single-instance guard so the host and the agent's watchdog cannot both
+start one (pids 8584/10224); then wire tamper protection now that a service exists and
+`service_missing` should finally be false.
+
+---

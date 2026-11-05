@@ -53,26 +53,34 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 219 — 2026-11-05 (why nothing survives a logon: the install dir is read-only to users)
+## Latest session: 220 — 2026-11-05 (the agent runs as a service; verified at boot with no logon)
 
 ### Fog cleared
 
-- **Why the agent vanished without a log line**: it could not create its log file.
-  Nothing writes, nothing to read — consistent with `Users:(RX)` on `agent.log`.
-- **Why the machine looked "auto-logged-in"**: the console account `NEWARK USER` is a
-  different local user from the SSH account `user`; the installer ran as `user`, so the
-  install is private to that account in practice even though the path is shared.
+- **The enrolment thread is closed**: FRANKENSTEIN enrolled, and after a reboot at
+  10:54:14 with **no user logged on** the service was RUNNING, two agent processes were
+  live in session 0 (started 10:54:37/39), and the server recorded
+  `last_checkin 07:54:57` — the first unattended check-in in this whole sequence.
+- **Why tasks and Run keys could never have worked here**: the scheduler executes
+  nothing (S218) and the Run key is non-elevated into a read-only directory (S219).
+  Both are now fallbacks, not the plan.
 
 ### Fog remaining
 
-- **Fixing it is a product decision, not a bug fix**: either (a) grant the interactive
-  user modify rights on `C:\ProgramData\LockdownAgent`, (b) run the agent as SYSTEM
-  through a working scheduler, or (c) install a real Windows service — which is what the
-  agent's own tamper check already expects (`service_missing=True` on every healthy
-  install). Option (c) is the honest answer to "runs at boot without a logon".
-- The scheduler defect on this image remains unaddressed (`sfc`/`DISM`/another machine).
-- Unchanged: `TAMPER DETECTED service_missing=True`; no TPM (DPAPI fallback);
-  `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness; S202 objective.
+- **Two agent processes still start** (pids 8584 and 10224, two seconds apart). The
+  frozen agent has no single-instance guard, and both the service host and the agent's
+  own watchdog start one. Needs either a guard inside the agent (rebuild) or a
+  host-side check before spawning.
+- **A frozen `lockdown-service.exe` is still required** for targets without Python; today
+  the service runs `python.exe service_host.py --service`, which is fine for the lab and
+  for the HP box (Python installed) but not for a clean customer machine. `agent/build.ps1`
+  needs a second PyInstaller target for the host.
+- Session 0 means the agent's `D-007` path activates (`tsdiscon` on the active console
+  session) — expected for a lockdown agent, but it should be verified deliberately.
+- Tamper protection is skipped on this box (`tamper_protection module not available`);
+  with the service now present, that module should become worth wiring properly.
+- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
+  the S202 objective.
 
 ### Debt items closed
 
@@ -84,37 +92,41 @@
 
 ### Blockers
 
-- A product decision on the persistence mechanism (permissions grant vs SYSTEM task vs
-  service).
+- None for enrolment or unattended start. Remaining items are build/packaging work.
 
 ### Failure attribution
 
-- **Layer 3 — execution environment** (primary): a read-only install directory plus a
-  broken scheduler means no persistence path exists on this machine, and neither
-  condition is visible from the code or the tests.
-- **Layer 4 — verification feedback**: the ACL check (`icacls`) took seconds and
-  explained a symptom two sessions had attributed to the scheduler alone.
+- **Layer 3 — execution environment** (again, and now resolved by design rather than by
+  argument): the launch context was the defect; replacing the mechanism removed it.
+- **Layer 4 — verification feedback**: the decisive evidence was a *reboot with no
+  logon* plus the server's `last_checkin`. Any weaker check (service state alone, exit
+  code, process list on a logged-in machine) could have passed while the agent was
+  useless.
 
 ### VERIFY
 
-- After reboot (uptime 84 s, console `NEWARK USER` id 1 active): `tasklist` → no agent;
-  `agent.log` → no line since the previous manual start; no launch-related event.
-- `icacls` output quoted above shows `Users:(RX)` on the log and config.
-- Same exe from an elevated session: runs (pid 12684).
-- Run key still present and correct.
-- No code changes this session; suites unchanged (agent 787, server 793, dashboard 220).
+- Install: `OK: installed`; `sc qc` → `START_TYPE: 2 AUTO_START`,
+  `SERVICE_START_NAME: LocalSystem`,
+  `BINARY_PATH_NAME: "C:\Program Files\Python312\python.exe" "C:\ProgramData\LockdownAgent\service_host.py" --service`;
+  `sc query` → `STATE: 4 RUNNING`; agent pids present in session 0.
+- Reboot (`shutdown /r /t 15`), then: uptime 63 s, **no user logged on** (console session
+  5 `Conn`, `NEWARK USER` session 1 `Disc`), service RUNNING, agent pids 8584 + 10224 in
+  session 0 started 10:54:37/39, server `last_checkin 2026-11-05 07:54:57` (20 s old).
+- Suites: agent **790** (+2), server 793, dashboard 220; ruff clean.
+- Commit: `d99b0b4`.
 
 ### Session artifacts
 
-- Changed: none (diagnosis only).
+- Changed: `agent/service_host.py` (new), `agent/service_installer.py`,
+  `agent/tests/test_service_installer.py`.
 
 ### Next session opening
 
-Decide the persistence mechanism: write the install directory so the interactive user
-can maintain state (smallest change, weakest protection), or make the agent a real
-Windows service so it runs as SYSTEM at boot without a logon (matches what its own
-tamper check expects, and removes the dependency on both the scheduler and the Run
-key). Recommend the service and record why.
+Two packaging tasks and one correctness task, in that order: build
+`lockdown-service.exe` in `agent/build.ps1` so the service works without Python on the
+target; add a single-instance guard so the host and the agent's watchdog cannot both
+start one (pids 8584/10224); then wire tamper protection now that a service exists and
+`service_missing` should finally be false.
 
 ---
 
