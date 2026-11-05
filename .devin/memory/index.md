@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-05 16:00:28
-Active memories: 1064 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-05 16:56:12
+Active memories: 1083 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -24,9 +24,12 @@ Active memories: 1064 | Superseded: 0 | Decayed: 20
 | m-998 | MISTAKE: mistake: attributed the start failure to  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1051 | Existing harnesses often contain the exact machine |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-971 | 'The server rejected my token' may mean 'the serve |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1090 | Security features need a sanctioned update path, n |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-995 | Control experiments beat inference: prove the mech |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1101 | Unit tests should not depend on a browser binary;  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-989 | A task that exits 0 may have started nothing; veri |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1013 | Fail-secure defaults need an unwind path that does |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1098 | A job's name defines its scope: 'Build PblApp' sho |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-978 | MISTAKE: mistake: spent S211/S212 fixing token sem |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1053 | Verify generated certificates with a strict client |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1069 | Key-pinning designs need their key distribution de |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -39,13 +42,17 @@ Active memories: 1064 | Superseded: 0 | Decayed: 20
 | m-1068 | MISTAKE: mistake: assumed the remaining gap was tr |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1058 | 'TLS works' is server-specific; record which serve |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1023 | Alternatives must be modelled as OR in the failure |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1087 | Pinning changes behaviour: unsigned updates are no |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1043 | Record TLS requirements as work items, not as obst |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1093 | A verification chain has to be walked to its last  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-984 | A served script should delegate to the installer,  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1081 | A demonstration is not reproducible until every in |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1014 | MISTAKE: mistake: initially suspected the display  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1088 | MISTAKE: mistake: pinned the installer's staging p |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1065 | 'Verify our server's verdict' is an enrolment + ke |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1022 | Separate assets from state in any tamper/tripwire  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1038 | When a read endpoint synthesises a default, every  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1089 | Check the pipeline before describing it as missing |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1071 | Module-level caches need an explicit test seam. |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1037 | Two registries need an explicit statement of which |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1011 | Two sources of truth need an explicit reconciliati |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -53,6 +60,7 @@ Active memories: 1064 | Superseded: 0 | Decayed: 20
 | m-1018 | Check process parentage before concluding duplicat |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1029 | A missing artefact named by a probe is a build tas |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1072 | MISTAKE: mistake: wrote a test that depended on ca |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1100 | Audit per component, not just at the root. |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-980 | Gate a new capability behind an explicit flag when |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1056 | MISTAKE: mistake: probed https://127.0.0.1 with a  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1066 | Find the writers of the state before designing a t |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -60,6 +68,7 @@ Active memories: 1064 | Superseded: 0 | Decayed: 20
 | m-982 | MISTAKE: mistake: initially let the dashboard comp |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-991 | Verify the effect (a running process), not the exi |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1003 | A service binPath must reach an SCM dispatcher; py |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1097 | A fresh clone has no BaseTools; scripts that assum |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1028 | MISTAKE: mistake: left 'watchdog expected but not  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-987 | Environment assumptions (platform, TLS policy, sch |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1080 | MISTAKE: mistake: treated 'Verdict decoded' as the |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -80,10 +89,13 @@ Active memories: 1064 | Superseded: 0 | Decayed: 20
 | m-1079 | A test root is fine for a demonstration and unusab |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-988 | Measure a machine's identity (detect-virt, TTL, SS |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1019 | A service executable must handle the SCM's empty a |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1102 | Distinguish 'false positive' from 'real but requir |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-967 | Make error messages name the state and the next ac |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1024 | A security alarm that fires on healthy state train |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1103 | MISTAKE: mistake: expected the electron upgrade to |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1070 | Publish the derivative (kid) together with the key |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1020 | Put keep-awake where the longest-lived process is  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1099 | MISTAKE: mistake: hypothesised failures from the c |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1042 | Sibling scripts diverge: a fix applied to one vari |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1059 | Log the transport layer's events, or a missing req |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1045 | A check must fail when the behaviour is absent; ba |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -101,6 +113,7 @@ Active memories: 1064 | Superseded: 0 | Decayed: 20
 | m-1034 | Write PowerShell scripts in ASCII (or with a BOM); |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-976 | Never ship a default backend in an installer: the  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1049 | Verify a provisioning write with a readback or you |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1095 | MISTAKE: mistake: treated 'device refuses unsigned |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1076 | MISTAKE: mistake: accepted 'registry is empty' as  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1021 | MISTAKE: mistake: recorded a duplicate-instance de |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1074 | Verify a list after writing to it; an empty regist |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -109,27 +122,32 @@ Active memories: 1064 | Superseded: 0 | Decayed: 20
 | m-970 | MISTAKE: mistake: patched a file with duplicated b |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1044 | MISTAKE: mistake: assumed combining --generate-key |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1017 | MISTAKE: mistake: earlier sessions created devices |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1092 | MISTAKE: mistake: described the release pipeline a |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1026 | Duplicate mechanisms need an explicit owner; other |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-973 | A loopback default should warn at generation time, |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1000 | When a daemon leaves no trace, suspect file permis |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1008 | Distinguish failure causes at the point they occur |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1025 | MISTAKE: mistake: recorded 'tamper_protection not  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-992 | Separate what the harness caused from what the pro |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1091 | Private key defaults should point outside the repo |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-993 | An empty operational log is itself evidence: the s |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1012 | A log line repeating every ten seconds is a sympto |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-986 | MISTAKE: mistake: asserted Read-Host in the GUI-mo |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1033 | Test the build path, not just the product: a one-c |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1078 | Assert the outcome (signature verified), not the p |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1054 | Put the chain check next to the pin in the generat |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1096 | Read the needs: graph before interpreting 'skipped |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-999 | A shared path (ProgramData) is not a shared permis |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1015 | Clean up the rows a repro creates; otherwise the p |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-994 | MISTAKE: mistake: attributed my own duplicate Star |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1050 | TPM NV AUTHWRITE authorizes with the index value,  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-974 | MISTAKE: mistake: spent S211 fixing token semantic |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1016 | Record identity with identifiers, and include know |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1086 | Security features that harden files need a sanctio |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1064 | MISTAKE: mistake: read S232's success as evidence  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1039 | Kill background services by task id, not by a patt |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1036 | MISTAKE: mistake: trusted the URL extraction becau |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1085 | A pin must name a path that outlives the installer |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-996 | Verify effects (processes, files), never exit code |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1077 | Fail-closed requirements surface as rejections wit |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-1007 | Diagnose sleep with powercfg rather than assuming  |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
@@ -138,6 +156,7 @@ Active memories: 1064 | Superseded: 0 | Decayed: 20
 | m-1002 | MISTAKE: mistake: attributed the missing agent aft |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-968 | A client that hard-codes a success status breaks w |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-969 | Trim identifiers, not secrets — and tokens are ide |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
+| m-1094 | A decision that removes a component for one purpos |  | 0.50 | 2026-11-05 | 0.250 | 0 |  |
 | m-042 | MISTAKE: Tried to use UefiRuntimeLib in DXE_DRIVER |  | 0.60 | 2026-08-18 | 0.249 | 0 |  |
 | m-015 | QEMU pc-bios files are in separate packages: seabi |  | 0.60 | 2026-08-18 | 0.249 | 0 |  |
 | m-038 | mkfs.vfat --offset=SECTOR can format a partition a |  | 0.60 | 2026-08-18 | 0.249 | 0 |  |
