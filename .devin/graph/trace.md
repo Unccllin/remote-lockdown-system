@@ -12604,3 +12604,78 @@ graph-check, and both firmware builds with BaseTools bootstrapped), then work th
 list — 8 high findings on the default branch is the largest open risk on the board.
 
 ---
+
+---
+
+## Session 246 — 2026-11-05 (Dependabot's highs: two in electron, both patched)
+
+### RULE-ZERO
+
+**Read**: the push response's Dependabot summary (22 findings, 8 high), `electron/package.json`
+and `package-lock.json`, `electron/jest.config.js`, `electron/main.js` (its `electron` usage),
+`scripts/audit-with-exceptions.sh` (the accepted-risk mechanism), and the audit gates AGENTS.md
+names (server `npm audit --audit-level=high`, dashboard via the exceptions script, agent
+`pip-audit`).
+
+### FOUND
+
+Reproduced the audits locally across every component:
+
+| Component | Before | After |
+|---|---|---|
+| server | 40 total, **0 high**, 17 moderate | unchanged (gate exits 0) |
+| dashboard | 0 | unchanged (gate exits 0) |
+| serverless | 0 | unchanged |
+| agent (pip-audit) | no known vulnerabilities | unchanged |
+| **electron** | 52 total, **2 high**, 23 moderate | 24 total, **0 high** |
+
+The two highs were both electron's:
+1. **`electron`** — GHSA-r4w5-6pfg-jxp5 (ProtocolResponse.url reuses the default session cache)
+   plus the OpenURL/sandbox cluster. The devDependency was `~41.7.1`; the vulnerable range is
+   `<=42.11.15`, so **every** 41.x is affected. Patched by `^42.11.18`.
+2. **`extract-zip`** — unvalidated symlink path traversal, build-time via electron-builder. It
+   left the tree with the upgrade.
+
+These are real advisories, not false positives, so the exceptions script was the wrong tool —
+it exists for documented false positives and its own comment says so.
+
+### SECOND DEFECT THE UPGRADE EXPOSED
+
+`tests/validateWorkerUrl.test.js` imports `main.js`, which does `require('electron')` — so a
+*URL-validation unit test* depended on the Electron **binary** having been downloaded. Electron
+42's `install.js` is ESM and refuses to run under this host's Node 20, so the suite failed to
+load with "Electron failed to install correctly. Please delete node_modules/electron…" while the
+other 20 tests passed.
+
+Fixed structurally: `electron/tests/electron-stub.js` provides the API surface `main.js` uses,
+and `jest.config.js` maps `^electron$` to it. A unit test no longer needs a 100 MB browser
+binary, and CI's electron-tests job stops being sensitive to that download either.
+
+### VERIFY
+
+- electron: **0 high / 0 critical**, `npm audit --audit-level=high` exit 0; 24 low/moderate
+  remain (babel-jest / @jest/transform / istanbul and friends — build tooling).
+- electron tests: **3 suites / 30 tests pass** (previously one suite could not load).
+- `node --check` on main.js, preload.js, setup-preload.js, setup-wizard.js, server-starter.js,
+  config.js, updater.js — all pass.
+- server gate exit 0; dashboard gate exit 0; agent `pip-audit` clean.
+
+### Fog remaining
+
+- **GitHub said 8 high; I could reproduce 2.** The rest are not in any local audit I can run
+  (server/dashboard/serverless/agent/electron all report 0 high now). Reconciling needs the
+  Dependabot page: it may count per-manifest duplicates, or cover GitHub Actions / Docker base
+  images, which `npm audit` cannot see.
+- **The Electron binary could not be installed here** (install.js is ESM, Node 20), so
+  electron-builder packaging and any Electron-runtime test remain unverified on this host — the
+  stub deliberately covers unit tests only, not runtime behaviour.
+- 24 low/moderate electron findings remain, all in build tooling.
+- D-117 (markdown/spec drift).
+
+### Next session opening
+
+Reconcile the remaining Dependabot highs from the security page (they are not reproducible by
+`npm audit` locally, so the likely surfaces are Actions pins, Docker base images or per-manifest
+duplication), and decide whether the electron 24 moderates are worth a tooling upgrade.
+
+---

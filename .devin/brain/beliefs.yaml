@@ -2235,3 +2235,33 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-100
+  statement: 'GitHub reported 8 high Dependabot findings on the default branch, and the locally reproducible
+    ones were both in electron: the electron devDependency was ~41.7.1 while the advisory range is <=42.11.15
+    (so every 41.x is affected — GHSA-r4w5-6pfg-jxp5 and the OpenURL/sandbox cluster), and extract-zip
+    carried an unvalidated symlink traversal via electron-builder. Bumping electron to ^42.11.18 removed
+    both: npm audit --audit-level=high now exits 0 in electron with 0 high and 0 critical, 24 low/moderate
+    remaining (all build tooling), while server (40 total, 0 high), dashboard (0, exceptions-script gate
+    exit 0), serverless (0) and the agent (pip-audit clean) were already fine. The upgrade also exposed
+    a structural defect: tests/validateWorkerUrl.test.js imports main.js, which requires(''electron''),
+    so a URL-validation unit test depended on the Electron binary being downloaded — and Electron 42''s
+    install.js is ESM and will not run under Node 20, so the suite failed to load with ''Electron failed
+    to install correctly'' rather than running. electron/tests/electron-stub.js plus a jest moduleNameMapper
+    for ^electron$ removes that dependency; the suite now passes (3 suites / 30 tests). The remaining
+    6 of GitHub''s 8 highs are not reproducible by any local audit and probably come from Actions pins,
+    Docker base images or per-manifest duplication.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: npm audit before/after across all components (electron 52/2 high → 24/0 high, gate exit
+    0); electron 3 suites/30 tests pass; node --check on seven files; server and dashboard gates exit
+    0; pip-audit clean
+  source: electron/package.json; electron/package-lock.json; electron/jest.config.js; electron/tests/electron-stub.js;
+    electron/main.js; scripts/audit-with-exceptions.sh; npm audit output per component
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
