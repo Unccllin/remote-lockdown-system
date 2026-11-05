@@ -133,6 +133,25 @@ def _get_config_path() -> Path | None:
     return None
 
 
+def _agent_running() -> bool:
+    """True when a lockdown-agent process already exists.
+
+    The install-time launch and the scheduled task both start the agent, so a
+    machine can end up with two (S216: pids 7540 and 22316 at once). The watchdog
+    already refuses to start a second one; this is the same guard for install time.
+    """
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq lockdown-agent.exe", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return False
+    return "lockdown-agent.exe" in (result.stdout or "").lower()
+
+
 def _install_dir() -> Path:
     """Where the agent, config and watchdog script live on the target."""
     return Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "LockdownAgent"
@@ -359,8 +378,38 @@ Set-ScheduledTask -TaskName '{TASK_NAME}' -Trigger $task.Triggers
     else:
         log.info("Registry run key added (backup persistence)")
 
-    # --- 3. Launch the agent immediately (VBS launcher — truly detached) ---
-    log.info("Launching agent immediately...")
+    # --- 3. Start the agent through the task that will keep it alive ---
+    # Running the task rather than spawning the process ourselves keeps ONE start
+    # mechanism: it proves the task works at install time, and the watchdog is what
+    # restarts the agent later (S216).
+    log.info("Starting the agent through the scheduled task...")
+    started = False
+    if _agent_running():
+        log.info("Agent already running — not starting a second instance")
+        started = True
+    else:
+        run_result = subprocess.run(
+            ["schtasks", "/Run", "/TN", TASK_NAME], capture_output=True, text=True
+        )
+        if run_result.returncode == 0:
+            log.info("Scheduled task started the agent")
+            started = True
+        else:
+            log.warning("Could not run the task (%s) — launching directly", run_result.stderr)
+
+    # Repeat the task every 5 minutes as well: ONSTART alone means nothing restarts
+    # the agent until a reboot. Failure here is not fatal (the agent has its own
+    # adaptive polling), so it is only logged.
+    repeat = subprocess.run(
+        ["schtasks", "/Change", "/TN", TASK_NAME, "/RI", "5", "/DU", "24:00"],
+        capture_output=True,
+        text=True,
+    )
+    if repeat.returncode == 0:
+        log.info("Task repeats every 5 minutes")
+    else:
+        log.warning("Could not add the 5-minute repetition: %s", repeat.stderr)
+
     try:
         # Write a VBS launcher and execute it via wscript.exe.
         # wscript.exe runs in its own session, so the agent survives
@@ -373,12 +422,14 @@ Set-ScheduledTask -TaskName '{TASK_NAME}' -Trigger $task.Triggers
         install_dir.mkdir(parents=True, exist_ok=True)
         vbs_path = install_dir / "launch_agent.vbs"
         vbs_content = f'Set sh = CreateObject("WScript.Shell")\nsh.Run "{agent_cmd}", 0, False\n'
-        vbs_path.write_text(vbs_content, encoding="utf-8")
-        subprocess.Popen(
-            ["wscript.exe", str(vbs_path)],
-            creationflags=_CREATE_NO_WINDOW,
-            close_fds=True,
-        )
+        if not started:
+            vbs_path.write_text(vbs_content, encoding="utf-8")
+            subprocess.Popen(
+                ["wscript.exe", str(vbs_path)],
+                creationflags=_CREATE_NO_WINDOW,
+                close_fds=True,
+            )
+            log.info("Launched the agent directly (task run failed)")
     except (FileNotFoundError, OSError) as e:
         log.error("Failed to launch agent: %s", e)
         # Don't return False — the scheduled task is installed and will

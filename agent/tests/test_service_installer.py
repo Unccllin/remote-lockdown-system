@@ -108,6 +108,26 @@ class TestCommandBuilding:
         assert script.read_bytes().startswith(b"\xef\xbb\xbf")
 
 
+class TestSingleInstance:
+    """Two agents on one machine = two pollers for one device (S216)."""
+
+    def test_agent_running_detects_the_process(self):
+        completed = MagicMock(returncode=0, stdout="lockdown-agent.exe   7540 Console  1  12,345 K")
+        with patch.object(service_installer.subprocess, "run", return_value=completed):
+            assert service_installer._agent_running() is True
+
+    def test_agent_running_is_false_when_tasklist_lists_nothing(self):
+        completed = MagicMock(
+            returncode=0, stdout="INFO: No tasks are running which match the specified criteria."
+        )
+        with patch.object(service_installer.subprocess, "run", return_value=completed):
+            assert service_installer._agent_running() is False
+
+    def test_agent_running_survives_a_missing_tasklist(self):
+        with patch.object(service_installer.subprocess, "run", side_effect=FileNotFoundError):
+            assert service_installer._agent_running() is False
+
+
 class TestInstallFlow:
     """Test the install flow with mocked subprocess calls."""
 

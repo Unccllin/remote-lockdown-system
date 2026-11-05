@@ -506,6 +506,21 @@ def add_defender_exclusions() -> bool:
 
 
 def launch_agent(agent_path: Path):
+    # The scheduled task may already have started one; a second instance means two
+    # agents polling and reporting for the same device (S216: two pids at once).
+    try:
+        listing = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq lockdown-agent.exe", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+        if "lockdown-agent.exe" in (listing or "").lower():
+            print("      agent already running — not starting a second instance")
+            return
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+
     subprocess.Popen(
         [str(agent_path), "--config", str(CONFIG_FILE)],
         creationflags=_CREATE_NO_WINDOW | _DETACHED_PROCESS,

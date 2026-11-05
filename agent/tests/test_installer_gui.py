@@ -8,6 +8,7 @@ is not tested (tkinter requires a display).
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -626,3 +627,36 @@ def test_write_config_keeps_tls_on_by_default(monkeypatch, tmp_path):
 
     written = json.loads((tmp_path / "config.json").read_text())
     assert written["verify_tls"] is True
+
+
+def test_launch_agent_does_not_start_a_second_instance(monkeypatch):
+    """A task-started agent must not be duplicated by the installer (S216)."""
+    import installer_gui
+
+    monkeypatch.setattr(
+        installer_gui.subprocess,
+        "run",
+        lambda *a, **k: type("R", (), {"stdout": "lockdown-agent.exe  7540 Console 1 1,234 K"})(),
+    )
+    spawned = []
+    monkeypatch.setattr(installer_gui.subprocess, "Popen", lambda *a, **k: spawned.append(a))
+
+    installer_gui.launch_agent(Path("/agent.exe"))
+
+    assert spawned == []
+
+
+def test_launch_agent_starts_when_nothing_is_running(monkeypatch):
+    import installer_gui
+
+    monkeypatch.setattr(
+        installer_gui.subprocess,
+        "run",
+        lambda *a, **k: type("R", (), {"stdout": "INFO: No tasks are running"})(),
+    )
+    spawned = []
+    monkeypatch.setattr(installer_gui.subprocess, "Popen", lambda *a, **k: spawned.append(a[0]))
+
+    installer_gui.launch_agent(Path("/agent.exe"))
+
+    assert spawned and spawned[0][0] == "/agent.exe"
