@@ -53,27 +53,32 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 223 — 2026-11-05 (dashboard cleaned; FRANKENSTEIN recorded as the first device)
+## Latest session: 224 — 2026-11-05 (frozen service, keep-awake, and a correction worth making)
 
 ### Fog cleared
 
-- **What the dashboard was showing**: four debugging artefacts around one real device.
-- **Which device is the reference**: FRANKENSTEIN, now written down with identifiers
-  rather than prose.
+- **The service needs no Python** on the target any more.
+- **The device cannot sleep its way out of reach**, because the host (not a power plan)
+  holds the request.
+- **Process counts were being misread** — the diagnostic habit this corrects is "count
+  entries in tasklist", when onefile builds double themselves.
 
 ### Fog remaining
 
-- **Stacked behind one Windows build** (unchanged from S220–S222): `lockdown-service.exe`,
-  the agent's single-instance guard, an agent-side power request, and the WSL/port-proxy
-  note above.
-- **The first device is reachable only on the LAN** through the Windows port-proxy; a
-  remote operator still needs the tailnet path or a public URL.
+- **The guardian still issues `tsdiscon` every tick while locked**, even with the console
+  session already disconnected — needs the WTS session-state check and an agent rebuild.
+- **`tamper_protection` is not bundled** in the agent build, so ACL/registry hardening is
+  skipped on every install.
+- **No TPM on this machine** (DPAPI fallback) — environmental.
+- **Port-proxy durability**: the Windows rule points at the WSL address and must be
+  re-created after a WSL restart.
 - Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
   the S202 objective.
 
 ### Debt items closed
 
-- None.
+- The S220/S221 "duplicate agent instance" item — **withdrawn**, not fixed: it was a
+  measurement artifact.
 
 ### Debt items still open
 
@@ -81,36 +86,40 @@
 
 ### Blockers
 
-- None. The product now has one clean, documented, service-installed device.
+- None for install, wakefulness or silence. The remaining items need an agent build.
 
 ### Failure attribution
 
-- **Layer 5 — state management** (primary): the synthetic rows existed because each
-  debugging session created a device and never cleaned up. A "delete the row you created"
-  habit, or a `dev:` hostname convention the dashboard could filter, would have kept this
-  from accumulating across nine sessions.
-- **Layer 2 — context provision**: the machine's identity lived only in chat until now;
-  `AGENTS.md` names it with UUID, serial and MAC so a later session does not have to
-  rediscover it.
+- **Layer 4 — verification feedback** (primary): "two processes" was accepted as evidence
+  four times without checking parentage. A parent-process column in the diagnostic would
+  have shown the bootloader immediately.
+- **Layer 3 — execution environment**: the SCM's empty argv is invisible from a shell
+  (every manual start passes arguments), which is why only the real service start
+  exposed it.
 
 ### VERIFY
 
-- `GET /api/devices` → 1 device (`FRANKENSTEIN`, active, last check-in 08:21:31).
-- Table counts after cleanup: `commands` 0, `encryption_keys` 0, `audit_log` 24,
-  `device_efs_certs` 0 (orphans removed).
-- `AGENTS.md` gained the first-device section (line 579) above the historical HP record.
-- No code changes; suites unchanged (agent 801, server 793, dashboard 220).
+- `sc qc` → `BINARY_PATH_NAME: "C:\ProgramData\LockdownAgent\lockdown-service.exe"
+  --service`; `sc query` → `STATE: 4 RUNNING`; `python.exe` count 0.
+- `[SERVICE] keep-awake acquired (ES_SYSTEM_REQUIRED|ES_CONTINUOUS)`, then
+  `[SERVICE] starting agent: …lockdown-agent.exe --silent --config …`.
+- Parent chain captured (above) → one agent, not two.
+- Server `last_checkin 2026-11-05 08:33:13`, 36 s before observation.
+- Tests: agent **807** (+6 host), all suites green, ruff clean.
+- Commit: `c2f9c0b`.
 
 ### Session artifacts
 
-- Changed: `AGENTS.md`; server database rows (destructive, intentional, verified above).
+- Changed: `agent/service_host.py`, `agent/service_installer.py`,
+  `agent/tests/test_service_host.py` (new), `agent/tests/test_service_installer.py`,
+  `AGENTS.md`.
 
 ### Next session opening
 
-One Windows build to clear the queue: `lockdown-service.exe` (so the service works
-without Python), the agent's single-instance guard, an agent-side power request, and the
-guardian's WTS session-state check — then re-run the boot test on FRANKENSTEIN to confirm
-one process starts unattended.
+Rebuild the agent once, carrying two changes together: the guardian's WTS session-state
+check (stop re-issuing `tsdiscon` into an already-disconnected session) and
+`tamper_protection` bundled into the build so ACL/registry hardening actually runs. Then
+re-run the boot test on FRANKENSTEIN with the frozen service.
 
 ---
 

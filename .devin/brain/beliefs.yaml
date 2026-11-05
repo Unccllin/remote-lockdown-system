@@ -1621,3 +1621,30 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-079
+  statement: 'A PyInstaller --onefile build always shows two processes — a parent bootloader and its child
+    — so tasklist counting ''lockdown-agent.exe'' entries overstates instances by design. Measured on
+    FRANKENSTEIN 2026-11-05: services.exe -> lockdown-service.exe (15180, bootloader) -> lockdown-service.exe
+    (2812, host) -> lockdown-agent.exe (9872) -> lockdown-agent.exe (11332, PyInstaller child). The ''two
+    agent processes'' recorded since S220 were therefore one agent, not a duplicate-instance bug, and
+    no agent-side single-instance guard is required; the backlog item is withdrawn and AGENTS.md corrected.
+    Also established this session: the SCM launches a service executable with NO arguments, so a frozen
+    build must treat an empty argv as service mode (otherwise it prints usage and exits with 1066/0x20000001);
+    and the keep-awake request belongs in the service host (SetThreadExecutionState ES_CONTINUOUS|ES_SYSTEM_REQUIRED
+    for the life of the service), which makes reachability independent of the power plan without an agent
+    rebuild.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live FRANKENSTEIN: parent-process chain captured (15180→2812→9872→11332), sc qc/query show
+    the frozen exe RUNNING with python.exe count 0, keep-awake logged, last_checkin 36s old; agent 807
+    tests'
+  source: agent/service_host.py; agent/service_installer.py; live sc qc/query, tasklist and Win32_Process
+    on FRANKENSTEIN; agent.log [SERVICE] lines
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

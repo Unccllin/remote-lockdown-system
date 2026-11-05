@@ -10469,3 +10469,119 @@ guardian's WTS session-state check — then re-run the boot test on FRANKENSTEIN
 one process starts unattended.
 
 ---
+
+---
+
+## Session 224 — 2026-11-05 (frozen service, keep-awake, and a correction worth making)
+
+### RULE-ZERO
+
+**Read**: `agent/service_host.py` (dispatcher mode, supervisor, argv handling),
+`agent/service_installer.py` (`_service_bin_path`, install flow), the live service
+configuration and process tree on FRANKENSTEIN, and `AGENTS.md`'s first-device section.
+
+### IMPLEMENT
+
+- **Frozen service.** Built `lockdown-service.exe` on the target with PyInstaller
+  (`--onefile --noconsole`, 7 849 949 bytes) and installed it, so the service no longer
+  needs Python on the machine:
+  `BINARY_PATH_NAME = "C:\ProgramData\LockdownAgent\lockdown-service.exe" --service`.
+  `python.exe` no longer appears in the service's process tree.
+- **Empty argv means service mode.** The SCM starts a service executable with *no
+  arguments*; the frozen build treated that as "print usage" and exited (first attempt:
+  service STOPPED, exit 1066 / `0x20000001`). `main()` now enters the dispatcher when
+  argv is empty and the build is frozen, or when `--service` is given.
+- **Keep-awake lives in the host.** `SetThreadExecutionState(ES_CONTINUOUS |
+  ES_SYSTEM_REQUIRED)` is held for the life of the service and released on stop, so the
+  device cannot idle into sleep or hibernation even if an operator changes the power
+  plan. Verified live: `[SERVICE] keep-awake acquired (ES_SYSTEM_REQUIRED|ES_CONTINUOUS)`.
+  This closes the S221 follow-up without an agent rebuild.
+- **Host-side single-instance guard** (`agent_is_running()` before spawning) — belt and
+  braces, with tests for running / not running / missing `tasklist` / no-spawn.
+- **Type hygiene**: pywin32 is imported for the checker in a `TYPE_CHECKING` branch and
+  for the runtime in an `else` branch, which removes the "Optional member access" class
+  of findings without a single suppression.
+
+### CORRECTION TO THE RECORD
+
+The "two agent processes" reported since S220 are **one agent**. PyInstaller `--onefile`
+always shows a parent bootloader plus its child; the measured chain is
+
+```
+services.exe (1100) → lockdown-service.exe (15180)   ← bootloader
+                    → lockdown-service.exe (2812)     ← real host
+                    → lockdown-agent.exe (9872)       ← started by the service
+                    → lockdown-agent.exe (11332)      ← PyInstaller child
+```
+
+So there was never a duplicate-instance bug: no agent-side guard is needed, and the
+backlog item carried since S220 is withdrawn. `AGENTS.md` and the session record are
+corrected rather than left as a plausible-sounding defect.
+
+### Fog cleared
+
+- **The service needs no Python** on the target any more.
+- **The device cannot sleep its way out of reach**, because the host (not a power plan)
+  holds the request.
+- **Process counts were being misread** — the diagnostic habit this corrects is "count
+  entries in tasklist", when onefile builds double themselves.
+
+### Fog remaining
+
+- **The guardian still issues `tsdiscon` every tick while locked**, even with the console
+  session already disconnected — needs the WTS session-state check and an agent rebuild.
+- **`tamper_protection` is not bundled** in the agent build, so ACL/registry hardening is
+  skipped on every install.
+- **No TPM on this machine** (DPAPI fallback) — environmental.
+- **Port-proxy durability**: the Windows rule points at the WSL address and must be
+  re-created after a WSL restart.
+- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
+  the S202 objective.
+
+### Debt items closed
+
+- The S220/S221 "duplicate agent instance" item — **withdrawn**, not fixed: it was a
+  measurement artifact.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None for install, wakefulness or silence. The remaining items need an agent build.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): "two processes" was accepted as evidence
+  four times without checking parentage. A parent-process column in the diagnostic would
+  have shown the bootloader immediately.
+- **Layer 3 — execution environment**: the SCM's empty argv is invisible from a shell
+  (every manual start passes arguments), which is why only the real service start
+  exposed it.
+
+### VERIFY
+
+- `sc qc` → `BINARY_PATH_NAME: "C:\ProgramData\LockdownAgent\lockdown-service.exe"
+  --service`; `sc query` → `STATE: 4 RUNNING`; `python.exe` count 0.
+- `[SERVICE] keep-awake acquired (ES_SYSTEM_REQUIRED|ES_CONTINUOUS)`, then
+  `[SERVICE] starting agent: …lockdown-agent.exe --silent --config …`.
+- Parent chain captured (above) → one agent, not two.
+- Server `last_checkin 2026-11-05 08:33:13`, 36 s before observation.
+- Tests: agent **807** (+6 host), all suites green, ruff clean.
+- Commit: `c2f9c0b`.
+
+### Session artifacts
+
+- Changed: `agent/service_host.py`, `agent/service_installer.py`,
+  `agent/tests/test_service_host.py` (new), `agent/tests/test_service_installer.py`,
+  `AGENTS.md`.
+
+### Next session opening
+
+Rebuild the agent once, carrying two changes together: the guardian's WTS session-state
+check (stop re-issuing `tsdiscon` into an already-disconnected session) and
+`tamper_protection` bundled into the build so ACL/registry hardening actually runs. Then
+re-run the boot test on FRANKENSTEIN with the frozen service.
+
+---
