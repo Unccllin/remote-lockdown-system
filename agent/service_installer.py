@@ -274,7 +274,7 @@ def _service_bin_path() -> str:
     """
     service_exe = _install_dir() / "lockdown-service.exe"
     if service_exe.exists():
-        return f'"{service_exe}"'
+        return f'"{service_exe}" --service'
     # --service makes the host bootstrap the SCM dispatcher; without it the SCM
     # starts the process and immediately reports it stopped.
     return f'"{sys.executable}" "{_install_dir() / "service_host.py"}" --service'

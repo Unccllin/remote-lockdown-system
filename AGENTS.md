@@ -604,9 +604,11 @@ Evidence that matters:
   (`HP-ELITEBOOK-840-G7`, `REPRO-01`, `REPRO-REASSOC`, `TEST-HOST-01`) and their
   dependents were removed on 2026-11-05.
 
-Known on this machine: two agent processes start (no single-instance guard in the frozen
-binary), no TPM (DPAPI fallback), and `tamper_protection` is skipped because the module is
-not bundled. The agent is reachable only over the LAN through a Windows port-proxy
+Known on this machine: no TPM (DPAPI fallback), and `tamper_protection` is skipped
+because the module is not bundled. Note on process counts: a PyInstaller `--onefile`
+build always shows a parent bootloader plus its child, so `tasklist` reporting two
+`lockdown-agent.exe` entries is **one** agent — measured on 2026-11-05 (pid 9872 →
+11332), not a duplicate-instance bug. The agent is reachable only over the LAN through a Windows port-proxy
 (`0.0.0.0:3001 → <WSL address>:3001`), which must be re-created after a WSL restart.
 
 ### Hardware testing status (as of 2026-08-28)

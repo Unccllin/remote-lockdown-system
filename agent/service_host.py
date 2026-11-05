@@ -34,6 +34,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 SERVICE_NAME = "LockdownAgent"
 SERVICE_DISPLAY_NAME = "Lockdown Agent"
@@ -75,6 +76,57 @@ def log_line(message: str) -> None:
         pass
 
 
+def agent_is_running() -> bool:
+    """True when a lockdown-agent process already exists.
+
+    The frozen agent has no single-instance guard, so the host and the agent's own
+    watchdog could both start one — two pollers for one device (S220/S221). Until the
+    agent itself guards, the host does.
+    """
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq lockdown-agent.exe", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return False
+    return "lockdown-agent.exe" in (out or "").lower()
+
+
+# SetThreadExecutionState flags (kernel32). Held for the life of the service so the
+# machine cannot idle into sleep/hibernate and drop out of reach — an operator can
+# change the powercfg policy, but not this.
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+
+
+def acquire_keep_awake() -> bool:
+    """Ask Windows not to sleep or hibernate while the service runs."""
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+        log_line("keep-awake acquired (ES_SYSTEM_REQUIRED|ES_CONTINUOUS)")
+        return True
+    except (AttributeError, OSError) as exc:
+        log_line(f"keep-awake unavailable: {exc}")
+        return False
+
+
+def release_keep_awake() -> None:
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+        log_line("keep-awake released")
+    except (AttributeError, OSError):
+        pass
+
+
 def run_supervisor(stop_event=None) -> int:
     """Start the agent and restart it when it exits, until asked to stop.
 
@@ -87,6 +139,16 @@ def run_supervisor(stop_event=None) -> int:
     while True:
         if stop_event is not None and stop_event.is_set():
             break
+
+        if agent_is_running():
+            # Nothing to do; wait and re-check rather than adding a second poller.
+            log_line("agent already running — not starting another")
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                if stop_event is not None and stop_event.is_set():
+                    return 0
+                time.sleep(2)
+            continue
 
         cmd = agent_command()
         log_line(f"starting agent: {' '.join(cmd)}")
@@ -130,22 +192,31 @@ def run_supervisor(stop_event=None) -> int:
 # --- SCM integration ------------------------------------------------------------
 # Imported lazily so this module can be imported (and unit tested) off Windows.
 
-try:  # pragma: no cover - exercised only on Windows
-    import servicemanager
-    import win32event
-    import win32service
-    import win32serviceutil
+PYWIN32_AVAILABLE = False
+
+if TYPE_CHECKING:  # pragma: no cover - type checkers only
+    # Analysed with the real modules so every pywin32 attribute below is known;
+    # the runtime branch below is what actually imports them.
+    import servicemanager  # noqa: F401
+    import win32event  # noqa: F401
+    import win32service  # noqa: F401
+    import win32serviceutil  # noqa: F401
 
     PYWIN32_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    PYWIN32_AVAILABLE = False
-    # Bind the names anyway: the flag guards every use, but leaving them unbound makes
-    # the guard the only thing between a missing dependency and a NameError, and static
-    # analysis cannot see that relationship.
-    servicemanager = None  # type: ignore[assignment]
-    win32event = None  # type: ignore[assignment]
-    win32service = None  # type: ignore[assignment]
-    win32serviceutil = None  # type: ignore[assignment]
+else:  # pragma: no cover - exercised only on Windows
+    try:
+        import servicemanager
+        import win32event
+        import win32service
+        import win32serviceutil
+
+        PYWIN32_AVAILABLE = True
+    except ImportError:
+        # Bound to None so a missing dependency is a flag check, not a NameError.
+        servicemanager = None
+        win32event = None
+        win32service = None
+        win32serviceutil = None
 
 
 class _StopHandle:
@@ -183,9 +254,11 @@ if PYWIN32_AVAILABLE:  # pragma: no cover
         def SvcDoRun(self):
             servicemanager.LogInfoMsg(f"{SERVICE_NAME}: starting")
             log_line("service starting")
+            acquire_keep_awake()
             try:
                 run_supervisor(_StopHandle(self.hWaitStop))
             finally:
+                release_keep_awake()
                 log_line("service stopped")
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: stopped")
 
@@ -211,7 +284,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    if args and args[0] == "--service":
+    # The SCM starts the executable with no arguments at all, so a frozen build must
+    # treat the empty case as service mode. (Run `debug` by hand for a foreground
+    # session; a source checkout with no arguments prints usage instead of pretending.)
+    if (not args and getattr(sys, "frozen", False)) or (args and args[0] == "--service"):
         # What the SCM launches. `python.exe script.py` does not speak to the Service
         # Control Manager by itself — pythonservice.exe normally does this — so the
         # dispatcher must be started here or `sc start` fails with a service that

@@ -154,7 +154,11 @@ class TestServiceInstall:
         (tmp_path / "lockdown-service.exe").write_text("x")
         monkeypatch.setattr(service_installer, "_install_dir", lambda: tmp_path)
 
-        assert service_installer._service_bin_path() == f'"{tmp_path / "lockdown-service.exe"}"'
+        # --service is explicit so a frozen build never has to guess from argv.
+        assert (
+            service_installer._service_bin_path()
+            == f'"{tmp_path / "lockdown-service.exe"}" --service'
+        )
 
 
 class TestManagedDevice:
