@@ -53,31 +53,30 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 221 — 2026-11-05 (awake, quiet, replaceable — and why it slept)
+## Latest session: 222 — 2026-11-05 ("the screen times out after a few seconds" was the agent)
 
 ### Fog cleared
 
-- **Why it slept quickly**: the Balanced scheme hibernates after one hour on AC and
-  nothing — including the agent — asked Windows to stay awake.
-- **Whether the app is silent**: yes, structurally (session 0, no windows). Now it is
-  also single-purpose: no Run key, no task competing with the service.
-- **Why a reinstall claimed the binary was unavailable**: a locked destination file, not
-  a missing binary.
+- **Why the screen went away**: the lock guardian disconnecting the console session, not
+  a power or saver setting.
+- **Why it persisted across reboots**: the latch lived in a file, and startup trusted it
+  without consulting the server.
+- **Whether data was at risk**: no — only the agent's own `README.txt` was in the
+  lockdown folder.
 
 ### Fog remaining
 
-- **Two agent processes still start** (e.g. pids 1216 and 6248). The frozen agent has no
-  single-instance guard and its own watchdog starts a second. Needs a guard in the agent
-  (rebuild) or a host-side check.
-- **The agent should hold its own power request** (`SetThreadExecutionState` with
-  `ES_SYSTEM_REQUIRED|ES_CONTINUOUS`, or `PowerCreateRequest`/`PowerSetRequest`) so
-  reachability does not depend on a `powercfg` setting an operator can change. Agent
-  rebuild required.
-- **Battery policy unchanged** by design; a stolen laptop may still sleep on battery,
-  which interacts with tracking frequency.
+- **The guardian still issues `tsdiscon` every tick while locked**, even when the console
+  session is already disconnected. The right fix is a WTS session-state check
+  (`WTSQuerySessionInformationW`), which needs ctypes work **and a rebuild**; it is
+  recorded rather than half-done in a frozen binary.
+- **The agent has no single-instance guard** (two processes still start; S220).
+- **The agent holds no power request**; reachability depends on the `powercfg` policy set
+  by the installer (S221).
 - Frozen `lockdown-service.exe` still needed for targets without Python (S220).
-- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
-  the S202 objective.
+- A corrupt deadman file is treated as `stolen`, which is fail-secure by design — but it
+  now costs at most one check-in instead of a permanent lock, because the server's status
+  can clear it.
 
 ### Debt items closed
 
@@ -89,40 +88,39 @@
 
 ### Blockers
 
-- None for install, quiet operation, or wakefulness on AC. The two remaining items need
-  an agent build.
+- None. The live machine is usable and enrolled.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): `_download_verified` collapsed four
-  different failures (status, missing digest, digest mismatch, locked destination) into
-  one `None`, so the installer reported "binary unavailable" for a file-lock. Separate
-  reasons would have saved the round-trip.
-- **Layer 2 — context provision**: the `except` ordering bug is the kind a reviewer
-  catches, not a test; `RequestException ⊂ OSError` belongs in the file's comments now.
+- **Layer 4 — verification feedback** (primary): the agent logged its re-locking every ten
+  seconds, in plain text, and nobody was reading that log. A health signal — "locked while
+  the server says active" — would have surfaced this without the user noticing their
+  screen first.
+- **Layer 2 — context provision**: "the sentinel is authoritative" was an implicit
+  assumption in three code paths. It is now explicit that the *server* is authoritative
+  and the sentinel is a cache of a previous decision.
 
 ### VERIFY
 
-- Live on FRANKENSTEIN after the install:
-  - `powercfg` AC `STANDBYIDLE` = `0x00000000`, `HIBERNATEIDLE` = `0x00000000`;
-  - Run key **removed**, task **removed**;
-  - `sc query LockdownAgent` → `STATE: 4 RUNNING`;
-  - processes `py 1936`, `lockdown-agent 1216/6248`, all session 0, empty window titles;
-  - server `last_checkin 2026-11-05 08:11:50` (11 s before observation).
-- Suites: agent **794** (+1), server 793, dashboard 220; ruff + eslint clean.
-- Commit: `7d2ab09`.
+- Before: D-007 `tsdiscon` lines every ~10 s (11:13:28 … 11:16:00); dashboard status
+  `active`; sentinel `{"locked": true, "deadman": true, "tamper_detected": true,
+  "original_last_seen": "corrupt"}`; `lockdown_folder` = 1 file (`README.txt`).
+- Remediation: service stopped, `.locked`/`.deadman`/`.heartbeat` removed, service
+  started → `STATE: 4 RUNNING`, console session `NEWARK USER` **Active**, no D-007 entries
+  after 11:16:28, agent polling (`Adaptive polling: 30s -> 300s (status=active)`).
+- Tests: agent **801** (+7), server 793, dashboard 220; ruff clean.
+- Commit: `28daffe`.
 
 ### Session artifacts
 
-- Changed: `agent/service_installer.py`, `agent/installer_gui.py`,
-  `agent/tests/test_installer_gui.py`.
+- Changed: `agent/agent.py`, `agent/tests/test_lock_reconcile.py` (new).
 
 ### Next session opening
 
-Two agent-side items that need a Windows build: a single-instance guard so the host and
-the agent's watchdog cannot both run one, and a real power request
-(`ES_SYSTEM_REQUIRED|ES_CONTINUOUS`) so the device stays reachable whatever the power
-scheme says. Build `lockdown-service.exe` in the same pass.
+Three agent-side changes now sit behind one Windows build: `lockdown-service.exe`, the
+single-instance guard, and a real power request. Add the guardian's WTS session-state
+check to the same build so a locked device stops re-issuing `tsdiscon` into a session
+that is already disconnected.
 
 ---
 

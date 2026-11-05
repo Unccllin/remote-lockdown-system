@@ -1569,3 +1569,29 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-077
+  statement: 'A lockdown latch must not outlive the state that justified it: on FRANKENSTEIN an earlier
+    deadman/tamper event wrote C:\ProgramData\LockdownAgent\.locked and the deadman state file was corrupt,
+    so _read_deadman_state returned status ''stolen'' and the startup path re-asserted the sentinel unconditionally
+    — the lock guardian then issued tsdiscon every ~10 seconds, disconnecting the console session (reported
+    as ''the screen times out after a few seconds'') while the dashboard showed the device active; nothing
+    of the user''s was encrypted (lockdown_folder held only README.txt). The server is authoritative for
+    a managed device: reconcile_lock_state(cfg, server_status) now runs after every successful check-in
+    and, for any status other than stolen/locked/tracking, stops the guardian and removes the sentinel,
+    after which update_deadman_timer rewrites the deadman state with the same status so no fail-secure
+    trap remains. Remaining known issue: while the guardian runs it still calls tsdiscon even when the
+    console session is already disconnected; fixing that needs a WTS session-state check and a rebuild.'
+  domain: general
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'live FRANKENSTEIN: D-007 tsdiscon every ~10s with status active; sentinel/deadman inspected;
+    remediation restored an Active console session with no new D-007; agent 801 tests'
+  source: agent/agent.py (startup sentinel checks, _lock_guardian_loop, _read_deadman_state); agent/tests/test_lock_reconcile.py;
+    live agent.log and state files on FRANKENSTEIN
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

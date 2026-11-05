@@ -10244,3 +10244,127 @@ the agent's watchdog cannot both run one, and a real power request
 scheme says. Build `lockdown-service.exe` in the same pass.
 
 ---
+
+---
+
+## Session 222 — 2026-11-05 ("the screen times out after a few seconds" was the agent)
+
+### RULE-ZERO
+
+**Read**: `agent/agent.py` (`_lock_workstation`, `_lock_guardian_loop`,
+`handle_unlock`, the startup sentinel checks, `_read_deadman_state`), the live
+`powercfg` values on FRANKENSTEIN, and its `agent.log`.
+
+**Symptom reported**: the screen times out after a few seconds.
+
+### FINDING — not a display timeout
+
+The display settings were ordinary (`VIDEOIDLE` AC `0x2a30`, 3 h) and the screen saver
+was inactive. The agent log showed the real cause:
+
+```
+11:13:28 / 11:13:38 / 11:13:49 / 11:13:59 / 11:14:09 … D-007: Session 0 detected
+  (session_id=0) — using tsdiscon to disconnect active console session
+```
+
+Every ~10 s the lock guardian disconnected the console session, i.e. the screen went to
+the lock/login screen — while the dashboard showed the device **active**.
+
+Chain of events: an earlier deadman/tamper event wrote
+`C:\ProgramData\LockdownAgent\.locked`; the deadman state file was **corrupt**, so
+`_read_deadman_state()` returned `status: "stolen"`; and the startup path re-asserted the
+lock unconditionally:
+
+```python
+# Check 1: Sentinel exists → device is locked → re-assert
+apply_lock_screen(); start_lock_guardian(); return
+```
+
+Nothing of the user's was encrypted — `lockdown_folder` contained only `README.txt`.
+
+### IMPLEMENT
+
+- `reconcile_lock_state(cfg, server_status)` — on every successful check-in, if the
+  server reports anything other than `stolen`/`locked`/`tracking` and a sentinel exists,
+  the guardian is stopped and the sentinel removed. The existing
+  `update_deadman_timer(current_status)` then rewrites the deadman state with the same
+  status, so removing the sentinel leaves no fail-secure trap.
+- Wired immediately after `current_status = data.get("status", "active")`.
+- Tests: 7 — the three non-locking statuses clear the latch **and** stop the guardian;
+  the three locking statuses keep it and must not touch the guardian; a missing sentinel
+  is a no-op.
+
+### Machine-side remediation (operator state, now unnecessary thanks to the fix)
+
+Stopped `LockdownAgent`, removed `.locked`, `.deadman` and `.heartbeat`, restarted the
+service. Result: console session **Active as NEWARK USER** (id 1) and **no D-007 lines
+since 11:16:28**; the agent keeps checking in.
+
+### Fog cleared
+
+- **Why the screen went away**: the lock guardian disconnecting the console session, not
+  a power or saver setting.
+- **Why it persisted across reboots**: the latch lived in a file, and startup trusted it
+  without consulting the server.
+- **Whether data was at risk**: no — only the agent's own `README.txt` was in the
+  lockdown folder.
+
+### Fog remaining
+
+- **The guardian still issues `tsdiscon` every tick while locked**, even when the console
+  session is already disconnected. The right fix is a WTS session-state check
+  (`WTSQuerySessionInformationW`), which needs ctypes work **and a rebuild**; it is
+  recorded rather than half-done in a frozen binary.
+- **The agent has no single-instance guard** (two processes still start; S220).
+- **The agent holds no power request**; reachability depends on the `powercfg` policy set
+  by the installer (S221).
+- Frozen `lockdown-service.exe` still needed for targets without Python (S220).
+- A corrupt deadman file is treated as `stolen`, which is fail-secure by design — but it
+  now costs at most one check-in instead of a permanent lock, because the server's status
+  can clear it.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None. The live machine is usable and enrolled.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the agent logged its re-locking every ten
+  seconds, in plain text, and nobody was reading that log. A health signal — "locked while
+  the server says active" — would have surfaced this without the user noticing their
+  screen first.
+- **Layer 2 — context provision**: "the sentinel is authoritative" was an implicit
+  assumption in three code paths. It is now explicit that the *server* is authoritative
+  and the sentinel is a cache of a previous decision.
+
+### VERIFY
+
+- Before: D-007 `tsdiscon` lines every ~10 s (11:13:28 … 11:16:00); dashboard status
+  `active`; sentinel `{"locked": true, "deadman": true, "tamper_detected": true,
+  "original_last_seen": "corrupt"}`; `lockdown_folder` = 1 file (`README.txt`).
+- Remediation: service stopped, `.locked`/`.deadman`/`.heartbeat` removed, service
+  started → `STATE: 4 RUNNING`, console session `NEWARK USER` **Active**, no D-007 entries
+  after 11:16:28, agent polling (`Adaptive polling: 30s -> 300s (status=active)`).
+- Tests: agent **801** (+7), server 793, dashboard 220; ruff clean.
+- Commit: `28daffe`.
+
+### Session artifacts
+
+- Changed: `agent/agent.py`, `agent/tests/test_lock_reconcile.py` (new).
+
+### Next session opening
+
+Three agent-side changes now sit behind one Windows build: `lockdown-service.exe`, the
+single-instance guard, and a real power request. Add the guardian's WTS session-state
+check to the same build so a locked device stops re-issuing `tsdiscon` into a session
+that is already disconnected.
+
+---
