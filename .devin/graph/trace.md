@@ -12738,3 +12738,92 @@ Ask for the Dependabot page (or set a token) so the remaining highs can be attac
 otherwise D-117 is the only item on the board that this host can actually finish.
 
 ---
+
+---
+
+## Session 248 — 2026-11-05 (the ledger disagreed with itself on 23 of 46 items)
+
+### RULE-ZERO
+
+**Read**: `docs/adr/PBL-DEBT-LEDGER.md` (the per-item entries and the summary table),
+the `Makefile` (does `make firmware-qemu` exist, as D-117's entry instructs),
+`firmware/PblPkg/` (is there any host-side unit-test harness), and
+`scripts/script_test_runner.py` (the `__main__` convention every `scripts/test_*.py` needs).
+
+### FINDING — D-117 was one symptom of a systematic drift
+
+D-117 appears twice in the ledger with different answers: the table says
+*CLOSED (QEMU+swtpm: 8 test-output logs)*, the detailed entry says *OPEN* with a specific
+blocker (no host-side unit tests for TPM command construction, response parsing, CBOR/COSE or
+decision logic). Verified: **no** `firmware/PblPkg/tests` directory and **no** CMocka/unity
+harness exists, so the entry is right and QEMU integration is not a unit test.
+`make firmware-qemu` *does* exist, so that half of the entry was accurate.
+
+Comparing every item's table status against its detailed status then found the real problem:
+**23 of the 46 items present in both places disagree.** The table marks D-111…D-128 CLOSED
+while their entries say OPEN, D-100 PARTIAL, and D-133 the opposite way round.
+
+### IMPLEMENT
+
+- `docs/adr/PBL-DEBT-LEDGER.md`: D-117's table row corrected to OPEN, citing the verified gap.
+- **`scripts/check_debt_ledger.py`** (new): compares the two sources, treating the **detailed
+  entry as authoritative** — it carries the evidence and the named blocker, while the table is
+  the part that rots. Statuses are normalised, so "CLOSED (with a note)" is not drift.
+- **`.devin/graph/debt-ledger-mismatches.txt`** (new): the 22 remaining disagreements as a
+  **shrink-only baseline**. A new mismatch fails the check; a reconciled item whose baseline
+  line survives is reported as *stale*, so the baseline cannot overstate the drift either.
+- **`scripts/test_check_debt_ledger.py`** (new): 8 tests — both sources parsed, qualifiers
+  ignored, a new mismatch fails, a recorded one passes, a stale baseline fails, agreement
+  passes, an unparsable ledger exits 2, and baseline regeneration round-trips.
+- `Makefile`: `check-debt-ledger`, wired into `make lint`; `ci.yml`: a step in the graph-check
+  job, so the guard runs in the pipeline that already enforces repo consistency.
+
+### Fog cleared
+
+- **What D-117's actual state is**: OPEN, and now stated the same way in both places, with the
+  verified reason (no unit tests) rather than a QEMU log count standing in for one.
+- **How far the drift goes**: 23 of 46, quantified instead of discovered one item at a time.
+
+### Fog remaining
+
+- **The other 22 disagreements are not fixed** — only recorded and made visible. Reconciling
+  each means verifying it against the codebase (as was done for D-117), which is per-item work
+  the baseline now tracks honestly.
+- D-117 itself stays OPEN: it needs host-side unit tests (CMocka/unity) for the PBL modules,
+  which is a real work item, not a documentation fix.
+- The remaining Dependabot highs still need the security page (S247).
+- D-117's sibling: firmware remains QEMU-only (I3).
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the ledger is a document that *describes* the
+  state of work, and nothing had ever checked that it describes it consistently. One table cell
+  was wrong for months because no test read the file.
+- **Layer 5 — state management**: two sources of truth for the same fact, with no rule about
+  which wins. They now have one, enforced by `make lint` and CI.
+
+### VERIFY
+
+- `python3 scripts/check_debt_ledger.py` → `mismatches now: 22 | recorded: 22 | new: 0 |
+  stale baseline: 0`, exit 0.
+- `python3 scripts/test_check_debt_ledger.py` → **8 passed**; the suite also caught a real bug
+  in the checker (`fixed = bool(current) and not new` made an empty ledger exit 1).
+- `make test-scripts` → all suites pass, including the auto-discovered new one and the
+  "every script test has a runner" rule.
+- `make lint` (which now includes the new gate) passes; `make lint-workflows` clean.
+- Commit: `4b3c31f`.
+
+### Session artifacts
+
+- Changed: `docs/adr/PBL-DEBT-LEDGER.md`, `Makefile`, `.github/workflows/ci.yml`;
+  new: `scripts/check_debt_ledger.py`, `scripts/test_check_debt_ledger.py`,
+  `.devin/graph/debt-ledger-mismatches.txt`.
+
+### Next session opening
+
+Reconcile the 22 baselined disagreements one at a time, verifying each against the code the way
+D-117 was (a claim of CLOSED needs a commit and an artifact, not a table entry), deleting each
+baseline line as it is settled; then take D-117 itself, which needs real host-side unit tests
+for the PBL modules.
+
+---

@@ -53,29 +53,55 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 247 — 2026-11-05 (chasing the other six Dependabot highs: a negative result worth recording)
+## Latest session: 248 — 2026-11-05 (the ledger disagreed with itself on 23 of 46 items)
 
-### VERIFY
+### Fog cleared
 
-- `grep -hoE "uses: [^ ]+" .github/workflows/*.yml | grep -vE "@[0-9a-f]{40}"` → empty.
-- `grep -rn "^FROM" --include="Dockerfile*"` → the four bases above, none stale.
-- `npm audit --json --package-lock-only` on the HEAD~1 lockfile → `{'low': 1, 'moderate': 2}`,
-  no high.
-- `pip-audit -r agent/requirements.txt` → no known vulnerabilities.
+- **What D-117's actual state is**: OPEN, and now stated the same way in both places, with the
+  verified reason (no unit tests) rather than a QEMU log count standing in for one.
+- **How far the drift goes**: 23 of 46, quantified instead of discovered one item at a time.
 
 ### Fog remaining
 
-- **The actual six.** Unresolvable without the Dependabot page (package, advisory id, severity
-  and manifest). With that, each is a targeted fix rather than a search.
-- The electron **binary** still cannot be installed here (ESM `install.js` + Node 20), so
-  packaging and Electron-runtime behaviour remain unverified on this host.
-- 24 low/moderate electron findings remain, all build tooling.
-- D-117 (markdown/spec drift).
+- **The other 22 disagreements are not fixed** — only recorded and made visible. Reconciling
+  each means verifying it against the codebase (as was done for D-117), which is per-item work
+  the baseline now tracks honestly.
+- D-117 itself stays OPEN: it needs host-side unit tests (CMocka/unity) for the PBL modules,
+  which is a real work item, not a documentation fix.
+- The remaining Dependabot highs still need the security page (S247).
+- D-117's sibling: firmware remains QEMU-only (I3).
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the ledger is a document that *describes* the
+  state of work, and nothing had ever checked that it describes it consistently. One table cell
+  was wrong for months because no test read the file.
+- **Layer 5 — state management**: two sources of truth for the same fact, with no rule about
+  which wins. They now have one, enforced by `make lint` and CI.
+
+### VERIFY
+
+- `python3 scripts/check_debt_ledger.py` → `mismatches now: 22 | recorded: 22 | new: 0 |
+  stale baseline: 0`, exit 0.
+- `python3 scripts/test_check_debt_ledger.py` → **8 passed**; the suite also caught a real bug
+  in the checker (`fixed = bool(current) and not new` made an empty ledger exit 1).
+- `make test-scripts` → all suites pass, including the auto-discovered new one and the
+  "every script test has a runner" rule.
+- `make lint` (which now includes the new gate) passes; `make lint-workflows` clean.
+- Commit: `4b3c31f`.
+
+### Session artifacts
+
+- Changed: `docs/adr/PBL-DEBT-LEDGER.md`, `Makefile`, `.github/workflows/ci.yml`;
+  new: `scripts/check_debt_ledger.py`, `scripts/test_check_debt_ledger.py`,
+  `.devin/graph/debt-ledger-mismatches.txt`.
 
 ### Next session opening
 
-Ask for the Dependabot page (or set a token) so the remaining highs can be attacked by name;
-otherwise D-117 is the only item on the board that this host can actually finish.
+Reconcile the 22 baselined disagreements one at a time, verifying each against the code the way
+D-117 was (a claim of CLOSED needs a commit and an artifact, not a table entry), deleting each
+baseline line as it is settled; then take D-117 itself, which needs real host-side unit tests
+for the PBL modules.
 
 ---
 

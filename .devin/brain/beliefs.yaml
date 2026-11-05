@@ -2293,3 +2293,47 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-102
+  statement: "The PBL debt ledger states each item's status twice — a summary table and a detailed entry\
+    \ whose blocker justifies it — and the two had drifted on 23 of the 46 items present in both places:\
+    \ the table marked D-111..D-128 CLOSED while their entries say OPEN, D-100 PARTIAL, and D-133 the\
+    \ reverse. D-117 was the instance in hand: the table said CLOSED (QEMU+swtpm: 8 test-output logs)\
+    \ while the entry says OPEN for want of host-side unit tests, and verification confirms the entry\
+    \ (no firmware/PblPkg/tests directory, no CMocka/unity harness) while === Starting swtpm (TPM 2.0\
+    \ simulator) ===\n  [INFO] tpm2-tools absent or PROVISION_AK_NAME=0 — unprovisioned path\n  swtpm\
+    \ started (PID 15)\n=== Creating ESP disk image ===\nCreating new GPT entries in memory.\nThe new\
+    \ table will be used at the next reboot or after you\nrun partprobe(8) or kpartx(8)\nThe operation\
+    \ has completed successfully.\nmkfs.fat 4.2 (2021-01-31)\n\n=== Booting PblApp in OVMF (timeout 40s)\
+    \ ===\n  QEMU exited with code 124\n  Serial log: 2725 bytes\n  Override input sent: True\n\n=== Checking\
+    \ serial output ===\n  [PASS] PBL banner appears\n  [PASS] Platform state step\n  [PASS] Policy parse\
+    \ step\n  [PASS] TPM NV read step\n  [PASS] Verdict step banner (fetch)\n  [PASS] Verdict step banner\
+    \ (verify)\n  [PASS] Verdict request suppressed without a device_id\n  [PASS] Verification skipped\
+    \ for the cached verdict\n  [INFO] no 'Online fetch failed' line; verdict-related serial output:\n\
+    \    [4/8] Fetching verdict...\r\n      [WARN] Verdict request suppressed: no device_id (C2 §1.3)\r\
+    \n      [WARN] No cached verdict — denied-boot-with-local-unlock\r\n    [5/8] Verifying verdict...\r\
+    \n      [INFO] Skipping verification for cached verdict\r\n  [PASS] Decision step\n  [PASS] PCR extend\
+    \ step\n  [PASS] Decision action step\n  [PASS] NV indices provisioned\n  [PASS] HMAC session established\n\
+    \  [PASS] Self-image measured (D-217)\n  [PASS] Loaded image digest computed (D-213)\n  [PASS] Lock\
+    \ screen displayed\n  [PASS] unprovisioned detected\n  [PASS] verdict request suppressed\n  [PASS]\
+    \ Self-image hash matches PblApp.efi (3906065d77d9e763...)\n\n=== Results: 19 PASS / 0 FAIL === —\
+    \ the other half of the entry — does exist. The detailed entry is authoritative because it carries\
+    \ evidence and a named blocker; the table is what rots. scripts/check_debt_ledger.py now compares\
+    \ the two (normalising status qualifiers), treats the entry as the source of truth, and runs under\
+    \ make lint and the CI graph-check job; the 22 unreconciled disagreements live in .devin/graph/debt-ledger-mismatches.txt\
+    \ as a shrink-only baseline so a new mismatch fails and a reconciled item whose baseline line survives\
+    \ is reported as stale. Its 8 tests caught a real bug before shipping ( made an empty ledger exit\
+    \ 1). Reconciling the other 22 means verifying each against the codebase, item by item."
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 23/46 mismatches parsed; D-117 verified by filesystem checks; checker exits 0 with 22 recorded;
+    8 tests pass; make test-scripts/lint/lint-workflows green
+  source: docs/adr/PBL-DEBT-LEDGER.md; scripts/check_debt_ledger.py; scripts/test_check_debt_ledger.py;
+    .devin/graph/debt-ledger-mismatches.txt; Makefile; .github/workflows/ci.yml
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

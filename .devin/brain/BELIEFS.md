@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-05 17:00:12 — 101 beliefs
+Generated: 2026-11-05 17:06:37 — 102 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -183,6 +183,49 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-099 | confirmed | hardware | The three failing CI checks on origin/master 9e06d37 were both PblApp builds and the graph invariant sweep, not the test suites (which CI skipped), and 13 checks showed 'skipped' because every job in ci.yml declares needs: graph-check — so a 12-second graph failure gated the whole pipeline. The graph job failed because it checks out shallow (default fetch-depth 1) while invariant I2 verifies that every debt item's cited commit exists: on a one-commit clone D-133, D-135, D-136 and others 'cite a commit that does not exist' — reproduced exactly with a depth-1 clone of that commit, passing on a full clone; the fix is fetch-depth: 0 rather than weakening the invariant. Both firmware jobs failed for one shared reason plus one X64-specific: a fresh clone has no compiled EDK II BaseTools (build cannot run), and build-pbl.sh additionally built ALL of OVMF (NetworkPkg+TLS+TPM2+Secure Boot) before PblApp.efi, which cannot finish in a 3-minute budget and reports its failure as a PblApp failure. build-pbl.sh now bootstraps BaseTools when /BinWrappers/PosixLike/build is absent and OVMF is opt-in via --with-ovmf/PBL_BUILD_OVMF=1, with the QEMU smoke job requesting it explicitly. Verified: X64 build at that commit with the fixed script reports 'Build successful', PblApp.efi 1,363,968 bytes, SHA-256 3906065d77d9e763… (the hash the QEMU harness reports as its self-image), plus PblPersistDxe.efi and EnrollKeys.efi, with OVMF skipped; make lint-workflows clean (and it caught a duplicated with: key in the first edit). Also measured: graph-check, OpenAPI 76/76, the secret scan for that push range, worker tsc --noEmit and the agent suite all pass at 9e06d37, so earlier hypotheses about the worker typecheck, secret scan and test suites were wrong. AARCH64 remains unverified locally (no aarch64-linux-gnu-gcc here). |
 | B-100 | confirmed | code-read | GitHub reported 8 high Dependabot findings on the default branch, and the locally reproducible ones were both in electron: the electron devDependency was ~41.7.1 while the advisory range is <=42.11.15 (so every 41.x is affected — GHSA-r4w5-6pfg-jxp5 and the OpenURL/sandbox cluster), and extract-zip carried an unvalidated symlink traversal via electron-builder. Bumping electron to ^42.11.18 removed both: npm audit --audit-level=high now exits 0 in electron with 0 high and 0 critical, 24 low/moderate remaining (all build tooling), while server (40 total, 0 high), dashboard (0, exceptions-script gate exit 0), serverless (0) and the agent (pip-audit clean) were already fine. The upgrade also exposed a structural defect: tests/validateWorkerUrl.test.js imports main.js, which requires('electron'), so a URL-validation unit test depended on the Electron binary being downloaded — and Electron 42's install.js is ESM and will not run under Node 20, so the suite failed to load with 'Electron failed to install correctly' rather than running. electron/tests/electron-stub.js plus a jest moduleNameMapper for ^electron$ removes that dependency; the suite now passes (3 suites / 30 tests). The remaining 6 of GitHub's 8 highs are not reproducible by any local audit and probably come from Actions pins, Docker base images or per-manifest duplication. |
 | B-101 | confirmed | code-read | GitHub's reported high Dependabot findings are not reproducible from this host, and 'npm audit is clean' is therefore not evidence that Dependabot is clean. Measurements: all GitHub Actions pins are SHA-pinned (no tag-pinned uses: remain), the Docker base images are node:20-slim, node:20-alpine (x2) and ubuntu:24.04 with nothing obviously stale, the agent pins cryptography==50.0.0 and requests==2.34.2 (current, pip-audit clean), and — decisively — auditing the pre-fix electron lockfile with npm's advisory database reports only 1 low and 2 moderate advisories with ZERO high, even though the installed tree reported two high packages. That rules out the hypothesis that GitHub's 8 highs were the two electron packages counted per advisory. The likely explanation, recorded as a hypothesis rather than a finding, is that Dependabot uses the GitHub Advisory Database (including advisories npm's audit does not serve) plus ecosystems npm cannot see; confirming it requires the Dependabot page or an API token. What was reproducible is fixed: electron ~41.7.1 -> ^42.11.18 removed both highs (electron's ProtocolResponse/sandbox cluster and extract-zip's symlink traversal), leaving 0 high/critical in electron, 0 high in server/dashboard/serverless and a clean agent. |
+| B-102 | confirmed | code-read | The PBL debt ledger states each item's status twice — a summary table and a detailed entry whose blocker justifies it — and the two had drifted on 23 of the 46 items present in both places: the table marked D-111..D-128 CLOSED while their entries say OPEN, D-100 PARTIAL, and D-133 the reverse. D-117 was the instance in hand: the table said CLOSED (QEMU+swtpm: 8 test-output logs) while the entry says OPEN for want of host-side unit tests, and verification confirms the entry (no firmware/PblPkg/tests directory, no CMocka/unity harness) while === Starting swtpm (TPM 2.0 simulator) ===
+  [INFO] tpm2-tools absent or PROVISION_AK_NAME=0 — unprovisioned path
+  swtpm started (PID 15)
+=== Creating ESP disk image ===
+Creating new GPT entries in memory.
+The new table will be used at the next reboot or after you
+run partprobe(8) or kpartx(8)
+The operation has completed successfully.
+mkfs.fat 4.2 (2021-01-31)
+
+=== Booting PblApp in OVMF (timeout 40s) ===
+  QEMU exited with code 124
+  Serial log: 2725 bytes
+  Override input sent: True
+
+=== Checking serial output ===
+  [PASS] PBL banner appears
+  [PASS] Platform state step
+  [PASS] Policy parse step
+  [PASS] TPM NV read step
+  [PASS] Verdict step banner (fetch)
+  [PASS] Verdict step banner (verify)
+  [PASS] Verdict request suppressed without a device_id
+  [PASS] Verification skipped for the cached verdict
+  [INFO] no 'Online fetch failed' line; verdict-related serial output:
+    [4/8] Fetching verdict...
+      [WARN] Verdict request suppressed: no device_id (C2 §1.3)
+      [WARN] No cached verdict — denied-boot-with-local-unlock
+    [5/8] Verifying verdict...
+      [INFO] Skipping verification for cached verdict
+  [PASS] Decision step
+  [PASS] PCR extend step
+  [PASS] Decision action step
+  [PASS] NV indices provisioned
+  [PASS] HMAC session established
+  [PASS] Self-image measured (D-217)
+  [PASS] Loaded image digest computed (D-213)
+  [PASS] Lock screen displayed
+  [PASS] unprovisioned detected
+  [PASS] verdict request suppressed
+  [PASS] Self-image hash matches PblApp.efi (3906065d77d9e763...)
+
+=== Results: 19 PASS / 0 FAIL === — the other half of the entry — does exist. The detailed entry is authoritative because it carries evidence and a named blocker; the table is what rots. scripts/check_debt_ledger.py now compares the two (normalising status qualifiers), treats the entry as the source of truth, and runs under make lint and the CI graph-check job; the 22 unreconciled disagreements live in .devin/graph/debt-ledger-mismatches.txt as a shrink-only baseline so a new mismatch fails and a reconciled item whose baseline line survives is reported as stale. Its 8 tests caught a real bug before shipping ( made an empty ledger exit 1). Reconciling the other 22 means verifying each against the codebase, item by item. |
 
 ## integrations/ui
 
