@@ -94,6 +94,15 @@ build-electron:
 # (build-all.sh is a build orchestrator; tests live in each component.)
 # ---------------------------------------------------------------------------
 
+# Windows artefacts (lockdown-service.exe, lockdown-installer.exe, lockdown-agent.exe).
+# Build logic lives in scripts/ per the repo convention; this only delegates, and says so
+# when there is no PowerShell to delegate to.
+.PHONY: windows-artifacts
+windows-artifacts:
+	@command -v pwsh >/dev/null 2>&1 && pwsh -NoProfile -File scripts/build-windows-artifacts.ps1 || { \
+		echo "windows-artifacts needs PowerShell: run it on a Windows host, or use the CI job windows-artifacts.yml"; \
+		exit 1; }
+
 .PHONY: test test-server test-agent test-dashboard test-worker test-electron test-scripts test-e2e test-e2e-dashboard test-coverage
 
 test: test-server test-agent test-dashboard test-worker test-electron test-scripts

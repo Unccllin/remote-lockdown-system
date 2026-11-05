@@ -1,0 +1,53 @@
+name: Windows artifacts
+
+# agent/dist/ is gitignored, so a fresh clone has no Windows installers: until this job
+# existed, lockdown-installer.exe had to be built by hand on a Windows machine (S227).
+# This runs scripts/build-windows-artifacts.ps1 on windows-latest and publishes the
+# binaries, so the server can stage them without a human at a Windows keyboard.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: windows-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Windows installers
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Nothing here needs the token after checkout; leaving it in .git/config is
+          # credential persistence that an artifact upload could carry (zizmor).
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Build artefacts
+        shell: pwsh
+        run: ./scripts/build-windows-artifacts.ps1
+
+      - name: List artefacts
+        shell: pwsh
+        run: Get-ChildItem agent/dist -Filter *.exe | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Upload artefacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-artifacts
+          path: agent/dist/*.exe
+          if-no-files-found: error
+          retention-days: 30

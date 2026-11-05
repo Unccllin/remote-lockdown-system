@@ -109,9 +109,21 @@ def _stage_dir(root: Path, *, agent: bool = True, installer: bool = True) -> Pat
     return stage
 
 
-def _run_build(stage: Path, out: Path, *extra: str) -> subprocess.CompletedProcess:
+# A build needs a server URL by design: installer.py has no default since S213, so the
+# script refuses rather than baking one. Tests that expect a successful build pass one
+# explicitly; the refusal test passes server_url=None.
+TEST_SERVER_URL = "https://lockdown.example.test"
+
+
+def _run_build(
+    stage: Path, out: Path, *extra: str, server_url: str | None = TEST_SERVER_URL
+) -> subprocess.CompletedProcess:
+    args = ["bash", str(BUILD_SH), "--stage", str(stage), "--out", str(out)]
+    if server_url is not None:
+        args += ["--server-url", server_url]
+    args += list(extra)
     return subprocess.run(
-        ["bash", str(BUILD_SH), "--stage", str(stage), "--out", str(out), *extra],
+        args,
         capture_output=True,
         text=True,
         timeout=300,
@@ -293,21 +305,30 @@ def test_build_script_reports_optional_companions_as_optional():
     assert "lockdown-watchdog.exe" in combined
 
 
-def test_build_script_takes_the_backend_url_from_installer_py():
-    """One source of truth: the URL the .nsi pre-fills is installer.py's default."""
+def test_build_script_refuses_to_guess_a_server_url():
+    """S213 removed the baked default.
+
+    A default that silently pointed at the deployed Worker enrolled devices into the
+    wrong server, where their tokens did not exist. The build therefore refuses to
+    guess and asks for --server-url.
+    """
+    with _tmp() as tmp:
+        result = _run_build(_stage_dir(tmp), tmp / "out", server_url=None)
+
+    assert result.returncode == 1
+    assert "--server-url" in result.stderr
+
+
+def test_build_script_uses_the_server_url_it_is_given():
     if _makensis() is None:
         _skip("makensis not installed")
         return
 
-    expected = re.search(
-        r'^DEFAULT_SERVER_URL\s*=\s*"([^"]+)"', INSTALLER_PY.read_text(encoding="utf-8"), re.M
-    )
-    assert expected, "DEFAULT_SERVER_URL not found in agent/installer.py"
-
     with _tmp() as tmp:
-        result = _run_build(_stage_dir(tmp), tmp / "out")
+        result = _run_build(_stage_dir(tmp), tmp / "out", server_url=TEST_SERVER_URL)
+
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"server-url: {expected.group(1)}" in result.stdout
+    assert "server-url: https://lockdown.example.test" in result.stdout
 
 
 def test_build_script_compiles_a_real_installer():

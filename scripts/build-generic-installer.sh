@@ -66,13 +66,28 @@ fi
 # the installer pre-fills and the URL the installer would fall back to on a
 # silent run cannot disagree.
 if [ -z "$SERVER_URL" ]; then
+  # `-n ... p` with `[^"]*` (zero or more): a non-matching line must produce nothing.
+  # With `[^"]+` an EMPTY default -- which is what installer.py has held since S213, when
+  # the baked Worker URL was removed for misdirecting enrolments -- did not match, so sed
+  # passed the whole source line through and the build happily baked
+  # `DEFAULT_SERVER_URL = ""` as the server URL.
   SERVER_URL="$(grep -m1 '^DEFAULT_SERVER_URL' "$REPO/agent/installer.py" 2>/dev/null \
-    | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+    | sed -nE 's/^[^"]*"([^"]*)".*/\1/p' || true)"
   if [ -z "$SERVER_URL" ]; then
-    err "cannot read DEFAULT_SERVER_URL from agent/installer.py (pass --server-url)"
+    err "no server URL: agent/installer.py has no default, so pass --server-url <url>"
     exit 1
   fi
 fi
+
+# A URL without a scheme is never right, and this is the check that would have caught the
+# empty-default extraction above.
+case "$SERVER_URL" in
+  http://*|https://*) ;;
+  *)
+    err "server URL must start with http:// or https:// (got '$SERVER_URL')"
+    exit 1
+    ;;
+esac
 
 # Mandatory: the agent, and the installer the wrapper delegates to.
 AGENT_EXE="$STAGE/lockdown-agent.exe"
