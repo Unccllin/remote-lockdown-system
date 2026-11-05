@@ -53,27 +53,28 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 238 — 2026-11-05 ("PBL devices show zero" was a wrong-store read)
+## Latest session: 239 — 2026-11-05 (the firmware verifies a verdict signed by this deployment)
 
 ### Fog cleared
 
-- **Why the PBL device list showed zero with devices enrolled**: a wrong-store read.
-- **That enrolment works and persists**: the row is in `pbl_kv_store` and survives restarts.
-- **That this server signs verdicts**: `POST /v1/verdict` for the enrolled id returned a
-  COSE_Sign1 with a 64-byte signature, and `kid c19157d8… / spki 91B` is now published by
-  key-info.
+- **Firmware verifies this deployment's verdicts**: proven, with the signature check asserted
+  rather than inferred.
+- **Why the first attempt was rejected**: not the key, not TLS — the missing cert chain.
+- **What an operator needs to pin this server**: kid + SPKI from key-info (S237) and a chain
+  whose leaf carries that SPKI.
 
 ### Fog remaining
 
-- **The firmware still verifies the harness's key, not this server's.** Building a policy that
-  pins our verdict SPKI (`kid c19157d8…`, 91 bytes from key-info) is the next step, after
-  which a QEMU run can show `Verdict signature verified` against this deployment.
-- **Enrolment is unauthenticated** (see the observation) — a threat-model question.
+- **The chain's root is a throwaway test root** minted here. A deployment needs its real
+  verdict-signing chain provisioned (the `/v1/admin/cert-chain` endpoint stores one but does
+  not return its bytes, so nothing can currently build a policy from it — recorded).
+- **`POST /v1/enroll` still accepts unverified `ek_cert`/`ak_public`** (S238 observation).
 - QEMU/emulation only; I3 unsatisfied. D-117 untouched.
 
 ### Debt items closed
 
-- The user-facing "PBL devices show zero" — root cause found and fixed.
+- The S236 "attestation enrolment" blocker for a verified verdict is resolved *for testing*
+  (a row exists and firmware verifies against it); real attestation remains a threat-model item.
 
 ### Debt items still open
 
@@ -81,37 +82,36 @@
 
 ### Blockers
 
-- None for the list. The firmware-side verification needs a policy built from our key-info.
+- None for the demonstration. Production needs a real signer chain and verified enrolment.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the route's bug was invisible while the
-  registry was empty; only enrolling something exposed it. A test asserting "a device written
-  to the KV appears in the list" would have caught it on the day it was written, and that test
-  now exists.
-- **Layer 2 — context provision**: the KV shim has two storage shapes (Map and table) and
-  nothing said `_store` only reflects one of them.
+- **Layer 4 — verification feedback** (primary): the first external run reported "verdict
+  decoded" as a PASS while the firmware had *rejected* the verdict one line earlier. The check
+  now asserts the verification itself, which is the only line that means anything here.
+- **Layer 2 — context provision**: D-205's fail-closed chain requirement was documented in the
+  firmware but not in the policy generator, so the generator happily emitted a chainless policy
+  for an external signer.
 
 ### VERIFY
 
-- Before the fix: 1 row in `pbl_kv_store`, verdict 200 signed, `GET /v1/devices` → `[]`.
-- After the fix (live): `GET /v1/devices` → `[{device_id: abababab…, status: active,
-  enrolled_at: 2026-11-05T12:20:15Z}]`; `POST /v1/verdict` → 200, verdict 0, signature 64 B;
-  key-info → `verdict_signing_key kid c19157d8…, spki 91 B, kid_matches_spki true`.
-- Suites: server **800** (48 suites; +2), eslint clean.
-- Commit: `188d706`.
+- Firmware serial: the four `[OK]` lines above; harness: six `[PASS]` lines; proxy: 149-byte
+  POST answered with 210 bytes.
+- Pinned kid `c19157d8…` matches `GET /v1/admin/key-info`; chain 813 bytes with the server's
+  SPKI in the leaf.
+- Commit: `d7d4949`.
 
 ### Session artifacts
 
-- Changed: `server/src/routes/pbl.js`, `server/tests/pblVerdictPolicyEnroll.test.js`.
+- Changed: `firmware/PblPkg/d131-wire-capture.py`,
+  `firmware/PblPkg/test-d131-wire-harness.sh`.
 
 ### Next session opening
 
-Build a firmware policy that pins this server's verdict key: take `kid`/`spki` from
-`GET /v1/admin/key-info`, put them in policy keys 71/76 with our TLS CA in key 78 and
-`lock_service_uri` pointing at the Python TLS front, boot PblApp and confirm
-`Verdict signature verified` against this deployment — the last step of the arc, and the one
-that also proves the enrolment row is usable by firmware.
+Make the chain a first-class deployment artefact: have `GET /v1/admin/cert-chain` return the
+stored chain bytes so a policy can be built from the server alone, and mint a real
+verdict-signing chain instead of the throwaway root used here. After that, the only remaining
+firmware item is real attestation at enrolment.
 
 ---
 

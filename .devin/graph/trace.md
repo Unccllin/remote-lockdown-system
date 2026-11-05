@@ -12049,3 +12049,110 @@ Build a firmware policy that pins this server's verdict key: take `kid`/`spki` f
 that also proves the enrolment row is usable by firmware.
 
 ---
+
+---
+
+## Session 239 — 2026-11-05 (the firmware verifies a verdict signed by this deployment)
+
+### RULE-ZERO
+
+**Read**: `d131-wire-capture.py` (`generate_assets`, the C4 policy keys, the serve path),
+`test-d131-wire-harness.sh` (external mode), `PblApp`'s D-205 rejection path
+("policy has no cert chain"), `server/src/routes/pbl.js` (`/admin/key-info`, `/admin/cert-chain`).
+
+**Goal**: pin *this server's* verdict signer in the policy and boot the firmware against it.
+
+### IMPLEMENT
+
+- **External signer support in the generator**: `--verdict-kid`, `--verdict-spki`,
+  `--verdict-chain`. Without it the generator could only pin a key it had just created, so
+  every verified-verdict run used the harness's own signer (S232).
+- **The chain is not optional.** D-205 fails closed on an absent chain, and that is exactly
+  what rejected this server's first verdict:
+  `[WARN] Verdict rejected — policy has no cert chain (D-205 fail-closed)`. The chain's leaf
+  must carry the signer's own public key, so it is minted from the verdict PKCS#8 the server
+  stores (leaf public key = the server's, signed by a throwaway test root), 813 bytes DER.
+- The `chain [leaf, root]` line no longer lies for an external signer, and the serve path
+  tolerates a missing/odd `verdict-meta.json` instead of raising on the lookups.
+- The wire harness's external mode now asserts **"Verdict signature verified"**, not merely
+  that a verdict decoded.
+
+### RESULT — the arc's goal
+
+```
+10.0.2.2:9443 (Python TLS front) -> Express /v1/verdict -> 200, 210 bytes
+firmware: [OK] Verdict response: 210 bytes
+          [OK] Verdict signature verified (ES256)
+          [OK] Verdict decoded: verdict=0 policy_version=1
+          [OK] Verdict verified
+harness:  [PASS] policy blob loaded from ESP
+          [PASS] device_id derived from AK Name
+          [PASS] verdict request posted over TLS
+          [PASS] external server received the verdict request
+          [PASS] verdict decoded by firmware
+          [PASS] verdict signature verified (external signer)
+```
+
+The pinned kid was `c19157d8…` — taken from this server's `GET /v1/admin/key-info` (S237) — and
+the device was the row enrolled in S238. So the chain of trust is end to end: our policy → our
+TLS (our CA in key 78) → our Express route → our signature → firmware verification.
+
+### Fog cleared
+
+- **Firmware verifies this deployment's verdicts**: proven, with the signature check asserted
+  rather than inferred.
+- **Why the first attempt was rejected**: not the key, not TLS — the missing cert chain.
+- **What an operator needs to pin this server**: kid + SPKI from key-info (S237) and a chain
+  whose leaf carries that SPKI.
+
+### Fog remaining
+
+- **The chain's root is a throwaway test root** minted here. A deployment needs its real
+  verdict-signing chain provisioned (the `/v1/admin/cert-chain` endpoint stores one but does
+  not return its bytes, so nothing can currently build a policy from it — recorded).
+- **`POST /v1/enroll` still accepts unverified `ek_cert`/`ak_public`** (S238 observation).
+- QEMU/emulation only; I3 unsatisfied. D-117 untouched.
+
+### Debt items closed
+
+- The S236 "attestation enrolment" blocker for a verified verdict is resolved *for testing*
+  (a row exists and firmware verifies against it); real attestation remains a threat-model item.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- None for the demonstration. Production needs a real signer chain and verified enrolment.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the first external run reported "verdict
+  decoded" as a PASS while the firmware had *rejected* the verdict one line earlier. The check
+  now asserts the verification itself, which is the only line that means anything here.
+- **Layer 2 — context provision**: D-205's fail-closed chain requirement was documented in the
+  firmware but not in the policy generator, so the generator happily emitted a chainless policy
+  for an external signer.
+
+### VERIFY
+
+- Firmware serial: the four `[OK]` lines above; harness: six `[PASS]` lines; proxy: 149-byte
+  POST answered with 210 bytes.
+- Pinned kid `c19157d8…` matches `GET /v1/admin/key-info`; chain 813 bytes with the server's
+  SPKI in the leaf.
+- Commit: `d7d4949`.
+
+### Session artifacts
+
+- Changed: `firmware/PblPkg/d131-wire-capture.py`,
+  `firmware/PblPkg/test-d131-wire-harness.sh`.
+
+### Next session opening
+
+Make the chain a first-class deployment artefact: have `GET /v1/admin/cert-chain` return the
+stored chain bytes so a policy can be built from the server alone, and mint a real
+verdict-signing chain instead of the throwaway root used here. After that, the only remaining
+firmware item is real attestation at enrolment.
+
+---

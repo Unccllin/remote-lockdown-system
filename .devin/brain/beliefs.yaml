@@ -2040,3 +2040,34 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-094
+  statement: 'The firmware can be made to verify a verdict signed by this deployment, and the missing
+    piece was the certificate chain rather than the key or TLS. PblApp fails closed when policy key 77
+    (signing_cert_chain) is empty — the first external run logged ''Verdict rejected — policy has no cert
+    chain (D-205 fail-closed)'' even though the server''s 200/210-byte verdict had been received — so
+    a policy pinning an external signer must carry a chain whose leaf holds that signer''s own public
+    key. d131-wire-capture.py --gen-assets therefore gained --verdict-kid/--verdict-spki/--verdict-chain,
+    and with the kid c19157d8... and 91-byte SPKI from GET /v1/admin/key-info (S237), a chain minted from
+    the server''s stored verdict PKCS#8 (813 bytes DER, leaf = server key), our TLS CA in policy key 78,
+    and the device row enrolled in S238, the firmware logs ''[OK] Verdict signature verified (ES256)'',
+    ''[OK] Verdict decoded: verdict=0 policy_version=1'', ''[OK] Verdict verified'' and the wire harness
+    passes six checks including ''verdict signature verified (external signer)''. The chain''s root in
+    this test is a throwaway test root: a deployment needs its real verdict-signing chain provisioned,
+    and GET /v1/admin/cert-chain currently reports only counts and sizes, so nothing can build a policy
+    from the server''s stored chain alone.'
+  domain: general
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'executed: QEMU firmware verified a verdict signed by this deployment — serial shows ''[OK]
+    Verdict signature verified (ES256)'', harness six PASS including ''verdict signature verified (external
+    signer)''; proxy logged the 149-byte POST and 210-byte 200'
+  source: firmware/PblPkg/d131-wire-capture.py (--verdict-kid/--verdict-spki/--verdict-chain); firmware/PblPkg/test-d131-wire-harness.sh
+    (external mode); server/src/routes/pbl.js (/admin/key-info, /admin/cert-chain); live serial and proxy
+    logs
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
