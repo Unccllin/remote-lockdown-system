@@ -9792,3 +9792,116 @@ session) as the likely fix; if that works, make it the default for desktop insta
 and keep ONSTART+repeat for servers.
 
 ---
+
+---
+
+## Session 218 — 2026-11-05 (the machine's scheduler is broken; the Run key is what works)
+
+### RULE-ZERO
+
+**Read**: `agent/service_installer.py` (task creation, watchdog, fallback launch, Run
+key), the live task variables on FRANKENSTEIN, `qwinsta`, the Task Scheduler service,
+and `Microsoft-Windows-TaskScheduler/Operational`.
+
+**Starting point**: S217 ended with one open question — a SYSTEM task starts nothing
+on FRANKENSTEIN while the same exe runs interactively.
+
+### FINDING — the fault is the machine, not the installer
+
+1. **Task Scheduler executes nothing there.** A control task
+   (`cmd.exe /c echo probe > C:\Users\user\task-probe.txt`, /RU SYSTEM /RL HIGHEST)
+   reports `Last Result: 0` and writes **no file**. A second identical probe after
+   `Restart-Service Schedule` also wrote nothing — and the restart itself failed:
+   *"Cannot open Schedule service on computer '.'"*, although `whoami` reports the
+   account in BUILTIN\Administrators. `Schedule` shows Running/Automatic.
+2. **Principal is not the cause.** An `ONLOGON` task created in the user's context
+   (`SystemHealthMonitorLogon`) behaved the same, so SYSTEM vs user is irrelevant.
+3. **An SSH-launched agent does not survive the session.** Via wscript + the VBS
+   launcher the agent *does* start (pid 14140 observed) — and 30 s after the SSH
+   session ends, `tasklist` reports no process. OpenSSH for Windows tears down the
+   session's process tree, so a remote install cannot leave a daemon running.
+4. **The Run key is the persistence that works.** HKLM
+   `...\CurrentVersion\Run\SystemHealthMonitor` contains the full command and starts
+   the agent at logon, independently of the scheduler.
+
+### IMPLEMENT
+
+- `install()` no longer trusts `schtasks /Run`'s exit code: it polls for the process
+  for up to 10 s and, when nothing appears, logs
+  *"The task reported success but no agent appeared — this machine's Task Scheduler may
+  be non-functional; launching directly"* and takes the direct-launch fallback.
+  Verified live: the warning appeared and the install still completed.
+- Test: +1 (the fallback fires when the task starts nothing).
+- Cleanup: the three probe tasks (`PiProbe`, `PiProbe2`,
+  `SystemHealthMonitorLogon`) were deleted; `\SystemHealthMonitor` remains.
+
+### Fog cleared
+
+- **Why nothing survived a reboot test**: the machine's scheduler is broken; it is not
+  our task definition, principal, action, or repetition.
+- **Why a remote install left no daemon**: the SSH session's process tree is killed on
+  disconnect.
+- **What still gives persistence here**: the HKLM Run key.
+
+### Fog remaining
+
+- **The scheduler defect is environmental and unfixed**: `sfc`/`DISM`/reboot or a
+  different machine would show whether it is a corrupted component store (this is a
+  Windows 11 build 26300 insider-era image). Not something the installer can repair.
+- **Logon-start is unverified** because confirming it needs a logoff/reboot, which
+  would drop the console session ("NEWARK USER" on session 5) that the machine is
+  sitting at.
+- **On a healthy machine the task path is still unproven** — every task-based result we
+  have comes from this broken scheduler.
+- `TAMPER DETECTED … service_missing=True` (agent expects a service; we register a
+  task) still needs an agent rebuild; no TPM on this box (DPAPI fallback).
+- Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
+  the S202 objective.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-117 (markdown/spec drift), D-100, D-111…D-115, D-118…D-129, D-134.
+
+### Blockers
+
+- Verifying unattended start requires either a working scheduler on that machine or a
+  logoff/reboot, which is the operator's call.
+
+### Failure attribution
+
+- **Layer 3 — execution environment** (primary): the machine's Task Scheduler is
+  non-functional and reports success while doing nothing. Two sessions were spent
+  attributing that to our task definition.
+- **Layer 4 — verification feedback**: the control probe (`cmd /c echo > file`) is what
+  proved it — a five-second experiment that should have come before touching the task
+  at all.
+
+### VERIFY
+
+- Control probe: task ran (`Last Result: 0`), **no file** → scheduler non-functional.
+- `ONLOGON` task in the user's context: same, no process.
+- wscript + VBS: agent started (pid 14140) and was gone 30 s after the SSH session
+  ended.
+- Run key present and correct (command string quoted above).
+- Installer now warns on the broken scheduler and completes: `OK: installed`.
+- Suites: agent **787** (+1), server 793, dashboard 220; ruff + eslint clean.
+- Commits: `65422d0`, `cf45d89`.
+
+### Session artifacts
+
+- Changed: `agent/service_installer.py`, `agent/tests/test_service_installer.py`.
+
+### Next session opening
+
+Two things in order: (1) reboot FRANKENSTEIN (or log off and back on) and confirm the
+Run key starts the agent unattended — that is the only persistence mechanism this
+machine can actually exercise; (2) test the task path on a Windows box whose scheduler
+works, so `\SystemHealthMonitor` is proven somewhere. If the Run key proves reliable,
+make it the documented primary for desktop installs and keep the task as the
+server-class mechanism.
+
+---

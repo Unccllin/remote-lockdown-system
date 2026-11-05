@@ -53,34 +53,28 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 217 — 2026-11-05 (one agent, one start mechanism, one open question)
+## Latest session: 218 — 2026-11-05 (the machine's scheduler is broken; the Run key is what works)
 
 ### Fog cleared
 
-- **Duplicate instances**: the installer and the task both started the agent; both
-  paths are now guarded, and a clean install leaves exactly one process.
-- **"Nothing starts it until reboot"**: the install runs the task, and the task now
-  repeats every 5 minutes.
-- **The task does register the repetition** on this machine (it was in the code
-  comments but never applied).
+- **Why nothing survived a reboot test**: the machine's scheduler is broken; it is not
+  our task definition, principal, action, or repetition.
+- **Why a remote install left no daemon**: the SSH session's process tree is killed on
+  disconnect.
+- **What still gives persistence here**: the HKLM Run key.
 
 ### Fog remaining
 
-- **A task launched as SYSTEM does not leave a running agent here.** Measured three
-  ways on FRANKENSTEIN: (a) watchdog script as the action → `Last Result: 0`, no
-  process, no log line; (b) task action pointed directly at
-  `lockdown-agent.exe --silent --config …` → same; (c) the *same* executable and
-  arguments started from an elevated interactive session → runs, logs
-  "Agent starting — hostname=FRANKENSTEIN", and the server records
-  `last_checkin 2026-11-05 07:11:58`. `Microsoft-Windows-TaskScheduler/Operational`
-  is empty (no events at all), so the scheduler gives no reason. `/Change /RU` prompts
-  for a password, so switching the principal to the logged-on user cannot be done
-  non-interactively.
-- **`TAMPER DETECTED … service_missing=True` on every healthy install.** The agent
-  expects a Windows *service*; this installer registers a *task*. Fixing that needs an
-  agent rebuild (its check is in the frozen binary).
-- **No TPM** on this machine → `TPM seal failed — falling back to DPAPI/plaintext`
-  (environmental; the fallback is silent in the UI).
+- **The scheduler defect is environmental and unfixed**: `sfc`/`DISM`/reboot or a
+  different machine would show whether it is a corrupted component store (this is a
+  Windows 11 build 26300 insider-era image). Not something the installer can repair.
+- **Logon-start is unverified** because confirming it needs a logoff/reboot, which
+  would drop the console session ("NEWARK USER" on session 5) that the machine is
+  sitting at.
+- **On a healthy machine the task path is still unproven** — every task-based result we
+  have comes from this broken scheduler.
+- `TAMPER DETECTED … service_missing=True` (agent expects a service; we register a
+  task) still needs an agent rebuild; no TPM on this box (DPAPI fallback).
 - Unchanged: `lockdown-installer.exe` missing (S209); `devices.hostname` uniqueness;
   the S202 objective.
 
@@ -94,41 +88,41 @@
 
 ### Blockers
 
-- Persistence under the scheduler on this machine (SYSTEM launch), which is also the
-  last thing between "installed" and "runs after a reboot".
+- Verifying unattended start requires either a working scheduler on that machine or a
+  logoff/reboot, which is the operator's call.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback**: my S216 close called the duplicate a "follow-up"
-  without distinguishing *my test's* second process from the product's. Measuring
-  instance count after a clean install is what separated them.
-- **Layer 3 — execution environment**: the SYSTEM-launch failure is invisible from
-  Linux and from unit tests; only the live machine exhibits it.
+- **Layer 3 — execution environment** (primary): the machine's Task Scheduler is
+  non-functional and reports success while doing nothing. Two sessions were spent
+  attributing that to our task definition.
+- **Layer 4 — verification feedback**: the control probe (`cmd /c echo > file`) is what
+  proved it — a five-second experiment that should have come before touching the task
+  at all.
 
 ### VERIFY
 
-- Clean install on FRANKENSTEIN: `OK: installed`, `reassociated=True`, agent process
-  count **1** (the installer was the only starter), task `\SystemHealthMonitor` with
-  `Repeat: Every 0 Hour(s), 5 Minute(s)`.
-- Direct start of the same exe: `Agent starting — hostname=FRANKENSTEIN
-  server=http://192.168.1.43:3001 poll=30s`; server `last_checkin 2026-11-05
-  07:11:58` (25 s before observation), `status active`.
-- Task-launched start: `Last Result: 0`, no process, no log line, no scheduler event.
-- Suites: agent **786** (+5), server 793, dashboard 220; ruff + eslint clean.
-- Commit: `65422d0`.
+- Control probe: task ran (`Last Result: 0`), **no file** → scheduler non-functional.
+- `ONLOGON` task in the user's context: same, no process.
+- wscript + VBS: agent started (pid 14140) and was gone 30 s after the SSH session
+  ended.
+- Run key present and correct (command string quoted above).
+- Installer now warns on the broken scheduler and completes: `OK: installed`.
+- Suites: agent **787** (+1), server 793, dashboard 220; ruff + eslint clean.
+- Commits: `65422d0`, `cf45d89`.
 
 ### Session artifacts
 
-- Changed: `agent/service_installer.py`, `agent/installer_gui.py`,
-  `agent/tests/test_service_installer.py`, `agent/tests/test_installer_gui.py`.
+- Changed: `agent/service_installer.py`, `agent/tests/test_service_installer.py`.
 
 ### Next session opening
 
-Find out why a SYSTEM task cannot start the agent on FRANKENSTEIN — enable the
-TaskScheduler/Operational log, compare the task's environment (session 0, no desktop)
-against the interactive one, and try `schtasks /SC ONLOGON` (which runs in the user's
-session) as the likely fix; if that works, make it the default for desktop installs
-and keep ONSTART+repeat for servers.
+Two things in order: (1) reboot FRANKENSTEIN (or log off and back on) and confirm the
+Run key starts the agent unattended — that is the only persistence mechanism this
+machine can actually exercise; (2) test the task path on a Windows box whose scheduler
+works, so `\SystemHealthMonitor` is proven somewhere. If the Run key proves reliable,
+make it the documented primary for desktop installs and keep the task as the
+server-class mechanism.
 
 ---
 

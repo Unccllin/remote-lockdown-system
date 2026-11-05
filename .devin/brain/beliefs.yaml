@@ -1457,3 +1457,31 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-073
+  statement: 'FRANKENSTEIN''s Task Scheduler is non-functional at OS level: a control task (cmd.exe /c
+    echo probe > file, running as SYSTEM with highest privileges) reports Last Result 0 and writes no
+    file; an ONLOGON task in the user''s context does the same; and Restart-Service Schedule fails with
+    ''Cannot open Schedule service on computer''. Therefore no task-based persistence can be verified
+    on that machine, and the S217 conclusion that the agent cannot be started by a task must be read as
+    an environment defect rather than a product defect. Additionally, a process started by an SSH-driven
+    installer does not survive the session (wscript/VBS launched the agent as pid 14140 and it was gone
+    30 seconds after disconnect), so remote installs cannot leave a daemon behind on OpenSSH for Windows.
+    The persistence that does work there is the HKLM Run key the installer writes (SystemHealthMonitor
+    = C:\ProgramData\LockdownAgent\lockdown-agent.exe --silent --config ...), which starts the agent at
+    logon; install() now polls for the process after schtasks /Run and warns when the scheduler started
+    nothing.'
+  domain: general
+  status: confirmed
+  evidence_level: real-media
+  provenance: 'live FRANKENSTEIN: control task wrote no file with Last Result 0; ONLOGON same; schedule
+    restart denied; wscript agent pid 14140 died within 30s of SSH disconnect; HKLM Run key read; agent
+    787 tests'
+  source: live FRANKENSTEIN probes (PiProbe/PiProbe2/SystemHealthMonitorLogon); agent/service_installer.py;
+    agent.log; HKLM Run key; TaskScheduler/Operational (empty)
+  asserted: '2026-11-05'
+  last_verified: '2026-11-05'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
