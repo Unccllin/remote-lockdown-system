@@ -442,13 +442,20 @@ def main():
 
     args = parser.parse_args()
 
+    # Sequential, not if/elif: `--generate-keys --generate-policy PATH` is the natural way
+    # to prepare a test run, and the elif chain silently did only the first thing (the
+    # policy blob was never written and nothing said so).
+    did_something = False
     if args.generate_keys:
         load_key_and_cert()
-    elif args.generate_policy:
+        did_something = True
+    if args.generate_policy:
         generate_policy(args.generate_policy, args.uri, args.bootmgr_hash)
-    elif args.serve:
+        did_something = True
+    if args.serve:
         serve(args.port)
-    else:
+        did_something = True
+    if not did_something:
         parser.print_help()
 
 

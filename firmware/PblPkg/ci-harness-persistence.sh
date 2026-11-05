@@ -15,7 +15,23 @@
 
 set -eo pipefail
 
-TIMEOUT="${1:-45}"
+# Accepts `45`, `--timeout 45` and `--timeout=45`. The old `TIMEOUT="${1:-45}"` took
+# the flag itself as the value, so the embedded Python emitted `if elapsed > --timeout:`
+# and died with "NameError: name 'timeout' is not defined" mid-run — the same bug that was
+# fixed in ci-harness-docker.sh but not here.
+TIMEOUT=45
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --timeout)   TIMEOUT="${2:-45}"; shift 2 || shift ;;
+    --timeout=*) TIMEOUT="${1#*=}"; shift ;;
+    [0-9]*)      TIMEOUT="$1"; shift ;;
+    *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: timeout must be an integer number of seconds, got '${TIMEOUT}'" >&2
+  exit 2
+fi
 FIRMWARE_DIR="${FIRMWARE_DIR:-/firmware}"
 BUILD_DIR="/tmp/pbl-ci-persist"
 
