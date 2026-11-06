@@ -1351,13 +1351,19 @@ debt_items:
                     both surfaces; (e) agent happy path unchanged and \
                     existing tests still pass, with new tests for a \
                     cross-device token and a replay"
-    status: OPEN
+    status: CLOSED
     category: SECURITY
     found: "session 252 (routes 401'd on Express); filed session 253"
-    blocker: "A scheme change has a rollout cost: agents mid-auto-update must \
-              keep working. Ruling open in .devin/PENDING-RULING.md (D-221)."
-    commit_ref: null
-    artifact_ref: null
+    commit_ref: "b9c6127"
+    artifact_ref: "docs/adr/D-221-token-vectors.json (6 bound + 4 legacy vectors, \
+                  read by server/tests/uninstallAuth.test.js, \
+                  serverless/worker.test.ts and scripts/test_cross_surface_contract.py); \
+                  server suite 828 passed, serverless 420 passed"
+    note: "Answered as 'take the recommendations' (Q1-A device-bound HMAC, Q2-A \
+           dual-accept one release, Q3-A refuse without a secret, Q4-A shared \
+           vector file). Legacy verification is logged and marked \
+           deprecated_scheme; deleting that path is the follow-up."
+
 
 # ---------------------------------------------------------------------------
 # GRAPH INVARIANTS (asserted by graph_assert.py)

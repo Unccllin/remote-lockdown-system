@@ -13583,3 +13583,93 @@ new scheme, plus `legacy` entries for both predecessors. Read by
 `server/tests/uninstallAuth.test.js`, `serverless/worker.test.ts` and
 `scripts/test_cross_surface_contract.py`; the Python side recomputes every vector, so a wrong
 vector fails there before it can "pin" two wrong implementations.
+
+**Both surfaces accept only their own legacy scheme** — Express `HMAC(secret, window)`, Worker
+`SHA256("window:secret")` — because a token never travels between surfaces; accepting the other
+one would have kept dead code alive for no migration benefit. The vectors file pins all three
+derivations, including the fact that the two legacy ones differ, so a future "cleanup" that made
+them identical fails a test.
+
+**Docs**: `docs/API.md` (both endpoints: the derivation, the 400/503 cases, the
+`deprecated_scheme` marker, and the standing rule that no response echoes the presented token) and
+`docs/openapi.yaml` (request bodies incl. `device_id`, response fields, 400/503).
+
+**Harness-forced edits, recorded because they are outside this session's subject**: three
+pre-existing Worker destructure-to-omit bindings (`const { api_key_hash, ...safeDevice } = merged`)
+tripped the unused-binding check the moment the file changed, so they carry the `_` prefix the rule
+asks for. Behaviour identical; one comment says why at the first site.
+
+### Fog cleared
+
+- **Whether the two surfaces could be made to agree without new storage**: yes — the device **id** is
+  enough (Q1-A), because a caller always authenticates *as* something: a device key resolves to a row
+  on both surfaces (`getDeviceByApiKeyHash` / `listDevices`), so the binding id never has to be
+  trusted from the request body. That is why Q1-B's per-device secret stayed unnecessary.
+- **Whether the Worker could do HMAC at all**: it already had `hmacSha256` and
+  `timingSafeEqualStr`, so both halves of the close criteria were a few lines each.
+- **Whether the agent needed changing**: no. `request_uninstall_token`/`verify_uninstall_token`
+  already send `device_id`, and the binding now comes from the authenticated row anyway — so the
+  agent works unchanged against old and new servers, which is what made Q2-A affordable.
+- **Whether the 5-minute legacy acceptance is safe to ship**: it is *weaker*, not weaker than
+  before — the previous scheme is accepted exactly as it was, on the surface that issued it, with a
+  deprecation log per verification, and the bound scheme is tried first.
+
+### Fog remaining
+
+- **The legacy acceptance has no expiry date in code.** It is logged and documented (`deprecated_scheme`,
+  the ledger note, the trace) but nothing fails when it is forgotten. A dated removal — the next
+  release after this one — is the follow-up the ledger note names.
+- **No test proves the *agent* still round-trips against a real server** (the agent's own test posts
+  to an unreachable port and expects `False`). The scheme is pinned on both server surfaces and by
+  shared vectors; the agent's side is unchanged code, not new evidence.
+- **`docs/adr/D-221-token-vectors.json` is the third "shared statement between surfaces" in the repo**
+  (after the route tables the contract test reads). If a fourth appears, the pattern deserves a home
+  rather than another bespoke loader.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
+
+### Debt items closed
+
+- **D-221** — commit `b9c6127`; artifact `docs/adr/D-221-token-vectors.json` plus the three suites
+  that read it (server 828 passed, serverless 420 passed, contract test 11 passed). All four defects
+  closed; the only residual is the dated removal of the legacy branch, recorded above.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 62 OPEN).
+
+### Blockers
+
+- Dependabot/CodeQL findings still need the security page. Nothing in D-221 is blocked.
+
+### Failure attribution
+
+- **Layer 2 — context provision** (primary): the divergence survived because nothing said *where*
+  the token scheme was stated. Each surface's comment described its own derivation accurately, so
+  both looked right; the shared statement did not exist. Q4-A created it, and the contract test now
+  fails if either suite stops reading it — the durable form of the fix.
+- **Layer 4 — verification feedback** (secondary): both suites were green before this session and one
+  of them was asserting the *wrong* scheme (the Express legacy token, which the migration branch now
+  accepts). A suite that pins whatever the code does is not a contract.
+
+### VERIFY
+
+- `cd server && npm test` → **828 passed, 50 suites** (was 817/50; `uninstallAuth.test.js` 9 → 20).
+- `cd serverless && npm test` → **420 passed, 2 files** (worker.test.ts 249, incl. 6 new D-221 cases).
+- `scripts/test_cross_surface_contract.py` → **11 passed** (3 new: vectors recomputed from first
+  principles, the two legacy derivations must differ, and both suites must still read the file).
+- Teeth: the cross-device case fails if the binding is taken from the body; the shared-vector case
+  fails if either surface changes its derivation (it is the same assertion in both suites).
+- `npx tsc --noEmit -p .` (serverless) exit 0; `npx eslint src/routes/agent.js tests/uninstallAuth.test.js`
+  exit 0; `make sast` → **44 findings, gate exit 0** (the new code adds none); prepush secret scan
+  clean — the vectors' secret is an obvious fixture and is not matched.
+- `python3 scripts/check_debt_ledger.py` → 0 mismatches after closing D-221; `make graph-check` →
+  all invariants pass (I2 resolves the cited commit `b9c6127`).
+- Counts corrected in AGENTS.md again: server 828/50, serverless **420** (was documented as 331 — the
+  fourth stale number this trio of sessions has found in that one paragraph).
+
+### Next session opening
+
+Delete the legacy uninstall-token branch: pick the release after this one, drop
+`legacyUninstallToken` from Express and the Worker, remove the `deprecated_scheme` marker and its
+two tests, and prove it by making the legacy vectors fail — then the D-221 note that still describes
+a migration window becomes history instead of live state.

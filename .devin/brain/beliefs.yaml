@@ -2450,3 +2450,24 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-108
+  statement: The D-221 uninstall token is HMAC_SHA256(ADMIN_TOKEN, '<device_id>:<window>') with the device
+    id taken from the authenticated device row (never the request body), derived identically on Express
+    and the Worker, pinned by docs/adr/D-221-token-vectors.json which both suites plus scripts/test_cross_surface_contract.py
+    read. Issuing fails closed with 503 when ADMIN_TOKEN is unset, comparisons are constant-time, and
+    each surface still verifies only its own previous deployment-wide derivation for one release with
+    a deprecated_scheme marker.
+  domain: api/auth
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S254: implemented and verified — server 828 passed/50 suites, serverless 420, contract
+    test 11 passed across the shared vectors; legacy acceptance logged and marked deprecated_scheme'
+  source: server/src/routes/agent.js; serverless/worker.ts; docs/adr/D-221-token-vectors.json; server/tests/uninstallAuth.test.js;
+    serverless/worker.test.ts; scripts/test_cross_surface_contract.py
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

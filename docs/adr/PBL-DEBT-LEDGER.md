@@ -2163,7 +2163,14 @@
 ---
 
 ### D-221 — The uninstall token is deployment-wide, and the two servers derive it differently
-- **Status**: OPEN
+- **Status**: CLOSED (2026-11-05, session 254 — commit `b9c6127`). Ruling answered as "take the
+  recommendations": Q1-A device-bound HMAC, Q2-A dual-accept one release, Q3-A refuse to issue
+  without a secret, Q4-A one shared vector file. All four defects are closed: the token is
+  `HMAC_SHA256(ADMIN_TOKEN, "<device_id>:<window>")` with the id taken from the authenticated
+  device row; both surfaces derive it identically and `docs/adr/D-221-token-vectors.json` is read by
+  both suites plus `scripts/test_cross_surface_contract.py`; `ADMIN_TOKEN || 'fallback'` is deleted
+  on both surfaces (503 when unset); comparisons are constant-time. Legacy tokens still verify for
+  one release with a deprecation marker, per Q2-A.
 - **Category**: SECURITY
 - **Found**: session 252, while proving that the uninstall-token error body never echoes the
   token (the routes were answering 401 to the agent that owns them; that part is fixed and
@@ -2272,7 +2279,7 @@
 | D-209 | PBL policy blob generation not implemented | CLOSED (commit d111ada) | SERVER |
 | D-210 | Serverless Worker PBL route integration not implemented | CLOSED (commit 9612fbb) | SERVER |
 | D-211 | Covert tracking mode (C5) not fully implemented | CLOSED (all 12 C5 plan items implemented: firmware Decision.c, server verdict+track endpoints, agent handle_track+data protection+stealth, dashboard Track button) | TODO |
-| D-221 | Uninstall token is deployment-wide, and the two servers derive it differently | OPEN (4 defects: no device binding, Express HMAC vs Worker SHA256, `ADMIN_TOKEN \|\| 'fallback'` public constant, non-constant-time compare — see the D-221 entry; ruling open in `.devin/PENDING-RULING.md`) | SECURITY |
+| D-221 | Uninstall token is deployment-wide, and the two servers derive it differently | CLOSED (commit `b9c6127` — device-bound HMAC from the authenticated device row, shared vectors read by both suites + the contract test, 503 when ADMIN_TOKEN is unset, constant-time compare; legacy scheme still verifies for one release with a deprecation marker) | SECURITY |
 
 ### RE-hardening review (2026-09-15)
 
@@ -2293,5 +2300,5 @@
 | D-219 | Policy signature BLOCK path untested | CLOSED (same scenario as D-215 — test-d215-harness.sh + gen-policy-rot.py; 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 | D-220 | BLOCK-intent returns propagate error to BDS (BootOrder advance bypass) | CLOSED (`PblApp.c` policy-sig-fail and anti-rollback paths returned `EFI_SECURITY_VIOLATION` — per Boot#### semantics a non-success return advances BDS to the next boot option (Windows boots). Fixed via `PblBlockHalt()` — lock screen + MOR + ResetSystem + CpuDeadLoop, never returns; chain-load return checked at all 3 call sites, fail-closed on error. Note: D-219's harness passed the buggy code — it checked serial lines, not post-BLOCK behavior. QEMU+swtpm: fve 16/0, docker 15/0, persistence 16/0. Commit this session; artifacts /tmp/pbl-fve-ci/, /tmp/pbl-ci-persist/) | SECURITY |
 
-**Totals**: 54 items — 49 CLOSED, 5 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware, D-130 signing, D-134 TPM NV hierarchy, D-221 uninstall-token scheme)
+**Totals**: 54 items — 50 CLOSED, 4 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware, D-130 signing, D-134 TPM NV hierarchy)
 

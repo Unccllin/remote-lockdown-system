@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 57 | 62 | ✗ |
+| Debt items | 58 | 62 | ✗ |
 | Enforcement paths (on hardware) | 3 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 57 of 62 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 58 of 62 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 10 enforcement paths that still need hardware verification:**
 
@@ -53,85 +53,82 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 253 — 2026-11-05 (the uninstall token gets an owner: D-221 filed, and a ruling opened instead of a patch)
+## Latest session: 254 — 2026-11-05 (D-221 implemented: device-bound uninstall token, one derivation, three suites pinning it)
 
 ### Fog cleared
 
-- **Where a non-firmware debt item belongs**: `PBL-DEBT-LEDGER.md`, despite its name. D-211
-  (covert tracking: agent + server + dashboard) is the precedent, and the 2xx series is global
-  and never reused — D-212..D-220 are already taken by the RE-hardening review, so the next
-  free id is **D-221**, not D-212.
-- **Whether the graph holds the complete debt set**: it does not. `GRAPH-SPEC.yaml` mirrors
-  D-001..D-012 of the 21 legacy items and D-100..D-211 plus D-215 of the live ledger, so its
-  "61 items" was never the full set. Recorded in the spec comment rather than papered over.
-- **Whether `current-state.md`'s ledger pointers were true**: they were not, and had not been for
-  many sessions — the footer said "D-100..D-130, 31 OPEN" while the live ledger ran to D-220 with
-  4 open items. Both numbers were literals in `scripts/graph_session.py`.
-- **Whether D-134 was tracked where the ledger says it is tracked**: the summary table (which the
-  ledger calls authoritative) had **no row** for it. The detail section and the graph both said
-  OPEN. Fixed by adding the row.
+- **Whether the two surfaces could be made to agree without new storage**: yes — the device **id** is
+  enough (Q1-A), because a caller always authenticates *as* something: a device key resolves to a row
+  on both surfaces (`getDeviceByApiKeyHash` / `listDevices`), so the binding id never has to be
+  trusted from the request body. That is why Q1-B's per-device secret stayed unnecessary.
+- **Whether the Worker could do HMAC at all**: it already had `hmacSha256` and
+  `timingSafeEqualStr`, so both halves of the close criteria were a few lines each.
+- **Whether the agent needed changing**: no. `request_uninstall_token`/`verify_uninstall_token`
+  already send `device_id`, and the binding now comes from the authenticated row anyway — so the
+  agent works unchanged against old and new servers, which is what made Q2-A affordable.
+- **Whether the 5-minute legacy acceptance is safe to ship**: it is *weaker*, not weaker than
+  before — the previous scheme is accepted exactly as it was, on the surface that issued it, with a
+  deprecation log per verification, and the bound scheme is tried first.
 
 ### Fog remaining
 
-- **The D-221 decision itself** — four questions open in `.devin/PENDING-RULING.md`; the repo is
-  in DISCUSSION MODE until they are answered. No code was written for it.
-- **D-212..D-214 and D-216..D-220 are CLOSED in the ledger but absent from the graph**, so the
-  convergence table's "5 of 62" undercounts the real debt set. Not fixed: mirroring nine closed
-  items is a reconciliation job of its own, and doing it here would have mixed a numbering audit
-  into a ruling deliverable.
-- **The ledger's "PBL" name is now actively misleading** — it holds agent/server/dashboard debt.
-  Renaming it touches AGENTS.md, the spec comments, `graph_session.py` and this session's own
-  citations, so it wants its own session.
-- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, both blocked on the
-  security page.
+- **The legacy acceptance has no expiry date in code.** It is logged and documented (`deprecated_scheme`,
+  the ledger note, the trace) but nothing fails when it is forgotten. A dated removal — the next
+  release after this one — is the follow-up the ledger note names.
+- **No test proves the *agent* still round-trips against a real server** (the agent's own test posts
+  to an unreachable port and expects `False`). The scheme is pinned on both server surfaces and by
+  shared vectors; the agent's side is unchanged code, not new evidence.
+- **`docs/adr/D-221-token-vectors.json` is the third "shared statement between surfaces" in the repo**
+  (after the route tables the contract test reads). If a fourth appears, the pattern deserves a home
+  rather than another bespoke loader.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
 
 ### Debt items closed
 
-- None.
+- **D-221** — commit `b9c6127`; artifact `docs/adr/D-221-token-vectors.json` plus the three suites
+  that read it (server 828 passed, serverless 420 passed, contract test 11 passed). All four defects
+  closed; the only residual is the dated removal of the legacy branch, recorded above.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134 per the graph, plus **D-221 (new this session)**, which the graph
-  now counts: 5 of 62 graph-tracked items.
+- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 62 OPEN).
 
 ### Blockers
 
-- D-221 is blocked on its own ruling (four questions). Nothing else changed.
-- Dependabot/CodeQL findings still need the security page.
+- Dependabot/CodeQL findings still need the security page. Nothing in D-221 is blocked.
 
 ### Failure attribution
 
-- **Layer 5 — state management** (primary): the drift this session fixed was all cross-session
-  state — a generator printing literals captured before the ledger moved, and a summary table
-  missing a row for an item two other artifacts called OPEN. No single session was wrong; the
-  copies simply aged differently. The generator now derives the count it prints, which is the
-  durable form of the fix.
-- **Layer 2 — context provision** (secondary): nothing in AGENTS.md says which ledger a new
-  non-PBL item belongs to, or that the graph mirrors only part of each ledger. Both facts were
-  reconstructed this session from D-211's precedent and a `comm` of the two id sets. They are
-  now written into the spec's comment block.
+- **Layer 2 — context provision** (primary): the divergence survived because nothing said *where*
+  the token scheme was stated. Each surface's comment described its own derivation accurately, so
+  both looked right; the shared statement did not exist. Q4-A created it, and the contract test now
+  fails if either suite stops reading it — the durable form of the fix.
+- **Layer 4 — verification feedback** (secondary): both suites were green before this session and one
+  of them was asserting the *wrong* scheme (the Express legacy token, which the migration branch now
+  accepts). A suite that pins whatever the code does is not a contract.
 
 ### VERIFY
 
-- `make graph-check` → all invariants pass **after** the session block was completed (it caught
-  the missing state sections first: `[I4] current_state_requires_update`).
-- `python3 scripts/check_debt_ledger.py` → `mismatches now: 0 | recorded: 0 | new: 0 | stale
-  baseline: 0` with D-221 and D-134 added.
-- `python3 -c "yaml.safe_load(GRAPH-SPEC.yaml)"` → 62 debt items (was 61).
-- `scripts/test_graph_session.py` → **40 passed, 0 failed** with the derived-count generator.
-  `scripts/test_check_debt_ledger.py` → 8 passed.
-- `scripts/check-ruling.sh` → **exit 1** by design: 4 open items, DISCUSSION MODE. No source file
-  under `agent/`, `server/`, `serverless/` or `dashboard/` was touched this session.
-- `current-state.md` regenerated: 130 lines, open-debt table now lists D-221 and its pointer reads
-  "5 of 62 graph-tracked items are OPEN" instead of a stale span and a stale count.
+- `cd server && npm test` → **828 passed, 50 suites** (was 817/50; `uninstallAuth.test.js` 9 → 20).
+- `cd serverless && npm test` → **420 passed, 2 files** (worker.test.ts 249, incl. 6 new D-221 cases).
+- `scripts/test_cross_surface_contract.py` → **11 passed** (3 new: vectors recomputed from first
+  principles, the two legacy derivations must differ, and both suites must still read the file).
+- Teeth: the cross-device case fails if the binding is taken from the body; the shared-vector case
+  fails if either surface changes its derivation (it is the same assertion in both suites).
+- `npx tsc --noEmit -p .` (serverless) exit 0; `npx eslint src/routes/agent.js tests/uninstallAuth.test.js`
+  exit 0; `make sast` → **44 findings, gate exit 0** (the new code adds none); prepush secret scan
+  clean — the vectors' secret is an obvious fixture and is not matched.
+- `python3 scripts/check_debt_ledger.py` → 0 mismatches after closing D-221; `make graph-check` →
+  all invariants pass (I2 resolves the cited commit `b9c6127`).
+- Counts corrected in AGENTS.md again: server 828/50, serverless **420** (was documented as 331 — the
+  fourth stale number this trio of sessions has found in that one paragraph).
 
 ### Next session opening
 
-Answer the four D-221 questions (binding, migration window, unset-secret behaviour, ownership of
-the derivation) — recommended defaults are Q1-A `HMAC(ADMIN_TOKEN, "{device_id}:{window}")`,
-Q2-A dual-accept for one release, Q3-A refuse to issue when the secret is unset, Q4-A one shared
-vector file both suites read — then implement against them, starting with the shared vector so
-the two surfaces cannot diverge again.
+Delete the legacy uninstall-token branch: pick the release after this one, drop
+`legacyUninstallToken` from Express and the Worker, remove the `deprecated_scheme` marker and its
+two tests, and prove it by making the legacy vectors fail — then the D-221 note that still describes
+a migration window becomes history instead of live state.
 
 ---
 
@@ -143,9 +140,8 @@ the two surfaces cannot diverge again.
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
-| D-221 | Uninstall token is deployment-wide, and Express and the Work | OPEN | — |
 
-See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (5 of 62 graph-tracked items are OPEN).
+See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (4 of 62 graph-tracked items are OPEN).
 
 ---
 ## Quick reference

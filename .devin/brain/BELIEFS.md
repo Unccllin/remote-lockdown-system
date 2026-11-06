@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-06 09:31:47 — 107 beliefs
+Generated: 2026-11-06 10:33:59 — 108 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -32,6 +32,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-107 | confirmed | code-read | The agent credential header contract is split across surfaces: Express agentAuth reads x-agent-key, the Worker reads X-API-Key, and agent/tamper_protection.py sends X-API-Key. With Bearer compared only to ADMIN_TOKEN, both /api/agent/uninstall-auth routes answered 401 on a self-hosted server for every device until S252 made Express accept either header name and the agent send both. |
+| B-108 | confirmed | code-read | The D-221 uninstall token is HMAC_SHA256(ADMIN_TOKEN, '<device_id>:<window>') with the device id taken from the authenticated device row (never the request body), derived identically on Express and the Worker, pinned by docs/adr/D-221-token-vectors.json which both suites plus scripts/test_cross_surface_contract.py read. Issuing fails closed with 503 when ADMIN_TOKEN is unset, comparisons are constant-time, and each surface still verifies only its own previous deployment-wide derivation for one release with a deprecated_scheme marker. |
 
 ## api/enrolment
 
