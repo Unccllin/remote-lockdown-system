@@ -53,39 +53,40 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 257 — 2026-11-05 (D-222 implemented: the fleet can finally say which build is on a machine)
+## Latest session: 258 — 2026-11-05 (version staleness: a device that stopped reporting must not look compliant)
 
 ### Fog cleared
 
-- **Whether D-222 needed new machinery**: no. Express already had the exact pattern (`update_verification`
-  with COALESCE + a `_at` timestamp), the Worker already had a check-in metadata interface and
-  `mergeCheckinMetadata()` built for nullable per-check-in facts, and the dashboard's sort is
-  field-generic. The gap was that nobody wrote the value down, not that it could not be stored.
-- **Whether `GET /api/devices` needed a field list extended**: no — it is `SELECT *` through
-  `publicDevice()`, which only strips `api_key_hash`, so the new columns reached the response for free.
-- **Whether SQLite can do this migration idempotently**: not by syntax (`ADD COLUMN IF NOT EXISTS`
-  does not exist), but the runner detects an already-applied `ADD COLUMN` and skips it, and
-  `migrationIdempotency.test.js` pins that behaviour — including the expected-version list, which
-  caught the missing entry the first full run.
+- **Whether staleness could be a SQL predicate**: no, and the reason is worth keeping — the dialects
+  store different timestamp shapes (`…T…Z` versus a zone-less `YYYY-MM-DD HH:MM:SS`), so a SQL
+  comparison would either need per-dialect expressions or would compare strings of different shapes.
+  One JS implementation serves both dialects and the Worker.
+- **Whether `new Date(zoneless)` was a real hazard or a theoretical one**: real. V8 parses
+  `2026-11-05 10:00:00` as **local** time, so the one-hour window would have been two hours on a CET
+  host and zero on UTC. The test asserts `parseDbTimestamp('2026-11-05 10:00:00') === Date.UTC(...)`
+  exactly, which is the only assertion that cannot pass by accident on a UTC runner.
+- **Whether "never checked in" and "stale" are the same thing**: they are not, and conflating them
+  would have labelled every unplugged machine as an old build. `isAgentVersionStale` returns false
+  when `last_checkin` is null; the offline question stays with `last_checkin`.
 
 ### Fog remaining
 
-- **The version is only as current as the last check-in.** `agent_version_at` records when it was
-  reported, but nothing flags a device whose report is older than its `last_checkin` (which would mean
-  a build that stopped sending the field — i.e. a downgrade or a mixed fleet). A "stale version"
-  badge is a small follow-up, not done here.
-- **No aggregation endpoint.** "How many devices are on each version?" is a client-side count over
-  `GET /api/devices`; at fleet scale that is a paginated list problem, and there is no pagination yet.
-- **The dashboard column has no filter control** — the API filters, and search matches a typed
-  version, but there is no dropdown of observed versions. Criterion (b) is met by the API + search;
-  a picker is UI polish.
+- **The one-hour tolerance is a constant, not a contract.** It is longer than the maximum poll
+  interval (300 s) with margin, but a deployment that raises the poll interval for locked devices
+  could in principle exceed it. It is named and commented rather than configurable.
+- **`agent_version_at` is only refreshed when the device sends a version**, so a device that keeps
+  sending the same version for months has an old `agent_version_at` by design — staleness is
+  therefore *relative to the check-in*, not an age test on the timestamp. A reader expecting "report
+  age" would misread it; the API doc now says which comparison it is.
+- **No aggregation or alerting.** `?agent_version=stale` is a query, not a monitor; nothing pages on
+  a fleet where half the devices silently stop reporting.
 - **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
 
 ### Debt items closed
 
-- **D-222** — commit `95d3b6f`; artifact: migration `018_agent_version.sql` (+ SQLite twin) and the
-  three suites that pin it (server 837/50, serverless 427, dashboard 229). All four close criteria met;
-  the residuals above are new, smaller gaps rather than unfinished parts of this one.
+- None new. D-222 stays CLOSED; this session closes its recorded residual (the staleness gap), so no
+  ledger item was needed for it — a debt entry for work completed in the same session adds churn
+  without adding a fact.
 
 ### Debt items still open
 
@@ -93,45 +94,43 @@
 
 ### Blockers
 
-- Dependabot/CodeQL findings still need the security page. Nothing here is blocked.
+- Dependabot/CodeQL findings still need the security page. Everything else here is done.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (secondary, caught by the harness): three `migrationIdempotency`
-  tests failed on the first full run because the migration list is pinned by hand. That is the test
-  doing its job — a hand-maintained list is what silently skipped suites before (S150/S151). Worth
-  noting rather than fixing: the alternative (deriving the list from the directory) would stop the
-  test from noticing a migration that failed to apply.
-- **Layer 2 — context provision** (primary, and the reason this took a session): the field was
-  requested by the agent on every check-in for as long as the update route has existed, and no
-  comment anywhere said "this is read and discarded". The code read as complete. The fix is the
-  documentation added to `API.md` (the field is now in the check-in body table) and to the migration
-  header, so the next reader sees that it is stored, not just accepted — the same class of defect as
-  the header contract in S252.
+- **Layer 4 — verification feedback** (primary, caught before shipping): my first edit script
+  asserted a unique anchor for `agent_version?: string | null;`, which appears **twice** in
+  `worker.ts` (the `Device` interface and `CheckinMetadata`). The assert fired and the script exited
+  before writing, so the file was untouched — the failure mode was "no change applied", visible only
+  because the script refuses to write on a failed assertion. A script that silently edited the wrong
+  occurrence would have compiled (`tsc` passed on the unmodified file) and shipped a half-change.
+- **Layer 2 — context provision** (secondary): the zone-less timestamp hazard is a property of
+  `sqlitePool.translateSql()`, recorded only in that function's docstring. Nothing at the call sites
+  says "the value you read back has no zone". The comment now lives where the comparison happens.
 
 ### VERIFY
 
-- `cd server && npm test` → **837 passed, 50 suites** (was 830; 6 check-in/list cases + 1 migration
-  expectation). The first run failed 3 tests for the expected-version list — updated, then green.
-- `cd serverless && npm test` → **427 passed** (was 422; 5 D-222 cases).
-- `cd dashboard && npx vitest run` → **229 passed / 25 files** (was 225; 4 D-222 cases).
-- `npx eslint` on all six changed JS files → exit 0 both components; `npx tsc --noEmit -p .`
+- `cd server && npm test` → **840 passed, 50 suites** (was 837; three cases added to
+  `devices.routes.test.js`: the exact-epoch parse check, the four-state staleness matrix, and the
+  `?agent_version=stale` filter). Measured, not predicted: the first draft of this line said 842
+  because it was written before the run reported.
+- `cd serverless && npm test` → **429 passed** (was 427; 2 staleness cases).
+- `cd dashboard && npx vitest run` → **231 passed / 25 files** (was 229; 2 badge cases).
+- `npx eslint` on the four changed JS/JSX files → exit 0 both components; `npx tsc --noEmit -p .`
   (serverless) → exit 0.
-- `make sast` → 44 findings, gate exit 0 (no new findings from the new code).
-- `scripts/check_debt_ledger.py` → 0 mismatches with D-222 CLOSED (51 of 55 CLOSED);
-  `GRAPH-SPEC` 63 items, 59 CLOSED, OPEN = D-120, D-129, D-130, D-134; `make graph-check` → all
-  invariants pass, I2 resolving `95d3b6f`.
-- Behavioural checks that matter: a pre-D-222 agent omitting `agent_version` does **not** erase an
-  earlier value (both surfaces), a malformed/over-long version stores null rather than a value, five
-  real version shapes (`1.4.2`, `v1.4.2`, `1.4.2-rc1`, `1.4.2+build.7`, `2026.11.05`) survive
-  normalisation, and `?agent_version=unknown` returns exactly the never-reported devices.
+- `make sast` → 44 findings, gate exit 0.
+- Behavioural checks that matter: a zone-less `2026-11-05 10:00:00` parses to exactly
+  `Date.UTC(2026,10,5,10,0,0)`; a device checking in with no version report is stale; one whose
+  report is two hours behind is stale; one 30 s behind is not; a device that has **never** checked in
+  is **not** stale; `?agent_version=stale` returns exactly the stale set on both surfaces; the
+  dashboard badges exactly one of two devices.
 
 ### Next session opening
 
-Surface version staleness — the field records *when* a device last reported a version and nothing
-compares it with `last_checkin`, so a machine that stopped sending one (downgrade, or a build older
-than the field) currently looks compliant. Add the comparison and a dashboard badge, and let
-`?agent_version=stale` join the existing two filter values.
+Nothing in the agent-version thread is outstanding. The honest next target is the one the debt
+ledger has been pointing at for many sessions: the four remaining OPEN items (D-120, D-129, D-130,
+D-134) all need real hardware, and 10 of 13 enforcement paths are `verified-in-unit-test` under I3 —
+so the next deliverable is a hardware window, not more software.
 
 ---
 

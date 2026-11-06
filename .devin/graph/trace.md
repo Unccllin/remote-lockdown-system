@@ -14031,3 +14031,124 @@ Surface version staleness — the field records *when* a device last reported a 
 compares it with `last_checkin`, so a machine that stopped sending one (downgrade, or a build older
 than the field) currently looks compliant. Add the comparison and a dashboard badge, and let
 `?agent_version=stale` join the existing two filter values.
+
+## Session 258 — 2026-11-05 (version staleness: a device that stopped reporting must not look compliant)
+
+### RULE-ZERO
+
+**Read**:
+- `server/src/routes/agent.js` `updateDeviceCheckin()` — writes `last_checkin = NOW()` and
+  `agent_version_at = CASE WHEN $7 IS NOT NULL THEN NOW() …`
+- `server/src/db/sqlitePool.js` `translateSql()` — `NOW()` becomes `datetime('now')`, i.e. SQLite
+  stores **`YYYY-MM-DD HH:MM:SS`, no zone marker**, while PostgreSQL returns a timestamp that
+  serialises as `…T…Z`
+- `server/src/routes/devices.js` — `publicDevice()` is the single place a device row is shaped for
+  the API, and `GET /` already post-filters nothing (the two `agent_version` filters run in SQL)
+- `serverless/worker.ts` — `mergeCheckinMetadata()`, where the Worker assembles the same facts
+- `dashboard/src/pages/DevicesPage.jsx` — the `Agent` column added in S257 and the existing
+  stat-card computations (`offline24h`) for the house style of a derived boolean
+
+**Finding — the comparison cannot be done in SQL, and not naively in JS either.** The two dialects
+store timestamps in different shapes: PG yields an ISO string with `Z`, SQLite yields
+`"2026-11-05 10:00:00"`. `new Date("2026-11-05 10:00:00")` is parsed as **local time** by V8, so a
+staleness check written the obvious way would be off by the host's UTC offset — a 1-hour window would
+become 2 hours in CET and 0 in UTC, and the bug would only appear on some machines. Zoneless strings
+are therefore normalised to UTC before parsing, with the reason in the comment; the comparison itself
+stays in JS so one implementation serves both dialects and the Worker.
+
+**Definition taken**: a device is *stale* when it **is** checking in but its version report is absent,
+or more than an hour older than that check-in. Never-checked-in devices are not stale — that is the
+offline question, already answered by `last_checkin`. The hour is deliberately longer than the maximum
+poll interval (300 s) so an ordinary check-in cycle never trips it.
+
+**Commit**: `a17d38f` — "feat(devices): flag a device that checks in but stopped
+reporting its version (D-258)". This session block is committed separately.
+
+### Implement
+
+- `server/src/routes/devices.js`: `parseDbTimestamp()` (zone normalisation) +
+  `isAgentVersionStale()`; `publicDevice()` gains the derived `agent_version_stale`, so both the list
+  and the detail route carry it; `?agent_version=stale` joins `<version>` and `unknown` as a filter
+  value, applied in JS for the reason above.
+- `serverless/worker.ts`: the same two helpers and the same derived field in
+  `mergeCheckinMetadata()` / the list handler, plus the `stale` filter value.
+- `dashboard/src/pages/DevicesPage.jsx`: a `stale` badge next to the version, with a title explaining
+  what it means — the state that must not read as "updated".
+- Docs (`docs/API.md`) and tests on all three surfaces.
+
+### Fog cleared
+
+- **Whether staleness could be a SQL predicate**: no, and the reason is worth keeping — the dialects
+  store different timestamp shapes (`…T…Z` versus a zone-less `YYYY-MM-DD HH:MM:SS`), so a SQL
+  comparison would either need per-dialect expressions or would compare strings of different shapes.
+  One JS implementation serves both dialects and the Worker.
+- **Whether `new Date(zoneless)` was a real hazard or a theoretical one**: real. V8 parses
+  `2026-11-05 10:00:00` as **local** time, so the one-hour window would have been two hours on a CET
+  host and zero on UTC. The test asserts `parseDbTimestamp('2026-11-05 10:00:00') === Date.UTC(...)`
+  exactly, which is the only assertion that cannot pass by accident on a UTC runner.
+- **Whether "never checked in" and "stale" are the same thing**: they are not, and conflating them
+  would have labelled every unplugged machine as an old build. `isAgentVersionStale` returns false
+  when `last_checkin` is null; the offline question stays with `last_checkin`.
+
+### Fog remaining
+
+- **The one-hour tolerance is a constant, not a contract.** It is longer than the maximum poll
+  interval (300 s) with margin, but a deployment that raises the poll interval for locked devices
+  could in principle exceed it. It is named and commented rather than configurable.
+- **`agent_version_at` is only refreshed when the device sends a version**, so a device that keeps
+  sending the same version for months has an old `agent_version_at` by design — staleness is
+  therefore *relative to the check-in*, not an age test on the timestamp. A reader expecting "report
+  age" would misread it; the API doc now says which comparison it is.
+- **No aggregation or alerting.** `?agent_version=stale` is a query, not a monitor; nothing pages on
+  a fleet where half the devices silently stop reporting.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
+
+### Debt items closed
+
+- None new. D-222 stays CLOSED; this session closes its recorded residual (the staleness gap), so no
+  ledger item was needed for it — a debt entry for work completed in the same session adds churn
+  without adding a fact.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 63 OPEN).
+
+### Blockers
+
+- Dependabot/CodeQL findings still need the security page. Everything else here is done.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, caught before shipping): my first edit script
+  asserted a unique anchor for `agent_version?: string | null;`, which appears **twice** in
+  `worker.ts` (the `Device` interface and `CheckinMetadata`). The assert fired and the script exited
+  before writing, so the file was untouched — the failure mode was "no change applied", visible only
+  because the script refuses to write on a failed assertion. A script that silently edited the wrong
+  occurrence would have compiled (`tsc` passed on the unmodified file) and shipped a half-change.
+- **Layer 2 — context provision** (secondary): the zone-less timestamp hazard is a property of
+  `sqlitePool.translateSql()`, recorded only in that function's docstring. Nothing at the call sites
+  says "the value you read back has no zone". The comment now lives where the comparison happens.
+
+### VERIFY
+
+- `cd server && npm test` → **840 passed, 50 suites** (was 837; three cases added to
+  `devices.routes.test.js`: the exact-epoch parse check, the four-state staleness matrix, and the
+  `?agent_version=stale` filter). Measured, not predicted: the first draft of this line said 842
+  because it was written before the run reported.
+- `cd serverless && npm test` → **429 passed** (was 427; 2 staleness cases).
+- `cd dashboard && npx vitest run` → **231 passed / 25 files** (was 229; 2 badge cases).
+- `npx eslint` on the four changed JS/JSX files → exit 0 both components; `npx tsc --noEmit -p .`
+  (serverless) → exit 0.
+- `make sast` → 44 findings, gate exit 0.
+- Behavioural checks that matter: a zone-less `2026-11-05 10:00:00` parses to exactly
+  `Date.UTC(2026,10,5,10,0,0)`; a device checking in with no version report is stale; one whose
+  report is two hours behind is stale; one 30 s behind is not; a device that has **never** checked in
+  is **not** stale; `?agent_version=stale` returns exactly the stale set on both surfaces; the
+  dashboard badges exactly one of two devices.
+
+### Next session opening
+
+Nothing in the agent-version thread is outstanding. The honest next target is the one the debt
+ledger has been pointing at for many sessions: the four remaining OPEN items (D-120, D-129, D-130,
+D-134) all need real hardware, and 10 of 13 enforcement paths are `verified-in-unit-test` under I3 —
+so the next deliverable is a hardware window, not more software.

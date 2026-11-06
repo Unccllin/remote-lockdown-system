@@ -2536,3 +2536,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-112
+  statement: 'Agent-version staleness is computed in the API layer, not SQL: a device is agent_version_stale
+    when it has checked in and its agent_version_at is absent or more than 60 minutes older than last_checkin
+    (longer than the 300 s max poll interval). The comparison needs a zone-normalising parser because
+    SQLite stores datetime(''now'') as ''YYYY-MM-DD HH:MM:SS'' with no zone marker while PostgreSQL returns
+    ...T...Z, and V8 parses the zoneless form as local time — asserting the exact epoch is the only TZ-independent
+    test. A device that never checked in is offline, not stale.'
+  domain: api/devices
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S258: implemented and tested on all three surfaces — exact-epoch parse assertion, four-state
+    staleness matrix (current/stale/never-reported/never-checked-in), ?agent_version=stale filter on both,
+    badge in the dashboard; server 840 passed, serverless 429, dashboard 231'
+  source: server/src/routes/devices.js (parseDbTimestamp, isAgentVersionStale); server/src/db/sqlitePool.js
+    translateSql; serverless/worker.ts; server/tests/devices.routes.test.js; docs/API.md
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
