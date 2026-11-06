@@ -2514,3 +2514,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-111
+  statement: The agent version is now persisted at check-in on both surfaces (Express devices.agent_version/agent_version_at
+    via migration 018, Worker CheckinMetadata on the KV-RACE-001 key) and readable/filterable from GET
+    /api/devices (?agent_version=<v> and a distinct ?agent_version=unknown). Normalisation is <=64 chars
+    matching ^[A-Za-z0-9][A-Za-z0-9._+-]*$ with everything else stored as null, and an agent that omits
+    the field keeps the previously reported value rather than resetting it.
+  domain: api/devices
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S257: implemented on both surfaces and pinned by tests — server 837 passed/50 suites (persistence,
+    malformed/over-long rejected, 5 version shapes, both filters), serverless 427 (store, omit-does-not-erase,
+    unknown, malformed, filter), dashboard 229 (version, unknown, sort, search)'
+  source: server/src/routes/agent.js (normalizeAgentVersion, updateDeviceCheckin); server/src/routes/devices.js;
+    serverless/worker.ts (normalizeAgentVersion, mergeCheckinMetadata); server/src/db/migrations/018_agent_version.sql;
+    docs/API.md
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

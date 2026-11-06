@@ -1377,15 +1377,15 @@ debt_items:
                     'unknown' rather than being dropped or 500ing; (d) API.md \
                     documents it and a test covers an old agent with no version \
                     in the body"
-    status: OPEN
+    status: CLOSED
     category: SERVER
     found: "session 256: /api/agent/update reads x-agent-version and discards \
             it; devices has no version column"
-    blocker: "The information never reaches storage, so the question a rollout \
-              asks ('which build is on that machine?') has no answer from the \
-              dashboard or the API."
-    commit_ref: null
-    artifact_ref: null
+    commit_ref: "95d3b6f"
+    artifact_ref: "server/src/db/migrations/018_agent_version.sql (+ the SQLite \
+                  twin); server suite 837 passed / 50 suites, serverless 427 \
+                  passed, dashboard 229 passed; docs/API.md documents the \
+                  check-in field, both response fields and both filter values"
 
 
 # ---------------------------------------------------------------------------

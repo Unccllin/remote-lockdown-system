@@ -2226,7 +2226,7 @@
   `verify_uninstall_token`), `server/tests/uninstallAuth.test.js`.
 
 ### D-222 — The server records no agent version, so fleet-update compliance cannot be answered
-- **Status**: CLOSED (2026-11-05, session 257 — commit pending in this session's first commit). All four
+- **Status**: CLOSED (2026-11-05, session 257 — commit `95d3b6f`). All four
   close criteria met: (a) `checkin` persists `agent_version` + `agent_version_at` on **both** surfaces
   (Express `devices` columns via migration `018_agent_version.sql`, Worker `CheckinMetadata` on the
   KV-RACE-001 key); (b) `GET /api/devices` returns both fields, the dashboard renders a sortable

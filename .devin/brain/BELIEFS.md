@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-06 13:15:05 — 110 beliefs
+Generated: 2026-11-06 13:47:54 — 111 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -35,6 +35,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-108 | confirmed | code-read | The D-221 uninstall token is HMAC_SHA256(ADMIN_TOKEN, '<device_id>:<window>') with the device id taken from the authenticated device row (never the request body), derived identically on Express and the Worker, pinned by docs/adr/D-221-token-vectors.json which both suites plus scripts/test_cross_surface_contract.py read. Issuing fails closed with 503 when ADMIN_TOKEN is unset, comparisons are constant-time, and each surface still verifies only its own previous deployment-wide derivation for one release with a deprecated_scheme marker. |
 | B-109 | confirmed | code-read | The D-221 legacy uninstall-token acceptance is dated: it expires 2027-02-04 (90 days from the close, because releases are tag-driven and have no cadence code can observe). The date lives in docs/adr/D-221-token-vectors.json as legacy_sunset with d221_closed_at and a rationale; scripts/test_cross_surface_contract.py fails on or after it with a deletion checklist, both surface suites fail on the same date, the window is itself bounded to <=180 days so it cannot be widened silently, and both surfaces echo deprecated_scheme_sunset in the verify response. |
 | B-110 | confirmed | code-read | A pre-D-221 agent requires no update to work with a post-D-221 server: it already sends device_id and authenticates with its device key, and the server binds the uninstall token to the authenticated device row. The D-221 legacy acceptance therefore protects legacy TOKENS (computed under the deployment-wide scheme and presented after 2027-02-04), not legacy binaries — the opposite of what session 255 recorded as its next action. |
+
+## api/devices
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-111 | confirmed | code-read | The agent version is now persisted at check-in on both surfaces (Express devices.agent_version/agent_version_at via migration 018, Worker CheckinMetadata on the KV-RACE-001 key) and readable/filterable from GET /api/devices (?agent_version=<v> and a distinct ?agent_version=unknown). Normalisation is <=64 chars matching ^[A-Za-z0-9][A-Za-z0-9._+-]*$ with everything else stored as null, and an agent that omits the field keeps the previously reported value rather than resetting it. |
 
 ## api/enrolment
 

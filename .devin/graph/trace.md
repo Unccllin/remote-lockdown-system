@@ -13953,3 +13953,81 @@ missing was never machinery — it was anyone writing the value down.
   in amber for null (a blank cell reads as "fine"), and the search box extended to match a version.
 - **Docs** — `API.md`: `agent_version` in the check-in body table, both fields in the device object,
   and the two filter values with the never-reported distinction spelled out.
+
+### Fog cleared
+
+- **Whether D-222 needed new machinery**: no. Express already had the exact pattern (`update_verification`
+  with COALESCE + a `_at` timestamp), the Worker already had a check-in metadata interface and
+  `mergeCheckinMetadata()` built for nullable per-check-in facts, and the dashboard's sort is
+  field-generic. The gap was that nobody wrote the value down, not that it could not be stored.
+- **Whether `GET /api/devices` needed a field list extended**: no — it is `SELECT *` through
+  `publicDevice()`, which only strips `api_key_hash`, so the new columns reached the response for free.
+- **Whether SQLite can do this migration idempotently**: not by syntax (`ADD COLUMN IF NOT EXISTS`
+  does not exist), but the runner detects an already-applied `ADD COLUMN` and skips it, and
+  `migrationIdempotency.test.js` pins that behaviour — including the expected-version list, which
+  caught the missing entry the first full run.
+
+### Fog remaining
+
+- **The version is only as current as the last check-in.** `agent_version_at` records when it was
+  reported, but nothing flags a device whose report is older than its `last_checkin` (which would mean
+  a build that stopped sending the field — i.e. a downgrade or a mixed fleet). A "stale version"
+  badge is a small follow-up, not done here.
+- **No aggregation endpoint.** "How many devices are on each version?" is a client-side count over
+  `GET /api/devices`; at fleet scale that is a paginated list problem, and there is no pagination yet.
+- **The dashboard column has no filter control** — the API filters, and search matches a typed
+  version, but there is no dropdown of observed versions. Criterion (b) is met by the API + search;
+  a picker is UI polish.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
+
+### Debt items closed
+
+- **D-222** — commit `95d3b6f`; artifact: migration `018_agent_version.sql` (+ SQLite twin) and the
+  three suites that pin it (server 837/50, serverless 427, dashboard 229). All four close criteria met;
+  the residuals above are new, smaller gaps rather than unfinished parts of this one.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 63 OPEN).
+
+### Blockers
+
+- Dependabot/CodeQL findings still need the security page. Nothing here is blocked.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (secondary, caught by the harness): three `migrationIdempotency`
+  tests failed on the first full run because the migration list is pinned by hand. That is the test
+  doing its job — a hand-maintained list is what silently skipped suites before (S150/S151). Worth
+  noting rather than fixing: the alternative (deriving the list from the directory) would stop the
+  test from noticing a migration that failed to apply.
+- **Layer 2 — context provision** (primary, and the reason this took a session): the field was
+  requested by the agent on every check-in for as long as the update route has existed, and no
+  comment anywhere said "this is read and discarded". The code read as complete. The fix is the
+  documentation added to `API.md` (the field is now in the check-in body table) and to the migration
+  header, so the next reader sees that it is stored, not just accepted — the same class of defect as
+  the header contract in S252.
+
+### VERIFY
+
+- `cd server && npm test` → **837 passed, 50 suites** (was 830; 6 check-in/list cases + 1 migration
+  expectation). The first run failed 3 tests for the expected-version list — updated, then green.
+- `cd serverless && npm test` → **427 passed** (was 422; 5 D-222 cases).
+- `cd dashboard && npx vitest run` → **229 passed / 25 files** (was 225; 4 D-222 cases).
+- `npx eslint` on all six changed JS files → exit 0 both components; `npx tsc --noEmit -p .`
+  (serverless) → exit 0.
+- `make sast` → 44 findings, gate exit 0 (no new findings from the new code).
+- `scripts/check_debt_ledger.py` → 0 mismatches with D-222 CLOSED (51 of 55 CLOSED);
+  `GRAPH-SPEC` 63 items, 59 CLOSED, OPEN = D-120, D-129, D-130, D-134; `make graph-check` → all
+  invariants pass, I2 resolving `95d3b6f`.
+- Behavioural checks that matter: a pre-D-222 agent omitting `agent_version` does **not** erase an
+  earlier value (both surfaces), a malformed/over-long version stores null rather than a value, five
+  real version shapes (`1.4.2`, `v1.4.2`, `1.4.2-rc1`, `1.4.2+build.7`, `2026.11.05`) survive
+  normalisation, and `?agent_version=unknown` returns exactly the never-reported devices.
+
+### Next session opening
+
+Surface version staleness — the field records *when* a device last reported a version and nothing
+compares it with `last_checkin`, so a machine that stopped sending one (downgrade, or a build older
+than the field) currently looks compliant. Add the comparison and a dashboard badge, and let
+`?agent_version=stale` join the existing two filter values.

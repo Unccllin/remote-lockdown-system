@@ -259,9 +259,9 @@ npm test
 # Per-component
 cd server   && npm test                       # 663 Jest tests
 scripts/run-agent-tests.sh -q                 # 830 pytest tests (uses agent/.venv)
-cd dashboard && npx vitest run                # 197 Vitest tests
+cd dashboard && npx vitest run                # 229 Vitest tests
 cd electron  && npm test                      # 30 Jest tests
-cd serverless && npm test                     # 422 Vitest tests
+cd serverless && npm test                     # 427 Vitest tests
 
 # Coverage gate (all 5 components; floors declared per component, dated 2026-10-27)
 make test-coverage
@@ -434,8 +434,8 @@ make build
 
 ## Diagnostic Sweep Results (2026-08-04, updated 2026-10-27)
 
-All green: 830 server tests (50 suites, measured 2026-11-05), 830 agent tests, 197 dashboard tests,
-30 electron tests, 422 serverless tests, 10 API E2E tests, 237 script-harness
+All green: 837 server tests (50 suites, measured 2026-11-05), 830 agent tests, 229 dashboard tests,
+30 electron tests, 427 serverless tests, 10 API E2E tests, 237 script-harness
 checks (218 pytest tests across 13 suites + 19 checks in the hand-rolled
 secret-scanner suite; 5 worker-update cases skip without a built worker),
 eslint clean on server + dashboard, ruff clean + formatted on
@@ -446,8 +446,8 @@ Not runnable on this host: Playwright + Electron (missing `libnspr4.so`).
 **`make full-verify` now covers all five component suites** (server, agent,
 dashboard, worker, electron) plus the script-level harness tests, E2E, env and
 artifact checks — it previously ran only three of the five while its own comment
-claimed "all 5 test suites". Current measured totals: server 830 (50 suites),
-agent 830, dashboard 197, worker 422, electron 30, API E2E 10, script harness 237.
+claimed "all 5 test suites". Current measured totals: server 837 (50 suites),
+agent 830, dashboard 229, worker 427, electron 30, API E2E 10, script harness 237.
 
 The script-level harness tests are **auto-discovered** (`scripts/test_*.py`, run
 by `make test-scripts` and the CI `script-tests` job). Counts measured 2026-11-05

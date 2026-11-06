@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 58 | 63 | ✗ |
+| Debt items | 59 | 63 | ✗ |
 | Enforcement paths (on hardware) | 3 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 58 of 63 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 59 of 63 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 10 enforcement paths that still need hardware verification:**
 
@@ -53,78 +53,85 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 256 — 2026-11-05 (the sunset's operator half — and the claim it was supposed to announce is false)
+## Latest session: 257 — 2026-11-05 (D-222 implemented: the fleet can finally say which build is on a machine)
 
 ### Fog cleared
 
-- **What the 2027-02-04 sunset actually breaks**: tokens, not binaries. A token computed under the
-  deployment-wide scheme and presented after the date is rejected; a pre-D-221 **agent** keeps
-  working forever, because it already sends `device_id` and the server binds from the authenticated
-  device row. S255's opening sentence said the opposite and is corrected here and in `API.md`.
-- **Whether operators could verify a fleet-wide agent-update instruction**: no. `/api/agent/update`
-  reads `x-agent-version` and discards it, `checkin` documents `agent_version` in its body, and
-  `devices` has no column for it — one grep hit, a docstring. Filed as D-222 with close criteria.
-- **Whether the uninstall path was documented correctly anywhere**: `tamper_protection.py`'s usage
-  example showed `(token, device_id, server_url, api_key)` for a function whose signature is
-  `(token, server_url, api_key, device_id=None)`. Every real caller is correct, so this was
-  documentation that would teach the next caller to write a broken one.
+- **Whether D-222 needed new machinery**: no. Express already had the exact pattern (`update_verification`
+  with COALESCE + a `_at` timestamp), the Worker already had a check-in metadata interface and
+  `mergeCheckinMetadata()` built for nullable per-check-in facts, and the dashboard's sort is
+  field-generic. The gap was that nobody wrote the value down, not that it could not be stored.
+- **Whether `GET /api/devices` needed a field list extended**: no — it is `SELECT *` through
+  `publicDevice()`, which only strips `api_key_hash`, so the new columns reached the response for free.
+- **Whether SQLite can do this migration idempotently**: not by syntax (`ADD COLUMN IF NOT EXISTS`
+  does not exist), but the runner detects an already-applied `ADD COLUMN` and skips it, and
+  `migrationIdempotency.test.js` pins that behaviour — including the expected-version list, which
+  caught the missing entry the first full run.
 
 ### Fog remaining
 
-- **D-222 is open**: until `agent_version` is persisted, no rollout can state its own compliance.
-  This is the gap that made S255's operator instruction unwritable as intended.
-- **The sunset is announced but not observable per device.** A deployment reports
-  `deprecated_scheme_sunset` when the old form is *used*, not when it is *approaching*; nothing warns
-  before 2027-02-04. A startup log line naming the date would be cheap and is not done.
-- **`request_uninstall_token()` still has no production caller in this repo** — the operator-facing
-  uninstall CLI is external. So the token path's *acquisition* UX is unpinned by any test here; only
-  the server side is.
+- **The version is only as current as the last check-in.** `agent_version_at` records when it was
+  reported, but nothing flags a device whose report is older than its `last_checkin` (which would mean
+  a build that stopped sending the field — i.e. a downgrade or a mixed fleet). A "stale version"
+  badge is a small follow-up, not done here.
+- **No aggregation endpoint.** "How many devices are on each version?" is a client-side count over
+  `GET /api/devices`; at fleet scale that is a paginated list problem, and there is no pagination yet.
+- **The dashboard column has no filter control** — the API filters, and search matches a typed
+  version, but there is no dropdown of observed versions. Criterion (b) is met by the API + search;
+  a picker is UI polish.
 - **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
 
 ### Debt items closed
 
-- None. D-221 stays CLOSED (`b9c6127`); **D-222 filed OPEN** this session.
+- **D-222** — commit `95d3b6f`; artifact: migration `018_agent_version.sql` (+ SQLite twin) and the
+  three suites that pin it (server 837/50, serverless 427, dashboard 229). All four close criteria met;
+  the residuals above are new, smaller gaps rather than unfinished parts of this one.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134, **D-222** (graph-tracked: 5 of 63 OPEN).
+- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 63 OPEN).
 
 ### Blockers
 
-- D-222 has no blocker but no owner beyond "a session takes it".
-- Dependabot/CodeQL findings still need the security page.
+- Dependabot/CodeQL findings still need the security page. Nothing here is blocked.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): S255 recorded "every device must update before the
-  date" as the next action *without reading the call path that decides it*. The sentence was a
-  plausible inference from the migration branch's existence, and nothing forced it to be checked —
-  it sat in `current-state.md` as the file every session reads first. The repair is the one this
-  repo keeps rediscovering: write the claim next to its evidence, or expect the next session to
-  inherit the error.
-- **Layer 2 — context provision** (secondary): the deployment guide had no section on agent updates
-  at all, so there was no existing text to contradict the wrong claim. There is now.
+- **Layer 4 — verification feedback** (secondary, caught by the harness): three `migrationIdempotency`
+  tests failed on the first full run because the migration list is pinned by hand. That is the test
+  doing its job — a hand-maintained list is what silently skipped suites before (S150/S151). Worth
+  noting rather than fixing: the alternative (deriving the list from the directory) would stop the
+  test from noticing a migration that failed to apply.
+- **Layer 2 — context provision** (primary, and the reason this took a session): the field was
+  requested by the agent on every check-in for as long as the update route has existed, and no
+  comment anywhere said "this is read and discarded". The code read as complete. The fix is the
+  documentation added to `API.md` (the field is now in the check-in body table) and to the migration
+  header, so the next reader sees that it is stored, not just accepted — the same class of defect as
+  the header contract in S252.
 
 ### VERIFY
 
-- `agent/.venv/bin/python -m pytest agent/tests` → **830 passed** (docstring-only change; run because
-  six modules import that file and a comment can still move the wrong line).
-- `agent/.venv/bin/python -m ruff check agent` → all checks passed.
-- `scripts/test_cross_surface_contract.py` → **14 passed** (the sunset checks still green).
-- `scripts/check_debt_ledger.py` → 0 mismatches with D-222 filed and the totals line updated to
-  55 items / 5 OPEN.
-- `python3 -c yaml.safe_load(GRAPH-SPEC.yaml)` → 63 debt items, OPEN = D-120, D-129, D-130, D-134,
-  D-222; `make graph-check` → all invariants pass (I2 unaffected: D-222 is OPEN, so it cites nothing).
-- `docs/DEPLOYMENT.md` § 6 is the operator-facing half: the date, what breaks (tokens), what does not
-  (agents), what to do (use tokens inside their window), the three-suite enforcement, and the D-222
-  limitation stated so no one repeats S255's mistake.
+- `cd server && npm test` → **837 passed, 50 suites** (was 830; 6 check-in/list cases + 1 migration
+  expectation). The first run failed 3 tests for the expected-version list — updated, then green.
+- `cd serverless && npm test` → **427 passed** (was 422; 5 D-222 cases).
+- `cd dashboard && npx vitest run` → **229 passed / 25 files** (was 225; 4 D-222 cases).
+- `npx eslint` on all six changed JS files → exit 0 both components; `npx tsc --noEmit -p .`
+  (serverless) → exit 0.
+- `make sast` → 44 findings, gate exit 0 (no new findings from the new code).
+- `scripts/check_debt_ledger.py` → 0 mismatches with D-222 CLOSED (51 of 55 CLOSED);
+  `GRAPH-SPEC` 63 items, 59 CLOSED, OPEN = D-120, D-129, D-130, D-134; `make graph-check` → all
+  invariants pass, I2 resolving `95d3b6f`.
+- Behavioural checks that matter: a pre-D-222 agent omitting `agent_version` does **not** erase an
+  earlier value (both surfaces), a malformed/over-long version stores null rather than a value, five
+  real version shapes (`1.4.2`, `v1.4.2`, `1.4.2-rc1`, `1.4.2+build.7`, `2026.11.05`) survive
+  normalisation, and `?agent_version=unknown` returns exactly the never-reported devices.
 
 ### Next session opening
 
-Take D-222: persist the agent version at check-in on both surfaces (Express `devices` column +
-Worker KV row), return it from `GET /api/devices`, show it in the dashboard, and make a version-less
-old agent appear as `unknown` rather than being dropped — then a rollout instruction like a sunset
-can finally come with a way to verify it.
+Surface version staleness — the field records *when* a device last reported a version and nothing
+compares it with `last_checkin`, so a machine that stopped sending one (downgrade, or a build older
+than the field) currently looks compliant. Add the comparison and a dashboard badge, and let
+`?agent_version=stale` join the existing two filter values.
 
 ---
 
@@ -136,9 +143,8 @@ can finally come with a way to verify it.
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
-| D-222 | The server records no agent version, so fleet-update complia | OPEN | — |
 
-See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (5 of 63 graph-tracked items are OPEN).
+See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (4 of 63 graph-tracked items are OPEN).
 
 ---
 ## Quick reference
