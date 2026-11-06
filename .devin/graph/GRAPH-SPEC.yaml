@@ -429,9 +429,17 @@ enforcement_paths:
     description: "Fernet decryption of LOCKDOWN_FOLDER on recovery"
     component: C-AGENT
     entry_function: "agent.decrypt_folder"
-    verified_by: [V-AGENT]
-    status: verified-in-unit-test
-    risk_notes: "Wrong-key handling (InvalidToken)"
+    verified_by: [V-AGENT, V-HW-HARNESS]
+    status: verified-on-hardware
+    hardware_artifact_ref: "agent/hw_test_artifact_frankenstein_win2.json\
+      #E-DECRYPT-01"
+    risk_notes: >-
+      Harness v2.0 simulate on FRANKENSTEIN (HP EliteBook 830 G8, Windows,
+      admin, TPM present, BitLocker off), 2026-11-05; the artifact carries the
+      environment and the agent binary hash.
+      8/8 assertions: a wrong key leaves ciphertext and sentinel intact
+      (InvalidToken handled, never a silent success); the right key decrypts
+      every file, including a nested one. Residual risk: wrong-key handling.
 
   - id: E-LOCK-SCREEN
     name: workstation-lock
@@ -499,18 +507,36 @@ enforcement_paths:
                  server"
     component: C-AGENT
     entry_function: "agent.ack_command"
-    verified_by: [V-AGENT, V-SERVER]
-    status: verified-in-unit-test
-    risk_notes: "Network failure retries via pending ACK file"
+    verified_by: [V-AGENT, V-SERVER, V-HW-HARNESS]
+    status: verified-on-hardware
+    hardware_artifact_ref: "agent/hw_test_artifact_frankenstein_win2.json\
+      #E-ACK-01"
+    risk_notes: >-
+      Harness v2.0 simulate on FRANKENSTEIN (HP EliteBook 830 G8, Windows,
+      admin, TPM present, BitLocker off), 2026-11-05; the artifact carries the
+      environment and the agent binary hash.
+      17/17 assertions: a refused connection preserves the pending ACK; the
+      retry delivers it once with the SAME command_uuid and then deletes it;
+      a 500 from the server keeps it for the next loop. Residual risk:
+      extended-outage queue behaviour (see E-OFFLINE-QUEUE).
 
   - id: E-RECOVERY
     name: unlock-recovery
     description: "Server releases key, agent decrypts, removes sentinel"
     component: C-AGENT
     entry_function: "agent.handle_unlock"
-    verified_by: [V-AGENT, V-SERVER]
-    status: verified-in-unit-test
-    risk_notes: "Key release security; sentinel cleanup"
+    verified_by: [V-AGENT, V-SERVER, V-HW-HARNESS]
+    status: verified-on-hardware
+    hardware_artifact_ref: "agent/hw_test_artifact_frankenstein_win2.json\
+      #E-RECOVERY-01"
+    risk_notes: >-
+      Harness v2.0 simulate on FRANKENSTEIN (HP EliteBook 830 G8, Windows,
+      admin, TPM present, BitLocker off), 2026-11-05; the artifact carries the
+      environment and the agent binary hash.
+      14/14 assertions: an unlock with no key material ACKs "failed" and
+      releases nothing; the right key decrypts, removes the sentinel and
+      deletes the recovery key file; the ACK records executed. Residual risk:
+      key release security.
 
   - id: E-TRACK
     name: covert-tracking
@@ -544,9 +570,18 @@ enforcement_paths:
     description: "Auto-lockdown if no server contact for 24h"
     component: C-AGENT
     entry_function: "agent.check_deadman"
-    verified_by: [V-AGENT]
-    status: verified-in-unit-test
-    risk_notes: "Clock skew; false trigger on network outage"
+    verified_by: [V-AGENT, V-HW-HARNESS]
+    status: verified-on-hardware
+    hardware_artifact_ref: "agent/hw_test_artifact_frankenstein_win2.json\
+      #E-DEADMAN-01"
+    risk_notes: >-
+      Harness v2.0 simulate on FRANKENSTEIN (HP EliteBook 830 G8, Windows,
+      admin, TPM present, BitLocker off), 2026-11-05; the artifact carries the
+      environment and the agent binary hash.
+      6/6 assertions: 60 s of skew does not fire; 25 h offline fires and
+      encrypts; a backward clock jump is treated as stolen+expired; a corrupt
+      deadman file is treated as tamper and fires. Residual risk: a false
+      trigger on network outage, which the skew case exists to catch.
 
   - id: E-EFFECTIVENESS
     name: lockdown-effectiveness

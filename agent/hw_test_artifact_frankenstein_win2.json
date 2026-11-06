@@ -1,0 +1,116 @@
+{
+  "results": {
+    "tool": {
+      "name": "hw-test-harness",
+      "version": "2.0"
+    },
+    "summary": {
+      "tests": 4,
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "start": "2026-11-06T12:06:13.085528+00:00",
+      "stop": "2026-11-06T12:06:13.085528+00:00"
+    },
+    "tests": [
+      {
+        "name": "E-DECRYPT-01",
+        "status": "passed",
+        "duration": 71,
+        "message": "8/8 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-DECRYPT",
+          "tags": [
+            "E-DECRYPT",
+            "non-destructive"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-ACK-01",
+        "status": "passed",
+        "duration": 7099,
+        "message": "17/17 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-ACK",
+          "tags": [
+            "E-ACK",
+            "network"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-RECOVERY-01",
+        "status": "passed",
+        "duration": 1197,
+        "message": "14/14 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-RECOVERY",
+          "tags": [
+            "E-RECOVERY",
+            "network"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-DEADMAN-01",
+        "status": "passed",
+        "duration": 216,
+        "message": "6/6 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-DEADMAN",
+          "tags": [
+            "E-DEADMAN",
+            "non-destructive"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      }
+    ],
+    "extra": {
+      "environment": {
+        "platform": "Windows",
+        "is_hp": true,
+        "hp_model": "HP EliteBook 830 G8 Notebook PC",
+        "is_admin": true,
+        "session_context": {
+          "is_session_zero": false,
+          "session_id": 1,
+          "console_session_id": 1,
+          "platform": "Windows"
+        },
+        "bitlocker_enabled": false,
+        "tpm_present": true,
+        "defender_exclusion": null,
+        "agent_binary_hash": "4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a",
+        "python_version": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+        "hostname": "FRANKENSTEIN"
+      },
+      "agent_binary_hash": "4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a"
+    }
+  }
+}

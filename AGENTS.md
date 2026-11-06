@@ -641,16 +641,28 @@ build always shows a parent bootloader plus its child, so `tasklist` reporting t
 Ran on FRANKENSTEIN (HP EliteBook 830 G8, Windows, admin, TPM present, BitLocker off) via the
 harness in `simulate` style, four tags: `E-EFFECTIVENESS`, `E-OFFLINE-QUEUE`, `E-TRACK`,
 `E-AUTO-UPDATE`. **4 passed, 0 failed**; artifact `agent/hw_test_artifact_frankenstein_win.json`
-(environment + agent binary hash recorded inside it). Graph: **7/13 enforcement paths now
-`verified-on-hardware`** (was 3/13), each citation re-verified by I3 opening the artifact.
+(environment + agent binary hash recorded inside it).
+
+A **second window** ran the four other stub-based tags — `E-DECRYPT`, `E-ACK`, `E-RECOVERY`,
+`E-DEADMAN` — again on FRANKENSTEIN: **4 passed, 0 failed** (8/8, 17/17, 14/14, 6/6 assertions),
+artifact `agent/hw_test_artifact_frankenstein_win2.json`. Graph: **11/13 enforcement paths
+`verified-on-hardware`** (was 3/13 before these two windows), each citation re-verified by I3 opening
+the artifact.
+
+**Only `E-BCD` and `E-HP-UEFI` remain `verified-in-unit-test`, and deliberately.** Both were ELIGIBLE
+on FRANKENSTEIN; both change boot/firmware state that a failed run cannot undo by itself (`E-BCD`
+rewrites the boot configuration and depends on rollback; `E-HP-UEFI` sets BIOS/Setup/DriveLock
+passwords through HP Sure Admin, where a rejected write can need a manual BIOS visit). Running them
+needs a named sacrificial machine and a recovery plan — not another tag list.
 
 Two things the record must not blur:
 - **`E-TRACK` used the IP fallback, not a `netsh` WiFi scan.** The path is hardware-verified for the
   reporting flow including the TLS-only IP lookup (S252/S256); the platform WiFi-scan branch remains
   unit-tested only, and `GRAPH-SPEC.yaml` says so.
-- **`defender_exclusion` was `null`** in the artifact — the harness saw no Defender exclusion on
-  FRANKENSTEIN, contradicting the installer's claimed exclusion. Unresolved; check
-  `agent/installer.py` against a real install before trusting that claim.
+- **`defender_exclusion` was `null` in BOTH windows** — the harness saw no Defender exclusion on
+  FRANKENSTEIN, contradicting the installer's claimed exclusion. Two runs make it evidence rather than
+  an anecdote, and it is still uninvestigated; check `agent/installer.py` against a real install before
+  trusting that claim.
 
 How the window is run now (both edges mechanical, see `docs/D-129-HARDWARE-RUNBOOK.md` §2a):
 
