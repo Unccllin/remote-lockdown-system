@@ -477,6 +477,11 @@ enforcement_paths:
     # was verified on hardware" is not what those artifacts show. I3 now
     # refuses the claim (see docs/D-129-HARDWARE-RUNBOOK.md §2, §6).
     status: verified-in-unit-test
+    verification_ceiling: >-
+      NOT hardware-verified by decision (S264). A failed run rewrites this
+      machine's boot configuration and disables WinRE — the recovery path a
+      boot failure would need — so verifying it requires a sacrificial unit
+      plus a rescue USB, not another harness run.
     hardware_artifact_ref: "agent/hw_test_artifact_azure_bitlocker.json#E-BCD-0\
                            1"
     verification_note: "Attempted on hardware twice (Azure VM, HP SPARE_TEST \
@@ -498,6 +503,10 @@ enforcement_paths:
     entry_function: "hp_uefi_lockdown.apply_boot_lockdown"
     verified_by: [V-AGENT, V-HW-HARNESS]
     status: verified-in-unit-test
+    verification_ceiling: >-
+      NOT hardware-verified by decision (S264). The test sets a FIRMWARE Setup
+      Password that its rollback does not clear, so a failed or interrupted run
+      needs HP service on this EliteBook — a vendor intervention, not a retry.
     risk_notes: "D-009 model-aware names; D-010 Sure Admin detection; needs \
                 hardware verification."
 

@@ -927,6 +927,10 @@ def report_convergence(graph: dict | None = None) -> dict:
     enforce_on_hw = sum(1 for e in enforcement if e.get("status") == "verified-on-hardware")
     enforce_in_unit = sum(1 for e in enforcement if e.get("status") == "verified-in-unit-test")
     enforce_unverified = sum(1 for e in enforcement if e.get("status") == "unverified")
+    # S264: a path can be short of hardware verification *by decision* rather than by pending work.
+    # Reporting the two together let "11/13" read as "two more runs to go", which is false for the
+    # pair that would need a sacrificial machine and vendor recovery.
+    enforce_by_design = [e for e in enforcement if e.get("verification_ceiling")]
 
     # The enforcement paths that still need hardware verification
     enforce_gap = [
@@ -935,6 +939,7 @@ def report_convergence(graph: dict | None = None) -> dict:
             "name": e.get("name", ""),
             "status": e.get("status", "?"),
             "risk_notes": e.get("risk_notes", ""),
+            "verification_ceiling": e.get("verification_ceiling", ""),
         }
         for e in enforcement
         if e.get("status") != "verified-on-hardware"
@@ -953,6 +958,7 @@ def report_convergence(graph: dict | None = None) -> dict:
             "on_hardware": enforce_on_hw,
             "in_unit_test": enforce_in_unit,
             "unverified": enforce_unverified,
+            "by_design": len(enforce_by_design),
             "total": len(enforcement),
         },
         "enforcement_gap": enforce_gap,
@@ -972,9 +978,12 @@ def print_convergence_report() -> None:
         f"  Enforcement:  {report['enforcement']['on_hardware']}/{report['enforcement']['total']} "
         f"verified-on-hardware"
     )
+    by_design = report["enforcement"]["by_design"]
     print(
         f"                {report['enforcement']['in_unit_test']} verified-in-unit-test, "
         f"{report['enforcement']['unverified']} unverified"
+        + (f" ({by_design} of the unit-tested ones are NOT hardware-verifiable by decision)"
+           if by_design else "")
     )
     print()
 

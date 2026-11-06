@@ -43,9 +43,8 @@ from pathlib import Path
 _GRAPH_DIR = Path(__file__).resolve().parent.parent / ".devin" / "graph"
 sys.path.insert(0, str(_GRAPH_DIR))
 
-from graph_loader import (
+from graph_loader import (  # pyright: ignore[reportMissingImports] - .devin/graph is added to sys.path at runtime
     get_closed_debt_items,
-    get_debt_items,
     get_enforcement_paths,
     get_open_debt_items,
     get_phase_nodes,
@@ -94,13 +93,15 @@ def parse_trace_sessions(trace_content: str) -> list[dict]:
         else:
             body_end_relative = len(rest)
 
-        body = trace_content[header_end:header_end + body_end_relative].rstrip()
-        sessions.append({
-            "header": header_line,
-            "body": body,
-            "start_pos": header_start,
-            "end_pos": header_end + body_end_relative,
-        })
+        body = trace_content[header_end : header_end + body_end_relative].rstrip()
+        sessions.append(
+            {
+                "header": header_line,
+                "body": body,
+                "start_pos": header_start,
+                "end_pos": header_end + body_end_relative,
+            }
+        )
     return sessions
 
 
@@ -144,7 +145,7 @@ def extract_state_sections(body: str) -> list[tuple[str, str]]:
     for i, m in enumerate(matches):
         heading = m.group(1).strip()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-        text = body[m.start():end].rstrip()
+        text = body[m.start() : end].rstrip()
         if any(heading.lower().startswith(name) for name in _STATE_SECTIONS):
             sections.append((heading, text))
     return sections
@@ -210,6 +211,7 @@ def extract_latest_session(trace_content: str) -> str:
 # Convergence status generation
 # ---------------------------------------------------------------------------
 
+
 def generate_convergence_status(graph: dict) -> str:
     """Generate the convergence status section from GRAPH-SPEC.yaml.
 
@@ -248,22 +250,60 @@ def generate_convergence_status(graph: dict) -> str:
     ]
 
     if enforce_converged == "✗":
-        debt_status = ("all debt is closed" if debt_total > 0 and len(debt_closed) == debt_total
-                       else f"{len(debt_closed)} of {debt_total} debt items are closed")
-        lines.append(f"**The project is NOT converged.** All phases are complete and "
-                      f"{debt_status}, but **{len(unit_tested)} of {enforcement_total} "
-                      f"enforcement paths are only `verified-in-unit-test`**, "
-                      f"not `verified-on-hardware`. Graph invariant I3 blocks marking them "
-                      f"`verified-on-hardware` without a real hardware artifact.")
+        debt_status = (
+            "all debt is closed"
+            if debt_total > 0 and len(debt_closed) == debt_total
+            else f"{len(debt_closed)} of {debt_total} debt items are closed"
+        )
+        # S264: split the gap in two. A path short of hardware verification *by decision* is not
+        # pending work, and reporting both together made "11/13" read as "two more runs to go".
+        by_design = [e for e in unit_tested if e.get("verification_ceiling")]
+        pending = [e for e in unit_tested if not e.get("verification_ceiling")]
+
+        if by_design and not pending:
+            lines.append(
+                f"**The project is NOT converged, and the remaining gap is a decision, "
+                f"not pending work.** All phases are complete and {debt_status}; "
+                f"**{hw_count} of {enforcement_total} enforcement paths are "
+                f"`verified-on-hardware`**, and the other {len(by_design)} are "
+                f"documented as **not hardware-verifiable** without a sacrificial "
+                f"machine (see the ceilings below). That is the honest ceiling under "
+                f"the current hardware policy — not a queue."
+            )
+        else:
+            lines.append(
+                f"**The project is NOT converged.** All phases are complete and "
+                f"{debt_status}, but **{len(pending)} of {enforcement_total} "
+                f"enforcement paths are only `verified-in-unit-test`**, "
+                f"not `verified-on-hardware`. Graph invariant I3 blocks marking them "
+                f"`verified-on-hardware` without a real hardware artifact."
+            )
         lines.append("")
 
-        if unit_tested:
-            lines.append(f"**The {len(unit_tested)} enforcement paths that still need "
-                         f"hardware verification:**")
+        if by_design:
+            lines.append(
+                f"**The {len(by_design)} paths with a documented verification "
+                f"ceiling (a failed run damages state the test cannot undo):**"
+            )
+            lines.append("")
+            lines.append("| ID | Name | Ceiling |")
+            lines.append("|----|------|---------|")
+            for e in by_design:
+                ceiling = " ".join(e.get("verification_ceiling", "").split())
+                if len(ceiling) > 90:
+                    ceiling = ceiling[:87] + "..."
+                lines.append(f"| {e['id']} | {e['name']} | {ceiling} |")
+            lines.append("")
+
+        if pending:
+            lines.append(
+                f"**The {len(pending)} enforcement paths that still need "
+                f"hardware verification:**"
+            )
             lines.append("")
             lines.append("| ID | Name | Status | Blocker |")
             lines.append("|----|------|--------|---------|")
-            for e in unit_tested:
+            for e in pending:
                 risk = e.get("risk_notes", "Needs hardware verification")
                 # Truncate risk notes for table readability
                 if len(risk) > 80:
@@ -281,9 +321,11 @@ def generate_convergence_status(graph: dict) -> str:
                 lines.append(f"| {e['id']} | {e['name']} | {artifact} |")
             lines.append("")
     else:
-        lines.append(f"**The project IS converged.** All {phases_total} phases complete, "
-                      f"all {debt_total} debt items closed, all {enforcement_total} "
-                      f"enforcement paths verified on hardware.")
+        lines.append(
+            f"**The project IS converged.** All {phases_total} phases complete, "
+            f"all {debt_total} debt items closed, all {enforcement_total} "
+            f"enforcement paths verified on hardware."
+        )
         lines.append("")
 
     lines.append("---")
@@ -294,15 +336,18 @@ def generate_convergence_status(graph: dict) -> str:
 # Open debt items section
 # ---------------------------------------------------------------------------
 
+
 def generate_open_debt_section(graph: dict) -> str:
     """Generate the open debt items section from GRAPH-SPEC.yaml."""
     open_debt = get_open_debt_items(graph)
     closed_debt = get_closed_debt_items(graph)
 
     if not open_debt:
-        return (f"## Open debt items\n\n"
-                f"None. All {len(closed_debt)} debt items are CLOSED.\n"
-                f"See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for the full ledger.\n\n---\n")
+        return (
+            f"## Open debt items\n\n"
+            f"None. All {len(closed_debt)} debt items are CLOSED.\n"
+            f"See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for the full ledger.\n\n---\n"
+        )
 
     lines = ["## Open debt items", ""]
     lines.append("| ID | Description | Status | Blocks |")
@@ -465,7 +510,9 @@ def archive_trace(
     line_count = content.count("\n")
 
     if line_count <= threshold:
-        print(f"trace.md is {line_count} lines (threshold {threshold}) — no archival needed.")
+        print(
+            f"trace.md is {line_count} lines (threshold {threshold}) — no archival needed."
+        )
         return None
 
     sessions = parse_trace_sessions(content)
@@ -492,14 +539,16 @@ def archive_trace(
     # Preserve the trace.md header for context
     header_end = content.find("---\n")
     if header_end != -1:
-        file_header = content[:header_end + 4] + "\n"
+        file_header = content[: header_end + 4] + "\n"
     else:
         file_header = ""
 
     archive_content = file_header
     archive_content += f"# Archived sessions from trace.md ({archive_month})\n\n"
     archive_content += "> Auto-archived by `scripts/graph_session.py archive-trace`.\n"
-    archive_content += "> These sessions were rotated out of trace.md to keep it compact.\n\n"
+    archive_content += (
+        "> These sessions were rotated out of trace.md to keep it compact.\n\n"
+    )
 
     for s in to_archive:
         archive_content += f"{s['header']}\n{s['body']}\n\n---\n\n"
@@ -552,7 +601,9 @@ def close_session(
 
     # Ensure the block starts with a session header
     if not _SESSION_HEADER_RE.match(block_content.strip()):
-        print("ERROR: session block must start with '## Session' header", file=sys.stderr)
+        print(
+            "ERROR: session block must start with '## Session' header", file=sys.stderr
+        )
         return False
 
     # Append to trace.md
@@ -568,7 +619,9 @@ def close_session(
     # Regenerate current-state.md
     lines = generate_current_state(trace_path, graph_spec_path, current_state_path)
     if lines and lines > 0:
-        print(f"Appended session to trace.md and regenerated current-state.md ({lines} lines)")
+        print(
+            f"Appended session to trace.md and regenerated current-state.md ({lines} lines)"
+        )
     else:
         print("ERROR: failed to regenerate current-state.md", file=sys.stderr)
         return False
@@ -602,24 +655,34 @@ def _maybe_auto_consolidate_decay() -> None:
     if raw_count % consolidate_interval == 0:
         print(f"[memory] {raw_count} raw sessions — running consolidate...")
         import subprocess
+
         result = subprocess.run(
             ["python3", str(memory_script), "consolidate"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
         )
         if result.returncode == 0:
-            print(f"[memory] consolidate completed")
+            print("[memory] consolidate completed")
         else:
-            print(f"[memory] consolidate failed: {result.stderr.strip()}", file=sys.stderr)
+            print(
+                f"[memory] consolidate failed: {result.stderr.strip()}", file=sys.stderr
+            )
 
     if raw_count % decay_interval == 0:
         print(f"[memory] {raw_count} raw sessions — running decay...")
         import subprocess
+
         result = subprocess.run(
             ["python3", str(memory_script), "decay"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
         )
         if result.returncode == 0:
-            print(f"[memory] decay completed")
+            print("[memory] decay completed")
         else:
             print(f"[memory] decay failed: {result.stderr.strip()}", file=sys.stderr)
 
@@ -641,34 +704,63 @@ def main() -> int:
         "generate-current-state",
         help="Regenerate current-state.md from trace.md + GRAPH-SPEC.yaml",
     )
-    gen_parser.add_argument("--trace", type=Path, default=_TRACE_PATH, help="Path to trace.md")
-    gen_parser.add_argument("--graph-spec", type=Path, default=_GRAPH_SPEC_PATH,
-                            help="Path to GRAPH-SPEC.yaml")
-    gen_parser.add_argument("--output", type=Path, default=_CURRENT_STATE_PATH,
-                            help="Output path for current-state.md")
+    gen_parser.add_argument(
+        "--trace", type=Path, default=_TRACE_PATH, help="Path to trace.md"
+    )
+    gen_parser.add_argument(
+        "--graph-spec",
+        type=Path,
+        default=_GRAPH_SPEC_PATH,
+        help="Path to GRAPH-SPEC.yaml",
+    )
+    gen_parser.add_argument(
+        "--output",
+        type=Path,
+        default=_CURRENT_STATE_PATH,
+        help="Output path for current-state.md",
+    )
 
     # archive-trace
     arch_parser = sub.add_parser(
         "archive-trace",
         help="Rotate old session blocks from trace.md into archive files",
     )
-    arch_parser.add_argument("--trace", type=Path, default=_TRACE_PATH, help="Path to trace.md")
-    arch_parser.add_argument("--archive-dir", type=Path, default=_ARCHIVE_DIR,
-                             help="Directory for archive files")
-    arch_parser.add_argument("--threshold", type=int, default=3000,
-                             help="Line count threshold to trigger archival (default: 3000)")
-    arch_parser.add_argument("--keep", type=int, default=5,
-                             help="Number of recent sessions to keep in trace.md (default: 5)")
+    arch_parser.add_argument(
+        "--trace", type=Path, default=_TRACE_PATH, help="Path to trace.md"
+    )
+    arch_parser.add_argument(
+        "--archive-dir",
+        type=Path,
+        default=_ARCHIVE_DIR,
+        help="Directory for archive files",
+    )
+    arch_parser.add_argument(
+        "--threshold",
+        type=int,
+        default=3000,
+        help="Line count threshold to trigger archival (default: 3000)",
+    )
+    arch_parser.add_argument(
+        "--keep",
+        type=int,
+        default=5,
+        help="Number of recent sessions to keep in trace.md (default: 5)",
+    )
 
     # close-session
     close_parser = sub.add_parser(
         "close-session",
         help="Append a session block to trace.md and regenerate current-state.md",
     )
-    close_parser.add_argument("--block-file", type=Path, help="File containing the session block")
-    close_parser.add_argument("--block-stdin", action="store_true",
-                              help="Read session block from stdin")
-    close_parser.add_argument("--trace", type=Path, default=_TRACE_PATH, help="Path to trace.md")
+    close_parser.add_argument(
+        "--block-file", type=Path, help="File containing the session block"
+    )
+    close_parser.add_argument(
+        "--block-stdin", action="store_true", help="Read session block from stdin"
+    )
+    close_parser.add_argument(
+        "--trace", type=Path, default=_TRACE_PATH, help="Path to trace.md"
+    )
 
     args = parser.parse_args()
 

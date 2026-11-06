@@ -8,15 +8,22 @@ artifact and rotates old trace.md sessions to archives.
 Run: python3 scripts/test_graph_session.py
 """
 
+import importlib
 import sys
 import tempfile
 import textwrap
 from pathlib import Path
 
+# pyyaml is installed in agent/.venv, not on this interpreter's path, so a top-level import
+# is unresolvable to a static analyser; the repo resolves it dynamically (same as pytest in
+# scripts/test_cross_surface_contract.py).
+yaml = importlib.import_module("yaml")
+
 # Add scripts dir to path
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
+# Deliberately after the sys.path insert above: graph_session lives in this directory.
 from graph_session import (
     _MAX_LINES,
     archive_trace,
@@ -24,6 +31,7 @@ from graph_session import (
     extract_latest_session,
     extract_state_sections,
     fit_to_cap,
+    generate_convergence_status,
     generate_current_state,
     parse_trace_sessions,
 )
@@ -160,28 +168,40 @@ def check(name: str, condition: bool, detail: str = ""):
 def test_parse_trace_sessions():
     """parse_trace_sessions should find all session blocks."""
     sessions = parse_trace_sessions(SAMPLE_TRACE)
-    check("parse_trace_sessions finds 2 sessions", len(sessions) == 2,
-         f"got {len(sessions)}")
-    check("first session header correct",
-         "First session" in sessions[0]["header"],
-         f"got '{sessions[0]['header']}'")
-    check("second session header correct",
-         "Second session" in sessions[1]["header"],
-         f"got '{sessions[1]['header']}'")
-    check("session bodies are non-empty",
-         len(sessions[0]["body"]) > 0 and len(sessions[1]["body"]) > 0)
+    check(
+        "parse_trace_sessions finds 2 sessions",
+        len(sessions) == 2,
+        f"got {len(sessions)}",
+    )
+    check(
+        "first session header correct",
+        "First session" in sessions[0]["header"],
+        f"got '{sessions[0]['header']}'",
+    )
+    check(
+        "second session header correct",
+        "Second session" in sessions[1]["header"],
+        f"got '{sessions[1]['header']}'",
+    )
+    check(
+        "session bodies are non-empty",
+        len(sessions[0]["body"]) > 0 and len(sessions[1]["body"]) > 0,
+    )
 
 
 def test_extract_latest_session():
     """extract_latest_session should return the last session block."""
     latest = extract_latest_session(SAMPLE_TRACE)
-    check("extract_latest_session returns second session",
-         "Second session" in latest,
-         f"got: {latest[:50]}")
-    check("extract_latest_session includes Fog cleared",
-         "Fog cleared" in latest)
-    check("extract_latest_session includes Next session opening",
-         "Next session opening" in latest)
+    check(
+        "extract_latest_session returns second session",
+        "Second session" in latest,
+        f"got: {latest[:50]}",
+    )
+    check("extract_latest_session includes Fog cleared", "Fog cleared" in latest)
+    check(
+        "extract_latest_session includes Next session opening",
+        "Next session opening" in latest,
+    )
 
 
 def test_generate_current_state():
@@ -190,23 +210,20 @@ def test_generate_current_state():
     lines = generate_current_state(trace_path, graph_spec_path, current_state_path)
     content = current_state_path.read_text()
 
-    check("generate_current_state returns positive line count", lines > 0, f"got {lines}")
-    check("generated file has Latest session header",
-         "## Latest session" in content)
-    check("generated file has NO Previous session blocks",
-         "## Previous session" not in content)
-    check("generated file has convergence status",
-         "## Convergence status" in content)
-    check("generated file has enforcement path table",
-         "E-DECRYPT" in content)
-    check("generated file has open debt items section",
-         "## Open debt items" in content)
-    check("generated file has quick reference",
-         "## Quick reference" in content)
-    check("generated file is compact (< 200 lines)",
-         lines < 200, f"got {lines} lines")
-    check("generated file mentions it is generated",
-         "GENERATED" in content)
+    check(
+        "generate_current_state returns positive line count", lines > 0, f"got {lines}"
+    )
+    check("generated file has Latest session header", "## Latest session" in content)
+    check(
+        "generated file has NO Previous session blocks",
+        "## Previous session" not in content,
+    )
+    check("generated file has convergence status", "## Convergence status" in content)
+    check("generated file has enforcement path table", "E-DECRYPT" in content)
+    check("generated file has open debt items section", "## Open debt items" in content)
+    check("generated file has quick reference", "## Quick reference" in content)
+    check("generated file is compact (< 200 lines)", lines < 200, f"got {lines} lines")
+    check("generated file mentions it is generated", "GENERATED" in content)
 
 
 def _write_trace(trace_path, body):
@@ -223,7 +240,9 @@ def test_generate_current_state_excludes_transcript_sections():
     one session). The file carries state, not a transcript.
     """
     _tmp, trace_path, graph_spec_path, current_state_path, _ = _make_test_env()
-    _write_trace(trace_path, textwrap.dedent("""        ### RULE-ZERO
+    _write_trace(
+        trace_path,
+        textwrap.dedent("""        ### RULE-ZERO
         - **Read**: `a.py`, `b.py` (a very long reading list that belongs in trace.md)
         - **Finding**: something long.
 
@@ -236,7 +255,8 @@ def test_generate_current_state_excludes_transcript_sections():
 
         ### Next session opening
         Do the next thing.
-        """))
+        """),
+    )
     generate_current_state(trace_path, graph_spec_path, current_state_path)
     content = current_state_path.read_text()
 
@@ -246,8 +266,11 @@ def test_generate_current_state_excludes_transcript_sections():
     check("IMPLEMENT section is excluded", "### IMPLEMENT" not in content)
     check("state sections are kept", "Fog cleared" in content)
     check("next session opening is kept", "Next session opening" in content)
-    check("file stays small", len(content.splitlines()) < 150,
-          f"got {len(content.splitlines())} lines")
+    check(
+        "file stays small",
+        len(content.splitlines()) < 150,
+        f"got {len(content.splitlines())} lines",
+    )
 
 
 def test_extract_state_sections_whitelist():
@@ -266,8 +289,11 @@ def test_extract_state_sections_whitelist():
         """)
     sections = extract_state_sections(body)
     headings = [h for h, _ in sections]
-    check("whitelist keeps only state headings", headings == ["Fog remaining", "Blockers"],
-          f"got {headings}")
+    check(
+        "whitelist keeps only state headings",
+        headings == ["Fog remaining", "Blockers"],
+        f"got {headings}",
+    )
 
 
 def test_fit_to_cap_drops_optional_sections_before_required():
@@ -281,9 +307,15 @@ def test_fit_to_cap_drops_optional_sections_before_required():
     out = fit_to_cap(sections, budget=20)
     # The marker names the dropped sections, so assert the sections themselves are
     # gone rather than the words (which legitimately appear in the disclosure).
-    check("optional sections dropped first",
-          "### VERIFY" not in out and "### Failure attribution" not in out, out[:120])
-    check("required sections survive", "Fog remaining" in out and "Next session opening" in out)
+    check(
+        "optional sections dropped first",
+        "### VERIFY" not in out and "### Failure attribution" not in out,
+        out[:120],
+    )
+    check(
+        "required sections survive",
+        "Fog remaining" in out and "Next session opening" in out,
+    )
     check("a marker explains the drop", "trace.md" in out)
 
 
@@ -291,19 +323,29 @@ def test_generate_current_state_never_breaches_the_compactness_cap():
     """Even a pathological block cannot push the file past the invariant limit."""
     _tmp, trace_path, graph_spec_path, current_state_path, _ = _make_test_env()
     huge = "\n".join(f"- bullet {i} with some words to take space" for i in range(400))
-    _write_trace(trace_path, "### Fog remaining\n" + huge + "\n\n### Next session opening\n- x\n")
+    _write_trace(
+        trace_path, "### Fog remaining\n" + huge + "\n\n### Next session opening\n- x\n"
+    )
     lines = generate_current_state(trace_path, graph_spec_path, current_state_path)
     content = current_state_path.read_text()
 
-    check("authoring cannot breach the 300-line invariant", lines <= 300, f"got {lines}")
-    check("stays within the generator's own budget", lines <= _MAX_LINES + 40, f"got {lines}")
+    check(
+        "authoring cannot breach the 300-line invariant", lines <= 300, f"got {lines}"
+    )
+    check(
+        "stays within the generator's own budget",
+        lines <= _MAX_LINES + 40,
+        f"got {lines}",
+    )
     check("truncation is disclosed", "trace.md" in content)
     check("the required sections still hold", "Fog remaining" in content)
 
 
 def test_archive_trace():
     """archive_trace should move old sessions to archive files."""
-    _tmp, trace_path, _graph_spec_path, _current_state_path, graph_dir = _make_test_env()
+    _tmp, trace_path, _graph_spec_path, _current_state_path, graph_dir = (
+        _make_test_env()
+    )
 
     # Add more sessions to trigger archival (need > keep sessions)
     content = trace_path.read_text()
@@ -320,32 +362,46 @@ def test_archive_trace():
     original_lines = content.count("\n")
     archive_name = archive_trace(trace_path, graph_dir, threshold=50, keep=3)
 
-    check("archive_trace returns archive filename", archive_name is not None,
-         f"got {archive_name}")
-    check("archive file was created",
-         (graph_dir / archive_name).exists() if archive_name else False)
+    check(
+        "archive_trace returns archive filename",
+        archive_name is not None,
+        f"got {archive_name}",
+    )
+    check(
+        "archive file was created",
+        (graph_dir / archive_name).exists() if archive_name else False,
+    )
 
     new_content = trace_path.read_text()
     new_lines = new_content.count("\n")
-    check("trace.md shrunk after archival",
-         new_lines < original_lines,
-         f"was {original_lines}, now {new_lines}")
+    check(
+        "trace.md shrunk after archival",
+        new_lines < original_lines,
+        f"was {original_lines}, now {new_lines}",
+    )
 
     remaining_sessions = parse_trace_sessions(new_content)
-    check("trace.md has exactly `keep` sessions after archival",
-         len(remaining_sessions) == 3,
-         f"got {len(remaining_sessions)}")
+    check(
+        "trace.md has exactly `keep` sessions after archival",
+        len(remaining_sessions) == 3,
+        f"got {len(remaining_sessions)}",
+    )
 
+    assert archive_name is not None, "archive_trace returned no archive name"
     archive_content = (graph_dir / archive_name).read_text()
     archived_sessions = parse_trace_sessions(archive_content)
-    check("archive file has the archived sessions",
-         len(archived_sessions) >= 4,
-         f"got {len(archived_sessions)}")
+    check(
+        "archive file has the archived sessions",
+        len(archived_sessions) >= 4,
+        f"got {len(archived_sessions)}",
+    )
 
 
 def test_archive_trace_no_archival_needed():
     """archive_trace should return None when trace is under threshold."""
-    _tmp, trace_path, _graph_spec_path, _current_state_path, graph_dir = _make_test_env()
+    _tmp, trace_path, _graph_spec_path, _current_state_path, graph_dir = (
+        _make_test_env()
+    )
     result = archive_trace(trace_path, graph_dir, threshold=10000, keep=5)
     check("archive_trace returns None when under threshold", result is None)
 
@@ -388,15 +444,21 @@ Do more.
     check("close_session returns True", success)
     new_content = trace_path.read_text()
     new_session_count = len(parse_trace_sessions(new_content))
-    check("trace.md has one more session after close_session",
-         new_session_count == original_session_count + 1,
-         f"was {original_session_count}, now {new_session_count}")
+    check(
+        "trace.md has one more session after close_session",
+        new_session_count == original_session_count + 1,
+        f"was {original_session_count}, now {new_session_count}",
+    )
 
     state_content = current_state_path.read_text()
-    check("current-state.md regenerated with new latest session",
-         "New session" in state_content)
-    check("current-state.md has no Previous session blocks",
-         "## Previous session" not in state_content)
+    check(
+        "current-state.md regenerated with new latest session",
+        "New session" in state_content,
+    )
+    check(
+        "current-state.md has no Previous session blocks",
+        "## Previous session" not in state_content,
+    )
 
 
 def test_generate_current_state_missing_trace():
@@ -404,7 +466,7 @@ def test_generate_current_state_missing_trace():
     result = generate_current_state(
         trace_path=Path("/nonexistent/trace.md"),
         graph_spec_path=Path("/nonexistent/spec.yaml"),
-        output_path=Path("/tmp/test-output.md"),
+        output_path=Path(tempfile.mkdtemp(prefix="graph-out-")) / "out.md",
     )
     check("generate_current_state returns 1 on missing trace", result == 1)
 
@@ -427,3 +489,72 @@ if __name__ == "__main__":
     print()
     print(f"  {_passed} passed, {_failed} failed")
     sys.exit(0 if _failed == 0 else 1)
+
+
+# ---------------------------------------------------------------------------
+# S264: a path that cannot be hardware-verified must not read as pending work
+# ---------------------------------------------------------------------------
+
+
+def test_a_path_with_a_verification_ceiling_is_not_reported_as_pending(tmp_path):
+    """A ceiling is a decision; the generated convergence text must say so.
+
+    Before S264 the generator pooled every non-hardware path into one list headed "still need
+    hardware verification", so two paths that would each need a sacrificial machine read as a
+    queue of two more runs. This pins the split: by-design paths get their own table, and are
+    excluded from the "still need" list.
+    """
+    spec = textwrap.dedent("""\
+        phase_nodes:
+          - id: P0
+            status: COMPLETE
+        enforcement_paths:
+          - id: E-ENCRYPT
+            name: file-encryption
+            status: verified-on-hardware
+            hardware_artifact_ref: "agent/test.json"
+            risk_notes: "Verified"
+          - id: E-BCD
+            name: bcd-lockdown
+            status: verified-in-unit-test
+            risk_notes: "Rewrites boot config"
+            verification_ceiling: >-
+              NOT hardware-verified by decision: a failed run disables the recovery path
+          - id: E-DECRYPT
+            name: file-decryption
+            status: verified-in-unit-test
+            risk_notes: "Needs hardware"
+        debt_items:
+          - id: D-001
+            status: CLOSED
+            description: "First debt"
+        """)
+    graph = yaml.safe_load(spec)
+
+    text = generate_convergence_status(graph)
+
+    assert "documented verification ceiling" in text
+    assert "E-BCD" in text
+    # The ceiling reason is carried through, not just the id.
+    assert "disables the recovery path" in text
+    # And the genuinely-pending path keeps the old heading.
+    assert "still need hardware verification" in text
+    pending_section = text.split("still need hardware verification")[1]
+    assert "E-DECRYPT" in pending_section
+    assert "E-BCD" not in pending_section
+
+
+def test_all_by_design_paths_are_not_claimed_as_hardware_verified():
+    """The real spec must not carry a ceiling on something it also calls hardware-verified."""
+    spec_path = (
+        Path(__file__).resolve().parent.parent / ".devin" / "graph" / "GRAPH-SPEC.yaml"
+    )
+    graph = yaml.safe_load(spec_path.read_text())
+    contradictory = [
+        p["id"]
+        for p in graph["enforcement_paths"]
+        if p.get("verification_ceiling") and p.get("status") == "verified-on-hardware"
+    ]
+    assert contradictory == [], (
+        f"paths claiming both a ceiling and hardware verification: {contradictory}"
+    )
