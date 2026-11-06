@@ -2648,3 +2648,24 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-117
+  statement: 'No destructive hardware test has a working harness-level rollback: HardwareTest.rollback()
+    is a no-op, E-BCD-01 and E-HP-UEFI-01 override it with pass (the override exists, the behaviour does
+    not), and E-INTEGRATION-01 inherits it. rollback_is_stub defaults True and is surfaced in describe_destructive()
+    as ''rollback: NOT IMPLEMENTED'', and agent/tests/test_hw_harness.py pins the set against a shrink-only
+    STUB_ROLLBACKS baseline so implementing one forces the entry''s removal.'
+  domain: testing/hardware
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S263: implemented rollback_is_stub + NOT IMPLEMENTED in the banner, pinned by 4 tests incl.
+    a shrink-only baseline; negative control (rollback_is_stub=False on TestBcdLockdown) makes the baseline
+    test fail as designed'
+  source: agent/hw_test_harness.py (rollback_is_stub, describe_destructive); agent/tests/test_hw_harness.py
+    (TestDestructiveGate, STUB_ROLLBACKS)
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

@@ -14650,3 +14650,116 @@ Fix the naming debt this created and the one it exposed: rename or strengthen
 `test_destructive_tests_have_rollback` so it no longer implies rollback exists (today it only checks
 ids), and decide `E-BCD`/`E-HP-UEFI` explicitly — name the machine and the recovery plan, or demote
 them in the graph with that reason, rather than leaving 11/13 to imply 13/13 is merely pending.
+
+## Session 263 — 2026-11-05 (the test whose name lied, and a baseline that shrinks)
+
+### RULE-ZERO
+
+**Read** (before the edit, this time):
+- `agent/tests/test_hw_harness.py` — `test_destructive_tests_have_rollback`, which asserted only that
+  `E-BCD-01` and `E-HP-UEFI-01` are in the destructive set; nothing about rollback
+- `agent/hw_test_harness.py` — that `TestBcdLockdown.rollback()` and `TestHpUefiLockdown.rollback()`
+  are `pass` bodies while `TestIntegration` has no override at all (so it inherits the base `pass`)
+- `scripts/test_cross_surface_contract.py` — the repo's shrink-only baseline idiom (`KNOWN_GAPS`,
+  `WORKER_ONLY_BY_DESIGN`): an entry that no longer applies must be deleted or the test fails
+- `.devin/graph/debt-ledger-mismatches.txt` — the same idiom applied to ledger drift
+
+**Finding**: all three destructive tests have no-op rollbacks — two by overriding with `pass`, one by
+inheriting it — while the test named `test_destructive_tests_have_rollback` implied otherwise. So the
+suite contained a green assertion whose *name* was the only thing claiming the property. That is the
+same shape as the two findings this week: a claim recorded ahead of its evidence (S256's next-opening,
+S258's pre-written numbers). This one had been in the suite since v2.0.
+
+### Implement
+
+- **`rollback_is_stub: bool = True` on `HardwareTest`** — the honest default, because the base
+  `rollback()` *is* a no-op. A test with a real rollback sets it False.
+- **The banner says it**: `describe_destructive()` now prints
+  `rollback: NOT IMPLEMENTED — recovery is manual, using the before-state written before the action`
+  (or `implemented by the test`). So the operator who typed `--allow-destructive` sees what they are
+  relying on, not just what will change.
+- **`test_destructive_tests_have_rollback` replaced** by four tests that check what their names say:
+  - `test_destructive_tests_are_marked_and_declared` — the three ids, each with scope + recovery.
+  - `test_stub_rollbacks_are_recorded_not_implied` — a **shrink-only baseline** (`STUB_ROLLBACKS`)
+    compared against the set of destructive tests whose `rollback_is_stub` is set. Implement a
+    rollback → fails until the entry is deleted; add a destructive test without declaring it → fails.
+  - `test_the_baseline_only_names_destructive_tests` — a stub rollback is only interesting where
+    something is destroyed.
+  - `test_the_notice_states_that_rollback_is_not_implemented` — the banner cannot quietly stop saying
+    it.
+
+### Fog cleared
+
+- **Whether any destructive test had a working rollback**: none do. The modules' *internal* rollback
+  (on critical failure) is real; the harness-level rollback that restores pre-test state is not, in
+  all three cases.
+- **Whether the old test was protecting anything**: no — it would have passed with every rollback
+  deleted. Its name was load-bearing and its body was not.
+
+### Fog remaining
+
+- **The rollbacks are still stubs** for all three. This makes that state *recorded and shrinking*,
+  not fixed. Real BCD rollback means re-applying the captured `bcdedit` output; real HP UEFI rollback
+  means clearing a Setup Password the module may not be able to clear — product work on the lockdown
+  modules.
+- **`E-BCD` and `E-HP-UEFI` remain `verified-in-unit-test`** — the decision is put to the operator
+  rather than taken here (see below).
+- **The gate and the baseline are unit-tested only.** No destructive test is eligible on this host,
+  so neither has been exercised against real firmware.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
+
+### Debt items closed
+
+- None. Enforcement coverage stays 11/13; this is the tooling that makes the last two honest.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 (4 of 63). Unchanged.
+
+### Blockers
+
+- The remaining decision needs a human: name a sacrificial machine + recovery plan for the last two
+  paths, or demote them in the graph with that reason.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary, self-inflicted): I used `git checkout
+  agent/hw_test_harness.py` to undo a temporary negative-control edit, which reverted the **whole
+  file** and wiped this session's `rollback_is_stub` work. The negative control itself was worth
+  running — it proved the baseline fails when a rollback is "implemented" — but the revert should have
+  been a ranged undo of the two lines I had just added. Recoverable because I had the edits in the
+  transcript; a session that had not would have lost them.
+- **Layer 2 — context provision** (secondary): my first version of the baseline test compared
+  `rollback_is_stub` across **all** tests, but the flag defaults True on the base class, so every test
+  matched. The flag is only meaningful for destructive tests, and nothing in the class said so — the
+  comment now does.
+- **Layer 4 again — verification feedback**: S262's `test_runs_with_the_flag` ran a destructive test
+  **without** an `evidence_dir`, so the harness wrote `E-FAKE-01-before-*.json` next to the agent
+  modules — into the repo — and S262's `git add -A` swept four of those files into commit `6a1c5c7`.
+  Found here because running the suite left new ones behind. Fixed at the cause (the test now always
+  passes `tmp_path` as the evidence dir) and at the symptom (the four tracked files are deleted in
+  this session's commit). A test that exercises a feature which writes to disk has to own where that
+  disk is.
+
+### VERIFY
+
+- `agent/.venv/bin/python -m pytest agent/tests` → **840 passed** (was 837; +3 net after replacing
+  one misleading test with four).
+- `agent/tests/test_hw_harness.py` → **46 passed** (43 + 3 net).
+- Negative control on the baseline: temporarily setting `rollback_is_stub = False` on
+  `TestBcdLockdown` makes `test_stub_rollbacks_are_recorded_not_implied` fail with
+  "stub-rollback baseline out of date — implemented a rollback? delete its entry". Restored.
+- `ruff check agent` → **All checks passed**; `ruff format --check agent` → 61 files already formatted
+  (after one 101-column docstring line and a `test = hw_test_harness.TestBcd()` that should have been
+  `TestBcdLockdown()`).
+- Stray `E-FAKE-01-before-*.json` files: **four were already tracked** (committed in `6a1c5c7` by
+  S262's `git add -A`) and more appeared from this session's runs. The test now passes `tmp_path` as
+  `evidence_dir`; the four tracked files are removed in this session's commit; a fresh suite run
+  leaves `agent/` clean (`ls agent/E-FAKE-01*` → none).
+
+### Next session opening
+
+Put the last two enforcement paths to the operator: either name a sacrificial machine and a recovery
+plan for `E-BCD`/`E-HP-UEFI` and run them with `--allow-destructive --evidence-dir <removable>`, or
+demote both in `GRAPH-SPEC.yaml` with the documented reason so 11/13 stops implying that 13/13 is
+merely pending.
