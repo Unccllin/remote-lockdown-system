@@ -14763,3 +14763,110 @@ Put the last two enforcement paths to the operator: either name a sacrificial ma
 plan for `E-BCD`/`E-HP-UEFI` and run them with `--allow-destructive --evidence-dir <removable>`, or
 demote both in `GRAPH-SPEC.yaml` with the documented reason so 11/13 stops implying that 13/13 is
 merely pending.
+
+## Session 264 — 2026-11-05 (11/13 becomes an honest ceiling instead of a queue)
+
+### RULE-ZERO
+
+**Read**:
+- `.devin/graph/graph_assert.py` — `VALID_ENFORCEMENT_STATUSES` (four values, so "by decision" has no
+  status of its own) and `report_convergence()`, which pooled every non-hardware path into one list
+- `scripts/graph_session.py` `generate_convergence_status()` — the generator behind
+  `current-state.md`, which every session reads first, and which said "The project is NOT converged …
+  N enforcement paths are only `verified-in-unit-test`"
+- `scripts/test_graph_session.py` — confirmed **no test** pinned the convergence wording, which is why
+  it could drift unchallenged
+- the two `GRAPH-SPEC.yaml` entries (`E-BCD`, `E-HP-UEFI`) and their existing `risk_notes`, which
+  already described the damage but not the *decision*
+
+**Finding**: the graph had no way to say "this will never be hardware-verified under our hardware
+policy". The status enum is `{unverified, verified-in-unit-test, verified-in-ci, verified-on-hardware}`
+— all of them describe *how far verification got*, none describes *why it stops*. So two paths that
+each need a sacrificial machine and vendor recovery were rendered identically to ordinary backlog, and
+`current-state.md` told every new session they were "paths that still need hardware verification".
+That is an instruction to do work that must not be done.
+
+### Implement
+
+- **`verification_ceiling` on both entries** — a stated reason, in the spec, next to the status:
+  `E-BCD` (a failed run rewrites boot config and **disables WinRE**, the recovery path) and
+  `E-HP-UEFI` (sets a **firmware Setup Password** its rollback does not clear, so failure means HP
+  service).
+- **`report_convergence()` counts and prints them**: `… 2 verified-in-unit-test, 0 unverified (2 of
+  the unit-tested ones are NOT hardware-verifiable by decision)`.
+- **`generate_convergence_status()` splits the gap**: by-design paths get their own table headed
+  "documented verification ceiling (a failed run damages state the test cannot undo)"; only the
+  genuinely-pending ones keep the "still need hardware verification" heading. When nothing is
+  pending, the paragraph reads "NOT converged, and the remaining gap is a decision, not pending
+  work … that is the honest ceiling under the current hardware policy — not a queue."
+- **Two tests** in `scripts/test_graph_session.py`: one drives a synthetic spec and asserts the
+  ceiling lands in its own section and is *excluded* from "still need", with the reason carried
+  through; the other reads the **real** spec and fails if a path carries both a ceiling and
+  `verified-on-hardware` (so running one later is impossible without deleting its ceiling).
+
+**Lint debt paid on the way past**, all in files this session touched: an unused `get_debt_items`
+import I left in S254 (`graph_session.py`), two placeholder-less f-strings and two implicit
+`check=False` `subprocess.run` calls that `scripts/` had never been linted for, a `Path / None`
+divisibility on `archive_name` (now asserted), a test writing to `/tmp`, and an import that pyyaml
+resolution could not see (now dynamic, matching the repo's pattern for pytest).
+
+### Fog cleared
+
+- **What "11/13" meant**: it meant "two more runs pending" to every reader of `current-state.md`,
+  which was false. It now says the remaining gap is a decision, and names both ceilings inline.
+- **Whether the graph could express "not verifiable by policy"**: it could not, and adding a new
+  status value would have been a schema change with I3 implications. A field carrying the *reason*
+  keeps the status honest (still `verified-in-unit-test`) while making the ceiling machine-readable.
+
+### Fog remaining
+
+- **`E-BCD` and `E-HP-UEFI` are still unverified on hardware**, by decision. If the operator ever
+  names a sacrificial machine, the ceiling must be deleted to claim the run — the new test enforces
+  that — but the two paths will still be the easiest place to accidentally lie about coverage.
+- **`defender_exclusion` was `null` in both hardware windows** while AGENTS.md says the installer adds
+  one. Two independent observations, unresolved, and the most concrete open question in the repo that
+  does not need a sacrificial machine.
+- **The harness's two firmware rollbacks are still stubs** (recorded in `STUB_ROLLBACKS`, S263).
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
+
+### Debt items closed
+
+- None. This session changed what the graph *claims*, not what it has verified: Enforcement stays
+  11/13 with the other 2 now documented as by-design.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 (4 of 63). Unchanged.
+
+### Blockers
+
+- None outstanding for software. The hardware work that remains (D-120 real-media, D-129 PBL on real
+  UEFI, D-130 signing rollout, D-134 TPM NV hierarchy) needs machines and firmware, not code.
+
+### Failure attribution
+
+- **Layer 2 — context provision** (primary): the reason `11/13` read as a queue is that nothing
+  anywhere carried the *decision*. Both entries' `risk_notes` described the damage precisely; neither
+  said "and therefore we are not going to do this without a sacrificial unit". A reader with the same
+  information could only infer pendingness, because that is the default for an unfinished count.
+- **Layer 4 — verification feedback** (secondary): no test pinned the convergence wording, so the
+  generator could have kept saying "still need hardware verification" forever. Two tests now do, one
+  of them against the real spec.
+
+### VERIFY
+
+- `make graph-status` → `Enforcement: 11/13 verified-on-hardware` / `2 verified-in-unit-test, 0
+  unverified (2 of the unit-tested ones are NOT hardware-verifiable by decision)`.
+- `python3 scripts/graph_session.py generate-current-state` → the ceiling section and the
+  decision-not-queue paragraph, quoted verbatim in **Implement** above.
+- `python3 scripts/test_graph_session.py` → **40 passed, 0 failed** (was 38: +2).
+- `python3 scripts/test_check_debt_ledger.py` → 8 passed; `make graph-check` → all invariants pass.
+- `ruff check` + `ruff format --check` on `scripts/graph_session.py` and
+  `scripts/test_graph_session.py` → clean (six lint debts paid, two of them pre-existing).
+
+### Next session opening
+
+Investigate the one open question that needs no sacrificial hardware: `defender_exclusion` came back
+`null` in two independent hardware windows while AGENTS.md says the installer adds a Defender
+exclusion — read `agent/installer.py` and the harness's detection, and either fix one, or correct the
+claim in AGENTS.md, so the repo stops asserting something two runs failed to observe.

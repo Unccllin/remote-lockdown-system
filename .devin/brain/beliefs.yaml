@@ -2669,3 +2669,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-118
+  statement: 'E-BCD and E-HP-UEFI are deliberately not hardware-verified: each carries a verification_ceiling
+    in GRAPH-SPEC.yaml explaining that a failed run damages state the test cannot undo (BCD rewrites boot
+    config and disables WinRE; HP UEFI sets a firmware Setup Password its rollback does not clear). report_convergence()
+    counts them as by_design, generate_convergence_status() gives them their own table and stops calling
+    them pending, and scripts/test_graph_session.py fails if a path carries both a ceiling and verified-on-hardware.
+    11/13 is therefore the honest ceiling, not a queue.'
+  domain: testing/hardware
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S264: implemented verification_ceiling on both entries, by_design counting in report_convergence,
+    the split in generate_convergence_status, and 2 tests (one synthetic, one against the real spec);
+    graph-status and current-state both print the ceiling; graph-check passes'
+  source: .devin/graph/GRAPH-SPEC.yaml; .devin/graph/graph_assert.py report_convergence; scripts/graph_session.py
+    generate_convergence_status; scripts/test_graph_session.py
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

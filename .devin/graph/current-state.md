@@ -27,14 +27,14 @@
 | Debt items | 59 | 63 | ✗ |
 | Enforcement paths (on hardware) | 11 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 59 of 63 debt items are closed, but **2 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 59 of 63 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
 
-**The 2 enforcement paths that still need hardware verification:**
+**The 2 paths with a documented verification ceiling (a failed run damages state the test cannot undo):**
 
-| ID | Name | Status | Blocker |
-|----|------|--------|---------|
-| E-BCD | bcd-lockdown | verified-in-unit-test | D-008 CLOSED: BitLocker suspend/resume verified on Azure VM with BitLocker. B... |
-| E-HP-UEFI | hp-uefi-lockdown | verified-in-unit-test | D-009 model-aware names; D-010 Sure Admin detection; needs hardware verificat... |
+| ID | Name | Ceiling |
+|----|------|---------|
+| E-BCD | bcd-lockdown | NOT hardware-verified by decision (S264). A failed run rewrites this machine's boot con... |
+| E-HP-UEFI | hp-uefi-lockdown | NOT hardware-verified by decision (S264). The test sets a FIRMWARE Setup Password that ... |
 
 **The 11 already verified on hardware:**
 
@@ -53,31 +53,31 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 263 — 2026-11-05 (the test whose name lied, and a baseline that shrinks)
+## Latest session: 264 — 2026-11-05 (11/13 becomes an honest ceiling instead of a queue)
 
 ### Fog cleared
 
-- **Whether any destructive test had a working rollback**: none do. The modules' *internal* rollback
-  (on critical failure) is real; the harness-level rollback that restores pre-test state is not, in
-  all three cases.
-- **Whether the old test was protecting anything**: no — it would have passed with every rollback
-  deleted. Its name was load-bearing and its body was not.
+- **What "11/13" meant**: it meant "two more runs pending" to every reader of `current-state.md`,
+  which was false. It now says the remaining gap is a decision, and names both ceilings inline.
+- **Whether the graph could express "not verifiable by policy"**: it could not, and adding a new
+  status value would have been a schema change with I3 implications. A field carrying the *reason*
+  keeps the status honest (still `verified-in-unit-test`) while making the ceiling machine-readable.
 
 ### Fog remaining
 
-- **The rollbacks are still stubs** for all three. This makes that state *recorded and shrinking*,
-  not fixed. Real BCD rollback means re-applying the captured `bcdedit` output; real HP UEFI rollback
-  means clearing a Setup Password the module may not be able to clear — product work on the lockdown
-  modules.
-- **`E-BCD` and `E-HP-UEFI` remain `verified-in-unit-test`** — the decision is put to the operator
-  rather than taken here (see below).
-- **The gate and the baseline are unit-tested only.** No destructive test is eligible on this host,
-  so neither has been exercised against real firmware.
+- **`E-BCD` and `E-HP-UEFI` are still unverified on hardware**, by decision. If the operator ever
+  names a sacrificial machine, the ceiling must be deleted to claim the run — the new test enforces
+  that — but the two paths will still be the easiest place to accidentally lie about coverage.
+- **`defender_exclusion` was `null` in both hardware windows** while AGENTS.md says the installer adds
+  one. Two independent observations, unresolved, and the most concrete open question in the repo that
+  does not need a sacrificial machine.
+- **The harness's two firmware rollbacks are still stubs** (recorded in `STUB_ROLLBACKS`, S263).
 - **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
 
 ### Debt items closed
 
-- None. Enforcement coverage stays 11/13; this is the tooling that makes the last two honest.
+- None. This session changed what the graph *claims*, not what it has verified: Enforcement stays
+  11/13 with the other 2 now documented as by-design.
 
 ### Debt items still open
 
@@ -85,51 +85,36 @@
 
 ### Blockers
 
-- The remaining decision needs a human: name a sacrificial machine + recovery plan for the last two
-  paths, or demote them in the graph with that reason.
+- None outstanding for software. The hardware work that remains (D-120 real-media, D-129 PBL on real
+  UEFI, D-130 signing rollout, D-134 TPM NV hierarchy) needs machines and firmware, not code.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, self-inflicted): I used `git checkout
-  agent/hw_test_harness.py` to undo a temporary negative-control edit, which reverted the **whole
-  file** and wiped this session's `rollback_is_stub` work. The negative control itself was worth
-  running — it proved the baseline fails when a rollback is "implemented" — but the revert should have
-  been a ranged undo of the two lines I had just added. Recoverable because I had the edits in the
-  transcript; a session that had not would have lost them.
-- **Layer 2 — context provision** (secondary): my first version of the baseline test compared
-  `rollback_is_stub` across **all** tests, but the flag defaults True on the base class, so every test
-  matched. The flag is only meaningful for destructive tests, and nothing in the class said so — the
-  comment now does.
-- **Layer 4 again — verification feedback**: S262's `test_runs_with_the_flag` ran a destructive test
-  **without** an `evidence_dir`, so the harness wrote `E-FAKE-01-before-*.json` next to the agent
-  modules — into the repo — and S262's `git add -A` swept four of those files into commit `6a1c5c7`.
-  Found here because running the suite left new ones behind. Fixed at the cause (the test now always
-  passes `tmp_path` as the evidence dir) and at the symptom (the four tracked files are deleted in
-  this session's commit). A test that exercises a feature which writes to disk has to own where that
-  disk is.
+- **Layer 2 — context provision** (primary): the reason `11/13` read as a queue is that nothing
+  anywhere carried the *decision*. Both entries' `risk_notes` described the damage precisely; neither
+  said "and therefore we are not going to do this without a sacrificial unit". A reader with the same
+  information could only infer pendingness, because that is the default for an unfinished count.
+- **Layer 4 — verification feedback** (secondary): no test pinned the convergence wording, so the
+  generator could have kept saying "still need hardware verification" forever. Two tests now do, one
+  of them against the real spec.
 
 ### VERIFY
 
-- `agent/.venv/bin/python -m pytest agent/tests` → **840 passed** (was 837; +3 net after replacing
-  one misleading test with four).
-- `agent/tests/test_hw_harness.py` → **46 passed** (43 + 3 net).
-- Negative control on the baseline: temporarily setting `rollback_is_stub = False` on
-  `TestBcdLockdown` makes `test_stub_rollbacks_are_recorded_not_implied` fail with
-  "stub-rollback baseline out of date — implemented a rollback? delete its entry". Restored.
-- `ruff check agent` → **All checks passed**; `ruff format --check agent` → 61 files already formatted
-  (after one 101-column docstring line and a `test = hw_test_harness.TestBcd()` that should have been
-  `TestBcdLockdown()`).
-- Stray `E-FAKE-01-before-*.json` files: **four were already tracked** (committed in `6a1c5c7` by
-  S262's `git add -A`) and more appeared from this session's runs. The test now passes `tmp_path` as
-  `evidence_dir`; the four tracked files are removed in this session's commit; a fresh suite run
-  leaves `agent/` clean (`ls agent/E-FAKE-01*` → none).
+- `make graph-status` → `Enforcement: 11/13 verified-on-hardware` / `2 verified-in-unit-test, 0
+  unverified (2 of the unit-tested ones are NOT hardware-verifiable by decision)`.
+- `python3 scripts/graph_session.py generate-current-state` → the ceiling section and the
+  decision-not-queue paragraph, quoted verbatim in **Implement** above.
+- `python3 scripts/test_graph_session.py` → **40 passed, 0 failed** (was 38: +2).
+- `python3 scripts/test_check_debt_ledger.py` → 8 passed; `make graph-check` → all invariants pass.
+- `ruff check` + `ruff format --check` on `scripts/graph_session.py` and
+  `scripts/test_graph_session.py` → clean (six lint debts paid, two of them pre-existing).
 
 ### Next session opening
 
-Put the last two enforcement paths to the operator: either name a sacrificial machine and a recovery
-plan for `E-BCD`/`E-HP-UEFI` and run them with `--allow-destructive --evidence-dir <removable>`, or
-demote both in `GRAPH-SPEC.yaml` with the documented reason so 11/13 stops implying that 13/13 is
-merely pending.
+Investigate the one open question that needs no sacrificial hardware: `defender_exclusion` came back
+`null` in two independent hardware windows while AGENTS.md says the installer adds a Defender
+exclusion — read `agent/installer.py` and the harness's detection, and either fix one, or correct the
+claim in AGENTS.md, so the repo stops asserting something two runs failed to observe.
 
 ---
 
