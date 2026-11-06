@@ -139,10 +139,27 @@ function decryptLocationFields(row) {
   };
 }
 
-router.get('/', requireAuth, async (_req, res) => {
-  const result = await pool.query(
-    'SELECT * FROM devices ORDER BY enrolled_at DESC'
-  );
+router.get('/', requireAuth, async (req, res) => {
+  // D-222: a rollout needs to ask "which devices are not on build X?". The version is
+  // device-reported and nullable, so `?agent_version=unknown` is a distinct query from any
+  // literal value — "never reported" is not "on some other version".
+  const requestedVersion = typeof req.query.agent_version === 'string'
+    ? req.query.agent_version.trim()
+    : '';
+
+  let result;
+  if (requestedVersion === 'unknown') {
+    result = await pool.query(
+      'SELECT * FROM devices WHERE agent_version IS NULL ORDER BY enrolled_at DESC'
+    );
+  } else if (requestedVersion) {
+    result = await pool.query(
+      'SELECT * FROM devices WHERE agent_version = $1 ORDER BY enrolled_at DESC',
+      [requestedVersion]
+    );
+  } else {
+    result = await pool.query('SELECT * FROM devices ORDER BY enrolled_at DESC');
+  }
   res.json(result.rows.map(publicDevice));
 });
 

@@ -2226,7 +2226,15 @@
   `verify_uninstall_token`), `server/tests/uninstallAuth.test.js`.
 
 ### D-222 — The server records no agent version, so fleet-update compliance cannot be answered
-- **Status**: OPEN
+- **Status**: CLOSED (2026-11-05, session 257 — commit pending in this session's first commit). All four
+  close criteria met: (a) `checkin` persists `agent_version` + `agent_version_at` on **both** surfaces
+  (Express `devices` columns via migration `018_agent_version.sql`, Worker `CheckinMetadata` on the
+  KV-RACE-001 key); (b) `GET /api/devices` returns both fields, the dashboard renders a sortable
+  `Agent` column, and the list filters by `?agent_version=<v>` and `?agent_version=unknown`;
+  (c) a device that never reported reads as `unknown` (null) rather than being dropped, and a
+  pre-D-222 agent that omits the field cannot erase an earlier reported value (COALESCE /
+  `existingMetadata` fallback on each surface); (d) `docs/API.md` documents the check-in field, both
+  response fields and both filter values.
 - **Category**: SERVER
 - **Found**: session 256, while writing the operator-facing note for D-221's sunset. The note wanted
   to say "update every agent before the date"; checking that turned out to be impossible, and
@@ -2317,7 +2325,7 @@
 | D-210 | Serverless Worker PBL route integration not implemented | CLOSED (commit 9612fbb) | SERVER |
 | D-211 | Covert tracking mode (C5) not fully implemented | CLOSED (all 12 C5 plan items implemented: firmware Decision.c, server verdict+track endpoints, agent handle_track+data protection+stealth, dashboard Track button) | TODO |
 | D-221 | Uninstall token is deployment-wide, and the two servers derive it differently | CLOSED (commit `b9c6127` — device-bound HMAC from the authenticated device row, shared vectors read by both suites + the contract test, 503 when ADMIN_TOKEN is unset, constant-time compare; legacy scheme still verifies until the dated sunset 2027-02-04, after which three suites fail with the deletion checklist) | SECURITY |
-| D-222 | Server records no agent version, so fleet-update compliance cannot be answered | OPEN (`/api/agent/update` reads `x-agent-version` and discards it; `devices` has no version column; close criteria in the D-222 entry) | SERVER |
+| D-222 | Server records no agent version, so fleet-update compliance cannot be answered | CLOSED (persisted at check-in on both surfaces via migration `018_agent_version.sql` + the Worker's check-in metadata; returned and filterable from `GET /api/devices`; dashboard shows a sortable Agent column with `unknown` for never-reported; a pre-D-222 agent cannot erase an earlier value) | SERVER |
 
 ### RE-hardening review (2026-09-15)
 
@@ -2338,5 +2346,5 @@
 | D-219 | Policy signature BLOCK path untested | CLOSED (same scenario as D-215 — test-d215-harness.sh + gen-policy-rot.py; 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 | D-220 | BLOCK-intent returns propagate error to BDS (BootOrder advance bypass) | CLOSED (`PblApp.c` policy-sig-fail and anti-rollback paths returned `EFI_SECURITY_VIOLATION` — per Boot#### semantics a non-success return advances BDS to the next boot option (Windows boots). Fixed via `PblBlockHalt()` — lock screen + MOR + ResetSystem + CpuDeadLoop, never returns; chain-load return checked at all 3 call sites, fail-closed on error. Note: D-219's harness passed the buggy code — it checked serial lines, not post-BLOCK behavior. QEMU+swtpm: fve 16/0, docker 15/0, persistence 16/0. Commit this session; artifacts /tmp/pbl-fve-ci/, /tmp/pbl-ci-persist/) | SECURITY |
 
-**Totals**: 55 items — 50 CLOSED, 5 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware, D-130 signing, D-134 TPM NV hierarchy, D-222 agent-version observability)
+**Totals**: 55 items — 51 CLOSED, 4 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware, D-130 signing, D-134 TPM NV hierarchy)
 

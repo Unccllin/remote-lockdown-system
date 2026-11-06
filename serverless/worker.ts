@@ -59,6 +59,11 @@ interface Device {
   // Populated from checkin metadata (KV-RACE-001), not stored on `devices`.
   firmware_audit?: Record<string, unknown> | null;
   firmware_audit_at?: string | null;
+  // D-222: the agent's own version, reported at check-in. Nullable and absent for
+  // pre-D-222 agents — "never reported" is a different fact from "on version X", and a
+  // rollout cannot be verified if a missing value reads as compliance.
+  agent_version?: string | null;
+  agent_version_at?: string | null;
   // update_verification: "signature" when the agent has a pinned update key and
   // will only apply detached-signature-verified updates, "sha256-only" when it
   // would accept whatever this backend serves (B-006). Reported per check-in so
@@ -658,6 +663,25 @@ interface CheckinMetadata {
   // How the device verifies updates (B-006). Absent means it never reported one;
   // "unknown" is not the same fact as "unverified".
   update_verification?: 'signature' | 'sha256-only' | 'key-unreadable';
+  // D-222: the agent's version. Stored on the checkin-metadata key for the same
+  // KV-RACE-001 reason as everything else here, and timestamped so a stale report is
+  // distinguishable from a current one.
+  agent_version?: string | null;
+  agent_version_at?: string | null;
+}
+
+/**
+ * D-222: the agent version string, as reported at check-in.
+ *
+ * Bounded and charset-restricted because it is device-reported data the dashboard renders
+ * verbatim. Anything that does not look like a version stays undefined (unknown) rather
+ * than being stored, so a malformed value cannot read as compliance.
+ */
+function normalizeAgentVersion(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 64) return undefined;
+  return /^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(trimmed) ? trimmed : undefined;
 }
 
 /**
@@ -698,6 +722,8 @@ function mergeCheckinMetadata(device: Device, metadata: CheckinMetadata | null):
     firmware_audit: metadata.firmware_audit ?? device.firmware_audit ?? null,
     firmware_audit_at: metadata.firmware_audit_at ?? device.firmware_audit_at ?? null,
     update_verification: metadata.update_verification ?? null,
+    agent_version: metadata.agent_version ?? device.agent_version ?? null,
+    agent_version_at: metadata.agent_version_at ?? device.agent_version_at ?? null,
   };
 }
 
@@ -1174,6 +1200,12 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
     update_verification:
       normalizeUpdateVerification(payload.update_verification)
       ?? existingMetadata?.update_verification,
+    // D-222: same rule as update_verification — a pre-D-222 agent that omits the field
+    // must not erase a version an earlier check-in reported.
+    agent_version: normalizeAgentVersion(payload.agent_version) ?? existingMetadata?.agent_version,
+    agent_version_at: normalizeAgentVersion(payload.agent_version)
+      ? new Date().toISOString()
+      : (existingMetadata?.agent_version_at ?? null),
   });
   // Do NOT call saveDevices() here — that would race with the ACK handler.
 
@@ -1854,7 +1886,15 @@ async function handleListDevices(request: Request, env: Env): Promise<Response> 
   // what marks the binding as deliberately unused (the harness treats an unprefixed unused
   // binding as a bug, which it is everywhere else in this file).
   const safe = merged.map(({ api_key_hash: _api_key_hash, ...d }) => d);
-  return jsonResponse(safe);
+  // D-222: a rollout asks "which devices are not on build X?". `unknown` is a distinct
+  // query from any literal version — never-reported is not "on some other version".
+  const url = new URL(request.url);
+  const requestedVersion = (url.searchParams.get('agent_version') || '').trim();
+  if (!requestedVersion) return jsonResponse(safe);
+  const filtered = requestedVersion === 'unknown'
+    ? safe.filter((d) => !d.agent_version)
+    : safe.filter((d) => d.agent_version === requestedVersion);
+  return jsonResponse(filtered);
 }
 
 async function handleGetDevice(

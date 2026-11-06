@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, fireEvent } from '@testing-library/react';
 import DevicesPage from '../src/pages/DevicesPage';
 import { setupUser, renderWithRouter } from './setup';
 
@@ -130,5 +130,54 @@ describe('DevicesPage', () => {
 
     expect(screen.getByText('updates blocked')).toBeInTheDocument();
     expect(screen.queryByText('updates unverified')).not.toBeInTheDocument();
+  });
+});
+
+describe('DevicesPage — agent version (D-222)', () => {
+  const withVersions = [
+    { id: '1', hostname: 'DEV-001', owner_name: 'Alice', status: 'active', last_checkin: null, enrolled_at: '2025-01-01', agent_version: '1.4.2' },
+    { id: '2', hostname: 'DEV-002', owner_name: 'Bob', status: 'active', last_checkin: null, enrolled_at: '2025-01-02', agent_version: null },
+  ];
+
+  it('shows the reported version', async () => {
+    api.get.mockResolvedValue({ data: withVersions });
+    renderWithRouter(<DevicesPage />);
+
+    await waitFor(() => expect(screen.getByText('DEV-001')).toBeInTheDocument());
+    expect(screen.getByText('1.4.2')).toBeInTheDocument();
+  });
+
+  it('shows "unknown" for a device that never reported one, not a blank cell', async () => {
+    // A blank reads as "fine"; this is the one state a rollout must notice.
+    api.get.mockResolvedValue({ data: withVersions });
+    renderWithRouter(<DevicesPage />);
+
+    await waitFor(() => expect(screen.getByText('DEV-002')).toBeInTheDocument());
+    expect(screen.getByText('unknown')).toBeInTheDocument();
+  });
+
+  it('sorts by the Agent column', async () => {
+    api.get.mockResolvedValue({ data: withVersions });
+    renderWithRouter(<DevicesPage />);
+
+    await waitFor(() => expect(screen.getByText('DEV-001')).toBeInTheDocument());
+    const header = screen.getByText('Agent').closest('th');
+    fireEvent.click(header);
+
+    // Sorting must change the aria-sort state rather than throw on a missing field.
+    await waitFor(() => expect(header).toHaveAttribute('aria-sort'));
+  });
+
+  it('searching by version finds the devices on it', async () => {
+    api.get.mockResolvedValue({ data: withVersions });
+    renderWithRouter(<DevicesPage />);
+
+    await waitFor(() => expect(screen.getByText('DEV-001')).toBeInTheDocument());
+    fireEvent.change(screen.getByPlaceholderText(/Search by hostname/i), { target: { value: '1.4.2' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('DEV-001')).toBeInTheDocument();
+      expect(screen.queryByText('DEV-002')).not.toBeInTheDocument();
+    });
   });
 });

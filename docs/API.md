@@ -155,7 +155,17 @@ List all enrolled devices, ordered by enrollment date (newest first).
 | **Auth required** | Yes — Bearer JWT (any role) |
 | **Rate limiting** | `dashboardLimiter` |
 
-**Query parameters:** None.
+**Query parameters:**
+
+| Param | Meaning |
+|---|---|
+| `agent_version=<v>` | Only devices reporting that exact version — a rollout's "who is already updated?" |
+| `agent_version=unknown` | Only devices that have **never** reported a version. A distinct query from any literal value: never-reported is not "on some other build". |
+
+**`agent_version` on each device (D-222).** Every device object carries `agent_version` and
+`agent_version_at`; both are `null` until the device reports one. The dashboard renders `unknown`
+rather than a blank cell, because a blank reads as "fine" — and the point of the field is to make an
+un-updated device visible.
 
 **Response:** `200` — Array of device objects:
 
@@ -169,7 +179,9 @@ List all enrolled devices, ordered by enrollment date (newest first).
     "last_checkin": "2026-08-29T10:00:00Z",
     "enrolled_at": "2026-08-20T12:00:00Z",
     "mac_address": "aa:bb:cc:dd:ee:ff",
-    "hardware_uuid": "..."
+    "hardware_uuid": "...",
+    "agent_version": "1.4.2",
+    "agent_version_at": "2026-11-05T10:00:00Z"
   }
 ]
 ```
@@ -446,6 +458,7 @@ Agent periodic check-in. Returns the next pending command (if any) and an adapti
 | `hostname` | string | Yes | Device hostname. |
 | `mac_address` | string | No | MAC address (populates hardware identity if missing). |
 | `hardware_uuid` | string | No | Hardware UUID (populates if missing). |
+| `agent_version` | string | No | The agent's own version, e.g. `1.4.2`. Stored on the device so a rollout can be verified (D-222). Bounded to 64 chars, `[A-Za-z0-9._+-]`; anything else is ignored and the stored value is kept — a malformed string must not read as compliance. Absent (pre-D-222 agents) keeps the previously reported value. |
 
 **Response:** `200`:
 

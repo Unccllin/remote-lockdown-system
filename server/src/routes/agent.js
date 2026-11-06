@@ -91,7 +91,7 @@ async function findDevice(hostname, mac_address, hardware_uuid) {
  * Update device check-in timestamp and populate hardware identity if missing.
  */
 async function updateDeviceCheckin(
-  deviceId, hostname, macAddress, hardwareUuid, firmwareAudit, updateVerification
+  deviceId, hostname, macAddress, hardwareUuid, firmwareAudit, updateVerification, agentVersion
 ) {
   await pool.query(
     `UPDATE devices
@@ -101,12 +101,30 @@ async function updateDeviceCheckin(
            hardware_uuid  = COALESCE($3, hardware_uuid),
            firmware_audit = COALESCE($5, firmware_audit),
            firmware_audit_at = CASE WHEN $5 IS NOT NULL THEN NOW() ELSE firmware_audit_at END,
-           update_verification = COALESCE($6, update_verification)
+           update_verification = COALESCE($6, update_verification),
+           agent_version = COALESCE($7, agent_version),
+           agent_version_at = CASE WHEN $7 IS NOT NULL THEN NOW() ELSE agent_version_at END
      WHERE id = $4`,
     [hostname, macAddress || null, hardwareUuid || null, deviceId,
      firmwareAudit ? JSON.stringify(firmwareAudit) : null,
-     updateVerification || null]
+     updateVerification || null,
+     agentVersion || null]
   );
+}
+
+/**
+ * D-222: the agent version string, as reported at check-in.
+ *
+ * Bounded and charset-restricted because it is device-reported data that the dashboard
+ * renders verbatim. Anything that does not look like a version stays **null**, so "this
+ * device has never reported a version" remains distinguishable from "on version X" — a
+ * rollout cannot be verified if a malformed string silently counts as compliance.
+ */
+function normalizeAgentVersion(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 64) return null;
+  return /^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(trimmed) ? trimmed : null;
 }
 
 /**
@@ -309,8 +327,12 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   // B-006: how this device verifies updates ("signature" | "sha256-only"), so the
   // dashboard can show which devices would accept an unauthenticated binary.
   const updateVerification = normalizeUpdateVerification(req.body.update_verification);
+  // D-222: the agent has always sent this (and /api/agent/update reads it from a header),
+  // but nothing stored it, so the fleet could not answer "which build is on that machine?".
+  // Absent for pre-D-222 agents: COALESCE keeps any earlier value rather than resetting it.
+  const agentVersion = normalizeAgentVersion(req.body.agent_version);
   await updateDeviceCheckin(
-    device.id, hostname, mac_address, hardware_uuid, firmwareAudit, updateVerification
+    device.id, hostname, mac_address, hardware_uuid, firmwareAudit, updateVerification, agentVersion
   );
 
   // Phase 5: Expire stale pending commands (older than COMMAND_EXPIRY_DAYS).

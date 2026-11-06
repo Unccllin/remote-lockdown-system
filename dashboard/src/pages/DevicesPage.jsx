@@ -98,7 +98,10 @@ export default function DevicesPage() {
       const q = search.toLowerCase();
       result = result.filter((d) =>
         d.hostname?.toLowerCase().includes(q) ||
-        d.owner_name?.toLowerCase().includes(q)
+        d.owner_name?.toLowerCase().includes(q) ||
+        // D-222: typing a version finds the devices on it, and typing "unknown" finds the
+        // ones that never reported — the two questions a rollout asks.
+        d.agent_version?.toLowerCase().includes(q)
       );
     }
     result = [...result].sort((a, b) => {
@@ -188,7 +191,7 @@ export default function DevicesPage() {
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
           <input
             className="input pl-10"
-            placeholder="Search by hostname or owner…"
+            placeholder="Search by hostname, owner or agent version…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -242,6 +245,9 @@ export default function DevicesPage() {
                   <span className="inline-flex items-center gap-1.5">Owner <SortIcon field="owner_name" /></span>
                 </th>
                 <th className="text-left px-5 py-3 font-medium">Model</th>
+                <th className="text-left px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-200" onClick={() => toggleSort('agent_version')} aria-sort={sortField === 'agent_version' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                  <span className="inline-flex items-center gap-1.5">Agent <SortIcon field="agent_version" /></span>
+                </th>
                 <th className="text-left px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-200" onClick={() => toggleSort('last_checkin')} aria-sort={sortField === 'last_checkin' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
                   <span className="inline-flex items-center gap-1.5">Last Check-in <SortIcon field="last_checkin" /></span>
                 </th>
@@ -285,6 +291,18 @@ export default function DevicesPage() {
                     </td>
                     <td className="px-5 py-3 text-slate-300">{d.owner_name}</td>
                     <td className="px-5 py-3 text-slate-400 text-xs">{d.model || d.hw_model || '—'}</td>
+                    <td className="px-5 py-3 text-xs font-mono">
+                      {d.agent_version ? (
+                        <span className="text-slate-300">{d.agent_version}</span>
+                      ) : (
+                        // D-222: a blank cell would read as "fine". A device that has never
+                        // reported a version is a fact the operator needs, especially when
+                        // checking whether a rollout reached everyone.
+                        <span className="text-amber-400/80" title="This agent has never reported its version — it predates D-222 or has not checked in since">
+                          unknown
+                        </span>
+                      )}
+                    </td>
                     <td className="px-5 py-3 text-slate-400">
                       {d.last_checkin
                         ? safeFromNow(d.last_checkin)

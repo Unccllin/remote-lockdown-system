@@ -3871,6 +3871,91 @@ describe('D-210: PBL route integration', () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // D-222: the fleet must be able to answer "which build is on that machine?"
+  // The version was always sent and never stored, so a rollout instruction could
+  // not come with a way to check compliance.
+  // -------------------------------------------------------------------------
+  describe('agent version reporting (D-222)', () => {
+    async function checkinWith(apiKey: string, hostname: string, extra: Record<string, unknown>) {
+      const body = JSON.stringify({ hostname, ...extra });
+      return worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), env);
+    }
+
+    it('stores the version reported at check-in and returns it from the device list', async () => {
+      const { apiKey, device } = await enrollDevice(worker, env, 'D222-REPORT-001');
+      const resp = await checkinWith(apiKey, 'D222-REPORT-001', { agent_version: '1.4.2' });
+      expect(resp.status).toBe(200);
+
+      const list = await worker.fetch(
+        makeRequest('GET', '/api/devices', undefined, { Authorization: 'Bearer test-admin-token' }),
+        env,
+      );
+      const devices: any[] = await parseResponse(list);
+      const row = devices.find((d) => d.id === device.id);
+      expect(row.agent_version).toBe('1.4.2');
+      expect(typeof row.agent_version_at).toBe('string');
+      // The credential hash still never leaves the Worker.
+      expect(row.api_key_hash).toBeUndefined();
+    });
+
+    it('a pre-D-222 agent that omits the field does not erase a reported version', async () => {
+      const { apiKey, device } = await enrollDevice(worker, env, 'D222-OMIT-001');
+      await checkinWith(apiKey, 'D222-OMIT-001', { agent_version: '1.4.2' });
+      // An older build checks in with no version at all.
+      await checkinWith(apiKey, 'D222-OMIT-001', {});
+
+      const list = await worker.fetch(
+        makeRequest('GET', '/api/devices', undefined, { Authorization: 'Bearer test-admin-token' }),
+        env,
+      );
+      const devices: any[] = await parseResponse(list);
+      expect(devices.find((d) => d.id === device.id).agent_version).toBe('1.4.2');
+    });
+
+    it('a device that never reported a version reads as unknown, not as compliant', async () => {
+      const { device } = await enrollDevice(worker, env, 'D222-UNKNOWN-001');
+      const list = await worker.fetch(
+        makeRequest('GET', '/api/devices', undefined, { Authorization: 'Bearer test-admin-token' }),
+        env,
+      );
+      const devices: any[] = await parseResponse(list);
+      const row = devices.find((d) => d.id === device.id);
+      expect(row.agent_version ?? null).toBeNull();
+    });
+
+    it('a malformed version is not stored (it must not read as compliance)', async () => {
+      const { apiKey, device } = await enrollDevice(worker, env, 'D222-BAD-001');
+      await checkinWith(apiKey, 'D222-BAD-001', { agent_version: '<script>alert(1)</script>' });
+
+      const list = await worker.fetch(
+        makeRequest('GET', '/api/devices', undefined, { Authorization: 'Bearer test-admin-token' }),
+        env,
+      );
+      const devices: any[] = await parseResponse(list);
+      expect(devices.find((d) => d.id === device.id).agent_version ?? null).toBeNull();
+    });
+
+    it('filters the device list by version, and `unknown` is its own query', async () => {
+      const old = await enrollDevice(worker, env, 'D222-FILTER-OLD');
+      const current = await enrollDevice(worker, env, 'D222-FILTER-NEW');
+      await checkinWith(current.apiKey, 'D222-FILTER-NEW', { agent_version: '9.9.9' });
+
+      const admin = { Authorization: 'Bearer test-admin-token' };
+      const byVersion: any[] = await parseResponse(
+        await worker.fetch(makeRequest('GET', '/api/devices?agent_version=9.9.9', undefined, admin), env),
+      );
+      expect(byVersion.map((d) => d.id)).toEqual([current.device.id]);
+
+      const unknown: any[] = await parseResponse(
+        await worker.fetch(makeRequest('GET', '/api/devices?agent_version=unknown', undefined, admin), env),
+      );
+      const unknownIds = unknown.map((d) => d.id);
+      expect(unknownIds).toContain(old.device.id);
+      expect(unknownIds).not.toContain(current.device.id);
+    });
+  });
+
   describe('POST /api/ping', () => {
     it("a ping only returns its own device's pending command", async () => {
       // The ping path is a second command-delivery route; it had no test at all,

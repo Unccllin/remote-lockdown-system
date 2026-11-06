@@ -94,6 +94,61 @@ describe('POST /api/agent/checkin', () => {
     expect(res.status).toBe(401);
   });
 
+  test('persists the agent version reported at check-in (D-222)', async () => {
+    const { apiKey } = provisionDevice();
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', agent_version: '1.4.2' });
+
+    expect(res.status).toBe(200);
+    const update = mockPool.query.mock.calls.find((c) => /UPDATE devices[\s\S]*last_checkin/.test(c[0]));
+    expect(update).toBeTruthy();
+    // Positional args: $1 hostname … $7 agent_version
+    expect(update[1][6]).toBe('1.4.2');
+    // The column is written with COALESCE/CASE, so an agent that omits it keeps what it
+    // reported before instead of resetting to null on every check-in.
+    expect(update[0]).toMatch(/agent_version = COALESCE\(\$7, agent_version\)/);
+    expect(update[0]).toMatch(/agent_version_at = CASE WHEN \$7 IS NOT NULL THEN NOW\(\)/);
+  });
+
+  test('a malformed agent version is stored as null, not as compliance (D-222)', async () => {
+    const { apiKey } = provisionDevice();
+    await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', agent_version: '<script>alert(1)</script>' });
+
+    const update = mockPool.query.mock.calls.find((c) => /UPDATE devices[\s\S]*last_checkin/.test(c[0]));
+    expect(update[1][6]).toBeNull();
+  });
+
+  test('an over-long agent version is rejected the same way (D-222)', async () => {
+    const { apiKey } = provisionDevice();
+    await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', agent_version: '1'.repeat(65) });
+
+    const update = mockPool.query.mock.calls.find((c) => /UPDATE devices[\s\S]*last_checkin/.test(c[0]));
+    expect(update[1][6]).toBeNull();
+  });
+
+  test('accepts the version shapes real builds use (D-222)', async () => {
+    // "v1.2.3", a commit-suffixed build, a dash-pre-release: all must survive normalisation.
+    const shapes = ['1.4.2', 'v1.4.2', '1.4.2-rc1', '1.4.2+build.7', '2026.11.05'];
+    for (const value of shapes) {
+      mockPool.query.reset();
+      const { apiKey } = provisionDevice();
+      await request(app)
+        .post('/api/agent/checkin')
+        .set('x-agent-key', apiKey)
+        .send({ hostname: 'DEV-001', agent_version: value });
+      const update = mockPool.query.mock.calls.find((c) => /UPDATE devices[\s\S]*last_checkin/.test(c[0]));
+      expect([value, update[1][6]]).toEqual([value, value]);
+    }
+  });
+
   test('returns 400 if hostname missing', async () => {
     // FA3: Auth succeeds via per-device key, then route validates body
     const { apiKey } = provisionDevice();

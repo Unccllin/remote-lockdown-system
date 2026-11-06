@@ -26,6 +26,52 @@ describe('GET /api/devices', () => {
     expect(res.status).toBe(401);
   });
 
+  test('exposes agent_version on each device (D-222)', async () => {
+    mockPool.query.setResult('SELECT * FROM devices ORDER BY', {
+      rows: [
+        { id: 'dev-1', hostname: 'DEV-001', owner_name: 'Alice', status: 'active', agent_version: '1.4.2', agent_version_at: '2026-11-05T10:00:00Z' },
+        { id: 'dev-2', hostname: 'DEV-002', owner_name: 'Bob', status: 'active', agent_version: null },
+      ],
+    });
+
+    const res = await request(app)
+      .get('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.body[0].agent_version).toBe('1.4.2');
+    // A device that never reported stays null: "unknown" must not be flattened into a version.
+    expect(res.body[1].agent_version).toBeNull();
+  });
+
+  test('filters by agent_version (D-222)', async () => {
+    mockPool.query.setResult('SELECT * FROM devices WHERE agent_version = $1', {
+      rows: [{ id: 'dev-1', hostname: 'DEV-001', owner_name: 'Alice', status: 'active', agent_version: '1.4.2' }],
+    });
+
+    const res = await request(app)
+      .get('/api/devices?agent_version=1.4.2')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    const call = mockPool.query.mock.calls.find((c) => /agent_version = \$1/.test(c[0]));
+    expect(call[1]).toEqual(['1.4.2']);
+  });
+
+  test('`agent_version=unknown` finds the devices that never reported (D-222)', async () => {
+    // A distinct query from any literal version — that is the rollout question.
+    mockPool.query.setResult('SELECT * FROM devices WHERE agent_version IS NULL', {
+      rows: [{ id: 'dev-2', hostname: 'DEV-002', owner_name: 'Bob', status: 'active', agent_version: null }],
+    });
+
+    const res = await request(app)
+      .get('/api/devices?agent_version=unknown')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(mockPool.query.mock.calls.some((c) => /agent_version IS NULL/.test(c[0]))).toBe(true);
+  });
+
   test('returns list of devices', async () => {
     const devices = [
       { id: 'dev-1', hostname: 'DEV-001', owner_name: 'Alice', status: 'active' },

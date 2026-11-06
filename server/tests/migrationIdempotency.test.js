@@ -39,6 +39,7 @@ const EXPECTED_VERSIONS = [
   '015_enrollment_tokens',
   '016_device_serial',
   '017_device_efs_certs',
+  '018_agent_version',
 ];
 
 async function appliedVersions() {

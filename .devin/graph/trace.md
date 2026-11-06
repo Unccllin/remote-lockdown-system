@@ -13907,3 +13907,49 @@ Take D-222: persist the agent version at check-in on both surfaces (Express `dev
 Worker KV row), return it from `GET /api/devices`, show it in the dashboard, and make a version-less
 old agent appear as `unknown` rather than being dropped — then a rollout instruction like a sunset
 can finally come with a way to verify it.
+
+## Session 257 — 2026-11-05 (D-222 implemented: the fleet can finally say which build is on a machine)
+
+### RULE-ZERO
+
+**Read**:
+- `server/src/routes/agent.js` — the check-in handler, `updateDeviceCheckin()`'s positional SQL
+  (already carrying `update_verification` with COALESCE + a `_at` timestamp, which is the exact
+  pattern this needed), and `normalizeUpdateVerification()` as the model for input validation
+- `server/src/db/migrations/016_device_serial.sql` (PG) + `migrations-sqlite/016_…` (SQLite, no
+  `IF NOT EXISTS`), and `migrationRunner.js`, which detects an already-applied `ADD COLUMN` for
+  SQLite — so the SQLite copy is idempotent by runner bookkeeping, not by syntax
+- `server/src/routes/devices.js` — `GET /` is `SELECT *` + `publicDevice()` (strips `api_key_hash`),
+  so a new column reaches the response with no field list to extend; there were **no** query params
+  at all
+- `serverless/worker.ts` — the KV-RACE-001 split: the check-in handler writes only
+  `device_checkin:{id}`, and `mergeCheckinMetadata()` overlays it for admin responses;
+  `update_verification` is the precedent for a nullable, "unknown ≠ absent" field
+- `dashboard/src/pages/DevicesPage.jsx` — the sortable-header pattern (`toggleSort(field)` over
+  `a[sortField]`, generic) and the search filter, which covered hostname + owner only
+- `docs/API.md` § `POST /api/agent/checkin` and § `GET /api/devices`
+
+**Finding**: every surface already had the shape this needed. Express had a nullable field with a
+COALESCE + timestamp pair to copy; the Worker had a metadata interface and merge function built for
+exactly this; the dashboard's sort is field-generic, so a new column sorts with no new code. What was
+missing was never machinery — it was anyone writing the value down.
+
+### Implement
+
+- **Schema** — `018_agent_version.sql` on both dialects: `agent_version VARCHAR(64)` /
+  `agent_version_at TIMESTAMPTZ` (PG, `IF NOT EXISTS`) and the SQLite twin (`TEXT`, idempotent via
+  the runner's already-applied detection, which the comment names).
+- **Express** — `normalizeAgentVersion()` (≤64 chars, `^[A-Za-z0-9][A-Za-z0-9._+-]*$`, else null);
+  check-in passes it into `updateDeviceCheckin()`, which writes
+  `agent_version = COALESCE($7, agent_version)` and
+  `agent_version_at = CASE WHEN $7 IS NOT NULL THEN NOW() ELSE agent_version_at END` — so a
+  pre-D-222 agent that omits the field cannot erase what an earlier check-in reported.
+- **Worker** — `Device` and `CheckinMetadata` gain the two fields; the same normaliser; the same
+  never-reset rule against `existingMetadata`; `mergeCheckinMetadata()` overlays them.
+- **List filter** — `GET /api/devices?agent_version=X` on both surfaces, plus `=unknown` as a
+  **distinct** query (`agent_version IS NULL` / falsy), because "never reported" is the state a
+  rollout has to find.
+- **Dashboard** — an `Agent` column, sortable through the existing `toggleSort`, rendering `unknown`
+  in amber for null (a blank cell reads as "fine"), and the search box extended to match a version.
+- **Docs** — `API.md`: `agent_version` in the check-in body table, both fields in the device object,
+  and the two filter values with the never-reported distinction spelled out.
