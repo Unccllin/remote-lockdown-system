@@ -2493,3 +2493,24 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-110
+  statement: 'A pre-D-221 agent requires no update to work with a post-D-221 server: it already sends
+    device_id and authenticates with its device key, and the server binds the uninstall token to the authenticated
+    device row. The D-221 legacy acceptance therefore protects legacy TOKENS (computed under the deployment-wide
+    scheme and presented after 2027-02-04), not legacy binaries — the opposite of what session 255 recorded
+    as its next action.'
+  domain: api/auth
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S256: read the call path end to end — request_uninstall_token/verify both send device_id,
+    service_installer.uninstall forwards token+device_id, and the server binds from getDeviceByApiKeyHash;
+    the sunset consequently rejects tokens, not binaries'
+  source: agent/tamper_protection.py (request/verify both send device_id); agent/service_installer.py
+    uninstall(); server/src/routes/agent.js uninstallSubject(); docs/DEPLOYMENT.md §6
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

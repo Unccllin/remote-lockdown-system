@@ -608,12 +608,12 @@ component_nodes:
 # Tracked in two ledgers:
 #   - docs/adr/DEBT-LEDGER.md       — D-001..D-021 (legacy, all CLOSED)
 #   - docs/adr/PBL-DEBT-LEDGER.md   — the live ledger: D-100..D-211 plus the
-#     D-212..D-220 RE-hardening review items and D-221. Despite the "PBL" in its
+#     D-212..D-220 RE-hardening review items, D-221 and D-222. Despite the "PBL" in its
 #     name it also holds agent/server/dashboard product debt (D-211 covert
-#     tracking, D-221 uninstall token), so it is where a new non-firmware item
-#     goes. Note: D-212..D-214 and D-216..D-220 are CLOSED in that ledger but are
-#     NOT mirrored here, so this file's 61 items are not the complete debt set —
-#     a known gap, not a claim of completeness.
+#     tracking, D-221 uninstall token, D-222 agent-version gap), so it is where a
+#     new non-firmware item goes. Note: D-212..D-214 and D-216..D-220 are CLOSED in
+#     that ledger but are NOT mirrored here, so this file's count is not the complete
+#     debt set — a known gap, not a claim of completeness.
 # Each debt item has:
 #   - id, description, close_criteria, status, commit_ref, artifact_ref
 # The graph asserts that a debt item cannot be CLOSED without:
@@ -1365,6 +1365,27 @@ debt_items:
            deprecated_scheme, and DATED: accepted until 2027-02-04, when \
            scripts/test_cross_surface_contract.py plus both surface suites \
            fail with the deletion checklist (session 255)."
+
+  - id: D-222
+    description: "The server records no agent version, so fleet-update compliance \
+                  cannot be answered"
+    close_criteria: "(a) checkin and the update probe persist the reported \
+                    version + timestamp on the device record on BOTH surfaces \
+                    (Express devices table, Worker KV device row); (b) \
+                    GET /api/devices returns it, the dashboard shows it and it \
+                    can be filtered; (c) a device reporting no version shows \
+                    'unknown' rather than being dropped or 500ing; (d) API.md \
+                    documents it and a test covers an old agent with no version \
+                    in the body"
+    status: OPEN
+    category: SERVER
+    found: "session 256: /api/agent/update reads x-agent-version and discards \
+            it; devices has no version column"
+    blocker: "The information never reaches storage, so the question a rollout \
+              asks ('which build is on that machine?') has no answer from the \
+              dashboard or the API."
+    commit_ref: null
+    artifact_ref: null
 
 
 # ---------------------------------------------------------------------------

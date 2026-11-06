@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 58 | 62 | ✗ |
+| Debt items | 58 | 63 | ✗ |
 | Enforcement paths (on hardware) | 3 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 58 of 62 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 58 of 63 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 10 enforcement paths that still need hardware verification:**
 
@@ -53,72 +53,78 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 255 — 2026-11-05 (the uninstall-token deprecation gets a deadline that fails a build)
+## Latest session: 256 — 2026-11-05 (the sunset's operator half — and the claim it was supposed to announce is false)
 
 ### Fog cleared
 
-- **What "the release after this one" could mean here**: nothing, mechanically. `release.yml` fires
-  on tags, `server/package.json` is a static `1.0.0`, and there is no cadence to point at — so a date
-  is the only thing code can evaluate. The window is **2027-02-04**, 90 days from the D-221 close.
-- **Whether the deprecation was enforced anywhere**: it was not. Log line, response marker, two
-  tests, two doc paragraphs — all of them optional to read. It is now enforced by three suites.
-- **Whether a date-based test can be gamed**: a deadline set in 2099 would pass every check, so the
-  window is itself asserted (≤180 days from `d221_closed_at`). Both fields are in the shared file, so
-  widening the window is a visible edit to a reviewed artifact rather than a comment.
+- **What the 2027-02-04 sunset actually breaks**: tokens, not binaries. A token computed under the
+  deployment-wide scheme and presented after the date is rejected; a pre-D-221 **agent** keeps
+  working forever, because it already sends `device_id` and the server binds from the authenticated
+  device row. S255's opening sentence said the opposite and is corrected here and in `API.md`.
+- **Whether operators could verify a fleet-wide agent-update instruction**: no. `/api/agent/update`
+  reads `x-agent-version` and discards it, `checkin` documents `agent_version` in its body, and
+  `devices` has no column for it — one grep hit, a docstring. Filed as D-222 with close criteria.
+- **Whether the uninstall path was documented correctly anywhere**: `tamper_protection.py`'s usage
+  example showed `(token, device_id, server_url, api_key)` for a function whose signature is
+  `(token, server_url, api_key, device_id=None)`. Every real caller is correct, so this was
+  documentation that would teach the next caller to write a broken one.
 
 ### Fog remaining
 
-- **The date is a duplicated literal on two surfaces** (`LEGACY_UNINSTALL_TOKEN_SUNSET` in
-  `agent.js` and `worker.ts`) rather than read from the vectors file at runtime. Both suites pin
-  their copy against `legacy_sunset`, so drift fails a test — but it is three statements of one
-  fact, and a shared module would be cleaner if a fourth surface ever appears.
-- **Nothing enforces that the agent-side note tells operators.** The window's consequence — a device
-  that has not updated cannot be uninstalled after that date — is in API.md and the ledger, and in
-  the response/log, but no runbook says "update every device before 2027-02-04".
+- **D-222 is open**: until `agent_version` is persisted, no rollout can state its own compliance.
+  This is the gap that made S255's operator instruction unwritable as intended.
+- **The sunset is announced but not observable per device.** A deployment reports
+  `deprecated_scheme_sunset` when the old form is *used*, not when it is *approaching*; nothing warns
+  before 2027-02-04. A startup log line naming the date would be cheap and is not done.
+- **`request_uninstall_token()` still has no production caller in this repo** — the operator-facing
+  uninstall CLI is external. So the token path's *acquisition* UX is unpinned by any test here; only
+  the server side is.
 - **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
 
 ### Debt items closed
 
-- None new. D-221 stays CLOSED (commit `b9c6127`); this session added its sunset mechanism and is
-  cited from that entry rather than closing anything.
+- None. D-221 stays CLOSED (`b9c6127`); **D-222 filed OPEN** this session.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 62 OPEN).
+- D-120, D-129, D-130, D-134, **D-222** (graph-tracked: 5 of 63 OPEN).
 
 ### Blockers
 
-- Dependabot/CodeQL findings still need the security page. Nothing here is blocked.
+- D-222 has no blocker but no owner beyond "a session takes it".
+- Dependabot/CodeQL findings still need the security page.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the previous session shipped a deprecation whose
-  only machine-readable state was a *log line*. That is the same half-measure S250 recorded as a
-  Layer-4 failure ("a summary line nobody reads"), repeated in a new place. The fix is the same
-  shape as the SAST gate: convert a statement into a failing check.
-- **Layer 2 — context provision** (secondary): "the release after this one" was written into the
-  trace as though a release cadence existed. It does not; the phrase had no referent, which is why
-  it survived a session boundary as an unactionable instruction.
+- **Layer 4 — verification feedback** (primary): S255 recorded "every device must update before the
+  date" as the next action *without reading the call path that decides it*. The sentence was a
+  plausible inference from the migration branch's existence, and nothing forced it to be checked —
+  it sat in `current-state.md` as the file every session reads first. The repair is the one this
+  repo keeps rediscovering: write the claim next to its evidence, or expect the next session to
+  inherit the error.
+- **Layer 2 — context provision** (secondary): the deployment guide had no section on agent updates
+  at all, so there was no existing text to contradict the wrong claim. There is now.
 
 ### VERIFY
 
-- `cd server && npm test` → **830 passed, 50 suites** (was 828; two sunset cases added).
-- `cd serverless && npm test` → **422 passed** (was 420; two added).
-- `scripts/test_cross_surface_contract.py` → **14 passed** (was 11; three sunset checks added).
-- **Teeth, measured**: with `legacy_sunset` back-dated to 2026-10-01, the contract test fails with the
-  four-step deletion checklist, `server/tests/uninstallAuth.test.js` fails 1 of 22 ("has not passed"),
-  and `serverless/worker.test.ts` fails that same case (251 tests, 1 failed) — then all three pass
-  again after restoring 2027-02-04.
-- `npx eslint src/routes/agent.js tests/uninstallAuth.test.js` exit 0; `npx tsc --noEmit -p .`
-  (serverless) exit 0; `make sast` → 44 findings, gate exit 0 (no new findings);
-  `scripts/check_debt_ledger.py` → 0 mismatches; `make graph-check` → all invariants pass.
+- `agent/.venv/bin/python -m pytest agent/tests` → **830 passed** (docstring-only change; run because
+  six modules import that file and a comment can still move the wrong line).
+- `agent/.venv/bin/python -m ruff check agent` → all checks passed.
+- `scripts/test_cross_surface_contract.py` → **14 passed** (the sunset checks still green).
+- `scripts/check_debt_ledger.py` → 0 mismatches with D-222 filed and the totals line updated to
+  55 items / 5 OPEN.
+- `python3 -c yaml.safe_load(GRAPH-SPEC.yaml)` → 63 debt items, OPEN = D-120, D-129, D-130, D-134,
+  D-222; `make graph-check` → all invariants pass (I2 unaffected: D-222 is OPEN, so it cites nothing).
+- `docs/DEPLOYMENT.md` § 6 is the operator-facing half: the date, what breaks (tokens), what does not
+  (agents), what to do (use tokens inside their window), the three-suite enforcement, and the D-222
+  limitation stated so no one repeats S255's mistake.
 
 ### Next session opening
 
-Write the operator-facing half of the sunset: a line in the deployment/upgrade documentation (and
-the D-129 hardware runbook's upgrade section) saying that every enrolled device must take an agent
-update before 2027-02-04 or it can no longer be uninstalled — the code now fails on the date, but
-nothing yet tells the person who will be holding the pager that the date exists.
+Take D-222: persist the agent version at check-in on both surfaces (Express `devices` column +
+Worker KV row), return it from `GET /api/devices`, show it in the dashboard, and make a version-less
+old agent appear as `unknown` rather than being dropped — then a rollout instruction like a sunset
+can finally come with a way to verify it.
 
 ---
 
@@ -130,8 +136,9 @@ nothing yet tells the person who will be holding the pager that the date exists.
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
+| D-222 | The server records no agent version, so fleet-update complia | OPEN | — |
 
-See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (4 of 62 graph-tracked items are OPEN).
+See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (5 of 63 graph-tracked items are OPEN).
 
 ---
 ## Quick reference

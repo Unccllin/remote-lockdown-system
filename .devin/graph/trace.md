@@ -13782,3 +13782,128 @@ Write the operator-facing half of the sunset: a line in the deployment/upgrade d
 the D-129 hardware runbook's upgrade section) saying that every enrolled device must take an agent
 update before 2027-02-04 or it can no longer be uninstalled — the code now fails on the date, but
 nothing yet tells the person who will be holding the pager that the date exists.
+
+## Session 256 — 2026-11-05 (the sunset's operator half — and the claim it was supposed to announce is false)
+
+### RULE-ZERO
+
+**Read**:
+- `docs/DEPLOYMENT.md` — `## Updating the system` (steps 1-5: back up, pull, migrate, rebuild,
+  verify) is the only upgrade checklist; there is **no** section about agent updates at all
+- `docs/D-129-HARDWARE-RUNBOOK.md` — no upgrade section either, so that is not the home
+- `agent/tamper_protection.py` — the module docstring's usage example, and
+  `verify_uninstall_token()`'s real signature/argument order
+- `agent/service_installer.py` `uninstall()` — how a token reaches verification: the operator
+  passes `--token`, and `remove_all_protection(..., uninstall_token, server_url, api_key, device_id)`
+  forwards it to `verify_uninstall_token(token, server_url, api_key, device_id)`
+- `server/src/routes/agent.js` — `/api/agent/update` reads the agent's version from
+  `x-agent-version`/`?version` **to decide whether to offer an update**; it never stores it
+- `server/src/db/migrations/001_base.sql` — the `devices` table has no version column, and
+  `grep -rn agent_version server/src` finds exactly one hit: a docstring
+
+**Finding — S255's "next session opening" was wrong, and the code says so.** That opening said
+"every enrolled device must take an agent update before 2027-02-04 or it can no longer be
+uninstalled". It does not. A pre-D-221 agent already sends `device_id` and authenticates with its
+per-device key, and the server binds the token to the **authenticated row**, so an old agent talking
+to a new server is issued a bound token and verifies it normally. The Q2-A legacy branch therefore
+protects **tokens, not binaries**: a token computed under the old scheme — staged in a runbook, a
+script, or a ticket before the upgrade — stops verifying on the date. Nothing about the agent binary
+needs to change, and telling operators otherwise would have sent them hunting a version they cannot
+even check.
+
+**Finding — they cannot check it anyway.** `/api/agent/update` reads `x-agent-version` from the
+request and discards it; `devices` has no version column. So "is the fleet updated?" has no answer
+from this system, which is a real gap and gets filed as **D-222** rather than left in a sentence.
+
+**Finding — a docstring documents a call that would be a bug.** `tamper_protection.py`'s usage
+example shows `verify_uninstall_token(token, device_id, server_url, api_key)`; the signature is
+`(token, server_url, api_key, device_id=None)`. Every real caller passes the correct order, so this
+is documentation that would teach the next person to write the broken call. Fixed.
+
+**Commit**: `2ae3877` — "docs(ops): the sunset's operator half — and a correction:
+agents need no update, tokens do". This session block is committed separately.
+
+### Implement
+
+- **`docs/DEPLOYMENT.md`** gains step 6 under `## Updating the system`: uninstall tokens issued
+  before the D-221 upgrade stop verifying on **2027-02-04**; agents need no update; use a token
+  inside its 5-minute window rather than staging it across the date; the date is enforced by three
+  suites and the contract test prints what to delete. It also states the limitation plainly — the
+  server records no agent versions, so a fleet-version question is answered out of band (D-222).
+- **`docs/API.md`** loses the false sentence and gains the accurate one.
+- **`docs/adr/PBL-DEBT-LEDGER.md` + `GRAPH-SPEC.yaml`**: D-222 filed OPEN (agent version is not
+  recorded, so fleet-update compliance is unanswerable), with close criteria; D-221's note keeps its
+  date and loses nothing.
+- **`agent/tamper_protection.py`**: the docstring example now matches the signature, with a note
+  that the order is easy to get wrong — `service_installer.uninstall()` is the caller to copy from.
+
+### Fog cleared
+
+- **What the 2027-02-04 sunset actually breaks**: tokens, not binaries. A token computed under the
+  deployment-wide scheme and presented after the date is rejected; a pre-D-221 **agent** keeps
+  working forever, because it already sends `device_id` and the server binds from the authenticated
+  device row. S255's opening sentence said the opposite and is corrected here and in `API.md`.
+- **Whether operators could verify a fleet-wide agent-update instruction**: no. `/api/agent/update`
+  reads `x-agent-version` and discards it, `checkin` documents `agent_version` in its body, and
+  `devices` has no column for it — one grep hit, a docstring. Filed as D-222 with close criteria.
+- **Whether the uninstall path was documented correctly anywhere**: `tamper_protection.py`'s usage
+  example showed `(token, device_id, server_url, api_key)` for a function whose signature is
+  `(token, server_url, api_key, device_id=None)`. Every real caller is correct, so this was
+  documentation that would teach the next caller to write a broken one.
+
+### Fog remaining
+
+- **D-222 is open**: until `agent_version` is persisted, no rollout can state its own compliance.
+  This is the gap that made S255's operator instruction unwritable as intended.
+- **The sunset is announced but not observable per device.** A deployment reports
+  `deprecated_scheme_sunset` when the old form is *used*, not when it is *approaching*; nothing warns
+  before 2027-02-04. A startup log line naming the date would be cheap and is not done.
+- **`request_uninstall_token()` still has no production caller in this repo** — the operator-facing
+  uninstall CLI is external. So the token path's *acquisition* UX is unpinned by any test here; only
+  the server side is.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
+
+### Debt items closed
+
+- None. D-221 stays CLOSED (`b9c6127`); **D-222 filed OPEN** this session.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134, **D-222** (graph-tracked: 5 of 63 OPEN).
+
+### Blockers
+
+- D-222 has no blocker but no owner beyond "a session takes it".
+- Dependabot/CodeQL findings still need the security page.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): S255 recorded "every device must update before the
+  date" as the next action *without reading the call path that decides it*. The sentence was a
+  plausible inference from the migration branch's existence, and nothing forced it to be checked —
+  it sat in `current-state.md` as the file every session reads first. The repair is the one this
+  repo keeps rediscovering: write the claim next to its evidence, or expect the next session to
+  inherit the error.
+- **Layer 2 — context provision** (secondary): the deployment guide had no section on agent updates
+  at all, so there was no existing text to contradict the wrong claim. There is now.
+
+### VERIFY
+
+- `agent/.venv/bin/python -m pytest agent/tests` → **830 passed** (docstring-only change; run because
+  six modules import that file and a comment can still move the wrong line).
+- `agent/.venv/bin/python -m ruff check agent` → all checks passed.
+- `scripts/test_cross_surface_contract.py` → **14 passed** (the sunset checks still green).
+- `scripts/check_debt_ledger.py` → 0 mismatches with D-222 filed and the totals line updated to
+  55 items / 5 OPEN.
+- `python3 -c yaml.safe_load(GRAPH-SPEC.yaml)` → 63 debt items, OPEN = D-120, D-129, D-130, D-134,
+  D-222; `make graph-check` → all invariants pass (I2 unaffected: D-222 is OPEN, so it cites nothing).
+- `docs/DEPLOYMENT.md` § 6 is the operator-facing half: the date, what breaks (tokens), what does not
+  (agents), what to do (use tokens inside their window), the three-suite enforcement, and the D-222
+  limitation stated so no one repeats S255's mistake.
+
+### Next session opening
+
+Take D-222: persist the agent version at check-in on both surfaces (Express `devices` column +
+Worker KV row), return it from `GET /api/devices`, show it in the dashboard, and make a version-less
+old agent appear as `unknown` rather than being dropped — then a rollout instruction like a sunset
+can finally come with a way to verify it.
