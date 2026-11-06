@@ -53,41 +53,34 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 254 — 2026-11-05 (D-221 implemented: device-bound uninstall token, one derivation, three suites pinning it)
+## Latest session: 255 — 2026-11-05 (the uninstall-token deprecation gets a deadline that fails a build)
 
 ### Fog cleared
 
-- **Whether the two surfaces could be made to agree without new storage**: yes — the device **id** is
-  enough (Q1-A), because a caller always authenticates *as* something: a device key resolves to a row
-  on both surfaces (`getDeviceByApiKeyHash` / `listDevices`), so the binding id never has to be
-  trusted from the request body. That is why Q1-B's per-device secret stayed unnecessary.
-- **Whether the Worker could do HMAC at all**: it already had `hmacSha256` and
-  `timingSafeEqualStr`, so both halves of the close criteria were a few lines each.
-- **Whether the agent needed changing**: no. `request_uninstall_token`/`verify_uninstall_token`
-  already send `device_id`, and the binding now comes from the authenticated row anyway — so the
-  agent works unchanged against old and new servers, which is what made Q2-A affordable.
-- **Whether the 5-minute legacy acceptance is safe to ship**: it is *weaker*, not weaker than
-  before — the previous scheme is accepted exactly as it was, on the surface that issued it, with a
-  deprecation log per verification, and the bound scheme is tried first.
+- **What "the release after this one" could mean here**: nothing, mechanically. `release.yml` fires
+  on tags, `server/package.json` is a static `1.0.0`, and there is no cadence to point at — so a date
+  is the only thing code can evaluate. The window is **2027-02-04**, 90 days from the D-221 close.
+- **Whether the deprecation was enforced anywhere**: it was not. Log line, response marker, two
+  tests, two doc paragraphs — all of them optional to read. It is now enforced by three suites.
+- **Whether a date-based test can be gamed**: a deadline set in 2099 would pass every check, so the
+  window is itself asserted (≤180 days from `d221_closed_at`). Both fields are in the shared file, so
+  widening the window is a visible edit to a reviewed artifact rather than a comment.
 
 ### Fog remaining
 
-- **The legacy acceptance has no expiry date in code.** It is logged and documented (`deprecated_scheme`,
-  the ledger note, the trace) but nothing fails when it is forgotten. A dated removal — the next
-  release after this one — is the follow-up the ledger note names.
-- **No test proves the *agent* still round-trips against a real server** (the agent's own test posts
-  to an unreachable port and expects `False`). The scheme is pinned on both server surfaces and by
-  shared vectors; the agent's side is unchanged code, not new evidence.
-- **`docs/adr/D-221-token-vectors.json` is the third "shared statement between surfaces" in the repo**
-  (after the route tables the contract test reads). If a fourth appears, the pattern deserves a home
-  rather than another bespoke loader.
+- **The date is a duplicated literal on two surfaces** (`LEGACY_UNINSTALL_TOKEN_SUNSET` in
+  `agent.js` and `worker.ts`) rather than read from the vectors file at runtime. Both suites pin
+  their copy against `legacy_sunset`, so drift fails a test — but it is three statements of one
+  fact, and a shared module would be cleaner if a fourth surface ever appears.
+- **Nothing enforces that the agent-side note tells operators.** The window's consequence — a device
+  that has not updated cannot be uninstalled after that date — is in API.md and the ledger, and in
+  the response/log, but no runbook says "update every device before 2027-02-04".
 - **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
 
 ### Debt items closed
 
-- **D-221** — commit `b9c6127`; artifact `docs/adr/D-221-token-vectors.json` plus the three suites
-  that read it (server 828 passed, serverless 420 passed, contract test 11 passed). All four defects
-  closed; the only residual is the dated removal of the legacy branch, recorded above.
+- None new. D-221 stays CLOSED (commit `b9c6127`); this session added its sunset mechanism and is
+  cited from that entry rather than closing anything.
 
 ### Debt items still open
 
@@ -95,40 +88,37 @@
 
 ### Blockers
 
-- Dependabot/CodeQL findings still need the security page. Nothing in D-221 is blocked.
+- Dependabot/CodeQL findings still need the security page. Nothing here is blocked.
 
 ### Failure attribution
 
-- **Layer 2 — context provision** (primary): the divergence survived because nothing said *where*
-  the token scheme was stated. Each surface's comment described its own derivation accurately, so
-  both looked right; the shared statement did not exist. Q4-A created it, and the contract test now
-  fails if either suite stops reading it — the durable form of the fix.
-- **Layer 4 — verification feedback** (secondary): both suites were green before this session and one
-  of them was asserting the *wrong* scheme (the Express legacy token, which the migration branch now
-  accepts). A suite that pins whatever the code does is not a contract.
+- **Layer 4 — verification feedback** (primary): the previous session shipped a deprecation whose
+  only machine-readable state was a *log line*. That is the same half-measure S250 recorded as a
+  Layer-4 failure ("a summary line nobody reads"), repeated in a new place. The fix is the same
+  shape as the SAST gate: convert a statement into a failing check.
+- **Layer 2 — context provision** (secondary): "the release after this one" was written into the
+  trace as though a release cadence existed. It does not; the phrase had no referent, which is why
+  it survived a session boundary as an unactionable instruction.
 
 ### VERIFY
 
-- `cd server && npm test` → **828 passed, 50 suites** (was 817/50; `uninstallAuth.test.js` 9 → 20).
-- `cd serverless && npm test` → **420 passed, 2 files** (worker.test.ts 249, incl. 6 new D-221 cases).
-- `scripts/test_cross_surface_contract.py` → **11 passed** (3 new: vectors recomputed from first
-  principles, the two legacy derivations must differ, and both suites must still read the file).
-- Teeth: the cross-device case fails if the binding is taken from the body; the shared-vector case
-  fails if either surface changes its derivation (it is the same assertion in both suites).
-- `npx tsc --noEmit -p .` (serverless) exit 0; `npx eslint src/routes/agent.js tests/uninstallAuth.test.js`
-  exit 0; `make sast` → **44 findings, gate exit 0** (the new code adds none); prepush secret scan
-  clean — the vectors' secret is an obvious fixture and is not matched.
-- `python3 scripts/check_debt_ledger.py` → 0 mismatches after closing D-221; `make graph-check` →
-  all invariants pass (I2 resolves the cited commit `b9c6127`).
-- Counts corrected in AGENTS.md again: server 828/50, serverless **420** (was documented as 331 — the
-  fourth stale number this trio of sessions has found in that one paragraph).
+- `cd server && npm test` → **830 passed, 50 suites** (was 828; two sunset cases added).
+- `cd serverless && npm test` → **422 passed** (was 420; two added).
+- `scripts/test_cross_surface_contract.py` → **14 passed** (was 11; three sunset checks added).
+- **Teeth, measured**: with `legacy_sunset` back-dated to 2026-10-01, the contract test fails with the
+  four-step deletion checklist, `server/tests/uninstallAuth.test.js` fails 1 of 22 ("has not passed"),
+  and `serverless/worker.test.ts` fails that same case (251 tests, 1 failed) — then all three pass
+  again after restoring 2027-02-04.
+- `npx eslint src/routes/agent.js tests/uninstallAuth.test.js` exit 0; `npx tsc --noEmit -p .`
+  (serverless) exit 0; `make sast` → 44 findings, gate exit 0 (no new findings);
+  `scripts/check_debt_ledger.py` → 0 mismatches; `make graph-check` → all invariants pass.
 
 ### Next session opening
 
-Delete the legacy uninstall-token branch: pick the release after this one, drop
-`legacyUninstallToken` from Express and the Worker, remove the `deprecated_scheme` marker and its
-two tests, and prove it by making the legacy vectors fail — then the D-221 note that still describes
-a migration window becomes history instead of live state.
+Write the operator-facing half of the sunset: a line in the deployment/upgrade documentation (and
+the D-129 hardware runbook's upgrade section) saying that every enrolled device must take an agent
+update before 2027-02-04 or it can no longer be uninstalled — the code now fails on the date, but
+nothing yet tells the person who will be holding the pager that the date exists.
 
 ---
 

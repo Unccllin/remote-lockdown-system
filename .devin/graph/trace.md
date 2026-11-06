@@ -13673,3 +13673,112 @@ Delete the legacy uninstall-token branch: pick the release after this one, drop
 `legacyUninstallToken` from Express and the Worker, remove the `deprecated_scheme` marker and its
 two tests, and prove it by making the legacy vectors fail — then the D-221 note that still describes
 a migration window becomes history instead of live state.
+
+## Session 255 — 2026-11-05 (the uninstall-token deprecation gets a deadline that fails a build)
+
+### RULE-ZERO
+
+**Read**:
+- `server/src/routes/agent.js` — `legacyUninstallToken()` and the Q2-A acceptance branch in
+  `POST /uninstall-auth/verify`, plus its `logger.warn` (which says "should be updated before this
+  path is deleted" and names no date)
+- `serverless/worker.ts` — the same branch, its `console.warn`, and `deprecated_scheme`
+- `docs/adr/D-221-token-vectors.json` — the shared statement both suites and the contract test read
+- `server/tests/uninstallAuth.test.js`, `serverless/worker.test.ts` — the two legacy tests
+- `.github/workflows/release.yml` — releases are **tag-driven** (`on: tags:`), no cadence, and
+  `server/package.json` sits at a static `1.0.0`, so "the release after this one" is not something
+  code can evaluate
+- repo-wide `grep -i 'sunset|deadline|deprecat'` — no date-based deprecation mechanism exists here;
+  the only `deadline` hits are polling loops in tests
+
+**Finding**: the deprecation is real but unenforceable. It is a log line, a response marker, two
+tests and two doc paragraphs — every one of which someone can stop reading. On a tag-driven repo
+there is no "next release" the code can observe, so the honest mechanism is a **date**, and the
+honest place for it is the vectors file that three suites already load.
+
+**Commit**: `aa1e655` — "fix(auth): the uninstall-token deprecation now ends on a date
+that fails a build". This session block is committed separately (graph + milestone).
+
+**Why not delete the branch now**: that is ruling answer Q2-**B** (hard cut), which was explicitly
+rejected in favour of Q2-A — a machine that has not taken the agent update would lose the ability
+to uninstall. "Proceed" cannot mean silently reversing a decision closed one session earlier, so
+this session makes the removal date mechanical and the deletion itself stays with whoever passes it.
+
+### Implement
+
+- `docs/adr/D-221-token-vectors.json` gains `legacy_sunset` (2027-02-04), `d221_closed_at`
+  (2026-11-06) and the rationale: 90 days from the close, because a tag-driven repo has no release
+  cadence to hang "one release" on.
+- `scripts/test_cross_surface_contract.py` gains three checks: the sunset has **not passed** (and on
+  or after that date it fails with the exact deletion checklist), the window is not open-ended
+  (≤180 days, so "set it to 2099" is not a passing edit), and the field is present and parseable.
+- Both suites gain one case each: the legacy scheme is still inside its window. Three suites now
+  fail on the sunset date rather than one log line going unread.
+- The server's deprecation log names the date, so an operator reading logs sees when the path
+  disappears. `docs/API.md` states the sunset next to the `deprecated_scheme` marker; the D-221
+  ledger note replaces "deleting that path is the follow-up" with the date and its enforcer.
+
+### Fog cleared
+
+- **What "the release after this one" could mean here**: nothing, mechanically. `release.yml` fires
+  on tags, `server/package.json` is a static `1.0.0`, and there is no cadence to point at — so a date
+  is the only thing code can evaluate. The window is **2027-02-04**, 90 days from the D-221 close.
+- **Whether the deprecation was enforced anywhere**: it was not. Log line, response marker, two
+  tests, two doc paragraphs — all of them optional to read. It is now enforced by three suites.
+- **Whether a date-based test can be gamed**: a deadline set in 2099 would pass every check, so the
+  window is itself asserted (≤180 days from `d221_closed_at`). Both fields are in the shared file, so
+  widening the window is a visible edit to a reviewed artifact rather than a comment.
+
+### Fog remaining
+
+- **The date is a duplicated literal on two surfaces** (`LEGACY_UNINSTALL_TOKEN_SUNSET` in
+  `agent.js` and `worker.ts`) rather than read from the vectors file at runtime. Both suites pin
+  their copy against `legacy_sunset`, so drift fails a test — but it is three statements of one
+  fact, and a shared module would be cleaner if a fourth surface ever appears.
+- **Nothing enforces that the agent-side note tells operators.** The window's consequence — a device
+  that has not updated cannot be uninstalled after that date — is in API.md and the ledger, and in
+  the response/log, but no runbook says "update every device before 2027-02-04".
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
+
+### Debt items closed
+
+- None new. D-221 stays CLOSED (commit `b9c6127`); this session added its sunset mechanism and is
+  cited from that entry rather than closing anything.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 62 OPEN).
+
+### Blockers
+
+- Dependabot/CodeQL findings still need the security page. Nothing here is blocked.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the previous session shipped a deprecation whose
+  only machine-readable state was a *log line*. That is the same half-measure S250 recorded as a
+  Layer-4 failure ("a summary line nobody reads"), repeated in a new place. The fix is the same
+  shape as the SAST gate: convert a statement into a failing check.
+- **Layer 2 — context provision** (secondary): "the release after this one" was written into the
+  trace as though a release cadence existed. It does not; the phrase had no referent, which is why
+  it survived a session boundary as an unactionable instruction.
+
+### VERIFY
+
+- `cd server && npm test` → **830 passed, 50 suites** (was 828; two sunset cases added).
+- `cd serverless && npm test` → **422 passed** (was 420; two added).
+- `scripts/test_cross_surface_contract.py` → **14 passed** (was 11; three sunset checks added).
+- **Teeth, measured**: with `legacy_sunset` back-dated to 2026-10-01, the contract test fails with the
+  four-step deletion checklist, `server/tests/uninstallAuth.test.js` fails 1 of 22 ("has not passed"),
+  and `serverless/worker.test.ts` fails that same case (251 tests, 1 failed) — then all three pass
+  again after restoring 2027-02-04.
+- `npx eslint src/routes/agent.js tests/uninstallAuth.test.js` exit 0; `npx tsc --noEmit -p .`
+  (serverless) exit 0; `make sast` → 44 findings, gate exit 0 (no new findings);
+  `scripts/check_debt_ledger.py` → 0 mismatches; `make graph-check` → all invariants pass.
+
+### Next session opening
+
+Write the operator-facing half of the sunset: a line in the deployment/upgrade documentation (and
+the D-129 hardware runbook's upgrade section) saying that every enrolled device must take an agent
+update before 2027-02-04 or it can no longer be uninstalled — the code now fails on the date, but
+nothing yet tells the person who will be holding the pager that the date exists.

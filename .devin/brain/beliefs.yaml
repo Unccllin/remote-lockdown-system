@@ -2471,3 +2471,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-109
+  statement: 'The D-221 legacy uninstall-token acceptance is dated: it expires 2027-02-04 (90 days from
+    the close, because releases are tag-driven and have no cadence code can observe). The date lives in
+    docs/adr/D-221-token-vectors.json as legacy_sunset with d221_closed_at and a rationale; scripts/test_cross_surface_contract.py
+    fails on or after it with a deletion checklist, both surface suites fail on the same date, the window
+    is itself bounded to <=180 days so it cannot be widened silently, and both surfaces echo deprecated_scheme_sunset
+    in the verify response.'
+  domain: api/auth
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S255: implemented with a measured teeth test — back-dating legacy_sunset to 2026-10-01
+    failed the contract test plus both surface suites (1 of 22 jest, 1 of 251 vitest), then all passed
+    after restoring 2027-02-04'
+  source: docs/adr/D-221-token-vectors.json; scripts/test_cross_surface_contract.py; server/src/routes/agent.js;
+    serverless/worker.ts; server/tests/uninstallAuth.test.js; serverless/worker.test.ts
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

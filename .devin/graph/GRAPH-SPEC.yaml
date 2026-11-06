@@ -1361,8 +1361,10 @@ debt_items:
                   server suite 828 passed, serverless 420 passed"
     note: "Answered as 'take the recommendations' (Q1-A device-bound HMAC, Q2-A \
            dual-accept one release, Q3-A refuse without a secret, Q4-A shared \
-           vector file). Legacy verification is logged and marked \
-           deprecated_scheme; deleting that path is the follow-up."
+           vector file). Legacy verification is logged, marked \
+           deprecated_scheme, and DATED: accepted until 2027-02-04, when \
+           scripts/test_cross_surface_contract.py plus both surface suites \
+           fail with the deletion checklist (session 255)."
 
 
 # ---------------------------------------------------------------------------
