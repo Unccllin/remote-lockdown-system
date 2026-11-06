@@ -18,6 +18,14 @@ if str(_AGENT_DIR) not in sys.path:
 
 import hw_test_harness  # noqa: E402
 
+# Destructive tests whose `rollback()` does nothing. Shrink-only: every entry must correspond to a
+# test that still sets rollback_is_stub, and a test that sets it must appear here (S263).
+STUB_ROLLBACKS = {
+    "E-BCD-01": "rollback() is a no-op; the BCD before-state is captured for manual repair instead",
+    "E-HP-UEFI-01": "rollback() is a no-op; the module never clears the Setup Password it sets",
+    "E-INTEGRATION-01": "no rollback override at all; recovery is the server's unlock command",
+}
+
 # ---------------------------------------------------------------------------
 # Environment detection tests
 # ---------------------------------------------------------------------------
@@ -372,13 +380,49 @@ class TestTestRegistry:
             assert test.name
             assert len(test.tags) > 0
 
-    def test_destructive_tests_have_rollback(self):
-        """v2.0: Destructive tests should be marked as such."""
+    def test_destructive_tests_are_marked_and_declared(self):
+        """The three destructive tests are marked, and each says what it breaks.
+
+        This replaces `test_destructive_tests_have_rollback`, whose name asserted something that was
+        not true: it only checked that the ids existed. Two of them override `rollback()` with
+        `pass`. Naming a test after a property it does not check is how the stub rollbacks
+        survived a suite that looked like it was testing them (S263).
+        """
         destructive = [t for t in hw_test_harness.ALL_TESTS if t.is_destructive]
-        # BCD and HP-UEFI are destructive
-        test_ids = [t.test_id for t in destructive]
-        assert "E-BCD-01" in test_ids
-        assert "E-HP-UEFI-01" in test_ids
+        test_ids = {t.test_id for t in destructive}
+        assert {"E-BCD-01", "E-HP-UEFI-01", "E-INTEGRATION-01"} <= test_ids
+        for test in destructive:
+            assert test.destructive_scope, f"{test.test_id} declares no destructive_scope"
+            assert test.recovery_hint, f"{test.test_id} declares no recovery_hint"
+
+    def test_stub_rollbacks_are_recorded_not_implied(self):
+        """Shrink-only baseline: a rollback that does nothing must be *stated*.
+
+        The harness defaults `rollback_is_stub = True` (the base `rollback()` is a no-op), so this
+        list is the set of destructive tests whose recovery is manual — and it must match exactly.
+        Implement a real rollback and the test fails until the entry is deleted; leave the entry and
+        it fails as stale. That is the property the old test's name promised.
+        """
+        declared = {
+            t.test_id for t in hw_test_harness.ALL_TESTS if t.is_destructive and t.rollback_is_stub
+        }
+        assert declared == set(STUB_ROLLBACKS), (
+            "stub-rollback baseline out of date — implemented a rollback? delete its entry; "
+            f"added a destructive test? declare it.\n  declared: {sorted(declared)}\n"
+            f"  baseline: {sorted(STUB_ROLLBACKS)}"
+        )
+
+    def test_the_baseline_only_names_destructive_tests(self):
+        """A stub rollback is only interesting where something is destroyed."""
+        destructive = {t.test_id for t in hw_test_harness.ALL_TESTS if t.is_destructive}
+        assert set(STUB_ROLLBACKS) <= destructive, sorted(set(STUB_ROLLBACKS) - destructive)
+
+    def test_the_notice_states_that_rollback_is_not_implemented(self):
+        """The banner an operator reads must not imply a recovery it cannot perform."""
+        test = hw_test_harness.TestBcdLockdown()
+        assert test.rollback_is_stub
+        notice = test.describe_destructive()
+        assert "rollback: NOT IMPLEMENTED" in notice
 
     def test_network_tests_have_retry(self):
         """v2.0: Network tests should be marked as such."""
@@ -431,7 +475,7 @@ class TestDestructiveGate:
         # The point of the gate: nothing ran.
         assert test.actions == 0
 
-    def test_runs_with_the_flag(self):
+    def test_runs_with_the_flag(self, tmp_path):
         test = _FakeDestructive()
         result = test.run(
             hw_test_harness.detect_environment(),
@@ -439,6 +483,10 @@ class TestDestructiveGate:
             timeout=10,
             retries=0,
             allow_destructive=True,
+            # Always point the evidence dir somewhere disposable: without it the harness
+            # writes the before-state next to the agent modules — into the repo. Found in S263:
+            # four such files had been committed by S262's over-broad `git add -A`.
+            evidence_dir=str(tmp_path),
         )
 
         assert result.status == "PASS"

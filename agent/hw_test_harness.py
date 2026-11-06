@@ -509,13 +509,27 @@ class HardwareTest:
     # fills them in, so a new destructive test cannot be added silently.
     destructive_scope: str = ""
     recovery_hint: str = ""
+    # Honest default: the base `rollback()` is a no-op, so a destructive test's rollback is a stub
+    # until it overrides this. The banner prints it and agent/tests/test_hw_harness.py pins the set
+    # against a shrink-only baseline, so implementing a real rollback forces that entry's removal
+    # (S263). E-BCD-01 and E-HP-UEFI-01 override `rollback()` with `pass` — the override exists, the
+    # behaviour does not, so they stay stub=True.
+    rollback_is_stub: bool = True
 
     def describe_destructive(self) -> str:
         """The pre-flight notice for a destructive test: what changes, how to recover."""
         scope = self.destructive_scope or "(NOT DECLARED — treat as unknown damage)"
         recovery = self.recovery_hint or "(NOT DECLARED — plan recovery before running)"
+        rollback = (
+            "NOT IMPLEMENTED — recovery is manual, using the before-state written before the action"
+            if self.rollback_is_stub
+            else "implemented by the test"
+        )
         return (
-            f"  [{self.test_id}] is DESTRUCTIVE.\n    changes : {scope}\n    recovery: {recovery}"
+            f"  [{self.test_id}] is DESTRUCTIVE.\n"
+            f"    changes : {scope}\n"
+            f"    recovery: {recovery}\n"
+            f"    rollback: {rollback}"
         )
 
     is_network: bool = False  # Pattern 8: retry on network errors
