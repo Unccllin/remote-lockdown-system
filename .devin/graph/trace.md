@@ -13024,3 +13024,181 @@ credential-disclosure hits), and record the rest as reviewed with a reason — t
 surface has evidence behind "expected" instead of a comment.
 
 ---
+
+---
+
+## Session 251 — 2026-11-05 (45 SAST findings classified: 3 code fixes, 45 with evidence, and a gate that fails both ways)
+
+### RULE-ZERO
+
+**Read**:
+- `scripts/sast-gate.py` — the whole policy: ERROR gates, WARNING/MEDIUM/INFO are printed
+  and ignored; `--strict` exists but nothing calls it
+- `.github/workflows/lint.yml` (sast-semgrep job) and the `Makefile` `sast` target — both call
+  `sast-gate.py semgrep.json` with no flags, so the WARNING tier has never been enforced
+- `scripts/audit-with-exceptions.sh` — the repo's precedent for "documented exception or fail":
+  each entry carries a justification and the script exits 1 for anything unlisted
+- `.devin/PENDING-RULING.md` + `scripts/check-ruling.sh` — **no open items**, task mode
+- `scripts/script_test_runner.py`, `scripts/test_check_firmware_todos.py` — every
+  `scripts/test_*.py` needs a `__main__` runner or the suite imports its tests and exits 0
+- `.devin/skills/phase-8-deps-sast/SKILL.md` — P8 covers linter deps and CodeQL, not this gate
+- the four code sites behind the findings: `server/src/routes/installer.js`,
+  `server/src/config/paths.js`, `server/src/routes/rearm.js`, `server/src/routes/downloads.js`,
+  `agent/hp_uefi_lockdown.py`, `agent/tamper_protection.py`, `agent/watchdog.py`,
+  `agent/agent_diagnostic.py`, `agent/hw_test_harness.py`, `electron/config.js`
+
+**Finding**: `semgrep` on PATH was a **broken symlink** (`~/.local/bin/semgrep` →
+`/tmp/semgrep-venv/bin/semgrep`; `/tmp` had been cleared). Reinstalled the CI-pinned
+`semgrep==1.182.1` before measuring anything, so the numbers below are the tool CI runs.
+
+**Finding**: Semgrep's OSS report sets `extra.lines` **and** `extra.fingerprint` to the literal
+string `"requires login"` on every finding — the registry withholds both from an unauthenticated
+scan. A gate keyed on `fingerprint` would have matched everything against nothing. The only
+trustworthy identity is the source line read from disk.
+
+**Finding**: the rule that produced 10 of the 45 findings does not care whether the value is
+actually attacker-controlled. Measured with a throwaway probe: `path.join(dir, 'literal')` is
+clean, `path.join(dir, param)` is flagged, and **so is** `path.join(dir, path.basename(param))`,
+a whitelist-table lookup (`TABLE[param]`), and a config object's literal field returned from a
+helper called with the parameter. The rule treats any function parameter that reaches
+`path.join` as user input. That is why "harden the code" cannot clear these findings — only
+removing the parameter or suppressing can — and it is the fact that decides the design below.
+
+### Implement
+
+**The gate now fails in both directions** (`scripts/sast-gate.py`, rewritten):
+
+- ERROR severity is **never exceptionable**. A matching exception entry is reported as invalid.
+- Every other finding must be either fixed or listed in `scripts/sast-exceptions.json` with
+  `disposition` (`false-positive` | `accepted-risk`), a `reason` (≥20 chars), `reviewed`
+  (`S251`) — otherwise the run fails and the message prints the exact `match` text to copy.
+- The match key is `(rule, path, stripped source line, occurrence)`, read from the file on disk.
+  Editing the flagged line **invalidates** the entry, and an entry that matches nothing fails:
+  a fixed finding must lose its exception instead of leaving a decision nobody is making.
+- `--lenient` reports without gating (local triage); `--repo-root` and `--exceptions` make the
+  tests hermetic. Exit 0 clean / 1 unclassified or stale / 2 unreadable report or invalid file.
+
+**`scripts/sast-exceptions.json`** — 45 entries (29 false-positive, 16 accepted-risk), each
+keyed to a real line, each with a reason that names what is actually substituted or why the
+transport is acceptable. Generated from the scan report so no `match` string or rule id was
+typed by hand; the reasons are authored per site.
+
+**Three code fixes** (real, but none of them removes a finding — see the measurement above):
+
+- `server/src/routes/installer.js` — `resolveDeviceAndBinaries` passed its raw `platform`
+  argument into `resolveAgentBinary`, which joins it into `path.join(cacheDir, internalPlatform)`.
+  Both callers already narrowed it to `'win'|'linux'`, so this was latent rather than live;
+  it now passes `plat.platform` (the whitelist `getPlatformConfig` returns) at all three sites.
+- `server/src/config/paths.js` — `resolveAgentBinary` now applies `path.basename()` before
+  joining, so a future caller passing `../…` cannot walk out of the binaries directory.
+- `server/src/routes/rearm.js` — the re-arm bootstrap is a `.ps1` served as `text/plain`; added
+  `X-Content-Type-Options: nosniff` so a browser cannot sniff it into a document (the device
+  writes the body to disk and executes it, so JSON-wrapping is not an option).
+
+**Tests**: `scripts/test_sast_gate.py` (20 cases, `__main__` runner) drives the real CLI in a
+temp tree — clean pass, ERROR fail, ERROR-not-exceptable, unclassified fail, accepted pass,
+stale-entry fail, **edited-line fail**, line-shift pass, duplicate-line occurrences, invalid
+entry → exit 2, duplicate entries → exit 2, unreadable report → exit 2, lenient never fails,
+plus three checks that the committed file stays valid and every `match` still exists in its
+file. `server/tests/paths.test.js` (5 cases) pins the basename guard;
+`server/tests/installer.helpers.test.js` gained a case proving `getPlatformConfig` never echoes
+a payload back as a platform; `server/tests/rearm.routes.test.js` asserts the nosniff header.
+
+**Docs/CI**: `AGENTS.md` § code scanning now describes the classification policy and the
+`"requires login"` trap (plus corrected, re-measured harness counts — the list claimed 11
+graph-session tests for a suite with 40, and 663 server tests for a suite of 803);
+`lint.yml`'s job comment and the `Makefile` `sast` comment say the same thing.
+
+**Commit**: `10f18b2` — “sast(ci): every finding now needs a verdict — the gate fails both
+ways (45 classified)”. This session block is committed separately, as usual.
+
+### Fog cleared
+
+- **What the 40 WARNING findings actually were**: 12 `dynamic-urllib-use` (11 of them the
+  hardware harness against `http://localhost:3000`, 1 the tamper module's operator-configured
+  server with a POST body), 11 `python-logger-credential-disclosure` (all logging an exception,
+  a path, or a return-code name — never the password), 10 `path-join-resolve-traversal` (8 in
+  the installer's binary resolvers, 1 Electron userData, 1 an unused helper), 4
+  `express-check-csurf` (bearer-token APIs with no cookies to forge with), 2 transport-http in
+  the lab harness. No ERROR-class issue was hiding among them.
+- **Whether the rule can be satisfied by hardening**: no — measured, see above. Worth knowing
+  before anyone spends a session trying.
+- **Whether `--strict` was ever used**: nothing calls it (CI, Makefile, docs). It is now
+  replaced by `--lenient`, the inverse default.
+
+### Fog remaining
+
+- **The 5 Dependabot vulnerabilities are still unidentified** (unchanged from S250): npm ×4 and
+  both pip sets audit clean, Actions are SHA-pinned. Confirming needs the security page.
+- **CodeQL's 102 alerts remain untriaged** (unchanged from S250).
+- **`agent/agent.py:1141` calls ip-api.com over plain HTTP** — recorded as `accepted-risk`, not
+  fixed: the free tier has no HTTPS. It is a real (small) disclosure and an E-TRACK blocker.
+- **`agent/tamper_protection.py:398` logs the server's HTTP error body** — accepted so field
+  failures stay diagnosable; a server that echoed the token in an error body would leak it into
+  the agent log. The server does not do that today; it is not prevented by a test.
+- **The exceptions are point-in-time.** A Semgrep rule update will surface new findings and the
+  gate will fail until they are classified — intended, but it means this file is a recurring
+  chore, not a one-off.
+
+### Debt items closed
+
+- None. D-117, D-129 and the PBL tail remain open.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134.
+
+### Blockers
+
+- The five Dependabot findings cannot be identified without the security page (or a token);
+  CodeQL's alerts likewise.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): the rewritten `sast-gate.py` crashed on its
+  first real run (`sorted(items, key=loc)` where `items` holds tuples — an AttributeError from
+  a two-element payload). The gate had been rewritten before any test existed for it; writing
+  `test_sast_gate.py` first would have caught it in seconds instead of on a 45-finding report.
+  The harness change is what now exists: the gate has 20 teeth tests, including the
+  `--lenient`/exit-code paths the crash hid behind.
+- **Layer 2 — context provision** (secondary): my first `server/tests/paths.test.js` asserted
+  `getAgentBinariesDir()` returns null without a built binary and failed, because the override
+  is *first*, not *exclusive* — the function falls through to the in-repo `agent/dist`, which
+  this host has. The behaviour was documented in the module header ("Lookup order: 0 override …
+  2 dev mode") **and** in `agent.routes.test.js`, which warns that assertions depending on "no
+  binary exists" pass locally and fail on CI or vice versa. I wrote the test before reading the
+  warning I had already read once. Rewritten to assert precedence and a name staged nowhere.
+
+### VERIFY
+
+- `semgrep scan --config=p/default` (1.182.1, reinstalled this session): **45 findings — 0
+  ERROR, 0 MEDIUM, 40 WARNING, 5 INFO**, identical before and after the three code fixes (the
+  rule flags parameters; measured, not assumed).
+- `make sast` end-to-end → **exit 0**: `[OK] every finding is either fixed or carries a
+  reviewed reason` (45 accepted, listed per rule).
+- **Negative controls on the real report** (the teeth):
+  - `--exceptions /tmp/empty-exceptions.json` → **exit 1**, `Summary: 45 finding(s) — 0 ERROR,
+    0 accepted, 45 unclassified, 0 stale`.
+  - one entry's `match` edited by one line → **exit 1**, `44 accepted, 1 unclassified, 1 stale
+    exception` naming `server/src/routes/rearm.js`.
+- `agent/.venv/bin/python scripts/test_sast_gate.py` → **20 passed**.
+- `make test-scripts` → new suite discovered and green (20 passed); whole sweep still green.
+- `cd server && npm test` → **803 passed, 48 suites** (was 663/41 when AGENTS.md was last
+  written; the doc now carries the measured numbers).
+- Teeth check on the paths guard: with `path.basename()` removed, `tests/paths.test.js` →
+  **1 failed of 5**; restored → 5 passed.
+- `make lint-workflows` → exit 0 (actionlint 1.7.12 + shellcheck). `npx eslint` on every
+  changed JS file → exit 0. `ruff check agent` → all checks passed. `make graph-check` → all
+  invariants pass.
+
+### Next session opening
+
+Decide what `agent/agent.py:1141`'s plaintext ip-api.com call should become — move E-TRACK's
+geolocation to a keyed HTTPS provider, drop the IP fallback and document the accuracy loss, or
+keep it and give the decision a test — and add a server-side test that an uninstall-token error
+response never echoes the token, since `tamper_protection.py:398` logging the body is currently
+accepted on that assumption alone.
+
+---
+
+---

@@ -53,41 +53,43 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 250 — 2026-11-05 (5 cooldown findings fixed; and what the 102 alerts actually are)
+## Latest session: 251 — 2026-11-05 (45 SAST findings classified: 3 code fixes, 45 with evidence, and a gate that fails both ways)
 
 ### Fog cleared
 
-- **What the 102 code-scanning alerts are**: CodeQL's default suite. The repo's enforced gate is
-  Semgrep, and it is **clean at ERROR level** (0 of 50 findings), which is why `sast-semgrep`
-  passes.
-- **What the 5 remaining Dependabot vulnerabilities are not**: nothing an audit can reach — npm
-  across four components, pip for both requirement sets, Actions pins and Dockerfile bases are
-  all clean. They are most likely Docker base-image OS packages, which Dependabot tracks and
-  npm/pip audits cannot see.
+- **What the 40 WARNING findings actually were**: 12 `dynamic-urllib-use` (11 of them the
+  hardware harness against `http://localhost:3000`, 1 the tamper module's operator-configured
+  server with a POST body), 11 `python-logger-credential-disclosure` (all logging an exception,
+  a path, or a return-code name — never the password), 10 `path-join-resolve-traversal` (8 in
+  the installer's binary resolvers, 1 Electron userData, 1 an unused helper), 4
+  `express-check-csurf` (bearer-token APIs with no cookies to forge with), 2 transport-http in
+  the lab harness. No ERROR-class issue was hiding among them.
+- **Whether the rule can be satisfied by hardening**: no — measured, see above. Worth knowing
+  before anyone spends a session trying.
+- **Whether `--strict` was ever used**: nothing calls it (CI, Makefile, docs). It is now
+  replaced by `--lenient`, the inverse default.
 
 ### Fog remaining
 
-- **The 5 Dependabot vulnerabilities are still unidentified** — confirming them needs the
-  Dependabot page (package, advisory id, manifest). Guessing would repeat S247's mistake of
-  theorising where a measurement was available.
-- **CodeQL's 102 alerts are untriaged.** Without UI access the security-severity split is
-  unknown; most in a codebase like this are maintainability (unused variables, empty blocks),
-  but that is an expectation, not a measurement.
-- **40 WARNING + 5 INFO Semgrep findings remain unfixed.** `sast-gate.py` documents most as
-  expected (`dynamic-urllib-use` for an agent posting to an operator-configured server,
-  `path-join-resolve-traversal` in the installer). The 10 path-traversal and 11
-  credential-disclosure hits deserve a deliberate review rather than a blanket "expected".
-- D-117 (host-side PBL unit tests) and D-129 (real-hardware validation) remain open.
-- Firmware is still QEMU-only, so I3 is unsatisfied.
+- **The 5 Dependabot vulnerabilities are still unidentified** (unchanged from S250): npm ×4 and
+  both pip sets audit clean, Actions are SHA-pinned. Confirming needs the security page.
+- **CodeQL's 102 alerts remain untriaged** (unchanged from S250).
+- **`agent/agent.py:1141` calls ip-api.com over plain HTTP** — recorded as `accepted-risk`, not
+  fixed: the free tier has no HTTPS. It is a real (small) disclosure and an E-TRACK blocker.
+- **`agent/tamper_protection.py:398` logs the server's HTTP error body** — accepted so field
+  failures stay diagnosable; a server that echoed the token in an error body would leak it into
+  the agent log. The server does not do that today; it is not prevented by a test.
+- **The exceptions are point-in-time.** A Semgrep rule update will surface new findings and the
+  gate will fail until they are classified — intended, but it means this file is a recurring
+  chore, not a one-off.
 
 ### Debt items closed
 
-- None.
+- None. D-117, D-129 and the PBL tail remain open.
 
 ### Debt items still open
 
-- D-117 (no host-side unit tests for PBL modules), D-129 (real-hardware validation), and the
-  PBL tail tracked in `GRAPH-SPEC.yaml`.
+- D-120, D-129, D-130, D-134.
 
 ### Blockers
 
@@ -96,28 +98,49 @@
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the 5 MEDIUM findings had been visible in the
-  SAST output since the job was written, printed but never acted on, because the gate only fails
-  on ERROR. A summary line that says "5 MEDIUM" without anyone reading it is a half-gate.
-- **Layer 2 — context provision**: nothing said the `sast-semgrep` job uploads no SARIF, so the
-  origin of "102 code scanning alerts" was not documented and had to be derived.
+- **Layer 4 — verification feedback** (primary): the rewritten `sast-gate.py` crashed on its
+  first real run (`sorted(items, key=loc)` where `items` holds tuples — an AttributeError from
+  a two-element payload). The gate had been rewritten before any test existed for it; writing
+  `test_sast_gate.py` first would have caught it in seconds instead of on a 45-finding report.
+  The harness change is what now exists: the gate has 20 teeth tests, including the
+  `--lenient`/exit-code paths the crash hid behind.
+- **Layer 2 — context provision** (secondary): my first `server/tests/paths.test.js` asserted
+  `getAgentBinariesDir()` returns null without a built binary and failed, because the override
+  is *first*, not *exclusive* — the function falls through to the in-repo `agent/dist`, which
+  this host has. The behaviour was documented in the module header ("Lookup order: 0 override …
+  2 dev mode") **and** in `agent.routes.test.js`, which warns that assertions depending on "no
+  binary exists" pass locally and fail on CI or vice versa. I wrote the test before reading the
+  warning I had already read once. Rewritten to assert precedence and a name staged nowhere.
 
 ### VERIFY
 
-- Before: `semgrep --config=p/default` → 50 findings, `{'MEDIUM': 5, 'INFO': 5, 'WARNING': 40}`,
-  0 ERROR.
-- After: 45 findings, `{'INFO': 5, 'WARNING': 40}`, **0 MEDIUM, 0 ERROR**; the five entries carry
-  `cooldown={'default-days': 7}` (verified by parsing the YAML).
-- `sast-gate.py` still passes (ERROR-only gate).
-- Audit sweep for the vulnerabilities: npm 0 high across four components, `pip-audit` clean for
-  `agent/requirements.txt` and `firmware/PblPkg/requirements.txt`, all `uses:` SHA-pinned.
+- `semgrep scan --config=p/default` (1.182.1, reinstalled this session): **45 findings — 0
+  ERROR, 0 MEDIUM, 40 WARNING, 5 INFO**, identical before and after the three code fixes (the
+  rule flags parameters; measured, not assumed).
+- `make sast` end-to-end → **exit 0**: `[OK] every finding is either fixed or carries a
+  reviewed reason` (45 accepted, listed per rule).
+- **Negative controls on the real report** (the teeth):
+  - `--exceptions /tmp/empty-exceptions.json` → **exit 1**, `Summary: 45 finding(s) — 0 ERROR,
+    0 accepted, 45 unclassified, 0 stale`.
+  - one entry's `match` edited by one line → **exit 1**, `44 accepted, 1 unclassified, 1 stale
+    exception` naming `server/src/routes/rearm.js`.
+- `agent/.venv/bin/python scripts/test_sast_gate.py` → **20 passed**.
+- `make test-scripts` → new suite discovered and green (20 passed); whole sweep still green.
+- `cd server && npm test` → **803 passed, 48 suites** (was 663/41 when AGENTS.md was last
+  written; the doc now carries the measured numbers).
+- Teeth check on the paths guard: with `path.basename()` removed, `tests/paths.test.js` →
+  **1 failed of 5**; restored → 5 passed.
+- `make lint-workflows` → exit 0 (actionlint 1.7.12 + shellcheck). `npx eslint` on every
+  changed JS file → exit 0. `ruff check agent` → all checks passed. `make graph-check` → all
+  invariants pass.
 
 ### Next session opening
 
-Take the 40 WARNING findings seriously enough to classify them: fix the ones that are real
-(starting with the 10 `path-join-resolve-traversal` hits in the installer and the 11
-credential-disclosure hits), and record the rest as reviewed with a reason — then the SAST
-surface has evidence behind "expected" instead of a comment.
+Decide what `agent/agent.py:1141`'s plaintext ip-api.com call should become — move E-TRACK's
+geolocation to a keyed HTTPS provider, drop the IP fallback and document the accuracy loss, or
+keep it and give the decision a test — and add a server-side test that an uninstall-token error
+response never echoes the token, since `tamper_protection.py:398` logging the body is currently
+accepted on that assumption alone.
 
 ---
 

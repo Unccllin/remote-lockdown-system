@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-05 17:25:01 — 104 beliefs
+Generated: 2026-11-06 08:57:24 — 106 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -274,3 +274,10 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-019 | confirmed | code-read | In-the-wild UEFI bootkits persist at three layers — SPI flash implants (LoJax, MosaicRegressor, MoonBounce, CosmicStrand), ESP-resident boot managers (BlackLotus, Bootkitty), and image-parser exploits (LogoFAIL). |
+
+## tooling
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-105 | confirmed | code-read | Semgrep's OSS JSON report sets extra.lines and extra.fingerprint to the literal string 'requires login' for registry (p/default) rules, so no gate can key findings on either field; the only trustworthy identity is the source line read from disk at start.line. |
+| B-106 | confirmed | emulated | The javascript path-join-resolve-traversal rule flags ANY function parameter that reaches path.join/resolve; path.basename(), whitelist-table lookups and literal-returning config helpers do not act as sanitizers (measured with a probe file, S251). Clearing that finding therefore requires removing the parameter from the join or suppressing, not hardening the value. |

@@ -2396,3 +2396,38 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-105
+  statement: Semgrep's OSS JSON report sets extra.lines and extra.fingerprint to the literal string 'requires
+    login' for registry (p/default) rules, so no gate can key findings on either field; the only trustworthy
+    identity is the source line read from disk at start.line.
+  domain: tooling
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S251: parsed the semgrep JSON report; every finding''s extra.lines and extra.fingerprint
+    equals ''requires login'''
+  source: /tmp/semgrep-s251.json (measured S251); scripts/sast-gate.py
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-106
+  statement: The javascript path-join-resolve-traversal rule flags ANY function parameter that reaches
+    path.join/resolve; path.basename(), whitelist-table lookups and literal-returning config helpers do
+    not act as sanitizers (measured with a probe file, S251). Clearing that finding therefore requires
+    removing the parameter from the join or suppressing, not hardening the value.
+  domain: tooling
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'S251: probe file with 7 path.join variants scanned with the CI-pinned semgrep 1.182.1;
+    only literal-arg and inline literal-ternary forms were clean'
+  source: S251 probe under /tmp/probe/probe.js; scripts/sast-gate.py; scripts/sast-exceptions.json
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
