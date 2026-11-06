@@ -272,7 +272,9 @@ make test-coverage
 cd server && npm audit --audit-level=high      # must exit 0
 cd dashboard && ../scripts/audit-with-exceptions.sh
 
-# Static analysis (Semgrep p/default; gates on ERROR severity only)
+# Static analysis (Semgrep p/default). Every finding must be fixed or listed in
+# scripts/sast-exceptions.json with a disposition + reason; ERROR is never
+# exceptionable, and an entry that no longer matches the code fails the gate.
 make sast
 
 # Docker: both images run as the unprivileged `node` user. SQLite mode needs a
@@ -432,9 +434,11 @@ make build
 
 ## Diagnostic Sweep Results (2026-08-04, updated 2026-10-27)
 
-All green: 663 server tests (41 suites), 689 agent tests, 197 dashboard tests,
-30 electron tests, 331 serverless tests, 10 API E2E tests, 71 script-harness tests
-(27 graph-session + 44 memory), eslint clean on server + dashboard, ruff clean + formatted on
+All green: 803 server tests (48 suites, measured 2026-11-05), 689 agent tests, 197 dashboard tests,
+30 electron tests, 331 serverless tests, 10 API E2E tests, 231 script-harness
+checks (212 pytest tests across 13 suites + 19 checks in the hand-rolled
+secret-scanner suite; 5 worker-update cases skip without a built worker),
+eslint clean on server + dashboard, ruff clean + formatted on
 agent, vite build OK, all shell scripts `bash -n` OK, all YAML configs valid, all
 local imports resolve, git tree clean. Also green: `make pg-smoke` 65/65 on real
 PostgreSQL 16, API+agent E2E 10/10, `actionlint` 1.7.12 clean on all 5 workflows.
@@ -442,13 +446,18 @@ Not runnable on this host: Playwright + Electron (missing `libnspr4.so`).
 **`make full-verify` now covers all five component suites** (server, agent,
 dashboard, worker, electron) plus the script-level harness tests, E2E, env and
 artifact checks — it previously ran only three of the five while its own comment
-claimed "all 5 test suites". Current measured totals: server 663 (41 suites),
-agent 689, dashboard 197, worker 331, electron 30, API E2E 10, script harness 71.
+claimed "all 5 test suites". Current measured totals: server 803 (48 suites),
+agent 689, dashboard 197, worker 331, electron 30, API E2E 10, script harness 231.
 
 The script-level harness tests are **auto-discovered** (`scripts/test_*.py`, run
-by `make test-scripts` and the CI `script-tests` job): 30 firmware-TODO tests,
-18 ci-annotate tests, 11 graph-session tests (40 checks), 44 memory tests, and
-10 secret-scanner tests (19 checks).
+by `make test-scripts` and the CI `script-tests` job). Counts measured 2026-11-05
+(`agent/.venv/bin/python scripts/test_*.py`, one file at a time): 6
+build-windows-artifacts, 8 debt-ledger, 30 firmware-TODO, 18 ci-annotate, 8
+cross-surface-contract, 18 generic-installer, 40 graph-session, 44 memory, 20
+sast-gate, 18 sign-release-metadata, 2 tls-floor, 5 skipped worker-update, plus 19
+checks in the hand-rolled secret-scanner suite. Earlier revisions of this
+paragraph said "11 graph-session tests" for a suite that had 40 — the list is
+cheaper to re-measure than to trust.
 
 **Every `scripts/test_*.py` must have a `__main__` runner** — the Makefile
 executes each file directly, so a suite without one imports its tests, runs
@@ -779,7 +788,7 @@ work — pick up here tomorrow.
 - Wayfinder tickets T1-T3 are CLOSED but Q1 (Goodhart) should be verified
 - Clean-state checklist exists but is not enforced by any tooling
 
-### Code scanning (verified 2026-10-28)
+### Code scanning (verified 2026-10-28, gate reworked 2026-11-05)
 
 `codeql.yml` cannot run here: code scanning on a **private** repository requires
 GitHub Code Security, and without it the SARIF upload returns
@@ -788,6 +797,29 @@ therefore gated on the repository variable `CODE_SECURITY_ENABLED` so it skips
 instead of failing every push. The equivalent coverage comes from **Semgrep**
 (`sast-semgrep` job, `make sast`), plus the existing eslint-plugin-security
 (server + dashboard), ruff `S` rules (agent) and cppcheck (firmware).
+
+**How the Semgrep gate works (S251).** It used to fail on ERROR only and merely
+print the other 40 findings, which meant the WARNING tier was decoration — nobody
+had to read it (recorded as a Layer-4 failure in S250). Now every finding must
+reach a verdict:
+
+- **ERROR** — never exceptionable. The rule is confident the code is exploitable.
+- **WARNING / MEDIUM / INFO** — either fixed, or listed in
+  `scripts/sast-exceptions.json` with `disposition` (`false-positive` or
+  `accepted-risk`), a `reason` a reviewer can check against the code, and
+  `reviewed` (the session).
+- The match key is `(rule, path, the flagged source line, occurrence)`, read from
+  the file on disk — Semgrep's OSS report sets `extra.lines` and
+  `extra.fingerprint` to the literal string `"requires login"`, so neither is
+  usable. Editing the flagged line **invalidates** the entry on purpose, and an
+  entry that matches nothing fails the gate, so a fixed finding loses its
+  exception instead of leaving a decision nobody is making any more.
+- `python3 scripts/sast-gate.py semgrep.json --lenient` reports without gating; CI
+  and `make sast` never use it. Tests: `scripts/test_sast_gate.py` (20 cases).
+
+Debug note: the `semgrep` on PATH may be a symlink into `/tmp` and silently gone
+(that is how S251 started). `make sast` fails loudly when the binary is missing;
+reinstall with `pipx install semgrep==1.182.1` (the version CI pins).
 
 ### Cross-cutting themes (apply to ALL harnesses)
 1. ~~No coverage reporting anywhere~~ — **DONE 2026-10-27 for all 5 components**

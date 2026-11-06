@@ -218,9 +218,14 @@ jobs:
   # ---------------------------------------------------------------------------
   # CodeQL needs GitHub Code Security on a private repository (SARIF upload 403),
   # so codeql.yml is gated off. This covers the same ground without the licence:
-  # Semgrep's default ruleset over JS/TS/Python/Dockerfile. It fails only on
-  # ERROR-severity findings; WARNING/MEDIUM/INFO are summarised so the patterns
-  # stay visible without blocking on day one.
+  # Semgrep's default ruleset over JS/TS/Python/Dockerfile.
+  #
+  # Every finding must reach a verdict. ERROR-severity findings are never
+  # exceptionable. Everything else is either fixed or listed in
+  # scripts/sast-exceptions.json with a disposition and a reason a reviewer can
+  # check against the code. An entry whose flagged line has changed no longer
+  # matches, and an entry that matches nothing fails the job — so "expected"
+  # always refers to a line someone actually read (S251).
   sast-semgrep:
     name: SAST (Semgrep)
     runs-on: ubuntu-latest

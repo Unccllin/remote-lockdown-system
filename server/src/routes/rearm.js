@@ -89,6 +89,12 @@ router.post('/', async (req, res, next) => {
 
     res.type('text/plain; charset=utf-8');
     res.set('Cache-Control', 'no-cache');
+    // A .ps1 body served as text/plain is still sniffable: without nosniff, a browser
+    // that sniffs HTML here would execute markup from any value that reaches the script
+    // (hostname comes from the device table). The script is what the bootstrap writes to
+    // disk and runs, so it cannot be JSON-wrapped; nosniff is what keeps a browser from
+    // treating it as a document (S251).
+    res.set('X-Content-Type-Options', 'nosniff');
     return res.send(script);
   } catch (err) {
     return next(err);

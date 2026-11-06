@@ -1,0 +1,412 @@
+{
+  "_comment": "Reviewed Semgrep exceptions for scripts/sast-gate.py. Every finding the p/default ruleset reports must either be fixed or appear here with a disposition ('false-positive' or 'accepted-risk') and a reason a reviewer can check against the code. The gate fails when a finding has no entry, and also when an entry matches nothing (so a fixed finding gets its entry deleted instead of lingering). ERROR-severity findings cannot be excepted. 'match' is the stripped source line at the finding's location: editing that line invalidates the entry on purpose, because the exception was a review of that code.",
+  "semgrep_version": "1.182.1",
+  "reviewed": "S251",
+  "exceptions": [
+    {
+      "rule": "python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http",
+      "path": "agent/agent.py",
+      "match": "resp = requests.get(\"http://ip-api.com/json/\", timeout=10)",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "ip-api.com's free tier answers over plain HTTP only (HTTPS needs a paid key). The request sends no credentials and no device identifier, so what is disclosed in transit is the server's own egress IP and the fact that a lookup happened. This is E-TRACK's documented fallback when the platform WiFi scan returns nothing; replacing it needs a paid subscription, tracked as an E-TRACK blocker.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+      "path": "agent/agent.py",
+      "match": "log.warning(\"Could not read BIOS password backup: %s\", e)",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Only substitution is the caught exception. The backup file's contents are never formatted into the message, and the exceptions that can occur here (OSError, UnicodeDecodeError, JSONDecodeError) carry a path or a byte position, not the payload. The rule keys on the word 'password' in the format string.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/agent_diagnostic.py",
+      "match": "with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "The URL is a literal https:// constant in this module (the Worker health probe); the variable form is only the Request object built from it. urllib's file:// exposure needs a caller-controlled URL and there is none on this path.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+      "path": "agent/hp_uefi_lockdown.py",
+      "match": "log.info(\"BIOS password backup written to %s\", BIOS_PASSWORD_BACKUP_FILE)",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Substitution is the backup file PATH, not the credential. Knowing where the DPAPI-encrypted blob lives does not disclose the BIOS password, and the path is a module constant the operator can already read from the install tree.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+      "path": "agent/hp_uefi_lockdown.py",
+      "match": "log.error(\"CRITICAL: Could not write BIOS password backup: %s\", e)",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Substitution is the caught OSError from the atomic write. No part of the encoded credential is formatted into the message.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+      "path": "agent/hp_uefi_lockdown.py",
+      "match": "log.error(\"Could not read BIOS password backup: %s\", e)",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Substitution is the caught exception from reading/decoding the backup. A JSONDecodeError reports a line and column, and UnicodeDecodeError reports a byte offset \u2014 neither includes the decrypted document.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+      "path": "agent/hp_uefi_lockdown.py",
+      "match": "log.warning(\"Could not delete BIOS password backup: %s\", e)",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Substitution is the caught OSError from unlinking the backup file. No credential material is in scope at this line.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+      "path": "agent/hp_uefi_lockdown.py",
+      "match": "log.error(",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Substitution is SET_BIOS_RETURN_CODES.get(rc) \u2014 a constant table of firmware return-code NAMES. The password being set is an argument to _set_setting(), not to the logger.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+      "path": "agent/hp_uefi_lockdown.py",
+      "match": "log.error(",
+      "occurrence": 2,
+      "disposition": "false-positive",
+      "reason": "Substitution is SET_BIOS_RETURN_CODES.get(rc), a constant-name lookup. Neither the BIOS password nor the Power-On password reaches the logger.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+      "path": "agent/hp_uefi_lockdown.py",
+      "match": "log.warning(",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Substitution is SET_BIOS_RETURN_CODES.get(rc) for the Power-On Password clear failure. The message names the operation, not the credential.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+      "path": "agent/hp_uefi_lockdown.py",
+      "match": "log.warning(",
+      "occurrence": 2,
+      "disposition": "false-positive",
+      "reason": "Substitution is SET_BIOS_RETURN_CODES.get(rc) for the Setup password clear failure. The message names the operation, not the credential.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/hw_test_harness.py",
+      "match": "urllib.request.urlopen(\"http://localhost:3000/api/health\", timeout=3)  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Hardware test harness only (agent/hw_test_harness.py) \u2014 never shipped to a device. Every URL in it is a literal http://localhost:3000 lab server, and the harness is run by an operator against the machine under test (D-003/D-129).",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.insecure-transport.urllib.insecure-urlopen.insecure-urlopen",
+      "path": "agent/hw_test_harness.py",
+      "match": "urllib.request.urlopen(\"http://localhost:3000/api/health\", timeout=3)  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Hardware test harness only (agent/hw_test_harness.py) \u2014 never shipped to a device. Every URL in it is a literal http://localhost:3000 lab server, and the harness is run by an operator against the machine under test (D-003/D-129).",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.insecure-transport.urllib.insecure-request-object.insecure-request-object",
+      "path": "agent/hw_test_harness.py",
+      "match": "req = urllib.request.Request(  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Hardware test harness only (agent/hw_test_harness.py) \u2014 never shipped to a device. Every URL in it is a literal http://localhost:3000 lab server, and the harness is run by an operator against the machine under test (D-003/D-129).",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/hw_test_harness.py",
+      "match": "resp = urllib.request.urlopen(req, timeout=10)  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Hardware test harness only (agent/hw_test_harness.py) \u2014 never shipped to a device. Every URL in it is a literal http://localhost:3000 lab server, and the harness is run by an operator against the machine under test (D-003/D-129).",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.insecure-transport.urllib.insecure-request-object.insecure-request-object",
+      "path": "agent/hw_test_harness.py",
+      "match": "enroll_req = urllib.request.Request(  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Hardware test harness only (agent/hw_test_harness.py) \u2014 never shipped to a device. Every URL in it is a literal http://localhost:3000 lab server, and the harness is run by an operator against the machine under test (D-003/D-129).",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/hw_test_harness.py",
+      "match": "resp = urllib.request.urlopen(enroll_req, timeout=10)  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Hardware test harness only (agent/hw_test_harness.py) \u2014 never shipped to a device. Every URL in it is a literal http://localhost:3000 lab server, and the harness is run by an operator against the machine under test (D-003/D-129).",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/hw_test_harness.py",
+      "match": "urllib.request.urlopen(flag_req, timeout=10)  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Hardware test harness only (agent/hw_test_harness.py) \u2014 never shipped to a device. Every URL in it is a literal http://localhost:3000 lab server, and the harness is run by an operator against the machine under test (D-003/D-129).",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/hw_test_harness.py",
+      "match": "resp = urllib.request.urlopen(get_req, timeout=10)  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Hardware test harness only (agent/hw_test_harness.py) \u2014 never shipped to a device. Every URL in it is a literal http://localhost:3000 lab server, and the harness is run by an operator against the machine under test (D-003/D-129).",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/hw_test_harness.py",
+      "match": "urllib.request.urlopen(recover_req, timeout=10)  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Hardware test harness only (agent/hw_test_harness.py) \u2014 never shipped to a device. Every URL in it is a literal http://localhost:3000 lab server, and the harness is run by an operator against the machine under test (D-003/D-129).",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/hw_test_harness.py",
+      "match": "resp = urllib.request.urlopen(get_req, timeout=10)  # noqa: S310",
+      "occurrence": 2,
+      "disposition": "accepted-risk",
+      "reason": "Hardware test harness only (agent/hw_test_harness.py) \u2014 never shipped to a device. Every URL in it is a literal http://localhost:3000 lab server, and the harness is run by an operator against the machine under test (D-003/D-129).",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/hw_test_harness.py",
+      "match": "urllib.request.urlopen(upload_req, timeout=10)  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Artifact upload to the server the operator names with --upload (their own lab server). Harness-only code, run by an operator, never shipped to a device.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/tamper_protection.py",
+      "match": "with urlopen(req, timeout=10) as resp:  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "URL is built from the operator-configured server_url the agent is enrolled with, and the request carries POST data \u2014 urllib refuses file:// for a request with a body (ValueError), so the file-read exposure the rule describes is unreachable.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+      "path": "agent/tamper_protection.py",
+      "match": "log.error(",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Logs the server's HTTP error body when an uninstall-token request fails, so a failed uninstall is diagnosable. The token is only returned on a 200; the body of an error response is the server's error message, and the request's API key is never echoed back. Accepted so field failures are not silent.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+      "path": "agent/tamper_protection.py",
+      "match": "log.error(\"Uninstall token request failed: %s\", e)",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Substitution is the caught transport exception (URLError/OSError/JSON error). No token material is in the message.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/tamper_protection.py",
+      "match": "with urlopen(req, timeout=10) as resp:  # noqa: S310",
+      "occurrence": 2,
+      "disposition": "false-positive",
+      "reason": "Same call as the uninstall-token request above: operator-configured server_url, POST body, so file:// is refused by urllib before any read happens.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.insecure-file-permissions.insecure-file-permissions",
+      "path": "agent/watchdog.py",
+      "match": "os.chmod(str(target), 0o755)  # noqa: S103 -- 0o755 is the correct permission for an executable binary",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "chmod 0o755 is applied to the agent EXECUTABLE after an in-place update \u2014 755 is what makes the new binary runnable. It is not a secret-bearing file; the credential material lives in the DPAPI-protected config, which has its own permissions.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "html.security.audit.missing-integrity.missing-integrity",
+      "path": "dashboard/index.html",
+      "match": "<link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z'/%3E%3C/svg%3E\" />",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "The flagged tag is the favicon and its href is a data: URI embedded in the document itself. There is no cross-origin fetch, so there is nothing for an integrity hash to pin.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal",
+      "path": "electron/config.js",
+      "match": "return path.join(userDataPath, CONFIG_FILENAME);",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Joins a CONSTANT filename (CONFIG_FILENAME) onto Electron's app.getPath('userData'). The parameter is supplied by Electron, not by a request, and no request data reaches this function.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage",
+      "path": "electron/server-starter.js",
+      "match": "const app = express();",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Loopback static file server for the built dashboard bundle. It serves files and nothing else \u2014 there is no session, cookie or mutating route, so there is no ambient credential a cross-site request could ride.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage",
+      "path": "electron/test-simulation.js",
+      "match": "const app = express();",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Express app with no cookie or session authentication: every mutating route authenticates with an Authorization bearer token or API key, which a cross-site form cannot set. CSRF forgery needs ambient credentials, and there are none to forge with.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "problem-based-packs.insecure-transport.js-node.using-http-server.using-http-server",
+      "path": "scripts/firmware-tls-proxy.js",
+      "match": "const upstream = http.request(",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "This proxy exists to terminate TLS for firmware that requires https:// and forward to the plain-HTTP lab server, so the upstream hop is deliberately plaintext and on the local QEMU host bridge. Debug tooling, not shipped.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "scripts/firmware-tls-proxy.py",
+      "match": "with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Same proxy on the Python side: the upstream URL is the operator's --upstream argument, defaulting to the QEMU host bridge. The scheme is checked before the request is made (see the S310 comment above it); this tool only runs against the local lab.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage",
+      "path": "server/dev-start-sqlite.js",
+      "match": "const app = express();",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Express app with no cookie or session authentication: every mutating route authenticates with an Authorization bearer token or API key, which a cross-site form cannot set. CSRF forgery needs ambient credentials, and there are none to forge with.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal",
+      "path": "server/src/config/paths.js",
+      "match": "const fullPath = path.join(dir, path.basename(String(binName)));",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "The helper resolves a NAME inside the binaries directory and now applies path.basename() first (S251), so a traversal payload cannot escape the directory at all. Callers pass literals; the rule flags the parameter itself.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage",
+      "path": "server/src/index.js",
+      "match": "const app = express();",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Express app with no cookie or session authentication: every mutating route authenticates with an Authorization bearer token or API key, which a cross-site form cannot set. CSRF forgery needs ambient credentials, and there are none to forge with.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal",
+      "path": "server/src/routes/installer.js",
+      "match": "const platformCacheDir = path.join(cacheDir, internalPlatform);",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "The rule flags any function parameter that reaches path.join, so it cannot be satisfied by narrowing: internalPlatform/binaryName are the literal fields of getPlatformConfig's return ('win'|'linux' plus fixed filenames), and resolveDeviceAndBinaries now passes plat.platform rather than the query value (S251). The only request-derived value in the chain is a two-value whitelist.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal",
+      "path": "server/src/routes/installer.js",
+      "match": "const cachedPath = path.join(platformCacheDir, localName);",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "The rule flags any function parameter that reaches path.join, so it cannot be satisfied by narrowing: internalPlatform/binaryName are the literal fields of getPlatformConfig's return ('win'|'linux' plus fixed filenames), and resolveDeviceAndBinaries now passes plat.platform rather than the query value (S251). The only request-derived value in the chain is a two-value whitelist.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal",
+      "path": "server/src/routes/installer.js",
+      "match": "const cachedPath = path.join(platformCacheDir, localName);",
+      "occurrence": 2,
+      "disposition": "false-positive",
+      "reason": "The rule flags any function parameter that reaches path.join, so it cannot be satisfied by narrowing: internalPlatform/binaryName are the literal fields of getPlatformConfig's return ('win'|'linux' plus fixed filenames), and resolveDeviceAndBinaries now passes plat.platform rather than the query value (S251). The only request-derived value in the chain is a two-value whitelist.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal",
+      "path": "server/src/routes/installer.js",
+      "match": "const localPath = path.join(binariesDir, binaryName);",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "The rule flags any function parameter that reaches path.join, so it cannot be satisfied by narrowing: internalPlatform/binaryName are the literal fields of getPlatformConfig's return ('win'|'linux' plus fixed filenames), and resolveDeviceAndBinaries now passes plat.platform rather than the query value (S251). The only request-derived value in the chain is a two-value whitelist.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal",
+      "path": "server/src/routes/installer.js",
+      "match": "const platformCacheDir = path.join(cacheDir, internalPlatform);",
+      "occurrence": 2,
+      "disposition": "false-positive",
+      "reason": "The rule flags any function parameter that reaches path.join, so it cannot be satisfied by narrowing: internalPlatform/binaryName are the literal fields of getPlatformConfig's return ('win'|'linux' plus fixed filenames), and resolveDeviceAndBinaries now passes plat.platform rather than the query value (S251). The only request-derived value in the chain is a two-value whitelist.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal",
+      "path": "server/src/routes/installer.js",
+      "match": "const cachedPath = path.join(platformCacheDir, binaryName);",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "The rule flags any function parameter that reaches path.join, so it cannot be satisfied by narrowing: internalPlatform/binaryName are the literal fields of getPlatformConfig's return ('win'|'linux' plus fixed filenames), and resolveDeviceAndBinaries now passes plat.platform rather than the query value (S251). The only request-derived value in the chain is a two-value whitelist.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal",
+      "path": "server/src/routes/installer.js",
+      "match": "const cachedPath = path.join(platformCacheDir, binaryName);",
+      "occurrence": 2,
+      "disposition": "false-positive",
+      "reason": "The rule flags any function parameter that reaches path.join, so it cannot be satisfied by narrowing: internalPlatform/binaryName are the literal fields of getPlatformConfig's return ('win'|'linux' plus fixed filenames), and resolveDeviceAndBinaries now passes plat.platform rather than the query value (S251). The only request-derived value in the chain is a two-value whitelist.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal",
+      "path": "server/src/routes/installer.js",
+      "match": "const candidate = path.join(dir, name);",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "localBinaryPath() has exactly one caller and it passes the literal 'lockdown-installer.exe'. The rule flags the parameter; no request value reaches this join.",
+      "reviewed": "S251"
+    },
+    {
+      "rule": "javascript.express.security.audit.xss.direct-response-write.direct-response-write",
+      "path": "server/src/routes/rearm.js",
+      "match": "return res.send(script);",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "The body is a generated PowerShell bootstrap. It cannot be JSON-wrapped (the device writes the response text to disk and runs it) and it is served as text/plain with X-Content-Type-Options: nosniff added in S251, so a browser cannot render it as HTML. The hostname interpolated into it has already been through the escapePs1/generateInstallPs1 quoting.",
+      "reviewed": "S251"
+    }
+  ]
+}

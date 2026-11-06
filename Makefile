@@ -183,8 +183,10 @@ dev-up: dev-secrets
 
 .PHONY: sast
 sast:
-	@# Code scanning without GitHub Code Security: Semgrep default ruleset,
-	@# gating on ERROR only (see scripts/sast-gate.py for why).
+	@# Code scanning without GitHub Code Security: Semgrep default ruleset.
+	@# Every finding must be fixed or listed in scripts/sast-exceptions.json with a
+	@# reason a reviewer can check; ERROR is never exceptionable. See
+	@# scripts/sast-gate.py for why this is no longer "fail on ERROR only".
 	@command -v semgrep >/dev/null 2>&1 || { echo "semgrep not installed — pipx install semgrep"; exit 2; }
 	@semgrep scan --config=p/default --json-output=semgrep.json --quiet . || true
 	@python3 scripts/sast-gate.py semgrep.json

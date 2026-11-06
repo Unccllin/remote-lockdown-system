@@ -102,6 +102,18 @@ describe('getPlatformConfig', () => {
   test('an unknown platform falls back to linux rather than throwing', () => {
     expect(getPlatformConfig('plan9').platform).toBe('linux');
   });
+
+  test('never echoes the requested string back as a platform', () => {
+    // The binary resolvers join config.platform into a cache path, so a query value
+    // that came back out verbatim would be a traversal. getPlatformConfig is the
+    // whitelist those joins rely on, which is why resolveDeviceAndBinaries passes
+    // plat.platform instead of the raw argument (S251).
+    const payloads = ['../../tmp', 'linux/../../..', 'WIN', 'darwin', '', null, undefined];
+    const leaked = payloads.filter(
+      (raw) => !['win', 'linux'].includes(getPlatformConfig(raw).platform)
+    );
+    expect(leaked).toEqual([]);
+  });
 });
 
 describe('getReleasePlatformName — GitHub asset naming', () => {

@@ -71,7 +71,11 @@ function getAgentBinariesDir() {
 function resolveAgentBinary(binName) {
   const dir = getAgentBinariesDir();
   if (!dir) return null;
-  const fullPath = path.join(dir, binName);
+  // basename() is not decoration: this helper resolves a NAME inside `dir`, so a
+  // caller that ever passes request-derived text (`../etc/passwd`) must not be able
+  // to walk out of the binaries directory. Every current caller passes a literal,
+  // which is exactly why the guard belongs here rather than at each call site (S251).
+  const fullPath = path.join(dir, path.basename(String(binName)));
   return fs.existsSync(fullPath) ? fullPath : null;
 }
 

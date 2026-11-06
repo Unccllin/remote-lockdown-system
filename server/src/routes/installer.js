@@ -458,7 +458,13 @@ async function resolveDeviceAndBinaries(deviceId, platform) {
   }
 
   const plat = getPlatformConfig(platform);
-  const agentBinPath = await resolveAgentBinary(platform, plat.agentName, 'lockdown-agent');
+  // Pass plat.platform — a whitelisted 'win'|'linux' from getPlatformConfig — not the
+  // raw `platform` argument. The argument arrives from a query string, and every binary
+  // resolver below joins it into a cache path (`path.join(cacheDir, internalPlatform)`),
+  // so an unvalidated value like `../../tmp` would escape the cache directory. The two
+  // callers today already narrow it, which made this a latent bug rather than a live one;
+  // resolving the whitelist HERE is what removes the taint instead of documenting it (S251).
+  const agentBinPath = await resolveAgentBinary(plat.platform, plat.agentName, 'lockdown-agent');
   if (!agentBinPath) {
     const err = new Error(
       `Agent binary not found for platform "${platform}". ` +
@@ -469,12 +475,12 @@ async function resolveDeviceAndBinaries(deviceId, platform) {
     throw err;
   }
 
-  const watchdogBinPath = await resolveAgentBinary(platform, plat.watchdogName, 'lockdown-watchdog');
+  const watchdogBinPath = await resolveAgentBinary(plat.platform, plat.watchdogName, 'lockdown-watchdog');
 
   // The CLI installer both generated Windows installers delegate to. Windows
   // only — the Linux install.sh keeps its systemd service path.
   const installerBinPath = plat.installerName
-    ? await resolveAgentBinary(platform, plat.installerName, 'lockdown-installer')
+    ? await resolveAgentBinary(plat.platform, plat.installerName, 'lockdown-installer')
     : null;
 
   return { device, agentBinPath, watchdogBinPath, installerBinPath, plat };

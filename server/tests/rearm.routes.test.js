@@ -69,6 +69,10 @@ describe('POST /api/rearm', () => {
     // The firmware writes the body straight to a .ps1 file, so it must be the
     // script itself — JSON wrapping it would be written verbatim and never run.
     expect(res.headers['content-type']).toMatch(/text\/plain/);
+    // Summary: the bootstrap saves the body as a .ps1 and a browser must never render
+    // it as a document — script text reaching an HTML renderer is the XSS the
+    // direct-response-write rule warns about (S251).
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
     expect(res.text).toContain('PC-STOLEN');
     expect(res.text.length).toBeGreaterThan(100);
 
