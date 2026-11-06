@@ -2431,3 +2431,22 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-107
+  statement: 'The agent credential header contract is split across surfaces: Express agentAuth reads x-agent-key,
+    the Worker reads X-API-Key, and agent/tamper_protection.py sends X-API-Key. With Bearer compared only
+    to ADMIN_TOKEN, both /api/agent/uninstall-auth routes answered 401 on a self-hosted server for every
+    device until S252 made Express accept either header name and the agent send both.'
+  domain: api/auth
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S252: read both route implementations and the agent''s header set; server/tests/uninstallAuth.test.js
+    fails 4x401 before the fix and passes 9/9 after'
+  source: server/src/routes/agent.js (uninstallCredential/authorizedForUninstall); serverless/worker.ts;
+    agent/tamper_protection.py; server/tests/uninstallAuth.test.js
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

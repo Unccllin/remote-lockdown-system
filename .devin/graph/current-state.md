@@ -53,94 +53,95 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 251 — 2026-11-05 (45 SAST findings classified: 3 code fixes, 45 with evidence, and a gate that fails both ways)
+## Latest session: 252 — 2026-11-05 (E-TRACK's cleartext lookup replaced, and the uninstall-token flow that was 401ing)
 
 ### Fog cleared
 
-- **What the 40 WARNING findings actually were**: 12 `dynamic-urllib-use` (11 of them the
-  hardware harness against `http://localhost:3000`, 1 the tamper module's operator-configured
-  server with a POST body), 11 `python-logger-credential-disclosure` (all logging an exception,
-  a path, or a return-code name — never the password), 10 `path-join-resolve-traversal` (8 in
-  the installer's binary resolvers, 1 Electron userData, 1 an unused helper), 4
-  `express-check-csurf` (bearer-token APIs with no cookies to forge with), 2 transport-http in
-  the lab harness. No ERROR-class issue was hiding among them.
-- **Whether the rule can be satisfied by hardening**: no — measured, see above. Worth knowing
-  before anyone spends a session trying.
-- **Whether `--strict` was ever used**: nothing calls it (CI, Makefile, docs). It is now
-  replaced by `--lenient`, the inverse default.
+- **What the ip-api.com fallback actually was**: the *default* path (no Google key is the
+  default configuration), cleartext, to a third party, on a tracking feature. The
+  `dynamic-urllib-use` finding had been recorded as "expected" for the agent generally;
+  this specific call was a `request-with-http`, and S251 recorded it `accepted-risk`
+  rather than fixed because the free tier has no TLS.
+- **Whether the 11 `python-logger-credential-disclosure` hits could leak the uninstall
+  token**: the server's error bodies are `{error: ...}` only — now *enforced* by
+  `server/tests/uninstallAuth.test.js` rather than assumed from reading the routes.
+- **Whether the uninstall-token routes worked at all on the self-hosted server**: they did
+  not. `grep -rn uninstall_token server/tests/` was empty, so nothing could have noticed,
+  and the cross-surface contract test compares route paths, not headers.
 
 ### Fog remaining
 
-- **The 5 Dependabot vulnerabilities are still unidentified** (unchanged from S250): npm ×4 and
-  both pip sets audit clean, Actions are SHA-pinned. Confirming needs the security page.
-- **CodeQL's 102 alerts remain untriaged** (unchanged from S250).
-- **`agent/agent.py:1141` calls ip-api.com over plain HTTP** — recorded as `accepted-risk`, not
-  fixed: the free tier has no HTTPS. It is a real (small) disclosure and an E-TRACK blocker.
-- **`agent/tamper_protection.py:398` logs the server's HTTP error body** — accepted so field
-  failures stay diagnosable; a server that echoed the token in an error body would leak it into
-  the agent log. The server does not do that today; it is not prevented by a test.
-- **The exceptions are point-in-time.** A Semgrep rule update will surface new findings and the
-  gate will fail until they are classified — intended, but it means this file is a recurring
-  chore, not a one-off.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, both blocked
+  on the security page.
+- **`uninstall-auth`'s token scheme is weak, and now visible**: the token is
+  `HMAC(ADMIN_TOKEN, 5-minute window)` — identical for every device on the deployment, and
+  guessable to anyone who ever sees one. This session fixed whether the route is
+  reachable, not what it issues. Not filed as debt yet; it should be.
+- **The general header-contract class is still untested.** This session pinned the two
+  uninstall routes by hand. `scripts/test_cross_surface_contract.py` compares route
+  existence only, so any *other* route where the agent's header spelling differs from the
+  Express reader is equally invisible.
+- **`TRACK_ALLOW_INSECURE_IP_LOOKUP` is an escape hatch with no audit trail** — an operator
+  who sets it gets a cleartext lookup and only a startup-adjacent warning.
+- The exceptions file is down to 44 entries; the `python-logger-credential-disclosure`
+  reason at `tamper_protection.py` now cites the server test instead of asserting the
+  assumption.
 
 ### Debt items closed
 
-- None. D-117, D-129 and the PBL tail remain open.
+- None. No ledger item covered either defect; both are recorded here and in the beliefs.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134.
+- D-117, D-120, D-129, D-130, D-134.
 
 ### Blockers
 
-- The five Dependabot findings cannot be identified without the security page (or a token);
-  CodeQL's alerts likewise.
+- Dependabot/CodeQL findings need the security page.
+- E-TRACK still cannot be marked `verified-on-hardware` (I3); the IP fallback change is a
+  unit-level fact, not a hardware artifact.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary): the rewritten `sast-gate.py` crashed on its
-  first real run (`sorted(items, key=loc)` where `items` holds tuples — an AttributeError from
-  a two-element payload). The gate had been rewritten before any test existed for it; writing
-  `test_sast_gate.py` first would have caught it in seconds instead of on a 45-finding report.
-  The harness change is what now exists: the gate has 20 teeth tests, including the
-  `--lenient`/exit-code paths the crash hid behind.
-- **Layer 2 — context provision** (secondary): my first `server/tests/paths.test.js` asserted
-  `getAgentBinariesDir()` returns null without a built binary and failed, because the override
-  is *first*, not *exclusive* — the function falls through to the in-repo `agent/dist`, which
-  this host has. The behaviour was documented in the module header ("Lookup order: 0 override …
-  2 dev mode") **and** in `agent.routes.test.js`, which warns that assertions depending on "no
-  binary exists" pass locally and fail on CI or vice versa. I wrote the test before reading the
-  warning I had already read once. Rewritten to assert precedence and a name staged nowhere.
+- **Layer 2 — context provision** (primary): the header mismatch was a *documented*
+  contract — `docs/API.md` said "Agent API key", `agent.js`'s `agentAuth` docstring says
+  `x-agent-key`, the Worker reads `X-API-Key` — spread over three files with no single
+  place stating the agent's outbound header. Nothing in `scripts/test_cross_surface_contract.py`
+  covers headers, because the contract it checks was defined as route paths. Fixing the
+  contract (both names accepted, both sent) is cheaper than any comment would have been.
+- **Layer 4 — verification feedback** (secondary): the two routes had **zero** tests, and
+  the agent's `TestGeolocation` patched `requests` so completely that the URL was never
+  asserted. Both defects survived because the tests were shaped exactly so the bug could
+  not appear in them.
 
 ### VERIFY
 
-- `semgrep scan --config=p/default` (1.182.1, reinstalled this session): **45 findings — 0
-  ERROR, 0 MEDIUM, 40 WARNING, 5 INFO**, identical before and after the three code fixes (the
-  rule flags parameters; measured, not assumed).
-- `make sast` end-to-end → **exit 0**: `[OK] every finding is either fixed or carries a
-  reviewed reason` (45 accepted, listed per rule).
-- **Negative controls on the real report** (the teeth):
-  - `--exceptions /tmp/empty-exceptions.json` → **exit 1**, `Summary: 45 finding(s) — 0 ERROR,
-    0 accepted, 45 unclassified, 0 stale`.
-  - one entry's `match` edited by one line → **exit 1**, `44 accepted, 1 unclassified, 1 stale
-    exception` naming `server/src/routes/rearm.js`.
-- `agent/.venv/bin/python scripts/test_sast_gate.py` → **20 passed**.
-- `make test-scripts` → new suite discovered and green (20 passed); whole sweep still green.
-- `cd server && npm test` → **808 passed, 49 suites** (was 663/41 when AGENTS.md was last
-  written; the doc now carries the measured numbers).
-- Teeth check on the paths guard: with `path.basename()` removed, `tests/paths.test.js` →
-  **1 failed of 5**; restored → 5 passed.
-- `make lint-workflows` → exit 0 (actionlint 1.7.12 + shellcheck). `npx eslint` on every
-  changed JS file → exit 0. `ruff check agent` → all checks passed. `make graph-check` → all
-  invariants pass.
+- `agent/.venv/bin/python -m pytest agent/tests` → **830 passed in 33.11s** (was 822
+  before this session's 8 new cases; AGENTS.md had been claiming 689).
+- `cd server && npm test` → **817 passed, 50 suites** (was 808/49; +9 cases, +1 suite).
+- `server/tests/uninstallAuth.test.js` **before** the server fix → **4 failed, 5 passed**,
+  every failure a 401 on `X-API-Key`; **after** → 9 passed. That is the proof the bug was
+  real and the fix is what closed it.
+- Teeth on the E-TRACK change: reverting the default to `http://ip-api.com/json/` **and**
+  neutralising the scheme guard makes `test_ip_lookup_default_is_https` and
+  `test_ip_lookup_refuses_cleartext_without_opt_in` fail; restored → 12 geolocation cases
+  pass.
+- `semgrep scan --config=p/default` → **44 findings** (was 45): the `request-with-http`
+  finding is gone because the call is https. The gate then **failed** with
+  `1 exception(s) match no finding` naming that entry — the stale-entry rule doing its job
+  on a real fix — and passed again only after the entry was deleted. **No new finding**
+  was produced by the rewritten function.
+- `scripts/test_sast_gate.py` → 20 passed. `ruff check` + `ruff format --check` clean.
+  `npx eslint src/routes/agent.js tests/uninstallAuth.test.js` clean. `make graph-check`
+  → all invariants pass. `python3 -c yaml.safe_load` on GRAPH-SPEC and openapi.yaml → ok.
 
 ### Next session opening
 
-Decide what `agent/agent.py:1141`'s plaintext ip-api.com call should become — move E-TRACK's
-geolocation to a keyed HTTPS provider, drop the IP fallback and document the accuracy loss, or
-keep it and give the decision a test — and add a server-side test that an uninstall-token error
-response never echoes the token, since `tamper_protection.py:398` logging the body is currently
-accepted on that assumption alone.
+File the uninstall-token scheme weakness as debt and decide it: `HMAC(ADMIN_TOKEN,
+5-minute window)` is the same string for every device in a deployment, so one leaked token
+authorises an uninstall anywhere until the window rolls — per-device HMAC with the device
+key and a server-issued nonce is the obvious replacement, and it belongs in the ledger
+before it is fixed.
 
 ---
 

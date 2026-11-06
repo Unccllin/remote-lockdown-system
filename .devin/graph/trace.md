@@ -13202,3 +13202,189 @@ accepted on that assumption alone.
 ---
 
 ---
+
+## Session 252 — 2026-11-05 (E-TRACK's cleartext lookup replaced, and the uninstall-token flow that was 401ing)
+
+### RULE-ZERO
+
+**Read**:
+- `agent/agent.py` — `get_ip_geolocation()` (the hardcoded `http://ip-api.com/json/` at 1141),
+  `get_geolocation()` and its WiFi-then-IP fallback, `report_location()`, and the
+  `google_api_key` plumbing at 447
+- `agent/tests/test_agent_serverless.py` `TestGeolocation` — note it mocks `agent.requests`
+  wholesale, so **no test ever asserted the URL or its scheme**; that is why a plaintext
+  third-party call survived every suite
+- `agent/tamper_protection.py` — `request_uninstall_token()` / `verify_uninstall_token()`, the
+  header set they send, and the `except HTTPError` branch at 396-403 that logs `e.read()`
+- `server/src/routes/agent.js` — `agentAuth` (reads `x-agent-key`) and both uninstall-auth routes
+- `serverless/worker.ts` — the same two routes on the Worker
+- `scripts/test_cross_surface_contract.py` — it compares route *existence* across UI/Worker/Express,
+  not headers
+- `docs/D-129-HARDWARE-RUNBOOK.md` — E-TRACK-01's assertions ("empty wifi scan falls back to IP")
+
+**Finding (both parts of this session, measured from source)**:
+
+1. `get_ip_geolocation()` calls **`http://ip-api.com/json/`** — cleartext, third party, on the
+   fallback path that runs whenever no Google key is configured (the default). The response is
+   geolocation of the operator's egress IP, and a network observer sees that a lookup happened.
+   No test asserted either the URL or the scheme.
+
+2. **The uninstall-token flow is broken against the self-hosted Express server.** The agent sends
+   `X-API-Key` + `Authorization: Bearer <api_key>` (`tamper_protection.py:390-391`, `:429-431`),
+   the Worker reads `X-API-Key`, but `server/src/routes/agent.js` reads **`x-agent-key`** and only
+   accepts `Authorization: Bearer <ADMIN_TOKEN>` as the fallback. A device's API key is not the
+   admin token, so both routes answer **401** on Express — the token can never be issued or
+   verified there, and the local uninstall path fails closed with no token. No server test existed
+   for either route (`grep -rn uninstall_token server/tests/` was empty), and the cross-surface
+   contract test compares route existence, not headers, so nothing could have seen it.
+
+**Consequence for the plan**: the "prove an error body never echoes the token" test cannot be
+written honestly without first making the flow reach a non-401 path — otherwise it asserts the
+shape of a 401 body and calls the token path covered. Fix the header contract, then assert.
+
+### Implement
+
+**A. E-TRACK's IP fallback is now TLS-only** (`agent/agent.py`):
+
+- `DEFAULT_IP_GEOLOCATION_URL = "https://ipwho.is/"` replaces the hardcoded
+  `http://ip-api.com/json/`. ip-api's free tier is HTTP-only (HTTPS is the paid `pro.`
+  host), so the default moved rather than gaining a scheme.
+- `IP_GEOLOCATION_URL` overrides the endpoint; `_ip_geolocation_url()` **returns None**
+  for anything that is not `https://` unless `TRACK_ALLOW_INSECURE_IP_LOOKUP=1`, and logs
+  the refusal. Returning None (not silently upgrading) keeps the refusal visible and lets
+  an operator who really runs a private-network lookup say so explicitly.
+- `_parse_ip_lookup()` normalises both schemas — `ipwho.is` (`latitude`/`longitude`/
+  `country_code`) and ip-api (`lat`/`lon`/`countryCode`, still what a `pro.ip-api.com`
+  override answers) — and treats an explicit provider failure (`success: false`,
+  `status: "fail"`) as *no location*, so a partially-populated body cannot become a fix.
+- Before this there was **no test of the URL at all**: every existing case patched
+  `agent.requests` wholesale, so a cleartext third-party call was invisible to the suite.
+
+**B. The uninstall-token flow works on Express again** (`server/src/routes/agent.js`,
+`agent/tamper_protection.py`):
+
+- Root cause: the agent sends `X-API-Key`; this router read only `x-agent-key`, and its
+  bearer fallback compares to `ADMIN_TOKEN` (a device key is not one). Both routes
+  answered 401 to the agent that owns them, so no self-hosted uninstall could obtain a
+  token. The Worker reads `X-API-Key`, which is why serverless worked and hid it.
+- Added `uninstallCredential()` + `authorizedForUninstall()` and used them in both routes:
+  accept `x-agent-key` **or** `X-API-Key`, bearer still means admin token only. The agent
+  now sends both header names, so it works against either surface.
+- Duplicated auth blocks in the two routes collapsed into the helper; behaviour otherwise
+  unchanged (`Authorization: Bearer <device key>` still 401s — pinned by a test).
+
+**C. Tests** (all new):
+- `agent/tests/test_agent_serverless.py` — 6 cases: default URL is https and equals
+  `DEFAULT_IP_GEOLOCATION_URL`; a cleartext override is refused *without any request*;
+  the opt-in env var makes it work; both response schemas parse; provider-failure markers
+  yield None (4 shapes).
+- `agent/tests/test_tamper_protection.py` — 2 cases asserting `x-agent-key` **and**
+  `X-API-Key` are both sent by both token calls.
+- `server/tests/uninstallAuth.test.js` — 9 cases: 401 without a credential; device key in
+  a bearer header stays 401; issuance works for `x-agent-key` and for `X-API-Key`;
+  unknown key 401 **and** the body echoes neither the key nor its hash; verify accepts the
+  current window token; a wrong token returns `authorized: false` and is not echoed; the
+  400 for a missing token does not echo the rest of the body; an unauthenticated request
+  carrying a token does not get the token back.
+
+**D. Docs touched because they stated the wrong thing**: `docs/API.md` (2 auth rows) and
+`docs/openapi.yaml` (`agentKey` scheme) now name both header spellings; the E-TRACK
+runbook row says the IP fallback is over TLS; `GRAPH-SPEC.yaml`'s E-TRACK `risk_notes`
+records the change and the opt-in.
+
+**Harness-forced edit** (recorded because it is outside this session's subject):
+`agent/agent.py`'s pre-existing `open(path, "r+b")` was reported as an invalid mode by the
+checker as soon as the file was edited at all. AGENTS.md documents the source-level fix for
+that exact discriminator — pass the mode as a keyword — so it is now
+`open(path, mode="r+b")`, behaviour identical, comment expanded to say why.
+
+**Commit**: `94bc8a6` — “fix(agent): stop sending the tracking lookup in cleartext,
+and un-break the uninstall token on Express”. This session block is committed separately.
+
+### Fog cleared
+
+- **What the ip-api.com fallback actually was**: the *default* path (no Google key is the
+  default configuration), cleartext, to a third party, on a tracking feature. The
+  `dynamic-urllib-use` finding had been recorded as "expected" for the agent generally;
+  this specific call was a `request-with-http`, and S251 recorded it `accepted-risk`
+  rather than fixed because the free tier has no TLS.
+- **Whether the 11 `python-logger-credential-disclosure` hits could leak the uninstall
+  token**: the server's error bodies are `{error: ...}` only — now *enforced* by
+  `server/tests/uninstallAuth.test.js` rather than assumed from reading the routes.
+- **Whether the uninstall-token routes worked at all on the self-hosted server**: they did
+  not. `grep -rn uninstall_token server/tests/` was empty, so nothing could have noticed,
+  and the cross-surface contract test compares route paths, not headers.
+
+### Fog remaining
+
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, both blocked
+  on the security page.
+- **`uninstall-auth`'s token scheme is weak, and now visible**: the token is
+  `HMAC(ADMIN_TOKEN, 5-minute window)` — identical for every device on the deployment, and
+  guessable to anyone who ever sees one. This session fixed whether the route is
+  reachable, not what it issues. Not filed as debt yet; it should be.
+- **The general header-contract class is still untested.** This session pinned the two
+  uninstall routes by hand. `scripts/test_cross_surface_contract.py` compares route
+  existence only, so any *other* route where the agent's header spelling differs from the
+  Express reader is equally invisible.
+- **`TRACK_ALLOW_INSECURE_IP_LOOKUP` is an escape hatch with no audit trail** — an operator
+  who sets it gets a cleartext lookup and only a startup-adjacent warning.
+- The exceptions file is down to 44 entries; the `python-logger-credential-disclosure`
+  reason at `tamper_protection.py` now cites the server test instead of asserting the
+  assumption.
+
+### Debt items closed
+
+- None. No ledger item covered either defect; both are recorded here and in the beliefs.
+
+### Debt items still open
+
+- D-117, D-120, D-129, D-130, D-134.
+
+### Blockers
+
+- Dependabot/CodeQL findings need the security page.
+- E-TRACK still cannot be marked `verified-on-hardware` (I3); the IP fallback change is a
+  unit-level fact, not a hardware artifact.
+
+### Failure attribution
+
+- **Layer 2 — context provision** (primary): the header mismatch was a *documented*
+  contract — `docs/API.md` said "Agent API key", `agent.js`'s `agentAuth` docstring says
+  `x-agent-key`, the Worker reads `X-API-Key` — spread over three files with no single
+  place stating the agent's outbound header. Nothing in `scripts/test_cross_surface_contract.py`
+  covers headers, because the contract it checks was defined as route paths. Fixing the
+  contract (both names accepted, both sent) is cheaper than any comment would have been.
+- **Layer 4 — verification feedback** (secondary): the two routes had **zero** tests, and
+  the agent's `TestGeolocation` patched `requests` so completely that the URL was never
+  asserted. Both defects survived because the tests were shaped exactly so the bug could
+  not appear in them.
+
+### VERIFY
+
+- `agent/.venv/bin/python -m pytest agent/tests` → **830 passed in 33.11s** (was 822
+  before this session's 8 new cases; AGENTS.md had been claiming 689).
+- `cd server && npm test` → **817 passed, 50 suites** (was 808/49; +9 cases, +1 suite).
+- `server/tests/uninstallAuth.test.js` **before** the server fix → **4 failed, 5 passed**,
+  every failure a 401 on `X-API-Key`; **after** → 9 passed. That is the proof the bug was
+  real and the fix is what closed it.
+- Teeth on the E-TRACK change: reverting the default to `http://ip-api.com/json/` **and**
+  neutralising the scheme guard makes `test_ip_lookup_default_is_https` and
+  `test_ip_lookup_refuses_cleartext_without_opt_in` fail; restored → 12 geolocation cases
+  pass.
+- `semgrep scan --config=p/default` → **44 findings** (was 45): the `request-with-http`
+  finding is gone because the call is https. The gate then **failed** with
+  `1 exception(s) match no finding` naming that entry — the stale-entry rule doing its job
+  on a real fix — and passed again only after the entry was deleted. **No new finding**
+  was produced by the rewritten function.
+- `scripts/test_sast_gate.py` → 20 passed. `ruff check` + `ruff format --check` clean.
+  `npx eslint src/routes/agent.js tests/uninstallAuth.test.js` clean. `make graph-check`
+  → all invariants pass. `python3 -c yaml.safe_load` on GRAPH-SPEC and openapi.yaml → ok.
+
+### Next session opening
+
+File the uninstall-token scheme weakness as debt and decide it: `HMAC(ADMIN_TOKEN,
+5-minute window)` is the same string for every device in a deployment, so one leaked token
+authorises an uninstall anywhere until the window rolls — per-device HMAC with the device
+key and a server-issued nonce is the obvious replacement, and it belongs in the ledger
+before it is fixed.

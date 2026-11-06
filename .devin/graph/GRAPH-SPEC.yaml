@@ -524,7 +524,11 @@ enforcement_paths:
       audited (session 171, scripts/audit_test_teeth.py): the parser tests added
       in agent/tests/test_wifi_parsing.py are what fail when the scan returns
       nothing; before them every test patched scan_wifi_networks out, so a
-      netsh/nmcli format change would have read as "no neighbours"
+      netsh/nmcli format change would have read as "no neighbours".
+      IP fallback is TLS-only since S252: the default lookup was
+      http://ip-api.com/json/ (cleartext, third party) and is now
+      https://ipwho.is/, overridable with IP_GEOLOCATION_URL; a plain-HTTP
+      override is refused unless TRACK_ALLOW_INSECURE_IP_LOOKUP=1
 
   - id: E-DEADMAN
     name: deadman-switch
