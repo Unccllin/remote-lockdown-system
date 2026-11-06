@@ -293,7 +293,20 @@ export default function DevicesPage() {
                     <td className="px-5 py-3 text-slate-400 text-xs">{d.model || d.hw_model || '—'}</td>
                     <td className="px-5 py-3 text-xs font-mono">
                       {d.agent_version ? (
-                        <span className="text-slate-300">{d.agent_version}</span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="text-slate-300">{d.agent_version}</span>
+                          {d.agent_version_stale && (
+                            // D-258: the device is checking in but the build it runs does not
+                            // report a version — so "1.4.2" may no longer be true. Stale must not
+                            // read as updated.
+                            <span
+                              className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/15 text-amber-300"
+                              title="This device keeps checking in but has not reported a version for over an hour — the agent it is running does not send one, so the version above may be out of date"
+                            >
+                              stale
+                            </span>
+                          )}
+                        </span>
                       ) : (
                         // D-222: a blank cell would read as "fine". A device that has never
                         // reported a version is a fact the operator needs, especially when

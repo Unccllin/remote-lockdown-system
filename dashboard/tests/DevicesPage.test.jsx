@@ -181,3 +181,34 @@ describe('DevicesPage — agent version (D-222)', () => {
     });
   });
 });
+
+describe('DevicesPage — stale version report (D-258)', () => {
+  it('badges a device that checks in but stopped reporting its version', async () => {
+    api.get.mockResolvedValue({
+      data: [
+        { id: '1', hostname: 'DEV-CUR', owner_name: 'A', status: 'active', last_checkin: '2026-11-05T12:00:00Z',
+          enrolled_at: '2025-01-01', agent_version: '1.4.2', agent_version_stale: false },
+        { id: '2', hostname: 'DEV-STALE', owner_name: 'B', status: 'active', last_checkin: '2026-11-05T12:00:00Z',
+          enrolled_at: '2025-01-02', agent_version: '1.4.2', agent_version_stale: true },
+      ],
+    });
+    renderWithRouter(<DevicesPage />);
+
+    await waitFor(() => expect(screen.getByText('DEV-STALE')).toBeInTheDocument());
+    // Exactly one badge: the current device must not be marked stale.
+    expect(screen.getAllByText('stale')).toHaveLength(1);
+  });
+
+  it('does not badge a device with a current report', async () => {
+    api.get.mockResolvedValue({
+      data: [
+        { id: '1', hostname: 'DEV-CUR', owner_name: 'A', status: 'active', last_checkin: '2026-11-05T12:00:00Z',
+          enrolled_at: '2025-01-01', agent_version: '1.4.2', agent_version_stale: false },
+      ],
+    });
+    renderWithRouter(<DevicesPage />);
+
+    await waitFor(() => expect(screen.getByText('DEV-CUR')).toBeInTheDocument());
+    expect(screen.queryByText('stale')).not.toBeInTheDocument();
+  });
+});

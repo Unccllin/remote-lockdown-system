@@ -64,6 +64,10 @@ interface Device {
   // rollout cannot be verified if a missing value reads as compliance.
   agent_version?: string | null;
   agent_version_at?: string | null;
+  // Derived on the way out (D-258): the device is checking in, but its version report is
+  // absent or more than an hour behind that check-in — i.e. the build it runs does not
+  // report a version at all. A never-checked-in device is "offline", not stale.
+  agent_version_stale?: boolean;
   // update_verification: "signature" when the agent has a pinned update key and
   // will only apply detached-signature-verified updates, "sha256-only" when it
   // would accept whatever this backend serves (B-006). Reported per check-in so
@@ -699,6 +703,36 @@ function normalizeUpdateVerification(
     : undefined;
 }
 
+/**
+ * A timestamp as written by either backend, in milliseconds (D-258).
+ *
+ * The Worker writes `new Date().toISOString()`, but a device first recorded by Express can carry
+ * SQLite's zone-less `2026-11-05 10:00:00`, which V8 parses as *local* time. Zoneless values are
+ * read as UTC — both backends write UTC — so the staleness window does not depend on where the
+ * code runs.
+ */
+function parseDbTimestamp(value: unknown): number | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  const raw = String(value).trim();
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(raw)
+    ? `${raw.replace(' ', 'T')}Z`
+    : raw;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/** Longer than the maximum adaptive poll interval (300 s), so a normal cycle never trips it. */
+const AGENT_VERSION_STALE_MS = 60 * 60 * 1000;
+
+function isAgentVersionStale(device: Device): boolean {
+  const lastCheckin = parseDbTimestamp(device.last_checkin);
+  if (lastCheckin === null) return false;
+  const reported = parseDbTimestamp(device.agent_version_at);
+  if (reported === null) return true;
+  return lastCheckin - reported > AGENT_VERSION_STALE_MS;
+}
+
 async function getCheckinMetadata(env: Env, deviceId: string): Promise<CheckinMetadata | null> {
   const data = await env.LOCKDOWN_KV.get(`${CHECKIN_KEY_PREFIX}${deviceId}`);
   return data ? parseKvJson<CheckinMetadata>(data, `${CHECKIN_KEY_PREFIX}${deviceId}`) : null;
@@ -724,6 +758,11 @@ function mergeCheckinMetadata(device: Device, metadata: CheckinMetadata | null):
     update_verification: metadata.update_verification ?? null,
     agent_version: metadata.agent_version ?? device.agent_version ?? null,
     agent_version_at: metadata.agent_version_at ?? device.agent_version_at ?? null,
+    agent_version_stale: isAgentVersionStale({
+      ...device,
+      last_checkin: metadata.last_checkin ?? device.last_checkin,
+      agent_version_at: metadata.agent_version_at ?? device.agent_version_at ?? null,
+    }),
   };
 }
 
@@ -1893,7 +1932,9 @@ async function handleListDevices(request: Request, env: Env): Promise<Response> 
   if (!requestedVersion) return jsonResponse(safe);
   const filtered = requestedVersion === 'unknown'
     ? safe.filter((d) => !d.agent_version)
-    : safe.filter((d) => d.agent_version === requestedVersion);
+    : requestedVersion === 'stale'
+      ? safe.filter((d) => d.agent_version_stale)
+      : safe.filter((d) => d.agent_version === requestedVersion);
   return jsonResponse(filtered);
 }
 

@@ -43,6 +43,64 @@ describe('GET /api/devices', () => {
     expect(res.body[1].agent_version).toBeNull();
   });
 
+  test('a zone-less timestamp is read as UTC, not as local time (D-258)', async () => {
+    // SQLite stores datetime('now') as "YYYY-MM-DD HH:MM:SS" with no zone marker, and V8 parses
+    // that form as LOCAL time. Asserting the exact epoch is what makes this independent of the
+    // host's TZ; a toBeTruthy() on a derived boolean would pass on a UTC runner either way.
+    const { parseDbTimestamp } = require('../src/routes/devices').helpers;
+    expect(parseDbTimestamp('2026-11-05 10:00:00')).toBe(Date.UTC(2026, 10, 5, 10, 0, 0));
+    expect(parseDbTimestamp('2026-11-05T10:00:00.000Z')).toBe(Date.UTC(2026, 10, 5, 10, 0, 0));
+    expect(parseDbTimestamp(null)).toBeNull();
+    expect(parseDbTimestamp('not a date')).toBeNull();
+  });
+
+  test('flags a device that checks in but no longer reports a version (D-258)', async () => {
+    mockPool.query.setResult('SELECT * FROM devices ORDER BY', {
+      rows: [
+        // checking in; version reported around the same time → current
+        { id: 'dev-current', hostname: 'CUR', owner_name: 'A', status: 'active',
+          last_checkin: '2026-11-05T12:00:00Z', agent_version: '1.4.2', agent_version_at: '2026-11-05T12:00:30Z' },
+        // checking in; version report two hours older → the build stopped sending it
+        { id: 'dev-stale', hostname: 'STALE', owner_name: 'B', status: 'active',
+          last_checkin: '2026-11-05T12:00:00Z', agent_version: '1.4.2', agent_version_at: '2026-11-05T10:00:00Z' },
+        // checking in; never reported a version at all → pre-D-222 build
+        { id: 'dev-never', hostname: 'NEVER', owner_name: 'C', status: 'active',
+          last_checkin: '2026-11-05T12:00:00Z', agent_version: null, agent_version_at: null },
+        // never checked in → that is the OFFLINE question, not staleness
+        { id: 'dev-offline', hostname: 'OFF', owner_name: 'D', status: 'active',
+          last_checkin: null, agent_version: null, agent_version_at: null },
+      ],
+    });
+
+    const res = await request(app)
+      .get('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    const byId = Object.fromEntries(res.body.map((d) => [d.id, d]));
+    expect(byId['dev-current'].agent_version_stale).toBe(false);
+    expect(byId['dev-stale'].agent_version_stale).toBe(true);
+    expect(byId['dev-never'].agent_version_stale).toBe(true);
+    // The distinction that keeps an unplugged machine from reading as an old build.
+    expect(byId['dev-offline'].agent_version_stale).toBe(false);
+  });
+
+  test('?agent_version=stale returns only the stale ones (D-258)', async () => {
+    mockPool.query.setResult('SELECT * FROM devices ORDER BY', {
+      rows: [
+        { id: 'dev-current', hostname: 'CUR', owner_name: 'A', status: 'active',
+          last_checkin: '2026-11-05T12:00:00Z', agent_version: '1.4.2', agent_version_at: '2026-11-05T12:00:30Z' },
+        { id: 'dev-stale', hostname: 'STALE', owner_name: 'B', status: 'active',
+          last_checkin: '2026-11-05T12:00:00Z', agent_version: '1.4.2', agent_version_at: '2026-11-05T09:00:00Z' },
+      ],
+    });
+
+    const res = await request(app)
+      .get('/api/devices?agent_version=stale')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.body.map((d) => d.id)).toEqual(['dev-stale']);
+  });
+
   test('filters by agent_version (D-222)', async () => {
     mockPool.query.setResult('SELECT * FROM devices WHERE agent_version = $1', {
       rows: [{ id: 'dev-1', hostname: 'DEV-001', owner_name: 'Alice', status: 'active', agent_version: '1.4.2' }],

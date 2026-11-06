@@ -161,11 +161,20 @@ List all enrolled devices, ordered by enrollment date (newest first).
 |---|---|
 | `agent_version=<v>` | Only devices reporting that exact version — a rollout's "who is already updated?" |
 | `agent_version=unknown` | Only devices that have **never** reported a version. A distinct query from any literal value: never-reported is not "on some other build". |
+| `agent_version=stale` | Only devices that are **checking in** but whose version report is absent or more than an hour older than that check-in — i.e. the build they run no longer reports a version (a downgrade, or an agent older than the field). Not the same as `unknown`: `stale` includes devices that did report one once and stopped. |
 
 **`agent_version` on each device (D-222).** Every device object carries `agent_version` and
 `agent_version_at`; both are `null` until the device reports one. The dashboard renders `unknown`
 rather than a blank cell, because a blank reads as "fine" — and the point of the field is to make an
 un-updated device visible.
+
+**`agent_version_stale` (D-258)** is derived per response: `true` when the device has checked in and
+its version report is missing or more than an hour older than that check-in (the hour is longer than
+the maximum adaptive poll interval of 300 s, so a normal check-in cycle never trips it). A device
+that has **never** checked in is not stale — that is the offline question, and `last_checkin` already
+answers it. The comparison is done in the API layer rather than in SQL because the two storage
+dialects write different timestamp shapes (PostgreSQL `…T…Z`, SQLite `YYYY-MM-DD HH:MM:SS` with no
+zone), and a zone-less value must be read as UTC or the window shifts with the host's timezone.
 
 **Response:** `200` — Array of device objects:
 

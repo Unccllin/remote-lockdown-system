@@ -3936,6 +3936,46 @@ describe('D-210: PBL route integration', () => {
       expect(devices.find((d) => d.id === device.id).agent_version ?? null).toBeNull();
     });
 
+    it('flags a device that checks in but stops reporting a version, and filters it (D-258)', async () => {
+      const { apiKey, device } = await enrollDevice(worker, env, 'D258-STALE-001');
+      await checkinWith(apiKey, 'D258-STALE-001', { agent_version: '1.4.2' });
+
+      // Rewrite the check-in metadata so the version report is two hours older than the
+      // check-in, as if the machine had been downgraded to a build that does not send it.
+      const key = `device_checkin:${device.id}`;
+      const meta = JSON.parse((await kv.get(key)) as string);
+      meta.last_checkin = '2026-11-05T12:00:00.000Z';
+      meta.agent_version_at = '2026-11-05T10:00:00.000Z';
+      await kv.put(key, JSON.stringify(meta));
+
+      const admin = { Authorization: 'Bearer test-admin-token' };
+      const all: any[] = await parseResponse(await worker.fetch(makeRequest('GET', '/api/devices', undefined, admin), env));
+      expect(all.find((d) => d.id === device.id).agent_version_stale).toBe(true);
+
+      const stale: any[] = await parseResponse(
+        await worker.fetch(makeRequest('GET', '/api/devices?agent_version=stale', undefined, admin), env),
+      );
+      expect(stale.map((d) => d.id)).toEqual([device.id]);
+    });
+
+    it('a fresh report is not stale, and a zone-less timestamp does not drift (D-258)', async () => {
+      const { apiKey, device } = await enrollDevice(worker, env, 'D258-CURRENT-001');
+      await checkinWith(apiKey, 'D258-CURRENT-001', { agent_version: '1.4.2' });
+
+      const key = `device_checkin:${device.id}`;
+      const meta = JSON.parse((await kv.get(key)) as string);
+      // Half an hour apart, and the version stamp is in SQLite's zone-less shape — the form a
+      // device first recorded by Express carries. Read as local time this would drift out of the
+      // window on any non-UTC host.
+      meta.last_checkin = '2026-11-05T12:00:00.000Z';
+      meta.agent_version_at = '2026-11-05 11:30:00';
+      await kv.put(key, JSON.stringify(meta));
+
+      const admin = { Authorization: 'Bearer test-admin-token' };
+      const all: any[] = await parseResponse(await worker.fetch(makeRequest('GET', '/api/devices', undefined, admin), env));
+      expect(all.find((d) => d.id === device.id).agent_version_stale).toBe(false);
+    });
+
     it('filters the device list by version, and `unknown` is its own query', async () => {
       const old = await enrollDevice(worker, env, 'D222-FILTER-OLD');
       const current = await enrollDevice(worker, env, 'D222-FILTER-NEW');

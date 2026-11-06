@@ -112,10 +112,54 @@ const INSERT_COMMAND_WITH_PBA_SQL = `INSERT INTO commands (device_id, command_ty
  * (routes/agent.js authenticates against it); it is removed here, at the
  * serialisation boundary, for every response that returns a device.
  */
+/**
+ * A timestamp as written by either dialect, in milliseconds.
+ *
+ * PostgreSQL returns a timestamp that serialises as `2026-11-05T10:00:00.000Z`; SQLite stores
+ * `datetime('now')`, which is `2026-11-05 10:00:00` — **no zone marker**. V8 parses that second
+ * form as *local* time, so comparing the two without normalising makes a staleness window
+ * dependent on the host's UTC offset (2 hours in CET, 0 in UTC). Zoneless values are therefore
+ * read as UTC, which is what both dialects actually write (S258).
+ */
+function parseDbTimestamp(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  const raw = String(value).trim();
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(raw)
+    ? `${raw.replace(' ', 'T')}Z`
+    : raw;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+// Longer than the maximum adaptive poll interval (300 s), so an ordinary check-in cycle can
+// never trip it; short enough that a device which stopped reporting shows up the same day.
+const AGENT_VERSION_STALE_MS = 60 * 60 * 1000;
+
+/**
+ * D-222/D-258: is this device checking in but not reporting its version?
+ *
+ * True when a device has checked in and its version report is missing, or more than an hour
+ * older than that check-in — i.e. the build it is running does not report a version at all. A
+ * device that has *never* checked in is **not** stale: that is the offline question, and
+ * `last_checkin` already answers it. Verification needs the two kept apart, or an unplugged
+ * machine would look like an old build.
+ */
+function isAgentVersionStale(device) {
+  const lastCheckin = parseDbTimestamp(device.last_checkin);
+  if (lastCheckin === null) return false;
+  const reported = parseDbTimestamp(device.agent_version_at);
+  if (reported === null) return true;
+  return lastCheckin - reported > AGENT_VERSION_STALE_MS;
+}
+
 function publicDevice(row) {
   if (!row) return row;
   const device = { ...row };
   delete device.api_key_hash;
+  // Derived on the way out so both the list and the detail route carry it, and so a client never
+  // has to reproduce the timestamp arithmetic above.
+  device.agent_version_stale = isAgentVersionStale(row);
   return device;
 }
 
@@ -147,12 +191,16 @@ router.get('/', requireAuth, async (req, res) => {
     ? req.query.agent_version.trim()
     : '';
 
+  // `stale` cannot be a SQL predicate: it compares two timestamps whose stored shapes differ by
+  // dialect (see parseDbTimestamp). One JS implementation serves both dialects and the Worker.
+  const wantsStale = requestedVersion === 'stale';
+
   let result;
   if (requestedVersion === 'unknown') {
     result = await pool.query(
       'SELECT * FROM devices WHERE agent_version IS NULL ORDER BY enrolled_at DESC'
     );
-  } else if (requestedVersion) {
+  } else if (requestedVersion && !wantsStale) {
     result = await pool.query(
       'SELECT * FROM devices WHERE agent_version = $1 ORDER BY enrolled_at DESC',
       [requestedVersion]
@@ -160,7 +208,9 @@ router.get('/', requireAuth, async (req, res) => {
   } else {
     result = await pool.query('SELECT * FROM devices ORDER BY enrolled_at DESC');
   }
-  res.json(result.rows.map(publicDevice));
+
+  const shaped = result.rows.map(publicDevice);
+  res.json(wantsStale ? shaped.filter((d) => d.agent_version_stale) : shaped);
 });
 
 router.get('/:id', requireAuth, async (req, res) => {
@@ -812,3 +862,7 @@ router.get('/by-pbl/:pblDeviceId', requireAuth, requireRole('operator'), async (
 
 module.exports = router;
 module.exports.syncAgentStatusToPbl = syncAgentStatusToPbl;
+// Attached the same way routes/installer.js attaches its helpers: the timestamp
+// normalisation is the part that can silently drift with the host's timezone (D-258), so it is
+// tested directly rather than only through a fixture whose two timestamps shift together.
+module.exports.helpers = { parseDbTimestamp, isAgentVersionStale, publicDevice };
