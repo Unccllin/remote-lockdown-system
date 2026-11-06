@@ -518,9 +518,18 @@ enforcement_paths:
     component: C-AGENT
     entry_function: "agent.handle_track"
     verified_by: [V-AGENT]
-    status: verified-in-unit-test
+    status: verified-on-hardware
+    hardware_artifact_ref: "agent/hw_test_artifact_frankenstein_win.json\
+      #E-TRACK-01"
     risk_notes: >-
-      Platform-specific wifi scanning; geolocation API rate limits. Mutation
+      Harness v2.0 simulate on FRANKENSTEIN (HP EliteBook 830 G8, Windows,
+      admin, TPM present, BitLocker off), 2026-11-05; the artifact carries
+      the environment and the agent binary hash.
+      10/10 assertions, and the scope matters: location was reported through the
+      IP fallback ("ip, ~citym"), not a netsh WiFi scan — so this evidences the
+      reporting path INCLUDING the TLS-only IP fallback added in S252/S256, and
+      NOT the platform WiFi-scan branch, which stays unit-tested only. Residual
+      risk: geolocation API rate limits. Mutation
       audited (session 171, scripts/audit_test_teeth.py): the parser tests added
       in agent/tests/test_wifi_parsing.py are what fail when the scan returns
       nothing; before them every test patched scan_wifi_networks out, so a
@@ -544,20 +553,33 @@ enforcement_paths:
     description: "boot_lock_detail + lockdown_effective reporting (Phase 17)"
     component: C-AGENT
     entry_function: "agent.handle_lockdown (boot_lock_detail aggregation)"
-    verified_by: [V-AGENT, V-SERVER, V-DASHBOARD]
-    status: verified-in-unit-test
-    risk_notes: "Closes the dangerous gap where critical_applied=0 was \
-                reported as success"
+    verified_by: [V-AGENT, V-SERVER, V-DASHBOARD, V-HW-HARNESS]
+    status: verified-on-hardware
+    hardware_artifact_ref: "agent/hw_test_artifact_frankenstein_win.json\
+      #E-EFFECTIVENESS-01"
+    risk_notes: >-
+      Harness v2.0 simulate on FRANKENSTEIN (HP EliteBook 830 G8, Windows,
+      admin, TPM present, BitLocker off), 2026-11-05; the artifact carries
+      the environment and the agent binary hash.
+      7/7 assertions: critical_applied=0 is reported as "partial" and never as a
+      success claim. Closes the dangerous gap where critical_applied=0 was
+      reported as success.
 
   - id: E-OFFLINE-QUEUE
     name: offline-queue
     description: "SQLite queue for location reports when offline"
     component: C-AGENT
     entry_function: "agent.queue_offline / agent.drain_offline_queue"
-    verified_by: [V-AGENT]
-    status: verified-in-unit-test
+    verified_by: [V-AGENT, V-HW-HARNESS]
+    status: verified-on-hardware
+    hardware_artifact_ref: "agent/hw_test_artifact_frankenstein_win.json\
+      #E-OFFLINE-QUEUE-01"
     risk_notes: >-
-      Queue growth on extended offline; SQLite corruption. Mutation audited
+      Harness v2.0 simulate on FRANKENSTEIN (HP EliteBook 830 G8, Windows,
+      admin, TPM present, BitLocker off), 2026-11-05; the artifact carries
+      the environment and the agent binary hash.
+      7/7 assertions (order, drain, corruption). Residual risk unchanged: queue
+      growth on extended offline; SQLite corruption. Mutation audited
       (session 171, scripts/audit_test_teeth.py): turning queue_offline into a
       no-op left the ENTIRE agent suite green, because no test referenced this
       code at all. agent/tests/test_offline_queue.py now fails on that mutation
@@ -567,9 +589,18 @@ enforcement_paths:
     description: "Download + verify + apply signed agent updates"
     component: C-AGENT
     entry_function: "agent.check_for_update / agent.download_update"
-    verified_by: [V-AGENT]
-    status: verified-in-unit-test
-    risk_notes: "Update server availability; signature verification on Windows"
+    verified_by: [V-AGENT, V-HW-HARNESS]
+    status: verified-on-hardware
+    hardware_artifact_ref: "agent/hw_test_artifact_frankenstein_win.json\
+      #E-AUTO-UPDATE-01"
+    risk_notes: >-
+      Harness v2.0 simulate on FRANKENSTEIN (HP EliteBook 830 G8, Windows,
+      admin, TPM present, BitLocker off), 2026-11-05; the artifact carries
+      the environment and the agent binary hash.
+      12/12 assertions on Windows: missing signature, invalid signature and
+      SHA-256 mismatch are each refused with no watchdog signal; a correctly
+      signed update is accepted with a pinned Ed25519 key. Residual risk:
+      update server availability.
 
 # ---------------------------------------------------------------------------
 # COMPONENT NODES
@@ -608,12 +639,12 @@ component_nodes:
 # Tracked in two ledgers:
 #   - docs/adr/DEBT-LEDGER.md       — D-001..D-021 (legacy, all CLOSED)
 #   - docs/adr/PBL-DEBT-LEDGER.md   — the live ledger: D-100..D-211 plus the
-#     D-212..D-220 RE-hardening review items, D-221 and D-222. Despite the "PBL" in its
-#     name it also holds agent/server/dashboard product debt (D-211 covert
-#     tracking, D-221 uninstall token, D-222 agent-version gap), so it is where a
-#     new non-firmware item goes. Note: D-212..D-214 and D-216..D-220 are CLOSED in
-#     that ledger but are NOT mirrored here, so this file's count is not the complete
-#     debt set — a known gap, not a claim of completeness.
+#     D-212..D-220 RE-hardening review items, D-221 and D-222. Despite the
+#     "PBL" in its name it also holds agent/server/dashboard product debt
+#     (D-211 covert tracking, D-221 uninstall token, D-222 agent-version gap),
+#     so it is where a new non-firmware item goes. Note: D-212..D-214 and
+#     D-216..D-220 are CLOSED in that ledger but NOT mirrored here, so this
+#     file's count is not the complete debt set — a known gap.
 # Each debt item has:
 #   - id, description, close_criteria, status, commit_ref, artifact_ref
 # The graph asserts that a debt item cannot be CLOSED without:
@@ -1355,37 +1386,39 @@ debt_items:
     category: SECURITY
     found: "session 252 (routes 401'd on Express); filed session 253"
     commit_ref: "b9c6127"
-    artifact_ref: "docs/adr/D-221-token-vectors.json (6 bound + 4 legacy vectors, \
-                  read by server/tests/uninstallAuth.test.js, \
-                  serverless/worker.test.ts and scripts/test_cross_surface_contract.py); \
-                  server suite 828 passed, serverless 420 passed"
-    note: "Answered as 'take the recommendations' (Q1-A device-bound HMAC, Q2-A \
-           dual-accept one release, Q3-A refuse without a secret, Q4-A shared \
-           vector file). Legacy verification is logged, marked \
+    artifact_ref: "docs/adr/D-221-token-vectors.json (6 bound + 4 legacy \
+                  vectors, read by server/tests/uninstallAuth.test.js, \
+                  serverless/worker.test.ts and \
+                  scripts/test_cross_surface_contract.py); server suite 828 \
+                  passed, serverless 420 passed"
+    note: "Answered as 'take the recommendations' (Q1-A device-bound HMAC, \
+           Q2-A dual-accept one release, Q3-A refuse without a secret, \
+           Q4-A shared vector file). Legacy verification is logged, marked \
            deprecated_scheme, and DATED: accepted until 2027-02-04, when \
            scripts/test_cross_surface_contract.py plus both surface suites \
            fail with the deletion checklist (session 255)."
 
   - id: D-222
-    description: "The server records no agent version, so fleet-update compliance \
-                  cannot be answered"
+    description: "The server records no agent version, so fleet-update \
+                  compliance cannot be answered"
     close_criteria: "(a) checkin and the update probe persist the reported \
                     version + timestamp on the device record on BOTH surfaces \
                     (Express devices table, Worker KV device row); (b) \
                     GET /api/devices returns it, the dashboard shows it and it \
                     can be filtered; (c) a device reporting no version shows \
                     'unknown' rather than being dropped or 500ing; (d) API.md \
-                    documents it and a test covers an old agent with no version \
-                    in the body"
+                    documents it and a test covers an old agent with no \
+                    version in the body"
     status: CLOSED
     category: SERVER
     found: "session 256: /api/agent/update reads x-agent-version and discards \
             it; devices has no version column"
     commit_ref: "95d3b6f"
-    artifact_ref: "server/src/db/migrations/018_agent_version.sql (+ the SQLite \
-                  twin); server suite 837 passed / 50 suites, serverless 427 \
-                  passed, dashboard 229 passed; docs/API.md documents the \
-                  check-in field, both response fields and both filter values"
+    artifact_ref: "server/src/db/migrations/018_agent_version.sql (+ the \
+                  SQLite twin); server suite 837 passed / 50 suites, \
+                  serverless 427 passed, dashboard 229 passed; docs/API.md \
+                  documents the check-in field, both response fields and both \
+                  filter values"
 
 
 # ---------------------------------------------------------------------------

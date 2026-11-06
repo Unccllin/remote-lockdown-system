@@ -1,0 +1,116 @@
+{
+  "results": {
+    "tool": {
+      "name": "hw-test-harness",
+      "version": "2.0"
+    },
+    "summary": {
+      "tests": 4,
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "start": "2026-11-06T11:49:12.344415+00:00",
+      "stop": "2026-11-06T11:49:12.344415+00:00"
+    },
+    "tests": [
+      {
+        "name": "E-TRACK-01",
+        "status": "passed",
+        "duration": 3769,
+        "message": "10/10 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-TRACK",
+          "tags": [
+            "E-TRACK",
+            "network"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-EFFECTIVENESS-01",
+        "status": "passed",
+        "duration": 1759,
+        "message": "7/7 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-EFFECTIVENESS",
+          "tags": [
+            "E-EFFECTIVENESS",
+            "non-destructive"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-OFFLINE-QUEUE-01",
+        "status": "passed",
+        "duration": 583,
+        "message": "7/7 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-OFFLINE-QUEUE",
+          "tags": [
+            "E-OFFLINE-QUEUE",
+            "network"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      },
+      {
+        "name": "E-AUTO-UPDATE-01",
+        "status": "passed",
+        "duration": 2649,
+        "message": "12/12 assertions passed. All assertions hold",
+        "trace": null,
+        "extra": {
+          "enforcement_path": "E-AUTO-UPDATE",
+          "tags": [
+            "E-AUTO-UPDATE",
+            "network"
+          ],
+          "evidence_before": null,
+          "evidence_after": null,
+          "rollback_restored": null,
+          "retries": 0,
+          "timed_out": false
+        }
+      }
+    ],
+    "extra": {
+      "environment": {
+        "platform": "Windows",
+        "is_hp": true,
+        "hp_model": "HP EliteBook 830 G8 Notebook PC",
+        "is_admin": true,
+        "session_context": {
+          "is_session_zero": false,
+          "session_id": 1,
+          "console_session_id": 1,
+          "platform": "Windows"
+        },
+        "bitlocker_enabled": false,
+        "tpm_present": true,
+        "defender_exclusion": null,
+        "agent_binary_hash": "4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a",
+        "python_version": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+        "hostname": "FRANKENSTEIN"
+      },
+      "agent_binary_hash": "4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a"
+    }
+  }
+}

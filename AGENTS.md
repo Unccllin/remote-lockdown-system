@@ -636,6 +636,34 @@ build always shows a parent bootloader plus its child, so `tasklist` reporting t
 11332), not a duplicate-instance bug. The agent is reachable only over the LAN through a Windows port-proxy
 (`0.0.0.0:3001 → <WSL address>:3001`), which must be re-created after a WSL restart.
 
+### Hardware testing status — 2026-11-05 (window: 4 enforcement paths moved)
+
+Ran on FRANKENSTEIN (HP EliteBook 830 G8, Windows, admin, TPM present, BitLocker off) via the
+harness in `simulate` style, four tags: `E-EFFECTIVENESS`, `E-OFFLINE-QUEUE`, `E-TRACK`,
+`E-AUTO-UPDATE`. **4 passed, 0 failed**; artifact `agent/hw_test_artifact_frankenstein_win.json`
+(environment + agent binary hash recorded inside it). Graph: **7/13 enforcement paths now
+`verified-on-hardware`** (was 3/13), each citation re-verified by I3 opening the artifact.
+
+Two things the record must not blur:
+- **`E-TRACK` used the IP fallback, not a `netsh` WiFi scan.** The path is hardware-verified for the
+  reporting flow including the TLS-only IP lookup (S252/S256); the platform WiFi-scan branch remains
+  unit-tested only, and `GRAPH-SPEC.yaml` says so.
+- **`defender_exclusion` was `null`** in the artifact — the harness saw no Defender exclusion on
+  FRANKENSTEIN, contradicting the installer's claimed exclusion. Unresolved; check
+  `agent/installer.py` against a real install before trusting that claim.
+
+How the window is run now (both edges mechanical, see `docs/D-129-HARDWARE-RUNBOOK.md` §2a):
+
+```bash
+make hw-preflight SERVER_URL=http://192.168.1.43:3001 ADMIN_TOKEN=… HOSTNAME=FRANKENSTEIN
+make hw-artifact  ARTIFACT=agent/hw_test_artifact_frankenstein_win.json   # prints only I3-accepted refs
+```
+
+Transfer note: FRANKENSTEIN has **no git** and no shared filesystem with the WSL dev host. The path
+that works is serving a zip on **WSL:3001**, which the existing Windows port proxy forwards to
+`192.168.1.43:3001` (the lab-server address). `\\wsl.localhost\…` is unavailable there, and the
+WSL box's `C:` is a *different* machine's `C:`.
+
 ### Hardware testing status (as of 2026-08-28)
 - HP machine (DESKTOP-RUDJGI6) successfully enrolled via one-click installer
 - Hardware UUID: B1198844-32B1-419B-B6BB-07371BE2DDD0, MAC: 74:70:FD:17:B7:67
