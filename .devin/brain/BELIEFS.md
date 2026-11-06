@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-06 15:10:21 — 115 beliefs
+Generated: 2026-11-06 15:23:09 — 116 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -292,6 +292,7 @@ mkfs.fat 4.2 (2021-01-31)
 | B-113 | confirmed | code-read | I3 already enforces artifact-content evidence: assert_enforcement_path_status check 3 calls artifact_supports_claim(), which resolves 'file.json#TEST-ID' and requires status PASS for that path's own test id, and _artifact_result_map() reads the harness v1.0, CTRF v2.0 and live-agent schemas. scripts/hw-window-preflight.py --artifact reuses those helpers so any citation it prints is one I3 accepts, and --check answers window readiness (reachability, last_checkin age, agent_version, agent_version_stale) because the lab box is unreachable from this host while the Windows port-proxy is down. |
 | B-114 | confirmed | real-media | Four enforcement paths (E-TRACK, E-EFFECTIVENESS, E-OFFLINE-QUEUE, E-AUTO-UPDATE) are verified-on-hardware against agent/hw_test_artifact_frankenstein_win.json, recorded on FRANKENSTEIN (HP EliteBook 830 G8, Windows, admin, TPM present, BitLocker off) on 2026-11-05: 4 tests passed with 10/10, 7/7, 7/7 and 12/12 assertions. The harness's four tagged tests run against an in-process stub server with patched temp dirs, so no live server or enrolment is required; the only practical obstacle was transferring the 740KB agent tree to a machine with no git, solved by serving a zip on WSL:3001 through the pre-existing Windows port proxy to 192.168.1.43:3001. E-TRACK's run exercised the IP fallback rather than a netsh WiFi scan, so the scan branch remains unit-tested only. |
 | B-115 | confirmed | real-media | Eleven of thirteen enforcement paths are now verified-on-hardware, each citing an artifact whose test id I3 itself resolved: agent/hw_test_artifact_frankenstein_win.json covers E-TRACK, E-EFFECTIVENESS, E-OFFLINE-QUEUE, E-AUTO-UPDATE and agent/hw_test_artifact_frankenstein_win2.json covers E-DECRYPT, E-ACK, E-RECOVERY, E-DEADMAN (both runs on FRANKENSTEIN, 4 passed 0 failed each). The remaining two, E-BCD and E-HP-UEFI, stay verified-in-unit-test deliberately: they change boot/firmware state that a failed run cannot undo, so verifying them needs a named sacrificial machine and a recovery plan rather than another harness run. |
+| B-116 | confirmed | code-read | The hardware harness gates destructive tests: HardwareTest.run() refuses any test with is_destructive=True unless allow_destructive is set (passed from --allow-destructive), prints that test's destructive_scope and recovery_hint as a banner, and writes the before-state to --evidence-dir (default: next to the artifact) BEFORE the action runs. --mode check labels such tests 'ELIGIBLE (DESTRUCTIVE — needs --allow-destructive)' rather than bare ELIGIBLE. E-BCD-01 and E-HP-UEFI-01 both override rollback() with pass, so their 'with rollback' names describe nothing; E-HP-UEFI sets a firmware Setup Password that its rollback does not clear. |
 
 ## threat-model
 

@@ -2625,3 +2625,26 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-116
+  statement: 'The hardware harness gates destructive tests: HardwareTest.run() refuses any test with is_destructive=True
+    unless allow_destructive is set (passed from --allow-destructive), prints that test''s destructive_scope
+    and recovery_hint as a banner, and writes the before-state to --evidence-dir (default: next to the
+    artifact) BEFORE the action runs. --mode check labels such tests ''ELIGIBLE (DESTRUCTIVE — needs --allow-destructive)''
+    rather than bare ELIGIBLE. E-BCD-01 and E-HP-UEFI-01 both override rollback() with pass, so their
+    ''with rollback'' names describe nothing; E-HP-UEFI sets a firmware Setup Password that its rollback
+    does not clear.'
+  domain: testing/hardware
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S262: implemented and pinned by 7 unit tests (refusal, consent, before-state persisted,
+    no file when refused, declarations present, notice text, NOT DECLARED); ruff clean; agent suite 837
+    passed'
+  source: agent/hw_test_harness.py (HardwareTest.run, describe_destructive, _persist_evidence); agent/tests/test_hw_harness.py::TestDestructiveGate;
+    docs/D-129-HARDWARE-RUNBOOK.md §2z
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

@@ -14522,3 +14522,131 @@ Decide `E-BCD` and `E-HP-UEFI`: they are the only enforcement paths left at `ver
 both were ELIGIBLE on FRANKENSTEIN, and both can leave a machine in a state a test cannot undo. Either
 name the machine and the recovery plan and run them, or demote the two entries to a documented
 "cannot be verified without a sacrificial unit" and stop claiming the graph is converging on 13/13.
+
+## Session 262 — 2026-11-05 (a destructive test now needs consent, because its rollback was a stub)
+
+### RULE-ZERO
+
+**Process note, recorded because it is the point of I5**: this RULE-ZERO was written **after** the
+code, not before. The session opened on "what are the risks?" — a question that turned out to need
+reading `hw_test_harness.py` and the two lockdown modules, which I did — but the reading happened as
+part of answering, and the log entry came later. That is the slip the invariant exists to catch, so
+it is stated here rather than backfilled as if it had happened first.
+
+**Read**:
+- `agent/hw_test_harness.py` — the `HardwareTest` phase lifecycle (`run()`: services → precondition →
+  dry-run → evidence-before → action → evidence-after → rollback → cleanup) and what `is_destructive`
+  actually gated, which was: capture evidence, call `rollback()`, and nothing else
+- the two destructive test classes' overrides: `E-BCD-01.rollback()` and `E-HP-UEFI-01.rollback()` are
+  both `pass` with a comment saying so
+- `agent/bcd_lockdown.py` `apply_bcd_lockdown()` — admin check, critical/best-effort split, BCD state
+  save, re-read after each setting, internal rollback on critical failure only
+- `agent/hp_uefi_lockdown.py` — `apply_boot_lockdown()` sets a Setup Password via HP Sure Admin,
+  returns the password even on critical failure, does **not** clear it on rollback, and writes
+  `.bios_pw_backup` next to the module (XOR with the hardware UUID)
+- `agent/tests/test_hw_harness.py` — existing patterns; note `test_destructive_tests_have_rollback`
+  only asserts the ids are present, which is why the stub rollbacks survived it
+
+**Finding**: the risk was not primarily "should we run these two". It was that **`is_destructive`
+gated nothing**: no prompt, no flag, and `--mode check` printed a bare `ELIGIBLE`. So the two tests
+that rewrite a boot configuration and set a firmware password were runnable by typing a tag, while
+their names said "with rollback" and `rollback()` was a no-op. Following the "read the code, not the
+name" rule is what surfaced it; the earlier session's summary had repeated the harness's own framing.
+
+### Implement
+
+- **`--allow-destructive`** (default off). Without it a destructive test finishes `SKIP` with
+  `destructive test refused — re-run with --allow-destructive to run <id>`, before any state is
+  captured or written. The gate is in `HardwareTest.run()`, so every caller passes through it, not
+  just the CLI.
+- **Declared scope + recovery per destructive test** (`destructive_scope`, `recovery_hint`) for
+  `E-BCD-01`, `E-HP-UEFI-01`, `E-INTEGRATION-01`, with `describe_destructive()` printing them as a
+  banner when the flag is given, and `(NOT DECLARED)` — not silence — when a future test forgets.
+- **Before-state persisted off the run** (`--evidence-dir`, default next to the artifact): written
+  *before* the action, with the path printed, because the artifact is only written at the end and the
+  whole point is the case where the machine does not come back. `E-BCD-01`'s capture already includes
+  the full `bcdedit /enum {current}` output.
+- **`--mode check` no longer implies consent**: destructive tests print
+  `ELIGIBLE (DESTRUCTIVE — needs --allow-destructive)` plus their scope and recovery lines.
+- `run_harness()` grew the two parameters; `main()` passes them; docs in
+  `docs/D-129-HARDWARE-RUNBOOK.md` §2z and AGENTS.md.
+
+**Two real bugs in my own edit, caught by ruff, not by review**: I wrote `log.warning(...)` in a
+module that has no logger (it prints — so that path would have raised `NameError` exactly when
+evidence persistence failed, i.e. mid-incident), and I referenced `args.allow_destructive` inside
+`run_harness()`, where `args` is not in scope (`NameError` on every destructive run). Both fixed by
+threading parameters and printing to stderr.
+
+### Fog cleared
+
+- **What "with rollback" meant**: nothing, for the two firmware tests. The harness called
+  `rollback()`; those overrides are `pass`. The modules have their own internal rollback, but it
+  fires only on *critical failure* — never on success, abort or timeout.
+- **Whether a destructive test could be run by accident**: yes, by typing its tag. It now takes a
+  flag plus an explicit `--evidence-dir` recommendation.
+- **Why this had to be fixed before the last two paths**: their whole risk is "a failed run leaves
+  state a test cannot undo". Gating them is what makes running them an experiment rather than a
+  gamble; it also means the *next* person to try does not have to rediscover that `rollback()` is a
+  stub.
+
+### Fog remaining
+
+- **The rollbacks are still stubs.** This session made the absence *visible and consented to*, not
+  fixed. Real rollback for BCD means parsing and re-applying the saved `bcdedit` output; for HP UEFI
+  it means clearing a Setup Password the module may not be able to clear. That is product work on the
+  lockdown modules, not on the harness.
+- **`test_destructive_tests_have_rollback` still only asserts ids exist.** Its name is now more
+  misleading than before; the new `TestDestructiveGate` carries the real invariant
+  (scope + recovery declared), but the old test should be renamed or strengthened.
+- **The gate is unexercised on real hardware.** On this WSL host no destructive test is eligible
+  (they need `admin`/`hp`/`server`), so the evidence is seven unit tests over a synthetic destructive
+  test. The first real exercise will be on a machine where one is eligible.
+- **`E-BCD` and `E-HP-UEFI` remain `verified-in-unit-test`** — unchanged, and still a decision.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
+
+### Debt items closed
+
+- None. This is enforcement-path *tooling*; the graph's 11/13 does not move.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 (4 of 63). Unchanged.
+
+### Blockers
+
+- The last two enforcement paths still need a named machine and a recovery plan — now with a harness
+  that refuses to run them by accident.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback** (primary): ruff caught two `NameError`s that would have fired
+  exactly in the incident the code was written for (evidence persistence failing; any destructive
+  run). My own reading of the diff missed both. The lesson is familiar from this repo's history: a
+  linter gate is not decoration, and `make lint`/ruff on the *changed* files is part of the edit, not
+  an afterthought.
+- **Layer 5 — state management** (secondary, and mine): RULE-ZERO for this session was logged after
+  the code. Nothing was actually unread — the reading is what produced the finding — but the ordering
+  invariant exists so that "I read it first" is checkable rather than asserted, and this session made
+  it uncheckable. Recorded at the top of this block rather than quietly omitted.
+
+### VERIFY
+
+- `agent/.venv/bin/python -m pytest agent/tests` → **837 passed** (was 830; +7 gate cases).
+- `agent/tests/test_hw_harness.py` → **43 passed**, of which 7 are the new `TestDestructiveGate`:
+  refused-without-flag (and the action counter proves nothing ran), runs-with-flag, before-state
+  written to `--evidence-dir` with the captured payload, **no** file written when refused, every
+  destructive test declares scope+recovery, the notice names both, and an undeclared one prints
+  `NOT DECLARED`.
+- `python3 hw_test_harness.py --help` → both flags present with their descriptions.
+- `ruff check agent` → **All checks passed**; `ruff format --check agent` → 61 files already formatted
+  (after two `NameError`s and one over-long line were fixed).
+- `--mode check` on this host shows `E-BCD-01`/`E-HP-UEFI-01` as `SKIP` (missing `admin`/`hp`
+  services) — i.e. the destructive label is not demonstrable here; that is why the gate is pinned by
+  unit tests rather than by a run.
+
+### Next session opening
+
+Fix the naming debt this created and the one it exposed: rename or strengthen
+`test_destructive_tests_have_rollback` so it no longer implies rollback exists (today it only checks
+ids), and decide `E-BCD`/`E-HP-UEFI` explicitly — name the machine and the recovery plan, or demote
+them in the graph with that reason, rather than leaving 11/13 to imply 13/13 is merely pending.

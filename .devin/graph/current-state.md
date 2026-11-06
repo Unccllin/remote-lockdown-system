@@ -53,34 +53,38 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 261 — 2026-11-05 (second window: 7/13 → 11/13; only the two destructive paths remain)
+## Latest session: 262 — 2026-11-05 (a destructive test now needs consent, because its rollback was a stub)
 
 ### Fog cleared
 
-- **Whether the remaining paths needed new code**: no. All four were already ELIGIBLE and passed with
-  the same transfer recipe; the window cost one round trip and no source change.
-- **Whether `E-DEADMAN` is safe to run on a real laptop**: yes — `non-destructive`, temp-rooted, and
-  the assertions are about firing conditions rather than about encrypting anything the operator owns.
-- **What the two remaining paths actually require**: rollback-capable firmware behaviour, not a longer
-  tag list. `E-BCD`'s documented failure on Azure was a platform restriction with a correct rollback;
-  `E-HP-UEFI` sets firmware passwords that a failed run leaves behind.
+- **What "with rollback" meant**: nothing, for the two firmware tests. The harness called
+  `rollback()`; those overrides are `pass`. The modules have their own internal rollback, but it
+  fires only on *critical failure* — never on success, abort or timeout.
+- **Whether a destructive test could be run by accident**: yes, by typing its tag. It now takes a
+  flag plus an explicit `--evidence-dir` recommendation.
+- **Why this had to be fixed before the last two paths**: their whole risk is "a failed run leaves
+  state a test cannot undo". Gating them is what makes running them an experiment rather than a
+  gamble; it also means the *next* person to try does not have to rediscover that `rollback()` is a
+  stub.
 
 ### Fog remaining
 
-- **`E-BCD` and `E-HP-UEFI` are still unit-test-only.** Running them needs a machine we are willing to
-  reconfigure, with a manual-recovery path if HP Sure Admin rejects the write. That is an operator
-  decision, and this session deliberately stopped short of taking it.
-- **`defender_exclusion` was `null` again** in this run — the same discrepancy AGENTS.md records from
-  the first window. Two windows, same observation: it is now evidence, not an anecdote, and still
-  uninvestigated.
-- **`E-ENROLL` and `E-INTEGRATION` still SKIP** without a reachable server; neither is a graph node,
-  but `E-INTEGRATION` is the only test that drives the whole lifecycle, so "6 paths untested" and "the
-  lifecycle is untested" are different gaps.
+- **The rollbacks are still stubs.** This session made the absence *visible and consented to*, not
+  fixed. Real rollback for BCD means parsing and re-applying the saved `bcdedit` output; for HP UEFI
+  it means clearing a Setup Password the module may not be able to clear. That is product work on the
+  lockdown modules, not on the harness.
+- **`test_destructive_tests_have_rollback` still only asserts ids exist.** Its name is now more
+  misleading than before; the new `TestDestructiveGate` carries the real invariant
+  (scope + recovery declared), but the old test should be renamed or strengthened.
+- **The gate is unexercised on real hardware.** On this WSL host no destructive test is eligible
+  (they need `admin`/`hp`/`server`), so the evidence is seven unit tests over a synthetic destructive
+  test. The first real exercise will be on a machine where one is eligible.
+- **`E-BCD` and `E-HP-UEFI` remain `verified-in-unit-test`** — unchanged, and still a decision.
 - **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
 
 ### Debt items closed
 
-- None. Enforcement nodes are not debt; D-129 (PBL on real UEFI) stays OPEN.
+- None. This is enforcement-path *tooling*; the graph's 11/13 does not move.
 
 ### Debt items still open
 
@@ -88,42 +92,41 @@
 
 ### Blockers
 
-- The last two enforcement paths need a decision (which machine, and what happens if firmware refuses),
-  not more tooling.
-- The empty `C:\Users\CLLIN\rls-hw-window` from the first window may still exist; 9p holds the handle
-  until WSL restarts.
+- The last two enforcement paths still need a named machine and a recovery plan — now with a harness
+  that refuses to run them by accident.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, three times in one edit): my `GRAPH-SPEC` writer was
-  rejected three times by its own validation — 82–84 column prose, then a stale line-number exemption
-  for the two pre-existing TLS lines. Each rejection happened *before* writing, which is the whole
-  point of build → parse → verify → write, but it also shows the width budget has to be computed, not
-  eyeballed: I hand-wrapped four paragraphs and got the count wrong on 10 of 16 lines.
-- **Layer 2 — context provision** (secondary): the two remaining paths' danger was not written down
-  anywhere I had read. `E-HP-UEFI`'s own `risk_notes` mention password setting but not that a failed
-  run can leave firmware locked. That fact came from reading the test, and it is why this session
-  stopped at 11/13 instead of pressing on.
+- **Layer 4 — verification feedback** (primary): ruff caught two `NameError`s that would have fired
+  exactly in the incident the code was written for (evidence persistence failing; any destructive
+  run). My own reading of the diff missed both. The lesson is familiar from this repo's history: a
+  linter gate is not decoration, and `make lint`/ruff on the *changed* files is part of the edit, not
+  an afterthought.
+- **Layer 5 — state management** (secondary, and mine): RULE-ZERO for this session was logged after
+  the code. Nothing was actually unread — the reading is what produced the finding — but the ordering
+  invariant exists so that "I read it first" is checkable rather than asserted, and this session made
+  it uncheckable. Recorded at the top of this block rather than quietly omitted.
 
 ### VERIFY
 
-- Pre-flight in WSL (not cited): 4 passed, 0 failed — 8/8, 17/17, 14/14, 6/6.
-- Harness on FRANKENSTEIN: `--mode check` → the four tags ELIGIBLE; `--mode simulate` → **4 passed,
-  0 failed**; the console shows the interesting behaviour explicitly (refused connection preserves the
-  pending ACK, retry delivers once with the same uuid; unlock with no key material ACKs `failed`;
-  60 s skew does not fire but a backward jump does).
-- Artifact received through the POST endpoint, sha256 `43158de5bea3921091c66fab010f3c4ae68c720ed3f3d94c8e0a1ae1a4c67982`
-  identical on both sides; `hw-window-preflight --artifact` → exit 0, four citations.
-- `make graph-check` → all invariants pass, **Enforcement: 11/13** (was 7/13), Debt 59/63, Phases 17/17.
-- YAML integrity: parses, four refs byte-exact, no new long lines (the two pre-existing TLS-note lines
-  are the only ones, now at 992/997).
+- `agent/tests/test_hw_harness.py` → **43 passed**, of which 7 are the new `TestDestructiveGate`:
+  refused-without-flag (and the action counter proves nothing ran), runs-with-flag, before-state
+  written to `--evidence-dir` with the captured payload, **no** file written when refused, every
+  destructive test declares scope+recovery, the notice names both, and an undeclared one prints
+  `NOT DECLARED`.
+- `python3 hw_test_harness.py --help` → both flags present with their descriptions.
+- `ruff check agent` → **All checks passed**; `ruff format --check agent` → 61 files already formatted
+  (after two `NameError`s and one over-long line were fixed).
+- `--mode check` on this host shows `E-BCD-01`/`E-HP-UEFI-01` as `SKIP` (missing `admin`/`hp`
+  services) — i.e. the destructive label is not demonstrable here; that is why the gate is pinned by
+  unit tests rather than by a run.
 
 ### Next session opening
 
-Decide `E-BCD` and `E-HP-UEFI`: they are the only enforcement paths left at `verified-in-unit-test`,
-both were ELIGIBLE on FRANKENSTEIN, and both can leave a machine in a state a test cannot undo. Either
-name the machine and the recovery plan and run them, or demote the two entries to a documented
-"cannot be verified without a sacrificial unit" and stop claiming the graph is converging on 13/13.
+Fix the naming debt this created and the one it exposed: rename or strengthen
+`test_destructive_tests_have_rollback` so it no longer implies rollback exists (today it only checks
+ids), and decide `E-BCD`/`E-HP-UEFI` explicitly — name the machine and the recovery plan, or demote
+them in the graph with that reason, rather than leaving 11/13 to imply 13/13 is merely pending.
 
 ---
 
