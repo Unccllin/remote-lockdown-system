@@ -49,6 +49,8 @@ help:
 	@echo "  make sast                 Semgrep static analysis (gates on ERROR)"
 	@echo "  make hw-test-dry          dry-run hardware test harness"
 	@echo "  make hw-test-check        check test eligibility (no execution)"
+	@echo "  make hw-preflight         can a hardware window start? SERVER_URL=… [ADMIN_TOKEN=…]"
+	@echo "  make hw-artifact          which citations does an artifact support? ARTIFACT=…"
 	@echo ""
 	@echo "Other:"
 	@echo "  make check-artifacts      verify build outputs (strict)"
@@ -352,6 +354,23 @@ hw-test-dry:
 
 hw-test-check:
 	@cd agent && python3 hw_test_harness.py --mode check
+
+# The two edges of a hardware window, which the harness itself cannot see:
+#   hw-preflight  — can the window start? (reachable, enrolled, checking in, known version)
+#   hw-artifact   — which citations does this run's artifact actually support? (verified with
+#                   the same helper I3 uses, so the ref cannot be a guess)
+# Failures name the next action; see docs/D-129-HARDWARE-RUNBOOK.md §2a.
+.PHONY: hw-preflight hw-artifact
+
+hw-preflight:
+	@test -n "$(SERVER_URL)" || { echo "usage: make hw-preflight SERVER_URL=http://host:3001 [ADMIN_TOKEN=…] [HOSTNAME=…]"; exit 2; }
+	@python3 scripts/hw-window-preflight.py --check --server-url "$(SERVER_URL)" \
+		$(if $(ADMIN_TOKEN),--admin-token "$(ADMIN_TOKEN)") \
+		$(if $(HOSTNAME),--hostname "$(HOSTNAME)")
+
+hw-artifact:
+	@test -n "$(ARTIFACT)" || { echo "usage: make hw-artifact ARTIFACT=agent/hw_test_artifact_<machine>.json"; exit 2; }
+	@python3 scripts/hw-window-preflight.py --artifact "$(ARTIFACT)"
 
 # ---------------------------------------------------------------------------
 # Artifact verification — wraps scripts/check-artifacts.sh

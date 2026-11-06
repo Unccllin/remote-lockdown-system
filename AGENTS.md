@@ -435,8 +435,8 @@ make build
 ## Diagnostic Sweep Results (2026-08-04, updated 2026-10-27)
 
 All green: 840 server tests (50 suites, measured 2026-11-05), 830 agent tests, 231 dashboard tests,
-30 electron tests, 429 serverless tests, 10 API E2E tests, 237 script-harness
-checks (218 pytest tests across 13 suites + 19 checks in the hand-rolled
+30 electron tests, 429 serverless tests, 10 API E2E tests, 251 script-harness
+checks (232 pytest tests across 14 suites + 19 checks in the hand-rolled
 secret-scanner suite; 5 worker-update cases skip without a built worker),
 eslint clean on server + dashboard, ruff clean + formatted on
 agent, vite build OK, all shell scripts `bash -n` OK, all YAML configs valid, all
@@ -447,14 +447,14 @@ Not runnable on this host: Playwright + Electron (missing `libnspr4.so`).
 dashboard, worker, electron) plus the script-level harness tests, E2E, env and
 artifact checks — it previously ran only three of the five while its own comment
 claimed "all 5 test suites". Current measured totals: server 840 (50 suites),
-agent 830, dashboard 231, worker 429, electron 30, API E2E 10, script harness 237.
+agent 830, dashboard 231, worker 429, electron 30, API E2E 10, script harness 251.
 
 The script-level harness tests are **auto-discovered** (`scripts/test_*.py`, run
 by `make test-scripts` and the CI `script-tests` job). Counts measured 2026-11-05
 (`agent/.venv/bin/python scripts/test_*.py`, one file at a time): 6
 build-windows-artifacts, 8 debt-ledger, 30 firmware-TODO, 18 ci-annotate, 14
-cross-surface-contract, 18 generic-installer, 40 graph-session, 44 memory, 20
-sast-gate, 18 sign-release-metadata, 2 tls-floor, 5 skipped worker-update, plus 19
+cross-surface-contract, 18 generic-installer, 40 graph-session, 14 hw-window-preflight,
+44 memory, 20 sast-gate, 18 sign-release-metadata, 2 tls-floor, 5 skipped worker-update, plus 19
 checks in the hand-rolled secret-scanner suite. Earlier revisions of this
 paragraph said "11 graph-session tests" for a suite that had 40 — the list is
 cheaper to re-measure than to trust.
@@ -488,6 +488,22 @@ intentional `installer-windows-execpolicy` by-design skip).
 
 Hardware test harness (D-003): `make hw-test-dry` runs the harness in dry-run mode.
 `make hw-test` runs real enforcement path tests on Windows/HP hardware.
+
+The two edges the harness cannot see are covered by `scripts/hw-window-preflight.py`
+(documented in `docs/D-129-HARDWARE-RUNBOOK.md` §2a):
+
+```bash
+make hw-preflight SERVER_URL=http://192.168.1.43:3001 ADMIN_TOKEN=… HOSTNAME=FRANKENSTEIN
+make hw-artifact  ARTIFACT=agent/hw_test_artifact_frankenstein.json
+```
+
+`hw-preflight` fails, naming the next action, when the target is unreachable (the
+Windows port-proxy does not survive a WSL restart), the device never checked in, its
+check-in is older than the 300 s poll interval, or `agent_version_stale` is set.
+`hw-artifact` prints the `hardware_artifact_ref` strings I3 will actually accept —
+it calls `artifact_supports_claim()` itself, so a citation cannot be a guess — and
+exits 1 when a run evidences no graph path at all (E-TPM/E-HWID/E-ENROLL are real
+coverage but not graph nodes). Tests: `scripts/test_hw_window_preflight.py` (14).
 
 ### Bugs found and fixed during the sweep
 

@@ -57,11 +57,18 @@ The harness's other seven tests (`E-DURESS`, `E-HIDDEN-FILE`, `E-TAMPER`,
 
 ---
 
-## 2. The acceptance rule this runbook enforces (stricter than I3)
+## 2. The acceptance rule (I3 now enforces it too)
 
-`graph_assert.py::assert_enforcement_path_statuses` requires only a **non-empty
-`hardware_artifact_ref` string**. It never opens the file. That is how this
-got through:
+> **Correction (2026-11-05, session 259):** this section used to say that
+> `graph_assert.py` "requires only a non-empty `hardware_artifact_ref` string. It never opens the
+> file", and that the PASS rule below was "a rule I3 does not yet implement". That stopped being
+> true — I3 check 3 calls `artifact_supports_claim()`, which opens the artifact and demands a PASS
+> for that path's own test id. The claim was stale in the *optimistic* direction: it told an
+> operator their citation would not be checked, when it is. Kept below as the history of how the
+> rule was found.
+
+The historical failure that motivated the rule — an artifact recording `FAIL` cited for a path
+marked `verified-on-hardware` — looked like this:
 
 ```console
 $ python3 -c "import json;d=json.load(open('agent/hw_test_artifact_azure_bitlocker.json'));
@@ -77,7 +84,7 @@ E-HP-UEFI-01   SKIP  :: Not an HP machine
 `FAIL`. (The other cited artifact, `hw_test_artifact_azure.json`, records
 `E-BCD-01 FAIL` and `E-HP-UEFI-01 SKIP` as well.)
 
-So this runbook uses a rule I3 does not yet implement:
+The rule, which I3 now enforces:
 
 > **A path may be marked `verified-on-hardware` only when the artifact named in
 > `hardware_artifact_ref` contains a result whose `test_id` is that path's test
@@ -86,6 +93,41 @@ So this runbook uses a rule I3 does not yet implement:
 `test_id` → path mapping is in §6. A passing `E-ENCRYPT-01` does **not**
 evidence `E-DECRYPT`; a passing `E-INTEGRATION-01` does **not** evidence
 `E-ACK`.
+
+### 2a. Don't hand-write the citation — generate it
+
+`scripts/hw-window-preflight.py --artifact <file>` prints, for every enforcement path the artifact
+actually evidences, the exact `hardware_artifact_ref` string and a paste-ready
+`status`/`hardware_artifact_ref` pair. It calls `artifact_supports_claim()` itself, so anything it
+prints is something I3 will accept, and it **exits 1** when the run evidences no graph path at all
+(E-TPM, E-HWID and E-ENROLL are real coverage but not graph nodes, so passing them moves no status):
+
+```console
+$ python3 scripts/hw-window-preflight.py --artifact agent/hw_test_artifact_frankenstein.json
+Artifact: agent/hw_test_artifact_frankenstein.json
+  E-ACK-01               PASS
+  E-TRACK-01             PASS
+  …
+Citations I3 will accept (each verified with artifact_supports_claim):
+  E-ACK            agent/hw_test_artifact_frankenstein.json#E-ACK-01
+  E-TRACK          agent/hw_test_artifact_frankenstein.json#E-TRACK-01
+…
+```
+
+And before opening the machine, ask whether the window can start at all:
+
+```console
+$ python3 scripts/hw-window-preflight.py --check --server-url http://192.168.1.43:3001
+$ python3 scripts/hw-window-preflight.py --check --server-url http://192.168.1.43:3001 \
+      --admin-token "$ADMIN_TOKEN" --hostname FRANKENSTEIN
+```
+
+It reports the device's `last_checkin` age, `agent_version` and `agent_version_stale` (see
+`docs/API.md`), and fails with the next action named — including the port-proxy note, which is the
+usual reason the lab address resets. Measured 2026-11-05: **the lab server was unreachable from the
+development host**, so this failure mode is not hypothetical. Failures: not reachable, never checked
+in, check-in older than the 300 s poll interval, or a stale agent version (the build on the machine
+does not report one, so a post-window artifact could not be tied to a known binary).
 
 ---
 
