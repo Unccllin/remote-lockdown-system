@@ -2603,3 +2603,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-115
+  statement: 'Eleven of thirteen enforcement paths are now verified-on-hardware, each citing an artifact
+    whose test id I3 itself resolved: agent/hw_test_artifact_frankenstein_win.json covers E-TRACK, E-EFFECTIVENESS,
+    E-OFFLINE-QUEUE, E-AUTO-UPDATE and agent/hw_test_artifact_frankenstein_win2.json covers E-DECRYPT,
+    E-ACK, E-RECOVERY, E-DEADMAN (both runs on FRANKENSTEIN, 4 passed 0 failed each). The remaining two,
+    E-BCD and E-HP-UEFI, stay verified-in-unit-test deliberately: they change boot/firmware state that
+    a failed run cannot undo, so verifying them needs a named sacrificial machine and a recovery plan
+    rather than another harness run.'
+  domain: testing/hardware
+  status: confirmed
+  evidence_level: real-media
+  provenance: 'S261: two harness runs on FRANKENSTEIN (4 passed each, artifacts win.json + win2.json,
+    sha256 verified on receipt), I3 re-resolved every citation in make graph-check → Enforcement 11/13'
+  source: agent/hw_test_artifact_frankenstein_win.json; agent/hw_test_artifact_frankenstein_win2.json;
+    .devin/graph/GRAPH-SPEC.yaml; make graph-check (11/13)
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

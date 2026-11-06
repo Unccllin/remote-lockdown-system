@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-06 13:14:50
-Active memories: 1142 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-06 15:10:09
+Active memories: 1180 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -21,7 +21,10 @@ Active memories: 1142 | Superseded: 0 | Decayed: 20
 | m-242 | MISTAKE: mistake: The previous session's convergen |  | 0.55 | 2026-11-03 | 0.266 | 0 |  |
 | m-249 | Build passes: PblApp.efi = 28,672 bytes, SHA-256 4 |  | 0.50 | 2026-09-07 | 0.257 | 0 |  |
 | m-1153 | A deadline can be gamed by setting it far out, so  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1165 | SQLite has no ADD COLUMN IF NOT EXISTS, but migrat |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1192 | MISTAKE: mistake: wrote VERIFY-style numbers into  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1158 | The server records no agent version at all: /api/a |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1199 | MISTAKE: mistake: my validation exempted the two p |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1118 | Cooldown is cheap supply-chain insurance for autom |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1131 | The cross-surface contract test compares route pat |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1121 | path-join-resolve-traversal flags ANY function par |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
@@ -29,49 +32,82 @@ Active memories: 1142 | Superseded: 0 | Decayed: 20
 | m-1119 | MISTAKE: mistake: assumed the SAST job's findings  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1145 | The Worker already had hmacSha256 and timingSafeEq |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1149 | MISTAKE: mistake: my first API.md edit used |---|- |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1197 | defender_exclusion was null in both windows — two  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1152 | Enforcement pattern repeated from the SAST gate: c |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1185 | MISTAKE: mistake: left int(age) in two print state |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1160 | A plausible inference written into the trace's nex |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1124 | A gate that only prints findings nobody must act o |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1139 | D-134 was OPEN in its detail section and in the gr |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1129 | Returning None from a scheme guard (instead of sil |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1176 | MISTAKE: mistake: wrote the VERIFY numbers into th |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1164 | GET /api/devices is SELECT * through publicDevice( |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1136 | D-212 was already taken by the 2026-09-15 RE-harde |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1154 | Both surfaces echo deprecated_scheme_sunset in the |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1169 | MISTAKE: note: malformed/over-long versions are st |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1142 | MISTAKE: mistake: first version of the ruling used |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1173 | 'Never checked in' and 'stale' are different facts |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1114 | I5's quality check counts bullet lines containing  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1125 | MISTAKE: mistake: wrote the exceptions gate before |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1126 | MISTAKE: mistake: assumed AGENT_BINARIES_DIR overr |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1113 | A generator that copies only some sections makes t |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1108 | A document with two statuses per item has no singl |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1174 | agent_version_at only refreshes when a device send |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1123 | A .ps1 bootstrap served as text/plain needs X-Cont |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1140 | The uninstall token has 4 defects: no device bindi |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1182 | urllib will open file:// and custom schemes, so an |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1151 | A tag-driven repo has no release cadence code can  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1146 | Dual-accept (Q2-A) is affordable only because the  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1183 | MISTAKE: mistake: wrote citations_for() with a bro |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1157 | The D-221 sunset breaks legacy TOKENS, not agent b |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1198 | MISTAKE: mistake: hand-wrapped four GRAPH-SPEC par |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1150 | MISTAKE: note: three pre-existing Worker destructu |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1127 | Existing TestGeolocation patched agent.requests wh |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1193 | MISTAKE: mistake: left an empty C:\Users\CLLIN\rls |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1166 | migrationIdempotency.test.js pins the expected app |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1132 | The S251 sast gate caught its own fix: removing th |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1111 | MISTAKE: mistake: first pass at the checker return |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1177 | MISTAKE: note: I had left an unused nowMs paramete |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1163 | Both surfaces already had the exact pattern needed |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1147 | A single vectors file read by both suites plus a p |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1188 | FRANKENSTEIN cannot see \\wsl.localhost, is not on |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1171 | Staleness therefore cannot be a SQL predicate acro |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1168 | MISTAKE: mistake: added migration 018 without the  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1194 | All four remaining stub-based tags passed on the f |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1189 | E-TRACK's hardware run used the IP fallback ('ip,  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1179 | A tool that reuses the graph's own helpers cannot  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1162 | MISTAKE: mistake: my first attempt to append the D |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1117 | MEDIUM findings that only print will accumulate un |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1175 | MISTAKE: mistake: asserted a unique anchor on 'age |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1148 | MISTAKE: mistake: assumed the AGENTS.md serverless |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1178 | I3 already opens the artifact: assert_enforcement_ | test | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1137 | GRAPH-SPEC.yaml mirrors only part of each ledger ( |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1181 | 'is_relative_to(<absolute root>)' is False for a r |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1106 | A hypothesis that survives reasoning often dies to |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1116 | Know which gate can actually fail your build befor |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1112 | When two sources describe one fact, the one a test |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1196 | The two remaining paths E-BCD and E-HP-UEFI are a  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1187 | artifact_supports_claim() accepts both 'pass' and  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1167 | Never-reported must be a distinct query value (age |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1115 | MISTAKE: mistake: wrote four consecutive session b |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1161 | MISTAKE: mistake: S255 recorded 'every device must |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1141 | MISTAKE: mistake: headed the session block 'D-212  |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1159 | tamper_protection.py's docstring documented verify |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1135 | New non-firmware debt goes into PBL-DEBT-LEDGER.md |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1190 | defender_exclusion was null on a real install, con |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1120 | Semgrep OSS sets extra.lines and extra.fingerprint |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1184 | MISTAKE: mistake: my first walkthrough of the wind |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1134 | MISTAKE: mistake: my first pass wrote the token te |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1191 | MISTAKE: mistake: my first two GRAPH-SPEC edits br |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1172 | The TZ-independent way to test it is asserting the |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1170 | The two dialects store different timestamp shapes: |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1138 | graph_session.py printed literal 'D-100..D-130, 31 |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1195 | E-DEADMAN reads dangerous ('auto-lockdown if no of |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1105 | Negative results are worth recording; they bound f |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1110 | Never put backticks inside a shell-quoted argument |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1109 | Baselines that both fail on growth and report shri |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1144 | Both surfaces could do the same derivation with no |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1107 | MISTAKE: mistake: presented the per-advisory expla |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1186 | The four tagged harness tests use an in-process _S |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1104 | npm audit clean does not imply Dependabot clean; t |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1155 | MISTAKE: mistake: my first ledger edit asserted on |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1128 | ip-api.com free tier is HTTP-only (HTTPS is the pa |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
@@ -79,6 +115,8 @@ Active memories: 1142 | Superseded: 0 | Decayed: 20
 | m-1143 | The binding id must come from the authenticated de |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1130 | The agent sends X-API-Key but the Express agentAut |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1133 | MISTAKE: mistake: assumed the uninstall-token erro |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1200 | MISTAKE: note: the artifact was renamed from the t |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
+| m-1180 | The lab box is unreachable from this host (connect |  | 0.50 | 2026-11-06 | 0.250 | 0 |  |
 | m-1001 | Persistence design must match the privilege level  |  | 0.50 | 2026-11-05 | 0.247 | 0 |  |
 | m-998 | MISTAKE: mistake: attributed the start failure to  |  | 0.50 | 2026-11-05 | 0.247 | 0 |  |
 | m-1051 | Existing harnesses often contain the exact machine |  | 0.50 | 2026-11-05 | 0.247 | 0 |  |

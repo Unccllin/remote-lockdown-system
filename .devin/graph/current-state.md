@@ -25,119 +25,105 @@
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
 | Debt items | 59 | 63 | ✗ |
-| Enforcement paths (on hardware) | 7 | 13 | ✗ |
+| Enforcement paths (on hardware) | 11 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 59 of 63 debt items are closed, but **6 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 59 of 63 debt items are closed, but **2 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
-**The 6 enforcement paths that still need hardware verification:**
+**The 2 enforcement paths that still need hardware verification:**
 
 | ID | Name | Status | Blocker |
 |----|------|--------|---------|
-| E-DECRYPT | file-decryption | verified-in-unit-test | Wrong-key handling (InvalidToken) |
 | E-BCD | bcd-lockdown | verified-in-unit-test | D-008 CLOSED: BitLocker suspend/resume verified on Azure VM with BitLocker. B... |
 | E-HP-UEFI | hp-uefi-lockdown | verified-in-unit-test | D-009 model-aware names; D-010 Sure Admin detection; needs hardware verificat... |
-| E-ACK | command-ack | verified-in-unit-test | Network failure retries via pending ACK file |
-| E-RECOVERY | unlock-recovery | verified-in-unit-test | Key release security; sentinel cleanup |
-| E-DEADMAN | deadman-switch | verified-in-unit-test | Clock skew; false trigger on network outage |
 
-**The 7 already verified on hardware:**
+**The 11 already verified on hardware:**
 
 | ID | Name | Artifact |
 |----|------|----------|
 | E-ENCRYPT | file-encryption | agent/hw_test_artifact_azure.json |
+| E-DECRYPT | file-decryption | agent/hw_test_artifact_frankenstein_win2.json#E-DECRYPT-01 |
 | E-LOCK-SCREEN | workstation-lock | agent/hw_test_artifact_azure.json |
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
+| E-ACK | command-ack | agent/hw_test_artifact_frankenstein_win2.json#E-ACK-01 |
+| E-RECOVERY | unlock-recovery | agent/hw_test_artifact_frankenstein_win2.json#E-RECOVERY-01 |
 | E-TRACK | covert-tracking | agent/hw_test_artifact_frankenstein_win.json#E-TRACK-01 |
+| E-DEADMAN | deadman-switch | agent/hw_test_artifact_frankenstein_win2.json#E-DEADMAN-01 |
 | E-EFFECTIVENESS | lockdown-effectiveness | agent/hw_test_artifact_frankenstein_win.json#E-EFFECTIVENESS-01 |
 | E-OFFLINE-QUEUE | offline-queue | agent/hw_test_artifact_frankenstein_win.json#E-OFFLINE-QUEUE-01 |
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 260 — 2026-11-05 (the hardware window ran: 4 paths leave unit-test-only, on FRANKENSTEIN)
+## Latest session: 261 — 2026-11-05 (second window: 7/13 → 11/13; only the two destructive paths remain)
 
 ### Fog cleared
 
-- **Whether the four untested paths could run at all without a server**: yes — they use an
-  in-process stub, so a "window" is Python + the agent source, nothing else. That is why the whole
-  exercise came down to transferring 740 KB, not to provisioning.
-- **Whether `verified-on-hardware` was reachable for them**: it is now. 4 paths moved, each citation
-  verified by I3 opening the artifact rather than by a non-empty string.
-- **What was blocking the window before**: not code and not permission — a *transfer*. No git on the
-  target, no shared filesystem, no tailnet membership, and the WSL mount path doesn't exist from
-  another machine. The existing `3001` port proxy was the one channel that already worked.
-- **Whether the harness's `passed` status satisfies an I3 rule written for `PASS`**: yes —
-  `artifact_supports_claim()` accepts `{pass, passed}` case-insensitively. Checked before citing,
-  because a mismatch would have made every window artifact uncitable.
+- **Whether the remaining paths needed new code**: no. All four were already ELIGIBLE and passed with
+  the same transfer recipe; the window cost one round trip and no source change.
+- **Whether `E-DEADMAN` is safe to run on a real laptop**: yes — `non-destructive`, temp-rooted, and
+  the assertions are about firing conditions rather than about encrypting anything the operator owns.
+- **What the two remaining paths actually require**: rollback-capable firmware behaviour, not a longer
+  tag list. `E-BCD`'s documented failure on Azure was a platform restriction with a correct rollback;
+  `E-HP-UEFI` sets firmware passwords that a failed run leaves behind.
 
 ### Fog remaining
 
-- **`E-TRACK`'s WiFi-scan branch is still unit-tested only.** The run fell through to the IP
-  fallback ("ip, ~citym"). To evidence the scan, a run needs a machine whose `netsh wlan` returns
-  networks — FRANKENSTEIN reported none to the harness.
-- **`defender_exclusion: null` on a real install** contradicts AGENTS.md's claim that the installer
-  adds one. Not investigated; it deserves its own check against `agent/installer.py`.
-- **6 enforcement paths remain at `verified-in-unit-test`**: E-DECRYPT, E-BCD, E-HP-UEFI, E-ACK,
-  E-RECOVERY, E-DEADMAN. Several are *eligible* on FRANKENSTEIN (`--mode check` said so for
-  E-DECRYPT, E-ACK, E-RECOVERY, E-DEADMAN) and simply were not in this window's tag list.
-- **`E-ENROLL` and `E-INTEGRATION` skip** on FRANKENSTEIN for want of a reachable server — they need
-  the lab stack up, which is a different window (and `E-INTEGRATION` is not a graph node).
-- **An empty `C:\Users\CLLIN\rls-hw-window` remains on the dev Windows host**: 9p still holds the
-  handle from this WSL session, so `Remove-Item` fails with IOException. It is empty and will delete
-  after a WSL restart. Recorded instead of claimed as cleaned.
+- **`E-BCD` and `E-HP-UEFI` are still unit-test-only.** Running them needs a machine we are willing to
+  reconfigure, with a manual-recovery path if HP Sure Admin rejects the write. That is an operator
+  decision, and this session deliberately stopped short of taking it.
+- **`defender_exclusion` was `null` again** in this run — the same discrepancy AGENTS.md records from
+  the first window. Two windows, same observation: it is now evidence, not an anecdote, and still
+  uninvestigated.
+- **`E-ENROLL` and `E-INTEGRATION` still SKIP** without a reachable server; neither is a graph node,
+  but `E-INTEGRATION` is the only test that drives the whole lifecycle, so "6 paths untested" and "the
+  lifecycle is untested" are different gaps.
 - **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
 
 ### Debt items closed
 
-- None. No ledger item covered these four paths — they are ENFORCE nodes, not debt. **D-129 stays
-  OPEN**: it asks for PBL firmware validation on real UEFI hardware, which this run is not.
+- None. Enforcement nodes are not debt; D-129 (PBL on real UEFI) stays OPEN.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 63 OPEN). Unchanged by this session.
+- D-120, D-129, D-130, D-134 (4 of 63). Unchanged.
 
 ### Blockers
 
-- None for the enforcement-path work. The remaining 6 paths need more tags on FRANKENSTEIN (cheap),
-  and E-HP-UEFI/E-BCD additionally need rollback-capable hardware behaviour that this window did not
-  exercise.
-- Dependabot/CodeQL findings still need the security page.
+- The last two enforcement paths need a decision (which machine, and what happens if firmware refuses),
+  not more tooling.
+- The empty `C:\Users\CLLIN\rls-hw-window` from the first window may still exist; 9p holds the handle
+  until WSL restarts.
 
 ### Failure attribution
 
-- **Layer 3 — execution environment** (primary): four transfer attempts failed before one worked,
-  each for an environment fact nobody had written down — no git on the target, no `\\wsl.localhost`
-  from another machine, and my `C:` being the *wrong* machine's `C:`. The fix that held used
-  infrastructure that already existed (the 3001 port proxy + its firewall rule). That fact is now in
-  AGENTS.md, so the next window starts where this one ended.
-- **Layer 4 — verification feedback** (secondary, self-caught twice): my first two edits to
-  `GRAPH-SPEC.yaml` **broke the YAML** — a `\#` escape that YAML rejects, then a block scalar
-  indented shallower than its key. Both were caught by parsing rather than by the linter, and the
-  third attempt was rebuilt around build → parse → verify refs byte-exact → verify widths → *then*
-  write. The lesson is mechanical: validate before writing, not after.
+- **Layer 4 — verification feedback** (primary, three times in one edit): my `GRAPH-SPEC` writer was
+  rejected three times by its own validation — 82–84 column prose, then a stale line-number exemption
+  for the two pre-existing TLS lines. Each rejection happened *before* writing, which is the whole
+  point of build → parse → verify → write, but it also shows the width budget has to be computed, not
+  eyeballed: I hand-wrapped four paragraphs and got the count wrong on 10 of 16 lines.
+- **Layer 2 — context provision** (secondary): the two remaining paths' danger was not written down
+  anywhere I had read. `E-HP-UEFI`'s own `risk_notes` mention password setting but not that a failed
+  run can leave firmware locked. That fact came from reading the test, and it is why this session
+  stopped at 11/13 instead of pressing on.
 
 ### VERIFY
 
-- Harness on FRANKENSTEIN: `--mode check` → all four tags ELIGIBLE; `--mode simulate` →
-  **4 passed, 0 failed** (`E-TRACK` 10/10, `E-EFFECTIVENESS` 7/7, `E-OFFLINE-QUEUE` 7/7,
-  `E-AUTO-UPDATE` 12/12).
-- Artifact received byte-for-byte through the POST endpoint and copied into `agent/`; sha256
-  `d39c2756abdac508ee39dd8a8ba969f5d3e58df62c33e9cc8385674d59e1b04f` identical on both sides.
-- `scripts/hw-window-preflight.py --artifact agent/hw_test_artifact_frankenstein_win.json` → exit 0,
-  four citations, each re-verified.
-- `make graph-check` → all invariants pass, **Enforcement: 7/13 verified-on-hardware** (was 3/13);
-  `Debt: 59/63 CLOSED` unchanged.
-- **Negative control**: temporarily pointing `E-TRACK`'s ref at `#E-BCD-01` (absent from this
-  artifact) made I3 fail with `the referenced artifact has no 'E-BCD-01' result`; restored → pass.
-  So the citations are load-bearing, not decorative.
-- YAML integrity after the edits: `yaml.safe_load` OK, the four refs byte-exact, no new long lines
-  (only the two pre-existing ones, shifted 941/946 → 957/962).
+- Pre-flight in WSL (not cited): 4 passed, 0 failed — 8/8, 17/17, 14/14, 6/6.
+- Harness on FRANKENSTEIN: `--mode check` → the four tags ELIGIBLE; `--mode simulate` → **4 passed,
+  0 failed**; the console shows the interesting behaviour explicitly (refused connection preserves the
+  pending ACK, retry delivers once with the same uuid; unlock with no key material ACKs `failed`;
+  60 s skew does not fire but a backward jump does).
+- Artifact received through the POST endpoint, sha256 `43158de5bea3921091c66fab010f3c4ae68c720ed3f3d94c8e0a1ae1a4c67982`
+  identical on both sides; `hw-window-preflight --artifact` → exit 0, four citations.
+- `make graph-check` → all invariants pass, **Enforcement: 11/13** (was 7/13), Debt 59/63, Phases 17/17.
+- YAML integrity: parses, four refs byte-exact, no new long lines (the two pre-existing TLS-note lines
+  are the only ones, now at 992/997).
 
 ### Next session opening
 
-Run the tags that are already ELIGIBLE on FRANKENSTEIN and were skipped —
-`E-DECRYPT,E-ACK,E-RECOVERY,E-DEADMAN` — with the same transfer recipe and `make hw-artifact` for the
-citations; that would take enforcement coverage from 7/13 toward 11/13 without new code, and the only
-new information needed is whether each passes on that machine.
+Decide `E-BCD` and `E-HP-UEFI`: they are the only enforcement paths left at `verified-in-unit-test`,
+both were ELIGIBLE on FRANKENSTEIN, and both can leave a machine in a state a test cannot undo. Either
+name the machine and the recovery plan and run them, or demote the two entries to a documented
+"cannot be verified without a sacrificial unit" and stop claiming the graph is converging on 13/13.
 
 ---
 
