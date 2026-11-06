@@ -683,8 +683,10 @@ is marked and logged:
 
 The sunset is not a note: it lives in `docs/adr/D-221-token-vectors.json` and
 `scripts/test_cross_surface_contract.py` **fails on that date** with the deletion checklist, as do
-the Express and Worker suites. An agent on a machine that has not updated before then can no longer
-be uninstalled — which is why both surfaces echo the date rather than only logging it.
+the Express and Worker suites. What stops working is a **token** derived the old way and presented
+after that date — not an agent: a pre-D-221 agent already sends `device_id` and the server binds from
+the authenticated device row, so it is issued and verified normally. Both surfaces echo the date
+rather than only logging it, so a live deployment reports its own state.
 
 `authorized: false` for a wrong token, a token from another device, or an expired one. `400` if
 `uninstall_token` is missing, `401` if unauthenticated, `503` if `ADMIN_TOKEN` is unset. No response

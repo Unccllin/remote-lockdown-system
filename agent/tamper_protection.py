@@ -25,8 +25,11 @@ Usage:
     apply_file_acls(agent_path, config_path, state_dir)
     apply_registry_protection()
 
-    # On uninstall (requires server token):
-    if verify_uninstall_token(token, device_id, server_url, api_key):
+    # On uninstall (requires server token). Note the argument order: token, server_url,
+    # api_key, device_id — NOT token, device_id, server_url, api_key, which is the order
+    # people reach for and would silently send the device id as the URL (S256).
+    # agent/service_installer.py uninstall() is the caller to copy from.
+    if verify_uninstall_token(token, server_url, api_key, device_id):
         remove_protection(agent_path, config_path, state_dir)
         # ... proceed with uninstall
 """

@@ -2225,6 +2225,37 @@
   `handleUninstallAuthVerify`), `agent/tamper_protection.py` (`request_uninstall_token`,
   `verify_uninstall_token`), `server/tests/uninstallAuth.test.js`.
 
+### D-222 — The server records no agent version, so fleet-update compliance cannot be answered
+- **Status**: OPEN
+- **Category**: SERVER
+- **Found**: session 256, while writing the operator-facing note for D-221's sunset. The note wanted
+  to say "update every agent before the date"; checking that turned out to be impossible, and
+  checking *whether it was even needed* turned out to be the more important question (it is not —
+  see D-221).
+- **Blocker**: the information never reaches storage. `/api/agent/update` reads
+  `x-agent-version` (or `?version`) to decide whether an update is available and then **discards
+  it**; `POST /api/agent/checkin`'s documented body includes `agent_version`, and
+  `devices` (`server/src/db/migrations/001_base.sql`) has no column for it. `grep -rn agent_version
+  server/src` returns exactly one line, and it is a docstring.
+- **Consequence**: "is every agent on version X?" cannot be answered from the dashboard or the API.
+  That is a fleet-operations question, not a cosmetic one — it is the question any update rollout
+  asks, including a D-129 hardware window ("which build is on that machine?") and any future change
+  that *does* require an agent update. It also means a sunset like D-221's cannot be announced with
+  a verification step, only a warning.
+- **Close criteria**:
+  - (a) `checkin` (and the update probe) persist the reported version + a timestamp on the device
+    record, on **both** surfaces — Express stores it in `devices`, the Worker in its KV device row.
+  - (b) `GET /api/devices` returns it, the dashboard shows it, and it can be filtered/sorted so a
+    rollout list is obtainable without a database client.
+  - (c) A device that reports no version shows as `unknown` rather than being dropped, rejected, or
+    500ing — pre-D-222 agents exist in the field and must keep checking in.
+  - (d) `docs/API.md` documents the field; a test asserts an old agent (no version in the body) still
+    checks in successfully and appears in the list with `unknown`.
+- **Evidence**: `server/src/routes/agent.js` (`/api/agent/update`, and the `checkin` docstring that
+  promises `agent_version`), `server/src/db/migrations/001_base.sql` (`devices` columns),
+  `docs/DEPLOYMENT.md` § "6. Uninstall tokens issued before the D-221 upgrade expire" (where the
+  limitation is stated to operators).
+
 ## Summary
 
 > **Reconciliation note (2026-09-17, session 114):** Per-item detail sections
@@ -2286,6 +2317,7 @@
 | D-210 | Serverless Worker PBL route integration not implemented | CLOSED (commit 9612fbb) | SERVER |
 | D-211 | Covert tracking mode (C5) not fully implemented | CLOSED (all 12 C5 plan items implemented: firmware Decision.c, server verdict+track endpoints, agent handle_track+data protection+stealth, dashboard Track button) | TODO |
 | D-221 | Uninstall token is deployment-wide, and the two servers derive it differently | CLOSED (commit `b9c6127` — device-bound HMAC from the authenticated device row, shared vectors read by both suites + the contract test, 503 when ADMIN_TOKEN is unset, constant-time compare; legacy scheme still verifies until the dated sunset 2027-02-04, after which three suites fail with the deletion checklist) | SECURITY |
+| D-222 | Server records no agent version, so fleet-update compliance cannot be answered | OPEN (`/api/agent/update` reads `x-agent-version` and discards it; `devices` has no version column; close criteria in the D-222 entry) | SERVER |
 
 ### RE-hardening review (2026-09-15)
 
@@ -2306,5 +2338,5 @@
 | D-219 | Policy signature BLOCK path untested | CLOSED (same scenario as D-215 — test-d215-harness.sh + gen-policy-rot.py; 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 | D-220 | BLOCK-intent returns propagate error to BDS (BootOrder advance bypass) | CLOSED (`PblApp.c` policy-sig-fail and anti-rollback paths returned `EFI_SECURITY_VIOLATION` — per Boot#### semantics a non-success return advances BDS to the next boot option (Windows boots). Fixed via `PblBlockHalt()` — lock screen + MOR + ResetSystem + CpuDeadLoop, never returns; chain-load return checked at all 3 call sites, fail-closed on error. Note: D-219's harness passed the buggy code — it checked serial lines, not post-BLOCK behavior. QEMU+swtpm: fve 16/0, docker 15/0, persistence 16/0. Commit this session; artifacts /tmp/pbl-fve-ci/, /tmp/pbl-ci-persist/) | SECURITY |
 
-**Totals**: 54 items — 50 CLOSED, 4 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware, D-130 signing, D-134 TPM NV hierarchy)
+**Totals**: 55 items — 50 CLOSED, 5 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware, D-130 signing, D-134 TPM NV hierarchy, D-222 agent-version observability)
 

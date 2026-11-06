@@ -412,6 +412,34 @@ curl https://lockdown.example.com/api/health
 docker compose -f docker-compose.prod.yml ps
 ```
 
+### 6. Uninstall tokens issued before the D-221 upgrade expire on 2027-02-04
+
+An uninstall token used to be `HMAC(ADMIN_TOKEN, 5-minute window)` — the **same string for every
+device** in the deployment. Since D-221 it is bound to one device
+(`HMAC_SHA256(ADMIN_TOKEN, "<device_id>:<window>")`).
+
+A server upgraded past D-221 still accepts the old form, so an operator who is mid-change is not
+stranded, but **that acceptance ends on 2027-02-04**. From then on a token derived the old way is
+rejected:
+
+| Question | Answer |
+|---|---|
+| Does an agent need updating for this? | **No.** A pre-D-221 agent already sends `device_id` and authenticates with its device key, and the server binds the token to the authenticated device row. Old agent + new server is issued and verified normally. |
+| What actually stops working? | A **token** computed under the old scheme and presented after the date — one staged in a runbook, a script, a ticket, or a chat message before you upgraded. |
+| What should I do? | Use uninstall tokens inside their 5-minute life instead of staging them. A token you fetched before upgrading should be used before 2027-02-04, or simply re-requested after it — the request path is unchanged. |
+
+The date is not a comment to remember: `scripts/test_cross_surface_contract.py` fails on it with the
+exact deletion checklist, and the Express and Worker suites fail on the same day. Both servers also
+echo `deprecated_scheme_sunset` in the verification response when the old form is accepted, so a live
+deployment reports its own state.
+
+> **Limitation, stated because it affects any fleet-wide instruction:** this server does **not**
+> record which agent version a device runs. `/api/agent/update` reads `x-agent-version` to decide
+> whether an update is available and then discards it, and the `devices` table has no version
+> column — so "is every agent on version X?" cannot be answered from the dashboard or the API.
+> That gap is tracked as **D-222** in `docs/adr/PBL-DEBT-LEDGER.md`. It does not affect the sunset
+> above, which needs no agent change at all.
+
 ---
 
 ## Troubleshooting
