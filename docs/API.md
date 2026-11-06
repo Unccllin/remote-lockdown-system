@@ -668,13 +668,23 @@ for an admin-token caller.
 { "authorized": true, "verified": true }
 ```
 
-A token issued by the previous, deployment-wide scheme still verifies for one release (a device
-whose agent has not yet taken the update must be able to uninstall), and such a verification is
-marked and logged:
+A token issued by the previous, deployment-wide scheme still verifies **until 2027-02-04** (a
+device whose agent has not yet taken the update must be able to uninstall), and such a verification
+is marked and logged:
 
 ```json
-{ "authorized": true, "verified": true, "deprecated_scheme": "legacy-deployment-wide" }
+{
+  "authorized": true,
+  "verified": true,
+  "deprecated_scheme": "legacy-deployment-wide",
+  "deprecated_scheme_sunset": "2027-02-04"
+}
 ```
+
+The sunset is not a note: it lives in `docs/adr/D-221-token-vectors.json` and
+`scripts/test_cross_surface_contract.py` **fails on that date** with the deletion checklist, as do
+the Express and Worker suites. An agent on a machine that has not updated before then can no longer
+be uninstalled — which is why both surfaces echo the date rather than only logging it.
 
 `authorized: false` for a wrong token, a token from another device, or an expired one. `400` if
 `uninstall_token` is missing, `401` if unauthenticated, `503` if `ADMIN_TOKEN` is unset. No response

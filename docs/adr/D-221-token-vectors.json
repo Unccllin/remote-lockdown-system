@@ -13,6 +13,9 @@
     "",
     "The secret is a fixed test value so the vectors are reproducible; it is not a real token."
   ],
+  "legacy_sunset": "2027-02-04",
+  "d221_closed_at": "2026-11-06",
+  "legacy_sunset_reason": "The previous deployment-wide derivation is still accepted (ruling Q2-A) so a device whose agent has not taken the update can uninstall. That acceptance must end, and a tag-driven repo has no release cadence for 'one release' to point at, so it ends on a date: 90 days from the D-221 close. scripts/test_cross_surface_contract.py FAILS on or after legacy_sunset and names the deletion sites; server/tests/uninstallAuth.test.js and serverless/worker.test.ts fail on the same date, so three suites have to be dealt with rather than one log line ignored. To close it out: delete legacyUninstallToken() and legacyUninstallToken() (Worker) plus their verify branches and the deprecated_scheme marker, drop the two legacy tests, then empty legacy_express and legacy_worker here (the vectors that prove the two schemes differed become history in the D-221 ledger entry).",
   "secret": "TEST-ONLY-d221-vector-secret-0123456789",
   "algorithm": {
     "new": "HMAC-SHA256(key=ADMIN_TOKEN, msg='<device_id>:<window>') -> lowercase hex",

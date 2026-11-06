@@ -954,6 +954,12 @@ async function legacyUninstallToken(secret: string, window: number): Promise<str
   return sha256(`${window}:${secret}`);
 }
 
+// The date the legacy scheme stops being accepted. docs/adr/D-221-token-vectors.json is the
+// authoritative statement; this literal is echoed to caller and operator, and
+// serverless/worker.test.ts pins it against `legacy_sunset`. On that date
+// scripts/test_cross_surface_contract.py fails with the deletion checklist.
+const LEGACY_UNINSTALL_TOKEN_SUNSET = '2027-02-04';
+
 /**
  * Who is calling, and as which device?
  *
@@ -1096,12 +1102,14 @@ async function handleUninstallAuthVerify(request: Request, env: Env): Promise<Re
     if (timingSafeEqualStr(providedToken, legacy)) {
       console.warn(
         `[uninstall-auth] accepted a LEGACY deployment-wide uninstall token for device ${subject.deviceId} ` +
-          '— D-221 added device binding; the agent should be updated before this path is deleted',
+          `— D-221 added device binding. It is deleted on ${LEGACY_UNINSTALL_TOKEN_SUNSET}; update the ` +
+          'agent on that device before then or it cannot be uninstalled afterwards.',
       );
       return jsonResponse({
         authorized: true,
         verified: true,
         deprecated_scheme: 'legacy-deployment-wide',
+        deprecated_scheme_sunset: LEGACY_UNINSTALL_TOKEN_SUNSET,
       });
     }
   }

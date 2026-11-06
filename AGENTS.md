@@ -261,7 +261,7 @@ cd server   && npm test                       # 663 Jest tests
 scripts/run-agent-tests.sh -q                 # 830 pytest tests (uses agent/.venv)
 cd dashboard && npx vitest run                # 197 Vitest tests
 cd electron  && npm test                      # 30 Jest tests
-cd serverless && npm test                     # 420 Vitest tests
+cd serverless && npm test                     # 422 Vitest tests
 
 # Coverage gate (all 5 components; floors declared per component, dated 2026-10-27)
 make test-coverage
@@ -434,9 +434,9 @@ make build
 
 ## Diagnostic Sweep Results (2026-08-04, updated 2026-10-27)
 
-All green: 828 server tests (50 suites, measured 2026-11-05), 830 agent tests, 197 dashboard tests,
-30 electron tests, 420 serverless tests, 10 API E2E tests, 231 script-harness
-checks (212 pytest tests across 13 suites + 19 checks in the hand-rolled
+All green: 830 server tests (50 suites, measured 2026-11-05), 830 agent tests, 197 dashboard tests,
+30 electron tests, 422 serverless tests, 10 API E2E tests, 237 script-harness
+checks (218 pytest tests across 13 suites + 19 checks in the hand-rolled
 secret-scanner suite; 5 worker-update cases skip without a built worker),
 eslint clean on server + dashboard, ruff clean + formatted on
 agent, vite build OK, all shell scripts `bash -n` OK, all YAML configs valid, all
@@ -446,13 +446,13 @@ Not runnable on this host: Playwright + Electron (missing `libnspr4.so`).
 **`make full-verify` now covers all five component suites** (server, agent,
 dashboard, worker, electron) plus the script-level harness tests, E2E, env and
 artifact checks — it previously ran only three of the five while its own comment
-claimed "all 5 test suites". Current measured totals: server 828 (50 suites),
-agent 830, dashboard 197, worker 420, electron 30, API E2E 10, script harness 231.
+claimed "all 5 test suites". Current measured totals: server 830 (50 suites),
+agent 830, dashboard 197, worker 422, electron 30, API E2E 10, script harness 237.
 
 The script-level harness tests are **auto-discovered** (`scripts/test_*.py`, run
 by `make test-scripts` and the CI `script-tests` job). Counts measured 2026-11-05
 (`agent/.venv/bin/python scripts/test_*.py`, one file at a time): 6
-build-windows-artifacts, 8 debt-ledger, 30 firmware-TODO, 18 ci-annotate, 8
+build-windows-artifacts, 8 debt-ledger, 30 firmware-TODO, 18 ci-annotate, 14
 cross-surface-contract, 18 generic-installer, 40 graph-session, 44 memory, 20
 sast-gate, 18 sign-release-metadata, 2 tls-floor, 5 skipped worker-update, plus 19
 checks in the hand-rolled secret-scanner suite. Earlier revisions of this

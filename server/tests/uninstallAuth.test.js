@@ -283,6 +283,26 @@ describe('POST /api/agent/uninstall-auth/verify — verifying', () => {
     expect(res.body.deprecated_scheme).toBe('legacy-deployment-wide');
   });
 
+  test('the legacy acceptance names its own sunset, and it matches the shared statement', async () => {
+    // The deprecation is only as good as its enforcement: the date is echoed here so an operator
+    // reading logs (and the agent reading the response) learns when the path disappears, and it is
+    // pinned against the file that the contract test enforces.
+    const { apiKey } = provisionDevice({ id: 'dev-sunset' });
+    const res = await request(app)
+      .post('/api/agent/uninstall-auth/verify')
+      .set('X-API-Key', apiKey)
+      .send({ uninstall_token: legacyToken(ADMIN_TOKEN, currentWindow()) });
+
+    expect(res.body.deprecated_scheme_sunset).toBe(VECTORS.legacy_sunset);
+    expect(agentRoutes.LEGACY_UNINSTALL_TOKEN_SUNSET).toBe(VECTORS.legacy_sunset);
+  });
+
+  test('the legacy window has not passed (fails on the sunset date, by design)', () => {
+    // Three suites fail on that date rather than one log line going unread. See
+    // scripts/test_cross_surface_contract.py for the deletion checklist.
+    expect(Date.now()).toBeLessThan(Date.parse(`${VECTORS.legacy_sunset}T00:00:00Z`));
+  });
+
   test('rejects a wrong token without echoing it', async () => {
     const { apiKey } = provisionDevice({ id: 'dev-wrong' });
     const wrong = 'f'.repeat(64);

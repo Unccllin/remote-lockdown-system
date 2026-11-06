@@ -2170,7 +2170,13 @@
   device row; both surfaces derive it identically and `docs/adr/D-221-token-vectors.json` is read by
   both suites plus `scripts/test_cross_surface_contract.py`; `ADMIN_TOKEN || 'fallback'` is deleted
   on both surfaces (503 when unset); comparisons are constant-time. Legacy tokens still verify for
-  one release with a deprecation marker, per Q2-A.
+  one release with a deprecation marker, per Q2-A. **That window is dated: 2027-02-04**
+  (90 days from close; a tag-driven repo has no release cadence for "one release" to point
+  at). The date lives in `docs/adr/D-221-token-vectors.json`, and
+  `scripts/test_cross_surface_contract.py` fails on it with the exact deletion checklist — as
+  do `server/tests/uninstallAuth.test.js` and `serverless/worker.test.ts`. Three suites, not
+  one log line nobody reads. Both surfaces also echo `deprecated_scheme_sunset` in the
+  verification response (session 255).
 - **Category**: SECURITY
 - **Found**: session 252, while proving that the uninstall-token error body never echoes the
   token (the routes were answering 401 to the agent that owns them; that part is fixed and
@@ -2279,7 +2285,7 @@
 | D-209 | PBL policy blob generation not implemented | CLOSED (commit d111ada) | SERVER |
 | D-210 | Serverless Worker PBL route integration not implemented | CLOSED (commit 9612fbb) | SERVER |
 | D-211 | Covert tracking mode (C5) not fully implemented | CLOSED (all 12 C5 plan items implemented: firmware Decision.c, server verdict+track endpoints, agent handle_track+data protection+stealth, dashboard Track button) | TODO |
-| D-221 | Uninstall token is deployment-wide, and the two servers derive it differently | CLOSED (commit `b9c6127` — device-bound HMAC from the authenticated device row, shared vectors read by both suites + the contract test, 503 when ADMIN_TOKEN is unset, constant-time compare; legacy scheme still verifies for one release with a deprecation marker) | SECURITY |
+| D-221 | Uninstall token is deployment-wide, and the two servers derive it differently | CLOSED (commit `b9c6127` — device-bound HMAC from the authenticated device row, shared vectors read by both suites + the contract test, 503 when ADMIN_TOKEN is unset, constant-time compare; legacy scheme still verifies until the dated sunset 2027-02-04, after which three suites fail with the deletion checklist) | SECURITY |
 
 ### RE-hardening review (2026-09-15)
 

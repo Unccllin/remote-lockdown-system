@@ -1064,6 +1064,13 @@ function legacyUninstallToken(secret, window) {
   return crypto.createHmac('sha256', secret).update(String(window)).digest('hex');
 }
 
+// The date the legacy scheme stops being accepted. `docs/adr/D-221-token-vectors.json` is the
+// authoritative statement; this literal exists so the deprecation response tells caller and
+// operator WHEN, and `legacy_sunset` is pinned against it by the test below it in
+// server/tests/uninstallAuth.test.js. On that date
+// `scripts/test_cross_surface_contract.py` fails with the deletion checklist.
+const LEGACY_UNINSTALL_TOKEN_SUNSET = '2027-02-04';
+
 /** Constant-time comparison of two hex strings (unequal lengths are never equal). */
 function safeEqual(left, right) {
   const a = Buffer.from(String(left), 'utf8');
@@ -1185,15 +1192,24 @@ router.post('/uninstall-auth/verify', async (req, res) => {
   for (const window of validWindows) {
     if (safeEqual(providedToken, legacyUninstallToken(ADMIN_TOKEN, window))) {
       logger.warn(
-        { deviceId },
-        '[uninstall-auth] accepted a LEGACY deployment-wide uninstall token — D-221 removed '
-          + 'device binding from this scheme; the agent should be updated before this path is deleted'
+        { deviceId, sunset: LEGACY_UNINSTALL_TOKEN_SUNSET },
+        `[uninstall-auth] accepted a LEGACY deployment-wide uninstall token — D-221 removed device `
+          + `binding from this scheme. It is deleted on ${LEGACY_UNINSTALL_TOKEN_SUNSET}; update the `
+          + 'agent on this device before then or it cannot be uninstalled afterwards.'
       );
-      return res.json({ authorized: true, verified: true, deprecated_scheme: 'legacy-deployment-wide' });
+      return res.json({
+        authorized: true,
+        verified: true,
+        deprecated_scheme: 'legacy-deployment-wide',
+        deprecated_scheme_sunset: LEGACY_UNINSTALL_TOKEN_SUNSET,
+      });
     }
   }
 
   return res.json({ authorized: false, verified: false });
 });
+
+// Exposed for the test that pins it against docs/adr/D-221-token-vectors.json.
+router.LEGACY_UNINSTALL_TOKEN_SUNSET = LEGACY_UNINSTALL_TOKEN_SUNSET;
 
 module.exports = router;

@@ -349,6 +349,68 @@ def test_the_vectors_actually_differ_between_the_two_legacy_schemes():
     )
 
 
+def test_the_legacy_scheme_has_not_passed_its_sunset():
+    """The Q2-A migration window must end on its own, without anyone remembering.
+
+    A tag-driven repo has no "next release" that code can observe, so the end of the window is a
+    date in the vectors file (with the rationale that set it). On or after that date this test
+    fails and says exactly what to delete — which is the whole point: the deprecation was
+    otherwise a log line nobody reads.
+    """
+    import datetime
+    import json
+
+    data = json.loads(VECTORS.read_text(encoding="utf-8"))
+    sunset = datetime.date.fromisoformat(data["legacy_sunset"])
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+
+    assert today < sunset, (
+        f"the legacy uninstall-token scheme reached its sunset on {sunset.isoformat()} "
+        f"(today is {today.isoformat()}). It is still accepted by both surfaces, which means a "
+        "token with no device binding still verifies. Delete it:\n"
+        "  1. server/src/routes/agent.js  — legacyUninstallToken() and its verify branch\n"
+        "  2. serverless/worker.ts        — legacyUninstallToken() and its verify branch\n"
+        "  3. the deprecated_scheme marker on both surfaces (+ the two legacy tests)\n"
+        "  4. empty legacy_express / legacy_worker in docs/adr/D-221-token-vectors.json, and move "
+        "the fact that the two schemes differed into the D-221 ledger entry, where it belongs as "
+        "history\n"
+        "Then delete this test and the two suite-level sunset cases."
+    )
+
+
+def test_the_sunset_window_is_not_open_ended():
+    """Guards the guard: a sunset set far enough out is the same as no sunset.
+
+    Without this, editing one field to 2099 passes every check above while leaving the weak scheme
+    alive indefinitely.
+    """
+    import datetime
+    import json
+
+    data = json.loads(VECTORS.read_text(encoding="utf-8"))
+    closed_at = datetime.date.fromisoformat(data["d221_closed_at"])
+    sunset = datetime.date.fromisoformat(data["legacy_sunset"])
+    window_days = (sunset - closed_at).days
+
+    assert sunset > closed_at, "the sunset must be after the close it starts from"
+    assert window_days <= 180, (
+        f"the migration window is {window_days} days; the ruling asked for one release and the "
+        "vectors file records 90 days. A window this long is a decision to keep the weak scheme, "
+        "and it belongs in a ruling rather than in a date field"
+    )
+
+
+def test_the_sunset_is_recorded_in_a_parseable_form():
+    import datetime
+    import json
+
+    data = json.loads(VECTORS.read_text(encoding="utf-8"))
+    assert "legacy_sunset" in data, "no sunset recorded — the deprecation has no end"
+    # Raises if it is not an ISO date; a free-text field would defeat the two checks above.
+    datetime.date.fromisoformat(data["legacy_sunset"])
+    assert data.get("legacy_sunset_reason"), "the sunset must say where it came from"
+
+
 def test_both_suites_read_the_vectors():
     """A suite that stops reading the file silently drops out of the cross-surface pin."""
     missing = [

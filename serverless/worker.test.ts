@@ -3820,6 +3820,26 @@ describe('D-210: PBL route integration', () => {
       expect(data.deprecated_scheme).toBe('legacy-deployment-wide');
     });
 
+    it('the legacy acceptance names its own sunset, and it matches the shared statement', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'D221-SUNSET-001');
+      const legacy = legacyWorkerToken(env.ADMIN_TOKEN, windowFor(Math.floor(Date.now() / 1000)));
+      const resp = await worker.fetch(
+        makeRequest(
+          'POST',
+          '/api/agent/uninstall-auth/verify',
+          { uninstall_token: legacy },
+          { 'X-API-Key': apiKey },
+        ),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(data.deprecated_scheme_sunset).toBe(vectors.legacy_sunset);
+    });
+
+    it('the legacy window has not passed (fails on the sunset date, by design)', () => {
+      expect(Date.now()).toBeLessThan(Date.parse(`${vectors.legacy_sunset}T00:00:00Z`));
+    });
+
     it('refuses to issue when ADMIN_TOKEN is unset', async () => {
       const { apiKey } = await enrollDevice(worker, env, 'D221-NOSECRET-001');
       const saved = env.ADMIN_TOKEN;
