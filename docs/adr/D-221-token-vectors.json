@@ -1,0 +1,75 @@
+{
+  "_comment": [
+    "Shared vectors for the D-221 uninstall-token derivation. Read by",
+    "server/tests/uninstallAuth.test.js, serverless/worker.test.ts and",
+    "scripts/test_cross_surface_contract.py.",
+    "",
+    "The scheme: token = HMAC_SHA256(secret=ADMIN_TOKEN, message='<device_id>:<window>')",
+    "as lowercase hex, where window = floor(unix_seconds / 300) * 300. 'bound' entries pin it.",
+    "'legacy_express' and 'legacy_worker' entries pin the two PREVIOUS derivations, which",
+    "Q2-A keeps verifying for one release: Express used HMAC(secret, str(window)) and the",
+    "Worker used SHA256('<window>:<secret>'). They are different on purpose \u2014 that divergence",
+    "is the defect D-221 records, and these vectors are how it stops being invisible.",
+    "",
+    "The secret is a fixed test value so the vectors are reproducible; it is not a real token."
+  ],
+  "secret": "TEST-ONLY-d221-vector-secret-0123456789",
+  "algorithm": {
+    "new": "HMAC-SHA256(key=ADMIN_TOKEN, msg='<device_id>:<window>') -> lowercase hex",
+    "legacy_express": "HMAC-SHA256(key=ADMIN_TOKEN, msg='<window>') -> lowercase hex",
+    "legacy_worker": "SHA256('<window>:<ADMIN_TOKEN>') -> lowercase hex",
+    "window": "floor(unix_seconds / 300) * 300"
+  },
+  "bound": [
+    {
+      "device_id": "45108abcc29625addf14b2f2ff78d0a2",
+      "window": 1767225600,
+      "token": "a3a51e5b0d1458ec2d91317f43d51e0633ca3dec5a69fe5dd78fe4a9f98c4f41"
+    },
+    {
+      "device_id": "45108abcc29625addf14b2f2ff78d0a2",
+      "window": 1767225900,
+      "token": "d6a94d20280a635e1c25006a7b1dd20af6ca91671e454306cb9343f345204950"
+    },
+    {
+      "device_id": "113A3A7C-FD08-4D6F-B1A7-917C60531D3B",
+      "window": 1767225600,
+      "token": "430fe1810462fb7ebbb47f211913385f495cc6f5375108830a0d2e0715e44d2d"
+    },
+    {
+      "device_id": "113A3A7C-FD08-4D6F-B1A7-917C60531D3B",
+      "window": 1767225900,
+      "token": "7d3c521ae207f355908d67133c65415d7c46945bef931317ade3e08176ef548d"
+    },
+    {
+      "device_id": "dev:with:colons",
+      "window": 1767225600,
+      "token": "e61c9d524aad2dc23b1e80456b2e338c831076ba9ef23e7f31f9a4d166b667f8"
+    },
+    {
+      "device_id": "dev:with:colons",
+      "window": 1767225900,
+      "token": "20e8497a09cddc18b3dd69da0696cae1e2cc051552fdbe115ce9e3a44b6fa0b2"
+    }
+  ],
+  "legacy_express": [
+    {
+      "window": 1767225600,
+      "token": "bcb483cd9ffdd9410352550671770fcab3805518f713a3a96c7713028c92db0b"
+    },
+    {
+      "window": 1767225900,
+      "token": "585b8c2b7c32be304492a9d0cfcb6dafdc2e791a03385bef03249a3fa3113268"
+    }
+  ],
+  "legacy_worker": [
+    {
+      "window": 1767225600,
+      "token": "bd01857003f0cc8f3caa43334a05b3e301ad446a30cc4e3a9957ed6f26607a01"
+    },
+    {
+      "window": 1767225900,
+      "token": "d62f8d6a9768bf46ffc6f3abf40c8023d8e3d21e354fb2021f8a9136d232631c"
+    }
+  ]
+}

@@ -3733,6 +3733,124 @@ describe('D-210: PBL route integration', () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // D-221: the uninstall token is bound to one device, and the two surfaces
+  // derive it identically. Before this, the Worker used SHA256("window:secret")
+  // while Express used HMAC(secret, window) — so a token from one surface never
+  // verified on the other, and each suite tested only its own surface.
+  // -------------------------------------------------------------------------
+  describe('D-221 uninstall-token scheme', () => {
+    const vectorsPath = path.join(HERE, '..', 'docs', 'adr', 'D-221-token-vectors.json');
+    const vectors = JSON.parse(fs.readFileSync(vectorsPath, 'utf8'));
+
+    const windowFor = (seconds: number) => Math.floor(seconds / 300) * 300;
+    const boundToken = (secret: string, deviceId: string, window: number) =>
+      crypto.createHmac('sha256', secret).update(`${deviceId}:${window}`).digest('hex');
+    const legacyWorkerToken = (secret: string, window: number) =>
+      crypto.createHash('sha256').update(`${window}:${secret}`).digest('hex');
+
+    it('the canonical derivation reproduces every shared vector', () => {
+      // server/tests/uninstallAuth.test.js asserts the same thing. Both suites passing is
+      // what makes the two surfaces agree; a divergence fails two suites instead of none.
+      const wrong = vectors.bound.filter(
+        (v: any) => boundToken(vectors.secret, v.device_id, v.window) !== v.token,
+      );
+      expect(wrong).toEqual([]);
+      expect(vectors.bound.length).toBeGreaterThan(0);
+    });
+
+    it('the Worker issues the canonical DEVICE-BOUND token', async () => {
+      const { device, apiKey } = await enrollDevice(worker, env, 'D221-BOUND-001');
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/uninstall-auth', undefined, { 'X-API-Key': apiKey }),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+
+      expect(data.device_id).toBe(device.id);
+      expect(data.uninstall_token).toBe(
+        boundToken(env.ADMIN_TOKEN, device.id, windowFor(Math.floor(Date.now() / 1000))),
+      );
+      // And specifically not the old deployment-wide token.
+      expect(data.uninstall_token).not.toBe(
+        legacyWorkerToken(env.ADMIN_TOKEN, windowFor(Math.floor(Date.now() / 1000))),
+      );
+    });
+
+    it("a token bound to another device does not authorise this one", async () => {
+      const victim = await enrollDevice(worker, env, 'D221-VICTIM-001');
+      const other = await enrollDevice(worker, env, 'D221-OTHER-001');
+      const stolen = boundToken(
+        env.ADMIN_TOKEN,
+        other.device.id,
+        windowFor(Math.floor(Date.now() / 1000)),
+      );
+
+      const resp = await worker.fetch(
+        makeRequest(
+          'POST',
+          '/api/agent/uninstall-auth/verify',
+          { uninstall_token: stolen },
+          { 'X-API-Key': victim.apiKey },
+        ),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(data.authorized).toBe(false);
+    });
+
+    it('still accepts the previous Worker scheme, and marks it deprecated', async () => {
+      // Q2-A: an agent that has not taken the update must still be able to uninstall.
+      const { apiKey } = await enrollDevice(worker, env, 'D221-LEGACY-001');
+      const legacy = legacyWorkerToken(
+        env.ADMIN_TOKEN,
+        windowFor(Math.floor(Date.now() / 1000)),
+      );
+      const resp = await worker.fetch(
+        makeRequest(
+          'POST',
+          '/api/agent/uninstall-auth/verify',
+          { uninstall_token: legacy },
+          { 'X-API-Key': apiKey },
+        ),
+        env,
+      );
+      const data: any = await parseResponse(resp);
+      expect(data.authorized).toBe(true);
+      expect(data.deprecated_scheme).toBe('legacy-deployment-wide');
+    });
+
+    it('refuses to issue when ADMIN_TOKEN is unset', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'D221-NOSECRET-001');
+      const saved = env.ADMIN_TOKEN;
+      // The old code fell back to HMAC over the literal string 'fallback', which anyone
+      // holding this repository can compute.
+      (env as any).ADMIN_TOKEN = '';
+      try {
+        const resp = await worker.fetch(
+          makeRequest('POST', '/api/agent/uninstall-auth', undefined, { 'X-API-Key': apiKey }),
+          env,
+        );
+        expect(resp.status).toBe(503);
+        const data: any = await parseResponse(resp);
+        expect(data.error).toMatch(/ADMIN_TOKEN/);
+        expect(data.uninstall_token).toBeUndefined();
+      } finally {
+        env.ADMIN_TOKEN = saved;
+      }
+    });
+
+    it('an admin-token caller must name the device it is issuing for', async () => {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/agent/uninstall-auth', {}, { Authorization: 'Bearer test-admin-token' }),
+        env,
+      );
+      expect(resp.status).toBe(400);
+      const data: any = await parseResponse(resp);
+      expect(data.error).toMatch(/device_id required/);
+    });
+  });
+
   describe('POST /api/ping', () => {
     it("a ping only returns its own device's pending command", async () => {
       // The ping path is a second command-delivery route; it had no test at all,

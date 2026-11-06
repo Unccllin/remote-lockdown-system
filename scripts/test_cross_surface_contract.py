@@ -285,6 +285,83 @@ def test_the_three_lists_do_not_overlap():
     assert overlaps == [], "an entry belongs to two lists: " + "; ".join(overlaps)
 
 
+# ---------------------------------------------------------------------------
+# D-221: the uninstall-token derivation is a contract between two surfaces
+# ---------------------------------------------------------------------------
+# The route-path checks above cannot see this class of defect. Express issued
+# `HMAC(ADMIN_TOKEN, window)` while the Worker issued `SHA256("window:ADMIN_TOKEN")`, so a token
+# from one surface never verified on the other — and each suite tested only its own surface, so
+# both stayed green. The vectors file is now the single statement of the scheme, and this test
+# recomputes it from first principles: a vector that is wrong cannot go on to "pin" two wrong
+# implementations.
+
+VECTORS = REPO / "docs" / "adr" / "D-221-token-vectors.json"
+
+
+def test_the_shared_vectors_match_their_own_statement():
+    import hashlib
+    import hmac
+    import json
+
+    data = json.loads(VECTORS.read_text(encoding="utf-8"))
+    secret = data["secret"]
+
+    def bound(device_id: str, window: int) -> str:
+        return hmac.new(
+            secret.encode(), f"{device_id}:{window}".encode(), hashlib.sha256
+        ).hexdigest()
+
+    wrong = [
+        entry for entry in data["bound"] if bound(entry["device_id"], entry["window"]) != entry["token"]
+    ]
+    assert wrong == [], f"bound vectors disagree with the documented scheme: {wrong}"
+
+    wrong_express = [
+        entry
+        for entry in data["legacy_express"]
+        if hmac.new(secret.encode(), str(entry["window"]).encode(), hashlib.sha256).hexdigest()
+        != entry["token"]
+    ]
+    assert wrong_express == [], f"legacy_express vectors are wrong: {wrong_express}"
+
+    wrong_worker = [
+        entry
+        for entry in data["legacy_worker"]
+        if hashlib.sha256(f"{entry['window']}:{secret}".encode()).hexdigest() != entry["token"]
+    ]
+    assert wrong_worker == [], f"legacy_worker vectors are wrong: {wrong_worker}"
+
+
+def test_the_vectors_actually_differ_between_the_two_legacy_schemes():
+    """The divergence D-221 records must stay visible in the vectors.
+
+    If someone "fixes" the file by making both legacy lists identical, the migration test on
+    each surface would stop proving anything.
+    """
+    import json
+
+    data = json.loads(VECTORS.read_text(encoding="utf-8"))
+    express_tokens = {entry["token"] for entry in data["legacy_express"]}
+    worker_tokens = {entry["token"] for entry in data["legacy_worker"]}
+    assert express_tokens & worker_tokens == set(), (
+        "the two legacy derivations are supposed to differ; identical vectors mean the file no "
+        "longer describes what each surface used to issue"
+    )
+
+
+def test_both_suites_read_the_vectors():
+    """A suite that stops reading the file silently drops out of the cross-surface pin."""
+    missing = [
+        str(path.relative_to(REPO))
+        for path in (REPO / "server/tests/uninstallAuth.test.js", REPO / "serverless/worker.test.ts")
+        if "D-221-token-vectors.json" not in path.read_text(encoding="utf-8")
+    ]
+    assert missing == [], (
+        "these suites no longer read docs/adr/D-221-token-vectors.json, so their surface is "
+        "unpinned: " + ", ".join(missing)
+    )
+
+
 if __name__ == "__main__":
     from script_test_runner import run
 

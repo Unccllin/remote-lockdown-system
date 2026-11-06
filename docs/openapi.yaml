@@ -886,10 +886,29 @@ paths:
     post:
       tags: [Agent]
       summary: Issue uninstall token
-      description: Issues a short-lived (5-minute) token for tamper protection removal.
+      description: >-
+        Issues a short-lived (5-minute) token for tamper protection removal. The
+        token is bound to ONE device: token = HMAC_SHA256(ADMIN_TOKEN,
+        "<device_id>:<window>") as lowercase hex, with window =
+        floor(unix_seconds / 300) * 300. The scheme is stated with reproducible
+        vectors in docs/adr/D-221-token-vectors.json, read by both the Express and
+        Worker suites. A device-key caller is bound to its own device row and any
+        device_id in the body is ignored; an admin-token caller must name the
+        device. 503 when ADMIN_TOKEN is unset — no token is issued, because the
+        scheme derives from it (D-221).
       security:
         - agentKey: []
         - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                device_id:
+                  type: string
+                  description: Required for an admin-token caller; ignored for a device key.
       responses:
         '200':
           description: Uninstall token issued
@@ -900,18 +919,31 @@ paths:
                 properties:
                   uninstall_token:
                     type: string
+                    description: Lowercase hex HMAC-SHA256 bound to the named device.
                   expires_in:
                     type: integer
                   issued_at:
                     type: string
                     format: date-time
+                  device_id:
+                    type: string
+                    description: The device this token is bound to.
+        '400':
+          description: device_id required (an admin-token call named no device)
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: ADMIN_TOKEN is not set on this deployment; uninstall tokens are disabled
 
   /api/agent/uninstall-auth/verify:
     post:
       tags: [Agent]
       summary: Verify uninstall token
+      description: >-
+        Verifies a token against the current and previous 5-minute windows. The
+        token must match the derivation for THIS device. A token from the previous
+        deployment-wide scheme still verifies for one release (devices mid-update)
+        and is reported as deprecated_scheme, so the migration is visible.
       security:
         - agentKey: []
         - bearerAuth: []
@@ -925,6 +957,9 @@ paths:
               properties:
                 uninstall_token:
                   type: string
+                device_id:
+                  type: string
+                  description: Required for an admin-token caller; ignored for a device key.
       responses:
         '200':
           description: Verification result

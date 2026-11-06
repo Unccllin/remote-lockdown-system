@@ -434,7 +434,10 @@ source — the full evidence is in the D-221 entry in `docs/adr/PBL-DEBT-LEDGER.
 - **C** — one-time nonce in KV (server stores `{device_id, nonce}` with a TTL; verify consumes
   it). Kills replay outright and makes verify stateful on both surfaces.
 
-- [ ] Q1 — binding → **?**
+- [x] Q1 — binding → **A: `HMAC(ADMIN_TOKEN, "{device_id}:{window}")`**. Device id comes
+      from the authenticated device row when the caller presents a device key, and from the
+      body only for the admin-token path (where there is no device). A client-supplied id
+      never overrides the authenticated one.
 
 ### Q2 — migration: do old-format tokens keep working?
 
@@ -445,7 +448,10 @@ source — the full evidence is in the D-221 entry in `docs/adr/PBL-DEBT-LEDGER.
 - **C** — capability negotiation: the agent reads a scheme flag from check-in and uses the
   matching derivation. Most correct, most code, and the flag becomes a new contract.
 
-- [ ] Q2 — migration window → **?**
+- [x] Q2 — migration window → **A: dual-accept for one release**. Each surface also accepts
+      *its own* previous derivation — Express `HMAC(ADMIN_TOKEN, window)`, Worker
+      `SHA256("window:ADMIN_TOKEN")` — so a device that has not yet taken the agent update
+      can still uninstall. Every legacy verification logs a deprecation line naming it.
 
 ### Q3 — what happens when the secret is unset?
 
@@ -456,7 +462,9 @@ source — the full evidence is in the D-221 entry in `docs/adr/PBL-DEBT-LEDGER.
 - **C** — keep a fallback but derive it from non-public material (the server's signing key).
   Still a silent configuration mode, which is defect 3 restated.
 
-- [ ] Q3 — unset-secret behaviour → **?**
+- [x] Q3 — unset-secret behaviour → **A: refuse to issue**, 503 naming `ADMIN_TOKEN` on both
+      surfaces. The `|| 'fallback'` constant is deleted, so no deployment can compute a token
+      from this repository.
 
 ### Q4 — who owns the derivation, so it cannot diverge again?
 
@@ -469,7 +477,10 @@ source — the full evidence is in the D-221 entry in `docs/adr/PBL-DEBT-LEDGER.
 - **C** — document the algorithm in `docs/API.md` and rely on review. That is what exists today,
   and it is how the two surfaces diverged.
 
-- [ ] Q4 — ownership of the derivation → **?**
+- [x] Q4 — ownership of the derivation → **A: one shared vector file**. `docs/adr/D-221-token-
+      vectors.json` is read by `server/tests/uninstallAuth.test.js` and
+      `serverless/worker.test.ts`, and `scripts/test_cross_surface_contract.py` re-computes
+      every vector so the file itself cannot be wrong. Divergence now fails three suites.
 
 Constant-time comparison (`crypto.timingSafeEqual` on Express, equivalent in the Worker) is part
 of D-221's close criteria and needs no ruling of its own — it is a two-line change whichever
@@ -477,3 +488,7 @@ answers win.
 
 Mode note: this file is live state. Mark an item `[x]` with a one-word outcome when answered,
 then delete the section once the implementation session has taken it.
+
+**Ruling closed 2026-11-05, session 253** (answered as "take the recommendations") — device-bound
+HMAC, dual-accept for one release, refuse to issue without a secret, one shared vector file.
+Constant-time comparison is part of the close criteria, not a separate decision.

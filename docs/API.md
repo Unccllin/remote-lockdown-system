@@ -609,13 +609,27 @@ Download the agent binary for auto-update.
 
 Issue a short-lived (5-minute) uninstall token for tamper protection removal.
 
+The token is **bound to one device** (D-221):
+
+```text
+window = floor(unix_seconds / 300) * 300
+token  = HMAC_SHA256(secret=ADMIN_TOKEN, msg="<device_id>:<window>")   # lowercase hex
+```
+
+The scheme is stated once, with reproducible vectors, in
+`docs/adr/D-221-token-vectors.json` — read by **both** the Express and Worker suites so the two
+surfaces cannot drift apart again (they did: Express used HMAC over the bare window, the Worker
+`SHA256("window:secret")`, so a token from one never verified on the other).
+
 | | |
-|---|---|
+|--|--|
 | **Auth required** | Yes — Agent API key (`x-agent-key`, or `X-API-Key` as the Worker spells it) **or** admin Bearer JWT (`ADMIN_TOKEN`) |
 | **HMAC required** | No |
 | **Rate limiting** | `agentLimiter` |
 
-**Request body:** None.
+**Request body:** `{ "device_id": "..." }` — required **only** for an admin-token caller. A device
+key binds the token to that device's own row; a `device_id` in the body from a device-key caller is
+ignored, so a device cannot obtain a token for another machine.
 
 **Response:** `200`:
 
@@ -623,25 +637,49 @@ Issue a short-lived (5-minute) uninstall token for tamper protection removal.
 {
   "uninstall_token": "hexstring...",
   "expires_in": 300,
-  "issued_at": "2026-08-29T10:00:00Z"
+  "issued_at": "2026-08-29T10:00:00Z",
+  "device_id": "45108abcc29625addf14b2f2ff78d0a2"
 }
 ```
 
-`401` if not authenticated.
+| Status | When |
+|--|--|
+| `400` | `device_id required` — an admin-token call that names no device (an unbound token can no longer be issued) |
+| `401` | Not authenticated |
+| `503` | `ADMIN_TOKEN` is not set on the deployment. **No token is issued**: the scheme derives from it, and the old `ADMIN_TOKEN \|\| 'fallback'` constant is gone, so an unconfigured server cannot hand out a token that anyone can compute from the repository |
 
 ### POST /api/agent/uninstall-auth/verify
 
-Verify an uninstall token (validates against current and previous 5-minute windows).
+Verify an uninstall token (validates against current and previous 5-minute windows, so ordinary
+clock skew does not break an uninstall).
 
 | | |
-|---|---|
+|--|--|
 | **Auth required** | Yes — Agent API key (`x-agent-key`, or `X-API-Key` as the Worker spells it) **or** admin Bearer JWT (`ADMIN_TOKEN`) |
 | **HMAC required** | No |
 | **Rate limiting** | `agentLimiter` |
 
-**Request body:** `{ "uninstall_token": "hexstring..." }` (required).
+**Request body:** `{ "uninstall_token": "hexstring..." }` (required), plus `{ "device_id": ... }`
+for an admin-token caller.
 
-**Response:** `200` — `{ authorized: true/false, verified: true/false }`.
+**Response:** `200`:
+
+```json
+{ "authorized": true, "verified": true }
+```
+
+A token issued by the previous, deployment-wide scheme still verifies for one release (a device
+whose agent has not yet taken the update must be able to uninstall), and such a verification is
+marked and logged:
+
+```json
+{ "authorized": true, "verified": true, "deprecated_scheme": "legacy-deployment-wide" }
+```
+
+`authorized: false` for a wrong token, a token from another device, or an expired one. `400` if
+`uninstall_token` is missing, `401` if unauthenticated, `503` if `ADMIN_TOKEN` is unset. No response
+of either route ever echoes the presented credential or token — the agent logs a failed request's
+body verbatim (`tamper_protection.py`).
 
 ---
 

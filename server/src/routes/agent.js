@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const express = require('express');
 const pool = require('../db/pool');
 const { withTransaction } = require('../db/withTransaction');
@@ -1006,9 +1007,12 @@ function uninstallCredential(req) {
 }
 
 /**
- * Is this request allowed to issue/verify an uninstall token?
+ * Is this request allowed to issue/verify an uninstall token — and as which device?
  *
- * A per-device key (looked up by hash) or the deployment's ADMIN_TOKEN via bearer.
+ * Returns the **authenticated device row** when the caller presents a device key, or `null` when
+ * it authenticated with the deployment's ADMIN_TOKEN. The row is what D-221 needs: the token is
+ * bound to a device id, and the only trustworthy id is the one the key resolved to. Using the id
+ * from the request body would make the property "does the caller claim an id" instead.
  */
 async function authorizedForUninstall(req) {
   const { agentKey, bearerToken } = uninstallCredential(req);
@@ -1017,12 +1021,76 @@ async function authorizedForUninstall(req) {
   if (agentKey) {
     try {
       const device = await getDeviceByApiKeyHash(hashApiKey(agentKey));
-      if (device) return true;
+      if (device) return { device };
     } catch {
       // Fall through to the admin-token check rather than 500ing on a DB blip.
     }
   }
-  return Boolean(bearerToken) && Boolean(ADMIN_TOKEN) && bearerToken === ADMIN_TOKEN;
+  if (bearerToken && ADMIN_TOKEN && bearerToken === ADMIN_TOKEN) {
+    return { device: null };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// D-221: the uninstall token scheme
+// ---------------------------------------------------------------------------
+// Canonical form, shared with the Worker and pinned by
+// `docs/adr/D-221-token-vectors.json`:
+//
+//   window = floor(unix_seconds / 300) * 300
+//   token  = HMAC_SHA256(secret=ADMIN_TOKEN, msg=f"{device_id}:{window}")   # lowercase hex
+//
+// What this replaced: `HMAC(ADMIN_TOKEN, window)` with no device input — so every device in a
+// deployment received the same token — keyed by `ADMIN_TOKEN || 'fallback'`, which made the token
+// computable from this repository whenever the secret was unset.
+const UNINSTALL_TOKEN_WINDOW_SECONDS = 300;
+
+function uninstallWindowFor(seconds) {
+  return Math.floor(seconds / UNINSTALL_TOKEN_WINDOW_SECONDS) * UNINSTALL_TOKEN_WINDOW_SECONDS;
+}
+
+/** The bound token: only the named device may present it. */
+function deriveUninstallToken(secret, deviceId, window) {
+  return crypto.createHmac('sha256', secret).update(`${deviceId}:${window}`).digest('hex');
+}
+
+/**
+ * The PREVIOUS Express derivation, kept for one release (ruling Q2-A): a device whose agent has
+ * not yet taken the update must still be able to uninstall. Verification logs when this path is
+ * taken, so the deprecation is visible rather than merely intended.
+ */
+function legacyUninstallToken(secret, window) {
+  return crypto.createHmac('sha256', secret).update(String(window)).digest('hex');
+}
+
+/** Constant-time comparison of two hex strings (unequal lengths are never equal). */
+function safeEqual(left, right) {
+  const a = Buffer.from(String(left), 'utf8');
+  const b = Buffer.from(String(right), 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Which device is this token for?
+ *
+ * A device-key caller is bound to **its own** row and may not name another device. The admin-token
+ * caller has no device of its own, so it must name one — an unbound token can no longer be issued,
+ * which is the point of D-221.
+ */
+function uninstallSubject(auth, body) {
+  if (auth.device) return { deviceId: auth.device.id, error: null };
+  const claimed = typeof body?.device_id === 'string' ? body.device_id.trim() : '';
+  if (!claimed) {
+    return {
+      deviceId: null,
+      error:
+        'device_id required: an uninstall token is bound to one device, and an admin-token ' +
+        'call has no device of its own to bind to.',
+    };
+  }
+  return { deviceId: claimed, error: null };
 }
 
 /**
@@ -1036,27 +1104,37 @@ async function authorizedForUninstall(req) {
  * Accepts either agent API key (x-agent-key or X-API-Key) or admin bearer token.
  */
 router.post('/uninstall-auth', async (req, res) => {
-  const crypto = require('crypto');
   const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
-  if (!(await authorizedForUninstall(req))) {
+  const auth = await authorizedForUninstall(req);
+  if (!auth) {
     // Never echo the presented credential: the agent logs this body verbatim when
     // a token request fails (tamper_protection.py, `except HTTPError`).
     return res.status(401).json({ error: 'Authentication required' });
   }
 
-  // Generate a short-lived token: HMAC-SHA256 of (timestamp_rounded_to_5min + ADMIN_TOKEN)
-  const now = Math.floor(Date.now() / 1000);
-  const window = Math.floor(now / 300) * 300; // 5-minute window
-  const uninstallToken = crypto
-    .createHmac('sha256', ADMIN_TOKEN || 'fallback')
-    .update(String(window))
-    .digest('hex');
+  // Q3-A: no secret, no token. Before D-221 this fell back to the literal string
+  // 'fallback', so a deployment that never set ADMIN_TOKEN issued a token anyone could
+  // compute from this repository.
+  if (!ADMIN_TOKEN) {
+    return res.status(503).json({
+      error:
+        'Uninstall tokens are disabled: ADMIN_TOKEN is not set on this server. Set it and ' +
+        'restart; an uninstall token is derived from it.',
+    });
+  }
 
-  res.json({
+  const { deviceId, error } = uninstallSubject(auth, req.body);
+  if (error) return res.status(400).json({ error });
+
+  const window = uninstallWindowFor(Math.floor(Date.now() / 1000));
+  const uninstallToken = deriveUninstallToken(ADMIN_TOKEN, deviceId, window);
+
+  return res.json({
     uninstall_token: uninstallToken,
-    expires_in: 300,
+    expires_in: UNINSTALL_TOKEN_WINDOW_SECONDS,
     issued_at: new Date().toISOString(),
+    device_id: deviceId,
   });
 });
 
@@ -1066,38 +1144,56 @@ router.post('/uninstall-auth', async (req, res) => {
  * Checks if the token is valid (within the current or previous 5-minute window).
  */
 router.post('/uninstall-auth/verify', async (req, res) => {
-  const crypto = require('crypto');
   const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
-  if (!(await authorizedForUninstall(req))) {
+  const auth = await authorizedForUninstall(req);
+  if (!auth) {
     // Same rule as the issuing route: a body that carries a token is logged verbatim
     // by the agent on failure, so the rejection must not repeat it.
     return res.status(401).json({ error: 'Authentication required' });
   }
 
+  if (!ADMIN_TOKEN) {
+    return res.status(503).json({
+      error:
+        'Uninstall tokens are disabled: ADMIN_TOKEN is not set on this server. Set it and ' +
+        'restart; an uninstall token is derived from it.',
+    });
+  }
+
   const providedToken = req.body?.uninstall_token;
-  if (!providedToken) {
+  if (!providedToken || typeof providedToken !== 'string') {
     return res.status(400).json({ error: 'uninstall_token required' });
   }
 
-  // Check current and previous 5-minute windows (allows for clock skew)
+  const { deviceId, error } = uninstallSubject(auth, req.body);
+  if (error) return res.status(400).json({ error });
+
+  // Current and previous 5-minute windows, so ordinary clock skew does not break an uninstall.
   const now = Math.floor(Date.now() / 1000);
-  const validWindows = [
-    Math.floor(now / 300) * 300,
-    Math.floor((now - 300) / 300) * 300,
-  ];
+  const validWindows = [uninstallWindowFor(now), uninstallWindowFor(now - UNINSTALL_TOKEN_WINDOW_SECONDS)];
 
   for (const window of validWindows) {
-    const expectedToken = crypto
-      .createHmac('sha256', ADMIN_TOKEN || 'fallback')
-      .update(String(window))
-      .digest('hex');
-    if (providedToken === expectedToken) {
+    if (safeEqual(providedToken, deriveUninstallToken(ADMIN_TOKEN, deviceId, window))) {
       return res.json({ authorized: true, verified: true });
     }
   }
 
-  res.json({ authorized: false, verified: false });
+  // Q2-A migration window: still accept the PREVIOUS deployment-wide scheme so a device whose
+  // agent has not yet taken the update can uninstall. It is logged every time, because the
+  // acceptance is meant to end.
+  for (const window of validWindows) {
+    if (safeEqual(providedToken, legacyUninstallToken(ADMIN_TOKEN, window))) {
+      logger.warn(
+        { deviceId },
+        '[uninstall-auth] accepted a LEGACY deployment-wide uninstall token — D-221 removed '
+          + 'device binding from this scheme; the agent should be updated before this path is deleted'
+      );
+      return res.json({ authorized: true, verified: true, deprecated_scheme: 'legacy-deployment-wide' });
+    }
+  }
+
+  return res.json({ authorized: false, verified: false });
 });
 
 module.exports = router;

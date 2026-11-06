@@ -13529,3 +13529,57 @@ the derivation) — recommended defaults are Q1-A `HMAC(ADMIN_TOKEN, "{device_id
 Q2-A dual-accept for one release, Q3-A refuse to issue when the secret is unset, Q4-A one shared
 vector file both suites read — then implement against them, starting with the shared vector so
 the two surfaces cannot diverge again.
+
+## Session 254 — 2026-11-05 (D-221 implemented: device-bound uninstall token, one derivation, three suites pinning it)
+
+### RULE-ZERO
+
+**Read** (this session; S252/S253 read the same files and their notes stand):
+- `.devin/PENDING-RULING.md` — the four answered questions, now closed: Q1-A device-bound HMAC,
+  Q2-A dual-accept one release, Q3-A refuse to issue without a secret, Q4-A shared vector file
+- `server/src/routes/agent.js` — `uninstallCredential()` / `authorizedForUninstall()` as S252 left
+  them, and both routes; note `authorizedForUninstall` currently returns a **boolean**, so the
+  authenticated device row is thrown away and cannot be used for binding
+- `serverless/worker.ts` — `handleUninstallAuth{,Verify}`, `listDevices(env)`, and the WebCrypto
+  helpers already in the file (`sha256`); the Worker has no `device_id`-keyed lookup of its own
+- `agent/tamper_protection.py` — the two calls send `device_id` in both bodies, so binding needs no
+  agent change; `verify_uninstall_token(token, server_url, api_key, device_id)`
+- `docs/adr/PBL-DEBT-LEDGER.md` D-221 close criteria (a)-(e) — the definition of done
+- `scripts/test_cross_surface_contract.py` — where the "both surfaces agree" assertion belongs
+- `server/tests/uninstallAuth.test.js`, `serverless/worker.test.ts` (uninstall-auth group) — the two
+  suites that will read the vectors
+
+**Finding**: `authorizedForUninstall` discarding the device is the reason a device-bound token was
+even possible to get wrong — the binding needs the *authenticated* device id, never the one in the
+request body, or the property under test is "does the caller claim an id" rather than "is this
+device that device". The Worker's `listDevices` returns rows including `id` and `api_key_hash`, so
+the same rule is implementable there without new storage.
+
+### Implement
+
+**Canonical derivation, both surfaces** (the whole point of Q4):
+
+    window = floor(unix_seconds / 300) * 300
+    token  = HMAC_SHA256(key = ADMIN_TOKEN, message = f"{device_id}:{window}")     # lowercase hex
+
+Accepted at verify: the current window and the previous one (unchanged clock-skew allowance).
+
+- **Express** — `deriveUninstallToken(secret, deviceId, window)` and
+  `legacyUninstallToken(secret, window)` (Q2-A's per-surface predecessor), compared with
+  `crypto.timingSafeEqual` over equal-length buffers. `authorizedForUninstall` now returns the
+  authenticated device (or `null` for the admin-token path); the route refuses to issue when
+  `ADMIN_TOKEN` is unset (**Q3-A**, 503 naming it) and deletes the `|| 'fallback'` constant.
+  A device-key caller is bound to **its own** row's id; an admin-token caller must supply
+  `device_id` in the body (400 when missing, because an admin-issued token has no device to bind
+  to otherwise).
+- **Worker** — the same two derivations via WebCrypto `HMAC`/`SHA-256`, byte-compared in constant
+  time (no `timingSafeEqual` in the runtime, so a full-length XOR accumulator), same 503, same
+  binding from `listDevices`, same admin-path requirement.
+- **Deprecation log** — a legacy token that verifies logs once per request: `logger.warn` on
+  Express, `console.warn`-equivalent in the Worker, each naming the scheme and the deadline.
+
+**Vectors** (`docs/adr/D-221-token-vectors.json`): `(secret, device_id, window) → token` for the
+new scheme, plus `legacy` entries for both predecessors. Read by
+`server/tests/uninstallAuth.test.js`, `serverless/worker.test.ts` and
+`scripts/test_cross_surface_contract.py`; the Python side recomputes every vector, so a wrong
+vector fails there before it can "pin" two wrong implementations.

@@ -3,23 +3,25 @@
  *   POST /api/agent/uninstall-auth         — issue a short-lived token
  *   POST /api/agent/uninstall-auth/verify  — verify one
  *
- * Two things are pinned here, and both were broken or unproven before S252:
+ * Three things are pinned here.
  *
- * 1. **The header contract.** `agent/tamper_protection.py` sends the device key in
- *    `X-API-Key` (plus a bearer token), while the Worker reads `X-API-Key` and this
- *    Express router read only `x-agent-key` — and its bearer fallback compares
- *    against ADMIN_TOKEN, which a device key is not. Against a self-hosted server
- *    both routes therefore answered 401 to the agent that owns them, so an uninstall
- *    could never obtain a token. Nothing failed, because no server test covered
- *    either route and the cross-surface contract test compares route paths only.
+ * 1. **The header contract** (S252). `agent/tamper_protection.py` sends the device key in
+ *    `X-API-Key`, while this router originally read only `x-agent-key` and compared a bearer
+ *    token against ADMIN_TOKEN — so on a self-hosted server both routes answered 401 to the
+ *    agent that owns them and no uninstall could ever obtain a token.
  *
- * 2. **The token is never echoed.** The agent logs the response body of a failed
- *    token request (`tamper_protection.py`, `except HTTPError`), so any error path
- *    that repeats what was sent writes the credential into the agent's log. These
- *    tests assert that no response body contains the presented key or token.
+ * 2. **The token is never echoed** (S252). The agent logs a failed token request's response
+ *    body verbatim, so no error path may repeat what was sent.
+ *
+ * 3. **The D-221 scheme** (S254): the token is bound to ONE device, derived exactly as
+ *    `docs/adr/D-221-token-vectors.json` says, refused when no secret is configured, compared
+ *    in constant time, and the previous deployment-wide scheme still verifies for one release
+ *    (ruling Q2-A) while it is logged.
  */
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const request = require('supertest');
 const express = require('express');
 
@@ -28,6 +30,10 @@ jest.mock('../src/db/pool', () => mockPool);
 
 const agentRoutes = require('../src/routes/agent');
 const { generateApiKey, hashApiKey } = require('../src/db/apiKey');
+
+const VECTORS = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', '..', 'docs', 'adr', 'D-221-token-vectors.json'), 'utf8')
+);
 
 const ADMIN_TOKEN = 'test-admin-token-for-uninstall-auth';
 
@@ -53,10 +59,20 @@ function provisionDevice(overrides = {}) {
   return { device, apiKey };
 }
 
-/** The token the server derives for the current window (the scheme itself). */
-function expectedToken() {
-  const window = Math.floor(Math.floor(Date.now() / 1000) / 300) * 300;
-  return crypto.createHmac('sha256', ADMIN_TOKEN).update(String(window)).digest('hex');
+/** The window the route will use right now (or one window back). */
+function currentWindow(offsetWindows = 0) {
+  const seconds = Math.floor(Date.now() / 1000) - offsetWindows * 300;
+  return Math.floor(seconds / 300) * 300;
+}
+
+/** The canonical D-221 derivation, computed independently of the route under test. */
+function boundToken(secret, deviceId, window) {
+  return crypto.createHmac('sha256', secret).update(`${deviceId}:${window}`).digest('hex');
+}
+
+/** The previous Express derivation, which must keep verifying for one release (Q2-A). */
+function legacyToken(secret, window) {
+  return crypto.createHmac('sha256', secret).update(String(window)).digest('hex');
 }
 
 const app = createApp();
@@ -74,6 +90,36 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
+// The shared vectors (Q4-A)
+// ---------------------------------------------------------------------------
+
+describe('D-221 shared vectors', () => {
+  test('the canonical derivation reproduces every bound vector', () => {
+    // If this suite and the Worker suite both pass, the two surfaces agree; a divergence
+    // fails here and in serverless/worker.test.ts instead of being invisible.
+    const wrong = VECTORS.bound.filter(
+      (v) => boundToken(VECTORS.secret, v.device_id, v.window) !== v.token
+    );
+    expect(wrong).toEqual([]);
+    expect(VECTORS.bound.length).toBeGreaterThan(0);
+  });
+
+  test('the legacy Express derivation reproduces its vectors', () => {
+    const wrong = VECTORS.legacy_express.filter(
+      (v) => legacyToken(VECTORS.secret, v.window) !== v.token
+    );
+    expect(wrong).toEqual([]);
+  });
+
+  test('the legacy Worker derivation differs from the legacy Express one', () => {
+    // This is the D-221 defect itself, kept as a fact: the two surfaces derived different
+    // tokens, so a token issued by one could never verify on the other.
+    const expressLegacy = VECTORS.legacy_express[0].token;
+    expect(VECTORS.legacy_worker[0].token).not.toBe(expressLegacy);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Issuing
 // ---------------------------------------------------------------------------
 
@@ -83,14 +129,10 @@ describe('POST /api/agent/uninstall-auth — issuing', () => {
 
     expect(res.status).toBe(401);
     expect(res.body.error).toMatch(/Authentication required/);
-    // The failure must not hand out a token by accident.
     expect(res.body.uninstall_token).toBeUndefined();
   });
 
   test('the bearer fallback does not accept a device key', async () => {
-    // Documented intent: without x-agent-key, only ADMIN_TOKEN authorises. A device
-    // key in a bearer header is not the admin token, so this must stay 401 — that is
-    // exactly why the agent's X-API-Key header has to be understood explicitly.
     const { apiKey } = provisionDevice();
     const res = await request(app)
       .post('/api/agent/uninstall-auth')
@@ -99,23 +141,79 @@ describe('POST /api/agent/uninstall-auth — issuing', () => {
     expect(res.status).toBe(401);
   });
 
-  test('issues a token for a per-device key in x-agent-key (the documented contract)', async () => {
-    const { apiKey } = provisionDevice();
+  test('issues a device-bound token for a per-device key in x-agent-key', async () => {
+    const { apiKey } = provisionDevice({ id: 'dev-bound-1' });
     const res = await request(app).post('/api/agent/uninstall-auth').set('x-agent-key', apiKey);
 
     expect(res.status).toBe(200);
     expect(res.body.uninstall_token).toMatch(/^[a-f0-9]{64}$/);
     expect(res.body.expires_in).toBe(300);
+    expect(res.body.device_id).toBe('dev-bound-1');
+    // Bound to this device — not the deployment-wide token of the old scheme.
+    expect(res.body.uninstall_token).toBe(boundToken(ADMIN_TOKEN, 'dev-bound-1', currentWindow()));
+    expect(res.body.uninstall_token).not.toBe(legacyToken(ADMIN_TOKEN, currentWindow()));
   });
 
   test('issues a token for the header the agent actually sends (X-API-Key)', async () => {
-    // This is the regression: agent/tamper_protection.py has always sent X-API-Key,
-    // so every self-hosted uninstall answered 401 and the token flow was dead.
-    const { apiKey } = provisionDevice();
+    const { apiKey } = provisionDevice({ id: 'dev-bound-2' });
     const res = await request(app).post('/api/agent/uninstall-auth').set('X-API-Key', apiKey);
 
     expect(res.status).toBe(200);
-    expect(res.body.uninstall_token).toMatch(/^[a-f0-9]{64}$/);
+    expect(res.body.uninstall_token).toBe(boundToken(ADMIN_TOKEN, 'dev-bound-2', currentWindow()));
+  });
+
+  test('a device-key caller cannot obtain a token bound to ANOTHER device', async () => {
+    // The binding must come from the authenticated row, never from the request body —
+    // otherwise the property would be "does the caller claim an id".
+    const { apiKey } = provisionDevice({ id: 'dev-mine' });
+    const res = await request(app)
+      .post('/api/agent/uninstall-auth')
+      .set('X-API-Key', apiKey)
+      .send({ device_id: 'dev-someone-else' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.device_id).toBe('dev-mine');
+    expect(res.body.uninstall_token).toBe(boundToken(ADMIN_TOKEN, 'dev-mine', currentWindow()));
+    expect(res.body.uninstall_token).not.toBe(
+      boundToken(ADMIN_TOKEN, 'dev-someone-else', currentWindow())
+    );
+  });
+
+  test('an admin-token caller must name the device', async () => {
+    // No device row authenticated, so there is nothing to bind to without the body.
+    const res = await request(app)
+      .post('/api/agent/uninstall-auth')
+      .set('Authorization', `Bearer ${ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/device_id required/);
+  });
+
+  test('an admin-token caller gets the token they asked for', async () => {
+    const res = await request(app)
+      .post('/api/agent/uninstall-auth')
+      .set('Authorization', `Bearer ${ADMIN_TOKEN}`)
+      .send({ device_id: 'dev-admin-bound' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.uninstall_token).toBe(
+      boundToken(ADMIN_TOKEN, 'dev-admin-bound', currentWindow())
+    );
+  });
+
+  test('503 when ADMIN_TOKEN is unset — no computable fallback token', async () => {
+    // Q3-A. Before D-221 this happily issued HMAC('fallback', window), which anyone
+    // holding this repository can compute.
+    delete process.env.ADMIN_TOKEN;
+    const { apiKey } = provisionDevice();
+
+    const res = await request(app).post('/api/agent/uninstall-auth').set('X-API-Key', apiKey);
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/ADMIN_TOKEN/);
+    expect(res.body.uninstall_token).toBeUndefined();
+    // And specifically not the old constant-fallback token.
+    expect(res.text).not.toContain(legacyToken('fallback', currentWindow()));
   });
 
   test('an unknown key gets 401 and the body never echoes it', async () => {
@@ -135,19 +233,58 @@ describe('POST /api/agent/uninstall-auth — issuing', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/agent/uninstall-auth/verify — verifying', () => {
-  test('accepts the current window token', async () => {
-    const { apiKey } = provisionDevice();
+  test('accepts the bound token for the current window', async () => {
+    const { apiKey } = provisionDevice({ id: 'dev-verify-1' });
     const res = await request(app)
       .post('/api/agent/uninstall-auth/verify')
       .set('X-API-Key', apiKey)
-      .send({ uninstall_token: expectedToken(), device_id: 'dev-uninstall-1' });
+      .send({ uninstall_token: boundToken(ADMIN_TOKEN, 'dev-verify-1', currentWindow()) });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ authorized: true, verified: true });
   });
 
+  test('accepts the previous window (clock skew)', async () => {
+    const { apiKey } = provisionDevice({ id: 'dev-verify-2' });
+    const res = await request(app)
+      .post('/api/agent/uninstall-auth/verify')
+      .set('X-API-Key', apiKey)
+      .send({ uninstall_token: boundToken(ADMIN_TOKEN, 'dev-verify-2', currentWindow(1)) });
+
+    expect(res.status).toBe(200);
+    expect(res.body.authorized).toBe(true);
+  });
+
+  test('rejects a token bound to a DIFFERENT device', async () => {
+    // The whole point of D-221: a token leaked from another machine is useless here.
+    const { apiKey } = provisionDevice({ id: 'dev-victim' });
+    const stolen = boundToken(ADMIN_TOKEN, 'dev-other-machine', currentWindow());
+
+    const res = await request(app)
+      .post('/api/agent/uninstall-auth/verify')
+      .set('X-API-Key', apiKey)
+      .send({ uninstall_token: stolen });
+
+    expect(res.status).toBe(200);
+    expect(res.body.authorized).toBe(false);
+    expect(res.text).not.toContain(stolen);
+  });
+
+  test('still accepts the previous deployment-wide token, and says so', async () => {
+    // Q2-A: an agent that has not taken the update must still be able to uninstall.
+    const { apiKey } = provisionDevice({ id: 'dev-legacy' });
+    const res = await request(app)
+      .post('/api/agent/uninstall-auth/verify')
+      .set('X-API-Key', apiKey)
+      .send({ uninstall_token: legacyToken(ADMIN_TOKEN, currentWindow()) });
+
+    expect(res.status).toBe(200);
+    expect(res.body.authorized).toBe(true);
+    expect(res.body.deprecated_scheme).toBe('legacy-deployment-wide');
+  });
+
   test('rejects a wrong token without echoing it', async () => {
-    const { apiKey } = provisionDevice();
+    const { apiKey } = provisionDevice({ id: 'dev-wrong' });
     const wrong = 'f'.repeat(64);
     const res = await request(app)
       .post('/api/agent/uninstall-auth/verify')
@@ -156,8 +293,19 @@ describe('POST /api/agent/uninstall-auth/verify — verifying', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.authorized).toBe(false);
-    // The decisive assertion: a rejection must not repeat the candidate token back.
     expect(res.text).not.toContain(wrong);
+  });
+
+  test('503 when ADMIN_TOKEN is unset', async () => {
+    delete process.env.ADMIN_TOKEN;
+    const { apiKey } = provisionDevice();
+    const res = await request(app)
+      .post('/api/agent/uninstall-auth/verify')
+      .set('X-API-Key', apiKey)
+      .send({ uninstall_token: legacyToken('fallback', currentWindow()) });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/ADMIN_TOKEN/);
   });
 
   test('a 400 for a missing token does not echo the rest of the body', async () => {
@@ -173,10 +321,8 @@ describe('POST /api/agent/uninstall-auth/verify — verifying', () => {
   });
 
   test('an unauthenticated request carrying a token never echoes it', async () => {
-    // The agent verifies with a token in the body; if authentication fails, the 401
-    // body must not repeat the token — that body is logged verbatim by the agent.
     mockPool.query.setResult('SELECT * FROM devices WHERE api_key_hash', { rows: [] });
-    const token = expectedToken();
+    const token = boundToken(ADMIN_TOKEN, 'dev-anon', currentWindow());
 
     const res = await request(app)
       .post('/api/agent/uninstall-auth/verify')

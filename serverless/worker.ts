@@ -919,34 +919,125 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
  * they'd need server-side authorization, which the admin only grants
  * for legitimate device retirement.
  */
-async function handleUninstallAuth(request: Request, env: Env): Promise<Response> {
-  // Accept either admin bearer auth or agent API key auth
-  const authHeader = request.headers.get('Authorization') || '';
+// ---------------------------------------------------------------------------
+// D-221: the uninstall token scheme
+// ---------------------------------------------------------------------------
+// Canonical form, shared with the Express routes and pinned by
+// `docs/adr/D-221-token-vectors.json`:
+//
+//   window = floor(unix_seconds / 300) * 300
+//   token  = HMAC_SHA256(secret=ADMIN_TOKEN, msg=`${device_id}:${window}`)   # lowercase hex
+//
+// What this replaced: `SHA256(`${window}:${ADMIN_TOKEN}`)` with no device input and a
+// `|| 'fallback'` constant when the secret was unset — and it disagreed with Express, which
+// used HMAC over the bare window, so a token from one surface never verified on the other.
+const UNINSTALL_TOKEN_WINDOW_SECONDS = 300;
+
+function uninstallWindowFor(seconds: number): number {
+  return Math.floor(seconds / UNINSTALL_TOKEN_WINDOW_SECONDS) * UNINSTALL_TOKEN_WINDOW_SECONDS;
+}
+
+/** The bound token: only the named device may present it. */
+async function deriveUninstallToken(
+  secret: string,
+  deviceId: string,
+  window: number,
+): Promise<string> {
+  return hmacSha256(secret, `${deviceId}:${window}`);
+}
+
+/**
+ * The PREVIOUS Worker derivation, kept for one release (ruling Q2-A) so a device whose agent
+ * has not taken the update can still uninstall. Verification logs when this path is taken.
+ */
+async function legacyUninstallToken(secret: string, window: number): Promise<string> {
+  return sha256(`${window}:${secret}`);
+}
+
+/**
+ * Who is calling, and as which device?
+ *
+ * Returns the device row when a device key authenticated (the only trustworthy source of the id
+ * the token is bound to), or `{ device: null }` for the deployment's ADMIN_TOKEN.
+ */
+async function uninstallAuth(
+  request: Request,
+  env: Env,
+): Promise<{ device: Device | null } | null> {
   const apiKey = request.headers.get('X-API-Key') || '';
+  const authHeader = request.headers.get('Authorization') || '';
   const token = authHeader.replace(/^Bearer\s+/i, '');
 
-  let authorized = false;
   if (apiKey) {
-    const devices = await listDevices(env);
     const apiKeyHash = await sha256(apiKey);
-    authorized = devices.some((d) => d.api_key_hash === apiKeyHash);
+    const device = (await listDevices(env)).find((d) => d.api_key_hash === apiKeyHash);
+    if (device) return { device };
   }
-  if (!authorized && token) {
-    authorized = token === (env.ADMIN_TOKEN || '');
+  if (token && env.ADMIN_TOKEN && token === env.ADMIN_TOKEN) {
+    return { device: null };
   }
-  if (!authorized) {
+  return null;
+}
+
+/**
+ * Which device is this token for? A device-key caller is bound to its OWN row and may not name
+ * another device; the admin-token caller has no device, so it must name one in the body.
+ */
+function uninstallSubject(
+  auth: { device: Device | null },
+  body: { device_id?: string },
+): { deviceId: string | null; error: string | null } {
+  if (auth.device) return { deviceId: auth.device.id, error: null };
+  const claimed = typeof body?.device_id === 'string' ? body.device_id.trim() : '';
+  if (!claimed) {
+    return {
+      deviceId: null,
+      error:
+        'device_id required: an uninstall token is bound to one device, and an admin-token ' +
+        'call has no device of its own to bind to.',
+    };
+  }
+  return { deviceId: claimed, error: null };
+}
+
+const NO_ADMIN_TOKEN_MESSAGE =
+  'Uninstall tokens are disabled: ADMIN_TOKEN is not set on this worker. Set it and redeploy; ' +
+  'an uninstall token is derived from it.';
+
+async function handleUninstallAuth(request: Request, env: Env): Promise<Response> {
+  const auth = await uninstallAuth(request, env);
+  if (!auth) {
     return errorResponse('Authentication required', 401);
   }
 
-  // Generate a short-lived token: hash of (timestamp_rounded_to_5min + secret)
-  const now = Math.floor(Date.now() / 1000);
-  const window = Math.floor(now / 300) * 300; // 5-minute window
-  const uninstallToken = await sha256(`${window}:${env.ADMIN_TOKEN || 'fallback'}`);
+  // Q3-A: no secret, no token — the `|| 'fallback'` constant is gone.
+  if (!env.ADMIN_TOKEN) {
+    return errorResponse(NO_ADMIN_TOKEN_MESSAGE, 503);
+  }
+
+  // The body is optional for a device-key caller (its id comes from the row).
+  let body: { device_id?: string } = {};
+  try {
+    body = (await request.json()) as { device_id?: string };
+  } catch {
+    body = {};
+  }
+
+  const subject = uninstallSubject(auth, body);
+  if (subject.error) return errorResponse(subject.error, 400);
+
+  const window = uninstallWindowFor(Math.floor(Date.now() / 1000));
+  const uninstallToken = await deriveUninstallToken(
+    env.ADMIN_TOKEN,
+    subject.deviceId as string,
+    window,
+  );
 
   return jsonResponse({
     uninstall_token: uninstallToken,
-    expires_in: 300, // 5 minutes
+    expires_in: UNINSTALL_TOKEN_WINDOW_SECONDS,
     issued_at: new Date().toISOString(),
+    device_id: subject.deviceId,
   });
 }
 
@@ -956,26 +1047,18 @@ async function handleUninstallAuth(request: Request, env: Env): Promise<Response
  * Checks if the token is valid (within the current 5-minute window).
  */
 async function handleUninstallAuthVerify(request: Request, env: Env): Promise<Response> {
-  const authHeader = request.headers.get('Authorization') || '';
-  const apiKey = request.headers.get('X-API-Key') || '';
-  const token = authHeader.replace(/^Bearer\s+/i, '');
-
-  let authorized = false;
-  if (apiKey) {
-    const devices = await listDevices(env);
-    const apiKeyHash = await sha256(apiKey);
-    authorized = devices.some((d) => d.api_key_hash === apiKeyHash);
-  }
-  if (!authorized && token) {
-    authorized = token === (env.ADMIN_TOKEN || '');
-  }
-  if (!authorized) {
+  const auth = await uninstallAuth(request, env);
+  if (!auth) {
     return errorResponse('Authentication required', 401);
   }
 
-  let body: { uninstall_token?: string };
+  if (!env.ADMIN_TOKEN) {
+    return errorResponse(NO_ADMIN_TOKEN_MESSAGE, 503);
+  }
+
+  let body: { uninstall_token?: string; device_id?: string };
   try {
-    body = await request.json();
+    body = (await request.json()) as { uninstall_token?: string; device_id?: string };
   } catch {
     return errorResponse('Invalid JSON body', 400);
   }
@@ -985,17 +1068,41 @@ async function handleUninstallAuthVerify(request: Request, env: Env): Promise<Re
     return errorResponse('uninstall_token required', 400);
   }
 
-  // Check current and previous 5-minute windows (allows for clock skew)
+  const subject = uninstallSubject(auth, body);
+  if (subject.error) return errorResponse(subject.error, 400);
+
+  // Current and previous 5-minute windows, so ordinary clock skew does not break an uninstall.
   const now = Math.floor(Date.now() / 1000);
   const validWindows = [
-    Math.floor(now / 300) * 300,
-    Math.floor((now - 300) / 300) * 300,
+    uninstallWindowFor(now),
+    uninstallWindowFor(now - UNINSTALL_TOKEN_WINDOW_SECONDS),
   ];
 
   for (const window of validWindows) {
-    const expectedToken = await sha256(`${window}:${env.ADMIN_TOKEN || 'fallback'}`);
-    if (providedToken === expectedToken) {
+    const expected = await deriveUninstallToken(
+      env.ADMIN_TOKEN,
+      subject.deviceId as string,
+      window,
+    );
+    if (timingSafeEqualStr(providedToken, expected)) {
       return jsonResponse({ authorized: true, verified: true });
+    }
+  }
+
+  // Q2-A migration window: still accept the PREVIOUS Worker scheme so a device whose agent has
+  // not taken the update can uninstall. Logged every time, because the acceptance is meant to end.
+  for (const window of validWindows) {
+    const legacy = await legacyUninstallToken(env.ADMIN_TOKEN, window);
+    if (timingSafeEqualStr(providedToken, legacy)) {
+      console.warn(
+        `[uninstall-auth] accepted a LEGACY deployment-wide uninstall token for device ${subject.deviceId} ` +
+          '— D-221 added device binding; the agent should be updated before this path is deleted',
+      );
+      return jsonResponse({
+        authorized: true,
+        verified: true,
+        deprecated_scheme: 'legacy-deployment-wide',
+      });
     }
   }
 
@@ -1735,7 +1842,10 @@ async function handleListDevices(request: Request, env: Env): Promise<Response> 
       return mergeCheckinMetadata(d, meta);
     }),
   );
-  const safe = merged.map(({ api_key_hash, ...d }) => d);
+  // `api_key_hash` is destructured out so it can never leave the Worker; the `_` prefix is
+  // what marks the binding as deliberately unused (the harness treats an unprefixed unused
+  // binding as a bug, which it is everywhere else in this file).
+  const safe = merged.map(({ api_key_hash: _api_key_hash, ...d }) => d);
   return jsonResponse(safe);
 }
 
@@ -1757,7 +1867,7 @@ async function handleGetDevice(
   // Return just the device object — matches the Express server's
   // `res.json(device)` shape (the dashboard expects devRes.data to be
   // the device, not a wrapper object).
-  const { api_key_hash, ...safeDevice } = merged;
+  const { api_key_hash: _api_key_hash, ...safeDevice } = merged;
   return jsonResponse(safeDevice);
 }
 
@@ -1868,7 +1978,7 @@ async function handleDeviceByHardware(
     const meta = await getCheckinMetadata(env, d.id);
     const merged = mergeCheckinMetadata(d, meta);
     if (merged.hardware_uuid === hardwareUuid) {
-      const { api_key_hash, ...safeDevice } = merged;
+      const { api_key_hash: _api_key_hash, ...safeDevice } = merged;
       return jsonResponse(safeDevice);
     }
   }
