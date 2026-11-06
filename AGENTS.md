@@ -434,7 +434,7 @@ make build
 
 ## Diagnostic Sweep Results (2026-08-04, updated 2026-10-27)
 
-All green: 803 server tests (48 suites, measured 2026-11-05), 689 agent tests, 197 dashboard tests,
+All green: 808 server tests (49 suites, measured 2026-11-05), 689 agent tests, 197 dashboard tests,
 30 electron tests, 331 serverless tests, 10 API E2E tests, 231 script-harness
 checks (212 pytest tests across 13 suites + 19 checks in the hand-rolled
 secret-scanner suite; 5 worker-update cases skip without a built worker),
@@ -446,7 +446,7 @@ Not runnable on this host: Playwright + Electron (missing `libnspr4.so`).
 **`make full-verify` now covers all five component suites** (server, agent,
 dashboard, worker, electron) plus the script-level harness tests, E2E, env and
 artifact checks — it previously ran only three of the five while its own comment
-claimed "all 5 test suites". Current measured totals: server 803 (48 suites),
+claimed "all 5 test suites". Current measured totals: server 808 (49 suites),
 agent 689, dashboard 197, worker 331, electron 30, API E2E 10, script harness 231.
 
 The script-level harness tests are **auto-discovered** (`scripts/test_*.py`, run

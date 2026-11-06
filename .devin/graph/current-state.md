@@ -126,7 +126,7 @@
     exception` naming `server/src/routes/rearm.js`.
 - `agent/.venv/bin/python scripts/test_sast_gate.py` → **20 passed**.
 - `make test-scripts` → new suite discovered and green (20 passed); whole sweep still green.
-- `cd server && npm test` → **803 passed, 48 suites** (was 663/41 when AGENTS.md was last
+- `cd server && npm test` → **808 passed, 49 suites** (was 663/41 when AGENTS.md was last
   written; the doc now carries the measured numbers).
 - Teeth check on the paths guard: with `path.basename()` removed, `tests/paths.test.js` →
   **1 failed of 5**; restored → 5 passed.

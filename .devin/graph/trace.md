@@ -13106,7 +13106,7 @@ a payload back as a platform; `server/tests/rearm.routes.test.js` asserts the no
 
 **Docs/CI**: `AGENTS.md` § code scanning now describes the classification policy and the
 `"requires login"` trap (plus corrected, re-measured harness counts — the list claimed 11
-graph-session tests for a suite with 40, and 663 server tests for a suite of 803);
+graph-session tests for a suite with 40, and 663 server tests for a suite of 808);
 `lint.yml`'s job comment and the `Makefile` `sast` comment say the same thing.
 
 **Commit**: `10f18b2` — “sast(ci): every finding now needs a verdict — the gate fails both
@@ -13183,7 +13183,7 @@ ways (45 classified)”. This session block is committed separately, as usual.
     exception` naming `server/src/routes/rearm.js`.
 - `agent/.venv/bin/python scripts/test_sast_gate.py` → **20 passed**.
 - `make test-scripts` → new suite discovered and green (20 passed); whole sweep still green.
-- `cd server && npm test` → **803 passed, 48 suites** (was 663/41 when AGENTS.md was last
+- `cd server && npm test` → **808 passed, 49 suites** (was 663/41 when AGENTS.md was last
   written; the doc now carries the measured numbers).
 - Teeth check on the paths guard: with `path.basename()` removed, `tests/paths.test.js` →
   **1 failed of 5**; restored → 5 passed.
