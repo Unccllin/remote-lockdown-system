@@ -2162,6 +2162,56 @@
 
 ---
 
+### D-221 — The uninstall token is deployment-wide, and the two servers derive it differently
+- **Status**: OPEN
+- **Category**: SECURITY
+- **Found**: session 252, while proving that the uninstall-token error body never echoes the
+  token (the routes were answering 401 to the agent that owns them; that part is fixed and
+  covered by `server/tests/uninstallAuth.test.js`).
+- **Blocker**: four defects in one scheme, and the shape of the fix is a decision rather than
+  a patch — it changes what a token *is*, so agents and both server surfaces have to agree
+  during rollout. Ruling opened in `.devin/PENDING-RULING.md` (D-221, session 253).
+
+**What is wrong** (all verified in source, not inferred):
+
+1. **Not per-device.** `server/src/routes/agent.js` `POST /uninstall-auth` returns
+   `HMAC-SHA256(key=ADMIN_TOKEN, msg=floor(now/300)*300)`. No device identity is an input, so
+   every device in a deployment receives the **same** token in a given 5-minute window. One
+   leaked token authorises an uninstall on any machine until the window rolls. The request body
+   already carries `device_id`; the derivation ignores it.
+2. **The two surfaces disagree.** `serverless/worker.ts` `handleUninstallAuth` returns
+   `SHA256("<window>:<ADMIN_TOKEN>")` — a different construction from Express's HMAC. A token
+   issued by one surface therefore never verifies on the other. Each suite tests only its own
+   surface (`server/tests/uninstallAuth.test.js`, `serverless/worker.test.ts`), and
+   `scripts/test_cross_surface_contract.py` compares route paths, not derivations, so nothing
+   can see the mismatch.
+3. **Both fall back to a public constant.** Both files use `ADMIN_TOKEN || 'fallback'`. With
+   `ADMIN_TOKEN` unset — the default for a fresh install — the token is
+   computable by anyone holding this repository, and tamper protection is defeated by reading
+   the source.
+4. **Non-constant-time comparison in Express.** `providedToken === expectedToken` on a
+   bearer-like secret. The Worker has the same pattern; the compare should be timing-safe.
+
+- **Close criteria**:
+  - (a) The token is bound to a single device, and verification requires that binding.
+  - (b) Express and the Worker derive it **identically**, pinned by a shared test vector both
+    suites read (a token issued on one surface verifies on the other).
+  - (c) Issuing **fails closed** when `ADMIN_TOKEN` (or whatever replaces it) is unset — no
+    constant fallback survives anywhere.
+  - (d) Comparison is constant-time on both surfaces.
+  - (e) The agent still works unchanged for the happy path, and the existing
+    `agent/tests/test_tamper_protection.py` + `server/tests/uninstallAuth.test.js` cases still
+    pass; new tests cover a stolen-token-for-another-device attempt and a replay.
+- **Why it is not fixed yet**: the migration question is real — agents in the field are
+  mid-auto-update, so a hard cut to a new derivation breaks uninstall on any device that has
+  not yet taken the update. That trade-off belongs to the operator, not to a session.
+- **Not tracked in `GRAPH-SPEC.yaml` before this session** — `grep -c` of the spec's
+  `debt_items` was 61 and none of them named this scheme.
+- **Evidence**: `server/src/routes/agent.js` (`authorizedForUninstall`, the two
+  `uninstall-auth` routes), `serverless/worker.ts` (`handleUninstallAuth`,
+  `handleUninstallAuthVerify`), `agent/tamper_protection.py` (`request_uninstall_token`,
+  `verify_uninstall_token`), `server/tests/uninstallAuth.test.js`.
+
 ## Summary
 
 > **Reconciliation note (2026-09-17, session 114):** Per-item detail sections
@@ -2206,6 +2256,7 @@
 | D-128 | SBAT variable check not implemented | CLOSED | TODO |
 | D-129 | No real hardware validation | OPEN | ENV |
 | D-130 | Code signing not configured | OPEN | SECURITY |
+| D-134 | PBL's NV indices live in the TPM platform hierarchy, which stock firmware takes away | OPEN (detail entry above; close criteria: the HP machine in the D-129 window boots the owner-hierarchy flow — design question closed session 166) | SECURITY |
 | D-131 | PBL never populates device_id — every verdict request carries 32 zero bytes | CLOSED (DeviceId now populated from NV 0x01C00003 via TPM2_NV_Read; QEMU artifacts `firmware/PblPkg/artifacts/d131-*`: enrolled 16/0 with a real device_id, unprovisioned 17/0 with the request suppressed) | STUB |
 | D-132 | Pinned CA never reached the TLS layer — `PblTlsVerifyCert` had no caller and EDK2 always verified against an empty platform store, so the HTTPS fetch could not complete | CLOSED (C4 key 78 carries the CA DER; PBL rewrites the platform `TlsCaCertificate` store before each fetch. Artifacts `firmware/PblPkg/artifacts/d200-wire-verified-*` = 6/0 with a real `device_id` on the wire, and `d132-mismatched-ca-results.txt` = mismatched CA correctly fails. Residual: `PblTlsVerifyCert` still has no caller — the pin is enforced by construction, not by that function) | SECURITY |
 | D-133 | Decision Step 6 checks are presence-only — any X.509 cert in db satisfied `DbHasWindowsUefiCa2023` and any X.509 revocation in dbx satisfied `DbxHasMs2011Revocation` | CLOSED (identity checks implemented; negative test passes) | SECURITY |
@@ -2221,6 +2272,7 @@
 | D-209 | PBL policy blob generation not implemented | CLOSED (commit d111ada) | SERVER |
 | D-210 | Serverless Worker PBL route integration not implemented | CLOSED (commit 9612fbb) | SERVER |
 | D-211 | Covert tracking mode (C5) not fully implemented | CLOSED (all 12 C5 plan items implemented: firmware Decision.c, server verdict+track endpoints, agent handle_track+data protection+stealth, dashboard Track button) | TODO |
+| D-221 | Uninstall token is deployment-wide, and the two servers derive it differently | OPEN (4 defects: no device binding, Express HMAC vs Worker SHA256, `ADMIN_TOKEN \|\| 'fallback'` public constant, non-constant-time compare — see the D-221 entry; ruling open in `.devin/PENDING-RULING.md`) | SECURITY |
 
 ### RE-hardening review (2026-09-15)
 
@@ -2241,5 +2293,5 @@
 | D-219 | Policy signature BLOCK path untested | CLOSED (same scenario as D-215 — test-d215-harness.sh + gen-policy-rot.py; 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 | D-220 | BLOCK-intent returns propagate error to BDS (BootOrder advance bypass) | CLOSED (`PblApp.c` policy-sig-fail and anti-rollback paths returned `EFI_SECURITY_VIOLATION` — per Boot#### semantics a non-success return advances BDS to the next boot option (Windows boots). Fixed via `PblBlockHalt()` — lock screen + MOR + ResetSystem + CpuDeadLoop, never returns; chain-load return checked at all 3 call sites, fail-closed on error. Note: D-219's harness passed the buggy code — it checked serial lines, not post-BLOCK behavior. QEMU+swtpm: fve 16/0, docker 15/0, persistence 16/0. Commit this session; artifacts /tmp/pbl-fve-ci/, /tmp/pbl-ci-persist/) | SECURITY |
 
-**Totals**: 52 items — 49 CLOSED, 3 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware, D-130 signing)
+**Totals**: 54 items — 49 CLOSED, 5 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware, D-130 signing, D-134 TPM NV hierarchy, D-221 uninstall-token scheme)
 

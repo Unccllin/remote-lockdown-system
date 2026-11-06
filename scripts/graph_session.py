@@ -45,6 +45,7 @@ sys.path.insert(0, str(_GRAPH_DIR))
 
 from graph_loader import (
     get_closed_debt_items,
+    get_debt_items,
     get_enforcement_paths,
     get_open_debt_items,
     get_phase_nodes,
@@ -311,8 +312,15 @@ def generate_open_debt_section(graph: dict) -> str:
         blocks = ", ".join(d.get("blocks", [])) or "—"
         lines.append(f"| {d['id']} | {desc} | {d['status']} | {blocks} |")
     lines.append("")
-    lines.append("See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and "
-                 "`docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130) for close criteria.")
+    # Counts, derived. This line used to print the literals "D-001..D-021" and
+    # "D-100..D-130, 31 OPEN" on every regenerate, and both had drifted: the live ledger ran
+    # to D-221 with 5 open items. A span is also not derivable from the graph, which mirrors
+    # only part of each ledger — a count is (S253).
+    total = len(open_debt) + len(closed_debt)
+    lines.append(
+        f"See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria "
+        f"({len(open_debt)} of {total} graph-tracked items are OPEN)."
+    )
     lines.append("")
     lines.append("---")
     return "\n".join(lines)
@@ -347,8 +355,8 @@ _FOOTER = """## Quick reference
 - **Graph spec**: `.devin/graph/GRAPH-SPEC.yaml`
 - **Full trace history**: `.devin/graph/trace.md` (read on demand)
 - **Trace archives**: `.devin/graph/trace-archive-*.md` (rotated old sessions)
-- **Debt ledger**: `docs/adr/DEBT-LEDGER.md` (D-001..D-021, all CLOSED)
-- **PBL debt ledger**: `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130, 31 OPEN)
+- **Debt ledger**: `docs/adr/DEBT-LEDGER.md` (legacy, all CLOSED)
+- **PBL debt ledger**: `docs/adr/PBL-DEBT-LEDGER.md` (the live one)
 - **Graph ADR**: `docs/adr/GRAPH-SPEC.md`
 - **Verification**: `make graph-check` (runs `graph_assert.py` — all invariants)
 - **Clean state**: `make clean-state` (runs 5-condition checklist from L12)

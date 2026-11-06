@@ -398,3 +398,82 @@ we terminate TLS.
       including a guard against the vacuous "client refused to offer" result.
 
 **Ruling closed 2026-11-03, session 202** — no open items.
+
+## D-221 uninstall-token ruling (opened 2026-11-05, session 253)
+
+The token that authorises an uninstall is `HMAC(ADMIN_TOKEN, 5-minute window)`. Session 252
+made the routes reachable (Express was answering 401 to the agent; `server/tests/uninstallAuth.test.js`
+pins that). What the route *issues* has never been designed. Four defects, all verified in
+source — the full evidence is in the D-221 entry in `docs/adr/PBL-DEBT-LEDGER.md`:
+
+1. **No device binding** — every device in a deployment gets the same token in a window.
+2. **The two surfaces derive it differently** — Express `HMAC-SHA256(ADMIN_TOKEN, window)`,
+   Worker `SHA256("window:ADMIN_TOKEN")`, so a token from one never verifies on the other.
+3. **Public-constant fallback** — both use `ADMIN_TOKEN || 'fallback'`.
+4. **Non-constant-time comparison** on both surfaces.
+
+### Context that constrains the choice
+- The server stores only `api_key_hash`, never the device's plaintext key, so a token **cannot**
+  be HMAC'd with the device key. The device **id** is available (the request body carries
+  `device_id`; the verify body does too).
+- The agent verifies **online** (`verify_uninstall_token` POSTs to the server), so a stateful
+  server-side check is available — there is no offline-verification constraint.
+- Both surfaces exist: Express has Postgres/SQLite, the Worker has KV and no database.
+- Devices auto-update on a schedule, so a hard cut has a real cost: an agent that has not taken
+  the update must still be able to uninstall.
+
+### Q1 — what binds the token to a device?
+
+- **A** — `HMAC(ADMIN_TOKEN, "{device_id}:{window}")`. Device id is already in both requests;
+  nothing new is stored; both surfaces compute it from `ADMIN_TOKEN` + the id. A token stolen
+  for device A does not authorise device B unless the caller also claims to be A, and the
+  uninstall script only ever asks for its own id.
+- **B** — per-device secret issued once and stored (server keeps an encrypted per-device
+  uninstall secret; token = HMAC(that secret, window)). Strongest binding; needs a migration,
+  per-device key management, and a Worker KV counterpart.
+- **C** — one-time nonce in KV (server stores `{device_id, nonce}` with a TTL; verify consumes
+  it). Kills replay outright and makes verify stateful on both surfaces.
+
+- [ ] Q1 — binding → **?**
+
+### Q2 — migration: do old-format tokens keep working?
+
+- **A** — dual-accept for one release with a deprecation log: verify accepts the new per-device
+  token *and* the old deployment-wide one until a stated date, then the old path is deleted.
+- **B** — hard cut: ship agent + both servers together and refuse old tokens immediately.
+  Simplest end state; any device that has not taken the update cannot be uninstalled until it does.
+- **C** — capability negotiation: the agent reads a scheme flag from check-in and uses the
+  matching derivation. Most correct, most code, and the flag becomes a new contract.
+
+- [ ] Q2 — migration window → **?**
+
+### Q3 — what happens when the secret is unset?
+
+- **A** — refuse to issue: 503 naming `ADMIN_TOKEN`, and a clear agent-side log line. No
+  constant fallback survives anywhere.
+- **B** — generate a per-deployment secret at first boot and persist it (Express); the Worker
+  has no writable store, so it fails closed there — i.e. two different behaviours by surface.
+- **C** — keep a fallback but derive it from non-public material (the server's signing key).
+  Still a silent configuration mode, which is defect 3 restated.
+
+- [ ] Q3 — unset-secret behaviour → **?**
+
+### Q4 — who owns the derivation, so it cannot diverge again?
+
+- **A** — one shared vector file read by both suites: `docs/adr/D-221-token-vectors.json` with
+  `(device_id, window, secret) → token`, consumed by `server/tests/uninstallAuth.test.js` **and**
+  `serverless/worker.test.ts`, plus a `scripts/test_cross_surface_contract.py` check that both
+  surfaces reproduce it. Divergence then fails two suites instead of none.
+- **B** — extract a shared module imported by both. Stronger typing, but the Worker bundles
+  separately and the runtimes differ (`node:crypto` vs WebCrypto).
+- **C** — document the algorithm in `docs/API.md` and rely on review. That is what exists today,
+  and it is how the two surfaces diverged.
+
+- [ ] Q4 — ownership of the derivation → **?**
+
+Constant-time comparison (`crypto.timingSafeEqual` on Express, equivalent in the Worker) is part
+of D-221's close criteria and needs no ruling of its own — it is a two-line change whichever
+answers win.
+
+Mode note: this file is live state. Mark an item `[x]` with a one-word outcome when answered,
+then delete the section once the implementation session has taken it.

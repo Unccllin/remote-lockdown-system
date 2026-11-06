@@ -607,7 +607,13 @@ component_nodes:
 # ---------------------------------------------------------------------------
 # Tracked in two ledgers:
 #   - docs/adr/DEBT-LEDGER.md       — D-001..D-021 (legacy, all CLOSED)
-#   - docs/adr/PBL-DEBT-LEDGER.md   — D-100..D-130 (PBL, 31 OPEN)
+#   - docs/adr/PBL-DEBT-LEDGER.md   — the live ledger: D-100..D-211 plus the
+#     D-212..D-220 RE-hardening review items and D-221. Despite the "PBL" in its
+#     name it also holds agent/server/dashboard product debt (D-211 covert
+#     tracking, D-221 uninstall token), so it is where a new non-firmware item
+#     goes. Note: D-212..D-214 and D-216..D-220 are CLOSED in that ledger but are
+#     NOT mirrored here, so this file's 61 items are not the complete debt set —
+#     a known gap, not a claim of completeness.
 # Each debt item has:
 #   - id, description, close_criteria, status, commit_ref, artifact_ref
 # The graph asserts that a debt item cannot be CLOSED without:
@@ -1333,6 +1339,25 @@ debt_items:
                 verdict+track, agent handle_track)"
     artifact_ref: "agent pytest suite incl. tracking tests; real-Windows \
                   residual → D-129"
+
+  - id: D-221
+    description: "Uninstall token is deployment-wide, and Express and the \
+                  Worker derive it differently"
+    close_criteria: "(a) token bound to one device and verification requires \
+                    that binding; (b) Express and the Worker derive it \
+                    identically, pinned by a shared test vector both suites \
+                    read; (c) issuing fails closed when ADMIN_TOKEN is unset \
+                    (no constant fallback); (d) constant-time comparison on \
+                    both surfaces; (e) agent happy path unchanged and \
+                    existing tests still pass, with new tests for a \
+                    cross-device token and a replay"
+    status: OPEN
+    category: SECURITY
+    found: "session 252 (routes 401'd on Express); filed session 253"
+    blocker: "A scheme change has a rollout cost: agents mid-auto-update must \
+              keep working. Ruling open in .devin/PENDING-RULING.md (D-221)."
+    commit_ref: null
+    artifact_ref: null
 
 # ---------------------------------------------------------------------------
 # GRAPH INVARIANTS (asserted by graph_assert.py)
