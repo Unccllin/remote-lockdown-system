@@ -2558,3 +2558,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-113
+  statement: 'I3 already enforces artifact-content evidence: assert_enforcement_path_status check 3 calls
+    artifact_supports_claim(), which resolves ''file.json#TEST-ID'' and requires status PASS for that
+    path''s own test id, and _artifact_result_map() reads the harness v1.0, CTRF v2.0 and live-agent schemas.
+    scripts/hw-window-preflight.py --artifact reuses those helpers so any citation it prints is one I3
+    accepts, and --check answers window readiness (reachability, last_checkin age, agent_version, agent_version_stale)
+    because the lab box is unreachable from this host while the Windows port-proxy is down.'
+  domain: testing/hardware
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S259: read graph_assert.assert_enforcement_path_status check 3 and artifact_supports_claim;
+    implemented a tool that calls them (14 tests, including the azure_bitlocker artifact that correctly
+    refuses E-BCD/FAIL and E-HP-UEFI/SKIP)'
+  source: .devin/graph/graph_assert.py (assert_enforcement_path_status, artifact_supports_claim, _artifact_result_map);
+    scripts/hw-window-preflight.py; docs/D-129-HARDWARE-RUNBOOK.md §2/§2a; scripts/test_hw_window_preflight.py
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

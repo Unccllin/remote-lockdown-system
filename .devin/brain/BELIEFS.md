@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-06 14:00:47 — 112 beliefs
+Generated: 2026-11-06 14:16:05 — 113 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -284,6 +284,12 @@ mkfs.fat 4.2 (2021-01-31)
 | B-051 | confirmed | code-read | The agent E2E harness (tests/e2e/agent-helpers.js) already encodes two rules that a new suite must reuse, not reinvent: (1) spawn the agent ASYNCHRONOUSLY, because spawnSync blocks the Node event loop and the test server shares that process — measured 6.0s ReadTimeout synchronously vs 200 in 0.01s async; (2) scrub agent-relevant env vars through agentEnv(), because load_config() prefers env over the config file — an inherited AGENT_SHARED_KEY yields 'SHARED-KEY-FROM-ENV' where the file says 'DEVICE-KEY-FROM-FILE', making every check-in 401. The S195 failures were the new suite bypassing those rules, NOT defects in the pre-existing harness. Separately, and still true: devices.hardware_uuid is UNIQUE while get_hardware_uuid() falls back to a host-stable value where DMI is unreadable, so two devices on one host collide on check-in (re-provision one device); and last_checkin is NULL at enrollment, so an assertion that it becomes non-null depends on a real check-in (verified: null before the agent ran, '2026-11-03 10:24:49' after). |
 | B-052 | proposed | assumed | In the jest E2E harness, 'await server.close()' is a no-op (close() returns the server, not a promise), so calling sqlitePool.end() next closes the database while a request handler may still be mid-query; the sqlite3 driver then THROWS from its native error callback (SQLITE_MISUSE: Database handle is closed) as an uncaught exception that kills the jest process with no test-level trace. Teardown must await a real close and drop keep-alive sockets (closeAllConnections) before ending the pool. Separately, ast-grep's unchecked-throwing-call rule fires on calls that ARE inside try: when they sit in an assignment or a with, and its line numbers can lag the file after edits — verify enclosures yourself instead of rewriting correct defensive code. |
 | B-054 | confirmed | code-read | In serverless/worker.ts, every /api path the source mentions (outside comments) is dispatched: 37 mentioned paths vs 56 route-table branches, 0 unrouted — so the S198 'advertised but unserved URL' defect was a single instance, not a pattern. The class is now gated two ways: serverless/worker.test.ts asserts that every /api literal outside a comment has a path === branch (verified non-vacuous by renaming the route, which fails both contract tests and the four download tests), and CI already runs that suite (ci.yml npm run test:coverage, release.yml npm test). Consequence for the open question: keeping the workerd E2E opt-in (LOCKDOWN_WORKER_E2E=1) does not leave the class ungated, so pinning wrangler buys runtime fidelity, not failure-mode coverage. |
+
+## testing/hardware
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-113 | confirmed | code-read | I3 already enforces artifact-content evidence: assert_enforcement_path_status check 3 calls artifact_supports_claim(), which resolves 'file.json#TEST-ID' and requires status PASS for that path's own test id, and _artifact_result_map() reads the harness v1.0, CTRF v2.0 and live-agent schemas. scripts/hw-window-preflight.py --artifact reuses those helpers so any citation it prints is one I3 accepts, and --check answers window readiness (reachability, last_checkin age, agent_version, agent_version_stale) because the lab box is unreachable from this host while the Windows port-proxy is down. |
 
 ## threat-model
 

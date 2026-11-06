@@ -14152,3 +14152,139 @@ Nothing in the agent-version thread is outstanding. The honest next target is th
 ledger has been pointing at for many sessions: the four remaining OPEN items (D-120, D-129, D-130,
 D-134) all need real hardware, and 10 of 13 enforcement paths are `verified-in-unit-test` under I3 —
 so the next deliverable is a hardware window, not more software.
+
+## Session 259 — 2026-11-05 (the hardware window made mechanical: preflight, and the citation I3 will accept)
+
+### RULE-ZERO
+
+**Measured first, because "proceed" on a hardware window needs a reachable machine**:
+- `curl -m 5 http://192.168.1.43:3001/api/health` → **connection reset by peer**
+- `curl -m 3 http://127.0.0.1:3001/api/health` → connection refused; nothing listening on 3001/3000
+- so the lab box is not reachable from this host (AGENTS.md already records why: the Windows
+  port-proxy `0.0.0.0:3001 → <WSL address>:3001` has to be re-created after a WSL restart). **The
+  window cannot be executed from here**, and this session does not pretend otherwise.
+
+**Read**:
+- `.devin/graph/graph_assert.py` — `assert_enforcement_path_status()` (I3), `artifact_supports_claim()`
+  (accepts `file.json#TEST-ID`, and without a fragment accepts any passing entry whose id is the path
+  id or `<path-id>-*`), and `_artifact_result_map()` (reads three artifact schemas: harness v1.0
+  `results[]`, harness v2.0 CTRF `results.tests[]`, live-agent `enforcement_paths{}`)
+- `docs/D-129-HARDWARE-RUNBOOK.md` §2 — states the stricter acceptance rule, then says
+  "`graph_assert.py` requires only a non-empty `hardware_artifact_ref` string. It never opens the
+  file" and calls it "a rule I3 does not yet implement"
+- `agent/hw_test_harness.py` — the CTRF artifact the window produces, and the test ids (`E-*`)
+
+**Finding — the runbook's §2 claim is stale, in the direction of understating the gate.** I3 now
+opens the artifact: check 3 in `assert_enforcement_path_status()` calls `artifact_supports_claim()`,
+whose docstring and the trace record it ("E-BCD was marked verified-on-hardware while citing an
+artifact that recorded FAIL, because this check only tested for a string"). So the runbook tells the
+operator their citation will not be checked, when in fact it will be — the opposite of the usual
+direction of drift, and worth correcting because it changes what a window has to produce.
+
+**Finding — the gap the window actually has is on both sides of it.** Before: nothing tells the
+operator whether the machine is reachable, enrolled, and reporting a build (the `agent_version` field
+added in S257 is exactly the pre-window question, and nothing reads it for this purpose). After:
+nothing produces the citation string I3 will accept, so it is hand-crafted and guessed at — which is
+how an artifact recording FAIL got cited in the first place.
+
+**Commit**: `bd9745c` — "feat(hw): make the hardware window mechanical — preflight, and
+the citation I3 will accept". This session block is committed separately.
+
+### Implement
+
+`scripts/hw-window-preflight.py`, two modes, both reusing the graph's own helpers so the tool's
+answer is by construction the one I3 gives:
+
+
+- `--check`: reachability (GET /api/health with a timeout, reporting the port-proxy note when the
+  connection is reset) and — given `--admin-token` — the device's readiness from the fleet API:
+  `last_checkin` age, `agent_version`, and `agent_version_stale` (S258). Non-zero exit with the next
+  action named, e.g. "re-create the port proxy" or "the device has never reported a version".
+- `--artifact FILE`: per-test PASS/FAIL/SKIP from `_artifact_result_map()`, then for every enforcement
+  path in `GRAPH-SPEC.yaml` the exact `hardware_artifact_ref` string that `artifact_supports_claim()`
+  accepts — verified by calling it — plus a ready-to-paste `status`/`hardware_artifact_ref` pair.
+  Exit 1 when the artifact supports no path at all, so "the window produced nothing" is a failure
+  rather than a printed table nobody reads.
+
+Runbook §2 corrected; a short "before/after" section points at both modes. Tests with fixtures for
+the three artifact schemas plus an unreachable URL.
+
+
+### Fog cleared
+
+- **Whether a window can start right now**: no. The lab server at `192.168.1.43:3001` **resets the
+  connection** and nothing listens locally, which is the documented port-proxy failure. That is now a
+  measured fact with a named remedy rather than something discovered with the machine open.
+- **Whether the runbook's §2 was accurate**: it was not — it claimed `graph_assert.py` "requires only
+  a non-empty string. It never opens the file" and that the PASS rule was "a rule I3 does not yet
+  implement". I3 check 3 calls `artifact_supports_claim()`, which opens the artifact and demands a
+  PASS for that path's test id. The claim was stale in the *optimistic* direction, which is the
+  dangerous one: an operator told their citation is unchecked stops being careful about it.
+  Corrected, with the old text kept as the history of how the rule was found.
+- **Whether the citation string could be derived instead of guessed**: yes, by calling the graph's own
+  `artifact_supports_claim()` — so the tool cannot print a ref I3 will reject, because it verifies
+  before printing.
+
+### Fog remaining
+
+- **The window itself is still unexecuted.** 10 of 13 enforcement paths remain
+  `verified-in-unit-test`; this session made the attempt mechanical, not successful. The blocker is
+  physical: no reachable lab machine from this host.
+- **`--check` needs an admin token to say anything about the device.** Without it the tool can only
+  answer "reachable". That is a deliberate choice (no token ⇒ no fleet query) but it means the most
+  useful half of the check is opt-in.
+- **Nothing schedules the preflight.** It is a thing a human runs before opening a laptop; a cron that
+  posted the readiness of the lab box would be a page, not a script, and is out of scope here.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
+
+### Debt items closed
+
+- None. No ledger item covered either edge of the window; both are recorded here and in the runbook.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 63 OPEN). All four need the hardware this session
+  established is currently unreachable.
+
+### Blockers
+
+- **Physical**: the lab machine cannot be reached from this host (`connection reset by peer`), so no
+  enforcement path can move to `verified-on-hardware` from here. D-129/D-130/D-134 and E-* (10 paths)
+  are blocked on the operator making the box reachable.
+- Dependabot/CodeQL findings still need the security page.
+
+### Failure attribution
+
+- **Layer 2 — context provision** (primary): the runbook described the state of I3 as it was when the
+  section was written and never re-checked, so the operator's mental model was worse than reality. The
+  correction keeps the original text visible rather than silently rewriting it, because how the rule
+  was found is the argument for the rule.
+- **Layer 4 — verification feedback** (secondary, self-caught): my first `citations_for()` reduced a
+  relative `--artifact` argument to a bare filename (`is_relative_to(<absolute root>)` is false for a
+  relative path), so `artifact_supports_claim()` resolved a file that does not exist and the tool
+  reported "no enforcement path" for an artifact with three PASSes. Found by running the tool on a
+  real artifact — the unit tests written afterwards would have encoded the same broken assumption.
+
+### VERIFY
+
+- `python3 scripts/hw-window-preflight.py --artifact agent/hw_test_artifact_azure_bitlocker.json` →
+  exit 0, citing `…azure_bitlocker.json#E-ENCRYPT-01`, `#E-LOCK-SCREEN-01`, `#E-GUARDIAN-01`, and
+  correctly **not** citing `E-BCD` (FAIL) or `E-HP-UEFI` (SKIP) — the exact failure §2 records.
+- `--artifact` on an artifact with only `E-TPM-01`/`E-HWID-01` at PASS → **exit 1** and "evidences no
+  enforcement path"; malformed JSON → exit 2.
+- `--check --server-url http://192.168.1.43:3001` → **exit 1**, `UNREACHABLE — ConnectionResetError`,
+  with the port-proxy hint; `--server-url file:///etc/passwd` → exit 1, "refusing file scheme";
+  no arguments → exit 2. `make hw-preflight` and `make hw-artifact` both guard with exit 2 and a usage
+  line.
+- `scripts/test_hw_window_preflight.py` → **14 passed**, including a real loopback HTTP server for
+  `--check` and fixtures for all three artifact schemas.
+- `make hw-artifact ARTIFACT=…` dry-run resolves to the documented command.
+
+### Next session opening
+
+Make the box reachable and run the window: re-create the port proxy, then
+`make hw-preflight SERVER_URL=http://192.168.1.43:3001 ADMIN_TOKEN=… HOSTNAME=FRANKENSTEIN` until it
+says `[OK] the window is ready`, run the four untested tags
+(`E-EFFECTIVENESS,E-OFFLINE-QUEUE,E-AUTO-UPDATE,E-TRACK`), and finish with
+`make hw-artifact ARTIFACT=agent/hw_test_artifact_frankenstein.json` — pasting only the pairs it
+prints. Nothing in the software can move those 10 paths; the next deliverable needs the machine.

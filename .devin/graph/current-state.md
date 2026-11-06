@@ -53,84 +53,86 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 258 — 2026-11-05 (version staleness: a device that stopped reporting must not look compliant)
+## Latest session: 259 — 2026-11-05 (the hardware window made mechanical: preflight, and the citation I3 will accept)
 
 ### Fog cleared
 
-- **Whether staleness could be a SQL predicate**: no, and the reason is worth keeping — the dialects
-  store different timestamp shapes (`…T…Z` versus a zone-less `YYYY-MM-DD HH:MM:SS`), so a SQL
-  comparison would either need per-dialect expressions or would compare strings of different shapes.
-  One JS implementation serves both dialects and the Worker.
-- **Whether `new Date(zoneless)` was a real hazard or a theoretical one**: real. V8 parses
-  `2026-11-05 10:00:00` as **local** time, so the one-hour window would have been two hours on a CET
-  host and zero on UTC. The test asserts `parseDbTimestamp('2026-11-05 10:00:00') === Date.UTC(...)`
-  exactly, which is the only assertion that cannot pass by accident on a UTC runner.
-- **Whether "never checked in" and "stale" are the same thing**: they are not, and conflating them
-  would have labelled every unplugged machine as an old build. `isAgentVersionStale` returns false
-  when `last_checkin` is null; the offline question stays with `last_checkin`.
+- **Whether a window can start right now**: no. The lab server at `192.168.1.43:3001` **resets the
+  connection** and nothing listens locally, which is the documented port-proxy failure. That is now a
+  measured fact with a named remedy rather than something discovered with the machine open.
+- **Whether the runbook's §2 was accurate**: it was not — it claimed `graph_assert.py` "requires only
+  a non-empty string. It never opens the file" and that the PASS rule was "a rule I3 does not yet
+  implement". I3 check 3 calls `artifact_supports_claim()`, which opens the artifact and demands a
+  PASS for that path's test id. The claim was stale in the *optimistic* direction, which is the
+  dangerous one: an operator told their citation is unchecked stops being careful about it.
+  Corrected, with the old text kept as the history of how the rule was found.
+- **Whether the citation string could be derived instead of guessed**: yes, by calling the graph's own
+  `artifact_supports_claim()` — so the tool cannot print a ref I3 will reject, because it verifies
+  before printing.
 
 ### Fog remaining
 
-- **The one-hour tolerance is a constant, not a contract.** It is longer than the maximum poll
-  interval (300 s) with margin, but a deployment that raises the poll interval for locked devices
-  could in principle exceed it. It is named and commented rather than configurable.
-- **`agent_version_at` is only refreshed when the device sends a version**, so a device that keeps
-  sending the same version for months has an old `agent_version_at` by design — staleness is
-  therefore *relative to the check-in*, not an age test on the timestamp. A reader expecting "report
-  age" would misread it; the API doc now says which comparison it is.
-- **No aggregation or alerting.** `?agent_version=stale` is a query, not a monitor; nothing pages on
-  a fleet where half the devices silently stop reporting.
+- **The window itself is still unexecuted.** 10 of 13 enforcement paths remain
+  `verified-in-unit-test`; this session made the attempt mechanical, not successful. The blocker is
+  physical: no reachable lab machine from this host.
+- **`--check` needs an admin token to say anything about the device.** Without it the tool can only
+  answer "reachable". That is a deliberate choice (no token ⇒ no fleet query) but it means the most
+  useful half of the check is opt-in.
+- **Nothing schedules the preflight.** It is a thing a human runs before opening a laptop; a cron that
+  posted the readiness of the lab box would be a page, not a script, and is out of scope here.
 - **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
 
 ### Debt items closed
 
-- None new. D-222 stays CLOSED; this session closes its recorded residual (the staleness gap), so no
-  ledger item was needed for it — a debt entry for work completed in the same session adds churn
-  without adding a fact.
+- None. No ledger item covered either edge of the window; both are recorded here and in the runbook.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 63 OPEN).
+- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 63 OPEN). All four need the hardware this session
+  established is currently unreachable.
 
 ### Blockers
 
-- Dependabot/CodeQL findings still need the security page. Everything else here is done.
+- **Physical**: the lab machine cannot be reached from this host (`connection reset by peer`), so no
+  enforcement path can move to `verified-on-hardware` from here. D-129/D-130/D-134 and E-* (10 paths)
+  are blocked on the operator making the box reachable.
+- Dependabot/CodeQL findings still need the security page.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback** (primary, caught before shipping): my first edit script
-  asserted a unique anchor for `agent_version?: string | null;`, which appears **twice** in
-  `worker.ts` (the `Device` interface and `CheckinMetadata`). The assert fired and the script exited
-  before writing, so the file was untouched — the failure mode was "no change applied", visible only
-  because the script refuses to write on a failed assertion. A script that silently edited the wrong
-  occurrence would have compiled (`tsc` passed on the unmodified file) and shipped a half-change.
-- **Layer 2 — context provision** (secondary): the zone-less timestamp hazard is a property of
-  `sqlitePool.translateSql()`, recorded only in that function's docstring. Nothing at the call sites
-  says "the value you read back has no zone". The comment now lives where the comparison happens.
+- **Layer 2 — context provision** (primary): the runbook described the state of I3 as it was when the
+  section was written and never re-checked, so the operator's mental model was worse than reality. The
+  correction keeps the original text visible rather than silently rewriting it, because how the rule
+  was found is the argument for the rule.
+- **Layer 4 — verification feedback** (secondary, self-caught): my first `citations_for()` reduced a
+  relative `--artifact` argument to a bare filename (`is_relative_to(<absolute root>)` is false for a
+  relative path), so `artifact_supports_claim()` resolved a file that does not exist and the tool
+  reported "no enforcement path" for an artifact with three PASSes. Found by running the tool on a
+  real artifact — the unit tests written afterwards would have encoded the same broken assumption.
 
 ### VERIFY
 
-- `cd server && npm test` → **840 passed, 50 suites** (was 837; three cases added to
-  `devices.routes.test.js`: the exact-epoch parse check, the four-state staleness matrix, and the
-  `?agent_version=stale` filter). Measured, not predicted: the first draft of this line said 842
-  because it was written before the run reported.
-- `cd serverless && npm test` → **429 passed** (was 427; 2 staleness cases).
-- `cd dashboard && npx vitest run` → **231 passed / 25 files** (was 229; 2 badge cases).
-- `npx eslint` on the four changed JS/JSX files → exit 0 both components; `npx tsc --noEmit -p .`
-  (serverless) → exit 0.
-- `make sast` → 44 findings, gate exit 0.
-- Behavioural checks that matter: a zone-less `2026-11-05 10:00:00` parses to exactly
-  `Date.UTC(2026,10,5,10,0,0)`; a device checking in with no version report is stale; one whose
-  report is two hours behind is stale; one 30 s behind is not; a device that has **never** checked in
-  is **not** stale; `?agent_version=stale` returns exactly the stale set on both surfaces; the
-  dashboard badges exactly one of two devices.
+- `python3 scripts/hw-window-preflight.py --artifact agent/hw_test_artifact_azure_bitlocker.json` →
+  exit 0, citing `…azure_bitlocker.json#E-ENCRYPT-01`, `#E-LOCK-SCREEN-01`, `#E-GUARDIAN-01`, and
+  correctly **not** citing `E-BCD` (FAIL) or `E-HP-UEFI` (SKIP) — the exact failure §2 records.
+- `--artifact` on an artifact with only `E-TPM-01`/`E-HWID-01` at PASS → **exit 1** and "evidences no
+  enforcement path"; malformed JSON → exit 2.
+- `--check --server-url http://192.168.1.43:3001` → **exit 1**, `UNREACHABLE — ConnectionResetError`,
+  with the port-proxy hint; `--server-url file:///etc/passwd` → exit 1, "refusing file scheme";
+  no arguments → exit 2. `make hw-preflight` and `make hw-artifact` both guard with exit 2 and a usage
+  line.
+- `scripts/test_hw_window_preflight.py` → **14 passed**, including a real loopback HTTP server for
+  `--check` and fixtures for all three artifact schemas.
+- `make hw-artifact ARTIFACT=…` dry-run resolves to the documented command.
 
 ### Next session opening
 
-Nothing in the agent-version thread is outstanding. The honest next target is the one the debt
-ledger has been pointing at for many sessions: the four remaining OPEN items (D-120, D-129, D-130,
-D-134) all need real hardware, and 10 of 13 enforcement paths are `verified-in-unit-test` under I3 —
-so the next deliverable is a hardware window, not more software.
+Make the box reachable and run the window: re-create the port proxy, then
+`make hw-preflight SERVER_URL=http://192.168.1.43:3001 ADMIN_TOKEN=… HOSTNAME=FRANKENSTEIN` until it
+says `[OK] the window is ready`, run the four untested tags
+(`E-EFFECTIVENESS,E-OFFLINE-QUEUE,E-AUTO-UPDATE,E-TRACK`), and finish with
+`make hw-artifact ARTIFACT=agent/hw_test_artifact_frankenstein.json` — pasting only the pairs it
+prints. Nothing in the software can move those 10 paths; the next deliverable needs the machine.
 
 ---
 
