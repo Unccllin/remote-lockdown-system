@@ -170,8 +170,96 @@ class TestServerlessConfig:
 
 
 class TestGeolocation:
+    @pytest.fixture(autouse=True)
+    def _clean_lookup_env(self, monkeypatch):
+        """Neither env var may leak in from the host running the suite."""
+        monkeypatch.delenv(agent.IP_GEOLOCATION_URL_ENV, raising=False)
+        monkeypatch.delenv(agent.IP_GEOLOCATION_INSECURE_ENV, raising=False)
+
+    def test_ip_lookup_default_is_https(self):
+        """The default lookup must go over TLS.
+
+        Until S252 it was `http://ip-api.com/json/`: cleartext, third party, on the
+        path that runs whenever no Google key is configured (i.e. by default). No
+        test asserted the URL at all, so the scheme could regress here silently.
+        """
+        with patch.object(agent, "requests") as mock_requests:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"success": True, "latitude": 1.0, "longitude": 2.0}
+            mock_resp.raise_for_status = MagicMock()
+            mock_requests.get.return_value = mock_resp
+
+            agent.get_ip_geolocation()
+
+            url = mock_requests.get.call_args[0][0]
+            assert url.startswith("https://"), f"cleartext IP lookup: {url}"
+            # Pinned deliberately: changing vendors should require editing this.
+            assert url == agent.DEFAULT_IP_GEOLOCATION_URL
+
+    def test_ip_lookup_refuses_cleartext_without_opt_in(self, monkeypatch):
+        monkeypatch.setenv(agent.IP_GEOLOCATION_URL_ENV, "http://ip-api.com/json/")
+        with patch.object(agent, "requests") as mock_requests:
+            assert agent.get_ip_geolocation() is None
+            # Not merely ignored — nothing is sent at all.
+            mock_requests.get.assert_not_called()
+
+    def test_ip_lookup_allows_cleartext_with_explicit_opt_in(self, monkeypatch):
+        """A private-network lookup stays possible, but only by saying so."""
+        monkeypatch.setenv(agent.IP_GEOLOCATION_URL_ENV, "http://10.0.0.5:8080/json")
+        monkeypatch.setenv(agent.IP_GEOLOCATION_INSECURE_ENV, "1")
+        with patch.object(agent, "requests") as mock_requests:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"success": True, "latitude": 1.0, "longitude": 2.0}
+            mock_resp.raise_for_status = MagicMock()
+            mock_requests.get.return_value = mock_resp
+
+            assert agent.get_ip_geolocation() is not None
+            assert mock_requests.get.call_args[0][0] == "http://10.0.0.5:8080/json"
+
+    def test_ip_lookup_parses_the_ipwho_schema(self):
+        """The default provider's field names (latitude/longitude/country_code)."""
+        parsed = agent._parse_ip_lookup(
+            {
+                "success": True,
+                "latitude": 37.77,
+                "longitude": -122.41,
+                "city": "San Francisco",
+                "region": "California",
+                "country_code": "US",
+                "ip": "1.2.3.4",
+            }
+        )
+        assert parsed == {
+            "latitude": 37.77,
+            "longitude": -122.41,
+            "city": "San Francisco",
+            "region": "California",
+            "country": "US",
+            "ip": "1.2.3.4",
+            "source": "ip",
+            "accuracy": "city",
+        }
+
+    def test_ip_lookup_still_parses_the_ip_api_schema(self):
+        """An operator override to ip-api's paid HTTPS host keeps working."""
+        parsed = agent._parse_ip_lookup(
+            {"status": "success", "lat": 1.5, "lon": 2.5, "regionName": "X", "countryCode": "GB"}
+        )
+        assert parsed is not None
+        assert parsed["latitude"] == 1.5
+        assert parsed["longitude"] == 2.5
+        assert parsed["region"] == "X"
+        assert parsed["country"] == "GB"
+
+    def test_ip_lookup_treats_provider_failure_as_no_location(self):
+        """Neither schema's failure marker may yield a location."""
+        assert agent._parse_ip_lookup({"success": False, "latitude": 1.0}) is None
+        assert agent._parse_ip_lookup({"status": "fail", "lat": 1.0}) is None
+        assert agent._parse_ip_lookup({"city": "nowhere"}) is None
+        assert agent._parse_ip_lookup({}) is None
+
     def test_get_ip_geolocation_returns_location(self):
-        """IP geolocation should return lat/long from ip-api.com."""
+        """IP geolocation should return lat/long from the configured lookup."""
         with patch.object(agent, "requests") as mock_requests:
             mock_resp = MagicMock()
             mock_resp.json.return_value = {
@@ -208,6 +296,7 @@ class TestGeolocation:
         with patch.object(agent, "get_ip_geolocation") as mock_ip:
             mock_ip.return_value = {"latitude": 1, "longitude": 2, "source": "ip"}
             result = agent.get_geolocation(cfg)
+            assert result is not None
             assert result["source"] == "ip"
             mock_ip.assert_called_once()
 
@@ -228,6 +317,7 @@ class TestGeolocation:
             mock_requests.post.return_value = mock_resp
 
             result = agent.get_geolocation(cfg)
+            assert result is not None
             assert result["source"] == "wifi"
             assert result["latitude"] == 37.77
             assert result["longitude"] == -122.41

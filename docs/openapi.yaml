@@ -2013,7 +2013,10 @@ components:
       type: apiKey
       in: header
       name: x-agent-key
-      description: Per-device API key or legacy AGENT_SHARED_KEY.
+      description: >-
+        Per-device API key or legacy AGENT_SHARED_KEY. The uninstall-auth routes
+        also accept the same key as `X-API-Key`, because that is the header name
+        the Worker reads and what agent/tamper_protection.py sends (S252).
 
   parameters:
     DeviceId:

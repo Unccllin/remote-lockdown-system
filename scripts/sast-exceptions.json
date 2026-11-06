@@ -4,15 +4,6 @@
   "reviewed": "S251",
   "exceptions": [
     {
-      "rule": "python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http",
-      "path": "agent/agent.py",
-      "match": "resp = requests.get(\"http://ip-api.com/json/\", timeout=10)",
-      "occurrence": 1,
-      "disposition": "accepted-risk",
-      "reason": "ip-api.com's free tier answers over plain HTTP only (HTTPS needs a paid key). The request sends no credentials and no device identifier, so what is disclosed in transit is the server's own egress IP and the fact that a lookup happened. This is E-TRACK's documented fallback when the platform WiFi scan returns nothing; replacing it needs a paid subscription, tracked as an E-TRACK blocker.",
-      "reviewed": "S251"
-    },
-    {
       "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
       "path": "agent/agent.py",
       "match": "log.warning(\"Could not read BIOS password backup: %s\", e)",
@@ -216,7 +207,7 @@
       "match": "log.error(",
       "occurrence": 1,
       "disposition": "accepted-risk",
-      "reason": "Logs the server's HTTP error body when an uninstall-token request fails, so a failed uninstall is diagnosable. The token is only returned on a 200; the body of an error response is the server's error message, and the request's API key is never echoed back. Accepted so field failures are not silent.",
+      "reason": "Logs the server's HTTP error body when an uninstall-token request fails, so a failed uninstall is diagnosable. The assumption that this cannot leak the token is now enforced rather than asserted: server/tests/uninstallAuth.test.js drives every error path of both uninstall-auth routes and requires that no response body contains the presented key or token (S252). The token is only returned on a 200.",
       "reviewed": "S251"
     },
     {

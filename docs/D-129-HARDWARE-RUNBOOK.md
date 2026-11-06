@@ -39,7 +39,7 @@ still needs Windows or the physical machine).
 | E-HP-UEFI | `E-HP-UEFI-01` | exit 0 | BIOS boot lockdown applied and rolled back on HP + admin |
 | E-ACK | `E-ACK-01` | exit 0 | refused connection → `False` + pending ACK preserved; retry delivers once, HMAC-signed, **same `command_uuid`**, then deletes the file |
 | E-RECOVERY | `E-RECOVERY-01` | exit 0 | no key material → ACK `failed`, nothing released; wrong key → ciphertext + sentinel + recovery key intact; right key → decrypted, sentinel removed, recovery key deleted, ACK `executed` |
-| E-TRACK | `E-TRACK-01` | exit 0 | location posted with its source and hardware UUID; unreachable server queues offline; empty wifi scan falls back to IP; no location → no phantom queue entry |
+| E-TRACK | `E-TRACK-01` | exit 0 | location posted with its source and hardware UUID; unreachable server queues offline; empty wifi scan falls back to IP (over **TLS** — since S252 a plain-HTTP lookup is refused, so a network you cannot reach over https yields "no location" rather than a cleartext call); no location → no phantom queue entry |
 | E-DEADMAN | `E-DEADMAN-01` | exit 0 | 60 s of skew does **not** fire; unflagged device does not fire; expiry fires and encrypts; backward clock fires; corrupt state fires |
 | E-EFFECTIVENESS | `E-EFFECTIVENESS-01` | exit 0 | `critical_applied_total == 0` ⇒ ACK says `partial`, never a success claim; fully applied ⇒ totals 5 / 3 reflected |
 | E-OFFLINE-QUEUE | `E-OFFLINE-QUEUE-01` | exit 0 | 3 queued, drained FIFO, size 0; corrupt DB does not raise and reports empty; queueing works again after removal |

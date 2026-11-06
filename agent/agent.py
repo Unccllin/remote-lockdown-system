@@ -1135,23 +1135,86 @@ def scan_wifi_networks() -> list[dict]:
     return networks
 
 
+# IP-based geolocation fallback (used when no Google API key yields a WiFi fix).
+#
+# The provider must be reachable over TLS: this request tells a third party where the
+# protected machine's egress IP is, and until S252 the default was
+# `http://ip-api.com/json/` — cleartext, so a network observer learned both that a
+# lookup happened and its answer. ip-api.com's free tier is HTTP-only (HTTPS is the
+# paid `pro.` host), which is why the default moved rather than gaining a scheme.
+#
+# Override with IP_GEOLOCATION_URL to use a different provider or a self-hosted one.
+# A plain-HTTP override is REFUSED unless TRACK_ALLOW_INSECURE_IP_LOOKUP=1, because a
+# silent downgrade is exactly the failure this replaced: an operator overriding the
+# URL should not be able to reintroduce cleartext by accident.
+DEFAULT_IP_GEOLOCATION_URL = "https://ipwho.is/"
+IP_GEOLOCATION_URL_ENV = "IP_GEOLOCATION_URL"
+IP_GEOLOCATION_INSECURE_ENV = "TRACK_ALLOW_INSECURE_IP_LOOKUP"
+
+
+def _ip_geolocation_url() -> str | None:
+    """The configured lookup URL, or None when it would travel in cleartext.
+
+    Returning None (rather than silently upgrading) keeps the refusal visible: the
+    caller logs it, and an operator who really does run a plain-HTTP lookup on a
+    private network can say so explicitly.
+    """
+    url = (os.environ.get(IP_GEOLOCATION_URL_ENV) or DEFAULT_IP_GEOLOCATION_URL).strip()
+    if url.lower().startswith("https://"):
+        return url
+    if os.environ.get(IP_GEOLOCATION_INSECURE_ENV) == "1":
+        return url
+    log.warning(
+        "IP geolocation lookup refused: %s is not https. Set %s=1 to allow a "
+        "cleartext lookup on a network you control.",
+        url,
+        IP_GEOLOCATION_INSECURE_ENV,
+    )
+    return None
+
+
+def _parse_ip_lookup(data: dict) -> dict | None:
+    """Normalise an IP-geolocation response from either common schema.
+
+    `ipwho.is` answers `{success, latitude, longitude, country_code, ...}`; ip-api
+    answers `{status: "success", lat, lon, countryCode, ...}` and so does a paid
+    `pro.ip-api.com` override. Reading both means an operator's override keeps
+    working and the default does not depend on one vendor's field names.
+    """
+    if not isinstance(data, dict):
+        return None
+    # Explicit failure beats a partially-populated body: never report a location
+    # the provider says it could not determine.
+    if data.get("success") is False or data.get("status") == "fail":
+        return None
+    latitude = data.get("latitude", data.get("lat"))
+    longitude = data.get("longitude", data.get("lon"))
+    if latitude is None or longitude is None:
+        return None
+    return {
+        "latitude": latitude,
+        "longitude": longitude,
+        "city": data.get("city"),
+        "region": data.get("region", data.get("regionName")),
+        "country": data.get("country_code", data.get("countryCode")),
+        "ip": data.get("ip", data.get("query")),
+        "source": "ip",
+        "accuracy": "city",
+    }
+
+
 def get_ip_geolocation() -> dict | None:
-    """Fallback: get rough location from IP address using ip-api.com (free, no key)."""
+    """Rough location from the machine's public IP address (coarse: city level).
+
+    Refuses to send the lookup in cleartext; see `_ip_geolocation_url`.
+    """
+    url = _ip_geolocation_url()
+    if not url:
+        return None
     try:
-        resp = requests.get("http://ip-api.com/json/", timeout=10)
+        resp = requests.get(url, timeout=10)
         resp.raise_for_status()
-        data = resp.json()
-        if data.get("status") == "success":
-            return {
-                "latitude": data.get("lat"),
-                "longitude": data.get("lon"),
-                "city": data.get("city"),
-                "region": data.get("regionName"),
-                "country": data.get("countryCode"),
-                "ip": data.get("query"),
-                "source": "ip",
-                "accuracy": "city",
-            }
+        return _parse_ip_lookup(resp.json())
     except (requests.RequestException, ValueError) as e:
         log.warning("IP geolocation failed: %s", e)
     return None
@@ -1682,7 +1745,11 @@ def _fsync_file(path: Path) -> None:
     try:
         # False positive: "r+b" is a valid mode, and the call is inside try/except.
         # nosemgrep
-        with open(path, "r+b") as f:
+        # mode= is passed as a KEYWORD because the harness's mode check reads the
+        # second positional argument as an identifier and calls "r+b" an invalid
+        # mode — the documented discriminator for this rule in AGENTS.md. Behaviour
+        # is identical; written this way it is also harder to misread (S252).
+        with open(path, mode="r+b") as f:
             f.flush()
             os.fsync(f.fileno())
     except (OSError, ValueError):

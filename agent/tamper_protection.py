@@ -388,6 +388,11 @@ def request_uninstall_token(
     req = Request(url, data=payload, method="POST")  # noqa: S310 — URL is server-provided
     req.add_header("Content-Type", "application/json")
     req.add_header("Authorization", f"Bearer {api_key}")
+    # Both header names, deliberately. `x-agent-key` is the header this project
+    # documents for the agent and the one the Express routes read; the Worker reads
+    # `X-API-Key`. Sending only the Worker's name is what made every self-hosted
+    # token request answer 401, so the uninstall flow was dead on Express (S252).
+    req.add_header("x-agent-key", api_key)
     req.add_header("X-API-Key", api_key)
 
     try:
@@ -427,6 +432,8 @@ def verify_uninstall_token(
     req = Request(url, data=payload, method="POST")  # noqa: S310 — URL is server-provided
     req.add_header("Content-Type", "application/json")
     req.add_header("Authorization", f"Bearer {api_key}")
+    # Both header names — see request_uninstall_token above.
+    req.add_header("x-agent-key", api_key)
     req.add_header("X-API-Key", api_key)
 
     try:

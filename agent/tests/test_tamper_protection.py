@@ -25,6 +25,7 @@ from tamper_protection import (
     remove_all_protection,
     remove_file_acls,
     remove_registry_protection,
+    request_uninstall_token,
     verify_uninstall_token,
 )
 
@@ -136,6 +137,48 @@ class TestVerifyUninstallToken:
             "fake_device_id",
         )
         assert result is False
+
+
+class TestUninstallTokenHeaders:
+    """The credential must be sent under both header names the two servers read.
+
+    The Express routes read `x-agent-key`; the Worker reads `X-API-Key`. This module
+    sent only the Worker's name, so on a self-hosted server every token request
+    answered 401 and the uninstall flow could never complete (S252). A device key in
+    a bearer header does not rescue it — neither server compares that to a device key.
+    """
+
+    @staticmethod
+    def _captured_request(call):
+        req = call[0][0]
+        return {key.lower(): value for key, value in req.headers.items()}
+
+    def _urlopen_returning(self, payload: dict):
+        resp = MagicMock()
+        resp.read.return_value = __import__("json").dumps(payload).encode("utf-8")
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=resp)
+        ctx.__exit__ = MagicMock(return_value=False)
+        return ctx
+
+    def test_request_token_sends_both_header_names(self):
+        with patch("tamper_protection.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = self._urlopen_returning({"uninstall_token": "tok"})
+            token = request_uninstall_token("http://server:3001", "device-key-123", "dev-1")
+
+        assert token == "tok"
+        headers = self._captured_request(mock_urlopen.call_args)
+        assert headers["x-agent-key"] == "device-key-123"
+        assert headers["x-api-key"] == "device-key-123"
+
+    def test_verify_token_sends_both_header_names(self):
+        with patch("tamper_protection.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = self._urlopen_returning({"authorized": True})
+            assert verify_uninstall_token("tok", "http://server:3001", "device-key-123") is True
+
+        headers = self._captured_request(mock_urlopen.call_args)
+        assert headers["x-agent-key"] == "device-key-123"
+        assert headers["x-api-key"] == "device-key-123"
 
 
 class TestCheckTamperNonWindows:

@@ -986,6 +986,46 @@ function compareVersions(a, b) {
 }
 
 /**
+ * The device/admin credential presented on an uninstall-auth request.
+ *
+ * Three surfaces have to agree on this and did not (S252):
+ *   - the Worker (`serverless/worker.ts`) reads `X-API-Key`;
+ *   - `agentAuth` above reads `x-agent-key`;
+ *   - `agent/tamper_protection.py` sends **`X-API-Key`** (plus a bearer token).
+ *
+ * So a device key presented the way the agent actually presents it was invisible here,
+ * both uninstall-auth routes answered 401, and on a self-hosted server the token flow
+ * could never complete. Reading both header names is the compatibility surface; the
+ * bearer fallback still means "admin token only", because a device key is not one.
+ */
+function uninstallCredential(req) {
+  return {
+    agentKey: req.headers['x-agent-key'] || req.headers['x-api-key'],
+    bearerToken: (req.headers['authorization'] || '').replace(/^Bearer\s+/i, ''),
+  };
+}
+
+/**
+ * Is this request allowed to issue/verify an uninstall token?
+ *
+ * A per-device key (looked up by hash) or the deployment's ADMIN_TOKEN via bearer.
+ */
+async function authorizedForUninstall(req) {
+  const { agentKey, bearerToken } = uninstallCredential(req);
+  const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+
+  if (agentKey) {
+    try {
+      const device = await getDeviceByApiKeyHash(hashApiKey(agentKey));
+      if (device) return true;
+    } catch {
+      // Fall through to the admin-token check rather than 500ing on a DB blip.
+    }
+  }
+  return Boolean(bearerToken) && Boolean(ADMIN_TOKEN) && bearerToken === ADMIN_TOKEN;
+}
+
+/**
  * POST /api/agent/uninstall-auth — Issue a short-lived uninstall token.
  *
  * The agent calls this when a local admin wants to uninstall the agent.
@@ -993,29 +1033,15 @@ function compareVersions(a, b) {
  * script must present this token to remove tamper protection (ACLs,
  * registry DENY ACEs) before deleting the agent.
  *
- * Accepts either agent API key (x-agent-key) or admin bearer token.
+ * Accepts either agent API key (x-agent-key or X-API-Key) or admin bearer token.
  */
 router.post('/uninstall-auth', async (req, res) => {
   const crypto = require('crypto');
   const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
-  // Accept either agent API key or admin bearer token
-  const agentKey = req.headers['x-agent-key'];
-  const bearerToken = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
-
-  let authorized = false;
-  if (agentKey) {
-    try {
-      const providedHash = hashApiKey(agentKey);
-      const device = await getDeviceByApiKeyHash(providedHash);
-      authorized = !!device;
-    } catch { authorized = false; }
-  }
-  if (!authorized && bearerToken && ADMIN_TOKEN) {
-    authorized = bearerToken === ADMIN_TOKEN;
-  }
-
-  if (!authorized) {
+  if (!(await authorizedForUninstall(req))) {
+    // Never echo the presented credential: the agent logs this body verbatim when
+    // a token request fails (tamper_protection.py, `except HTTPError`).
     return res.status(401).json({ error: 'Authentication required' });
   }
 
@@ -1043,22 +1069,9 @@ router.post('/uninstall-auth/verify', async (req, res) => {
   const crypto = require('crypto');
   const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
-  const agentKey = req.headers['x-agent-key'];
-  const bearerToken = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
-
-  let authorized = false;
-  if (agentKey) {
-    try {
-      const providedHash = hashApiKey(agentKey);
-      const device = await getDeviceByApiKeyHash(providedHash);
-      authorized = !!device;
-    } catch { authorized = false; }
-  }
-  if (!authorized && bearerToken && ADMIN_TOKEN) {
-    authorized = bearerToken === ADMIN_TOKEN;
-  }
-
-  if (!authorized) {
+  if (!(await authorizedForUninstall(req))) {
+    // Same rule as the issuing route: a body that carries a token is logged verbatim
+    // by the agent on failure, so the rejection must not repeat it.
     return res.status(401).json({ error: 'Authentication required' });
   }
 

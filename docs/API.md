@@ -611,7 +611,7 @@ Issue a short-lived (5-minute) uninstall token for tamper protection removal.
 
 | | |
 |---|---|
-| **Auth required** | Yes — Agent API key **or** admin Bearer JWT (`ADMIN_TOKEN`) |
+| **Auth required** | Yes — Agent API key (`x-agent-key`, or `X-API-Key` as the Worker spells it) **or** admin Bearer JWT (`ADMIN_TOKEN`) |
 | **HMAC required** | No |
 | **Rate limiting** | `agentLimiter` |
 
@@ -635,7 +635,7 @@ Verify an uninstall token (validates against current and previous 5-minute windo
 
 | | |
 |---|---|
-| **Auth required** | Yes — Agent API key **or** admin Bearer JWT (`ADMIN_TOKEN`) |
+| **Auth required** | Yes — Agent API key (`x-agent-key`, or `X-API-Key` as the Worker spells it) **or** admin Bearer JWT (`ADMIN_TOKEN`) |
 | **HMAC required** | No |
 | **Rate limiting** | `agentLimiter` |
 
