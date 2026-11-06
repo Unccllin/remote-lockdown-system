@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-06 14:16:05 — 113 beliefs
+Generated: 2026-11-06 15:01:01 — 114 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -290,6 +290,7 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-113 | confirmed | code-read | I3 already enforces artifact-content evidence: assert_enforcement_path_status check 3 calls artifact_supports_claim(), which resolves 'file.json#TEST-ID' and requires status PASS for that path's own test id, and _artifact_result_map() reads the harness v1.0, CTRF v2.0 and live-agent schemas. scripts/hw-window-preflight.py --artifact reuses those helpers so any citation it prints is one I3 accepts, and --check answers window readiness (reachability, last_checkin age, agent_version, agent_version_stale) because the lab box is unreachable from this host while the Windows port-proxy is down. |
+| B-114 | confirmed | real-media | Four enforcement paths (E-TRACK, E-EFFECTIVENESS, E-OFFLINE-QUEUE, E-AUTO-UPDATE) are verified-on-hardware against agent/hw_test_artifact_frankenstein_win.json, recorded on FRANKENSTEIN (HP EliteBook 830 G8, Windows, admin, TPM present, BitLocker off) on 2026-11-05: 4 tests passed with 10/10, 7/7, 7/7 and 12/12 assertions. The harness's four tagged tests run against an in-process stub server with patched temp dirs, so no live server or enrolment is required; the only practical obstacle was transferring the 740KB agent tree to a machine with no git, solved by serving a zip on WSL:3001 through the pre-existing Windows port proxy to 192.168.1.43:3001. E-TRACK's run exercised the IP fallback rather than a netsh WiFi scan, so the scan branch remains unit-tested only. |
 
 ## threat-model
 

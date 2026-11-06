@@ -2580,3 +2580,26 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-114
+  statement: 'Four enforcement paths (E-TRACK, E-EFFECTIVENESS, E-OFFLINE-QUEUE, E-AUTO-UPDATE) are verified-on-hardware
+    against agent/hw_test_artifact_frankenstein_win.json, recorded on FRANKENSTEIN (HP EliteBook 830 G8,
+    Windows, admin, TPM present, BitLocker off) on 2026-11-05: 4 tests passed with 10/10, 7/7, 7/7 and
+    12/12 assertions. The harness''s four tagged tests run against an in-process stub server with patched
+    temp dirs, so no live server or enrolment is required; the only practical obstacle was transferring
+    the 740KB agent tree to a machine with no git, solved by serving a zip on WSL:3001 through the pre-existing
+    Windows port proxy to 192.168.1.43:3001. E-TRACK''s run exercised the IP fallback rather than a netsh
+    WiFi scan, so the scan branch remains unit-tested only.'
+  domain: testing/hardware
+  status: confirmed
+  evidence_level: real-media
+  provenance: 'S260: harness run on FRANKENSTEIN (4 passed, 0 failed), artifact sha256 d39c2756… received
+    byte-for-byte, citations re-verified by I3 in make graph-check → 7/13 verified-on-hardware'
+  source: agent/hw_test_artifact_frankenstein_win.json; .devin/graph/GRAPH-SPEC.yaml; make graph-check
+    (7/13 verified-on-hardware)
+  asserted: '2026-11-06'
+  last_verified: '2026-11-06'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

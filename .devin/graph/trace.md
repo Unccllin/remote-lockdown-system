@@ -14288,3 +14288,131 @@ says `[OK] the window is ready`, run the four untested tags
 (`E-EFFECTIVENESS,E-OFFLINE-QUEUE,E-AUTO-UPDATE,E-TRACK`), and finish with
 `make hw-artifact ARTIFACT=agent/hw_test_artifact_frankenstein.json` — pasting only the pairs it
 prints. Nothing in the software can move those 10 paths; the next deliverable needs the machine.
+
+## Session 260 — 2026-11-05 (the hardware window ran: 4 paths leave unit-test-only, on FRANKENSTEIN)
+
+### RULE-ZERO
+
+**Read**:
+- `agent/hw_test_harness.py` CLI (`--mode`, `--tag`, `--artifact`, `--retry`) and that the four
+  network-tagged tests drive the real agent functions against an **in-process `_StubServer`** with
+  patched temp dirs — so a window needs no running server, no enrolment, no port proxy
+- `.devin/graph/graph_assert.py` `artifact_supports_claim()` — it opens the artifact, reads
+  `passed`/`PASS` (both accepted), and demands the path's **own** test id
+- Reachability, in order: lab address `192.168.1.43:3001` → **connection reset**; nothing local;
+  `hostname`/`whoami` from the operator → the prompt was **FRANKENSTEIN**, not this WSL box
+  (`DESKTOP-G4PCDHH`); `tailscale status` → FRANKENSTEIN is **not** on the tailnet; `netsh
+  interface portproxy show all` → `0.0.0.0:3001 → <WSL>:3001` **already existed** with a firewall
+  rule
+
+**Finding**: three failed transfer attempts failed before one worked, each for a real reason — the repo was not on
+FRANKENSTEIN at all (so `git`/`cd` failed); `\\wsl.localhost\…` does not exist from a *different*
+machine; and `C:\Users\CLLIN` was my Windows profile, not theirs. The path that worked was the one
+already plumbed: serve on **WSL:3001**, which the existing port proxy forwards to
+`192.168.1.43:3001` — the same address AGENTS.md records as the lab server.
+
+### Implement
+
+Nothing in the product changed this session. What changed is the **claim**:
+
+- `agent/hw_test_artifact_frankenstein_win.json` (3312 B, sha256 `d39c2756…`) — harness v2.0
+  simulate, 4 tests, 4 passed, on **FRANKENSTEIN** (HP EliteBook 830 G8, Windows, admin, TPM present,
+  BitLocker off). The artifact records `environment` + `agent_binary_hash 4d6f5f81…`.
+- `GRAPH-SPEC.yaml`: `E-TRACK`, `E-EFFECTIVENESS`, `E-OFFLINE-QUEUE`, `E-AUTO-UPDATE` →
+  `verified-on-hardware` with `hardware_artifact_ref` fragments, citations produced by
+  `scripts/hw-window-preflight.py --artifact` and each re-verified by I3.
+- **Enforcement paths: 3/13 → 7/13 verified-on-hardware.**
+
+**Scope recorded, not glossed**: `E-TRACK-01` reported location through the **IP fallback**
+(`"ip, ~citym"`), not a `netsh` WiFi scan. The graph note says so explicitly: the run evidences the
+reporting path including the TLS-only IP fallback added in S252/S256, and **not** the platform
+WiFi-scan branch, which stays unit-tested only. Claiming otherwise would be the E-BCD/FAIL overclaim
+in a new costume.
+
+**Also observed on the real machine**: `defender_exclusion: null` — the harness saw no Defender
+exclusion, while AGENTS.md says the installer adds one. Not investigated here; recorded as a
+discrepancy to resolve with the installer, not assumed away.
+
+### Fog cleared
+
+- **Whether the four untested paths could run at all without a server**: yes — they use an
+  in-process stub, so a "window" is Python + the agent source, nothing else. That is why the whole
+  exercise came down to transferring 740 KB, not to provisioning.
+- **Whether `verified-on-hardware` was reachable for them**: it is now. 4 paths moved, each citation
+  verified by I3 opening the artifact rather than by a non-empty string.
+- **What was blocking the window before**: not code and not permission — a *transfer*. No git on the
+  target, no shared filesystem, no tailnet membership, and the WSL mount path doesn't exist from
+  another machine. The existing `3001` port proxy was the one channel that already worked.
+- **Whether the harness's `passed` status satisfies an I3 rule written for `PASS`**: yes —
+  `artifact_supports_claim()` accepts `{pass, passed}` case-insensitively. Checked before citing,
+  because a mismatch would have made every window artifact uncitable.
+
+### Fog remaining
+
+- **`E-TRACK`'s WiFi-scan branch is still unit-tested only.** The run fell through to the IP
+  fallback ("ip, ~citym"). To evidence the scan, a run needs a machine whose `netsh wlan` returns
+  networks — FRANKENSTEIN reported none to the harness.
+- **`defender_exclusion: null` on a real install** contradicts AGENTS.md's claim that the installer
+  adds one. Not investigated; it deserves its own check against `agent/installer.py`.
+- **6 enforcement paths remain at `verified-in-unit-test`**: E-DECRYPT, E-BCD, E-HP-UEFI, E-ACK,
+  E-RECOVERY, E-DEADMAN. Several are *eligible* on FRANKENSTEIN (`--mode check` said so for
+  E-DECRYPT, E-ACK, E-RECOVERY, E-DEADMAN) and simply were not in this window's tag list.
+- **`E-ENROLL` and `E-INTEGRATION` skip** on FRANKENSTEIN for want of a reachable server — they need
+  the lab stack up, which is a different window (and `E-INTEGRATION` is not a graph node).
+- **An empty `C:\Users\CLLIN\rls-hw-window` remains on the dev Windows host**: 9p still holds the
+  handle from this WSL session, so `Remove-Item` fails with IOException. It is empty and will delete
+  after a WSL restart. Recorded instead of claimed as cleaned.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
+
+### Debt items closed
+
+- None. No ledger item covered these four paths — they are ENFORCE nodes, not debt. **D-129 stays
+  OPEN**: it asks for PBL firmware validation on real UEFI hardware, which this run is not.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 63 OPEN). Unchanged by this session.
+
+### Blockers
+
+- None for the enforcement-path work. The remaining 6 paths need more tags on FRANKENSTEIN (cheap),
+  and E-HP-UEFI/E-BCD additionally need rollback-capable hardware behaviour that this window did not
+  exercise.
+- Dependabot/CodeQL findings still need the security page.
+
+### Failure attribution
+
+- **Layer 3 — execution environment** (primary): four transfer attempts failed before one worked,
+  each for an environment fact nobody had written down — no git on the target, no `\\wsl.localhost`
+  from another machine, and my `C:` being the *wrong* machine's `C:`. The fix that held used
+  infrastructure that already existed (the 3001 port proxy + its firewall rule). That fact is now in
+  AGENTS.md, so the next window starts where this one ended.
+- **Layer 4 — verification feedback** (secondary, self-caught twice): my first two edits to
+  `GRAPH-SPEC.yaml` **broke the YAML** — a `\#` escape that YAML rejects, then a block scalar
+  indented shallower than its key. Both were caught by parsing rather than by the linter, and the
+  third attempt was rebuilt around build → parse → verify refs byte-exact → verify widths → *then*
+  write. The lesson is mechanical: validate before writing, not after.
+
+### VERIFY
+
+- Harness on FRANKENSTEIN: `--mode check` → all four tags ELIGIBLE; `--mode simulate` →
+  **4 passed, 0 failed** (`E-TRACK` 10/10, `E-EFFECTIVENESS` 7/7, `E-OFFLINE-QUEUE` 7/7,
+  `E-AUTO-UPDATE` 12/12).
+- Artifact received byte-for-byte through the POST endpoint and copied into `agent/`; sha256
+  `d39c2756abdac508ee39dd8a8ba969f5d3e58df62c33e9cc8385674d59e1b04f` identical on both sides.
+- `scripts/hw-window-preflight.py --artifact agent/hw_test_artifact_frankenstein_win.json` → exit 0,
+  four citations, each re-verified.
+- `make graph-check` → all invariants pass, **Enforcement: 7/13 verified-on-hardware** (was 3/13);
+  `Debt: 59/63 CLOSED` unchanged.
+- **Negative control**: temporarily pointing `E-TRACK`'s ref at `#E-BCD-01` (absent from this
+  artifact) made I3 fail with `the referenced artifact has no 'E-BCD-01' result`; restored → pass.
+  So the citations are load-bearing, not decorative.
+- YAML integrity after the edits: `yaml.safe_load` OK, the four refs byte-exact, no new long lines
+  (only the two pre-existing ones, shifted 941/946 → 957/962).
+
+### Next session opening
+
+Run the tags that are already ELIGIBLE on FRANKENSTEIN and were skipped —
+`E-DECRYPT,E-ACK,E-RECOVERY,E-DEADMAN` — with the same transfer recipe and `make hw-artifact` for the
+citations; that would take enforcement coverage from 7/13 toward 11/13 without new code, and the only
+new information needed is whether each passes on that machine.

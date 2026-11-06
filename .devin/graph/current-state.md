@@ -25,11 +25,11 @@
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
 | Debt items | 59 | 63 | ✗ |
-| Enforcement paths (on hardware) | 3 | 13 | ✗ |
+| Enforcement paths (on hardware) | 7 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 59 of 63 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 59 of 63 debt items are closed, but **6 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
-**The 10 enforcement paths that still need hardware verification:**
+**The 6 enforcement paths that still need hardware verification:**
 
 | ID | Name | Status | Blocker |
 |----|------|--------|---------|
@@ -38,101 +38,106 @@
 | E-HP-UEFI | hp-uefi-lockdown | verified-in-unit-test | D-009 model-aware names; D-010 Sure Admin detection; needs hardware verificat... |
 | E-ACK | command-ack | verified-in-unit-test | Network failure retries via pending ACK file |
 | E-RECOVERY | unlock-recovery | verified-in-unit-test | Key release security; sentinel cleanup |
-| E-TRACK | covert-tracking | verified-in-unit-test | Platform-specific wifi scanning; geolocation API rate limits. Mutation audite... |
 | E-DEADMAN | deadman-switch | verified-in-unit-test | Clock skew; false trigger on network outage |
-| E-EFFECTIVENESS | lockdown-effectiveness | verified-in-unit-test | Closes the dangerous gap where critical_applied=0 was reported as success |
-| E-OFFLINE-QUEUE | offline-queue | verified-in-unit-test | Queue growth on extended offline; SQLite corruption. Mutation audited (sessio... |
-| E-AUTO-UPDATE | agent-auto-update | verified-in-unit-test | Update server availability; signature verification on Windows |
 
-**The 3 already verified on hardware:**
+**The 7 already verified on hardware:**
 
 | ID | Name | Artifact |
 |----|------|----------|
 | E-ENCRYPT | file-encryption | agent/hw_test_artifact_azure.json |
 | E-LOCK-SCREEN | workstation-lock | agent/hw_test_artifact_azure.json |
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
+| E-TRACK | covert-tracking | agent/hw_test_artifact_frankenstein_win.json#E-TRACK-01 |
+| E-EFFECTIVENESS | lockdown-effectiveness | agent/hw_test_artifact_frankenstein_win.json#E-EFFECTIVENESS-01 |
+| E-OFFLINE-QUEUE | offline-queue | agent/hw_test_artifact_frankenstein_win.json#E-OFFLINE-QUEUE-01 |
+| E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 259 — 2026-11-05 (the hardware window made mechanical: preflight, and the citation I3 will accept)
+## Latest session: 260 — 2026-11-05 (the hardware window ran: 4 paths leave unit-test-only, on FRANKENSTEIN)
 
 ### Fog cleared
 
-- **Whether a window can start right now**: no. The lab server at `192.168.1.43:3001` **resets the
-  connection** and nothing listens locally, which is the documented port-proxy failure. That is now a
-  measured fact with a named remedy rather than something discovered with the machine open.
-- **Whether the runbook's §2 was accurate**: it was not — it claimed `graph_assert.py` "requires only
-  a non-empty string. It never opens the file" and that the PASS rule was "a rule I3 does not yet
-  implement". I3 check 3 calls `artifact_supports_claim()`, which opens the artifact and demands a
-  PASS for that path's test id. The claim was stale in the *optimistic* direction, which is the
-  dangerous one: an operator told their citation is unchecked stops being careful about it.
-  Corrected, with the old text kept as the history of how the rule was found.
-- **Whether the citation string could be derived instead of guessed**: yes, by calling the graph's own
-  `artifact_supports_claim()` — so the tool cannot print a ref I3 will reject, because it verifies
-  before printing.
+- **Whether the four untested paths could run at all without a server**: yes — they use an
+  in-process stub, so a "window" is Python + the agent source, nothing else. That is why the whole
+  exercise came down to transferring 740 KB, not to provisioning.
+- **Whether `verified-on-hardware` was reachable for them**: it is now. 4 paths moved, each citation
+  verified by I3 opening the artifact rather than by a non-empty string.
+- **What was blocking the window before**: not code and not permission — a *transfer*. No git on the
+  target, no shared filesystem, no tailnet membership, and the WSL mount path doesn't exist from
+  another machine. The existing `3001` port proxy was the one channel that already worked.
+- **Whether the harness's `passed` status satisfies an I3 rule written for `PASS`**: yes —
+  `artifact_supports_claim()` accepts `{pass, passed}` case-insensitively. Checked before citing,
+  because a mismatch would have made every window artifact uncitable.
 
 ### Fog remaining
 
-- **The window itself is still unexecuted.** 10 of 13 enforcement paths remain
-  `verified-in-unit-test`; this session made the attempt mechanical, not successful. The blocker is
-  physical: no reachable lab machine from this host.
-- **`--check` needs an admin token to say anything about the device.** Without it the tool can only
-  answer "reachable". That is a deliberate choice (no token ⇒ no fleet query) but it means the most
-  useful half of the check is opt-in.
-- **Nothing schedules the preflight.** It is a thing a human runs before opening a laptop; a cron that
-  posted the readiness of the lab box would be a page, not a script, and is out of scope here.
+- **`E-TRACK`'s WiFi-scan branch is still unit-tested only.** The run fell through to the IP
+  fallback ("ip, ~citym"). To evidence the scan, a run needs a machine whose `netsh wlan` returns
+  networks — FRANKENSTEIN reported none to the harness.
+- **`defender_exclusion: null` on a real install** contradicts AGENTS.md's claim that the installer
+  adds one. Not investigated; it deserves its own check against `agent/installer.py`.
+- **6 enforcement paths remain at `verified-in-unit-test`**: E-DECRYPT, E-BCD, E-HP-UEFI, E-ACK,
+  E-RECOVERY, E-DEADMAN. Several are *eligible* on FRANKENSTEIN (`--mode check` said so for
+  E-DECRYPT, E-ACK, E-RECOVERY, E-DEADMAN) and simply were not in this window's tag list.
+- **`E-ENROLL` and `E-INTEGRATION` skip** on FRANKENSTEIN for want of a reachable server — they need
+  the lab stack up, which is a different window (and `E-INTEGRATION` is not a graph node).
+- **An empty `C:\Users\CLLIN\rls-hw-window` remains on the dev Windows host**: 9p still holds the
+  handle from this WSL session, so `Remove-Item` fails with IOException. It is empty and will delete
+  after a WSL restart. Recorded instead of claimed as cleaned.
 - **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
 
 ### Debt items closed
 
-- None. No ledger item covered either edge of the window; both are recorded here and in the runbook.
+- None. No ledger item covered these four paths — they are ENFORCE nodes, not debt. **D-129 stays
+  OPEN**: it asks for PBL firmware validation on real UEFI hardware, which this run is not.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 63 OPEN). All four need the hardware this session
-  established is currently unreachable.
+- D-120, D-129, D-130, D-134 (graph-tracked: 4 of 63 OPEN). Unchanged by this session.
 
 ### Blockers
 
-- **Physical**: the lab machine cannot be reached from this host (`connection reset by peer`), so no
-  enforcement path can move to `verified-on-hardware` from here. D-129/D-130/D-134 and E-* (10 paths)
-  are blocked on the operator making the box reachable.
+- None for the enforcement-path work. The remaining 6 paths need more tags on FRANKENSTEIN (cheap),
+  and E-HP-UEFI/E-BCD additionally need rollback-capable hardware behaviour that this window did not
+  exercise.
 - Dependabot/CodeQL findings still need the security page.
 
 ### Failure attribution
 
-- **Layer 2 — context provision** (primary): the runbook described the state of I3 as it was when the
-  section was written and never re-checked, so the operator's mental model was worse than reality. The
-  correction keeps the original text visible rather than silently rewriting it, because how the rule
-  was found is the argument for the rule.
-- **Layer 4 — verification feedback** (secondary, self-caught): my first `citations_for()` reduced a
-  relative `--artifact` argument to a bare filename (`is_relative_to(<absolute root>)` is false for a
-  relative path), so `artifact_supports_claim()` resolved a file that does not exist and the tool
-  reported "no enforcement path" for an artifact with three PASSes. Found by running the tool on a
-  real artifact — the unit tests written afterwards would have encoded the same broken assumption.
+- **Layer 3 — execution environment** (primary): four transfer attempts failed before one worked,
+  each for an environment fact nobody had written down — no git on the target, no `\\wsl.localhost`
+  from another machine, and my `C:` being the *wrong* machine's `C:`. The fix that held used
+  infrastructure that already existed (the 3001 port proxy + its firewall rule). That fact is now in
+  AGENTS.md, so the next window starts where this one ended.
+- **Layer 4 — verification feedback** (secondary, self-caught twice): my first two edits to
+  `GRAPH-SPEC.yaml` **broke the YAML** — a `\#` escape that YAML rejects, then a block scalar
+  indented shallower than its key. Both were caught by parsing rather than by the linter, and the
+  third attempt was rebuilt around build → parse → verify refs byte-exact → verify widths → *then*
+  write. The lesson is mechanical: validate before writing, not after.
 
 ### VERIFY
 
-- `python3 scripts/hw-window-preflight.py --artifact agent/hw_test_artifact_azure_bitlocker.json` →
-  exit 0, citing `…azure_bitlocker.json#E-ENCRYPT-01`, `#E-LOCK-SCREEN-01`, `#E-GUARDIAN-01`, and
-  correctly **not** citing `E-BCD` (FAIL) or `E-HP-UEFI` (SKIP) — the exact failure §2 records.
-- `--artifact` on an artifact with only `E-TPM-01`/`E-HWID-01` at PASS → **exit 1** and "evidences no
-  enforcement path"; malformed JSON → exit 2.
-- `--check --server-url http://192.168.1.43:3001` → **exit 1**, `UNREACHABLE — ConnectionResetError`,
-  with the port-proxy hint; `--server-url file:///etc/passwd` → exit 1, "refusing file scheme";
-  no arguments → exit 2. `make hw-preflight` and `make hw-artifact` both guard with exit 2 and a usage
-  line.
-- `scripts/test_hw_window_preflight.py` → **14 passed**, including a real loopback HTTP server for
-  `--check` and fixtures for all three artifact schemas.
-- `make hw-artifact ARTIFACT=…` dry-run resolves to the documented command.
+- Harness on FRANKENSTEIN: `--mode check` → all four tags ELIGIBLE; `--mode simulate` →
+  **4 passed, 0 failed** (`E-TRACK` 10/10, `E-EFFECTIVENESS` 7/7, `E-OFFLINE-QUEUE` 7/7,
+  `E-AUTO-UPDATE` 12/12).
+- Artifact received byte-for-byte through the POST endpoint and copied into `agent/`; sha256
+  `d39c2756abdac508ee39dd8a8ba969f5d3e58df62c33e9cc8385674d59e1b04f` identical on both sides.
+- `scripts/hw-window-preflight.py --artifact agent/hw_test_artifact_frankenstein_win.json` → exit 0,
+  four citations, each re-verified.
+- `make graph-check` → all invariants pass, **Enforcement: 7/13 verified-on-hardware** (was 3/13);
+  `Debt: 59/63 CLOSED` unchanged.
+- **Negative control**: temporarily pointing `E-TRACK`'s ref at `#E-BCD-01` (absent from this
+  artifact) made I3 fail with `the referenced artifact has no 'E-BCD-01' result`; restored → pass.
+  So the citations are load-bearing, not decorative.
+- YAML integrity after the edits: `yaml.safe_load` OK, the four refs byte-exact, no new long lines
+  (only the two pre-existing ones, shifted 941/946 → 957/962).
 
 ### Next session opening
 
-Make the box reachable and run the window: re-create the port proxy, then
-`make hw-preflight SERVER_URL=http://192.168.1.43:3001 ADMIN_TOKEN=… HOSTNAME=FRANKENSTEIN` until it
-says `[OK] the window is ready`, run the four untested tags
-(`E-EFFECTIVENESS,E-OFFLINE-QUEUE,E-AUTO-UPDATE,E-TRACK`), and finish with
-`make hw-artifact ARTIFACT=agent/hw_test_artifact_frankenstein.json` — pasting only the pairs it
-prints. Nothing in the software can move those 10 paths; the next deliverable needs the machine.
+Run the tags that are already ELIGIBLE on FRANKENSTEIN and were skipped —
+`E-DECRYPT,E-ACK,E-RECOVERY,E-DEADMAN` — with the same transfer recipe and `make hw-artifact` for the
+citations; that would take enforcement coverage from 7/13 toward 11/13 without new code, and the only
+new information needed is whether each passes on that machine.
 
 ---
 
