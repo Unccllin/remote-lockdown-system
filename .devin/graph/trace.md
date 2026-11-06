@@ -13388,3 +13388,144 @@ File the uninstall-token scheme weakness as debt and decide it: `HMAC(ADMIN_TOKE
 authorises an uninstall anywhere until the window rolls — per-device HMAC with the device
 key and a server-issued nonce is the obvious replacement, and it belongs in the ledger
 before it is fixed.
+
+## Session 253 — 2026-11-05 (the uninstall token gets an owner: D-221 filed, and a ruling opened instead of a patch)
+
+### RULE-ZERO
+
+**Read**:
+- `docs/adr/DEBT-LEDGER.md` — D-001..D-021, all CLOSED, "legacy"; its own close-criteria
+  summary table is the format a new entry has to match
+- `docs/adr/PBL-DEBT-LEDGER.md` — the live ledger (D-100..D-211) and **D-211 specifically**:
+  covert tracking, i.e. agent + server + dashboard product debt, is filed there under a 2xx
+  id. That precedent is what decides where a non-firmware item belongs
+- `scripts/check_debt_ledger.py` — the PBL ledger is checked for table-vs-detail agreement,
+  with a shrink-only mismatch baseline; a new *consistent* entry is safe, an inconsistent one
+  is a new mismatch
+- `.devin/graph/graph_assert.py` `assert_debt_close_has_evidence` (I2) — only CLOSED items
+  need commit + artifact evidence, so an OPEN item needs no fabricated hash
+- `.devin/graph/GRAPH-SPEC.yaml` `debt_items:` — 61 items; the comment block above them still
+  claims "PBL-DEBT-LEDGER.md — D-100..D-130 (PBL, 31 OPEN)"
+- `scripts/graph_session.py` — `_FOOTER` and `generate_open_debt_section` hardcode
+  "D-100..D-130, 31 OPEN": both numbers are wrong today (the ledger runs to D-211 and 12 are
+  open), and they are printed into every regenerated `current-state.md`
+- `serverless/worker.ts` `handleUninstallAuth{,Verify}` — the Worker's derivation
+- `.devin/PENDING-RULING.md` — the gate this deliverable has to open, per Mode Discipline
+- `.devin/graph/trace-archive-*.md` — D-213/D-215/D-217 existed historically and were
+  reconciled into D-129, which confirms ids are global and retired, not reused
+
+**Finding — the token has four separate defects, not one**:
+
+1. **Not per-device.** `HMAC-SHA256(ADMIN_TOKEN, rounded_5min_window)` contains no device
+   identity, so every device in a deployment receives the *same* token in a given window.
+   One leaked token authorises an uninstall anywhere until the window rolls.
+2. **The two surfaces disagree.** Express computes `HMAC-SHA256(key=ADMIN_TOKEN, msg=window)`;
+   the Worker computes `SHA256("window:ADMIN_TOKEN")`. A token issued by one never verifies on
+   the other — and both suites test only their own surface, so nothing could see it.
+3. **Both fall back to a public constant.** `ADMIN_TOKEN || 'fallback'` means that with
+   `ADMIN_TOKEN` unset the token is computable by anyone who reads this repository.
+4. **Express compares with `===`** — a non-constant-time comparison of a bearer-like secret.
+
+**Consequence for the plan**: this is a design decision with a migration cost (agents and both
+servers must agree during rollout), so it gets a ruling and a ledger entry — **no code this
+session**. Filing it as debt first is also what keeps the S252 "next opening" honest instead of
+fixing the scheme quietly under a header bug.
+
+### Implement
+
+**Ledger — D-221 filed as OPEN** (D-212 was already taken by the 2026-09-15 RE-hardening review; see Fog cleared) (`docs/adr/PBL-DEBT-LEDGER.md`, `GRAPH-SPEC.yaml`):
+entry carries the four defects with their evidence, a category of SECURITY, a blocker that
+names the decision this ruling must make, and close criteria that require *both* surfaces and a
+shared test vector. Table row added so `check_debt_ledger.py` sees a consistent item; spec entry
+added so convergence and the open-debt table count it.
+
+**Stale generator text fixed** (`scripts/graph_session.py`): the footer and the open-debt
+section no longer hardcode "D-100..D-130, 31 OPEN". The ledger range and the open count are now
+derived from the graph, so they cannot drift again — the same class of defect this repo keeps
+finding in generated artifacts.
+
+**Commit**: `e8bd09f` — "docs(debt): file D-221 for the uninstall-token scheme, and
+open the ruling instead of patching it".
+
+**Ruling opened** (`.devin/PENDING-RULING.md`) — four questions with recommended defaults:
+binding, migration, fail-closed when `ADMIN_TOKEN` is unset, and single ownership of the
+derivation. **The repository is therefore in DISCUSSION MODE**: `scripts/check-ruling.sh`
+exits 1 until they are answered, and no source file was edited this session.
+
+### Fog cleared
+
+- **Where a non-firmware debt item belongs**: `PBL-DEBT-LEDGER.md`, despite its name. D-211
+  (covert tracking: agent + server + dashboard) is the precedent, and the 2xx series is global
+  and never reused — D-212..D-220 are already taken by the RE-hardening review, so the next
+  free id is **D-221**, not D-212.
+- **Whether the graph holds the complete debt set**: it does not. `GRAPH-SPEC.yaml` mirrors
+  D-001..D-012 of the 21 legacy items and D-100..D-211 plus D-215 of the live ledger, so its
+  "61 items" was never the full set. Recorded in the spec comment rather than papered over.
+- **Whether `current-state.md`'s ledger pointers were true**: they were not, and had not been for
+  many sessions — the footer said "D-100..D-130, 31 OPEN" while the live ledger ran to D-220 with
+  4 open items. Both numbers were literals in `scripts/graph_session.py`.
+- **Whether D-134 was tracked where the ledger says it is tracked**: the summary table (which the
+  ledger calls authoritative) had **no row** for it. The detail section and the graph both said
+  OPEN. Fixed by adding the row.
+
+### Fog remaining
+
+- **The D-221 decision itself** — four questions open in `.devin/PENDING-RULING.md`; the repo is
+  in DISCUSSION MODE until they are answered. No code was written for it.
+- **D-212..D-214 and D-216..D-220 are CLOSED in the ledger but absent from the graph**, so the
+  convergence table's "5 of 62" undercounts the real debt set. Not fixed: mirroring nine closed
+  items is a reconciliation job of its own, and doing it here would have mixed a numbering audit
+  into a ruling deliverable.
+- **The ledger's "PBL" name is now actively misleading** — it holds agent/server/dashboard debt.
+  Renaming it touches AGENTS.md, the spec comments, `graph_session.py` and this session's own
+  citations, so it wants its own session.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, both blocked on the
+  security page.
+
+### Debt items closed
+
+- None.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 per the graph, plus **D-221 (new this session)**, which the graph
+  now counts: 5 of 62 graph-tracked items.
+
+### Blockers
+
+- D-221 is blocked on its own ruling (four questions). Nothing else changed.
+- Dependabot/CodeQL findings still need the security page.
+
+### Failure attribution
+
+- **Layer 5 — state management** (primary): the drift this session fixed was all cross-session
+  state — a generator printing literals captured before the ledger moved, and a summary table
+  missing a row for an item two other artifacts called OPEN. No single session was wrong; the
+  copies simply aged differently. The generator now derives the count it prints, which is the
+  durable form of the fix.
+- **Layer 2 — context provision** (secondary): nothing in AGENTS.md says which ledger a new
+  non-PBL item belongs to, or that the graph mirrors only part of each ledger. Both facts were
+  reconstructed this session from D-211's precedent and a `comm` of the two id sets. They are
+  now written into the spec's comment block.
+
+### VERIFY
+
+- `make graph-check` → all invariants pass **after** the session block was completed (it caught
+  the missing state sections first: `[I4] current_state_requires_update`).
+- `python3 scripts/check_debt_ledger.py` → `mismatches now: 0 | recorded: 0 | new: 0 | stale
+  baseline: 0` with D-221 and D-134 added.
+- `python3 -c "yaml.safe_load(GRAPH-SPEC.yaml)"` → 62 debt items (was 61).
+- `scripts/test_graph_session.py` → **40 passed, 0 failed** with the derived-count generator.
+  `scripts/test_check_debt_ledger.py` → 8 passed.
+- `scripts/check-ruling.sh` → **exit 1** by design: 4 open items, DISCUSSION MODE. No source file
+  under `agent/`, `server/`, `serverless/` or `dashboard/` was touched this session.
+- `current-state.md` regenerated: 130 lines, open-debt table now lists D-221 and its pointer reads
+  "5 of 62 graph-tracked items are OPEN" instead of a stale span and a stale count.
+
+### Next session opening
+
+Answer the four D-221 questions (binding, migration window, unset-secret behaviour, ownership of
+the derivation) — recommended defaults are Q1-A `HMAC(ADMIN_TOKEN, "{device_id}:{window}")`,
+Q2-A dual-accept for one release, Q3-A refuse to issue when the secret is unset, Q4-A one shared
+vector file both suites read — then implement against them, starting with the shared vector so
+the two surfaces cannot diverge again.

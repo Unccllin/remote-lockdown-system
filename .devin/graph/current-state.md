@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 57 | 61 | ✗ |
+| Debt items | 57 | 62 | ✗ |
 | Enforcement paths (on hardware) | 3 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 57 of 61 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged.** All phases are complete and 57 of 62 debt items are closed, but **10 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 10 enforcement paths that still need hardware verification:**
 
@@ -53,95 +53,85 @@
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 
 ---
-## Latest session: 252 — 2026-11-05 (E-TRACK's cleartext lookup replaced, and the uninstall-token flow that was 401ing)
+## Latest session: 253 — 2026-11-05 (the uninstall token gets an owner: D-221 filed, and a ruling opened instead of a patch)
 
 ### Fog cleared
 
-- **What the ip-api.com fallback actually was**: the *default* path (no Google key is the
-  default configuration), cleartext, to a third party, on a tracking feature. The
-  `dynamic-urllib-use` finding had been recorded as "expected" for the agent generally;
-  this specific call was a `request-with-http`, and S251 recorded it `accepted-risk`
-  rather than fixed because the free tier has no TLS.
-- **Whether the 11 `python-logger-credential-disclosure` hits could leak the uninstall
-  token**: the server's error bodies are `{error: ...}` only — now *enforced* by
-  `server/tests/uninstallAuth.test.js` rather than assumed from reading the routes.
-- **Whether the uninstall-token routes worked at all on the self-hosted server**: they did
-  not. `grep -rn uninstall_token server/tests/` was empty, so nothing could have noticed,
-  and the cross-surface contract test compares route paths, not headers.
+- **Where a non-firmware debt item belongs**: `PBL-DEBT-LEDGER.md`, despite its name. D-211
+  (covert tracking: agent + server + dashboard) is the precedent, and the 2xx series is global
+  and never reused — D-212..D-220 are already taken by the RE-hardening review, so the next
+  free id is **D-221**, not D-212.
+- **Whether the graph holds the complete debt set**: it does not. `GRAPH-SPEC.yaml` mirrors
+  D-001..D-012 of the 21 legacy items and D-100..D-211 plus D-215 of the live ledger, so its
+  "61 items" was never the full set. Recorded in the spec comment rather than papered over.
+- **Whether `current-state.md`'s ledger pointers were true**: they were not, and had not been for
+  many sessions — the footer said "D-100..D-130, 31 OPEN" while the live ledger ran to D-220 with
+  4 open items. Both numbers were literals in `scripts/graph_session.py`.
+- **Whether D-134 was tracked where the ledger says it is tracked**: the summary table (which the
+  ledger calls authoritative) had **no row** for it. The detail section and the graph both said
+  OPEN. Fixed by adding the row.
 
 ### Fog remaining
 
-- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, both blocked
-  on the security page.
-- **`uninstall-auth`'s token scheme is weak, and now visible**: the token is
-  `HMAC(ADMIN_TOKEN, 5-minute window)` — identical for every device on the deployment, and
-  guessable to anyone who ever sees one. This session fixed whether the route is
-  reachable, not what it issues. Not filed as debt yet; it should be.
-- **The general header-contract class is still untested.** This session pinned the two
-  uninstall routes by hand. `scripts/test_cross_surface_contract.py` compares route
-  existence only, so any *other* route where the agent's header spelling differs from the
-  Express reader is equally invisible.
-- **`TRACK_ALLOW_INSECURE_IP_LOOKUP` is an escape hatch with no audit trail** — an operator
-  who sets it gets a cleartext lookup and only a startup-adjacent warning.
-- The exceptions file is down to 44 entries; the `python-logger-credential-disclosure`
-  reason at `tamper_protection.py` now cites the server test instead of asserting the
-  assumption.
+- **The D-221 decision itself** — four questions open in `.devin/PENDING-RULING.md`; the repo is
+  in DISCUSSION MODE until they are answered. No code was written for it.
+- **D-212..D-214 and D-216..D-220 are CLOSED in the ledger but absent from the graph**, so the
+  convergence table's "5 of 62" undercounts the real debt set. Not fixed: mirroring nine closed
+  items is a reconciliation job of its own, and doing it here would have mixed a numbering audit
+  into a ruling deliverable.
+- **The ledger's "PBL" name is now actively misleading** — it holds agent/server/dashboard debt.
+  Renaming it touches AGENTS.md, the spec comments, `graph_session.py` and this session's own
+  citations, so it wants its own session.
+- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, both blocked on the
+  security page.
 
 ### Debt items closed
 
-- None. No ledger item covered either defect; both are recorded here and in the beliefs.
+- None.
 
 ### Debt items still open
 
-- D-117, D-120, D-129, D-130, D-134.
+- D-120, D-129, D-130, D-134 per the graph, plus **D-221 (new this session)**, which the graph
+  now counts: 5 of 62 graph-tracked items.
 
 ### Blockers
 
-- Dependabot/CodeQL findings need the security page.
-- E-TRACK still cannot be marked `verified-on-hardware` (I3); the IP fallback change is a
-  unit-level fact, not a hardware artifact.
+- D-221 is blocked on its own ruling (four questions). Nothing else changed.
+- Dependabot/CodeQL findings still need the security page.
 
 ### Failure attribution
 
-- **Layer 2 — context provision** (primary): the header mismatch was a *documented*
-  contract — `docs/API.md` said "Agent API key", `agent.js`'s `agentAuth` docstring says
-  `x-agent-key`, the Worker reads `X-API-Key` — spread over three files with no single
-  place stating the agent's outbound header. Nothing in `scripts/test_cross_surface_contract.py`
-  covers headers, because the contract it checks was defined as route paths. Fixing the
-  contract (both names accepted, both sent) is cheaper than any comment would have been.
-- **Layer 4 — verification feedback** (secondary): the two routes had **zero** tests, and
-  the agent's `TestGeolocation` patched `requests` so completely that the URL was never
-  asserted. Both defects survived because the tests were shaped exactly so the bug could
-  not appear in them.
+- **Layer 5 — state management** (primary): the drift this session fixed was all cross-session
+  state — a generator printing literals captured before the ledger moved, and a summary table
+  missing a row for an item two other artifacts called OPEN. No single session was wrong; the
+  copies simply aged differently. The generator now derives the count it prints, which is the
+  durable form of the fix.
+- **Layer 2 — context provision** (secondary): nothing in AGENTS.md says which ledger a new
+  non-PBL item belongs to, or that the graph mirrors only part of each ledger. Both facts were
+  reconstructed this session from D-211's precedent and a `comm` of the two id sets. They are
+  now written into the spec's comment block.
 
 ### VERIFY
 
-- `agent/.venv/bin/python -m pytest agent/tests` → **830 passed in 33.11s** (was 822
-  before this session's 8 new cases; AGENTS.md had been claiming 689).
-- `cd server && npm test` → **817 passed, 50 suites** (was 808/49; +9 cases, +1 suite).
-- `server/tests/uninstallAuth.test.js` **before** the server fix → **4 failed, 5 passed**,
-  every failure a 401 on `X-API-Key`; **after** → 9 passed. That is the proof the bug was
-  real and the fix is what closed it.
-- Teeth on the E-TRACK change: reverting the default to `http://ip-api.com/json/` **and**
-  neutralising the scheme guard makes `test_ip_lookup_default_is_https` and
-  `test_ip_lookup_refuses_cleartext_without_opt_in` fail; restored → 12 geolocation cases
-  pass.
-- `semgrep scan --config=p/default` → **44 findings** (was 45): the `request-with-http`
-  finding is gone because the call is https. The gate then **failed** with
-  `1 exception(s) match no finding` naming that entry — the stale-entry rule doing its job
-  on a real fix — and passed again only after the entry was deleted. **No new finding**
-  was produced by the rewritten function.
-- `scripts/test_sast_gate.py` → 20 passed. `ruff check` + `ruff format --check` clean.
-  `npx eslint src/routes/agent.js tests/uninstallAuth.test.js` clean. `make graph-check`
-  → all invariants pass. `python3 -c yaml.safe_load` on GRAPH-SPEC and openapi.yaml → ok.
+- `make graph-check` → all invariants pass **after** the session block was completed (it caught
+  the missing state sections first: `[I4] current_state_requires_update`).
+- `python3 scripts/check_debt_ledger.py` → `mismatches now: 0 | recorded: 0 | new: 0 | stale
+  baseline: 0` with D-221 and D-134 added.
+- `python3 -c "yaml.safe_load(GRAPH-SPEC.yaml)"` → 62 debt items (was 61).
+- `scripts/test_graph_session.py` → **40 passed, 0 failed** with the derived-count generator.
+  `scripts/test_check_debt_ledger.py` → 8 passed.
+- `scripts/check-ruling.sh` → **exit 1** by design: 4 open items, DISCUSSION MODE. No source file
+  under `agent/`, `server/`, `serverless/` or `dashboard/` was touched this session.
+- `current-state.md` regenerated: 130 lines, open-debt table now lists D-221 and its pointer reads
+  "5 of 62 graph-tracked items are OPEN" instead of a stale span and a stale count.
 
 ### Next session opening
 
-File the uninstall-token scheme weakness as debt and decide it: `HMAC(ADMIN_TOKEN,
-5-minute window)` is the same string for every device in a deployment, so one leaked token
-authorises an uninstall anywhere until the window rolls — per-device HMAC with the device
-key and a server-issued nonce is the obvious replacement, and it belongs in the ledger
-before it is fixed.
+Answer the four D-221 questions (binding, migration window, unset-secret behaviour, ownership of
+the derivation) — recommended defaults are Q1-A `HMAC(ADMIN_TOKEN, "{device_id}:{window}")`,
+Q2-A dual-accept for one release, Q3-A refuse to issue when the secret is unset, Q4-A one shared
+vector file both suites read — then implement against them, starting with the shared vector so
+the two surfaces cannot diverge again.
 
 ---
 
@@ -153,8 +143,9 @@ before it is fixed.
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
+| D-221 | Uninstall token is deployment-wide, and Express and the Work | OPEN | — |
 
-See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130) for close criteria.
+See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (5 of 62 graph-tracked items are OPEN).
 
 ---
 ## Quick reference
@@ -162,8 +153,8 @@ See `docs/adr/DEBT-LEDGER.md` (D-001..D-021) and `docs/adr/PBL-DEBT-LEDGER.md` (
 - **Graph spec**: `.devin/graph/GRAPH-SPEC.yaml`
 - **Full trace history**: `.devin/graph/trace.md` (read on demand)
 - **Trace archives**: `.devin/graph/trace-archive-*.md` (rotated old sessions)
-- **Debt ledger**: `docs/adr/DEBT-LEDGER.md` (D-001..D-021, all CLOSED)
-- **PBL debt ledger**: `docs/adr/PBL-DEBT-LEDGER.md` (D-100..D-130, 31 OPEN)
+- **Debt ledger**: `docs/adr/DEBT-LEDGER.md` (legacy, all CLOSED)
+- **PBL debt ledger**: `docs/adr/PBL-DEBT-LEDGER.md` (the live one)
 - **Graph ADR**: `docs/adr/GRAPH-SPEC.md`
 - **Verification**: `make graph-check` (runs `graph_assert.py` — all invariants)
 - **Clean state**: `make clean-state` (runs 5-condition checklist from L12)
