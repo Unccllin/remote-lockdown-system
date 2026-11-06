@@ -156,6 +156,29 @@ def with_retry(max_retries: int, retry_delay: float = 1.0):
 # ---------------------------------------------------------------------------
 
 
+def _persist_evidence(
+    test_id: str, phase: str, payload: dict, evidence_dir: str | None
+) -> str | None:
+    """Write a destructive test's before/after state to disk and return the path (S262).
+
+    Plain JSON next to the artifact, or in `evidence_dir`: the point is that the operator can carry
+    it away while the machine still boots.
+    """
+    import datetime
+    import json as _json
+
+    try:
+        target_dir = Path(evidence_dir) if evidence_dir else _AGENT_DIR
+        target_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
+        path = target_dir / f"{test_id}-{phase}-{stamp}.json"
+        path.write_text(_json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        return str(path)
+    except OSError as exc:
+        print(f"WARNING: could not persist {phase} evidence for {test_id}: {exc}", file=sys.stderr)
+        return None
+
+
 def capture_state(label: str, paths: list[Path] | None = None) -> dict:
     """Capture a state snapshot for evidence.
 
@@ -480,6 +503,21 @@ class HardwareTest:
     requires_services: list[str] = []  # Pattern 2
     requires_platform: str | None = None  # "Windows" or None for any
     is_destructive: bool = False  # Pattern 5/12: uses rollback
+    # A destructive test must declare what it changes and how to get back, because the harness's
+    # rollback() is overridden per test and two of them are stubs. These are printed before the run
+    # and inside the refusal message; agent/tests/test_hw_harness.py asserts every destructive test
+    # fills them in, so a new destructive test cannot be added silently.
+    destructive_scope: str = ""
+    recovery_hint: str = ""
+
+    def describe_destructive(self) -> str:
+        """The pre-flight notice for a destructive test: what changes, how to recover."""
+        scope = self.destructive_scope or "(NOT DECLARED — treat as unknown damage)"
+        recovery = self.recovery_hint or "(NOT DECLARED — plan recovery before running)"
+        return (
+            f"  [{self.test_id}] is DESTRUCTIVE.\n    changes : {scope}\n    recovery: {recovery}"
+        )
+
     is_network: bool = False  # Pattern 8: retry on network errors
     default_timeout: int = 60  # Pattern 7
     default_retries: int = 0  # Pattern 8
@@ -522,8 +560,23 @@ class HardwareTest:
         """Restore prior state (Pattern 12). Override for custom rollback."""
         pass
 
-    def run(self, env: dict, mode: str, timeout: int, retries: int) -> TestResult:
-        """Run the full phase lifecycle."""
+    def run(
+        self,
+        env: dict,
+        mode: str,
+        timeout: int,
+        retries: int,
+        allow_destructive: bool = False,
+        evidence_dir: str | None = None,
+    ) -> TestResult:
+        """Run the full phase lifecycle.
+
+        `allow_destructive` is the only way a test with `is_destructive = True` executes. Before
+        this gate existed, `is_destructive` merely turned on evidence capture and a `rollback()`
+        call — and two of the three destructive tests override `rollback()` with `pass`, so
+        "with rollback" in their names described nothing. Typing the tag was enough to set a
+        firmware password. Now it takes an explicit flag, and the flag prints what will change.
+        """
         self.result.start()
 
         # Pattern 2: Service gating
@@ -546,9 +599,28 @@ class HardwareTest:
             self.result.finish("SKIP", f"Dry run — would test {self.name}")
             return self.result
 
-        # Pattern 11: Evidence capture (before)
+        # Pattern 5/12 (hardened): a destructive test needs explicit consent, and announces itself.
+        if self.is_destructive:
+            if not allow_destructive:
+                self.result.finish(
+                    "SKIP",
+                    f"destructive test refused — re-run with --allow-destructive "
+                    f"to run {self.test_id}",
+                )
+                return self.result
+            print(self.describe_destructive())
+
+        # Pattern 11: Evidence capture (before), persisted IMMEDIATELY for destructive tests.
+        # The artifact is written at the end of the run; if the machine stops booting mid-test,
+        # that file never exists — which is exactly when the before-state is worth most. So it is
+        # also written to disk, where an operator can carry it off the machine first.
         if self.is_destructive:
             self.result.evidence_before = self.capture_before(env)
+            written = _persist_evidence(
+                self.test_id, "before", self.result.evidence_before, evidence_dir
+            )
+            if written:
+                print(f"    before-state saved to {written} — copy it off this machine first")
 
         # Pattern 1: Action + Verify (with timeout + retry)
         effective_timeout = timeout or self.default_timeout
@@ -778,6 +850,16 @@ class TestBcdLockdown(HardwareTest):
     requires_platform = "Windows"
     requires_services = ["admin"]
     is_destructive = True
+    destructive_scope = (
+        "rewrites this machine's boot configuration: bcdedit {bootmgr}/{default} values "
+        "(timeout, bootsequence, integrity), disables WinRE/recovery via reagentc, and suspends "
+        "BitLocker if enabled"
+    )
+    recovery_hint = (
+        "the before-state JSON and the full `bcdedit /enum {current}` output are saved before any "
+        "write — restore with bcdedit from another admin session, or from WinRE/a rescue USB, but "
+        "note WinRE may be among the things disabled; enable BitLocker protection again afterwards"
+    )
     default_timeout = 60
 
     def capture_before(self, env: dict) -> dict:
@@ -846,6 +928,17 @@ class TestHpUefiLockdown(HardwareTest):
     enforcement_path = "E-HP-UEFI"
     name = "HP UEFI/BIOS lockdown (with rollback)"
     tags = ["E-HP-UEFI", "destructive"]
+    destructive_scope = (
+        "sets a FIRMWARE Setup Password (then boot order / F12 / legacy settings) through HP Sure "
+        "Admin; the module returns the password even on critical failure and its rollback does NOT "
+        "clear the Setup Password"
+    )
+    recovery_hint = (
+        "the generated password is in .bios_pw_backup next to the module (XOR-obfuscated with the "
+        "hardware UUID) and in the result dict — copy both off the machine BEFORE anything else, "
+        "and confirm the firmware password is known before the write; a lost password means HP "
+        "service on this EliteBook"
+    )
     requires_platform = "Windows"
     requires_services = ["hp", "admin"]
     is_destructive = True
@@ -1189,6 +1282,14 @@ class TestIntegration(HardwareTest):
     enforcement_path = "E-INTEGRATION"
     name = "Full cycle: enroll -> flag -> lockdown -> recover"
     tags = ["E-INTEGRATION", "network", "destructive"]
+    destructive_scope = (
+        "drives the whole lifecycle against a live server: enroll a test device, flag it stolen, "
+        "let it lock down (encrypting its folder), then recover it"
+    )
+    recovery_hint = (
+        "needs a reachable server for the recover half; if the run stops between lockdown and "
+        "recovery, the test device stays encrypted and flagged — use the server's unlock command"
+    )
     is_network = True
     is_destructive = True
     default_retries = 2
@@ -2434,6 +2535,8 @@ def run_harness(
     artifact_path: str | None = None,
     fmt: str = "ctrf",
     upload_url: str | None = None,
+    allow_destructive: bool = False,
+    evidence_dir: str | None = None,
 ) -> dict:
     """Run the hardware test harness and return the artifact dict."""
     print(f"D-003: Hardware test harness v{HARNESS_VERSION} (mode={mode})")
@@ -2460,8 +2563,16 @@ def run_harness(
         print("Check mode — reporting test eligibility:")
         for test in ALL_TESTS:
             eligible = test.precondition(env, mode)
-            status = "ELIGIBLE" if eligible else "SKIP"
+            # A destructive test is never plain "ELIGIBLE": eligibility is not consent, and this
+            # line used to imply the two firmware-writing tests could simply be run (S262).
+            if eligible and test.is_destructive:
+                status = "ELIGIBLE (DESTRUCTIVE — needs --allow-destructive)"
+            else:
+                status = "ELIGIBLE" if eligible else "SKIP"
             print(f"  [{test.test_id}] {test.name}: {status}")
+            if eligible and test.is_destructive:
+                print(f"      changes : {test.destructive_scope or '(NOT DECLARED)'}")
+                print(f"      recovery: {test.recovery_hint or '(NOT DECLARED)'}")
             if test.requires_services:
                 svc = check_services(test.requires_services, env)
                 missing = [s for s, ok in svc.items() if not ok]
@@ -2494,7 +2605,14 @@ def run_harness(
     results = []
     for test in tests_to_run:
         print(f"  [{test.test_id}] {test.name}... ", end="", flush=True)
-        result = test.run(env, mode, timeout=timeout, retries=retries)
+        result = test.run(
+            env,
+            mode,
+            timeout=timeout,
+            retries=retries,
+            allow_destructive=allow_destructive,
+            evidence_dir=evidence_dir,
+        )
         results.append(result)
         status_icon = {
             "PASS": "OK",
@@ -2608,6 +2726,20 @@ def main():
         default=0,
         help="Retry network tests up to N times (default: 0)",
     )
+    # Hardened destructive gate (S262): consent is explicit, and the notice says what will change.
+    parser.add_argument(
+        "--allow-destructive",
+        action="store_true",
+        help="Permit tests tagged destructive (BCD, HP UEFI, integration). Without this they SKIP "
+        "with a message instead of running.",
+    )
+    parser.add_argument(
+        "--evidence-dir",
+        type=str,
+        default=None,
+        help="Where to persist a destructive test's before-state (default: next to the artifact). "
+        "Put it on a removable drive: the machine may not come back.",
+    )
     # Artifact output
     parser.add_argument(
         "--artifact",
@@ -2677,6 +2809,8 @@ def main():
         artifact_path=args.artifact,
         fmt=args.format,
         upload_url=args.upload,
+        allow_destructive=args.allow_destructive,
+        evidence_dir=args.evidence_dir,
     )
 
     # Exit code: 0 if all passed or skipped, 1 if any failed or errored

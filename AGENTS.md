@@ -500,6 +500,14 @@ make hw-artifact  ARTIFACT=agent/hw_test_artifact_frankenstein.json
 `hw-preflight` fails, naming the next action, when the target is unreachable (the
 Windows port-proxy does not survive a WSL restart), the device never checked in, its
 check-in is older than the 300 s poll interval, or `agent_version_stale` is set.
+
+**Destructive tests need `--allow-destructive`** (S262). `E-BCD-01`, `E-HP-UEFI-01` and
+`E-INTEGRATION-01` rewrite boot configuration / set a firmware password / drive a live
+lockdown, and two of them override `rollback()` with `pass` — so the name "with
+rollback" was untrue and the tag alone used to be enough to run them. They now SKIP
+without the flag, `--mode check` labels them `ELIGIBLE (DESTRUCTIVE — needs
+--allow-destructive)`, and with the flag the harness prints the scope + recovery and
+persists the before-state to `--evidence-dir` *before* the action. See runbook §2z.
 `hw-artifact` prints the `hardware_artifact_ref` strings I3 will actually accept —
 it calls `artifact_supports_claim()` itself, so a citation cannot be a guess — and
 exits 1 when a run evidences no graph path at all (E-TPM/E-HWID/E-ENROLL are real

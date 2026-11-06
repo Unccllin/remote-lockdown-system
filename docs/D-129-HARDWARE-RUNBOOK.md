@@ -94,6 +94,42 @@ The rule, which I3 now enforces:
 evidence `E-DECRYPT`; a passing `E-INTEGRATION-01` does **not** evidence
 `E-ACK`.
 
+### 2z. Destructive tests need explicit consent (and their rollback is not real)
+
+`E-BCD-01`, `E-HP-UEFI-01` and `E-INTEGRATION-01` are tagged `destructive`. Until S262 the only
+effect of that flag was to capture evidence and call `rollback()` — and the first two override
+`rollback()` with `pass`, so "with rollback" in their names described nothing. Typing the tag was
+enough to rewrite a boot configuration or set a firmware password.
+
+Now:
+
+```bash
+python3 hw_test_harness.py --mode check            # destructive tests show as
+                                                   # "ELIGIBLE (DESTRUCTIVE — needs --allow-destructive)"
+python3 hw_test_harness.py --mode simulate --tag E-BCD
+#   → SKIP: destructive test refused — re-run with --allow-destructive to run E-BCD-01
+
+python3 hw_test_harness.py --mode simulate --tag E-BCD \
+  --allow-destructive --evidence-dir /media/usb/evidence
+```
+
+With `--allow-destructive` the harness prints what the test changes and how to recover, then writes
+the before-state (`<TEST-ID>-before-<timestamp>.json`, including the full `bcdedit /enum
+{current}` output for BCD) **before** the action runs. Put `--evidence-dir` on removable media: the
+whole reason is that the machine may not come back.
+
+What each one changes, quoted from the harness:
+
+| Test | Changes | Recovery |
+|---|---|---|
+| `E-BCD-01` | `{bootmgr}`/`{default}` BCD values, disables WinRE via `reagentc`, suspends BitLocker | restore from the saved `bcdedit` output — but WinRE may be among the things disabled, so have a rescue USB |
+| `E-HP-UEFI-01` | sets a **firmware Setup Password** then boot order/F12/legacy settings; rollback does **not** clear it | the password is in `.bios_pw_backup` next to the module and in the result dict — copy both off the machine first; a lost password means HP service |
+| `E-INTEGRATION-01` | full lifecycle against a live server: enroll → flag stolen → lockdown (encrypts) → recover | needs the server reachable for the recover half |
+
+A new destructive test cannot be added without declaring `destructive_scope` and `recovery_hint` —
+`agent/tests/test_hw_harness.py::TestDestructiveGate` fails otherwise, and an undeclared one prints
+`(NOT DECLARED)` rather than staying silent.
+
 ### 2a. Don't hand-write the citation — generate it
 
 `scripts/hw-window-preflight.py --artifact <file>` prints, for every enforcement path the artifact

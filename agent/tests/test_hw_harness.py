@@ -386,3 +386,110 @@ class TestTestRegistry:
         test_ids = [t.test_id for t in network]
         assert "E-ENROLL-01" in test_ids
         assert "E-INTEGRATION-01" in test_ids
+
+
+# ---------------------------------------------------------------------------
+# S262: the destructive gate
+# ---------------------------------------------------------------------------
+# Until this existed, `is_destructive` only turned on evidence capture and a `rollback()` call —
+# and two of the three destructive tests override `rollback()` with `pass`. Typing the tag was
+# enough to rewrite a boot configuration or set a firmware password, while the test name said
+# "with rollback". These tests pin the gate that replaced that: consent is explicit, the notice
+# says what will change, and the before-state is on disk before anything is touched.
+
+
+class _FakeDestructive(hw_test_harness.HardwareTest):
+    """A destructive test that records whether it was ever executed."""
+
+    test_id = "E-FAKE-01"
+    enforcement_path = "E-FAKE"
+    name = "fake destructive test"
+    tags = ["E-FAKE", "destructive"]
+    is_destructive = True
+    destructive_scope = "would change something real"
+    recovery_hint = "would need a manual repair"
+
+    def __init__(self):
+        super().__init__()
+        self.actions = 0
+
+    def action(self, env, mode):
+        self.actions += 1
+        return "did the thing"
+
+    def verify(self, env, mode, action_detail=""):
+        return True, "ok"
+
+
+class TestDestructiveGate:
+    def test_refused_without_the_flag(self):
+        test = _FakeDestructive()
+        result = test.run(hw_test_harness.detect_environment(), "simulate", timeout=10, retries=0)
+
+        assert result.status == "SKIP"
+        assert "--allow-destructive" in (result.detail or "")
+        # The point of the gate: nothing ran.
+        assert test.actions == 0
+
+    def test_runs_with_the_flag(self):
+        test = _FakeDestructive()
+        result = test.run(
+            hw_test_harness.detect_environment(),
+            "simulate",
+            timeout=10,
+            retries=0,
+            allow_destructive=True,
+        )
+
+        assert result.status == "PASS"
+        assert test.actions == 1
+
+    def test_before_state_is_persisted_when_allowed(self, tmp_path):
+        test = _FakeDestructive()
+        test.run(
+            hw_test_harness.detect_environment(),
+            "simulate",
+            timeout=10,
+            retries=0,
+            allow_destructive=True,
+            evidence_dir=str(tmp_path),
+        )
+
+        written = list(tmp_path.glob("E-FAKE-01-before-*.json"))
+        assert len(written) == 1, written
+        payload = json.loads(written[0].read_text())
+        assert payload["label"]  # capture_state's label field
+
+    def test_no_evidence_file_when_refused(self, tmp_path):
+        test = _FakeDestructive()
+        test.run(
+            hw_test_harness.detect_environment(),
+            "simulate",
+            timeout=10,
+            retries=0,
+            evidence_dir=str(tmp_path),
+        )
+        assert list(tmp_path.glob("*.json")) == []
+
+    def test_every_destructive_test_declares_scope_and_recovery(self):
+        """A new destructive test cannot be added without saying what it breaks."""
+        missing = [
+            t.test_id
+            for t in hw_test_harness.ALL_TESTS
+            if t.is_destructive and (not t.destructive_scope or not t.recovery_hint)
+        ]
+        assert missing == [], f"destructive tests with no declared scope/recovery: {missing}"
+
+    def test_the_notice_names_the_scope_and_recovery(self):
+        notice = _FakeDestructive().describe_destructive()
+        assert "DESTRUCTIVE" in notice
+        assert "would change something real" in notice
+        assert "would need a manual repair" in notice
+
+    def test_an_undeclared_destructive_test_is_visibly_undeclared(self):
+        """Silence must not read as safety: a blank declaration prints as a warning."""
+        test = _FakeDestructive()
+        test.destructive_scope = ""
+        test.recovery_hint = ""
+        notice = test.describe_destructive()
+        assert "NOT DECLARED" in notice
