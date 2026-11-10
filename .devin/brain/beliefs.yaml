@@ -2696,14 +2696,13 @@ beliefs:
     added no exclusion at all and installer_gui.py/deploy.ps1 add ExclusionPath — so the two ''defender_exclusion:
     null'' hardware readings meant ''wrong metric + missing step'', not ''Defender is excluding nothing''.'
   domain: general
-  status: proposed
-  evidence_level: assumed
-  provenance: 'S265 code read: hw_test_harness._mp_exclusions (now reads both), installer.add_defender_exclusions
-    (new), installer_gui.add_defender_exclusions, deploy.ps1 step 8; tests TestMpExclusions + test_defender_exclusions_*'
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S265: fixed on both sides; tests TestMpExclusions + test_defender_exclusions_*'
   source: code-read
   asserted: '2026-11-10'
-  last_verified: null
-  commit_ref: null
+  last_verified: '2026-11-10'
+  commit_ref: f076792
   supersedes: null
   superseded_by: null
   dependents: []
@@ -2713,14 +2712,13 @@ beliefs:
     length, desynchronising every following map entry; fixed in S265 to advance by the encoded length,
     found by the first host-side CborDecode tests.
   domain: firmware
-  status: proposed
-  evidence_level: assumed
-  provenance: 'S265: firmware/PblPkg/host-tests (19 cases/97 checks); fix in CborDecode.c; regression
-    test verdict/oversized-reason-sync'
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S265: firmware/PblPkg/host-tests 97/97; regression test verdict/oversized-reason-sync'
   source: code-read
   asserted: '2026-11-10'
-  last_verified: null
-  commit_ref: null
+  last_verified: '2026-11-10'
+  commit_ref: f076792
   supersedes: null
   superseded_by: null
   dependents: []
@@ -2730,14 +2728,13 @@ beliefs:
     and no EDK II API accepts a hash as a chain anchor. Deleted in S265; chain pinning remains PblInstallTlsCaCertificate
     + EFI_TLS_VERIFY_PEER.'
   domain: firmware/tls
-  status: proposed
-  evidence_level: assumed
-  provenance: 'S265: TlsVerify.c trimmed to 105 lines, prototype removed from PblApp.h; pyright clean;
-    firmware rebuilt (PblApp.efi 336f5451…)'
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S265: TlsVerify.c 105 lines; pyright clean; firmware rebuilt 336f5451'
   source: code-read
   asserted: '2026-11-10'
-  last_verified: null
-  commit_ref: null
+  last_verified: '2026-11-10'
+  commit_ref: f076792
   supersedes: null
   superseded_by: null
   dependents: []
