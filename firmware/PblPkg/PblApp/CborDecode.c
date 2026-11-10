@@ -202,8 +202,21 @@ PblCborReadTstr (
   }
 
   if (Value >= DestSize) {
-    // Truncate to fit
-    Value = DestSize - 1;
+    //
+    // The string is longer than the destination. Copy what fits and truncate the
+    // rest — but advance the cursor by the *encoded* length, not by the number of
+    // bytes copied. The bytes past the destination are still in the buffer (they
+    // were length-checked above) and the very next item is a map key: a short
+    // advance leaves the cursor inside this string, so every later entry is parsed
+    // out of string bytes. Found by firmware/PblPkg/host-tests (S265); the payload
+    // is signed, but a desynced decode is a misparse, not a truncation.
+    //
+    UINT64 EncodedLen = Value;
+
+    CopyMem (Dest, Cursor->Buf + Cursor->Offset, DestSize - 1);
+    Dest[DestSize - 1] = '\0';
+    Cursor->Offset += (UINTN)EncodedLen;
+    return EFI_SUCCESS;
   }
 
   CopyMem (Dest, Cursor->Buf + Cursor->Offset, (UINTN)Value);

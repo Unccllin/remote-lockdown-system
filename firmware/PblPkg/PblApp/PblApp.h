@@ -862,13 +862,8 @@ PblInstallTlsCaCertificate (
   IN UINTN         CertDerSize
   );
 
-EFI_STATUS
-PblTlsVerifyCert (
-  IN CONST UINT8  *CertDer,
-  IN UINTN         CertDerSize,
-  IN CONST UINT8  *CaPin,     // 32-byte SHA-256
-  IN CONST CHAR8  *ExpectedHostname
-  );
+// PblTlsVerifyCert was removed in S265 — a SHA-256 pin cannot anchor an EDK II
+// chain, so it had no caller and no way to get one. See TlsVerify.c's header.
 
 // CborEncode.c — C3 §3.2 (request body)
 EFI_STATUS

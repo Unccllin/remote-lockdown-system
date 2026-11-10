@@ -143,6 +143,16 @@ test-worker:
 firmware-build:
 	@cd firmware/PblPkg && ./build-pbl.sh --arch $${PBL_ARCH:-X64}
 
+# Host-side unit tests for the PBL parsing modules (D-117's missing half).
+#
+# Any C99 compiler — no EDK II checkout, no QEMU, no swtpm, no Docker. Structs are
+# generated from the real PblApp.h at build time, so a field rename fails the build
+# instead of leaving the tests testing a stale shape. First run found the CborDecode
+# TSTR cursor desync (S265) — the class of bug the end-to-end harness can only see
+# as "the boot broke".
+firmware-host-tests:
+	@bash firmware/PblPkg/host-tests/run-host-tests.sh
+
 # PBL firmware runtime check in QEMU + swtpm, via Docker.
 #
 # Needs no local qemu/swtpm/EDK II: the image carries them and the prebuilt

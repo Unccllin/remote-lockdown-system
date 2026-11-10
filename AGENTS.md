@@ -258,7 +258,7 @@ npm test
 
 # Per-component
 cd server   && npm test                       # 663 Jest tests
-scripts/run-agent-tests.sh -q                 # 830 pytest tests (uses agent/.venv)
+scripts/run-agent-tests.sh -q                 # 857 pytest tests (uses agent/.venv)
 cd dashboard && npx vitest run                # 231 Vitest tests
 cd electron  && npm test                      # 30 Jest tests
 cd serverless && npm test                     # 429 Vitest tests
@@ -355,6 +355,11 @@ make check-firmware-todos                      # exit 0 = clean, 1 = untraceable
 
 # Build
 cd dashboard && npx vite build                # outputs dashboard/dist
+
+# PBL host-side unit tests — any C99 compiler, no EDK II/QEMU/Docker (D-117).
+# They found the CborDecode TSTR cursor desync in S265; run them after any
+# CborDecode.c / PblApp.h change.
+make firmware-host-tests                     # 19 cases / 97 checks
 cd electron  && node --check main.js preload.js setup-preload.js setup-wizard.js server-starter.js config.js updater.js
 
 # Generic (fleet) agent installer: NSIS wrapper over the CLI installer. Needs
@@ -434,7 +439,7 @@ make build
 
 ## Diagnostic Sweep Results (2026-08-04, updated 2026-10-27)
 
-All green: 840 server tests (50 suites, measured 2026-11-05), 830 agent tests, 231 dashboard tests,
+All green: 840 server tests (50 suites, measured 2026-11-05), 857 agent tests, 231 dashboard tests,
 30 electron tests, 429 serverless tests, 10 API E2E tests, 251 script-harness
 checks (232 pytest tests across 14 suites + 19 checks in the hand-rolled
 secret-scanner suite; 5 worker-update cases skip without a built worker),
@@ -667,10 +672,15 @@ Two things the record must not blur:
 - **`E-TRACK` used the IP fallback, not a `netsh` WiFi scan.** The path is hardware-verified for the
   reporting flow including the TLS-only IP lookup (S252/S256); the platform WiFi-scan branch remains
   unit-tested only, and `GRAPH-SPEC.yaml` says so.
-- **`defender_exclusion` was `null` in BOTH windows** — the harness saw no Defender exclusion on
-  FRANKENSTEIN, contradicting the installer's claimed exclusion. Two runs make it evidence rather than
-  an anecdote, and it is still uninvestigated; check `agent/installer.py` against a real install before
-  trusting that claim.
+- **`defender_exclusion` was `null` in BOTH windows — resolved (S265), and it was two bugs.**
+  The harness asked only for `(Get-MpPreference).ExclusionProcess`
+  (`agent/hw_test_harness.py`), while `installer.py`/`installer_gui.py` add `-ExclusionPath`
+  (`deploy.ps1` adds both) — so a path-only install read as "no exclusion". And on top of that,
+  `agent/installer.py` (the CLI/service path the FRANKENSTEIN install used) added **no exclusion at
+  all**. The harness now reads both lists (`_mp_exclusions()`), the CLI installer adds two paths and
+  two processes, and `agent/tests/test_installer.py::test_defender_exclusions_*` plus
+  `test_hw_harness.py::TestMpExclusions` pin both halves. The next hardware window will say
+  `Defender path: …` / `Defender process: …` instead of one opaque `null`.
 
 How the window is run now (both edges mechanical, see `docs/D-129-HARDWARE-RUNBOOK.md` §2a):
 
@@ -690,7 +700,8 @@ WSL box's `C:` is a *different* machine's `C:`.
 - Lockdown command received and executed on real hardware (status: locked)
 - Recovery command received and executed (screen unlocked, files decrypted)
 - Agent now runs windowless (console=False) with file logging
-- Windows Defender exclusion auto-added by installer
+- Windows Defender exclusion added by the installer (`-ExclusionPath` for the install dir + agent exe,
+  `-ExclusionProcess` for the agent and lock screen; the hardware harness now reads both lists)
 - TODO: re-test on HP with windowless agent + Defender exclusion
 - TODO: test duress code, hidden file trigger, tamper protection on hardware
 

@@ -645,3 +645,81 @@ def test_silent_mode_without_a_server_url_fails_with_guidance(monkeypatch):
 
     # Exit code 1 (usage failure), not a network error deeper in.
     assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# Defender exclusions (S265)
+#
+# The CLI/service installer — the path the FRANKENSTEIN service install used —
+# added no Defender exclusion at all, while the hardware harness only read
+# Defender's *process* list. Two hardware windows therefore reported
+# `defender_exclusion: null` for an install that had a path exclusion. These
+# tests pin both halves: the installer must add path AND process exclusions, and
+# the harness must read both lists.
+# ---------------------------------------------------------------------------
+
+
+def _fake_run_factory(returncode=0):
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        result = MagicMock()
+        result.returncode = returncode
+        result.stdout = ""
+        result.stderr = ""
+        return result
+
+    return _fake_run, calls
+
+
+def test_defender_exclusions_add_path_and_process_entries(monkeypatch):
+    """Both exclusion kinds are added — they are not interchangeable."""
+    fake_run, calls = _fake_run_factory()
+    monkeypatch.setattr(installer.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+
+    assert installer.add_defender_exclusions() is True
+
+    scripts = [c[-1] for c in calls]
+    path_entries = [s for s in scripts if "-ExclusionPath" in s]
+    process_entries = [s for s in scripts if "-ExclusionProcess" in s]
+
+    assert len(path_entries) == 2, scripts
+    assert len(process_entries) == 2, scripts
+    # The install directory is what the one-file executable unpacks into.
+    assert any(str(installer.INSTALL_DIR) in s for s in path_entries)
+    assert any(installer.AGENT_EXE_NAME in s for s in path_entries)
+    assert any(installer.AGENT_EXE_NAME in s for s in process_entries)
+    assert any(installer.LOCKSCREEN_EXE_NAME in s for s in process_entries)
+
+
+def test_defender_exclusions_are_skipped_off_windows(monkeypatch):
+    fake_run, calls = _fake_run_factory()
+    monkeypatch.setattr(installer.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+
+    assert installer.add_defender_exclusions() is False
+    assert calls == []
+
+
+def test_defender_exclusion_failure_is_a_warning_not_an_abort(monkeypatch, capsys):
+    """A refused Add-MpPreference must not abandon an otherwise good install."""
+    fake_run, calls = _fake_run_factory(returncode=1)
+    monkeypatch.setattr(installer.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+
+    assert installer.add_defender_exclusions() is False
+    # Every entry was still attempted — one failure does not short-circuit.
+    assert len(calls) == 4
+    assert "0/4 added" in capsys.readouterr().out
+
+
+def test_defender_exclusion_missing_powershell_does_not_raise(monkeypatch):
+    def _raise(cmd, **kwargs):
+        raise FileNotFoundError("powershell")
+
+    monkeypatch.setattr(installer.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(installer.subprocess, "run", _raise)
+
+    assert installer.add_defender_exclusions() is False

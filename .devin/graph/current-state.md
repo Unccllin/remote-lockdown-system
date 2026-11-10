@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 59 | 63 | ✗ |
+| Debt items | 59 | 64 | ✗ |
 | Enforcement paths (on hardware) | 11 | 13 | ✗ |
 
-**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 59 of 63 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
+**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 59 of 64 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
 
 **The 2 paths with a documented verification ceiling (a failed run damages state the test cannot undo):**
 
@@ -53,68 +53,105 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 264 — 2026-11-05 (11/13 becomes an honest ceiling instead of a queue)
+## Latest session: 265 — 2026-11-10 (the five loose ends, and the tests that found a parser bug)
 
 ### Fog cleared
 
-- **What "11/13" meant**: it meant "two more runs pending" to every reader of `current-state.md`,
-  which was false. It now says the remaining gap is a decision, and names both ceilings inline.
-- **Whether the graph could express "not verifiable by policy"**: it could not, and adding a new
-  status value would have been a schema change with I3 implications. A field carrying the *reason*
-  keeps the status honest (still `verified-in-unit-test`) while making the ceiling machine-readable.
+- **Why `defender_exclusion` was `null` twice**: harness read one list, the CLI installer wrote none.
+  Fixed on both sides and pinned by six tests (`TestMpExclusions`, `test_defender_exclusions_*`).
+- **Whether "with rollback" meant anything**: it did not; now both firmware tests restore real settings
+  through the modules' own restore paths and cannot report a silent success.
+- **Whether the 223-line `PblTlsVerifyCert` enforced anything**: no, and it could not — removed, with
+  the live pinning mechanism named in the file header and in D-116's ledger row.
+- **Whether D-117's closure was honest**: the integration half was real (17/0, 15/0, 16/0, 16/0); the
+  host-side half was not, so it was built (19 cases / 97 checks) and the two unreachable criteria became
+  D-224. `make graph-check` is green with 5 open items instead of 4.
+- **A real parser bug**: `PblCborReadTstr` left the cursor inside an over-long text field, so every map
+  entry after it was decoded from string bytes. Found by the first host-test run, fixed, and pinned.
 
 ### Fog remaining
 
-- **`E-BCD` and `E-HP-UEFI` are still unverified on hardware**, by decision. If the operator ever
-  names a sacrificial machine, the ceiling must be deleted to claim the run — the new test enforces
-  that — but the two paths will still be the easiest place to accidentally lie about coverage.
-- **`defender_exclusion` was `null` in both hardware windows** while AGENTS.md says the installer adds
-  one. Two independent observations, unresolved, and the most concrete open question in the repo that
-  does not need a sacrificial machine.
-- **The harness's two firmware rollbacks are still stubs** (recorded in `STUB_ROLLBACKS`, S263).
-- **The 5 Dependabot vulnerabilities and CodeQL's 102 alerts** — unchanged, blocked on the security page.
+- **D-120** still needs real BitLocker media + a VMK lock-state proof; **D-129**/**D-134** need one
+  hardware window on a real UEFI machine (the owner-hierarchy build + `device_id from AK Name` in the
+  serial log, with `TPM2_Clear` treated as unenrolled); **D-130** needs a provisioned signing
+  certificate. All four are resource-bound.
+- **D-224** (new): host-side tests for TPM command buffers and COSE verification with test keys. Needs
+  either a small host crypto backend or EDK II TPM structure headers vendored for the host build.
+- **`E-BCD` / `E-HP-UEFI`** remain `verified-in-unit-test` by decision (S264); a failed run damages state
+  the test cannot undo.
+- **CodeQL's ~102 alerts** remain uninspectable here (private repo without GitHub Code Security; the job
+  is gated on `CODE_SECURITY_ENABLED`). The local equivalent `make sast` cannot run **on this host**:
+  `semgrep` is not installed (`pipx install semgrep==1.182.1` restores it). Files checked:
+  `command -v semgrep` → absent.
+- **Playwright + Electron E2E** still cannot run here (missing `libnspr4.so`).
 
 ### Debt items closed
 
-- None. This session changed what the graph *claims*, not what it has verified: Enforcement stays
-  11/13 with the other 2 now documented as by-design.
+- **D-117** — split, not absorbed: QEMU+swtpm evidence (existing) + `firmware/PblPkg/host-tests` (new)
+  now satisfy its two host-side criteria for the parsing modules; the remainder is D-224. Evidence:
+  `make firmware-host-tests` → `19 cases / 97 checks`, and `make firmware-build` rebuilds `PblApp.efi`
+  after the `TlsVerify.c` trim (SHA-256 `336f5451…`).
+- **D-116** — same row updated (dead pin checker removed; chain pinning remains
+  `PblInstallTlsCaCertificate` + `EFI_TLS_VERIFY_PEER`).
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134 (4 of 63). Unchanged.
+- D-120, D-129, D-130, D-134 (unchanged, resource-bound) and **D-224** (newly visible, was hidden inside
+  D-117's closure). Graph: 59/64 CLOSED.
 
 ### Blockers
 
-- None outstanding for software. The hardware work that remains (D-120 real-media, D-129 PBL on real
-  UEFI, D-130 signing rollout, D-134 TPM NV hierarchy) needs machines and firmware, not code.
+- Hardware/certificate only: a real UEFI machine with a TPM for the D-129 window, real BitLocker media
+  for D-120, and a provisioned code-signing certificate for D-130. No software blocker remains for the
+  work done this session.
 
 ### Failure attribution
 
-- **Layer 2 — context provision** (primary): the reason `11/13` read as a queue is that nothing
-  anywhere carried the *decision*. Both entries' `risk_notes` described the damage precisely; neither
-  said "and therefore we are not going to do this without a sacrificial unit". A reader with the same
-  information could only infer pendingness, because that is the default for an unfinished count.
-- **Layer 4 — verification feedback** (secondary): no test pinned the convergence wording, so the
-  generator could have kept saying "still need hardware verification" forever. Two tests now do, one
-  of them against the real spec.
+- **Layer 4 — verification feedback (primary).** The harness's own analyzer repeatedly reported four
+  findings against content that no longer existed (`agent/bcd_lockdown.py:892` "stderr is unbound",
+  `test_hw_harness.py:586/695/739` "_SimpleResult/pytest not defined"). Disproved five ways on the same
+  working tree: ruff `--select F821` clean, pyright 1.1.414 `filesAnalyzed 1, errorCount 0`, an AST walk
+  showing zero `stderr` loads/stores in `remove_bcd_lockdown`, direct reads (`L892` is
+  `log.info("BCD restored: %s", description)`), and the harness's own LSP probe returning
+  `Total diagnostics: 0`. Clearing that project's lens cache and parsed snapshot did not stop it
+  re-deriving the same lines. **Harness change that would prevent it**: key cached findings by the
+  *content hash of the cited line* (the repo's `scripts/sast-gate.py` already does exactly this, which is
+  why its exceptions invalidate on edit) and drop a finding whose line no longer matches, instead of
+  re-emitting a signature.
+- **Layer 2 — context provision (secondary).** The Defender question sat in `current-state.md` as "the
+  most concrete open question" with no note that the installer and the check used different exclusion
+  kinds. One line in each place would have made it a five-minute fix instead of a session-opening
+  investigation.
 
 ### VERIFY
 
-- `make graph-status` → `Enforcement: 11/13 verified-on-hardware` / `2 verified-in-unit-test, 0
-  unverified (2 of the unit-tested ones are NOT hardware-verifiable by decision)`.
-- `python3 scripts/graph_session.py generate-current-state` → the ceiling section and the
-  decision-not-queue paragraph, quoted verbatim in **Implement** above.
-- `python3 scripts/test_graph_session.py` → **40 passed, 0 failed** (was 38: +2).
-- `python3 scripts/test_check_debt_ledger.py` → 8 passed; `make graph-check` → all invariants pass.
-- `ruff check` + `ruff format --check` on `scripts/graph_session.py` and
-  `scripts/test_graph_session.py` → clean (six lint debts paid, two of them pre-existing).
+- `make firmware-host-tests` → `97 checks, 0 failures across 19 cases`.
+- `make firmware-build` → **Build successful**, `PblApp.efi` SHA-256 `336f5451…` (after removing
+  `PblTlsVerifyCert`).
+- `scripts/run-agent-tests.sh -q` → **857 tests**, 0 failures; targeted re-run of
+  `test_hw_harness.py test_hw_harness_s265.py test_installer.py test_boot_lockdown_bcd.py
+  test_boot_lockdown_uefi.py` → exit 0.
+- `ruff check agent/` → All checks passed; `ruff format --check agent/` → 62 files already formatted;
+  `ruff check --select F821,F823 agent/bcd_lockdown.py` → clean.
+- `python3 scripts/check_debt_ledger.py` → `mismatches now: 0 | recorded: 0 | new: 0 | stale baseline: 0`.
+- `make graph-check` → All invariants pass; `make graph-status` → `Phases 17/17`, `Debt 59/64`,
+  `Enforcement 11/13` (+2 by decision), 5 open items named.
+- `python3 scripts/check-firmware-todos.py` → no untraceable TODO/FIXME under `firmware/PblPkg`.
+- `agent/.venv` upgraded (certifi/urllib3/setuptools) → `pip-audit` **No known vulnerabilities found**;
+  a clean env resolving `agent/requirements.txt` was already clean, so the five advisories were stale
+  local packages, not Dependabot findings against this repo.
+- `make test-scripts` → all 14 suites green (40 graph-session, 44 memory, 20 sast-gate, 30
+  firmware-TODO, …).
+- `scripts/run-agent-tests.sh -q` (final) → **859 tests**, 0 failures; `test_boot_lockdown_runner.py`
+  green; `ruff check` + `ruff format --check agent/` clean (63 files).
 
 ### Next session opening
 
-Investigate the one open question that needs no sacrificial hardware: `defender_exclusion` came back
-`null` in two independent hardware windows while AGENTS.md says the installer adds a Defender
-exclusion — read `agent/installer.py` and the harness's detection, and either fix one, or correct the
-claim in AGENTS.md, so the repo stops asserting something two runs failed to observe.
+Name the real UEFI machine for the D-129 window — it closes D-129 and D-134 together (owner-hierarchy
+build, `device_id from AK Name` in the serial log, `TPM2_Clear` treated as unenrolled) and the same boot
+gives D-120 its real-media evidence — and re-run `make hw-preflight` / `make hw-artifact` so the citations
+are the ones I3 actually accepts; if no machine is available, take D-224's byte-level TPM command-buffer
+tests instead.
 
 ---
 
@@ -122,12 +159,13 @@ claim in AGENTS.md, so the repo stops asserting something two runs failed to obs
 
 | ID | Description | Status | Blocks |
 |----|-------------|--------|--------|
+| D-224 | No host-side tests for TPM command construction or COSE veri | OPEN | — |
 | D-120 | BitLocker detection not implemented | OPEN | — |
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
 
-See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (4 of 63 graph-tracked items are OPEN).
+See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (5 of 64 graph-tracked items are OPEN).
 
 ---
 ## Quick reference

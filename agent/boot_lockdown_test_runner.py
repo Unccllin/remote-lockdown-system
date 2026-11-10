@@ -77,7 +77,12 @@ def cmd_status():
 
     if hp_uefi_lockdown.is_hp_machine():
         print("\n--- Current BIOS Settings ---")
-        for name, _ in hp_uefi_lockdown.LOCKDOWN_SETTINGS:
+        # D-009 replaced the flat LOCKDOWN_SETTINGS list with model-aware resolution;
+        # this runner kept the old name, so `cmd_status()` raised AttributeError on
+        # every HP machine — i.e. exactly where it would be used (found by S265's
+        # re-analysis of the callers, not by any test: nothing imports this module).
+        critical_settings, best_effort_settings = hp_uefi_lockdown._resolve_setting_names()
+        for name, _ in critical_settings + best_effort_settings:
             val = hp_uefi_lockdown._read_setting(name)
             if val is not None:
                 print(f"  {name}: {val}")

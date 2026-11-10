@@ -1,0 +1,14 @@
+# This subtree is built by run-host-tests.sh with the host compiler, NOT by the
+# EDK II build. Without this, clangd applies firmware/PblPkg/compile_commands.json
+# to include/PblApp.h, whose EDK2 headers define UINT64/INT64/UINTN first — so the
+# shim's own typedefs read as "typedef redefinition with different types".
+#
+# The compilation database is pointed at this directory (which has none) so the
+# analysis uses default host flags, which is how the files are actually built, and
+# the shim's include directory is added because nothing else supplies it.
+# Relative paths here resolve against this file's directory.
+CompileFlags:
+  CompilationDatabase: .
+  Add:
+    - -Iinclude
+    - -std=c99

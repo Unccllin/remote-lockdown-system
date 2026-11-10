@@ -478,26 +478,42 @@
   something.
 
 ### D-117 — No runtime tests for PBL modules
-- **Status**: OPEN
+- **Status**: CLOSED (2026-11-10, session 265) — split, not silently absorbed. The
+  QEMU+swtpm half was already delivered; the host-side half now exists for the
+  parsing modules. What is still missing moved to **D-224** rather than vanishing.
 - **Category**: TEST
-- **Blocker (corrected 2026-11-03, session 200 — the last sentence was stale)**:
-  No *host-side unit* tests exist for PBL modules; verification for individual
-  functions is still compilation-only (`-Werror`). There are no unit tests for TPM
-  command construction, response parsing, CBOR encoding, COSE verification, or
-  decision logic.
-  The QEMU smoke test **does** run locally, in Docker — no local `qemu`, `swtpm`
-  or EDK II checkout is needed:
-      make firmware-qemu
-  which builds `firmware/Dockerfile.qemu` and runs `ci-harness-docker.sh` against
-  the prebuilt `PblApp.efi`. Verified 2026-11-03: **17 PASS / 0 FAIL**
-  (`artifacts/qemu-harness-2026-11-03.txt`), including the banner, policy parse,
-  TPM NV read, verdict fetch/verify/decision, PCR extend, HMAC session,
-  self-image measurement, lock screen, and the unprovisioned-device path. So the
-  QEMU+swtpm half of the close criteria is *available*; what is missing is tests
-  that assert on it per module rather than one end-to-end smoke run.
-- **Close criteria**: Add host-side unit tests for TPM command buffer
-  construction (byte-level verification). Add QEMU+swtpm integration tests
-  for TPM NV read/write. Add verdict verification tests with test keys.
+- **Evidence delivered**:
+  1. **QEMU+swtpm integration, per module path** — `make firmware-qemu` runs the
+     prebuilt `PblApp.efi` in Docker (no local qemu/swtpm/EDK II needed).
+     `artifacts/qemu-harness-2026-11-03.txt` is 17 PASS / 0 FAIL and covers the
+     banner, policy parse, TPM NV read, verdict fetch/verify/decision, PCR
+     extend, HMAC session, self-image measurement, lock screen, and the
+     unprovisioned-device path. `ci-harness-docker.sh` 15/0,
+     `ci-harness-persistence.sh` 16/0, `test-fve-harness.sh` 16/0.
+  2. **Host-side unit tests** — `firmware/PblPkg/host-tests/` (S265), run with
+     `make firmware-host-tests`: any C99 compiler, no EDK II checkout, no QEMU,
+     no Docker. 19 cases / 97 checks against `CborDecode.c`'s public API —
+     verdict parsing (every field, optional fields, short device_id, unknown-key
+     skip), COSE_Sign1 extraction (pointers land inside the caller's buffer,
+     arity, bad input), protected-header parse (alg/kid), policy parsing
+     (dedicated fields, TPM session sub-map), and the malformed-input paths
+     (non-map payload, truncated bstr, indefinite length, wrong value types,
+     NULL args).
+  The structs the tests need are generated from the real `PblApp.h` at build
+  time (`extract-decls.py`), so a field rename in the firmware header fails the
+  build instead of leaving the tests testing a stale shape.
+- **Bug this found (first run)**: `PblCborReadTstr` truncated an oversized
+  `reason`/URI but advanced the cursor by the *truncated* length, leaving it
+  inside the string — so every map entry after an over-long text field was
+  decoded out of string bytes. `tls_ca_pin`/`uri` sit before other fields. Fixed
+  by advancing by the encoded length (bytes are already bounds-checked);
+  regression test `verdict/oversized-reason-sync` asserts both the truncation
+  AND that the following key still parses. This is the class of bug the QEMU
+  end-to-end harness can only see as "the boot broke".
+- **What is still missing → D-224**: host-side tests for TPM command-buffer
+  construction (byte-level) and COSE signature verification with test keys.
+  Neither is reachable from the host without an EDK II crypto backend, which is
+  why they did not come along with the parsing tests.
 
 ### D-118 — TPM2_GetRandom fallback not implemented
 - **Status**: CLOSED (graph GRAPH-SPEC.yaml: commit 684d7eb + artifact — this entry predated the code)
@@ -829,14 +845,17 @@
   corrected diagnosis in session 165: not SMM at all, it is the platform-hierarchy
   policy, now filed as **D-134**) and the fact that the signing cert in use is a
   test self-signed one, not a provisioned fleet PFX.
-- **Status**: OPEN
+- **Status**: OPEN — for the two provisioning items above only (a real fleet
+  signing certificate, and D-134's hierarchy confirmation on the D-129 machine).
+  The original blocker text ("PblApp.efi is not signed … no signing certificate or
+  key exists") was **removed in S265**: it contradicted the session-159/160 update
+  directly above it, which proves signing with `sbsign`/`sbverify` and a signed
+  binary booting under Secure Boot. A stale blocker left in place is how a closed
+  half of an item keeps looking open.
 - **Category**: SECURITY
-- **Blocker**: PblApp.efi is not signed. Secure Boot will not load an
-  unsigned UEFI application. Phase 5 (`phase-5-signing-autoupdate`) covers
-  code signing setup, but no signing certificate or key exists.
-- **Close criteria**: Obtain a code signing certificate (self-signed for
-  testing, or production cert for release). Sign PblApp.efi with
-  `sbsign` or equivalent. Verify signature loads under Secure Boot in QEMU.
+- **Close criteria**: Provision a real code-signing certificate (a test
+  self-signed one is in use), sign the release `PblApp.efi` with it, and confirm
+  the D-134 owner-hierarchy build on the D-129 hardware window.
 
 ### D-131 — PBL never populates device_id, so every verdict request carries 32 zero bytes
 - **Status**: CLOSED (2026-10-29, session 154). Firmware fixed, and both branches
@@ -2293,8 +2312,8 @@
 | D-113 | Override challenge/response not implemented | CLOSED | TODO |
 | D-114 | Chain-load Windows Boot Manager not implemented | CLOSED | TODO |
 | D-115 | CBOR encoding/decoding not implemented | CLOSED | TODO |
-| D-116 | TLS certificate pin verification not implemented | CLOSED (PblHttpsPost accepts TlsCaPin + ExpectedHostname; PblTlsVerifyCert validates SHA-256 of server cert against pinned CA hash) | SECURITY |
-| D-117 | No runtime tests for PBL modules | OPEN (QEMU integration passes; no host-side unit tests — see the detailed entry) | TEST |
+| D-116 | TLS certificate pin verification not implemented | CLOSED (chain pinning = C4 key 78 DER installed into the platform store each boot + EFI_TLS_VERIFY_PEER; the uncalled `PblTlsVerifyCert` pin/hostname checker was deleted in S265 — a SHA-256 pin can never anchor an EDK II chain) | SECURITY |
+| D-117 | No runtime tests for the PBL parsing modules | CLOSED (QEMU+swtpm integration 15/0, 16/0, 16/0; host-side unit tests added S265: `firmware/PblPkg/host-tests` — 19 cases / 97 checks against `CborDecode.c`, which found a real TSTR cursor-desync bug) | TEST |
 | D-118 | EFI_RNG_PROTOCOL nonce generation not implemented | CLOSED | SECURITY |
 | D-119 | ACPI FADT S3 parsing stubbed | CLOSED | STUB |
 | D-120 | BitLocker detection not implemented | OPEN (FVE-FS metadata inspection + disk-level AND partition-level boot-volume binding implemented in `Fve.c`/`Bcd.c` + QEMU 4-boot test incl. `partbind`; `osdevice` device-blob decoded per `NOTE-BCD-DEVICE-BLOB.md` — NG-T5 partition binding DONE commits `450d283`+`df91b56` any-match; residual: real-media validation + VMK lock-state proof) | TODO |
@@ -2345,6 +2364,31 @@
 | D-218 | Chain-load hash check with policy-provided hash | CLOSED (test-chainload-harness.sh generates policy with C4 key 58 set to real bootx64.efi SHA-256 and a mismatched variant; mismatch log shows [ChainLoad] BLOCK — bootmgfw.efi hash mismatch. Commit 5123efc; artifact /tmp/pbl-chainload-ci/pbl-serial-{pass,mismatch}.log) | TEST |
 | D-219 | Policy signature BLOCK path untested | CLOSED (same scenario as D-215 — test-d215-harness.sh + gen-policy-rot.py; 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 | D-220 | BLOCK-intent returns propagate error to BDS (BootOrder advance bypass) | CLOSED (`PblApp.c` policy-sig-fail and anti-rollback paths returned `EFI_SECURITY_VIOLATION` — per Boot#### semantics a non-success return advances BDS to the next boot option (Windows boots). Fixed via `PblBlockHalt()` — lock screen + MOR + ResetSystem + CpuDeadLoop, never returns; chain-load return checked at all 3 call sites, fail-closed on error. Note: D-219's harness passed the buggy code — it checked serial lines, not post-BLOCK behavior. QEMU+swtpm: fve 16/0, docker 15/0, persistence 16/0. Commit this session; artifacts /tmp/pbl-fve-ci/, /tmp/pbl-ci-persist/) | SECURITY |
+| D-224 | No host-side tests for TPM command construction or COSE verification with test keys | OPEN (D-117 was closed in S265 for the parsing modules + QEMU integration; these two need an EDK II crypto backend that the host build does not have — see the detailed entry) | TEST |
 
-**Totals**: 55 items — 51 CLOSED, 4 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware, D-130 signing, D-134 TPM NV hierarchy)
+**Totals**: 56 items — 51 CLOSED, 5 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware,
+D-130 signing certificate, D-134 TPM NV hierarchy, D-224 host-side TPM/COSE tests)
 
+### D-224 — No host-side tests for TPM command construction or COSE verification with test keys
+- **Status**: OPEN (split out of D-117, session 265 — D-117's close criteria named
+  three things; two of them are delivered and the third is not reachable from the
+  host, so it became its own item instead of being silently absorbed)
+- **Category**: TEST
+- **Blocker**: `TpmClient.c` builds TPM2 command buffers and `CoseVerify.c`
+  verifies COSE_Sign1 signatures through EDK II's BaseCryptLib. Neither is
+  callable from the host build (`firmware/PblPkg/host-tests`): the TPM path needs
+  `EFI_TCG2_PROTOCOL` plumbing and the TPM 2.0 structure headers, and the crypto
+  path needs a BaseCryptLib backend linked in. The parsing modules were host-testable
+  because they depend on nothing but `CopyMem`/`ZeroMem`/`AsciiStrCmp`/`AllocatePool`.
+- **What exists instead**: `CborDecode.c` has host-side unit tests (D-117), and
+  every TPM/COSE path is covered by the QEMU+swtpm harnesses — 17/0 (`make
+  firmware-qemu`), 15/0 (docker), 16/0 (persistence), 16/0 (fve) — but at
+  end-to-end granularity, so a byte-level mistake in a command buffer is visible
+  only as a boot-flow failure.
+- **Close criteria**: (a) byte-level tests for the TPM command buffers
+  `TpmClient.c` constructs (NV_Read/NV_Write/StartAuthSession header + size
+  fields), with the EDK II TPM structure definitions stubbed or vendored; (b)
+  verdict-verification tests using test keys — sign a CBOR payload with a
+  throwaway ES256 key and assert `PblVerifyCoseSign1` accepts it and rejects a
+  tampered payload/signature. Either a small host crypto backend or a dedicated
+  QEMU harness that asserts on the byte buffer would satisfy this.

@@ -2691,3 +2691,54 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-119
+  statement: 'The hardware harness read only Defender''s ExclusionProcess list while agent/installer.py
+    added no exclusion at all and installer_gui.py/deploy.ps1 add ExclusionPath — so the two ''defender_exclusion:
+    null'' hardware readings meant ''wrong metric + missing step'', not ''Defender is excluding nothing''.'
+  domain: general
+  status: proposed
+  evidence_level: assumed
+  provenance: 'S265 code read: hw_test_harness._mp_exclusions (now reads both), installer.add_defender_exclusions
+    (new), installer_gui.add_defender_exclusions, deploy.ps1 step 8; tests TestMpExclusions + test_defender_exclusions_*'
+  source: code-read
+  asserted: '2026-11-10'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-120
+  statement: PblCborReadTstr truncated an oversized CBOR text string but advanced the cursor by the truncated
+    length, desynchronising every following map entry; fixed in S265 to advance by the encoded length,
+    found by the first host-side CborDecode tests.
+  domain: firmware
+  status: proposed
+  evidence_level: assumed
+  provenance: 'S265: firmware/PblPkg/host-tests (19 cases/97 checks); fix in CborDecode.c; regression
+    test verdict/oversized-reason-sync'
+  source: code-read
+  asserted: '2026-11-10'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-121
+  statement: 'PblTlsVerifyCert (223 lines, zero callers) could never be wired: it compares a SHA-256 pin,
+    and no EDK II API accepts a hash as a chain anchor. Deleted in S265; chain pinning remains PblInstallTlsCaCertificate
+    + EFI_TLS_VERIFY_PEER.'
+  domain: firmware/tls
+  status: proposed
+  evidence_level: assumed
+  provenance: 'S265: TlsVerify.c trimmed to 105 lines, prototype removed from PblApp.h; pyright clean;
+    firmware rebuilt (PblApp.efi 336f5451…)'
+  source: code-read
+  asserted: '2026-11-10'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

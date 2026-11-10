@@ -68,6 +68,7 @@ import secrets
 import string
 import subprocess
 from pathlib import Path
+from typing import cast
 
 log = logging.getLogger("lockdown-agent")
 
@@ -230,16 +231,19 @@ def _load_model_overrides() -> dict:
     global _MODEL_OVERRIDES
     if _MODEL_OVERRIDES is not None:
         return _MODEL_OVERRIDES
-    if not MODEL_OVERRIDES_FILE.exists():
-        _MODEL_OVERRIDES = {}
-        return _MODEL_OVERRIDES
-    try:
-        _MODEL_OVERRIDES = json.loads(MODEL_OVERRIDES_FILE.read_text())
-        log.info("Loaded HP model overrides from %s", MODEL_OVERRIDES_FILE)
-    except (OSError, json.JSONDecodeError, ValueError, TypeError) as e:
-        log.warning("Failed to load HP model overrides: %s", e)
-        _MODEL_OVERRIDES = {}
-    return _MODEL_OVERRIDES
+    # A local keeps the return type honest: the module-level cache is Optional so a
+    # caller can tell "never loaded" from "loaded and empty", which is not what this
+    # function returns (found by the type checker while wiring restore_boot_state, S265).
+    overrides: dict = {}
+    if MODEL_OVERRIDES_FILE.exists():
+        try:
+            overrides = json.loads(MODEL_OVERRIDES_FILE.read_text())
+            log.info("Loaded HP model overrides from %s", MODEL_OVERRIDES_FILE)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError) as e:
+            log.warning("Failed to load HP model overrides: %s", e)
+            overrides = {}
+    _MODEL_OVERRIDES = overrides
+    return overrides
 
 
 def _detect_hp_model() -> str | None:
@@ -1375,6 +1379,28 @@ def _rollback_bios_settings(saved_settings: dict, bios_password: str) -> bool:
     return all_ok
 
 
+def restore_boot_state(bios_password: str) -> bool:
+    """Restore BIOS settings from the state file `apply_boot_lockdown` wrote.
+
+    The rollback entry point for callers outside this module (the hardware
+    harness). Per CC18 the Setup Password is deliberately **not** cleared here,
+    because a failed clear leaves a BIOS-locked machine whose password is only in
+    the encrypted backup and the returned result dict; the operator's unlock
+    command is what clears it.
+
+    Returns False when there is no saved state or no password to write with — a
+    caller must not read that as "restored".
+    """
+    state = load_boot_state()
+    if not state:
+        log.warning("No saved BIOS state — nothing to restore")
+        return False
+    if not bios_password:
+        log.error("BIOS rollback needs the Setup Password to write settings — none available")
+        return False
+    return _rollback_bios_settings(state.get("settings", {}), bios_password)
+
+
 # ---------------------------------------------------------------------------
 # Public API: apply / remove boot lockdown
 # ---------------------------------------------------------------------------
@@ -1520,6 +1546,11 @@ def apply_boot_lockdown(
         )
         return result
 
+    # Declared explicitly so the type is `str` at every use site below without
+    # relying on flow-based narrowing: the two branches assign a generated password
+    # or the existing one (guarded).
+    bios_password: str
+
     if not password_already_set:
         # Generate a new password and set it
         bios_password = generate_bios_password()
@@ -1546,8 +1577,16 @@ def apply_boot_lockdown(
             return result
         log.info("BIOS Setup password set successfully (verified)")
     else:
-        # Use the existing password to authorize changes
-        bios_password = existing_password
+        # Use the existing password to authorize changes.
+        # The guard above returns when a password is set but unconfigured, so this
+        # branch always has one. `is None` (rather than a truthiness test) is the
+        # narrowing form every checker understands.
+        if existing_password is None:
+            log.error("BIOS Setup password is set but UEFI_PASSWORD is empty — cannot proceed")
+            return result
+        # cast: the guard above proves it is not None, and `cast` states that at the
+        # assignment for every type-aware reader without changing behaviour.
+        bios_password = cast(str, existing_password)
         log.info("Using existing BIOS Setup password for lockdown changes")
 
     # Always return the password, even on critical failure (CC18)

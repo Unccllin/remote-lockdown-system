@@ -14870,3 +14870,192 @@ Investigate the one open question that needs no sacrificial hardware: `defender_
 `null` in two independent hardware windows while AGENTS.md says the installer adds a Defender
 exclusion — read `agent/installer.py` and the harness's detection, and either fix one, or correct the
 claim in AGENTS.md, so the repo stops asserting something two runs failed to observe.
+
+---
+
+## Session 265 — 2026-11-10 (the five loose ends, and the tests that found a parser bug)
+
+### RULE-ZERO
+
+**Read**:
+- `.devin/skills/hw-test-harness-v2/SKILL.md` — the harness's 12 patterns, the 20-test registry, the
+  rollback/destructive model.
+- `.devin/skills/graph-session-lifecycle` conventions via `scripts/graph_session.py` (close-session
+  appends the block and regenerates `current-state.md`).
+- `agent/hw_test_harness.py` (`detect_environment`, `_mp_exclusions` predecessor, `HardwareTest.run`,
+  `TestBcdLockdown`, `TestHpUefiLockdown`, `describe_destructive`), `agent/tests/test_hw_harness.py`.
+- `agent/installer.py` (whole install flow: `run_baked_install`, `main`, `install_files`,
+  `create_lockdown_folder`, `install_service`, `verify_checkin`), `agent/installer_gui.py`
+  (`add_defender_exclusions`), `agent/deploy.ps1` step 8.
+- `agent/bcd_lockdown.py` (`save_bcd_state`/`load_bcd_state`/`_rollback_bcd`/`remove_bcd_lockdown`),
+  `agent/hp_uefi_lockdown.py` (`save_boot_state`/`_rollback_bios_settings`/`apply_boot_lockdown`,
+  `read_password_backup`).
+- `firmware/PblPkg/PblApp/TlsVerify.c`, `PblApp.h` (CBOR/COSE prototypes, `PBL_VERDICT`, `PBL_POLICY`),
+  `CborDecode.c` (head/bstr/tstr/uint/skip readers, COSE payload extraction, verdict + policy maps),
+  `PblApp.inf`, `build-pbl.sh`.
+- `docs/adr/PBL-DEBT-LEDGER.md` (D-116/D-117/D-120/D-129/D-130/D-134 + summary table),
+  `docs/adr/DEBT-LEDGER.md`, `.devin/graph/GRAPH-SPEC.yaml` (debt_items), `GRAPH-SPEC.md`,
+  `docs/D-129-HARDWARE-RUNBOOK.md`, `AGENTS.md`.
+- Memory harness retrieve + brain retrieve at session start (B-055/B-056 both relevant: TLS pinning is
+  enforced by construction, and the firmware *does* build locally).
+
+**Finding**:
+1. **`defender_exclusion: null` was two bugs, not a mystery.** The harness queried only
+   `(Get-MpPreference).ExclusionProcess`; `installer.py`/`installer_gui.py` add `-ExclusionPath` and
+   `deploy.ps1` adds both — and `agent/installer.py` (the CLI/service path FRANKENSTEIN used) added
+   **neither**. A path-only install therefore read as "no exclusion".
+2. **The two "with rollback" firmware tests never rolled anything back.** `E-BCD-01` and
+   `E-HP-UEFI-01` overrode `rollback()` with `pass` while `bcd_lockdown._rollback_bcd` and
+   `hp_uefi_lockdown._rollback_bios_settings` had working implementations the whole time. Worse, a
+   silent no-op was recorded as `rollback_restored = True` because `run()` only checks for an exception.
+3. **`PblTlsVerifyCert` was 223 lines with zero callers** — it compared a SHA-256 pin, and no EDK II
+   API accepts a hash as a chain anchor, so it could never be wired in (B-055 said as much). The live
+   pinning path is `PblInstallTlsCaCertificate`, in the same file.
+4. **D-117 was CLOSED against unmet criteria.** It required host-side unit tests for TPM command
+   construction; there were none anywhere under `firmware/` (no CMocka/Unity/TestRunner target), while
+   `PBL-DEBT-LEDGER.md` still said OPEN. Introduced by the mass reconciliation `42ab797`.
+5. **`remove_bcd_lockdown` raised `UnboundLocalError` inside the recovery path** — the "no saved state"
+   branch logged `stderr`, which only the *other* branch assigns.
+
+### IMPLEMENT
+
+- `agent/hw_test_harness.py`: `_mp_exclusions()` reads **both** Defender lists; `env` exposes
+  `defender_exclusion_path` / `defender_exclusion_process`; `check_services(["defender"])` accepts
+  either; the environment banner prints both. `E-BCD-01`/`E-HP-UEFI-01` now delegate to
+  `bcd_lockdown.restore_bcd_state()` / `hp_uefi_lockdown.restore_boot_state()`, raise when nothing was
+  restored (so a failed rollback is recorded as failed), and set `rollback_is_stub = False`. The HP test
+  keeps the password from its own action result with `.bios_pw_backup` as fallback.
+- `agent/bcd_lockdown.py`: new public `restore_bcd_state()`; fixed the `UnboundLocalError`; renamed the
+  restore-path `stderr` bindings to `command_error`.
+- `agent/hp_uefi_lockdown.py`: new public `restore_boot_state(bios_password)` (CC18: settings only, the
+  Setup Password is deliberately not cleared); `_load_model_overrides` returns a definite `dict`;
+  `bios_password` is declared `str` and narrowed with `is None` + `cast`.
+- `agent/installer.py`: `add_defender_exclusions()` — two `-ExclusionPath` (install dir, agent exe) and
+  two `-ExclusionProcess` (agent, lock screen), non-fatal on failure, called in **both** install flows;
+  later steps renumbered 4→7. New `LOCKSCREEN_EXE_NAME`.
+- `firmware/PblPkg/PblApp/TlsVerify.c`: deleted `PblTlsVerifyCert` (105 lines remain, all
+  `PblInstallTlsCaCertificate`); header comment rewritten; prototype removed from `PblApp.h`.
+- `firmware/PblPkg/PblApp/CborDecode.c`: `PblCborReadTstr` now advances the cursor by the **encoded**
+  length when truncating, instead of the truncated length.
+- `firmware/PblPkg/host-tests/` (new): `include/PblApp.h` (EDK2 base-type shim, guarded on
+  `MDE_CPU_X64` so an analysis with real EDK2 headers cannot redefine them), `host_efi.c`
+  (CopyMem/ZeroMem/AsmStrCmp/AllocatePool), `extract-decls.py` (lifts `PBL_VERDICT`/`PBL_POLICY` and
+  friends out of the real `PblApp.h` at build time), `test_cbor_decode.c` (19 cases / 97 checks),
+  `run-host-tests.sh`, `.clangd` (this subtree is host-built, not EDK2-built).
+- `agent/tests/test_hw_harness_s265.py` (new, split from `test_hw_harness.py`): Defender detection +
+  rollback delegation; `STUB_ROLLBACKS` shrinks to `E-INTEGRATION-01`.
+- `agent/tests/test_installer.py`: four `add_defender_exclusions` tests (both kinds added, skipped off
+  Windows, failure warns instead of aborting, missing powershell does not raise).
+- `Makefile`: `make firmware-host-tests` (+ help line). `AGENTS.md`: Defender claim corrected in both
+  places, host-tests command added, agent count 830 → 857. `PBL-DEBT-LEDGER.md` + `GRAPH-SPEC.yaml`:
+  D-117 reconciled, **D-224 opened** for the two criteria the host build cannot reach, D-130's stale
+  duplicate blocker removed. `.gitignore`: generated header + build dir.
+
+- `agent/boot_lockdown_test_runner.py`: `cmd_status()` used `hp_uefi_lockdown.LOCKDOWN_SETTINGS`, which
+  D-009 removed — an `AttributeError` waiting on the first HP machine (nothing imports that runner, so no
+  test could have caught it). Now resolves names through `_resolve_setting_names()`; new
+  `agent/tests/test_boot_lockdown_runner.py` checks **every** `hp_uefi_lockdown.*` / `bcd_lockdown.*`
+  symbol the runner references, plus a behavioural `cmd_status()` run.
+- `agent/bcd_lockdown.py`: uniform `err_text` naming for the third `_run()` tuple element (the module had
+  20 mixed `stderr` bindings and one of them had been the unbound name). Mechanical, ruff+format clean,
+  behaviour unchanged.
+
+### Fog cleared
+
+- **Why `defender_exclusion` was `null` twice**: harness read one list, the CLI installer wrote none.
+  Fixed on both sides and pinned by six tests (`TestMpExclusions`, `test_defender_exclusions_*`).
+- **Whether "with rollback" meant anything**: it did not; now both firmware tests restore real settings
+  through the modules' own restore paths and cannot report a silent success.
+- **Whether the 223-line `PblTlsVerifyCert` enforced anything**: no, and it could not — removed, with
+  the live pinning mechanism named in the file header and in D-116's ledger row.
+- **Whether D-117's closure was honest**: the integration half was real (17/0, 15/0, 16/0, 16/0); the
+  host-side half was not, so it was built (19 cases / 97 checks) and the two unreachable criteria became
+  D-224. `make graph-check` is green with 5 open items instead of 4.
+- **A real parser bug**: `PblCborReadTstr` left the cursor inside an over-long text field, so every map
+  entry after it was decoded from string bytes. Found by the first host-test run, fixed, and pinned.
+
+### Fog remaining
+
+- **D-120** still needs real BitLocker media + a VMK lock-state proof; **D-129**/**D-134** need one
+  hardware window on a real UEFI machine (the owner-hierarchy build + `device_id from AK Name` in the
+  serial log, with `TPM2_Clear` treated as unenrolled); **D-130** needs a provisioned signing
+  certificate. All four are resource-bound.
+- **D-224** (new): host-side tests for TPM command buffers and COSE verification with test keys. Needs
+  either a small host crypto backend or EDK II TPM structure headers vendored for the host build.
+- **`E-BCD` / `E-HP-UEFI`** remain `verified-in-unit-test` by decision (S264); a failed run damages state
+  the test cannot undo.
+- **CodeQL's ~102 alerts** remain uninspectable here (private repo without GitHub Code Security; the job
+  is gated on `CODE_SECURITY_ENABLED`). The local equivalent `make sast` cannot run **on this host**:
+  `semgrep` is not installed (`pipx install semgrep==1.182.1` restores it). Files checked:
+  `command -v semgrep` → absent.
+- **Playwright + Electron E2E** still cannot run here (missing `libnspr4.so`).
+
+### Debt items closed
+
+- **D-117** — split, not absorbed: QEMU+swtpm evidence (existing) + `firmware/PblPkg/host-tests` (new)
+  now satisfy its two host-side criteria for the parsing modules; the remainder is D-224. Evidence:
+  `make firmware-host-tests` → `19 cases / 97 checks`, and `make firmware-build` rebuilds `PblApp.efi`
+  after the `TlsVerify.c` trim (SHA-256 `336f5451…`).
+- **D-116** — same row updated (dead pin checker removed; chain pinning remains
+  `PblInstallTlsCaCertificate` + `EFI_TLS_VERIFY_PEER`).
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 (unchanged, resource-bound) and **D-224** (newly visible, was hidden inside
+  D-117's closure). Graph: 59/64 CLOSED.
+
+### Blockers
+
+- Hardware/certificate only: a real UEFI machine with a TPM for the D-129 window, real BitLocker media
+  for D-120, and a provisioned code-signing certificate for D-130. No software blocker remains for the
+  work done this session.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback (primary).** The harness's own analyzer repeatedly reported four
+  findings against content that no longer existed (`agent/bcd_lockdown.py:892` "stderr is unbound",
+  `test_hw_harness.py:586/695/739` "_SimpleResult/pytest not defined"). Disproved five ways on the same
+  working tree: ruff `--select F821` clean, pyright 1.1.414 `filesAnalyzed 1, errorCount 0`, an AST walk
+  showing zero `stderr` loads/stores in `remove_bcd_lockdown`, direct reads (`L892` is
+  `log.info("BCD restored: %s", description)`), and the harness's own LSP probe returning
+  `Total diagnostics: 0`. Clearing that project's lens cache and parsed snapshot did not stop it
+  re-deriving the same lines. **Harness change that would prevent it**: key cached findings by the
+  *content hash of the cited line* (the repo's `scripts/sast-gate.py` already does exactly this, which is
+  why its exceptions invalidate on edit) and drop a finding whose line no longer matches, instead of
+  re-emitting a signature.
+- **Layer 2 — context provision (secondary).** The Defender question sat in `current-state.md` as "the
+  most concrete open question" with no note that the installer and the check used different exclusion
+  kinds. One line in each place would have made it a five-minute fix instead of a session-opening
+  investigation.
+
+### VERIFY
+
+- `make firmware-host-tests` → `97 checks, 0 failures across 19 cases`.
+- `make firmware-build` → **Build successful**, `PblApp.efi` SHA-256 `336f5451…` (after removing
+  `PblTlsVerifyCert`).
+- `scripts/run-agent-tests.sh -q` → **857 tests**, 0 failures; targeted re-run of
+  `test_hw_harness.py test_hw_harness_s265.py test_installer.py test_boot_lockdown_bcd.py
+  test_boot_lockdown_uefi.py` → exit 0.
+- `ruff check agent/` → All checks passed; `ruff format --check agent/` → 62 files already formatted;
+  `ruff check --select F821,F823 agent/bcd_lockdown.py` → clean.
+- `python3 scripts/check_debt_ledger.py` → `mismatches now: 0 | recorded: 0 | new: 0 | stale baseline: 0`.
+- `make graph-check` → All invariants pass; `make graph-status` → `Phases 17/17`, `Debt 59/64`,
+  `Enforcement 11/13` (+2 by decision), 5 open items named.
+- `python3 scripts/check-firmware-todos.py` → no untraceable TODO/FIXME under `firmware/PblPkg`.
+- `agent/.venv` upgraded (certifi/urllib3/setuptools) → `pip-audit` **No known vulnerabilities found**;
+  a clean env resolving `agent/requirements.txt` was already clean, so the five advisories were stale
+  local packages, not Dependabot findings against this repo.
+- `make test-scripts` → all 14 suites green (40 graph-session, 44 memory, 20 sast-gate, 30
+  firmware-TODO, …).
+- `scripts/run-agent-tests.sh -q` (final) → **859 tests**, 0 failures; `test_boot_lockdown_runner.py`
+  green; `ruff check` + `ruff format --check agent/` clean (63 files).
+
+### Next session opening
+
+Name the real UEFI machine for the D-129 window — it closes D-129 and D-134 together (owner-hierarchy
+build, `device_id from AK Name` in the serial log, `TPM2_Clear` treated as unenrolled) and the same boot
+gives D-120 its real-media evidence — and re-run `make hw-preflight` / `make hw-artifact` so the citations
+are the ones I3 actually accepts; if no machine is available, take D-224's byte-level TPM command-buffer
+tests instead.
+
+---

@@ -20,9 +20,10 @@ import hw_test_harness  # noqa: E402
 
 # Destructive tests whose `rollback()` does nothing. Shrink-only: every entry must correspond to a
 # test that still sets rollback_is_stub, and a test that sets it must appear here (S263).
+# S265 removed E-BCD-01 and E-HP-UEFI-01: both now delegate to the module that already
+# implemented the restore (`bcd_lockdown.restore_bcd_state` /
+# `hp_uefi_lockdown.restore_boot_state`) instead of overriding `rollback()` with `pass`.
 STUB_ROLLBACKS = {
-    "E-BCD-01": "rollback() is a no-op; the BCD before-state is captured for manual repair instead",
-    "E-HP-UEFI-01": "rollback() is a no-op; the module never clears the Setup Password it sets",
     "E-INTEGRATION-01": "no rollback override at all; recovery is the server's unlock command",
 }
 
@@ -419,10 +420,22 @@ class TestTestRegistry:
 
     def test_the_notice_states_that_rollback_is_not_implemented(self):
         """The banner an operator reads must not imply a recovery it cannot perform."""
-        test = hw_test_harness.TestBcdLockdown()
+        test = hw_test_harness.TestIntegration()
         assert test.rollback_is_stub
         notice = test.describe_destructive()
         assert "rollback: NOT IMPLEMENTED" in notice
+
+    def test_the_firmware_tests_no_longer_claim_a_stub_rollback(self):
+        """S265: both firmware tests restored settings in the module all along.
+
+        Their `rollback()` overrode the base no-op with `pass` while `bcd_lockdown` and
+        `hp_uefi_lockdown` both had working restore paths, so "with rollback" in the name described
+        nothing. The banner is the operator-facing half of the same claim.
+        """
+        for cls in (hw_test_harness.TestBcdLockdown, hw_test_harness.TestHpUefiLockdown):
+            test = cls()
+            assert test.rollback_is_stub is False, test.test_id
+            assert "rollback: implemented by the test" in test.describe_destructive()
 
     def test_network_tests_have_retry(self):
         """v2.0: Network tests should be marked as such."""
@@ -541,3 +554,8 @@ class TestDestructiveGate:
         test.recovery_hint = ""
         notice = test.describe_destructive()
         assert "NOT DECLARED" in notice
+
+
+# ---------------------------------------------------------------------------
+# S265: Defender exclusion detection reads both lists
+# ---------------------------------------------------------------------------

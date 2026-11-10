@@ -273,6 +273,32 @@ def compute_agent_hash() -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _mp_exclusions() -> dict:
+    """Read Defender's exclusion lists — path AND process.
+
+    They are not interchangeable, and reading only one of them produced the
+    longest-lived false negative in this harness: `defender_exclusion` came back
+    `null` in two independent hardware windows (S260/S261) whose installs *did*
+    add an exclusion, because the check asked only for `ExclusionProcess` while
+    `installer.py`/`installer_gui.py` add `-ExclusionPath` (S265).
+    """
+    found: dict[str, str | None] = {"path": None, "process": None}
+    for kind, key in (("ExclusionPath", "path"), ("ExclusionProcess", "process")):
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", f"(Get-MpPreference).{kind}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            value = result.stdout.strip()
+            if value:
+                found[key] = value
+        except Exception:  # noqa: S110
+            pass
+    return found
+
+
 def detect_environment() -> dict:
     """Detect the hardware/OS environment for test eligibility."""
     env = {
@@ -284,6 +310,8 @@ def detect_environment() -> dict:
         "bitlocker_enabled": None,
         "tpm_present": None,
         "defender_exclusion": None,
+        "defender_exclusion_path": None,
+        "defender_exclusion_process": None,
         "agent_binary_hash": compute_agent_hash(),
         "python_version": sys.version,
         "hostname": platform.node(),
@@ -343,16 +371,12 @@ def detect_environment() -> dict:
     except Exception:  # noqa: S110
         pass
 
-    # Check Windows Defender exclusion
+    # Check Windows Defender exclusions — path AND process (see _mp_exclusions)
     try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "(Get-MpPreference).ExclusionProcess"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        exclusions = result.stdout.strip()
-        env["defender_exclusion"] = exclusions if exclusions else None
+        exclusions = _mp_exclusions()
+        env["defender_exclusion_path"] = exclusions["path"]
+        env["defender_exclusion_process"] = exclusions["process"]
+        env["defender_exclusion"] = exclusions["path"] or exclusions["process"]
     except Exception:  # noqa: S110
         pass
 
@@ -380,7 +404,11 @@ def check_services(services: list[str], env: dict) -> dict[str, bool]:
         elif svc == "windows":
             available["windows"] = env["platform"] == "Windows"
         elif svc == "defender":
-            available["defender"] = env.get("defender_exclusion") is not None
+            available["defender"] = (
+                env.get("defender_exclusion_path") is not None
+                or env.get("defender_exclusion_process") is not None
+                or env.get("defender_exclusion") is not None
+            )
         elif svc == "server":
             # Check if server is reachable
             try:
@@ -875,6 +903,10 @@ class TestBcdLockdown(HardwareTest):
         "note WinRE may be among the things disabled; enable BitLocker protection again afterwards"
     )
     default_timeout = 60
+    # S265: rollback() now delegates to bcd_lockdown.restore_bcd_state() — a real
+    # restore, not a no-op. agent/tests/test_hw_harness.py counts this against a
+    # shrink-only stub baseline, so this line and that entry move together.
+    rollback_is_stub = False
 
     def capture_before(self, env: dict) -> dict:
         """Capture current BCD settings before test."""
@@ -908,12 +940,25 @@ class TestBcdLockdown(HardwareTest):
         return state
 
     def rollback(self, before_state: dict) -> None:
-        """Restore BCD settings from before the test."""
-        # In a real implementation, this would parse the before bcdedit output
-        # and restore each setting. For now, we log that rollback was attempted.
-        if before_state.get("bcdedit_output"):
-            # BCD rollback is complex — in production, we'd diff and restore
-            pass
+        """Restore BCD settings from the state `apply_bcd_lockdown` saved.
+
+        This used to be `pass` with a comment saying a real implementation would
+        parse `bcdedit /enum` — while `bcd_lockdown` had already implemented
+        exactly that (`save_bcd_state` → `_rollback_bcd`), so the test was named
+        "with rollback" and performed none (S263 found the stub, S265 wired it).
+
+        Raising on failure is deliberate: `run()` marks `rollback_restored = True`
+        unless this raises, so returning quietly would record a failed restore as
+        a successful one.
+        """
+        import bcd_lockdown
+
+        if not bcd_lockdown.restore_bcd_state():
+            raise RuntimeError(
+                "BCD rollback did not complete — either no state was saved before the "
+                "write, or some settings need manual restoration; the before-state "
+                "artifact has the original `bcdedit /enum` output"
+            )
 
     def action(self, env: dict, mode: str) -> str:
         import bcd_lockdown
@@ -957,6 +1002,15 @@ class TestHpUefiLockdown(HardwareTest):
     requires_services = ["hp", "admin"]
     is_destructive = True
     default_timeout = 120
+    # Settings are restored by hp_uefi_lockdown.restore_boot_state(); the Setup
+    # Password is not cleared (CC18 — by design, see the module docstring).
+    rollback_is_stub = False
+
+    def __init__(self):
+        super().__init__()
+        # The Setup Password is generated inside apply_boot_lockdown and returned in
+        # its result dict; rollback() needs it to write settings back.
+        self._lockdown_result: dict = {}
 
     def capture_before(self, env: dict) -> dict:
         state = capture_state("HP UEFI before")
@@ -977,15 +1031,38 @@ class TestHpUefiLockdown(HardwareTest):
         return state
 
     def rollback(self, before_state: dict) -> None:
-        """Restore BIOS settings from before the test."""
-        # In production, this would use hp_uefi_lockdown to restore each setting
-        if before_state.get("bios_settings"):
-            pass
+        """Restore BIOS settings from the state `apply_boot_lockdown` saved.
+
+        Settings are restored; the Setup Password is deliberately NOT cleared
+        (CC18 — a failed clear leaves a BIOS-locked machine; the operator's unlock
+        command clears it). This was `pass` until S265 even though the module had
+        `_rollback_bios_settings` all along.
+
+        Raising matters: `run()` records `rollback_restored = True` unless this
+        raises.
+        """
+        import hp_uefi_lockdown
+
+        password = self._lockdown_result.get("bios_password")
+        if not password:
+            backup = hp_uefi_lockdown.read_password_backup() or {}
+            password = backup.get("bios_password")
+        if not password:
+            raise RuntimeError(
+                "BIOS rollback needs the Setup Password — neither the result dict nor "
+                ".bios_pw_backup had one; firmware settings cannot be written without it"
+            )
+        if not hp_uefi_lockdown.restore_boot_state(password):
+            raise RuntimeError(
+                "BIOS rollback did not complete — no saved state, or some settings need "
+                "manual restoration; the Setup Password is still set"
+            )
 
     def action(self, env: dict, mode: str) -> str:
         import hp_uefi_lockdown
 
         hp_result = hp_uefi_lockdown.apply_boot_lockdown()
+        self._lockdown_result = hp_result
         if hp_result.get("success"):
             crit = hp_result.get("critical_applied", 0)
             be_ok = hp_result.get("best_effort_applied", 0)
@@ -2568,7 +2645,8 @@ def run_harness(
     print(f"  Session 0:        {env['session_context']}")
     print(f"  BitLocker:        {env['bitlocker_enabled']}")
     print(f"  TPM present:      {env.get('tpm_present')}")
-    print(f"  Defender excl:    {env.get('defender_exclusion') or 'None'}")
+    print(f"  Defender path:    {env.get('defender_exclusion_path') or 'None'}")
+    print(f"  Defender process: {env.get('defender_exclusion_process') or 'None'}")
     print(f"  Agent hash:       {(env.get('agent_binary_hash') or 'N/A')[:16]}...")
     print()
 

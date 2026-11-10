@@ -1013,14 +1013,32 @@ debt_items:
                   firmware/PblPkg/artifacts/d132-mismatched-ca-results.txt"
 
   - id: D-117
-    description: "No runtime tests for PBL modules"
-    close_criteria: "Host-side unit tests for TPM commands + QEMU+swtpm \
-                    integration tests"
+    description: "No runtime tests for the PBL parsing modules"
+    close_criteria: "Host-side unit tests for the CBOR/COSE parsing modules + QEMU+swtpm integration tests"
     status: CLOSED
     category: TEST
     commit_ref: "684d7eb + harness commits"
-    artifact_ref: "8+ QEMU+swtpm serial logs; ci-harness-docker 15/0, \
-                  persistence 16/0, fve 16/0"
+    artifact_ref: "firmware/PblPkg/host-tests/run-host-tests.sh; firmware/PblPkg/artifacts/qemu-harness-2026-11-03.txt"
+    risk_notes: >-
+      S265 split this item rather than absorbing it. The QEMU+swtpm half was already
+      delivered (ci-harness-docker 15/0, persistence 16/0, fve 16/0, and
+      artifacts/qemu-harness-2026-11-03.txt at 17/0). The host-side half now exists for
+      CborDecode.c: firmware/PblPkg/host-tests, 19 cases / 97 checks, run by
+      `make firmware-host-tests` with any C99 compiler and no EDK II/QEMU/Docker. The
+      struct declarations are generated from the real PblApp.h at build time
+      (extract-decls.py), so a field rename fails the build instead of leaving the tests
+      testing a stale shape. Its first run found a real bug: PblCborReadTstr advanced the
+      cursor by the truncated length after truncating an oversized string, desynchronising
+      every following map entry; fixed and pinned by verdict/oversized-reason-sync. The
+      two criteria this does NOT cover — TPM command-buffer bytes and COSE verification
+      with test keys — are D-224, so they stay visible instead of closing with the rest.
+
+  - id: D-224
+    description: "No host-side tests for TPM command construction or COSE verification with test keys"
+    close_criteria: "Byte-level TPM command-buffer tests + verdict verification with throwaway ES256 test keys"
+    status: OPEN
+    category: TEST
+
 
   - id: D-118
     description: "EFI_RNG_PROTOCOL nonce generation not implemented (C3 §5)"

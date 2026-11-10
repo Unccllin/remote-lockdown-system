@@ -212,9 +212,9 @@ def _read_bcd_setting(setting: str) -> str | None:
     `bcdedit /enum <entry>` and locating the element line.
     """
     entry = "{bootmgr}" if setting in BOOTMGR_SCOPED_SETTINGS else "{default}"
-    rc, stdout, stderr = _run(["bcdedit", "/enum", entry])
+    rc, stdout, err_text = _run(["bcdedit", "/enum", entry])
     if rc != 0:
-        log.debug("bcdedit /enum %s failed: %s", entry, stderr)
+        log.debug("bcdedit /enum %s failed: %s", entry, err_text)
         return None
     # Output lines look like "recoveryenabled         Yes"
     for line in stdout.splitlines():
@@ -241,9 +241,9 @@ def _set_bcd_setting(setting: str, value: str) -> bool:
 
     Returns True if the setting was applied AND verified, False otherwise.
     """
-    rc, _, stderr = _run(["bcdedit", "/set", "{default}", setting, value])
+    rc, _, err_text = _run(["bcdedit", "/set", "{default}", setting, value])
     if rc != 0:
-        log.warning("bcdedit /set %s %s failed: %s", setting, value, stderr)
+        log.warning("bcdedit /set %s %s failed: %s", setting, value, err_text)
         return False
 
     # Verification re-read: confirm the setting actually took effect
@@ -268,9 +268,9 @@ def _set_bcd_setting_bootmgr(setting: str, value: str) -> bool:
     {bootmgr} for boot-manager elements — one verification path for both scopes,
     so the two cannot drift apart.
     """
-    rc, _, stderr = _run(["bcdedit", "/set", "{bootmgr}", setting, value])
+    rc, _, err_text = _run(["bcdedit", "/set", "{bootmgr}", setting, value])
     if rc != 0:
-        log.warning("bcdedit /set {bootmgr} %s %s failed: %s", setting, value, stderr)
+        log.warning("bcdedit /set {bootmgr} %s %s failed: %s", setting, value, err_text)
         return False
 
     current = _read_bcd_setting(setting)
@@ -301,12 +301,12 @@ def _clear_bootsequence() -> bool:
 
     Returns True if cleared (or was already empty), False on failure.
     """
-    rc, _, stderr = _run(["bcdedit", "/deletevalue", "{bootmgr}", "bootsequence"])
+    rc, _, err_text = _run(["bcdedit", "/deletevalue", "{bootmgr}", "bootsequence"])
     if rc == 0:
         log.info("T4: bootsequence cleared (one-time boot override removed)")
         return True
     # bootsequence may not exist — that's fine, not an error
-    log.debug("T4: bootsequence clear returned %d: %s (may not exist — OK)", rc, stderr)
+    log.debug("T4: bootsequence clear returned %d: %s (may not exist — OK)", rc, err_text)
     return True
 
 
@@ -382,22 +382,22 @@ BCD_BOOTMGR_RESTORE_COMMANDS = [
 
 def _disable_winre() -> bool:
     """Disable Windows Recovery Environment."""
-    rc, _, stderr = _run(["reagentc", "/disable"])
+    rc, _, err_text = _run(["reagentc", "/disable"])
     if rc == 0:
         log.info("WinRE disabled (reagentc /disable)")
         return True
     # reagentc returns non-zero if WinRE is already disabled or not installed
-    log.debug("reagentc /disable returned %d: %s", rc, stderr)
+    log.debug("reagentc /disable returned %d: %s", rc, err_text)
     return False
 
 
 def _enable_winre() -> bool:
     """Re-enable Windows Recovery Environment."""
-    rc, _, stderr = _run(["reagentc", "/enable"])
+    rc, _, err_text = _run(["reagentc", "/enable"])
     if rc == 0:
         log.info("WinRE enabled (reagentc /enable)")
         return True
-    log.debug("reagentc /enable returned %d: %s", rc, stderr)
+    log.debug("reagentc /enable returned %d: %s", rc, err_text)
     return False
 
 
@@ -444,14 +444,14 @@ def _check_bitlocker() -> dict:
     if platform.system() != "Windows":
         return {"enabled": False, "suspended": False, "percentage": "0%", "error": None}
     try:
-        rc, stdout, stderr = _run(["manage-bde", "-status", "C:"], timeout=10)
+        rc, stdout, err_text = _run(["manage-bde", "-status", "C:"], timeout=10)
         if rc != 0:
             # manage-bde not available or no BitLocker — treat as not enabled
             return {
                 "enabled": False,
                 "suspended": False,
                 "percentage": "0%",
-                "error": f"manage-bde failed: {stderr}",
+                "error": f"manage-bde failed: {err_text}",
             }
         # Parse output for Protection Status and Conversion Status
         enabled = False
@@ -500,13 +500,13 @@ def _suspend_bitlocker() -> bool:
         return True
     try:
         # Suspend protectors with 1 reboot count (auto-resume after 1 reboot)
-        rc, _, stderr = _run(
+        rc, _, err_text = _run(
             ["manage-bde", "-protectors", "-disable", "C:", "-rebootcount", "1"], timeout=10
         )
         if rc == 0:
             log.info("BitLocker protectors suspended on C: (auto-resume after 1 reboot)")
             return True
-        log.warning("Failed to suspend BitLocker protectors: %s", stderr)
+        log.warning("Failed to suspend BitLocker protectors: %s", err_text)
         return False
     except (subprocess.SubprocessError, OSError, ValueError, TypeError) as e:
         log.warning("Failed to suspend BitLocker protectors: %s", e)
@@ -530,11 +530,11 @@ def _resume_bitlocker() -> bool:
     if platform.system() != "Windows":
         return True
     try:
-        rc, _, stderr = _run(["manage-bde", "-protectors", "-enable", "C:"], timeout=10)
+        rc, _, err_text = _run(["manage-bde", "-protectors", "-enable", "C:"], timeout=10)
         if rc == 0:
             log.info("BitLocker protectors resumed on C:")
             return True
-        log.warning("Failed to resume BitLocker protectors: %s", stderr)
+        log.warning("Failed to resume BitLocker protectors: %s", err_text)
         return False
     except (subprocess.SubprocessError, OSError, ValueError, TypeError) as e:
         log.warning("Failed to resume BitLocker protectors: %s", e)
@@ -650,6 +650,22 @@ def _rollback_bcd(state: dict) -> bool:
     else:
         log.error("BCD rollback completed with errors — some settings may need manual restoration")
     return all_ok
+
+
+def restore_bcd_state() -> bool:
+    """Restore BCD settings from the state file `apply_bcd_lockdown` wrote.
+
+    This is the rollback entry point for callers outside this module (the
+    hardware harness). `_rollback_bcd` takes a dict and assumes the caller knows
+    where it came from, and `remove_bcd_lockdown` is the operator/sentinel path
+    that also disables lockdown features. Returns False when there is no saved
+    state, so a caller cannot mistake "nothing was written" for "restored".
+    """
+    state = load_bcd_state()
+    if not state:
+        log.warning("No saved BCD state — nothing to restore")
+        return False
+    return _rollback_bcd(state)
 
 
 # ---------------------------------------------------------------------------
@@ -854,14 +870,17 @@ def remove_bcd_lockdown() -> bool:
         # T4: Restore {bootmgr}-level settings (timeout)
         saved_bootmgr = state.get("bootmgr_settings", {})
         for setting, original_value in saved_bootmgr.items():
-            rc, _, stderr = _run(["bcdedit", "/set", "{bootmgr}", setting, original_value])
+            rc, _, command_error = _run(["bcdedit", "/set", "{bootmgr}", setting, original_value])
             if rc == 0:
                 restored += 1
                 log.info("BCD {bootmgr} restored: %s -> %s", setting, original_value)
             else:
                 failed += 1
                 log.warning(
-                    "BCD {bootmgr} restore failed: %s -> %s: %s", setting, original_value, stderr
+                    "BCD {bootmgr} restore failed: %s -> %s: %s",
+                    setting,
+                    original_value,
+                    command_error,
                 )
     else:
         # No saved state — use safe defaults
@@ -873,17 +892,21 @@ def remove_bcd_lockdown() -> bool:
                 log.info("BCD restored: %s", description)
             else:
                 failed += 1
-                log.warning("BCD restore failed: %s — %s", description, stderr)
+                # _apply_bcd_setting returns a bool, so there is no command error text to
+                # report here. This line used to interpolate a variable assigned only by the
+                # other branch, so a failed restore with no saved state raised UnboundLocalError
+                # *inside the recovery path* (found while wiring the harness rollback, S265).
+                log.warning("BCD restore failed: %s", description)
 
         # T4: Restore {bootmgr} safe defaults
         for setting, value, description in BCD_BOOTMGR_RESTORE_COMMANDS:
-            rc, _, stderr = _run(["bcdedit", "/set", "{bootmgr}", setting, value])
+            rc, _, command_error = _run(["bcdedit", "/set", "{bootmgr}", setting, value])
             if rc == 0:
                 restored += 1
                 log.info("BCD {bootmgr} restored: %s", description)
             else:
                 failed += 1
-                log.warning("BCD {bootmgr} restore failed: %s — %s", description, stderr)
+                log.warning("BCD {bootmgr} restore failed: %s — %s", description, command_error)
 
         # Re-enable WinRE (safe default)
         if _enable_winre():
