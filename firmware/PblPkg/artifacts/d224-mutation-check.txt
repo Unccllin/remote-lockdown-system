@@ -1,0 +1,34 @@
+# D-224 mutation check: do the new host tests actually fail when the firmware is broken?
+# A green suite proves nothing unless it goes red on a defect. Two mutations, each reverted
+# with git, each run through make firmware-host-tests.
+# generated 2026-11-11T06:26:38Z
+
+## baseline (unmutated)
+host-tests: 97 checks, 0 failures across 19 cases
+PASS — CborDecode.c public API behaves as specified
+host-tests: 86 checks, 0 failures across 8 cases
+PASS — TPM command buffers match the TPM 2.0 wire format
+host-tests: 12 checks, 0 failures across 8 cases
+PASS — COSE_Sign1 verification accepts valid verdicts and rejects tampered ones
+
+## mutation 1: TpmClient.c password-session authAreaSize 9 -> 8
+   (the classic 'size field forgot a field' bug these tests exist to catch)
+host-tests: 97 checks, 0 failures across 19 cases
+FAIL [nv-read/lock-state] authAreaSize 39, expected 9 + 31 (password session)
+FAIL [nv-read/lock-state] NV_Read params 5 bytes, expected 4
+FAIL [nv-write/lock-state] NV_Write params 69 bytes, expected 2 + 64 + 2
+FAIL [nv-define/all-four-indices] command 0 auth size 0, expected the PCD auth value length
+FAIL [nv-define/all-four-indices] command 0 TPM2B_NV_PUBLIC size 8016, expected 14
+FAIL [nv-define/all-four-indices] command 0 nvIndex 0x424c5f44, expected 0x1c00001
+FAIL [nv-define/all-four-indices] command 0 nameAlg 0x4556, expected SHA-256
+FAIL [nv-define/all-four-indices] command 1 auth size 0, expected the PCD auth value length
+FAIL [nv-define/all-four-indices] command 1 TPM2B_NV_PUBLIC size 8016, expected 14
+   reverted: 0 diff lines (0 = clean)
+
+## mutation 2: CoseVerify.c Sig_structure external_aad empty -> 1 byte
+   (a wrong Sig_structure must fail closed: valid signatures stop verifying)
+host-tests: 97 checks, 0 failures across 19 cases
+host-tests: 86 checks, 0 failures across 8 cases
+FAIL [cose/accepts-valid] expected status 0x0 got 0x800000000000001a
+host-tests: 12 checks, 1 failures across 8 cases
+   reverted: 0 diff lines (0 = clean)

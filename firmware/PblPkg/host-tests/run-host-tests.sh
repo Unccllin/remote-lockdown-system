@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# Host-side unit tests for the PBL parsing modules (D-117).
+# Host-side unit tests for the PBL firmware modules.
 #
-# These run on the build host with any C99 compiler — no EDK II checkout, no
-# QEMU, no swtpm, no Docker. That is the gap D-117 named: before this, the only
-# verification for individual modules was `-Werror` compilation plus one QEMU
-# end-to-end boot, so a CBOR parsing regression was only visible as "the whole
-# boot flow broke".
+# These run on the build host with a desktop C compiler — no EDK II checkout, no QEMU, no
+# swtpm, no Docker. That is the gap D-117 named: before this, the only verification for
+# individual modules was `-Werror` compilation plus one QEMU end-to-end boot, so a regression
+# inside a module was visible only as "the whole boot flow broke".
 #
-# What is covered here: CborDecode.c's public API — verdict parsing, policy
-# parsing, COSE_Sign1 envelope extraction, protected-header parsing, and the
-# malformed-input paths. What is NOT covered (and is still open in D-224): TPM
-# command buffer construction and COSE signature verification with test keys.
+# Three suites, each built from the REAL firmware sources:
+#
+#   1. test_cbor_decode  — CborDecode.c's public API. Needs nothing but a C compiler (D-117).
+#   2. test_tpm_command  — TPM 2.0 command buffers, captured at the EFI_TCG2_PROTOCOL seam
+#                          (D-224a). Needs OpenSSL for the HMAC/AES/sha256 the session code calls.
+#   3. test_cose_verify  — COSE_Sign1 verdict verification with throwaway ES256 keys (D-224b).
+#                          Needs OpenSSL.
+#
+# When OpenSSL headers are absent the TPM and COSE suites print an explicit SKIPPED line and the
+# run still fails only if a suite that DID run fails — a skip is never reported as a pass.
 #
 # Usage: ./run-host-tests.sh [--verbose]
 set -euo pipefail
@@ -25,21 +30,113 @@ if [[ "${1:-}" == "--verbose" ]]; then
   verbose="-v"
 fi
 
+cflags=(-std=c11 -Wall -Wextra -Werror -Wno-unused-parameter)
+
 rm -rf "$build"
-mkdir -p "$build"
+mkdir -p "$build/IndustryStandard" "$build/cose-fixture"
 
-# 1. Lift the parsed structs out of the real firmware header (single source of truth)
-#    into include/ so an editor/clangd resolving this directory also sees it.
+# ---------------------------------------------------------------------------
+# 1. Generated headers: the host view of the firmware's own sources.
+#
+#    extract-decls.py lifts the structs, PBL_* macros and prototypes out of the real
+#    PblApp.h; gen-host-pcd.py lifts the PCD defaults out of PblPkg.dec; gen-host-tpm.py
+#    folds the vendored EDK II TPM headers into one self-contained file. Nothing here is a
+#    hand-kept copy, so a firmware rename or a changed PCD default cannot leave the host
+#    tests asserting on a shape that no longer exists.
+# ---------------------------------------------------------------------------
 python3 "$here/extract-decls.py" "$pbl/PblApp/PblApp.h" >"$here/include/pbl_decls.generated.h"
+python3 "$here/gen-host-pcd.py" "$pbl/PblPkg.dec" >"$here/include/pbl_pcd.generated.h"
+python3 "$here/gen-host-tpm.py" \
+  "$here/include/IndustryStandard/Tpm12.h" \
+  "$here/include/IndustryStandard/Tpm20.h" >"$here/include/pbl_tpm_wire.generated.h"
 
-# 2. CborDecode.c includes "PblApp.h". A quoted include finds the *including
-#    file's* directory first, so the shim cannot win by -I ordering alone — the
-#    source is compiled from a copy in the build directory with -Iinclude first.
+# ---------------------------------------------------------------------------
+# 2. Drift check on the vendored EDK II TPM headers.
+#
+#    They are verbatim copies so the host build needs no EDK II checkout. When a checkout IS
+#    present, prove they still match it. When it is not, say so rather than pretend — the
+#    firmware's own build is the thing that would notice a stale copy, and it does.
+# ---------------------------------------------------------------------------
+edk2="${EDK2_DIR:-$HOME/.local/src/edk2}"
+if [[ -f "$edk2/MdePkg/Include/IndustryStandard/Tpm20.h" ]]; then
+  for h in Tpm12.h Tpm20.h; do
+    if ! cmp -s "$here/include/IndustryStandard/$h" \
+                "$edk2/MdePkg/Include/IndustryStandard/$h"; then
+      echo "FAIL: vendored $h differs from $edk2/MdePkg/Include/IndustryStandard/$h" >&2
+      echo "      re-sync it with the copy command in include/IndustryStandard/README.md" >&2
+      exit 1
+    fi
+  done
+  echo "vendored TPM headers match EDK II ($edk2)"
+else
+  echo "note: EDK II not found at $edk2 — vendored TPM header drift check skipped"
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Stand-ins for the modules' own `#include <IndustryStandard/Tpm20.h>`.
+#
+#    TpmClient.c and TpmSession.c include that header directly. The declarations are already
+#    present by then — the shim pulled them in through pbl_tpm_wire.generated.h — so including
+#    the vendored file a second time would fail with "redefinition of struct tdTPM_STRUCT_VER".
+#    These placeholders are found first (-Ibuild precedes -Iinclude) and contribute nothing,
+#    because everything they would have declared is already in scope.
+# ---------------------------------------------------------------------------
+for h in Tpm12.h Tpm20.h; do
+  cat >"$build/IndustryStandard/$h" <<'EOF'
+/* Placeholder: the TPM 2.0 declarations reach the translation unit through the host shim
+   (include/pbl_tpm_wire.generated.h). Present so the module's own angled include resolves
+   without a second copy of the same typedefs. Generated by run-host-tests.sh. */
+EOF
+done
+
+# CborDecode.c is compiled from a copy in build/: a quoted include finds the *including file's*
+# directory first, so "PblApp.h" can only resolve to the shim when no copy sits next to the TU.
 cp "$pbl/PblApp/CborDecode.c" "$build/CborDecode.c"
 
-"$cc" -std=c99 -Wall -Wextra -Werror -Wno-unused-parameter \
+"$cc" "${cflags[@]}" \
   -I "$here/include" -I "$build" \
   "$build/CborDecode.c" "$here/host_efi.c" "$here/test_cbor_decode.c" \
   -o "$build/test_cbor_decode"
 
 "$build/test_cbor_decode" $verbose
+
+# ---------------------------------------------------------------------------
+# 4. TPM command-buffer and COSE suites (need OpenSSL).
+# ---------------------------------------------------------------------------
+if [[ -f /usr/include/openssl/evp.h ]]; then
+  for tu in TpmClient.c TpmSession.c CoseVerify.c; do
+    cp "$pbl/PblApp/$tu" "$build/$tu"
+  done
+
+  # -Ibuild BEFORE -Iinclude here on purpose: <IndustryStandard/Tpm20.h> must find the empty
+  # stand-in, not the vendored original (whose declarations already arrived via the shim, and
+  # including them twice is a hard "conflicting types for TPM2_COMMAND_HEADER" error).
+
+  # TPM commands: the shipped TpmClient.c + TpmSession.c against the fake TCG2 protocol.
+  "$cc" "${cflags[@]}" \
+    -I "$build" -I "$here/include" -I "$here" \
+    "$build/TpmClient.c" "$build/TpmSession.c" \
+    "$here/host_efi.c" "$here/host_crypto.c" "$here/host_tpm.c" "$here/test_tpm_command.c" \
+    -lcrypto -o "$build/test_tpm_command"
+
+  "$build/test_tpm_command" $verbose
+
+  # COSE verification: real ES256 key + self-signed cert, generated fresh every run so no key
+  # material is ever committed.
+  fixture="$build/cose-fixture"
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout "$fixture/key.pem" -out "$fixture/cert.pem" \
+    -days 1 -subj "/CN=pbl-host-test-throwaway" >/dev/null 2>&1
+  openssl x509 -in "$fixture/cert.pem" -outform DER -out "$fixture/cert.der" >/dev/null 2>&1
+
+  "$cc" "${cflags[@]}" \
+    -I "$build" -I "$here/include" -I "$here" \
+    "$build/CoseVerify.c" "$build/CborDecode.c" \
+    "$here/host_efi.c" "$here/host_crypto.c" "$here/test_cose_verify.c" \
+    -lcrypto -o "$build/test_cose_verify"
+
+  "$build/test_cose_verify" "$fixture" $verbose
+else
+  echo "SKIPPED test_tpm_command: /usr/include/openssl/evp.h not found (apt install libssl-dev)"
+  echo "SKIPPED test_cose_verify: /usr/include/openssl/evp.h not found (apt install libssl-dev)"
+fi

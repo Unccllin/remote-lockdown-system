@@ -11,6 +11,9 @@
     "dashboard/coverage/**",
     "serverless/coverage/**",
     "firmware/PblPkg/compile_commands.json",
+    "firmware/PblPkg/host-tests/build/**",
+    "firmware/PblPkg/host-tests/include/*.generated.h",
+    "firmware/PblPkg/host-tests/include/IndustryStandard/**",
     "agent/.venv/**",
     "**/node_modules/**"
   ]

@@ -1,0 +1,16 @@
+# D-224 host-side TPM command-buffer + COSE verification tests
+# generated 2026-11-11T06:26:17Z by: make firmware-host-tests
+# host: Linux 6.18.33.2-microsoft-standard-WSL2 x86_64, cc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+
+vendored TPM headers match EDK II (/home/cllin/.local/src/edk2)
+
+host-tests: 97 checks, 0 failures across 19 cases
+PASS — CborDecode.c public API behaves as specified
+  test_tpm_command: byte-level TPM command construction
+
+host-tests: 86 checks, 0 failures across 8 cases
+PASS — TPM command buffers match the TPM 2.0 wire format
+test_cose_verify: COSE_Sign1 verdict verification with real ES256 keys
+
+host-tests: 12 checks, 0 failures across 8 cases
+PASS — COSE_Sign1 verification accepts valid verdicts and rejects tampered ones

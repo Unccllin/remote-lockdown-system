@@ -11,4 +11,8 @@ CompileFlags:
   CompilationDatabase: .
   Add:
     - -Iinclude
-    - -std=c99
+    - -std=c11
+    # Headers here are C, not C++: without this clangd falls back to Objective-C++ for
+    # an isolated .h and then rejects -std=c11 ("not allowed with 'Objective-C++'").
+    - -x
+    - c
