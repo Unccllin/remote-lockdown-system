@@ -203,6 +203,63 @@ class TestExceptions:
         assert "unclassified" in out
 
 
+class TestCoverageReporting:
+    """Files Semgrep could not read produce no findings — so they must be named out loud.
+
+    An unparseable file is indistinguishable from a clean one in `results`, which is how 17
+    files (most of the firmware's C) sat outside the gate while it printed `[OK]`. The gate
+    reports them but does not fail on them: the parse failure is a tooling limitation on EDK II
+    C, and a permanently-red gate is a gate nobody reads.
+    """
+
+    def test_note_names_unparseable_files_and_still_passes(self, tree):
+        report = {
+            "results": [finding(RULE_PATH, "src/app.js", 2)],
+            "errors": [{"path": "firmware/App.c", "type": "Other syntax error", "message": "x"}],
+        }
+        code, out = run_gate(report, tree, [entry(RULE_PATH, "src/app.js", LINE)])
+        assert code == 0, out
+        assert "NOT scanned" in out
+        assert "firmware/App.c" in out
+
+    def test_no_errors_means_no_note(self, tree):
+        code, out = run_gate({"results": [finding(RULE_PATH, "src/app.js", 2)]}, tree,
+                             [entry(RULE_PATH, "src/app.js", LINE)])
+        assert code == 0, out
+        assert "NOT scanned" not in out
+
+    def test_reasons_are_classified_and_deduplicated(self, tree):
+        report = {
+            "results": [],
+            "errors": [
+                {"path": "a.c", "type": "Other syntax error", "message": "boom"},
+                {"path": "a.c", "type": ["PartialParsing", []], "message": "again"},
+                {"path": "b.c", "type": "Timeout", "message": "Timeout when running rule"},
+                {"path": "c.c", "type": ["PartialParsing", []], "message": "partial"},
+                {"type": "Other syntax error", "message": "no path, must be ignored"},
+            ],
+        }
+        code, out = run_gate(report, tree, [])
+        assert code == 0, out
+        assert "3 file(s)" in out
+        # a.c is reported twice by semgrep; the note must list it once, not twice.
+        assert out.count("a.c") == 1
+        # The first reason wins, so a later PartialParsing cannot relabel an unparseable file.
+        assert "could not be parsed" in out
+        assert "timed out" in out
+        assert "partially parsed" in out
+
+    def test_note_survives_a_failing_run(self, tree):
+        """A red build must not hide the files it never looked at."""
+        report = {
+            "results": [finding(RULE_PATH, "src/app.js", 2)],
+            "errors": [{"path": "firmware/App.c", "type": "Other syntax error", "message": "x"}],
+        }
+        code, out = run_gate(report, tree, [])
+        assert code == 1, out
+        assert "firmware/App.c" in out
+
+
 class TestExceptionsFileValidation:
     @pytest.mark.parametrize(
         "overrides,expected",

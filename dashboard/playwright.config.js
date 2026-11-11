@@ -35,5 +35,12 @@ export default defineConfig({
     url: 'http://localhost:5173',
     timeout: 30_000,
     reuseExistingServer: !process.env.CI,
+    // A developer's dashboard/.env may point the UI at the deployed Worker via VITE_API_URL
+    // (that is what a standalone build wants). The E2E suite is a SAME-ORIGIN test against the
+    // fixture backend, so that value must not leak in: with it, every authenticated test talked
+    // to production and got 401, which read as "login is broken" in the UI.
+    // Vite gives existing process.env values precedence over .env files, so an empty string here
+    // wins and the client falls back to '/api'.
+    env: { VITE_API_URL: '' },
   },
 });

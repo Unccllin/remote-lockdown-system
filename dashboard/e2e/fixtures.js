@@ -56,7 +56,10 @@ const agentRoutes = require('../../server/src/routes/agent');
 const auditRoutes = require('../../server/src/routes/audit');
 const healthRoutes = require('../../server/src/routes/health');
 
-const BACKEND_PORT = 3001;
+// Overridable so a local run can dodge a collision on 3001 (another dev server, another
+// project, a harness) instead of requiring that process to be stopped. CI keeps the default.
+// vite.config.js reads the same variable, so the proxy follows the backend.
+const BACKEND_PORT = Number(process.env.E2E_BACKEND_PORT ?? 3001);
 const BACKEND_URL = `http://localhost:${BACKEND_PORT}`;
 const ADMIN_USERNAME = 'e2e-admin';
 const ADMIN_PASSWORD = 'e2e-admin-password-123';

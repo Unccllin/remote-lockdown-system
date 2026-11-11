@@ -159,6 +159,8 @@
 Name the real UEFI machine for the D-129 window (it closes D-129 and D-134 together and gives
 D-120 its real-media evidence), re-run `make hw-preflight` / `make hw-artifact` so the I3 citations
 are ones the checker accepts, and take D-130 only once a code-signing certificate exists.
+Software-side, nothing is queued: the four remaining debt items need hardware or a certificate,
+and the two host gates that could not run (Playwright, Semgrep) now both run and pass.
 
 ---
 

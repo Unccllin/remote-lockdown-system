@@ -15050,6 +15050,47 @@ claim in AGENTS.md, so the repo stops asserting something two runs failed to obs
 - `scripts/run-agent-tests.sh -q` (final) → **859 tests**, 0 failures; `test_boot_lockdown_runner.py`
   green; `ruff check` + `ruff format --check agent/` clean (63 files).
 
+### Second half — the two "cannot run here" gates were unblocked
+
+No debt item; this is environment and gate work, recorded because three separate
+`AGENTS.md` statements turned out to be wrong or incomplete.
+
+- **Playwright E2E now runs and passes on this host: 11/11 in 25.3s.** The documented cause
+  ("missing libnspr4.so") was the first of **three independent blockers**, each only visible
+  after the previous one cleared:
+  1. `libnspr4`/`libnss3` absent (extracted from the Ubuntu .deb into `~/.local/lib/nspr`
+     with `apt-get download` + `dpkg-deb -x` — no root, nothing system-wide);
+  2. `dashboard/e2e/fixtures.js` hardcoded port 3001, held on this machine by an unrelated
+     project's Next.js dev server → `EADDRINUSE :::3001`. Now `E2E_BACKEND_PORT` (default
+     3001, so CI is untouched) with `vite.config.js`'s proxy following the same variable;
+  3. `dashboard/.env` sets `VITE_API_URL=<deployed Worker>/api`, which Vite injects into
+     `import.meta.env` and the axios client prefers over same-origin `/api`. Every
+     authenticated test therefore talked to **production** and took a 401 — the Playwright
+     trace showed `POST https://lockdown-serverless…/api/auth/login → 401` and, tellingly,
+     `GET …/api/setup/status → 200`, so the suite looked like "login is broken" rather than
+     misconfigured. `playwright.config.js` now forces `VITE_API_URL: ''` on the dev server it
+     spawns (Vite gives `process.env` precedence over `.env`), leaving a developer's `.env`
+     intact for normal `npm run dev`.
+  Failure sequence, for the record: 0/11 passed (EADDRINUSE) → 4/11 (real assertions,
+  production 401s) → **11/11**. Three runs, each fixing one layer.
+- **`make sast` runs again** (`semgrep` was missing; `pipx install semgrep==1.182.1`, the
+  version CI pins) → 45 findings, **0 ERROR**, all 41 WARNING + 4 INFO matched by
+  `scripts/sast-exceptions.json`. But green did not mean scanned: Semgrep's C parser cannot
+  read EDK II code, so **17 files received no coverage** while the gate printed `[OK]` — the
+  same "a tier nobody can see reads as green" failure that made this gate fail on unclassified
+  WARNINGs in S251. `sast-gate.py` now prints a `[sast] NOTE:` block naming each unscanned
+  file and its reason (`could not be parsed` / `partially parsed` / `timed out`). Reported,
+  not gated: a permanently-red gate is one nobody reads. +4 tests (24 total).
+- **Electron runs**: `electron@42`'s `install.js` `require()`s the ESM-only `@electron/get`,
+  which throws `ERR_REQUIRE_ESM` on Node 20 — so `npm install` leaves
+  `node_modules/electron/dist/` empty and the app cannot start at all. Fixed by running the
+  install under Node 24 (nvm). Launcher and desktop entry installed at
+  `~/.local/bin/remote-lockdown-admin` and
+  `~/.local/share/applications/remote-lockdown-admin.desktop`; app verified live over CDP
+  (bridge `apiBaseUrl` correct, Worker `/api/setup/status` → 200, Fleet Overview rendering 8
+  devices). One own-goal worth naming: the first seeded `worker_url` omitted the `/api`
+  suffix the client expects, so the app rendered but every call 404'd.
+
 ### Next session opening
 
 Name the real UEFI machine for the D-129 window — it closes D-129 and D-134 together (owner-hierarchy
@@ -15212,3 +15253,5 @@ tests instead.
 Name the real UEFI machine for the D-129 window (it closes D-129 and D-134 together and gives
 D-120 its real-media evidence), re-run `make hw-preflight` / `make hw-artifact` so the I3 citations
 are ones the checker accepts, and take D-130 only once a code-signing certificate exists.
+Software-side, nothing is queued: the four remaining debt items need hardware or a certificate,
+and the two host gates that could not run (Playwright, Semgrep) now both run and pass.

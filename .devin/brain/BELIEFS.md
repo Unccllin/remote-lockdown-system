@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-11 09:35:37 — 124 beliefs
+Generated: 2026-11-11 14:09:58 — 127 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -67,6 +67,18 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-058 | confirmed | code-read | Admin usernames follow one contract, defined in server/src/validation/username.js: the value is TRIMMED before use, allowed characters are letters, digits and _ @ . -, length is 3-100 on creation while login accepts shorter values so a legacy account can still sign in, and the password is never trimmed. Before S203 three routes each had their own rule (login allowed _ @ . -, setup/create-admin and admins/create allowed only _ -) and none trimmed, so a username accepted at creation could be rejected at login, and padded input failed with 'username contains invalid characters' — a message that reads like a wrong password. The dashboard also submitted the username untrimmed and its setup form used a narrower allowlist than login. |
+
+## dashboard/e2e
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-125 | confirmed | code-read | The dashboard E2E suite needed three independent fixes to run on this host, in this order: libnspr4+libnss3 (from Ubuntu .debs into ~/.local/lib/nspr, no root), E2E_BACKEND_PORT instead of a hardcoded 3001 (which collided with an unrelated dev server), and forcing VITE_API_URL='' because dashboard/.env otherwise made every authenticated test call the deployed Worker and take a 401 that looks like broken login. |
+
+## dashboard/electron
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-127 | confirmed | code-read | electron@42's install.js requires the ESM-only @electron/get, so 'npm install' under Node 20 throws ERR_REQUIRE_ESM and leaves node_modules/electron/dist empty — the app then cannot start at all, with no binary and no path.txt. |
 
 ## deployment/windows
 
@@ -329,3 +341,9 @@ mkfs.fat 4.2 (2021-01-31)
 |---|--------|----------|-----------|
 | B-105 | confirmed | code-read | Semgrep's OSS JSON report sets extra.lines and extra.fingerprint to the literal string 'requires login' for registry (p/default) rules, so no gate can key findings on either field; the only trustworthy identity is the source line read from disk at start.line. |
 | B-106 | confirmed | emulated | The javascript path-join-resolve-traversal rule flags ANY function parameter that reaches path.join/resolve; path.basename(), whitelist-table lookups and literal-returning config helpers do not act as sanitizers (measured with a probe file, S251). Clearing that finding therefore requires removing the parameter from the join or suppressing, not hardening the value. |
+
+## tooling/sast
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-126 | confirmed | code-read | A green Semgrep gate does not mean the code was scanned: the OSS C parser cannot read EDK II C, so 17 files in this repo yield no findings at all and are indistinguishable from clean ones in the report. |

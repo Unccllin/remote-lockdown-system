@@ -304,6 +304,55 @@ def report_gating(verdict: dict, repo_root: Path) -> bool:
     return problems
 
 
+def unscanned_files(report: dict) -> dict[str, str]:
+    """Map each path Semgrep reported an error for to a short reason.
+
+    Why this exists: an unparseable file produces **no findings**, which the gate reads as
+    "clean". EDK II C is the live example — `EFIAPI` after a return type and typedefs the OSS
+    parser cannot resolve make every `firmware/PblPkg/PblApp/*.c` unreadable, so 17 files were
+    silently outside the gate's assurance while the run printed `[OK]`. That is the same class
+    of blindness (a tier nobody can see reading as green) that made this gate fail on
+    unclassified WARNINGs in S251.
+
+    Reported, not gated: failing here would turn CI red for a dozen pre-existing files whose
+    parse failure is a tooling limitation, not a defect, and a permanently-red gate gets
+    ignored — which is the failure this script was written to end.
+    """
+    reasons: dict[str, str] = {}
+    for error in report.get("errors") or []:
+        path = error.get("path")
+        if not path:
+            continue
+        kind = error.get("type")
+        message = str(error.get("message") or "")
+        if isinstance(kind, list) and kind and kind[0] == "PartialParsing":
+            reason = "partially parsed"
+        elif "Timeout" in str(kind) or "Timeout" in message:
+            reason = "timed out"
+        else:
+            reason = "could not be parsed"
+        reasons.setdefault(path, reason)
+    return reasons
+
+
+def report_coverage(report: dict) -> None:
+    """Print the files that received no coverage. Never affects the exit code."""
+    files = unscanned_files(report)
+    if not files:
+        return
+    print()
+    print(
+        f"[sast] NOTE: {len(files)} file(s) were NOT scanned — Semgrep could not read them, "
+        "so 'no findings here' does not mean 'clean':"
+    )
+    for path in sorted(files):
+        print(f"  {path:62} {files[path]}")
+    print(
+        "[sast] these files carry no static-analysis coverage; the known cause is EDK II C "
+        "(EFIAPI after the return type, typedefs the OSS parser cannot resolve)"
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Gate a Semgrep JSON report.")
     ap.add_argument("report", help="path to the JSON produced by semgrep --json-output")
@@ -356,6 +405,7 @@ def main() -> int:
             print(f"  {'gating':13} ERROR   {loc(finding):45} {short_rule(finding)}")
         for entry in verdict["stale"]:
             print(f"  {'stale-entry':13} {entry['path']:45} {entry['rule'].split('.')[-1]}")
+        report_coverage(report)
         return 0
 
     failed = report_gating(verdict, args.repo_root)
@@ -366,11 +416,13 @@ def main() -> int:
             f"{len(verdict['accepted'])} accepted, {len(verdict['unclassified'])} unclassified, "
             f"{len(verdict['stale'])} stale exception(s)."
         )
+        report_coverage(report)
         return 1
 
     report_clean(verdict)
     print()
     print("[OK] every finding is either fixed or carries a reviewed reason")
+    report_coverage(report)
     return 0
 
 

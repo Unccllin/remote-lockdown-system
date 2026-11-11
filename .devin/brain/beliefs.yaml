@@ -2792,3 +2792,55 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-125
+  statement: 'The dashboard E2E suite needed three independent fixes to run on this host, in this order:
+    libnspr4+libnss3 (from Ubuntu .debs into ~/.local/lib/nspr, no root), E2E_BACKEND_PORT instead of
+    a hardcoded 3001 (which collided with an unrelated dev server), and forcing VITE_API_URL='''' because
+    dashboard/.env otherwise made every authenticated test call the deployed Worker and take a 401 that
+    looks like broken login.'
+  domain: dashboard/e2e
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S266: verified by running (E2E 11/11; semgrep.json errors[]; install under Node 24)'
+  source: 'S266: playwright trace showed POST .../workers.dev/api/auth/login 401; 0/11 -> 4/11 -> 11/11
+    passed after each fix'
+  asserted: '2026-11-11'
+  last_verified: '2026-11-11'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-126
+  statement: 'A green Semgrep gate does not mean the code was scanned: the OSS C parser cannot read EDK
+    II C, so 17 files in this repo yield no findings at all and are indistinguishable from clean ones
+    in the report.'
+  domain: tooling/sast
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S266: verified by running (E2E 11/11; semgrep.json errors[]; install under Node 24)'
+  source: 'S266: semgrep.json errors[] lists 17 paths; sast-gate.py now reports them as a coverage NOTE
+    (reported, not gated)'
+  asserted: '2026-11-11'
+  last_verified: '2026-11-11'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-127
+  statement: electron@42's install.js requires the ESM-only @electron/get, so 'npm install' under Node
+    20 throws ERR_REQUIRE_ESM and leaves node_modules/electron/dist empty — the app then cannot start
+    at all, with no binary and no path.txt.
+  domain: dashboard/electron
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S266: verified by running (E2E 11/11; semgrep.json errors[]; install under Node 24)'
+  source: 'S266: install.js:3 require(''@electron/get''); worked under Node 24.21.0 (require(ESM) supported)'
+  asserted: '2026-11-11'
+  last_verified: '2026-11-11'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

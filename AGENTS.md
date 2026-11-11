@@ -449,7 +449,35 @@ eslint clean on server + dashboard, ruff clean + formatted on
 agent, vite build OK, all shell scripts `bash -n` OK, all YAML configs valid, all
 local imports resolve, git tree clean. Also green: `make pg-smoke` 65/65 on real
 PostgreSQL 16, API+agent E2E 10/10, `actionlint` 1.7.12 clean on all 5 workflows.
-Not runnable on this host: Playwright + Electron (missing `libnspr4.so`).
+**Playwright and Electron DO run on this host (fixed 2026-11-11).** The old note here said
+"not runnable: missing libnspr4.so", which was only the first of three independent blockers.
+The distro ships neither `libnspr4` nor `libnss3`; both were extracted from their Ubuntu
+packages into `~/.local/lib/nspr` **without root** (`apt-get download` + `dpkg-deb -x`), and
+every browser/Electron launch needs `LD_LIBRARY_PATH="$HOME/.local/lib/nspr"`. Two more
+blockers only became visible afterwards:
+
+1. `dashboard/e2e/fixtures.js` hardcoded port 3001, which on this machine holds an unrelated
+   project's dev server → `EADDRINUSE`. Now `E2E_BACKEND_PORT` (default 3001, CI unchanged),
+   and `vite.config.js` follows the same variable.
+2. `dashboard/.env` sets `VITE_API_URL=<deployed Worker>/api`, which Vite injects into
+   `import.meta.env`. The E2E suite is same-origin, so every authenticated test talked to
+   **production** and got 401 — presenting as "login is broken", not as misconfiguration.
+   `playwright.config.js` now forces `VITE_API_URL: ''` for the dev server it spawns (Vite
+   gives existing `process.env` values precedence over `.env`), so a developer's `.env` is
+   honoured for normal `npm run dev` and ignored by the test run.
+
+Run the suite:
+
+```bash
+cd dashboard && E2E_BACKEND_PORT=3101 LD_LIBRARY_PATH="$HOME/.local/lib/nspr" npx playwright test
+# 11 passed — measured 2026-11-11
+```
+
+Electron runs too (`npx electron .` from `electron/`, same `LD_LIBRARY_PATH`); `electron@42`'s
+`install.js` needs Node ≥22 because it `require()`s the ESM-only `@electron/get`, so use
+`~/.nvm/versions/node/v24.21.0/bin/node` for the first install or `npm install` leaves
+`node_modules/electron/dist/` empty. Installed launcher and desktop entry:
+`~/.local/bin/remote-lockdown-admin`, `~/.local/share/applications/remote-lockdown-admin.desktop`.
 **`make full-verify` now covers all five component suites** (server, agent,
 dashboard, worker, electron) plus the script-level harness tests, E2E, env and
 artifact checks — it previously ran only three of the five while its own comment
@@ -892,7 +920,14 @@ reach a verdict:
   entry that matches nothing fails the gate, so a fixed finding loses its
   exception instead of leaving a decision nobody is making any more.
 - `python3 scripts/sast-gate.py semgrep.json --lenient` reports without gating; CI
-  and `make sast` never use it. Tests: `scripts/test_sast_gate.py` (20 cases).
+  and `make sast` never use it. Tests: `scripts/test_sast_gate.py` (24 cases).
+- **A green gate does not mean everything was scanned.** Semgrep's C parser cannot read
+  EDK II code (`EFIAPI` after the return type, typedefs it cannot resolve), so the firmware
+  C files and 12 others produce *no findings* and are silently indistinguishable from clean.
+  The gate now prints a `[sast] NOTE:` block naming every file that received no coverage,
+  with a reason (`could not be parsed` / `partially parsed` / `timed out`) — reported, not
+  gated, because a permanently-red gate is one nobody reads. Measured 2026-11-11: 17 files,
+  45 findings (0 ERROR).
 
 Debug note: the `semgrep` on PATH may be a symlink into `/tmp` and silently gone
 (that is how S251 started). `make sast` fails loudly when the binary is missing;
