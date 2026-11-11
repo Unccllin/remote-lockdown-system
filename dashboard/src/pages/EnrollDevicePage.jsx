@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/client';
+import { useServerlessMode } from '../hooks/useServerlessMode';
 
 /**
  * Derive the server base URL (no /api suffix) for the install command.
@@ -44,6 +45,9 @@ function getServerBaseUrl() {
 export default function EnrollDevicePage() {
   const navigate = useNavigate();
   const [token, setToken] = useState(null);
+  // Serverless (Worker) builds serve a per-device install.ps1 instead of the
+  // token+setup-command flow, so point the operator at that page — see the callout below.
+  const { serverless } = useServerlessMode();
   // The setup command comes from the server (it owns PUBLIC_SERVER_URL), so the
   // operator copies a URL this server can actually be reached at — the browser's
   // own origin is `localhost` when the dashboard is opened on the server, and a
@@ -228,6 +232,31 @@ export default function EnrollDevicePage() {
         Generate a short-lived enrollment token, then run a single command on the
         target machine. No admin password needed on the target.
       </p>
+
+      {/* The token flow needs GET /api/enroll/setup-command, which only the Express
+          server implements — the Worker has no such route, so this page could not
+          produce a command at all against it (the request 404s and the page fell back
+          to a bare installer line). The serverless path is a per-device install.ps1
+          served by GET /api/installer/:id, on the manual-enroll page. Nothing linked
+          there, and the packaged desktop app has no address bar to type it. */}
+      {serverless && (
+        <div className="card border border-amber-500/40 bg-amber-500/5 mb-6">
+          <h2 className="text-sm font-semibold text-amber-200 mb-2">
+            Serverless mode — use the per-device installer
+          </h2>
+          <p className="text-sm text-slate-300 mb-4">
+            This build talks to a Cloudflare Worker, which issues a self-contained{' '}
+            <code>install.ps1</code> per device (its API key is baked in) instead of an
+            enrollment token. The token flow below only works against the Express server.
+          </p>
+          <button
+            onClick={() => navigate('/devices/enroll/manual')}
+            className="btn-primary"
+          >
+            Go to per-device installer
+          </button>
+        </div>
+      )}
 
       {/* Generate token button (initial state) */}
       {!token && (
