@@ -2364,31 +2364,58 @@
 | D-218 | Chain-load hash check with policy-provided hash | CLOSED (test-chainload-harness.sh generates policy with C4 key 58 set to real bootx64.efi SHA-256 and a mismatched variant; mismatch log shows [ChainLoad] BLOCK — bootmgfw.efi hash mismatch. Commit 5123efc; artifact /tmp/pbl-chainload-ci/pbl-serial-{pass,mismatch}.log) | TEST |
 | D-219 | Policy signature BLOCK path untested | CLOSED (same scenario as D-215 — test-d215-harness.sh + gen-policy-rot.py; 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 | D-220 | BLOCK-intent returns propagate error to BDS (BootOrder advance bypass) | CLOSED (`PblApp.c` policy-sig-fail and anti-rollback paths returned `EFI_SECURITY_VIOLATION` — per Boot#### semantics a non-success return advances BDS to the next boot option (Windows boots). Fixed via `PblBlockHalt()` — lock screen + MOR + ResetSystem + CpuDeadLoop, never returns; chain-load return checked at all 3 call sites, fail-closed on error. Note: D-219's harness passed the buggy code — it checked serial lines, not post-BLOCK behavior. QEMU+swtpm: fve 16/0, docker 15/0, persistence 16/0. Commit this session; artifacts /tmp/pbl-fve-ci/, /tmp/pbl-ci-persist/) | SECURITY |
-| D-224 | No host-side tests for TPM command construction or COSE verification with test keys | OPEN (D-117 was closed in S265 for the parsing modules + QEMU integration; these two need an EDK II crypto backend that the host build does not have — see the detailed entry) | TEST |
+| D-224 | No host-side tests for TPM command construction or COSE verification with test keys | CLOSED (S266: host_tpm.c fakes EFI_TCG2_PROTOCOL->SubmitCommand so the shipped construction code runs and its bytes are asserted — 86 checks; COSE verify with throwaway ES256 keys — 12 checks; mutation-checked; commit e0dbec8) | TEST |
 
 **Totals**: 56 items — 51 CLOSED, 5 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware,
 D-130 signing certificate, D-134 TPM NV hierarchy, D-224 host-side TPM/COSE tests)
 
 ### D-224 — No host-side tests for TPM command construction or COSE verification with test keys
-- **Status**: OPEN (split out of D-117, session 265 — D-117's close criteria named
-  three things; two of them are delivered and the third is not reachable from the
-  host, so it became its own item instead of being silently absorbed)
+- **Status**: CLOSED (2026-11-11, session 266; commit `e0dbec8`)
 - **Category**: TEST
-- **Blocker**: `TpmClient.c` builds TPM2 command buffers and `CoseVerify.c`
-  verifies COSE_Sign1 signatures through EDK II's BaseCryptLib. Neither is
-  callable from the host build (`firmware/PblPkg/host-tests`): the TPM path needs
-  `EFI_TCG2_PROTOCOL` plumbing and the TPM 2.0 structure headers, and the crypto
-  path needs a BaseCryptLib backend linked in. The parsing modules were host-testable
-  because they depend on nothing but `CopyMem`/`ZeroMem`/`AsciiStrCmp`/`AllocatePool`.
-- **What exists instead**: `CborDecode.c` has host-side unit tests (D-117), and
-  every TPM/COSE path is covered by the QEMU+swtpm harnesses — 17/0 (`make
-  firmware-qemu`), 15/0 (docker), 16/0 (persistence), 16/0 (fve) — but at
-  end-to-end granularity, so a byte-level mistake in a command buffer is visible
-  only as a boot-flow failure.
-- **Close criteria**: (a) byte-level tests for the TPM command buffers
-  `TpmClient.c` constructs (NV_Read/NV_Write/StartAuthSession header + size
-  fields), with the EDK II TPM structure definitions stubbed or vendored; (b)
-  verdict-verification tests using test keys — sign a CBOR payload with a
-  throwaway ES256 key and assert `PblVerifyCoseSign1` accepts it and rejects a
-  tampered payload/signature. Either a small host crypto backend or a dedicated
-  QEMU harness that asserts on the byte buffer would satisfy this.
+- **Progress**: both halves of the close criteria are delivered, in
+  `firmware/PblPkg/host-tests/`, run by `make firmware-host-tests`.
+  **(a) Byte-level TPM command buffers** — `host_tpm.c` implements a fake
+  `EFI_TCG2_PROTOCOL` whose `SubmitCommand` captures the command block and returns
+  scripted responses. That is the only path `TpmClient.c` has to a TPM
+  (`gBS->LocateProtocol` + `Tcg2->SubmitCommand`), so the *shipped* construction code
+  runs and the produced bytes are asserted exactly: tag, declared `CommandSize`,
+  command code, both handles, auth-area size, the password session's auth value (which
+  is `PcdPblTpmNvAuthValue`, not an empty password — the D-135 boot failure), and
+  parameter order/offsets for NV_Read, NV_Write, NV_DefineSpace (all four indices, in
+  the owner hierarchy), NV_Increment and StartAuthSession. A cross-cutting invariant
+  additionally rejects any command whose `header.CommandSize` disagrees with the bytes
+  submitted — the class of bug a QEMU boot can only report as `TPM_RC_SIZE`.
+  86 checks / 8 cases.
+  **(b) COSE signature verification with test keys** — a throwaway P-256 key and
+  self-signed certificate are generated per run (no key material committed), a real
+  ES256 signature is produced over a real `Sig_structure`, and `PblVerifyCoseSign1` is
+  shown to accept it and to reject a tampered payload, a tampered signature, a wrong
+  kid, a malformed envelope, and alg −8 (which must stay `EFI_UNSUPPORTED`, never
+  accepted). 12 checks / 8 cases.
+  Total: **195 checks across 35 cases, 0 failures**.
+- **Why it is not vacuous** (the part that matters): both suites were
+  mutation-checked. Changing the password-session auth area from 9 to 8 bytes fails 9
+  TPM assertions across 3 cases; making `external_aad` one byte instead of empty makes
+  every valid COSE signature stop verifying while both tamper cases still reject —
+  i.e. it fails closed. Evidence: `firmware/PblPkg/artifacts/d224-mutation-check.txt`.
+- **Single source of truth, not copies**: `extract-decls.py` now also lifts every
+  object-like `PBL_*` macro and every `PblTpm*` prototype out of `PblApp.h`;
+  `gen-host-pcd.py` lifts the PCD defaults out of `PblPkg.dec` (so
+  `PcdPblTpmUsePlatformHierarchy=FALSE` flows into the asserted hierarchy handle);
+  `gen-host-tpm.py` folds the vendored, byte-identical EDK II `Tpm12.h`/`Tpm20.h` into
+  one self-contained header, and the runner `cmp`s the vendored pair against
+  `$EDK2_DIR` when that checkout exists and fails on drift. Three generator bugs were
+  found and fixed while building this: a comment-mention anchor that duplicated six
+  struct definitions, a backward walk that escaped into the preceding struct, and an
+  include order that let the vendored header beat its own stand-in.
+- **Residual, named rather than hidden**: the TPM and COSE suites need OpenSSL headers
+  (`libssl-dev`) at build time; without them `run-host-tests.sh` prints an explicit
+  `SKIPPED` line for those two suites and still runs the CBOR suite, so a skip can
+  never be read as a pass. One latent contract issue is pinned by a test rather than
+  fixed: `PblTpmStartHmacSession` writes `BindHandle` into the command verbatim, so
+  "unbound" is only correct if the caller passes `TPM_RH_NULL`; the sole caller
+  (`PblApp.c:479`) binds to the NV index, so this is a trap for a future caller rather
+  than a live defect.
+- **Artifacts**: `firmware/PblPkg/artifacts/d224-host-tests.txt`,
+  `firmware/PblPkg/artifacts/d224-mutation-check.txt`
+

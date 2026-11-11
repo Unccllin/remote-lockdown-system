@@ -78,7 +78,7 @@ fi
 #    TpmClient.c and TpmSession.c include that header directly. The declarations are already
 #    present by then — the shim pulled them in through pbl_tpm_wire.generated.h — so including
 #    the vendored file a second time would fail with "redefinition of struct tdTPM_STRUCT_VER".
-#    These placeholders are found first (-Ibuild precedes -Iinclude) and contribute nothing,
+#    These placeholders are found first (-I on the build dir precedes the include dir) and contribute nothing,
 #    because everything they would have declared is already in scope.
 # ---------------------------------------------------------------------------
 for h in Tpm12.h Tpm20.h; do
@@ -108,7 +108,7 @@ if [[ -f /usr/include/openssl/evp.h ]]; then
     cp "$pbl/PblApp/$tu" "$build/$tu"
   done
 
-  # -Ibuild BEFORE -Iinclude here on purpose: <IndustryStandard/Tpm20.h> must find the empty
+  # -I on the build dir BEFORE the include dir here on purpose: <IndustryStandard/Tpm20.h> must find the empty
   # stand-in, not the vendored original (whose declarations already arrived via the shim, and
   # including them twice is a hard "conflicting types for TPM2_COMMAND_HEADER" error).
 

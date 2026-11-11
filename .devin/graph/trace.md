@@ -15059,3 +15059,156 @@ are the ones I3 actually accepts; if no machine is available, take D-224's byte-
 tests instead.
 
 ---
+
+## Session 266 — 2026-11-11 (D-224: test the code that talks to the TPM, not a model of it)
+
+### RULE-ZERO — Understanding logged before code changes
+
+**Read**:
+- `docs/adr/PBL-DEBT-LEDGER.md` D-224 (close criteria (a) byte-level TPM command buffers,
+  (b) verdict COSE verify with test keys), D-117 (the parent item this was split from)
+- `firmware/PblPkg/host-tests/{run-host-tests.sh,extract-decls.py,host_efi.c,include/PblApp.h}`
+- `firmware/PblPkg/PblApp/TpmClient.c` (2498 lines: header/finalize helpers, session-auth builder,
+  NV_Read/NV_Write/NV_DefineSpace/NV_Increment/PCR_Extend, `PblTcg2Locate`, `PblTpmSubmitCommand`)
+- `firmware/PblPkg/PblApp/TpmSession.c` (1435 lines: StartAuthSession + HMAC/CFB session state)
+- `firmware/PblPkg/PblApp/CoseVerify.c` (`PblVerifyCoseSign1`: CBOR parse → kid check → Sig_structure →
+  ES256 raw r||s verify through `EcGetPublicKeyFromX509`/`EcDsaVerify`)
+- `firmware/PblPkg/PblPkg.dec` (PCD defaults: `PcdPblTpmUsePlatformHierarchy=FALSE`,
+  `PcdPblTpmUseParameterEncryption=TRUE`, `PcdPblTpmNvAuthValue="PBL_DEV_NV_AUTH_KEY_32B_LONG!!"`,
+  `PcdNvIndexBase=0x01C00000`), `Makefile:153` (`firmware-host-tests` target)
+- EDK II on this host: `~/.local/src/edk2` (present) — `MdePkg/Include/IndustryStandard/Tpm20.h`
+  (1810 lines, includes `Tpm12.h`), `CryptoPkg/Library/BaseCryptLib/Pk/CryptEc.c:EcDsaVerify`
+
+**Finding** (each of these shaped the design):
+- **`EcDsaVerify` takes raw r||s, not DER** (`CryptEc.c:1060` converts via `ECDSA_SIG_set0` after
+  checking `SigSize == HalfSize*2`). So `CoseVerify.c`'s 64-byte signature is correct, and a host
+  backend that mimicked OpenSSL's `ECDSA_verify` directly would have tested the wrong contract and
+  reported a false bug. Read the EDK II implementation, not the name.
+- **The TPM dependency surface is small and already vendorable**: `TpmClient.c`+`TpmSession.c` need
+  only `SwapBytes16/32/64`, `CopyMem/ZeroMem`, `AllocatePool/FreePool`, `Print`, five PCDs,
+  `Sha256HashAll`, and the `HmacSha256*` family. Everything else they call is each other. No EDK II
+  crypto backend is needed for the *command-buffer* half — only for the COSE half.
+- **The real test seam is `EFI_TCG2_PROTOCOL->SubmitCommand`**, which the code reaches through
+  `gBS->LocateProtocol`. A fake protocol lets the test capture the *actual* bytes the shipped code
+  builds, so the test cannot drift from the firmware the way a re-implementation of the layout would.
+- **A cross-cutting invariant is available for free**: every submitted command must satisfy
+  `header.CommandSize == the CommandSize argument` — i.e. the declared size covers exactly what was
+  written. That single assertion catches the whole class of "size field forgot the auth area" bug,
+  which is the failure mode a QEMU boot can only report as `TPM_RC_SIZE`.
+- **`PcdPblTpmUsePlatformHierarchy` now defaults FALSE** (`PblPkg.dec:76`), matching D-134's fix; the
+  ledger's "defaults to TRUE" text is the pre-fix state. Host tests must read the PCD rather than
+  hardcode a handle, so this default flows into the assertions.
+- **Host tests cannot require EDK II or OpenSSL to stay honest.** D-117's promise is "any C99
+  compiler". Therefore: vendor `Tpm20.h`/`Tpm12.h` verbatim (drift-checked against EDK II when it is
+  present), implement SHA-256/HMAC in the harness pinned by NIST/RFC 4231 known-answer vectors, and
+  make only the COSE test depend on OpenSSL — announced as an explicit `SKIPPED` line, never a
+  silent pass.
+
+**Design** (before editing): extend the existing host shim rather than fork it; three test binaries
+(`test_cbor_decode`, `test_tpm_command`, `test_cose_verify`), all invoked by `run-host-tests.sh` so
+`make firmware-host-tests` keeps being the one entry point.
+
+### Fog cleared
+
+- **D-224 was described as blocked on "an EDK II crypto backend", and that description was wrong.**
+  Two facts made it reachable: (a) EDK II's `Tpm20.h` is a *wire-format* header, so vendoring it
+  costs nothing and needs no crypto backend; (b) the only crypto the compiled modules use is
+  SHA-256/HMAC-SHA256/AES-CBC/ECDSA-P-256, all of which OpenSSL provides on this host behind
+  `libssl-dev`. What the item actually lacked was a *seam*: `EFI_TCG2_PROTOCOL->SubmitCommand`
+  is the only path `TpmClient.c` has to a TPM, so faking it runs the shipped construction code and
+  the bytes become assertable. Source: `PblTcg2Locate`/`PblTpmSubmitCommand` in TpmClient.c:60-126.
+- **`EcDsaVerify` takes raw r||s, not DER** — `CryptoPkg/.../CryptEc.c:1060` rejects any
+  `SigSize != 2 * half` and rebuilds an `ECDSA_SIG` from the halves. A host backend that mirrored
+  OpenSSL's `ECDSA_verify` would have declared a nonexistent firmware bug. Read the implementation,
+  not the name.
+- **The host shim's EFI status table was wrong** and nothing could notice: `EFI_PROTOCOL_ERROR` was
+  `ENCODE_ERROR(11)` (EDK II: 24), and `EFI_NOT_STARTED`/`EFI_ALREADY_STARTED` were missing
+  entirely. The CBOR suite asserted the *macro*, so it passed either way; the error only became
+  visible once `TpmSession.c` — which returns those codes — was compiled for the first time.
+- **Byte offsets cannot be read off the C source.** `TPMS_AUTH_COMMAND` is 137 bytes because
+  `TPM2B_*` are fixed 66-byte buffers; the *serialized* empty auth area is 9. An assertion claiming
+  9 was rejected by the compiler, which is exactly why it was written.
+- **The tests are non-vacuous** — proven, not asserted: `artifacts/d224-mutation-check.txt`.
+
+### Fog remaining
+
+- **D-120** (real BitLocker media + VMK lock-state proof), **D-129** (PBL on real UEFI hardware),
+  **D-130** (provisioned signing certificate) and **D-134** (owner-hierarchy confirmation on the
+  D-129 window) are unchanged and resource-bound. Files checked: `docs/adr/PBL-DEBT-LEDGER.md`
+  D-120/D-129/D-130/D-134; `firmware/PblPkg/artifacts/` (no new hardware evidence this session).
+- **A latent contract trap is now pinned but not fixed**: `PblTpmStartHmacSession` writes
+  `BindHandle` into `TPM2_StartAuthSession` verbatim, so "unbound" requires the caller to pass
+  `TPM_RH_NULL` (0x40000007) — passing 0 produces a command the TPM answers `TPM_RC_HANDLE`. The
+  sole caller (`PblApp.c:479`) binds to the NV index, so this is not a live defect. Pinned by
+  `session/start-auth-session-unbound`; treating it as a defect needs a decision, not a test edit.
+- **`E-BCD` / `E-HP-UEFI`** remain `verified-in-unit-test` by decision (S264).
+- **CodeQL's ~102 alerts** and **Playwright/Electron E2E** remain unrunnable here (private repo
+  without Code Security; missing `libnspr4.so`). `make sast` still cannot run: `semgrep` absent.
+
+### Debt items closed
+
+- **D-224** — commit `e0dbec8`. Both close criteria delivered in
+  `firmware/PblPkg/host-tests/`: 8 byte-level TPM command cases (86 checks) and 8 COSE cases
+  (12 checks), 195 checks / 35 cases across all three suites, 0 failures. Artifacts:
+  `firmware/PblPkg/artifacts/d224-host-tests.txt`,
+  `firmware/PblPkg/artifacts/d224-mutation-check.txt`. Graph: 60/64 CLOSED.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — unchanged, resource-bound (see Fog remaining).
+
+### Blockers
+
+- Hardware/certificate only, unchanged: a real UEFI machine with a TPM for D-129/D-134, real
+  BitLocker media for D-120, a provisioned code-signing certificate for D-130. The lab server
+  answers `http://localhost:3001/api/health` → 200, so `make hw-preflight`'s network precondition
+  holds today; what remains is someone at the machine.
+
+### Failure attribution
+
+- **Layer 2 — context provision (primary).** D-224's own text said the two missing tests "need an
+  EDK II crypto backend that the host build does not have". That sentence sent four sessions past
+  the item: it framed a *design* problem (no seam) as a *dependency* problem, and the fix (fake
+  `SubmitCommand`, vendor the wire header, use libcrypto) was never written down anywhere. One
+  line naming the seam would have made this a one-session task.
+- **Layer 4 — verification feedback (secondary).** The host shim carried a wrong EFI status table
+  (`EFI_PROTOCOL_ERROR` as 11) and nobody could notice, because the only suite consuming it
+  asserted the macro rather than the value. Harness change that would prevent it and is cheap:
+  when `$EDK2_DIR/MdePkg/Include/Base.h` exists, parse the `EFI_*` codes out of it and compare
+  them with the shim's — the same "compare against the real header when it is present" pattern
+  the vendored-TPM-header `cmp` check already uses.
+- **Self-inflicted, recorded honestly**: three generator bugs (a `\b` search that matched a
+  comment mention and duplicated six struct definitions; a backward walk that escaped into the
+  preceding struct because a field line ending in a comment does not end with `;`; an include
+  order that let the vendored header beat its own stand-in), four test expectations that were
+  wrong about the firmware (NV_Increment carries *two* handles; a failed epoch increment
+  short-circuits the counter read; `GetRandom` needs a `TPM2B_DIGEST` body; a truncated COSE
+  input is `BUFFER_TOO_SMALL`, not `PROTOCOL_ERROR`), and one real bug in my signing helper
+  (writing a `size_t` length through a cast of an `int`). Each was caught by running the tests
+  rather than reasoning about them.
+
+### VERIFY
+
+- `make firmware-host-tests` → **195 checks, 0 failures across 35 cases** (CBOR 97/19, TPM 86/8,
+  COSE 12/8); vendored TPM headers reported identical to EDK II (`cmp`, `~/.local/src/edk2`).
+- Mutation check (`artifacts/d224-mutation-check.txt`) → `authAreaSize 9→8` fails 9 TPM assertions
+  across 3 cases; `external_aad` empty→1 byte makes every valid COSE signature stop verifying while
+  both tamper cases still reject. Both firmware sources restored (`git diff --stat` → 0 lines).
+- `make firmware-build` → **Build successful**, `PblApp.efi` SHA-256 `336f5451…` — identical to
+  S265, confirming no firmware source was modified.
+- `scripts/run-agent-tests.sh` → **859 passed** (unchanged from S265; includes
+  `test_graph_assertions.py` covering I1–I7).
+- `python3 scripts/check_debt_ledger.py` → `mismatches now: 0 | recorded: 0 | new: 0 | stale
+  baseline: 0` (summary row and detail entry agree, B-102's failure mode checked).
+- `make graph-check` → **All invariants pass**; `make graph-status` → Phases 17/17, **Debt 60/64**,
+  Enforcement 11/13 (+2 by decision), 4 open items named.
+- `make check-firmware-todos` → `OK: no untraceable TODO/FIXME markers under firmware/PblPkg`.
+- Lens diagnostics on the six new/changed host-test files: 0 errors (2 stale advisories about
+  `stdio.h`/`Iinclude` fixed; the remaining `unused-includes` hits on generated headers are the
+  known false positive — include-cleaner cannot see macro expansion).
+
+### Next session opening
+
+Name the real UEFI machine for the D-129 window (it closes D-129 and D-134 together and gives
+D-120 its real-media evidence), re-run `make hw-preflight` / `make hw-artifact` so the I3 citations
+are ones the checker accepts, and take D-130 only once a code-signing certificate exists.

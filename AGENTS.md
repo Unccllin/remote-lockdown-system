@@ -356,10 +356,12 @@ make check-firmware-todos                      # exit 0 = clean, 1 = untraceable
 # Build
 cd dashboard && npx vite build                # outputs dashboard/dist
 
-# PBL host-side unit tests — any C99 compiler, no EDK II/QEMU/Docker (D-117).
-# They found the CborDecode TSTR cursor desync in S265; run them after any
-# CborDecode.c / PblApp.h change.
-make firmware-host-tests                     # 19 cases / 97 checks
+# PBL host-side unit tests (D-117 parsing, D-224 TPM buffers + COSE verify). The CBOR
+# suite runs with any C compiler; the TPM and COSE suites need OpenSSL headers and print an
+# explicit SKIPPED line without them (never a silent pass). They found the CborDecode TSTR
+# cursor desync in S265, and in S266 they pin the TPM wire format byte by byte —
+# mutation-checked, see firmware/PblPkg/artifacts/d224-mutation-check.txt.
+make firmware-host-tests                     # 35 cases / 195 checks (CBOR 19/97, TPM 8/86, COSE 8/12)
 cd electron  && node --check main.js preload.js setup-preload.js setup-wizard.js server-starter.js config.js updater.js
 
 # Generic (fleet) agent installer: NSIS wrapper over the CLI installer. Needs

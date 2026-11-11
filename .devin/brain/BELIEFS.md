@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-10 12:24:26 — 121 beliefs
+Generated: 2026-11-11 09:35:37 — 124 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -100,6 +100,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-034 | confirmed | emulated | BootNext is read and its target classified (BootNextOption field + PBL_BPF_BOOTNEXT_SET/SHELL_AS_BOOTNEXT); BUT EDK2 BDS deletes BootNext at BdsEntry.c:1075 before dispatch, so a live BootNext is unobservable to any booted app — detection is best-effort for non-spec firmware |
 | B-035 | confirmed | emulated | On this OVMF build, an unordered Boot#### (exists but not in BootOrder) — or BootNext targeting an existent Boot#### — wedges the VM silently before console init (zero serial output) — emulated anomaly, likely OVMF/QEMU fw_cfg interaction, not confirmed on other firmware |
 
+## firmware/cose
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-123 | confirmed | code-read | EDK II's EcDsaVerify consumes a RAW r\|\|s signature (SigSize == 2 * curve half), not DER: CryptoPkg/Library/BaseCryptLib/Pk/CryptEc.c rebuilds an ECDSA_SIG from the two halves. So CoseVerify.c's 64-byte ES256 signature is correct, and a host backend mirroring OpenSSL ECDSA_verify would report a nonexistent bug. |
+
 ## firmware/identity
 
 | ID | Status | Evidence | Statement |
@@ -152,6 +158,13 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-056 | confirmed | code-read | The PBL firmware builds reproducibly on this host with the repo's own script: EDK II lives at ~/.local/src/edk2 (commit 2970e56) with nasm 2.16.01 at ~/.local/bin, BaseTools and OVMF already built, and 'cd firmware/PblPkg && ./build-pbl.sh --arch X64' reproduces PblApp.efi (3906065d...), PblPersistDxe.efi (042f2914...) and EnrollKeys.efi (418d7d8c...) byte-identically — git status firmware/ stays empty. So firmware fixes are buildable and verifiable here, contrary to S200's 'no EDK II build tool' conclusion that was drawn from inside the pbl-qemu image only. For D-116, the remaining gap is the TLS VERSION FLOOR, not pinning or hostname: chain pinning comes from C4 key 78 + PblInstallTlsCaCertificate, hostname verification comes from EDK2's HttpDxe (HttpsSupport.c:666-668 sets VerifyHost.HostName from RemoteHost, :695-702 applies EfiTlsVerifyHost), but TlsDxe creates its context as TLS10 (TlsDriver.c:263) and TlsInit.c:107 makes that the minimum, so TLS 1.0/1.1 can be negotiated; PBL cannot raise it because HttpsClient.c only ever holds EFI_HTTP_PROTOCOL (no EFI_TLS_PROTOCOL handle, no EfiTlsVersion). |
 | B-057 | confirmed | code-read | The TLS 1.2 floor for the verdict fetch is enforced at the terminator, not by the device: Caddy states 'tls { protocols tls1.2 tls1.3 }' (validated by the real caddy binary) and Cloudflare's zone Minimum TLS Version must be 1.2 (a dashboard step, documented in serverless/README.md). The device structurally cannot raise it — PBL holds only EFI_HTTP_PROTOCOL, HttpDxe exposes no EfiTlsVersion, and EDK2's TlsDxe creates its context as TLS10 (TlsDriver.c:263) which TlsInit.c:107 applies as the SSL_CTX minimum with only SSLv3 disabled. scripts/test_tls_floor.py proves the floor behaviourally AND must force the offer with '-cipher DEFAULT@SECLEVEL=0' because OpenSSL 3 refuses to offer TLS 1.0 at its default security level: without that, the test passes with the server never consulted. Also: docs/adr/PBL-DEBT-LEDGER.md (markdown) and .devin/graph/GRAPH-SPEC.yaml disagreed about D-116 and D-117 status — the spec is authoritative for graph invariants and the markdown had drifted, which graph_assert cannot detect. |
 | B-121 | confirmed | code-read | PblTlsVerifyCert (223 lines, zero callers) could never be wired: it compares a SHA-256 pin, and no EDK II API accepts a hash as a chain anchor. Deleted in S265; chain pinning remains PblInstallTlsCaCertificate + EFI_TLS_VERIFY_PEER. |
+
+## firmware/tpm
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-122 | confirmed | code-read | The host-test seam for PBL's TPM client is EFI_TCG2_PROTOCOL->SubmitCommand: it is the only path TpmClient.c has to a TPM (gBS->LocateProtocol then Tcg2->SubmitCommand), so faking it runs the shipped command-construction code and the produced bytes can be asserted exactly. |
+| B-124 | confirmed | code-read | TPMS_AUTH_COMMAND is 137 bytes on the host (TPM2B_* are fixed 66-byte buffers), while an empty auth area serializes to 9 bytes; TPM wire offsets must be computed from the serialized fields, never from sizeof of the EDK II structs. |
 
 ## firmware/variables
 

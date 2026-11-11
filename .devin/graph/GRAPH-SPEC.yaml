@@ -1036,8 +1036,33 @@ debt_items:
   - id: D-224
     description: "No host-side tests for TPM command construction or COSE verification with test keys"
     close_criteria: "Byte-level TPM command-buffer tests + verdict verification with throwaway ES256 test keys"
-    status: OPEN
+    status: CLOSED
     category: TEST
+    commit_ref: "e0dbec8 — host-side TPM command-buffer + COSE verification tests"
+    artifact_ref: >-
+      firmware/PblPkg/artifacts/d224-host-tests.txt;
+      firmware/PblPkg/artifacts/d224-mutation-check.txt;
+      firmware/PblPkg/host-tests/run-host-tests.sh
+    risk_notes: >-
+      S266 delivered both halves that D-117 split out. (a) TPM command buffers: host_tpm.c fakes
+      EFI_TCG2_PROTOCOL->SubmitCommand — the only path TpmClient.c has to a TPM — so the shipped
+      construction code runs and the captured bytes are asserted (tag, declared size, command
+      code, both handles, auth-area size, password-session auth value, parameter order/offset).
+      A cross-cutting invariant rejects any command whose header size disagrees with the bytes
+      submitted. 86 checks / 8 cases. (b) COSE: a throwaway P-256 key and self-signed cert are
+      generated per run, a real ES256 signature is produced over a real Sig_structure, and
+      PblVerifyCoseSign1 accepts it while rejecting a tampered payload, a tampered signature, a
+      wrong kid, a malformed envelope, and alg -8 (which must stay EFI_UNSUPPORTED). 12 checks /
+      8 cases. Total 195 checks / 35 cases, 0 failures. The tests are proven non-vacuous by
+      mutation: authAreaSize 9->8 fails 9 TPM assertions, and a non-empty external_aad makes
+      every valid COSE signature stop verifying while both tamper cases still reject (fail-closed)
+      — artifacts/d224-mutation-check.txt. Residual, stated rather than hidden: the TPM and COSE
+      suites need OpenSSL headers at build time (libssl-dev); without them run-host-tests.sh
+      prints an explicit SKIPPED line for those two suites and still runs the CBOR suite, so a
+      skip is never reported as a pass. One latent contract finding is now pinned by a test rather
+      than fixed: PblTpmStartHmacSession writes BindHandle verbatim, so "unbound" is only correct
+      when the caller passes TPM_RH_NULL — the sole production caller binds to the NV index, so
+      this is a trap for future callers, not a live defect.
 
 
   - id: D-118

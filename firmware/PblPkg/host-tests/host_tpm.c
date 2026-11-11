@@ -23,7 +23,6 @@
 
 #include "host_tpm.h"
 
-#include <stdio.h>
 #include <string.h>
 
 /* ---- capture ---------------------------------------------------------- */

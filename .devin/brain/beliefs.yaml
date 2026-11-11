@@ -2739,3 +2739,56 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-122
+  statement: 'The host-test seam for PBL''s TPM client is EFI_TCG2_PROTOCOL->SubmitCommand: it is the
+    only path TpmClient.c has to a TPM (gBS->LocateProtocol then Tcg2->SubmitCommand), so faking it runs
+    the shipped command-construction code and the produced bytes can be asserted exactly.'
+  domain: firmware/tpm
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S266: host_tpm.c fakes SubmitCommand; test_tpm_command.c asserts captured bytes for 8 cases/86
+    checks'
+  source: 'S266: firmware/PblPkg/PblApp/TpmClient.c:60-126; firmware/PblPkg/host-tests/host_tpm.c; test_tpm_command.c
+    86 checks'
+  asserted: '2026-11-11'
+  last_verified: '2026-11-11'
+  commit_ref: e0dbec8
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-123
+  statement: 'EDK II''s EcDsaVerify consumes a RAW r||s signature (SigSize == 2 * curve half), not DER:
+    CryptoPkg/Library/BaseCryptLib/Pk/CryptEc.c rebuilds an ECDSA_SIG from the two halves. So CoseVerify.c''s
+    64-byte ES256 signature is correct, and a host backend mirroring OpenSSL ECDSA_verify would report
+    a nonexistent bug.'
+  domain: firmware/cose
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S266: CryptEc.c:1060 read directly; host_crypto.c mirrors the raw r||s contract; test_cose_verify.c
+    accept case passes with a real ES256 signature'
+  source: 'S266: ~/.local/src/edk2/CryptoPkg/Library/BaseCryptLib/Pk/CryptEc.c:1060; host_crypto.c EcDsaVerify'
+  asserted: '2026-11-11'
+  last_verified: '2026-11-11'
+  commit_ref: e0dbec8
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-124
+  statement: TPMS_AUTH_COMMAND is 137 bytes on the host (TPM2B_* are fixed 66-byte buffers), while an
+    empty auth area serializes to 9 bytes; TPM wire offsets must be computed from the serialized fields,
+    never from sizeof of the EDK II structs.
+  domain: firmware/tpm
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S266: sizeof probe against vendored Tpm20.h (137 / 10 / 66); STATIC_ASSERTs pin them in
+    host-tests/include/PblApp.h'
+  source: 'S266: measured with a sizeof probe against vendored Tpm20.h; pinned by STATIC_ASSERTs in host-tests/include/PblApp.h'
+  asserted: '2026-11-11'
+  last_verified: '2026-11-11'
+  commit_ref: e0dbec8
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
