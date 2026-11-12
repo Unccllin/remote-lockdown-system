@@ -136,8 +136,9 @@ def _make_console_safe() -> None:
     for stream in (sys.stdout, sys.stderr):
         if stream is None:
             continue
-        # sys.stdout is typed TextIO, which does not declare reconfigure(); the concrete
-        # object under a console build is an io.TextIOWrapper, which does. Resolving it
+        # sys.stdout is typed TextIO, which does not declare the stream-reconfiguration
+        # method at all; the concrete object under a console build is an io.TextIOWrapper,
+        # which does. Resolving it
         # reflectively keeps both the type checker and a badly-wrapped stream happy.
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:
