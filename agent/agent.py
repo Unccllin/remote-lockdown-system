@@ -1425,6 +1425,11 @@ def checkin(cfg: dict) -> dict | None:
         "hostname": cfg["hostname"],
         "mac_address": get_mac_address(),
         "hardware_uuid": get_hardware_uuid(),
+        # The build this agent reports. It used to be sent only on the update-check request
+        # (check_for_update sets X-Agent-Version), so the dashboard's Agent column stayed
+        # blank for every device even though the server has a field and D-222 staleness logic
+        # for it. Reported on every check-in now.
+        "agent_version": AGENT_VERSION,
         # Provenance the operator can act on: "signature" means this device will
         # only apply a detached-signature-verified update; "sha256-only" means it
         # would accept whatever the backend serves.

@@ -50,6 +50,8 @@ interface Device {
   mac_address: string | null;
   hardware_uuid: string | null;
   serial_number: string | null;
+  /** Hardware model reported by the check-in (from firmware_audit); display only. */
+  model?: string | null;
   last_checkin: string | null;
   enrolled_at: string;
   api_key_hash: string;
@@ -681,6 +683,13 @@ interface CheckinMetadata {
  * verbatim. Anything that does not look like a version stays undefined (unknown) rather
  * than being stored, so a malformed value cannot read as compliance.
  */
+/** Hardware model from a check-in's firmware_audit block, when present and non-empty. */
+function firmwareAuditModel(audit: unknown): string | null {
+  if (!audit || typeof audit !== 'object' || Array.isArray(audit)) return null;
+  const model = (audit as Record<string, unknown>)['model'];
+  return typeof model === 'string' && model.trim() ? model.trim() : null;
+}
+
 function normalizeAgentVersion(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
@@ -758,6 +767,10 @@ function mergeCheckinMetadata(device: Device, metadata: CheckinMetadata | null):
     update_verification: metadata.update_verification ?? null,
     agent_version: metadata.agent_version ?? device.agent_version ?? null,
     agent_version_at: metadata.agent_version_at ?? device.agent_version_at ?? null,
+    // Surface the hardware model the check-in reported. It only exists inside
+    // firmware_audit, and nothing mapped it onto the device, so the UI showed its
+    // 'no value' placeholder on every device.
+    model: firmwareAuditModel(metadata.firmware_audit) ?? device.model ?? null,
     agent_version_stale: isAgentVersionStale({
       ...device,
       last_checkin: metadata.last_checkin ?? device.last_checkin,
@@ -1241,8 +1254,10 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
       ?? existingMetadata?.update_verification,
     // D-222: same rule as update_verification — a pre-D-222 agent that omits the field
     // must not erase a version an earlier check-in reported.
-    agent_version: normalizeAgentVersion(payload.agent_version) ?? existingMetadata?.agent_version,
-    agent_version_at: normalizeAgentVersion(payload.agent_version)
+    // The agent reports its build as the X-Agent-Version header (agent.py:3437); reading only
+    // payload.agent_version left this null forever, so the dashboard's Agent column was blank.
+    agent_version: normalizeAgentVersion(payload.agent_version ?? request.headers.get('X-Agent-Version')) ?? existingMetadata?.agent_version,
+    agent_version_at: normalizeAgentVersion(payload.agent_version ?? request.headers.get('X-Agent-Version'))
       ? new Date().toISOString()
       : (existingMetadata?.agent_version_at ?? null),
   });
@@ -2503,6 +2518,15 @@ function generateServerlessInstallScript(options: {
 # Generated ${String(config.enrolled_at ?? '')} — run elevated (Administrator) on the target.
 ${trigger}
 $ErrorActionPreference = 'Stop'
+
+# Stock Windows PowerShell 5.1 negotiates TLS 1.0/1.1 on many images; the Worker sits behind
+# Cloudflare, which requires TLS 1.2+. Without this, every Invoke-WebRequest below fails with
+# "The underlying connection was closed" on a machine that has never been updated.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+} catch {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+}
 
 # Work in a temp directory: the installer decides the real install location
 # (%ProgramData\\LockdownAgent) and copies the agent there itself.

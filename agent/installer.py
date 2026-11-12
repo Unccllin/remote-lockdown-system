@@ -59,6 +59,7 @@ imports), by agent/build.ps1:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import json
 import os
@@ -115,6 +116,39 @@ def _enable_windows_ansi() -> None:
 
 
 _enable_windows_ansi()
+
+
+def _make_console_safe() -> None:
+    """Never let a decorative glyph kill an install.
+
+    Windows consoles are usually cp1252, where the check/cross/warning glyphs used by
+    print_ok/print_fail/print_warn cannot be encoded. `print()` then raises
+    UnicodeEncodeError, and because print_ok() is called from main() *before* any real work,
+    the whole installer died on its own banner:
+
+        UnicodeEncodeError: 'charmap' codec can't encode character '\u2713'
+
+    That made the one-click installer unrunnable on a stock Windows machine (found in the
+    first live hardware test). Reconfiguring the text streams with errors="replace" degrades
+    an unrepresentable glyph to '?' and leaves every ASCII part of the message intact, which
+    is the difference between a cosmetic glitch and a dead tool.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None:
+            continue
+        # sys.stdout is typed TextIO, which does not declare reconfigure(); the concrete
+        # object under a console build is an io.TextIOWrapper, which does. Resolving it
+        # reflectively keeps both the type checker and a badly-wrapped stream happy.
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        # A closed or detached stream cannot be reconfigured; the installer still runs, it
+        # just keeps the default (strict) error handler.
+        with contextlib.suppress(ValueError, OSError):
+            reconfigure(errors="replace")
+
+
+_make_console_safe()
 
 BOLD = "\033[1m"
 GREEN = "\033[92m"
@@ -941,6 +975,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    _make_console_safe()
     args = build_parser().parse_args()
 
     print_banner()

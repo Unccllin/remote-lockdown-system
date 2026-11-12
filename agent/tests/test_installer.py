@@ -7,6 +7,7 @@ Covers:
   - Error handling for expired / invalid / reused tokens
 """
 
+import io
 import sys
 from pathlib import Path
 from typing import Any
@@ -723,3 +724,58 @@ def test_defender_exclusion_missing_powershell_does_not_raise(monkeypatch):
     monkeypatch.setattr(installer.subprocess, "run", _raise)
 
     assert installer.add_defender_exclusions() is False
+
+
+class TestConsoleEncoding:
+    """The installer must not die on its own decoration.
+
+    First live hardware test: lockdown-installer.exe crashed with
+
+        UnicodeEncodeError: 'charmap' codec can't encode character '\u2713'
+
+    because print_ok() prints a checkmark and the Windows console was cp1252. Because
+    print_ok() is called from main() before any real work, the one-click installer was
+    unrunnable on a stock Windows image -- the failure looked like a broken installer rather
+    than a cosmetic encoding glitch. _make_console_safe() degrades the glyph instead.
+    """
+
+    @staticmethod
+    def _cp1252_stdout():
+        # errors="strict" reproduces the stock console: it raises rather than substituting.
+        return io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict", newline="")
+
+    def test_print_ok_survives_a_cp1252_console(self, monkeypatch):
+        stream = self._cp1252_stdout()
+        monkeypatch.setattr(installer.sys, "stdout", stream)
+
+        installer._make_console_safe()
+        installer.print_ok("Running as Administrator")  # must not raise
+        stream.flush()
+
+        written = stream.buffer.getvalue().decode("cp1252")
+        assert "Running as Administrator" in written
+
+    def test_all_decorated_helpers_survive(self, monkeypatch):
+        stream = self._cp1252_stdout()
+        monkeypatch.setattr(installer.sys, "stdout", stream)
+
+        installer._make_console_safe()
+        installer.print_ok("ok")
+        installer.print_fail("fail")
+        installer.print_warn("warn")
+        installer.print_step(1, "step")
+        stream.flush()
+        assert "step" in stream.buffer.getvalue().decode("cp1252")
+
+    def test_without_the_fix_the_glyph_would_raise(self, monkeypatch):
+        """Pins the original defect: on a strict cp1252 stream print_ok() raises."""
+        stream = self._cp1252_stdout()
+        monkeypatch.setattr(installer.sys, "stdout", stream)
+
+        with pytest.raises(UnicodeEncodeError):
+            installer.print_ok("boom")
+
+    def test_no_stdout_is_tolerated(self, monkeypatch):
+        """A windowed build has stdout=None; the helper must not crash on it."""
+        monkeypatch.setattr(installer.sys, "stdout", None)
+        installer._make_console_safe()  # must not raise
