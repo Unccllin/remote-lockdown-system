@@ -57,7 +57,7 @@ jobs:
 
       - name: Clone EDK II
         run: |
-          git clone --depth 1 --branch edk2-stable202408 \
+          git clone --depth 1 --branch edk2-stable202411 \
             https://github.com/tianocore/edk2.git ~/.local/src/edk2
           cd ~/.local/src/edk2
           git submodule update --init --recursive \
@@ -111,7 +111,7 @@ jobs:
 
       - name: Clone EDK II
         run: |
-          git clone --depth 1 --branch edk2-stable202408 \
+          git clone --depth 1 --branch edk2-stable202411 \
             https://github.com/tianocore/edk2.git ~/.local/src/edk2
           cd ~/.local/src/edk2
           git submodule update --init --recursive \
@@ -162,7 +162,7 @@ jobs:
 
       - name: Clone EDK II + build OVMF
         run: |
-          git clone --depth 1 --branch edk2-stable202408 \
+          git clone --depth 1 --branch edk2-stable202411 \
             https://github.com/tianocore/edk2.git ~/.local/src/edk2
           cd ~/.local/src/edk2
           git submodule update --init --recursive \
