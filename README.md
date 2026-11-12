@@ -122,6 +122,29 @@ python agent.py
 
 ---
 
+## Screenshots
+
+Captured from a live deployment: the desktop shell talking to the Cloudflare Worker, with one
+real Windows machine (`FRANKENSTEIN`) enrolled and being tracked.
+
+| | |
+|---|---|
+| **Sign in** | **Fleet overview** — live counts, recent agent activity |
+| ![Sign in](docs/images/01-login.png) | ![Fleet overview](docs/images/02-fleet-overview.png) |
+| **Devices** | **Device detail** — identity, API key, installer downloads |
+| ![Devices](docs/images/03-devices.png) | ![Device detail](docs/images/04-device-detail.png) |
+| **Enroll (serverless)** — points at the per-device installer | **Enroll (manual)** — the real install script |
+| ![Enroll callout](docs/images/05-enroll-serverless-callout.png) | ![Enroll manual](docs/images/06-enroll-manual.png) |
+| **PBL devices** — pre-boot lockdown fleet | **Audit log** |
+| ![PBL devices](docs/images/07-pbl-devices.png) | ![Audit log](docs/images/08-audit-log.png) |
+
+**Map view** — location reported by the enrolled agent:
+
+![Map view](docs/images/09-map-view.png)
+
+Regenerate with `node scripts/capture-docs-screenshots.mjs <url> <admin-password>` (needs the
+dashboard dev server and Chromium; on this host also `LD_LIBRARY_PATH=~/.local/lib/nspr`).
+
 ## Architecture
 
 ```
