@@ -57,9 +57,14 @@ jobs:
 
       - name: Clone EDK II
         run: |
-          git clone --depth 1 --branch edk2-stable202411 \
+          # Pinned to the commit developers build against: stable tags do not work here.
+          #   202408: StackCheckLibNull.inf absent -> 'File/directory not found'
+          #   202411: the .inf exists but does not DEFINE __stack_chk_guard/__stack_chk_fail
+          #           -> link fails under -fstack-protector. 2970e569 builds green locally.
+          git clone --filter=blob:none \
             https://github.com/tianocore/edk2.git ~/.local/src/edk2
           cd ~/.local/src/edk2
+          git checkout 2970e5699ba6267f3384ffab20f96647578aebc8
           git submodule update --init --recursive \
             MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg OvmfPkg
 
@@ -111,9 +116,14 @@ jobs:
 
       - name: Clone EDK II
         run: |
-          git clone --depth 1 --branch edk2-stable202411 \
+          # Pinned to the commit developers build against: stable tags do not work here.
+          #   202408: StackCheckLibNull.inf absent -> 'File/directory not found'
+          #   202411: the .inf exists but does not DEFINE __stack_chk_guard/__stack_chk_fail
+          #           -> link fails under -fstack-protector. 2970e569 builds green locally.
+          git clone --filter=blob:none \
             https://github.com/tianocore/edk2.git ~/.local/src/edk2
           cd ~/.local/src/edk2
+          git checkout 2970e5699ba6267f3384ffab20f96647578aebc8
           git submodule update --init --recursive \
             MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg ArmVirtPkg
 
@@ -162,9 +172,14 @@ jobs:
 
       - name: Clone EDK II + build OVMF
         run: |
-          git clone --depth 1 --branch edk2-stable202411 \
+          # Pinned to the commit developers build against: stable tags do not work here.
+          #   202408: StackCheckLibNull.inf absent -> 'File/directory not found'
+          #   202411: the .inf exists but does not DEFINE __stack_chk_guard/__stack_chk_fail
+          #           -> link fails under -fstack-protector. 2970e569 builds green locally.
+          git clone --filter=blob:none \
             https://github.com/tianocore/edk2.git ~/.local/src/edk2
           cd ~/.local/src/edk2
+          git checkout 2970e5699ba6267f3384ffab20f96647578aebc8
           git submodule update --init --recursive \
             MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg OvmfPkg
 
