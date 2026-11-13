@@ -359,7 +359,10 @@ jobs:
             scripts/sign-release-metadata.py "${args[@]}" --key "$keyfile"
             rm -f "$keyfile"
           else
-            echo "::warning title=Unsigned release metadata::UPDATE_SIGNING_KEY is not set — agents with a pinned update key will REFUSE this release. See docs/CODE_SIGNING.md."
+            msg="::warning title=Unsigned release metadata::UPDATE_SIGNING_KEY is not set — "
+            msg+="agents with a pinned update key will REFUSE this release. See "
+            msg+="docs/CODE_SIGNING.md."
+            echo "$msg"
             scripts/sign-release-metadata.py "${args[@]}" --unsigned
           fi
 

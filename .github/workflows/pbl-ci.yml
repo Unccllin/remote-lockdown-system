@@ -66,7 +66,11 @@ jobs:
           cd ~/.local/src/edk2
           git checkout 2970e5699ba6267f3384ffab20f96647578aebc8
           git submodule update --init --recursive \
-            MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg OvmfPkg
+            MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg OvmfPkg \
+            BaseTools
+          # BaseTools for its BrotliCompress/brotli submodule: compiling
+          # BaseTools without it dies on a missing brotli header, and a
+          # developer checkout already had it, so only CI saw this (S269).
 
       - name: Build PblApp
         run: |
@@ -125,7 +129,10 @@ jobs:
           cd ~/.local/src/edk2
           git checkout 2970e5699ba6267f3384ffab20f96647578aebc8
           git submodule update --init --recursive \
-            MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg ArmVirtPkg
+            MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg ArmVirtPkg \
+            BaseTools
+          # BaseTools is here for its BrotliCompress/brotli submodule; without it
+          # compiling BaseTools dies on a missing brotli header (S269).
 
       - name: Build PblApp
         run: |
@@ -181,7 +188,10 @@ jobs:
           cd ~/.local/src/edk2
           git checkout 2970e5699ba6267f3384ffab20f96647578aebc8
           git submodule update --init --recursive \
-            MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg OvmfPkg
+            MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg OvmfPkg \
+            BaseTools
+          # BaseTools for its BrotliCompress/brotli submodule (see the X64
+          # job); the OVMF build compiles BaseTools too.
 
       - name: Build PblApp + OVMF
         run: |

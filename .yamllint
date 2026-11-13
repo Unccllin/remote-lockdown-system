@@ -1,0 +1,26 @@
+# yamllint policy for this repository.
+#
+# The workflow gate here is actionlint (`make lint-workflows`, and what CI runs).
+# yamllint's *defaults* were never adopted, and applying them today flags 218
+# lines across six workflow files — pinned action SHAs with their version
+# comments, long explanatory comments, and `on:` — while saying nothing about
+# whether a workflow is correct. That noise buries the findings that do matter.
+#
+# So: keep the checks that catch real defects (YAML syntax, duplicate keys,
+# trailing whitespace, indentation) and relax the style rules that this repo
+# deliberately ignores.
+extends: default
+
+rules:
+  line-length:
+    max: 120
+    allow-non-breakable-words: true
+  comments-indentation: disable
+  comments:
+    # `- uses: owner/action@<sha> # v4.6.2` is the convention here: the version
+    # comment is the point, so one space before it is intentional.
+    min-spaces-from-content: 1
+  document-start: disable
+  truthy:
+    # Workflow files use `on:` as a key; it is a keyword here, not a boolean.
+    check-keys: false
