@@ -178,10 +178,12 @@ jobs:
         #   error 7000: Failed to execute command
         #   make tbuild [.../MdePkg/Library/BaseLib/BaseLib]
         # in exactly the three NASM-using libraries, and the smoke test that
-        # needed the OVMF image was then skipped (S269).
+        # needed the OVMF image was then skipped (S269). With those added, OVMF
+        # got further and failed on RamDisk.aml Error 127 — OVMF also compiles
+        # ACPI tables, so it needs iasl.
         run: |
           ./scripts/apt-install-retry.sh /tmp/pbl-apt-qemu.log \
-            build-essential nasm uuid-dev \
+            build-essential nasm uuid-dev iasl \
             qemu-system-x86 \
             swtpm \
             mtools dosfstools gdisk
