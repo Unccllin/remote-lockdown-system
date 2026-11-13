@@ -148,7 +148,12 @@ PblEvaluateDecision (
 {
   PBL_RESULT  PolicyResult;
   PBL_RESULT  FinalResult;
-  UINT32      Now;
+  // Initialised because the runner's GCC cannot prove that PblGetUnixTime always
+  // writes its OUT parameter under -Os, and PBL CI treats warnings as errors:
+  //   Decision.c:175: error: 'Now' may be used uninitialized [-Werror=maybe-uninitialized]
+  // The value is still overwritten below; zero just means "no usable time", which
+  // the expiry check already treats as "do not degrade on time".
+  UINT32      Now = 0;
   EFI_STATUS  Status;
 
   if (State == NULL || Policy == NULL) {

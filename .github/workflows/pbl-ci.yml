@@ -5,7 +5,8 @@ on:
     paths:
       - 'firmware/PblPkg/**'
       # This workflow now invokes these scripts, so a change to one of them must
-      # re-run the job that uses it. Without these entries a fix to the TODO gate
+      # re-run the job that uses it. Without these entries a fix to the TODO
+      # gate
       # or the apt helper would only be exercised by the next firmware commit —
       # the job would stay green on stale assumptions.
       - 'scripts/check-firmware-todos.py'
@@ -57,10 +58,12 @@ jobs:
 
       - name: Clone EDK II
         run: |
-          # Pinned to the commit developers build against: stable tags do not work here.
+          # Pinned to the commit developers build against: stable tags do not
+          # work here.
           #   202408: StackCheckLibNull.inf absent -> 'File/directory not found'
-          #   202411: the .inf exists but does not DEFINE __stack_chk_guard/__stack_chk_fail
-          #           -> link fails under -fstack-protector. 2970e569 builds green locally.
+          #   202411: the .inf exists but does not DEFINE
+          #           __stack_chk_guard/__stack_chk_fail -> link fails under
+          #           -fstack-protector. 2970e569 builds green locally.
           git clone --filter=blob:none \
             https://github.com/tianocore/edk2.git ~/.local/src/edk2
           cd ~/.local/src/edk2
@@ -86,7 +89,8 @@ jobs:
             "PBL CI: PblApp build (X64)"
 
       - name: Upload PblApp.efi artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: PblApp-X64
           path: firmware/PblPkg/PblApp.efi
@@ -101,7 +105,7 @@ jobs:
           persist-credentials: false
 
       - name: Install build dependencies + AARCH64 cross-compiler
-        # `libuuid-dev` was here and does not exist on jammy — the dev package is
+        # `libuuid-dev` was here and does not exist on jammy — the package is
         # `uuid-dev`. That single wrong name is what made this step exit 100 on
         # every run (reproduced in a bare ubuntu:22.04 container: "E: Unable to
         # locate package libuuid-dev"). EDK II BaseTools still needs uuid-dev,
@@ -120,10 +124,12 @@ jobs:
 
       - name: Clone EDK II
         run: |
-          # Pinned to the commit developers build against: stable tags do not work here.
+          # Pinned to the commit developers build against: stable tags do not
+          # work here.
           #   202408: StackCheckLibNull.inf absent -> 'File/directory not found'
-          #   202411: the .inf exists but does not DEFINE __stack_chk_guard/__stack_chk_fail
-          #           -> link fails under -fstack-protector. 2970e569 builds green locally.
+          #   202411: the .inf exists but does not DEFINE
+          #           __stack_chk_guard/__stack_chk_fail -> link fails under
+          #           -fstack-protector. 2970e569 builds green locally.
           git clone --filter=blob:none \
             https://github.com/tianocore/edk2.git ~/.local/src/edk2
           cd ~/.local/src/edk2
@@ -131,7 +137,7 @@ jobs:
           git submodule update --init --recursive \
             MdePkg MdeModulePkg NetworkPkg SecurityPkg CryptoPkg ArmVirtPkg \
             BaseTools
-          # BaseTools is here for its BrotliCompress/brotli submodule; without it
+          # BaseTools for its BrotliCompress/brotli submodule: without it
           # compiling BaseTools dies on a missing brotli header (S269).
 
       - name: Build PblApp
@@ -149,7 +155,8 @@ jobs:
             "PBL CI: PblApp build (AARCH64)"
 
       - name: Upload PblApp.efi artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: PblApp-AARCH64
           path: firmware/PblPkg/PblApp.efi
@@ -179,10 +186,12 @@ jobs:
 
       - name: Clone EDK II + build OVMF
         run: |
-          # Pinned to the commit developers build against: stable tags do not work here.
+          # Pinned to the commit developers build against: stable tags do not
+          # work here.
           #   202408: StackCheckLibNull.inf absent -> 'File/directory not found'
-          #   202411: the .inf exists but does not DEFINE __stack_chk_guard/__stack_chk_fail
-          #           -> link fails under -fstack-protector. 2970e569 builds green locally.
+          #   202411: the .inf exists but does not DEFINE
+          #           __stack_chk_guard/__stack_chk_fail -> link fails under
+          #           -fstack-protector. 2970e569 builds green locally.
           git clone --filter=blob:none \
             https://github.com/tianocore/edk2.git ~/.local/src/edk2
           cd ~/.local/src/edk2
@@ -197,10 +206,12 @@ jobs:
         run: |
           set -o pipefail
           export EDK2_DIR="$HOME/.local/src/edk2"
-          # --with-ovmf is required here: the harness boots OVMF, while the PblApp
-          # build jobs skip it (building all of OVMF took longer than their 3-minute
-          # budget and reported its failure as a PblApp failure — S244).
-          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC --with-ovmf 2>&1 \
+          # --with-ovmf is required here: the harness boots OVMF, while the
+          # PblApp build jobs skip it (building all of OVMF took longer than
+          # their 3-minute budget and reported its failure as a PblApp failure
+          # — S244).
+          ./firmware/PblPkg/build-pbl.sh --arch X64 --toolchain GCC \
+            --with-ovmf 2>&1 \
             | tee /tmp/pbl-build-qemu.log
 
       - name: Annotate build failure
