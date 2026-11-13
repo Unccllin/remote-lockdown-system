@@ -58,7 +58,10 @@ fi
 echo "  SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH}"
 
 # === Environment setup (from legacy-tools/build-uefi.sh) ===
-export PATH="/home/cllin/.local/bin:${EDK2_DIR}/BaseTools/BinWrappers/PosixLike:${PATH}"
+# No developer-specific prefix here: the old PATH began with /home/cllin/.local/bin,
+# a path from another machine that silently contributed whatever happened to be in
+# it. EDK II's own wrappers are all this needs.
+export PATH="${EDK2_DIR}/BaseTools/BinWrappers/PosixLike:${PATH}"
 export EDK_TOOLS_PATH="${EDK2_DIR}/BaseTools"
 export WORKSPACE="${EDK2_DIR}"
 export PACKAGES_PATH="${EDK2_DIR}:${FIRMWARE_DIR}"
@@ -72,10 +75,13 @@ if [ ! -d "${EDK2_DIR}" ]; then
 fi
 
 # === EDK II BaseTools ===
-# A fresh clone (which is what CI has) contains no compiled BaseTools, and `build`
-# fails immediately without them. Building them takes a minute; not building them
-# made the CI job look like a compile failure (S244).
-if [ ! -x "${EDK_TOOLS_PATH}/BinWrappers/PosixLike/build" ]; then
+# A fresh clone (which is what CI has) *does* ship the BinWrappers/PosixLike
+# scripts, but not the compiled programs they exec. Guarding on the wrapper (as
+# this did until S269) therefore never built anything in CI, and the build died at
+# the first `.efi` with `Unable to find the real 'GenFw' to run` -> make Error 127,
+# which reads like a compiler or linker failure and was chased as one twice.
+# Guard on the compiled tool: that is the thing a fresh clone lacks.
+if [ ! -x "${EDK_TOOLS_PATH}/Source/C/bin/GenFw" ]; then
   echo "=== Building EDK II BaseTools (first run) ==="
   make -C "${EDK_TOOLS_PATH}" -j"$(nproc)" >/dev/null
 fi
