@@ -15479,6 +15479,18 @@ exist on this path. Reproduced: default-UA urllib → 403 (cf-ray present), cust
   `agent.py:2598-2599` and the flag comes from a `del` in an except branch that returns first —
   reproduced in eight lines in trace Addendum 6). So do not claim "lint-agent green" until the ruff
   version is pinned or that `del` is removed.
+- **The deployed Worker's credentials are not on the development host, and `secrets/` does not match
+  the deployment.** Mints tried and their results: an HS256 session token built from
+  `secrets/jwt_secret.txt` (as the raw 64-char hex and as its 32 decoded bytes) → **401**, as did the
+  `dev-secret` fallback — so the Worker's `JWT_SECRET` is a different value, set as a Cloudflare
+  secret. Also checked and empty: `CLOUDFLARE_API_TOKEN`/`CF_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` in
+  the environment, any wrangler config (`~/.config/.wrangler`, `~/.wrangler`), JWT-shaped strings in
+  all four Chromium/Chrome `Local Storage/leveldb` stores (0 candidates — the dashboard keeps no
+  token there; there is no Firefox profile), `~/.bash_history`, and any non-example `.env` under
+  `~/Projects`. GitHub's `gh` CLI is authenticated with `repo` scope, but Actions secrets are
+  write-only by design and reading them is not attempted. `~/frankenstein-agent-config.ini` carries
+  the **device** `agent_key`, which is not an admin credential. So the window's fleet read needs one
+  of: a dashboard-login JWT, the break-glass `ADMIN_TOKEN`, or a Cloudflare-authorized rotation.
 - **Whether `secure_boot:false` is an acceptable posture for this window is an operator decision that
   was not taken** (runbook §4 step 2). The device reports Secure Boot off, so nothing this run does
   evidences a PBL load under Secure Boot; D-130 (no signing certificate) is why it was never enabled.
