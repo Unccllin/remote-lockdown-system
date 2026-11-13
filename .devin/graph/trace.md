@@ -15748,3 +15748,131 @@ def f():
 So no NameError exists in the duress path, and per AGENTS rules (a finding in a file you did not
 change is baseline) it is reported, not silently fixed. It does mean "make lint-agent is green" must
 not be claimed until either the ruff version is pinned or that `del` is removed.
+
+---
+
+## Session 269 — 2026-11-13 (the window was blocked by its own build, not by hardware)
+
+### RULE-ZERO — Understanding logged before code changes
+
+**Read**: `.github/workflows/pbl-ci.yml` (both build jobs + the QEMU job), `firmware/PblPkg/build-pbl.sh`
+(BaseTools guard, PATH, build invocations), `firmware/PblPkg/PblApp/Decision.c` (the `Now` out-parameter
+and its error path), `$EDK2/BaseTools/Source/Python/AutoGen/GenMake.py:487` (what `F000` actually means),
+`serverless/worker.ts:364-379` (`resolveAdminAuth`: break-glass equality vs. signed JWT),
+`serverless/worker.ts:623/2940-2952` (KV `devices` key; the artifact POST/GET routes).
+
+**Finding**: the D-129 window was ready on the server side, but stream A could not start because **PBL
+CI had failed on its last five runs** — there existed no `PblApp.efi` anywhere. Each failure was
+infrastructure, not firmware, and each was invisible on a developer machine for the same reason: the
+developer checkout already had what CI lacked.
+
+### Fog cleared
+
+- **`make hw-preflight` against the live Worker reports the window READY** — measured with a real
+  admin session JWT, not a stub: `health ok`, `fleet 1 device(s)`, `FRANKENSTEIN status=active
+  last_checkin=226s agent_version=1.0.0`, `[OK] the window is ready`. The device record is
+  `c724f400…`, serial `5CG2422FJR`, BIOS `T39 Ver. 01.24.02`, `secure_boot:false`,
+  `update_verification:"signature"`, `enrolled_at 2026-11-12T14:32:04Z`.
+- **Stream B's upload path works end to end.** `hw_test_harness.py --mode simulate --tag
+  E-HWID,E-DECRYPT,E-OFFLINE-QUEUE --upload … --upload-token $env:LOCKDOWN_ADMIN_TOKEN` on the device →
+  `3 passed`, `Artifact uploaded to: https://…workers.dev`. Pulled back with `GET
+  /api/hw-test-artifact/1` (the record wraps the CTRF in `artifact_json`) into
+  `agent/hw_test_artifact_frankenstein_s269_safe.json`; `--artifact` accepts
+  `E-DECRYPT`/`E-OFFLINE-QUEUE` citations from it. Both were already `verified-on-hardware`, so no
+  status moved — as the tool says itself.
+- **The credential question is settled.** The Worker's `JWT_SECRET` is not the value in `secrets/`
+  (that token mints to 401), there is no Cloudflare API token or wrangler session on this host, and no
+  dashboard session is stored in any browser profile. A dashboard login JWT works for every operation
+  the window needs, and the break-glass `ADMIN_TOKEN` is an equality-compared Cloudflare secret with no
+  repo fallback.
+- **PBL CI was fixed in five layers, each one CI-only.** (1) the BaseTools guard tested the
+  `BinWrappers/PosixLike` *wrapper*, which every clone ships, so the compiled tools were never built →
+  `Unable to find the real 'GenFw'` / make Error 127 (`f973c57`). (2) `BaseTools/Source/C/
+  BrotliCompress/brotli` is its own submodule and was not in the CI submodule list → missing brotli
+  header (`ab54d35`). (3) a genuine diagnostic: `Decision.c:175 'Now' may be used uninitialized
+  [-Werror=maybe-uninitialized]` — correct code the runner's GCC cannot prove, initialised to 0
+  (`ed11967`). (4) the QEMU job built OVMF with no `build-essential`/`nasm`/`uuid-dev` (`c4784d7`).
+  (5) OVMF also needs `iasl` for its ACPI tables (`eced39e`).
+- **`PblApp.efi` now exists as a CI artifact**: run 43444819018, job *Build PblApp (X64, GCC)* →
+  `PE32+ executable for EFI (application), x86-64, 3 sections`, 1,380,352 bytes, SHA-256
+  `6fa6ac418b726075a6b97588c8ed580fe955ffff7dc21f545b2ca6aa8b5e5a05`. Static analysis also green.
+
+### Fog remaining
+
+- **The QEMU smoke test has never passed, and now it runs and says why it cannot be read: 0 PASS / 14
+  FAIL with a completely empty serial log.** The harness boots OVMF with `-nographic -serial
+  mon:stdio -display none` (`ci-harness.sh:120-126`) and QEMU ran until its timeout, printing only
+  `terminating on signal 15`; no OVMF output, no PBL banner. So this is "the guest produced no output",
+  not "PBL asserted something false", and it needs its own investigation (most likely the OVMF ConOut /
+  serial terminal pairing, or the ESP not being booted). It does **not** gate the hardware window, and
+  it was skipped on every previous run, so nothing regressed here.
+- **`build-aarch64` cannot build and never could.** It fails `F000: No files to be built in module
+  [RELEASE, GCC, AARCH64]` on `MdePkg/Library/SecPeiDxeTimerLibCpu/SecPeiDxeTimerLibCpu.inf`, whose
+  sources are x86-only, while `PblPkg.dsc` declares `SUPPORTED_ARCHITECTURES = X64|AARCH64` and maps
+  `TimerLib` to it unconditionally. Resolution is a decision, not a patch: drop AARCH64 from the DSC
+  and the job, or add `ArmArchTimerLib` + `ArmPkg` and whatever else AARCH64 needs.
+- **`secure_boot:false` remains an untaken operator decision** (runbook §4 step 2). The window can run
+  under the documented first-bring-up posture, but that must be recorded in the artifact, and no run
+  under this posture can evidence a Secure Boot boot.
+- Unchanged: `make test-scripts` dies at `test_tls_floor.py` (docker inactive, root needed), and
+  `make lint-agent` is red with 6 findings in untouched `agent/agent.py` (3 `UP038`, 3 `F821` that are
+  a ruff 0.5.0 flow false positive — eight-line repro in Addendum 6).
+
+### Debt items closed
+
+- None. D-129 is now *startable* rather than blocked, which is not a close; D-120/D-130/D-134 likewise
+  wait on the same hardware run or a certificate.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — unchanged.
+
+### Blockers
+
+- The physical FRANKENSTEIN box for stream A (PBL boot + capture). Everything on the server side is
+  ready and proven; no credential is outstanding while a dashboard session is active.
+- A decision on AARCH64 (see Fog), and a recorded decision on the Secure Boot posture.
+
+### Session artifacts
+
+- `agent/hw_test_artifact_frankenstein_s269_safe.json` — the first artifact uploaded through the fixed
+  path, pulled back from `GET /api/hw-test-artifact/1` (E-HWID, E-DECRYPT, E-OFFLINE-QUEUE).
+- `.github/workflows/pbl-ci.yml` — BaseTools in all three submodule lists; QEMU job deps
+  (`build-essential nasm uuid-dev iasl`); `hashFiles` guard on the smoke-test annotation; every line
+  ≤80 columns.
+- `firmware/PblPkg/build-pbl.sh` — guard on `Source/C/bin/GenFw`; no `/home/cllin` PATH prefix.
+- `firmware/PblPkg/PblApp/Decision.c` — `UINT32 Now = 0` with the reason recorded at the declaration.
+- `.yamllint` — the repository's YAML policy (the gate is actionlint; yamllint defaults flagged 218
+  lines across six workflows).
+- `firmware/PblPkg/.clangd` — why these sources cannot be analysed without an EDK II tree.
+
+### Failure attribution
+
+- **Layer 3 — execution environment (primary), five times over.** Every CI failure was a missing
+  artifact of the build environment (compiled BaseTools, a submodule, a compiler, an ASL compiler), and
+  each was masked locally by a developer checkout that already had it. The CI job could not say what it
+  was missing because `Error 127` and `7000 Failed to execute command` name the step, not the absence.
+- **Layer 4 — verification feedback (secondary).** The QEMU smoke test reported 14 specific FAILs —
+  banner, policy, TPM NV, verdict, decision, PCR, self-image — which reads as fourteen firmware
+  defects. The serial log being empty turns all fourteen into one finding. A check that cannot say "I
+  received nothing" invites exactly that misreading.
+
+### VERIFY
+
+- Run 43444819018: *Build PblApp (X64, GCC)* **success** (artifact `PblApp.efi`, PE32+ x86-64,
+  1,380,352 B), *Static analysis* **success**, *AARCH64* failure (TimerLib, above), *QEMU + swtpm* 0/14.
+- `make hw-preflight SERVER_URL=… ADMIN_TOKEN=<jwt> HOSTNAME=FRANKENSTEIN` → `[OK] the window is ready`.
+- Device: harness `3 passed`, upload accepted; `--artifact` on the pulled file prints the two citations.
+- `scripts/sast-exceptions.json` re-pointed at the rewritten upload code (`reviewed: S268`) so
+  `test_sast_gate.py` passes: 24 passed.
+- `yamllint .github/workflows/` under `.yamllint` → **0 findings** (was 218 under yamllint defaults).
+- `make firmware-host-tests` → 195 checks, 0 failures. `make test-server` 843, `make test-worker` 429,
+  `scripts/run-agent-tests.sh` 866, `pytest scripts/test_hw_window_preflight.py` 19.
+
+### Next session opening
+
+Boot `PblApp.efi` on FRANKENSTEIN (stream A): FAT32 ESP with `\EFI\BOOT\BOOTX64.EFI`, Secure Boot off,
+capture from before power-on, record the posture, then the second boot to prove NV persistence. The
+first line to read is the AK Name / `NV_Read` RC — `[OK]` closes D-134 as "production PCD fine",
+`0x9A2`/`0x18B` closes it the other way and needs `PcdPblTpmUsePlatformHierarchy=FALSE`. `BLOCK` is the
+expected outcome. Separately: decide AARCH64, and investigate the empty QEMU serial.

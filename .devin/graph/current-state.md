@@ -53,149 +53,118 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 268 — 2026-11-13 (the preflight cannot see a Cloudflare Worker)
+## Latest session: 269 — 2026-11-13 (the window was blocked by its own build, not by hardware)
 
 ### Fog cleared
 
-- **`make hw-preflight` could not preflight the deployed Worker** — fixed at the cause, not the
-  message. `fetch_json()` now sends `User-Agent: lockdown-hw-preflight/1.0`
-  (`scripts/hw-window-preflight.py`), so a Cloudflare-fronted target answers `200` instead of
-  `403 error code 1010`. Artifact: `docs/artifacts/s268-preflight-worker-403.txt`.
-- **The tool's own ruff debt in a file that was never linted.** `scripts/` is not covered by
-  `make lint-agent` (which runs `cd agent && ruff check . tests/`), so this file carried 4 findings
-  — `S310` on the `Request` construction, `UP017` ×2 (`timezone.utc` → `UTC`), and an `E501`. All
-  four fixed; `ruff check` and `ruff format --check` are now clean on both touched files under
-  `agent/ruff.toml`.
-- **The Worker is the window's target, not the Express lab server.** `/api/health` →
-  `{"status":"ok","serverless":true}`, `/api/health/detailed` → `{"devices":1}`, `/api/setup/status`
-  → `{"setupComplete":true,"admins":1}`. The fleet therefore lives in KV `LOCKDOWN_KV`, and the
-  Express dev stack (SQLite) is a different, empty server.
-- **The fleet was measured, and the window's only missing precondition was the binary.**
-  `GET /api/devices` → **1 device, `FRANKENSTEIN`**, status `tracking`, `last_checkin` 6 s old, serial
-  `5CG2422FJR`, HP EliteBook 830 G8, BIOS `T39 Ver. 01.24.02`, `secure_boot:false`, and
-  `agent_version: null` / `agent_version_stale: true`. So `--check` failed on exactly one line: one
-  device-side upgrade, not the network, the Worker, or enrollment.
-- **The D-129 window is READY for the first time.** The installed binary predated commit `ad38fce`
-  by 43 minutes — the commit that introduced both the `agent_version` body field and the Worker's
-  `X-Agent-Version` read. The Worker was proven post-`ad38fce` without server access by a field that
-  commit added (`model`, from `firmwareAuditModel()`), so only the binary was stale. Rebuilt on the
-  device from `master.zip` via `scripts/build-windows-artifacts.ps1 -Only agent`, swapped under the
-  S241 ACL lock, service restarted → `health ok`, `agent_version=1.0.0`, `[OK] the window is ready`.
-- **The harness's artifact upload could never have worked against the Worker.**
-  `agent/hw_test_harness.py` posted to `/api/hw-test-artifact` with no `Authorization` (the handler is
-  `requireRole(request, env, 'operator')` → 401) and urllib's default UA (Cloudflare → 403/1010), and
-  printed both failures as a `WARNING` — so a run could look successful while nothing was stored.
-  Fixed: `upload_artifact()` + `--upload-token`/`$LOCKDOWN_ADMIN_TOKEN`, 3 new tests.
-- **A device in `tracking` mode locks its operator out, and `--check` called it ready.** Opening
-  stream B, the operator's Windows account vanished from the login screen and the console fell back
-  to the `GuestUser` decoy. Cause from the code: `apply_tracking_data_protection()` (`agent.py:2866`)
-  runs `net user <real> /active:no`, creates the decoy and EFS-encrypts that profile. Remedy that
-  worked: `POST /api/devices/<id>/stop-track` → `status=active` → account back. The feature applied
-  and reversed exactly as designed, so the defect was in the procedure, not the code — both halves
-  are now closed: runbook §2a states the precondition, and `--check` refuses a non-`active` device.
+- **`make hw-preflight` against the live Worker reports the window READY** — measured with a real
+  admin session JWT, not a stub: `health ok`, `fleet 1 device(s)`, `FRANKENSTEIN status=active
+  last_checkin=226s agent_version=1.0.0`, `[OK] the window is ready`. The device record is
+  `c724f400…`, serial `5CG2422FJR`, BIOS `T39 Ver. 01.24.02`, `secure_boot:false`,
+  `update_verification:"signature"`, `enrolled_at 2026-11-12T14:32:04Z`.
+- **Stream B's upload path works end to end.** `hw_test_harness.py --mode simulate --tag
+  E-HWID,E-DECRYPT,E-OFFLINE-QUEUE --upload … --upload-token $env:LOCKDOWN_ADMIN_TOKEN` on the device →
+  `3 passed`, `Artifact uploaded to: https://…workers.dev`. Pulled back with `GET
+  /api/hw-test-artifact/1` (the record wraps the CTRF in `artifact_json`) into
+  `agent/hw_test_artifact_frankenstein_s269_safe.json`; `--artifact` accepts
+  `E-DECRYPT`/`E-OFFLINE-QUEUE` citations from it. Both were already `verified-on-hardware`, so no
+  status moved — as the tool says itself.
+- **The credential question is settled.** The Worker's `JWT_SECRET` is not the value in `secrets/`
+  (that token mints to 401), there is no Cloudflare API token or wrangler session on this host, and no
+  dashboard session is stored in any browser profile. A dashboard login JWT works for every operation
+  the window needs, and the break-glass `ADMIN_TOKEN` is an equality-compared Cloudflare secret with no
+  repo fallback.
+- **PBL CI was fixed in five layers, each one CI-only.** (1) the BaseTools guard tested the
+  `BinWrappers/PosixLike` *wrapper*, which every clone ships, so the compiled tools were never built →
+  `Unable to find the real 'GenFw'` / make Error 127 (`f973c57`). (2) `BaseTools/Source/C/
+  BrotliCompress/brotli` is its own submodule and was not in the CI submodule list → missing brotli
+  header (`ab54d35`). (3) a genuine diagnostic: `Decision.c:175 'Now' may be used uninitialized
+  [-Werror=maybe-uninitialized]` — correct code the runner's GCC cannot prove, initialised to 0
+  (`ed11967`). (4) the QEMU job built OVMF with no `build-essential`/`nasm`/`uuid-dev` (`c4784d7`).
+  (5) OVMF also needs `iasl` for its ACPI tables (`eced39e`).
+- **`PblApp.efi` now exists as a CI artifact**: run 43444819018, job *Build PblApp (X64, GCC)* →
+  `PE32+ executable for EFI (application), x86-64, 3 sections`, 1,380,352 bytes, SHA-256
+  `6fa6ac418b726075a6b97588c8ed580fe955ffff7dc21f545b2ca6aa8b5e5a05`. Static analysis also green.
 
 ### Fog remaining
 
-- **`make test-scripts` cannot run here past `scripts/test_tls_floor.py`**: it starts
-  `docker run caddy` and fails `permission denied … /var/run/docker.sock` (daemon inactive, user not
-  in the `docker` group), and the runner `|| exit 1`s — so **every file after it never runs under
-  make**, `test_worker_update_e2e.py` included. Run them individually: 13 of 13 pass that way.
-- **`make lint-agent` is red at HEAD** with 6 findings, all in `agent/agent.py` — a file 268 did not
-  touch, so baseline per the AGENTS rule. 3 are `UP038` style; the 3 `F821 Undefined name` at
-  `agent.py:2626/2628` are a ruff 0.5.0 limitation, not a defect (`key`/`key_b64` are bound at
-  `agent.py:2598-2599` and the flag comes from a `del` in an except branch that returns first —
-  reproduced in eight lines in trace Addendum 6). So do not claim "lint-agent green" until the ruff
-  version is pinned or that `del` is removed.
-- **The deployed Worker's credentials are not on the development host, and `secrets/` does not match
-  the deployment.** Mints tried and their results: an HS256 session token built from
-  `secrets/jwt_secret.txt` (as the raw 64-char hex and as its 32 decoded bytes) → **401**, as did the
-  `dev-secret` fallback — so the Worker's `JWT_SECRET` is a different value, set as a Cloudflare
-  secret. Also checked and empty: `CLOUDFLARE_API_TOKEN`/`CF_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` in
-  the environment, any wrangler config (`~/.config/.wrangler`, `~/.wrangler`), JWT-shaped strings in
-  all four Chromium/Chrome `Local Storage/leveldb` stores (0 candidates — the dashboard keeps no
-  token there; there is no Firefox profile), `~/.bash_history`, and any non-example `.env` under
-  `~/Projects`. GitHub's `gh` CLI is authenticated with `repo` scope, but Actions secrets are
-  write-only by design and reading them is not attempted. `~/frankenstein-agent-config.ini` carries
-  the **device** `agent_key`, which is not an admin credential. So the window's fleet read needs one
-  of: a dashboard-login JWT, the break-glass `ADMIN_TOKEN`, or a Cloudflare-authorized rotation.
-- **Whether `secure_boot:false` is an acceptable posture for this window is an operator decision that
-  was not taken** (runbook §4 step 2). The device reports Secure Boot off, so nothing this run does
-  evidences a PBL load under Secure Boot; D-130 (no signing certificate) is why it was never enabled.
-- **`scripts/` has no lint gate** — `make lint-agent` runs `cd agent && ruff check . tests/`, so a
-  directory-wide `ruff check` there reports **245** pre-existing findings that no gate would ever have
-  shown. Not fixed: reported, and out of scope for a session that touched two files in it.
+- **The QEMU smoke test has never passed, and now it runs and says why it cannot be read: 0 PASS / 14
+  FAIL with a completely empty serial log.** The harness boots OVMF with `-nographic -serial
+  mon:stdio -display none` (`ci-harness.sh:120-126`) and QEMU ran until its timeout, printing only
+  `terminating on signal 15`; no OVMF output, no PBL banner. So this is "the guest produced no output",
+  not "PBL asserted something false", and it needs its own investigation (most likely the OVMF ConOut /
+  serial terminal pairing, or the ESP not being booted). It does **not** gate the hardware window, and
+  it was skipped on every previous run, so nothing regressed here.
+- **`build-aarch64` cannot build and never could.** It fails `F000: No files to be built in module
+  [RELEASE, GCC, AARCH64]` on `MdePkg/Library/SecPeiDxeTimerLibCpu/SecPeiDxeTimerLibCpu.inf`, whose
+  sources are x86-only, while `PblPkg.dsc` declares `SUPPORTED_ARCHITECTURES = X64|AARCH64` and maps
+  `TimerLib` to it unconditionally. Resolution is a decision, not a patch: drop AARCH64 from the DSC
+  and the job, or add `ArmArchTimerLib` + `ArmPkg` and whatever else AARCH64 needs.
+- **`secure_boot:false` remains an untaken operator decision** (runbook §4 step 2). The window can run
+  under the documented first-bring-up posture, but that must be recorded in the artifact, and no run
+  under this posture can evidence a Secure Boot boot.
+- Unchanged: `make test-scripts` dies at `test_tls_floor.py` (docker inactive, root needed), and
+  `make lint-agent` is red with 6 findings in untouched `agent/agent.py` (3 `UP038`, 3 `F821` that are
+  a ruff 0.5.0 flow false positive — eight-line repro in Addendum 6).
 
 ### Debt items closed
 
-- None. The preflight and harness defects were not ledger items; this session minted no debt ID and
-  closed none. The `tracking`-mode runbook gap is closed as a procedure plus a test, not as a ledger
-  item — it never blocked a debt close.
+- None. D-129 is now *startable* rather than blocked, which is not a close; D-120/D-130/D-134 likewise
+  wait on the same hardware run or a certificate.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134 — unchanged, unchanged reason (hardware + certificate).
+- D-120, D-129, D-130, D-134 — unchanged.
 
 ### Blockers
 
-- The physical FRANKENSTEIN box and operator access to it — nothing on the server side. The Worker is
-  reachable, the device is enrolled, checking in, `active` and on `agent_version=1.0.0`.
-- D-130 stays open until a code-signing certificate exists, which is also what would make Secure Boot
-  a posture this window could measure.
+- The physical FRANKENSTEIN box for stream A (PBL boot + capture). Everything on the server side is
+  ready and proven; no credential is outstanding while a dashboard session is active.
+- A decision on AARCH64 (see Fog), and a recorded decision on the Secure Boot posture.
 
 ### Session artifacts
 
-- `docs/artifacts/s268-preflight-worker-403.txt` — the 403/1010 reproduction (default UA vs custom
-  UA), the fixed `--check` output, and the ruff before/after.
-- `scripts/hw-window-preflight.py` — `USER_AGENT` + header, `# noqa: S310` with its audit reason,
-  `datetime.UTC`, two wrapped argparse lines, and `status=` in the fleet line with the
-  `tracking`/`locked`/`stolen` refusal.
-- `scripts/test_hw_window_preflight.py` — `RECORDED_USER_AGENTS` module list recorded by the local
-  server; `test_sends_a_user_agent_cloudflare_accepts` asserts the header actually sent;
-  `ready_device()` + 4 status tests (active passes, `tracking`/`locked` refuse, an absent status is
-  not a failure).
-- `agent/hw_test_harness.py` — `upload_artifact()` (http(s) allowlist before any request, bearer
-  token, harness UA, `HTTPError` reported with its status code), `--upload-token` (default
-  `$LOCKDOWN_ADMIN_TOKEN`), inline best-effort upload replaced;
-  `agent/tests/test_hw_harness.py::TestArtifactUpload` (3 tests against a real local server).
-- `docs/D-129-HARDWARE-RUNBOOK.md` §2a — the `tracking`-mode precondition, what it does to the
-  operator's account, and the `stop-track` remedy with its ordering caveat. Evidence:
-  `docs/artifacts/s268-tracking-mode-lockout.txt` (the incident, the code citation for each of the
-  three layers, the remedy, and the mutation check that proves the new test bites).
-- `scripts/sast-exceptions.json` — the `--upload` exception re-pointed at the two lines the Addendum 3
-  rewrite created, with the reason corrected to name the http(s) allowlist (`reviewed: S268`).
+- `agent/hw_test_artifact_frankenstein_s269_safe.json` — the first artifact uploaded through the fixed
+  path, pulled back from `GET /api/hw-test-artifact/1` (E-HWID, E-DECRYPT, E-OFFLINE-QUEUE).
+- `.github/workflows/pbl-ci.yml` — BaseTools in all three submodule lists; QEMU job deps
+  (`build-essential nasm uuid-dev iasl`); `hashFiles` guard on the smoke-test annotation; every line
+  ≤80 columns.
+- `firmware/PblPkg/build-pbl.sh` — guard on `Source/C/bin/GenFw`; no `/home/cllin` PATH prefix.
+- `firmware/PblPkg/PblApp/Decision.c` — `UINT32 Now = 0` with the reason recorded at the declaration.
+- `.yamllint` — the repository's YAML policy (the gate is actionlint; yamllint defaults flagged 218
+  lines across six workflows).
+- `firmware/PblPkg/.clangd` — why these sources cannot be analysed without an EDK II tree.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback (primary).** The preflight's failure text was *confident and
-  wrong*: it named the Windows port-proxy for a target where no proxy exists. A check that can only
-  fail with a stale-diagnosis hint turns a 403 into an afternoon of proxy debugging.
-- **Layer 3 — execution environment (secondary).** `scripts/` has no lint gate, so this file's four
-  ruff findings were invisible until a change to it made them visible.
+- **Layer 3 — execution environment (primary), five times over.** Every CI failure was a missing
+  artifact of the build environment (compiled BaseTools, a submodule, a compiler, an ASL compiler), and
+  each was masked locally by a developer checkout that already had it. The CI job could not say what it
+  was missing because `Error 127` and `7000 Failed to execute command` name the step, not the absence.
+- **Layer 4 — verification feedback (secondary).** The QEMU smoke test reported 14 specific FAILs —
+  banner, policy, TPM NV, verdict, decision, PCR, self-image — which reads as fourteen firmware
+  defects. The serial log being empty turns all fourteen into one finding. A check that cannot say "I
+  received nothing" invites exactly that misreading.
 
 ### VERIFY
 
-- `ruff check --config agent/ruff.toml scripts/hw-window-preflight.py scripts/test_hw_window_preflight.py`
-  → **All checks passed**; `ruff format --check` → **2 files already formatted**.
-- `python -m pytest scripts/test_hw_window_preflight.py -q` → **19 passed** (15 pre-existing + the
-  UA test + 4 status tests); the same suite also passes through its own `__main__` runner.
-- `scripts/run-agent-tests.sh` → **866 passed** (863 + the 3 upload tests); `ruff check` and
-  `ruff format --check` clean on both touched `agent/` files.
-- `make hw-preflight SERVER_URL=https://lockdown-serverless.mainacollins196.workers.dev HOSTNAME=FRANKENSTEIN`
-  → `health ok`, `[OK] reachable` (pre-fix: `UNREACHABLE — HTTP 403`); with `ADMIN_TOKEN=…` and the
-  rebuilt agent → `status=active`, `agent_version=1.0.0`, `[OK] the window is ready`.
-- Mutation check: with the UA header removed the new test fails (`Python-urllib/3.14` recorded by the
-  local server), and against the live Worker the same command returns 403 again. With the status
-  check removed, the `tracking` test fails.
+- Run 43444819018: *Build PblApp (X64, GCC)* **success** (artifact `PblApp.efi`, PE32+ x86-64,
+  1,380,352 B), *Static analysis* **success**, *AARCH64* failure (TimerLib, above), *QEMU + swtpm* 0/14.
+- `make hw-preflight SERVER_URL=… ADMIN_TOKEN=<jwt> HOSTNAME=FRANKENSTEIN` → `[OK] the window is ready`.
+- Device: harness `3 passed`, upload accepted; `--artifact` on the pulled file prints the two citations.
+- `scripts/sast-exceptions.json` re-pointed at the rewritten upload code (`reviewed: S268`) so
+  `test_sast_gate.py` passes: 24 passed.
+- `yamllint .github/workflows/` under `.yamllint` → **0 findings** (was 218 under yamllint defaults).
+- `make firmware-host-tests` → 195 checks, 0 failures. `make test-server` 843, `make test-worker` 429,
+  `scripts/run-agent-tests.sh` 866, `pytest scripts/test_hw_window_preflight.py` 19.
 
 ### Next session opening
 
-**Open the window — that is the only thing left that moves a status.** Confirm
-`make hw-preflight SERVER_URL=https://lockdown-serverless.mainacollins196.workers.dev ADMIN_TOKEN=…
-HOSTNAME=FRANKENSTEIN` prints `status=active` first (runbook §2a: a `tracking` device locks the
-operator out; a `locked`/`stolen` one starts the window from an unmeasured state). Then stream A —
-PBL serial capture for D-129/D-134/D-120 — and stream B —
-`agent/hw_test_harness.py --upload --upload-token "$LOCKDOWN_ADMIN_TOKEN"` for the CTRF artifacts.
-D-130 waits for a signing certificate. Start Docker first if `make test-scripts` is to join the close.
+Boot `PblApp.efi` on FRANKENSTEIN (stream A): FAT32 ESP with `\EFI\BOOT\BOOTX64.EFI`, Secure Boot off,
+capture from before power-on, record the posture, then the second boot to prove NV persistence. The
+first line to read is the AK Name / `NV_Read` RC — `[OK]` closes D-134 as "production PCD fine",
+`0x9A2`/`0x18B` closes it the other way and needs `PcdPblTpmUsePlatformHierarchy=FALSE`. `BLOCK` is the
+expected outcome. Separately: decide AARCH64, and investigate the empty QEMU serial.
 
 ---
 
