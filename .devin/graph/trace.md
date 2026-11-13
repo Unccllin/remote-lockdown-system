@@ -15403,3 +15403,279 @@ the D-129 window, which closes D-129 and D-134 together and gives D-120 its real
 take D-130 only once a code-signing certificate exists.
 
 ---
+
+## Session 268 — 2026-11-13 (the preflight cannot see a Cloudflare Worker)
+
+### RULE-ZERO — Understanding logged before code changes
+
+**Read**:
+- `scripts/hw-window-preflight.py` — `fetch_json()` builds `urllib.request.Request(url)` and adds only
+  `Authorization`; no `User-Agent` is set, so the request carries urllib's default
+  `Python-urllib/<ver>` signature.
+- `scripts/test_hw_window_preflight.py` — `_Handler` (a real `HTTPServer`) serves `/api/health` and
+  `/api/devices`; `TestCheckMode` asserts the user-visible outcomes of `--check`, so a header
+  assertion belongs in that fixture rather than in a mock.
+- `docs/D-129-HARDWARE-RUNBOOK.md` §2a — `make hw-preflight SERVER_URL=…` is the documented gate
+  before opening the laptop; its "UNREACHABLE" text deliberately points at the Windows port-proxy.
+- `serverless/wrangler.toml` + `serverless/worker.ts` — the deployed target is
+  `lockdown-serverless.mainacollins196.workers.dev` (KV `LOCKDOWN_KV`, `/api/health`,
+  `/api/health/detailed`, `/api/auth/login`, `/api/devices` behind admin auth), i.e. the window's
+  real server is the Worker, not the Express lab server.
+
+**Finding**: Cloudflare in front of the Worker answers `Python-urllib/*` with **HTTP 403, error
+code 1010** ("banned browser signature"), while `curl`/`requests`/a custom UA get **200**. So
+`make hw-preflight SERVER_URL=https://…workers.dev` reports the server as UNREACHABLE and prints the
+port-proxy hint — a wrong diagnosis that sends the operator to fix a Windows proxy that does not
+exist on this path. Reproduced: default-UA urllib → 403 (cf-ray present), custom UA → 200.
+
+### Fog cleared
+
+- **`make hw-preflight` could not preflight the deployed Worker** — fixed at the cause, not the
+  message. `fetch_json()` now sends `User-Agent: lockdown-hw-preflight/1.0`
+  (`scripts/hw-window-preflight.py`), so a Cloudflare-fronted target answers `200` instead of
+  `403 error code 1010`. Artifact: `docs/artifacts/s268-preflight-worker-403.txt`.
+- **The tool's own ruff debt in a file that was never linted.** `scripts/` is not covered by
+  `make lint-agent` (which runs `cd agent && ruff check . tests/`), so this file carried 4 findings
+  — `S310` on the `Request` construction, `UP017` ×2 (`timezone.utc` → `UTC`), and an `E501`. All
+  four fixed; `ruff check` and `ruff format --check` are now clean on both touched files under
+  `agent/ruff.toml`.
+- **The Worker is the window's target, not the Express lab server.** `/api/health` →
+  `{"status":"ok","serverless":true}`, `/api/health/detailed` → `{"devices":1}`, `/api/setup/status`
+  → `{"setupComplete":true,"admins":1}`. The fleet therefore lives in KV `LOCKDOWN_KV`, and the
+  Express dev stack (SQLite) is a different, empty server.
+- **The fleet was measured, and the window's only missing precondition was the binary.**
+  `GET /api/devices` → **1 device, `FRANKENSTEIN`**, status `tracking`, `last_checkin` 6 s old, serial
+  `5CG2422FJR`, HP EliteBook 830 G8, BIOS `T39 Ver. 01.24.02`, `secure_boot:false`, and
+  `agent_version: null` / `agent_version_stale: true`. So `--check` failed on exactly one line: one
+  device-side upgrade, not the network, the Worker, or enrollment.
+- **The D-129 window is READY for the first time.** The installed binary predated commit `ad38fce`
+  by 43 minutes — the commit that introduced both the `agent_version` body field and the Worker's
+  `X-Agent-Version` read. The Worker was proven post-`ad38fce` without server access by a field that
+  commit added (`model`, from `firmwareAuditModel()`), so only the binary was stale. Rebuilt on the
+  device from `master.zip` via `scripts/build-windows-artifacts.ps1 -Only agent`, swapped under the
+  S241 ACL lock, service restarted → `health ok`, `agent_version=1.0.0`, `[OK] the window is ready`.
+- **The harness's artifact upload could never have worked against the Worker.**
+  `agent/hw_test_harness.py` posted to `/api/hw-test-artifact` with no `Authorization` (the handler is
+  `requireRole(request, env, 'operator')` → 401) and urllib's default UA (Cloudflare → 403/1010), and
+  printed both failures as a `WARNING` — so a run could look successful while nothing was stored.
+  Fixed: `upload_artifact()` + `--upload-token`/`$LOCKDOWN_ADMIN_TOKEN`, 3 new tests.
+- **A device in `tracking` mode locks its operator out, and `--check` called it ready.** Opening
+  stream B, the operator's Windows account vanished from the login screen and the console fell back
+  to the `GuestUser` decoy. Cause from the code: `apply_tracking_data_protection()` (`agent.py:2866`)
+  runs `net user <real> /active:no`, creates the decoy and EFS-encrypts that profile. Remedy that
+  worked: `POST /api/devices/<id>/stop-track` → `status=active` → account back. The feature applied
+  and reversed exactly as designed, so the defect was in the procedure, not the code — both halves
+  are now closed: runbook §2a states the precondition, and `--check` refuses a non-`active` device.
+
+### Fog remaining
+
+- **`make test-scripts` still cannot run here past its first two files**: `scripts/test_tls_floor.py`
+  starts `docker run caddy` and fails `permission denied … /var/run/docker.sock` (daemon inactive,
+  user not in the `docker` group). Environmental; `scripts/test_hw_window_preflight.py` passes 19/19
+  when invoked directly from the repo root.
+- **Whether `secure_boot:false` is an acceptable posture for this window is an operator decision that
+  was not taken** (runbook §4 step 2). The device reports Secure Boot off, so nothing this run does
+  evidences a PBL load under Secure Boot; D-130 (no signing certificate) is why it was never enabled.
+- **`scripts/` has no lint gate** — `make lint-agent` runs `cd agent && ruff check . tests/`, so a
+  directory-wide `ruff check` there reports **245** pre-existing findings that no gate would ever have
+  shown. Not fixed: reported, and out of scope for a session that touched two files in it.
+
+### Debt items closed
+
+- None. The preflight and harness defects were not ledger items; this session minted no debt ID and
+  closed none. The `tracking`-mode runbook gap is closed as a procedure plus a test, not as a ledger
+  item — it never blocked a debt close.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — unchanged, unchanged reason (hardware + certificate).
+
+### Blockers
+
+- The physical FRANKENSTEIN box and operator access to it — nothing on the server side. The Worker is
+  reachable, the device is enrolled, checking in, `active` and on `agent_version=1.0.0`.
+- D-130 stays open until a code-signing certificate exists, which is also what would make Secure Boot
+  a posture this window could measure.
+
+### Session artifacts
+
+- `docs/artifacts/s268-preflight-worker-403.txt` — the 403/1010 reproduction (default UA vs custom
+  UA), the fixed `--check` output, and the ruff before/after.
+- `scripts/hw-window-preflight.py` — `USER_AGENT` + header, `# noqa: S310` with its audit reason,
+  `datetime.UTC`, two wrapped argparse lines, and `status=` in the fleet line with the
+  `tracking`/`locked`/`stolen` refusal.
+- `scripts/test_hw_window_preflight.py` — `RECORDED_USER_AGENTS` module list recorded by the local
+  server; `test_sends_a_user_agent_cloudflare_accepts` asserts the header actually sent;
+  `ready_device()` + 4 status tests (active passes, `tracking`/`locked` refuse, an absent status is
+  not a failure).
+- `agent/hw_test_harness.py` — `upload_artifact()` (http(s) allowlist before any request, bearer
+  token, harness UA, `HTTPError` reported with its status code), `--upload-token` (default
+  `$LOCKDOWN_ADMIN_TOKEN`), inline best-effort upload replaced;
+  `agent/tests/test_hw_harness.py::TestArtifactUpload` (3 tests against a real local server).
+- `docs/D-129-HARDWARE-RUNBOOK.md` §2a — the `tracking`-mode precondition, what it does to the
+  operator's account, and the `stop-track` remedy with its ordering caveat. Evidence:
+  `docs/artifacts/s268-tracking-mode-lockout.txt` (the incident, the code citation for each of the
+  three layers, the remedy, and the mutation check that proves the new test bites).
+
+### Failure attribution
+
+- **Layer 4 — verification feedback (primary).** The preflight's failure text was *confident and
+  wrong*: it named the Windows port-proxy for a target where no proxy exists. A check that can only
+  fail with a stale-diagnosis hint turns a 403 into an afternoon of proxy debugging.
+- **Layer 3 — execution environment (secondary).** `scripts/` has no lint gate, so this file's four
+  ruff findings were invisible until a change to it made them visible.
+
+### VERIFY
+
+- `ruff check --config agent/ruff.toml scripts/hw-window-preflight.py scripts/test_hw_window_preflight.py`
+  → **All checks passed**; `ruff format --check` → **2 files already formatted**.
+- `python -m pytest scripts/test_hw_window_preflight.py -q` → **19 passed** (15 pre-existing + the
+  UA test + 4 status tests); the same suite also passes through its own `__main__` runner.
+- `scripts/run-agent-tests.sh` → **866 passed** (863 + the 3 upload tests); `ruff check` and
+  `ruff format --check` clean on both touched `agent/` files.
+- `make hw-preflight SERVER_URL=https://lockdown-serverless.mainacollins196.workers.dev HOSTNAME=FRANKENSTEIN`
+  → `health ok`, `[OK] reachable` (pre-fix: `UNREACHABLE — HTTP 403`); with `ADMIN_TOKEN=…` and the
+  rebuilt agent → `status=active`, `agent_version=1.0.0`, `[OK] the window is ready`.
+- Mutation check: with the UA header removed the new test fails (`Python-urllib/3.14` recorded by the
+  local server), and against the live Worker the same command returns 403 again. With the status
+  check removed, the `tracking` test fails.
+
+### Next session opening
+
+**Open the window — that is the only thing left that moves a status.** Confirm
+`make hw-preflight SERVER_URL=https://lockdown-serverless.mainacollins196.workers.dev ADMIN_TOKEN=…
+HOSTNAME=FRANKENSTEIN` prints `status=active` first (runbook §2a: a `tracking` device locks the
+operator out; a `locked`/`stolen` one starts the window from an unmeasured state). Then stream A —
+PBL serial capture for D-129/D-134/D-120 — and stream B —
+`agent/hw_test_harness.py --upload --upload-token "$LOCKDOWN_ADMIN_TOKEN"` for the CTRF artifacts.
+D-130 waits for a signing certificate. Start Docker first if `make test-scripts` is to join the close.
+
+### Addendum — fleet state measured on the deployed Worker (same session, after the preflight fix)
+
+Measured with the operator's dashboard credential (login `POST /api/auth/login` → JWT, then
+`GET /api/devices`), which is what `--admin-token` needs:
+
+- **`GET /api/devices` → 1 device, `FRANKENSTEIN`** (`c724f400…`), `status=tracking`,
+  `last_checkin=2026-11-13T09:44:04Z` (6 s before the check → the agent is running), serial
+  `5CG2422FJR`, `firmware_audit` HP EliteBook 830 G8 / BIOS `T39 Ver. 01.24.02` / `secure_boot:false`,
+  `update_verification:"signature"`.
+- **`make hw-preflight SERVER_URL=<worker> ADMIN_TOKEN=… HOSTNAME=FRANKENSTEIN` → FAIL on one line
+  only**: `agent_version=unknown STALE`. `/api/devices` confirms `agent_version: null` and
+  `agent_version_stale: true`.
+- Therefore the window's precondition is now **one device-side upgrade**, not the network, the
+  server, enrollment, or the port-proxy: `agent/agent.py:232 AGENT_VERSION = "1.0.0"` is sent as
+  `agent_version` in the check-in body (`agent/agent.py:1432`) and stored by
+  `serverless/worker.ts:768`; the build running on FRANKENSTEIN predates that field.
+- Unchanged by this evidence: D-120/D-129/D-130/D-134 and the hardware window.
+
+### Addendum 2 — the agent was rebuilt on FRANKENSTEIN, and the window turned READY
+
+Decisive measurement that named the stale side (binary, not Worker):
+- `lockdown-agent.exe` on the device: `LastWriteTime 2026-11-12 17:31:55 +03:00`, size 16,368,368 B,
+  no `FileVersion` resource (PyInstaller default).
+- Commit `ad38fce` — which introduced BOTH the `agent_version` body field and the Worker's
+  `request.headers.get('X-Agent-Version')` read, plus the `firmwareAuditModel` mapping — is
+  `2026-11-12 18:14:28 +03:00`: **43 minutes after the binary was written**.
+- The deployed Worker is post-`ad38fce`, proven without server access by a field that commit added:
+  `GET /api/devices` returns `model: "HP EliteBook 830 G8 Notebook PC"`, which only exists because
+  `firmwareAuditModel()` maps it. So the Worker already reads the header; only the binary was old.
+- Device inventory from the same call: HP EliteBook 830 G8, serial `5CG2422FJR`, BIOS
+  `T39 Ver. 01.24.02`, `secure_boot:false`, `update_verification:"signature"`; service
+  `LockdownAgent` → `"C:\ProgramData\LockdownAgent\lockdown-service.exe" --service`; Python 3.12.10
+  present, **no git, no makensis**; two `lockdown-agent` PIDs before the swap.
+
+Rebuild path that worked (no git on the device): GitHub `master.zip` → `scripts/build-windows-artifacts.ps1
+-Only agent` (PyInstaller spec, PE-header verified) → `Stop-Service`, ACL unlock
+(`takeown` + `/remove:d Everyone` + `/grant Administrators:F`, i.e. the S241 tamper protection),
+copy over `C:\ProgramData\LockdownAgent\lockdown-agent.exe`, `Start-Service`.
+
+Result — **the D-129 window is now ready for the first time**:
+
+    make hw-preflight SERVER_URL=<worker> ADMIN_TOKEN=… HOSTNAME=FRANKENSTEIN
+       health      ok
+       fleet       1 device(s)
+         FRANKENSTEIN             last_checkin=9s ago       agent_version=1.0.0
+    [OK] the window is ready: server reachable, device checking in, known agent version.
+
+No debt item is closed by this: it converts "cannot even preflight" into "ready to run". D-120,
+D-129, D-130 and D-134 are untouched and still need the machine's boot cycle / a certificate.
+
+### Addendum 3 — the harness's artifact upload could never have worked against the Worker
+
+Found while setting up the device run: `agent/hw_test_harness.py` posted to `/api/hw-test-artifact`
+with **no `Authorization` header** (the Worker's handler is `requireRole(request, env, 'operator')`,
+so it answers 401) and with urllib's **default User-Agent** (Cloudflare answers 403 + error code
+1010 — the same defect fixed in Addendum 1). Both failures were printed as a `WARNING`, so a run
+could look successful while nothing was ever stored.
+
+Fixed in `agent/hw_test_harness.py`:
+- new module-level `upload_artifact(upload_url, artifact, token)` — http(s) allowlist before any
+  request, `Authorization: Bearer <token>` when supplied, `User-Agent: lockdown-hw-harness/2.0`,
+  `HTTPError` reported with its status code and, for 401/403, the flag that fixes it;
+- `run_harness(..., upload_token=...)` and `--upload-token` (default `$LOCKDOWN_ADMIN_TOKEN`);
+- the inline best-effort upload block replaced by the helper.
+
+Tests (`agent/tests/test_hw_harness.py::TestArtifactUpload`, 3 new): a real local `HTTPServer`
+records what arrived — bearer header + our User-Agent + JSON body on 200; `False` plus
+`--upload-token` in the message on 401, with no Authorization header sent; `file://` refused before
+any request.
+
+VERIFY: `scripts/run-agent-tests.sh` → **866 passed** (863 + 3); `ruff check` + `ruff format --check`
+clean on both touched files. Two pi-lens blockers in `hw_test_harness.py` (`__exit__` arity at
+L1597, unchecked call at L2472) are **baseline**: both lines exist identically at `HEAD` and this
+session's insert begins at L2620. The `no-secret-in-env-var-name` warning on
+`headers["Authorization"] = f"Bearer {token}"` is a false positive — no literal secret, the value
+is a CLI/env argument.
+
+### Addendum 4 — a device in `tracking` mode locks the operator out of their own machine
+
+While starting stream B on FRANKENSTEIN the operator lost access: their Windows account disappeared
+from the login screen and the console fell back to another account, then PowerShell on that account
+could not elevate.
+
+**Cause, from the code (not a guess):** the device was `status=tracking` on the Worker, which is C5
+covert-tracking mode, and `apply_tracking_data_protection()` (`agent/agent.py:2866`) does exactly
+what its docstring says:
+
+- `_get_real_username()` → `_run_net_user([real_user, "/active:no"])` (`agent.py:2888`) —
+  disabling the account is why it vanished from the login UI;
+- creates and enables the decoy `DECOY_ACCOUNT_NAME = "GuestUser"` (`agent.py:2696`) — the "other
+  account" the console landed on;
+- EFS-encrypts the real user's sensitive files.
+
+`remove_tracking_data_protection()` (`agent.py:2956`) reverses it in order: decrypt EFS → re-enable
+the real user → disable and delete the decoy. It is reached from `handle_stop_track()`
+(`agent.py:2680`, registry entry `agent.py:3090`).
+
+**Remedy that worked:** `POST /api/devices/<id>/stop-track` → command `a1f80d8f0204c843…` →
+`{"device":{"status":"active"}}`; one poll later `pending_commands: 0` and the operator confirmed the
+account was back.
+
+**Runbook gap (actionable, unfiled):** `docs/D-129-HARDWARE-RUNBOOK.md` never says that a device in
+`tracking` mode must be returned to `active` *before* a window starts. `make hw-preflight` does not
+check it either: it validates health, check-in freshness and agent version, and passes happily on a
+machine whose operator is about to be locked out. Two candidate fixes — add a precondition to the
+runbook, and/or have `hw-preflight` refuse (or loudly warn) when `status=tracking`. Evidence that the
+feature itself is correct: layers 1-3 all applied and reversed as designed; the defect is in the
+procedure, not the code.
+
+### Addendum 5 — the gap from Addendum 4 became a precondition and a test
+
+Both candidate fixes were taken rather than filed as debt, because each is small and each fails
+silently when it is wrong:
+- `scripts/hw-window-preflight.py --check` now prints `status=` on the device line and **fails** for
+  `tracking` (naming the lockout and the `POST /api/devices/<id>/stop-track` remedy) and for
+  `locked`/`stolen` (a window must not start from a state it never measured). An *absent* status
+  field is deliberately not a failure: an older server or a stub does not report one, and inventing a
+  requirement the server never promised would make the check wrong in a new way.
+- `docs/D-129-HARDWARE-RUNBOOK.md` §2a now states the precondition with the code citation, the
+  three layers it reverses, and the ordering caveat (the stop-track command is queued, so a device
+  that has not polled is still locked out even after the API returns 200).
+- `scripts/test_hw_window_preflight.py` gained `ready_device()` and 4 tests: `active` passes,
+  `tracking` refuses, `locked` refuses, and an absent status is not a failure. 19/19 pass.
+
+This is a *close-out*: `.devin/graph/current-state.md` is generated from the whitelisted `###`
+sections only, so the four addenda above never reached it — it still claimed the fleet was unknowable
+and that the next step was to obtain an admin credential. Their conclusions are folded into
+`Fog cleared`, `Fog remaining`, `Blockers`, `Session artifacts`, `VERIFY` and `Next session opening`,
+and `make gen-state` was re-run. Nothing in the addenda themselves changed.

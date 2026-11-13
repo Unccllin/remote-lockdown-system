@@ -1,0 +1,30 @@
+# S268 — why 'make hw-preflight' called the deployed Worker UNREACHABLE
+# captured 2026-11-13T12:41:35+03:00 on omarchy
+
+## 1. The defect: urllib default UA is banned by Cloudflare (error 1010)
+$ python3 (default urllib UA) -> GET https://lockdown-serverless.mainacollins196.workers.dev/api/health
+HTTP 403 | server: cloudflare | cf-ray: a59cd256d9f2d7fc-BUD
+body: error code: 1010
+
+
+## 2. Any non-urllib UA is served normally
+UA lockdown-hw-preflight/1.0    HTTP 200
+UA curl/8.10.1                  HTTP 200
+
+## 3. After the fix (scripts/hw-window-preflight.py sends USER_AGENT)
+$ make hw-preflight SERVER_URL=https://lockdown-serverless.mainacollins196.workers.dev HOSTNAME=FRANKENSTEIN
+    Target: https://lockdown-serverless.mainacollins196.workers.dev
+      health      ok
+      fleet       skipped (pass --admin-token to check the device's readiness)
+    
+    [OK] reachable. Re-run with --admin-token to confirm the device is checking in.
+
+## 4. Ruff on the two touched files (repo config agent/ruff.toml)
+before: 4 findings (S310 x1, UP017 x2, E501 x1)
+All checks passed!
+2 files already formatted
+
+## 5. Regression test
+$ python -m pytest scripts/test_hw_window_preflight.py -q
+...............                                                          [100%]
+15 passed in 2.81s

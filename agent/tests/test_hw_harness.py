@@ -8,6 +8,8 @@ tests are skipped on non-Windows platforms.
 
 import json
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -554,6 +556,77 @@ class TestDestructiveGate:
         test.recovery_hint = ""
         notice = test.describe_destructive()
         assert "NOT DECLARED" in notice
+
+
+# ---------------------------------------------------------------------------
+# S268: artifact upload must carry auth and a Cloudflare-acceptable User-Agent
+# ---------------------------------------------------------------------------
+
+
+class TestArtifactUpload:
+    """The upload used to be best-effort in a way that could never work against the Worker.
+
+    Two independent defects, both invisible because the failure was a printed WARNING: the endpoint
+    requires an operator/admin bearer token, and a Cloudflare-fronted host answers urllib's default
+    `Python-urllib/<ver>` with HTTP 403 + error code 1010 (the same defect that made `make
+    hw-preflight` call the deployed Worker UNREACHABLE). These tests assert on what a real local
+    server received, not on our own source.
+    """
+
+    @staticmethod
+    def _serve(status: int):
+        captured: dict = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler API
+                captured["path"] = self.path
+                captured["headers"] = {k.lower(): v for k, v in self.headers.items()}
+                length = int(self.headers.get("Content-Length") or 0)
+                captured["body"] = self.rfile.read(length)
+                self.send_response(status)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, format, *args):  # noqa: A002 - API signature
+                return
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server, captured
+
+    def test_upload_sends_the_bearer_token_and_our_own_user_agent(self):
+        server, captured = self._serve(200)
+        try:
+            url = f"http://127.0.0.1:{server.server_port}"
+            ok = hw_test_harness.upload_artifact(url, {"results": {"tool": {"name": "t"}}}, "tkn")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert ok is True
+        assert captured["path"] == "/api/hw-test-artifact"
+        assert captured["headers"].get("authorization") == "Bearer tkn"
+        assert captured["headers"].get("user-agent") == hw_test_harness.UPLOAD_USER_AGENT
+        assert not captured["headers"].get("user-agent", "").startswith("Python-urllib")
+        assert json.loads(captured["body"])["results"]["tool"]["name"] == "t"
+
+    def test_a_rejected_upload_returns_false_and_names_the_flag(self, capsys):
+        server, captured = self._serve(401)
+        try:
+            url = f"http://127.0.0.1:{server.server_port}"
+            ok = hw_test_harness.upload_artifact(url, {"results": {}}, None)
+        finally:
+            server.shutdown()
+            server.server_close()
+        out = capsys.readouterr().out
+        assert ok is False, "a 401 must not be reported as a successful upload"
+        assert "401" in out
+        assert "--upload-token" in out
+        assert "authorization" not in captured["headers"]
+
+    def test_a_non_http_upload_url_is_refused_before_any_request(self, capsys):
+        assert hw_test_harness.upload_artifact("file:///etc/passwd", {"results": {}}, "t") is False
+        assert "refused" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

@@ -158,12 +158,34 @@ $ python3 scripts/hw-window-preflight.py --check --server-url http://192.168.1.4
       --admin-token "$ADMIN_TOKEN" --hostname FRANKENSTEIN
 ```
 
-It reports the device's `last_checkin` age, `agent_version` and `agent_version_stale` (see
-`docs/API.md`), and fails with the next action named — including the port-proxy note, which is the
-usual reason the lab address resets. Measured 2026-11-05: **the lab server was unreachable from the
-development host**, so this failure mode is not hypothetical. Failures: not reachable, never checked
-in, check-in older than the 300 s poll interval, or a stale agent version (the build on the machine
-does not report one, so a post-window artifact could not be tied to a known binary).
+It reports the device's `status`, `last_checkin` age, `agent_version` and `agent_version_stale`
+(see `docs/API.md`), and fails with the next action named — including the port-proxy note, which is
+the usual reason the lab address resets. Measured 2026-11-05: **the lab server was unreachable from
+the development host**, so this failure mode is not hypothetical. Failures: not reachable, never
+checked in, check-in older than the 300 s poll interval, a stale agent version (the build on the
+machine does not report one, so a post-window artifact could not be tied to a known binary), or a
+device that is not `active`.
+
+#### The device must be `active` before you open it — `tracking` locks you out of your own machine
+
+Session 268 lost access to FRANKENSTEIN at the start of stream B: the Windows account was gone from
+the login screen and the console fell back to a second account. Nothing was broken. The device was
+`status=tracking` on the Worker, and covert tracking mode does exactly what it is designed to do —
+`apply_tracking_data_protection()` (`agent/agent.py:2866`) disables the real user account
+(`net user <user> /active:no`), creates and enables the `GuestUser` decoy, and EFS-encrypts the real
+user's sensitive files. That is correct behaviour for a stolen device and a session-ending accident
+for an operator sitting at it.
+
+So, before opening the machine:
+
+1. `--check` must print `status=active` for the device. It now refuses a device in `tracking`,
+   `locked` or `stolen` mode and names the remedy.
+2. If it says `tracking`, return it to `active` **first**:
+   `POST /api/devices/<id>/stop-track` on the server, then wait for `pending_commands: 0`. That runs
+   `remove_tracking_data_protection()`, which reverses the three layers in order (EFS decrypt →
+   re-enable the real user → disable and delete the decoy).
+3. Confirm the account is back **before** touching the harness. The command is queued, so a device
+   that has not polled yet is still locked out even though the API returned 200.
 
 ---
 

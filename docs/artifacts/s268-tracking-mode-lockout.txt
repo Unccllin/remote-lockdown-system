@@ -1,0 +1,63 @@
+# S268 addendum 4/5 — a device in `tracking` mode locked the operator out of their own machine
+# captured 2026-11-13, after the D-129 window turned READY and stream B started on FRANKENSTEIN
+
+## 1. The incident (as observed, not inferred)
+- Opening stream B, the operator's Windows account was no longer offered at the login screen.
+- The console fell back to a second account, and PowerShell from that account could not elevate.
+- Nothing had crashed and no test had run destructively: `make hw-preflight` had already printed
+  `[OK] the window is ready: server reachable, device checking in, known agent version.`
+
+## 2. The cause, from the code
+Device state on the Worker was `status=tracking` (C5 covert-tracking mode).
+
+`apply_tracking_data_protection()` — agent/agent.py:2866 — does what its docstring says:
+- `_get_real_username()` → `_run_net_user([real_user, "/active:no"])` (agent.py:2888)
+  → the account is disabled, which is why it disappeared from the login UI;
+- creates and enables the decoy `DECOY_ACCOUNT_NAME = "GuestUser"` (agent.py:2696)
+  → the "other account" the console landed on;
+- EFS-encrypts the real user's sensitive files.
+
+That is correct behaviour for a stolen device. It is a session-ending accident for the operator
+sitting at the machine, and the only readiness gate before the window did not look at it.
+
+## 3. The remedy that worked
+    POST /api/devices/<id>/stop-track
+    -> {"command_id":"a1f80d8f0204c843…","device":{"status":"active"}}
+    (one poll later: pending_commands: 0, operator confirmed the account was back)
+
+`remove_tracking_data_protection()` (agent.py:2956) reverses the three layers in order: EFS decrypt
+→ re-enable the real user → disable and delete the decoy. Reached from `handle_stop_track()`
+(agent.py:2680, registry entry agent.py:3090).
+
+Ordering caveat: the command is queued, so an API 200 does not mean the device has run it. Wait for
+`pending_commands: 0` (and for the operator to confirm the login screen) before touching the harness.
+
+## 4. What was fixed, and where
+- `scripts/hw-window-preflight.py --check`
+  - prints `status=<mode>` on the device line;
+  - **fails** for `tracking` (names the lockout and the `stop-track` remedy);
+  - **fails** for `locked`/`stolen` (a window must not start from a state it never measured);
+  - does **not** fail on an absent status field — an older server or a stub does not report one, and
+    inventing a requirement the server never promised would make the check wrong in a new way.
+- `docs/D-129-HARDWARE-RUNBOOK.md` §2a — the precondition, the code citation, the reversal order and
+  the ordering caveat.
+- `scripts/test_hw_window_preflight.py` — `ready_device()` plus 4 tests: `active` passes, `tracking`
+  refuses, `locked` refuses, absent status is not a failure.
+
+## 5. Evidence
+    $ python -m pytest scripts/test_hw_window_preflight.py -q
+    ...................                                                      [100%]
+    19 passed
+
+    $ python -m pytest scripts/test_hw_window_preflight.py -q   # with `if mode == "tracking":`
+                                                                # mutated to `if False:`
+    FAILED scripts/test_hw_window_preflight.py::TestCheckMode::test_refuses_a_device_in_tracking_mode
+    E       assert 0 == 1
+    1 failed, 18 deselected
+
+    (the check removed, exit code 0 not 1 — the test fails for the right reason; the same file restored
+    afterwards passes 19/19)
+
+Failure attribution: layer 4 (verification feedback) again — a readiness check that validated health,
+freshness and version but not state, so it reported a machine as ready on which the operator was about
+to lose their account. The feature is not the defect; the procedure was.

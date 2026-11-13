@@ -2617,6 +2617,58 @@ def build_legacy_artifact(env: dict, results: list[TestResult], summary: dict) -
 # ---------------------------------------------------------------------------
 
 
+UPLOAD_USER_AGENT = "lockdown-hw-harness/2.0"
+UPLOAD_TIMEOUT_SECONDS = 10
+
+
+def upload_artifact(upload_url: str, artifact: dict | str, token: str | None = None) -> bool:
+    """POST an artifact to `/api/hw-test-artifact`. True when the server accepted it.
+
+    The first version of this upload was unauthenticated and used urllib's default User-Agent, so
+    it could never have worked against the deployed Worker even though its failure was only a
+    printed WARNING: the endpoint requires an operator/admin bearer token (`requireRole`), and a
+    Cloudflare-fronted host answers `Python-urllib/<ver>` with HTTP 403 + error code 1010. Both
+    failure modes are silent to a harness that treats upload as best-effort, which is why the
+    token is explicit and the status code is reported.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    scheme = urllib.parse.urlsplit(upload_url).scheme.lower()
+    if scheme not in ("http", "https"):
+        print(f"WARNING: Artifact upload refused — {scheme or 'absent'} scheme, only http(s)")
+        return False
+
+    headers = {"Content-Type": "application/json", "User-Agent": UPLOAD_USER_AGENT}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    body = (
+        json.dumps(artifact, default=str).encode()
+        if isinstance(artifact, dict)
+        else str(artifact).encode()
+    )
+    request = urllib.request.Request(  # noqa: S310 - scheme allowlisted above
+        f"{upload_url.rstrip('/')}/api/hw-test-artifact",
+        method="POST",
+        headers=headers,
+        data=body,
+    )
+    try:
+        urllib.request.urlopen(request, timeout=UPLOAD_TIMEOUT_SECONDS)  # noqa: S310
+    except urllib.error.HTTPError as exc:
+        hint = (
+            " (pass --upload-token or set LOCKDOWN_ADMIN_TOKEN)" if exc.code in (401, 403) else ""
+        )
+        print(f"WARNING: Artifact upload rejected: HTTP {exc.code}{hint}")
+        return False
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"WARNING: Artifact upload failed: {exc}")
+        return False
+    print(f"Artifact uploaded to: {upload_url}")
+    return True
+
+
 def run_harness(
     mode: str = "simulate",
     tags: list[str] | None = None,
@@ -2626,6 +2678,7 @@ def run_harness(
     artifact_path: str | None = None,
     fmt: str = "ctrf",
     upload_url: str | None = None,
+    upload_token: str | None = None,
     allow_destructive: bool = False,
     evidence_dir: str | None = None,
 ) -> dict:
@@ -2761,20 +2814,7 @@ def run_harness(
 
     # Pattern: Artifact upload to server
     if upload_url:
-        import urllib.error
-        import urllib.request
-
-        try:
-            upload_req = urllib.request.Request(  # noqa: S310
-                f"{upload_url}/api/hw-test-artifact",
-                method="POST",
-                headers={"Content-Type": "application/json"},
-                data=json.dumps(artifact, default=str).encode(),
-            )
-            urllib.request.urlopen(upload_req, timeout=10)  # noqa: S310
-            print(f"Artifact uploaded to: {upload_url}")
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            print(f"WARNING: Artifact upload failed: {e}")
+        upload_artifact(upload_url, artifact, upload_token)
 
     return artifact if isinstance(artifact, dict) else {"xml": artifact}
 
@@ -2853,6 +2893,13 @@ def main():
         default=None,
         help="Server URL to upload artifact to (e.g. http://localhost:3000)",
     )
+    parser.add_argument(
+        "--upload-token",
+        type=str,
+        default=os.environ.get("LOCKDOWN_ADMIN_TOKEN"),
+        help="Admin/operator bearer token for --upload (default: $LOCKDOWN_ADMIN_TOKEN). The "
+        "endpoint requires one; an unauthenticated upload is rejected with 401.",
+    )
     # Backward compatibility: --dry-run flag
     parser.add_argument(
         "--dry-run",
@@ -2901,6 +2948,7 @@ def main():
         artifact_path=args.artifact,
         fmt=args.format,
         upload_url=args.upload,
+        upload_token=args.upload_token,
         allow_destructive=args.allow_destructive,
         evidence_dir=args.evidence_dir,
     )

@@ -53,109 +53,129 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 267 — 2026-11-13 (re-measure every gate, then fix the one that was lying)
+## Latest session: 268 — 2026-11-13 (the preflight cannot see a Cloudflare Worker)
 
 ### Fog cleared
 
-- **Every documented verification count was re-measured by running the owning command**, and nine of
-  them were stale: agent 857→**863**, dashboard 231→**260**, script harness 251→**255** (236 pytest
-  + 19 hand-rolled checks), verify-env 60→**63 PASS**, API E2E 10→**14** tests, dashboard coverage
-  floors 58/68/50/58→**statements 68 / branches 61 / functions 62 / lines 70**, Semgrep unscanned
-  files 17→**19**, server 840→**843** (+3 from the new suite). `AGENTS.md` now carries the measured
-  numbers with the date, because its own note says the list is cheaper to re-measure than to trust.
-- **`make test-e2e` was intermittently fatal and that was invisible in the docs** — "API+agent E2E
-  10/10 green" was wrong about both the count and the outcome. Root cause found, fixed at the pool
-  layer, and proven; see the fix note below and `docs/artifacts/s267-e2e-teardown-race.txt`.
-- **Semgrep's blind spot grew with S266's own work**: `host_tpm.c`, `host_tpm.h`, `host_crypto.c`,
-  `test_cose_verify.c`, `test_tpm_command.c` are unparsed or partially parsed, so the newest firmware
-  is exactly the code the SAST gate cannot see. Reported by the gate (19 files), not gated.
-- **Nothing renders "the sensors say green, therefore fine" true**: the whole point of this session
-  was that a documented green and a measured green are different objects.
+- **`make hw-preflight` could not preflight the deployed Worker** — fixed at the cause, not the
+  message. `fetch_json()` now sends `User-Agent: lockdown-hw-preflight/1.0`
+  (`scripts/hw-window-preflight.py`), so a Cloudflare-fronted target answers `200` instead of
+  `403 error code 1010`. Artifact: `docs/artifacts/s268-preflight-worker-403.txt`.
+- **The tool's own ruff debt in a file that was never linted.** `scripts/` is not covered by
+  `make lint-agent` (which runs `cd agent && ruff check . tests/`), so this file carried 4 findings
+  — `S310` on the `Request` construction, `UP017` ×2 (`timezone.utc` → `UTC`), and an `E501`. All
+  four fixed; `ruff check` and `ruff format --check` are now clean on both touched files under
+  `agent/ruff.toml`.
+- **The Worker is the window's target, not the Express lab server.** `/api/health` →
+  `{"status":"ok","serverless":true}`, `/api/health/detailed` → `{"devices":1}`, `/api/setup/status`
+  → `{"setupComplete":true,"admins":1}`. The fleet therefore lives in KV `LOCKDOWN_KV`, and the
+  Express dev stack (SQLite) is a different, empty server.
+- **The fleet was measured, and the window's only missing precondition was the binary.**
+  `GET /api/devices` → **1 device, `FRANKENSTEIN`**, status `tracking`, `last_checkin` 6 s old, serial
+  `5CG2422FJR`, HP EliteBook 830 G8, BIOS `T39 Ver. 01.24.02`, `secure_boot:false`, and
+  `agent_version: null` / `agent_version_stale: true`. So `--check` failed on exactly one line: one
+  device-side upgrade, not the network, the Worker, or enrollment.
+- **The D-129 window is READY for the first time.** The installed binary predated commit `ad38fce`
+  by 43 minutes — the commit that introduced both the `agent_version` body field and the Worker's
+  `X-Agent-Version` read. The Worker was proven post-`ad38fce` without server access by a field that
+  commit added (`model`, from `firmwareAuditModel()`), so only the binary was stale. Rebuilt on the
+  device from `master.zip` via `scripts/build-windows-artifacts.ps1 -Only agent`, swapped under the
+  S241 ACL lock, service restarted → `health ok`, `agent_version=1.0.0`, `[OK] the window is ready`.
+- **The harness's artifact upload could never have worked against the Worker.**
+  `agent/hw_test_harness.py` posted to `/api/hw-test-artifact` with no `Authorization` (the handler is
+  `requireRole(request, env, 'operator')` → 401) and urllib's default UA (Cloudflare → 403/1010), and
+  printed both failures as a `WARNING` — so a run could look successful while nothing was stored.
+  Fixed: `upload_artifact()` + `--upload-token`/`$LOCKDOWN_ADMIN_TOKEN`, 3 new tests.
+- **A device in `tracking` mode locks its operator out, and `--check` called it ready.** Opening
+  stream B, the operator's Windows account vanished from the login screen and the console fell back
+  to the `GuestUser` decoy. Cause from the code: `apply_tracking_data_protection()` (`agent.py:2866`)
+  runs `net user <real> /active:no`, creates the decoy and EFS-encrypts that profile. Remedy that
+  worked: `POST /api/devices/<id>/stop-track` → `status=active` → account back. The feature applied
+  and reversed exactly as designed, so the defect was in the procedure, not the code — both halves
+  are now closed: runbook §2a states the precondition, and `--check` refuses a non-`active` device.
 
 ### Fog remaining
 
-- **The trigger for the pre-fix E2E crash is still not pinned to one call site.** The fix removes the
-  crash class at the pool (drain + refusal), so it does not need the culprit identified, but no log
-  line ever named the stale statement. Reproducing it required concurrency with a second harness
-  (Playwright); it never failed in isolation, under `forceExit`/`detectOpenHandles` toggles, or under
-  synthetic CPU load (`yes` ×4). Files checked: `tests/e2e/*.js`, `server/src/db/*.js`,
-  `server/src/routes/{agent,devices}.js`.
-- **`_ready` in `sqlitePool.js` is written and never read** (pre-existing, not touched — AGENTS rules
-  1 and 4 say a finding in a file you did not change is baseline). Same for the two `opengrep`
-  advisories (`_ready` write, unused `match` param in `replace` callbacks).
-- **D-120, D-129, D-130, D-134 remain CLOSED-to-work, open-in-fact**: real BitLocker media, a real
-  UEFI machine, a provisioned signing certificate. `localhost:3001/api/health` and
-  `192.168.1.43:3001/api/health` both returned HTTP 000 this session, so the lab server is down and
-  `make hw-preflight`'s network precondition does not hold today.
-- **`E-BCD` / `E-HP-UEFI`** remain `verified-in-unit-test` by decision (S264).
-- **CodeQL's alerts** remain unrunnable here (private repo without Code Security).
+- **`make test-scripts` still cannot run here past its first two files**: `scripts/test_tls_floor.py`
+  starts `docker run caddy` and fails `permission denied … /var/run/docker.sock` (daemon inactive,
+  user not in the `docker` group). Environmental; `scripts/test_hw_window_preflight.py` passes 19/19
+  when invoked directly from the repo root.
+- **Whether `secure_boot:false` is an acceptable posture for this window is an operator decision that
+  was not taken** (runbook §4 step 2). The device reports Secure Boot off, so nothing this run does
+  evidences a PBL load under Secure Boot; D-130 (no signing certificate) is why it was never enabled.
+- **`scripts/` has no lint gate** — `make lint-agent` runs `cd agent && ruff check . tests/`, so a
+  directory-wide `ruff check` there reports **245** pre-existing findings that no gate would ever have
+  shown. Not fixed: reported, and out of scope for a session that touched two files in it.
 
 ### Debt items closed
 
-- None. All four open items are resource-bound (hardware/certificate); this session closed no debt.
+- None. The preflight and harness defects were not ledger items; this session minted no debt ID and
+  closed none. The `tracking`-mode runbook gap is closed as a procedure plus a test, not as a ledger
+  item — it never blocked a debt close.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134 — unchanged and resource-bound.
+- D-120, D-129, D-130, D-134 — unchanged, unchanged reason (hardware + certificate).
 
 ### Blockers
 
-- Hardware and certificate only: a named sacrificial UEFI machine for D-129/D-134/D-120, and a
-  code-signing certificate for D-130. The lab server is currently **down** (HTTP 000 on both
-  `localhost:3001` and `192.168.1.43:3001`), so the D-129 window cannot even be preflighted until it
-  is started.
+- The physical FRANKENSTEIN box and operator access to it — nothing on the server side. The Worker is
+  reachable, the device is enrolled, checking in, `active` and on `agent_version=1.0.0`.
+- D-130 stays open until a code-signing certificate exists, which is also what would make Secure Boot
+  a posture this window could measure.
 
 ### Session artifacts
 
-- `docs/artifacts/s267-e2e-teardown-race.txt` — pre-fix crash output, the each-suite-passes-alone
-  matrix, the mutation check against the reverted fix, and the 10/10 concurrent sweep.
-- `server/tests/sqlitePoolEnd.test.js` — 3 new regression tests (suite count 50→51, tests 840→843).
-- `server/src/db/sqlitePool.js` — in-flight tracking, drain-before-close, catchable refusal window.
+- `docs/artifacts/s268-preflight-worker-403.txt` — the 403/1010 reproduction (default UA vs custom
+  UA), the fixed `--check` output, and the ruff before/after.
+- `scripts/hw-window-preflight.py` — `USER_AGENT` + header, `# noqa: S310` with its audit reason,
+  `datetime.UTC`, two wrapped argparse lines, and `status=` in the fleet line with the
+  `tracking`/`locked`/`stolen` refusal.
+- `scripts/test_hw_window_preflight.py` — `RECORDED_USER_AGENTS` module list recorded by the local
+  server; `test_sends_a_user_agent_cloudflare_accepts` asserts the header actually sent;
+  `ready_device()` + 4 status tests (active passes, `tracking`/`locked` refuse, an absent status is
+  not a failure).
+- `agent/hw_test_harness.py` — `upload_artifact()` (http(s) allowlist before any request, bearer
+  token, harness UA, `HTTPError` reported with its status code), `--upload-token` (default
+  `$LOCKDOWN_ADMIN_TOKEN`), inline best-effort upload replaced;
+  `agent/tests/test_hw_harness.py::TestArtifactUpload` (3 tests against a real local server).
+- `docs/D-129-HARDWARE-RUNBOOK.md` §2a — the `tracking`-mode precondition, what it does to the
+  operator's account, and the `stop-track` remedy with its ordering caveat. Evidence:
+  `docs/artifacts/s268-tracking-mode-lockout.txt` (the incident, the code citation for each of the
+  three layers, the remedy, and the mutation check that proves the new test bites).
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback (primary).** The E2E gate could die without failing a test, and
-  the only record of its state was a prose claim ("10/10 green") that no run had produced for a long
-  time. A gate whose failure has no test-level trace, whose count was wrong in the docs, and which
-  was never re-run during any sweep, is a sensor that reports a constant. Harness change that fixes
-  the class: the sweep must re-run *every* gate it quotes a number for, and any gate that can exit
-  non-zero without a test failure needs a regression test that fails loudly (as the reverted-fix
-  check now does).
-- **Layer 3 — execution environment (secondary).** Two hours of this session were spent discovering
-  that `semgrep`/`actionlint`/`shellcheck`/`k6` are installed and that `npx jest` is not the server
-  runner. Both facts are now written down (`AGENTS.md` counts; the `--experimental-vm-modules` note)
-  instead of living in a previous session's head.
-- **Self-inflicted, recorded honestly**: I first ran the server suite with `npx jest` and read a
-  PGlite dynamic-import crash as my own regression; and my first regression test asserted promise
-  settlement order (`['query','end']`) when the real property is that the statement completes — the
-  fix was right, the assertion was about the wrong thing. Both were caught by running, not reasoning.
+- **Layer 4 — verification feedback (primary).** The preflight's failure text was *confident and
+  wrong*: it named the Windows port-proxy for a target where no proxy exists. A check that can only
+  fail with a stale-diagnosis hint turns a 403 into an afternoon of proxy debugging.
+- **Layer 3 — execution environment (secondary).** `scripts/` has no lint gate, so this file's four
+  ruff findings were invisible until a change to it made them visible.
 
 ### VERIFY
 
-- `cd server && npm test` → **843 passed, 51 suites, exit 0** (840 + the 3 new pool tests).
-- `npx jest tests/sqlitePoolEnd.test.js` ×3 → 3/3 pass each time; with the fix reverted
-  (`git stash push -- server/src/db/sqlitePool.js`) the same file reproduces
-  `Error: SQLITE_MISUSE: Database handle is closed` and the process dies before printing a summary.
-- `make test-e2e` ×10, run **concurrently with the full server suite** → **10 passed / 0 failed**,
-  14 tests each. Pre-fix the same command failed 2 of ~10 runs with exit 2.
-- `make graph-check` → all invariants pass. `make check-debt-ledger` → 0 mismatches.
-  `make check-firmware-todos` → clean.
-- Component suites: server 843 (51), agent 863, dashboard 260 (29 files), serverless 429 (2),
-  electron 30 (3), Playwright E2E 11, script harness 255 (236 pytest + 19 checks, 14 suites).
-- `make test-coverage` → server 74.12/70.97/79.55/75.03, agent 65%, dashboard 69.98/65.33/62.03/70.88,
-  worker 90.25/85.46/95.97/92.74, electron 39.40/47.36/30.95/39.30 — all above their floors.
-- `make sast` → 45 findings, 0 ERROR, every finding fixed or carrying a reviewed reason; NOTE names
-  19 files with no coverage.
-- `make firmware-host-tests` → 195 checks / 35 cases, 0 failures; vendored TPM headers match EDK II.
-- `make lint-workflows`, eslint (server + dashboard), ruff check + format, `make typecheck-worker` →
-  all clean. `make verify-env` → 63 PASS / 0 FAIL / 2 SKIP.
+- `ruff check --config agent/ruff.toml scripts/hw-window-preflight.py scripts/test_hw_window_preflight.py`
+  → **All checks passed**; `ruff format --check` → **2 files already formatted**.
+- `python -m pytest scripts/test_hw_window_preflight.py -q` → **19 passed** (15 pre-existing + the
+  UA test + 4 status tests); the same suite also passes through its own `__main__` runner.
+- `scripts/run-agent-tests.sh` → **866 passed** (863 + the 3 upload tests); `ruff check` and
+  `ruff format --check` clean on both touched `agent/` files.
+- `make hw-preflight SERVER_URL=https://lockdown-serverless.mainacollins196.workers.dev HOSTNAME=FRANKENSTEIN`
+  → `health ok`, `[OK] reachable` (pre-fix: `UNREACHABLE — HTTP 403`); with `ADMIN_TOKEN=…` and the
+  rebuilt agent → `status=active`, `agent_version=1.0.0`, `[OK] the window is ready`.
+- Mutation check: with the UA header removed the new test fails (`Python-urllib/3.14` recorded by the
+  local server), and against the live Worker the same command returns 403 again. With the status
+  check removed, the `tracking` test fails.
 
 ### Next session opening
 
-Name the sacrificial UEFI machine and **start the lab server first** (`make hw-preflight` fails at its
-network precondition today: both `localhost:3001` and `192.168.1.43:3001` return HTTP 000), then run
-the D-129 window, which closes D-129 and D-134 together and gives D-120 its real-media evidence;
-take D-130 only once a code-signing certificate exists.
+**Open the window — that is the only thing left that moves a status.** Confirm
+`make hw-preflight SERVER_URL=https://lockdown-serverless.mainacollins196.workers.dev ADMIN_TOKEN=…
+HOSTNAME=FRANKENSTEIN` prints `status=active` first (runbook §2a: a `tracking` device locks the
+operator out; a `locked`/`stolen` one starts the window from an unmeasured state). Then stream A —
+PBL serial capture for D-129/D-134/D-120 — and stream B —
+`agent/hw_test_harness.py --upload --upload-token "$LOCKDOWN_ADMIN_TOKEN"` for the CTRF artifacts.
+D-130 waits for a signing certificate. Start Docker first if `make test-scripts` is to join the close.
 
 ---
 

@@ -165,9 +165,7 @@ def artifact_mode(artifact_path: Path) -> int:
         print(f'    hardware_artifact_ref: "{item["ref"]}"')
 
     unchanged = [
-        item["path_id"]
-        for item in supported
-        if item["current_status"] == "verified-on-hardware"
+        item["path_id"] for item in supported if item["current_status"] == "verified-on-hardware"
     ]
     if unchanged:
         print()
@@ -186,6 +184,13 @@ def artifact_mode(artifact_path: Path) -> int:
 
 ALLOWED_SCHEMES = ("http", "https")
 
+# A serverless deployment sits behind Cloudflare, which rejects urllib's default
+# "Python-urllib/<ver>" signature with HTTP 403 + error code 1010 ("banned browser
+# signature"). Without this header the Worker target reads as UNREACHABLE and the
+# operator is sent to fix the Windows port-proxy — a diagnosis that is never right
+# for that deployment. Measured: default UA -> 403 (with cf-ray), this UA -> 200.
+USER_AGENT = "lockdown-hw-preflight/1.0"
+
 
 def fetch_json(url: str, admin_token: str | None = None) -> tuple[Any, str | None]:
     """GET a URL and decode JSON. Returns (payload, error).
@@ -203,7 +208,9 @@ def fetch_json(url: str, admin_token: str | None = None) -> tuple[Any, str | Non
     if scheme not in ALLOWED_SCHEMES:
         return None, f"refusing {scheme or 'absent'} scheme — this tool only fetches http(s)"
 
-    request = urllib.request.Request(url)
+    # S310 is audited rather than anonymous: the scheme allowlist above rejects everything that is
+    # not http(s) before this line is reached, so `file:`/custom schemes cannot get here.
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})  # noqa: S310
     if admin_token:
         request.add_header("Authorization", f"Bearer {admin_token}")
     try:
@@ -219,7 +226,7 @@ def _age_seconds(iso_timestamp: str | None) -> float | None:
     """Seconds since an ISO-8601 UTC timestamp; None when absent or unparsable."""
     if not iso_timestamp:
         return None
-    from datetime import datetime, timezone
+    from datetime import UTC, datetime
 
     raw = str(iso_timestamp).strip().replace("Z", "+00:00")
     try:
@@ -227,8 +234,8 @@ def _age_seconds(iso_timestamp: str | None) -> float | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - parsed).total_seconds()
+        parsed = parsed.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - parsed).total_seconds()
 
 
 def check_mode(server_url: str, admin_token: str | None, hostname: str | None) -> int:
@@ -281,10 +288,28 @@ def check_mode(server_url: str, admin_token: str | None, hostname: str | None) -
         version = device.get("agent_version") or "unknown"
         stale = device.get("agent_version_stale")
         marker = "  STALE" if stale else ""
+        mode = device.get("status") or "unknown"
         print(
-            f"    {device.get('hostname', '?'):24} last_checkin={age_text:12} "
+            f"    {device.get('hostname', '?'):24} status={mode:10} last_checkin={age_text:12} "
             f"agent_version={version}{marker}"
         )
+        # A device in covert-tracking mode is not a machine you can open: the agent disables the
+        # real Windows account, creates the GuestUser decoy and EFS-encrypts that profile
+        # (`apply_tracking_data_protection` in agent.py). Correct for a stolen device, and a
+        # lockout for the operator about to sit down at it — S268 lost access exactly this way
+        # after this check had called the machine ready. An absent status field is *not* a
+        # failure: an older server, or a stub, simply does not report one.
+        if mode == "tracking":
+            problems.append(
+                f"{device.get('hostname')} is in tracking mode — the real account is disabled and "
+                "the GuestUser decoy is live, so opening the window locks the operator out. "
+                "Return it to active first: POST /api/devices/<id>/stop-track."
+            )
+        elif mode in ("locked", "stolen"):
+            problems.append(
+                f"{device.get('hostname')} is in {mode} mode — restore it to active, or the "
+                "window starts from a state it never measured."
+            )
         if age is None:
             problems.append(
                 f"{device.get('hostname')} has never checked in — the agent is not running or not "
@@ -308,7 +333,10 @@ def check_mode(server_url: str, admin_token: str | None, hostname: str | None) -
         for problem in problems:
             print(f"  → {problem}")
         return 1
-    print("[OK] the window is ready: server reachable, device checking in, known agent version.")
+    print(
+        "[OK] the window is ready: server reachable, device active and checking in, known agent "
+        "version."
+    )
     return 0
 
 
@@ -317,10 +345,14 @@ def main() -> int:
         description="Preflight a hardware window, or produce the citations its artifact supports."
     )
     parser.add_argument("--check", action="store_true", help="is the window ready to start?")
-    parser.add_argument("--server-url", help="server base URL for --check, e.g. http://192.168.1.43:3001")
+    parser.add_argument(
+        "--server-url", help="server base URL for --check, e.g. http://192.168.1.43:3001"
+    )
     parser.add_argument("--admin-token", help="admin JWT/ADMIN_TOKEN, to read the fleet state")
     parser.add_argument("--hostname", help="only check this device (default: every device)")
-    parser.add_argument("--artifact", type=Path, help="harness artifact to translate into citations")
+    parser.add_argument(
+        "--artifact", type=Path, help="harness artifact to translate into citations"
+    )
     args = parser.parse_args()
 
     if args.artifact and args.check:

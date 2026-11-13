@@ -18,6 +18,7 @@ import importlib
 import importlib.util
 import json
 import threading
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,10 @@ pytest: Any = importlib.import_module("pytest")
 
 SCRIPT = Path(__file__).resolve().parent / "hw-window-preflight.py"
 REPO_ROOT = SCRIPT.parent.parent
+
+# User-Agents the local test server actually received. Module-level rather than a class attribute so
+# the handler keeps no mutable class state; the fixture clears it between tests.
+RECORDED_USER_AGENTS: list[str] = []
 
 
 def load_module():
@@ -62,6 +67,21 @@ def run_main(argv) -> int:
         return mod.main()
     finally:
         sys.argv = saved
+
+
+def ready_device(**overrides) -> dict:
+    """A device record that passes every precondition, so a test can fail exactly one of them."""
+    payload = {
+        "id": "d3",
+        "hostname": "FRANKENSTEIN",
+        "status": "active",
+        # Fresh, so the check-in age is never the reason a test fails.
+        "last_checkin": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "agent_version": "1.0.0",
+        "agent_version_stale": False,
+    }
+    payload.update(overrides)
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +203,23 @@ class TestCheckMode:
         assert code == 0, out
         assert "[OK] reachable" in out
 
+    def test_sends_a_user_agent_cloudflare_accepts(self, live_server, capsys):
+        """Pins the 403/1010 defect: urllib's default signature is banned by Cloudflare.
+
+        The serverless deployment answers `Python-urllib/<ver>` with HTTP 403 + error code 1010, so
+        --check called the Worker UNREACHABLE and printed the Windows port-proxy hint — a wrong
+        diagnosis for a target where no port-proxy exists. Asserted on the header the local server
+        actually received, because the failure mode is invisible in our own source.
+        """
+        RECORDED_USER_AGENTS.clear()
+        code = run_main(["--check", "--server-url", live_server])
+        capsys.readouterr()
+        assert code == 0
+        assert RECORDED_USER_AGENTS, "the check made no request at all"
+        for sent in RECORDED_USER_AGENTS:
+            assert not sent.startswith("Python-urllib"), f"default urllib UA would 403 → {sent!r}"
+            assert sent == mod.USER_AGENT
+
     def test_reports_a_device_that_never_checked_in(self, live_server_with_devices, capsys):
         code = run_main(
             ["--check", "--server-url", live_server_with_devices, "--admin-token", "tkn"]
@@ -206,6 +243,49 @@ class TestCheckMode:
         out = capsys.readouterr().out
         assert code == 1
         assert "stale agent version" in out
+
+    def test_ready_device_must_be_active(self, live_server, set_devices, capsys):
+        """Everything the preflight measured has to be green for the window to open."""
+        set_devices([ready_device(status="active")])
+        code = run_main(["--check", "--server-url", live_server, "--admin-token", "tkn"])
+        out = capsys.readouterr().out
+        assert code == 0, out
+        assert "status=active" in out
+        assert "the window is ready" in out
+
+    def test_refuses_a_device_in_tracking_mode(self, live_server, set_devices, capsys):
+        """The S268 lockout, pinned: covert tracking disables the operator's own account.
+
+        In tracking mode the agent disables the real Windows account, creates the `GuestUser`
+        decoy and EFS-encrypts that profile. S268 opened the machine in that state and lost
+        access to it, while this check called the machine ready — it only measured health,
+        freshness and version. The remedy has to be named, because the operator cannot look it up
+        from the login screen they can no longer get past.
+        """
+        set_devices([ready_device(status="tracking")])
+        code = run_main(["--check", "--server-url", live_server, "--admin-token", "tkn"])
+        out = capsys.readouterr().out
+        assert code == 1, out
+        assert "status=tracking" in out
+        assert "locks the operator out" in out
+        assert "stop-track" in out
+
+    def test_refuses_a_locked_device(self, live_server, set_devices, capsys):
+        set_devices([ready_device(status="locked")])
+        code = run_main(["--check", "--server-url", live_server, "--admin-token", "tkn"])
+        out = capsys.readouterr().out
+        assert code == 1, out
+        assert "locked mode" in out
+
+    def test_a_server_that_omits_status_is_not_a_failure(self, live_server, set_devices, capsys):
+        """Absent is not dangerous: only a reported non-active mode blocks the window."""
+        device = ready_device()
+        del device["status"]
+        set_devices([device])
+        code = run_main(["--check", "--server-url", live_server, "--admin-token", "tkn"])
+        out = capsys.readouterr().out
+        assert code == 0, out
+        assert "status=unknown" in out
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +312,10 @@ class _Handler(BaseHTTPRequestHandler):
     ]
 
     def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
+        # Recorded so a test can assert the tool's own User-Agent rather than trusting the source:
+        # the header is invisible on the wire unless a server writes it down (Cloudflare's 1010
+        # shows why). Module-level list, so the handler keeps no mutable class state.
+        RECORDED_USER_AGENTS.append(self.headers.get("User-Agent", ""))
         if self.path.startswith("/api/health"):
             body = json.dumps({"status": "ok"}).encode()
         elif self.path.startswith("/api/devices"):
@@ -253,6 +337,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def live_server():
+    RECORDED_USER_AGENTS.clear()
     server = HTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -264,6 +349,18 @@ def live_server():
 @pytest.fixture()
 def live_server_with_devices(live_server):
     return live_server
+
+
+@pytest.fixture()
+def set_devices():
+    """Swap the local server's device list for one test, then restore the shared fixture list."""
+    saved = _Handler.devices
+
+    def apply(devices: list[dict]) -> None:
+        _Handler.devices = devices
+
+    yield apply
+    _Handler.devices = saved
 
 
 if __name__ == "__main__":
