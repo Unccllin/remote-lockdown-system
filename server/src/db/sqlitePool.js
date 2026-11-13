@@ -24,6 +24,53 @@ const path = require('path');
 let _db = null;
 let _ready = null;
 
+// --- In-flight query tracking ---
+//
+// `end()` closes the connection, but a query that already took the handle can
+// still be mid-await (waiting on a prev-promise, a param expansion, its own
+// native round-trip) when the close lands. The sqlite3 driver then raises
+// "SQLITE_MISUSE: Database handle is closed" from its *native error callback* —
+// an uncaught exception that kills the process, not a rejected promise a caller
+// could handle. That is how the E2E suite died intermittently (exit 2, no
+// test-level failure, S196 in the agent helpers and again in S267 for the
+// lockdown/recovery suites).
+//
+// pg.Pool.end() has the same hazard and solves it by refusing new work and
+// waiting for checked-out clients; this is that wait, plus the same
+// catchable refusal (`Cannot use a pool after calling end on the pool`).
+let _inflight = 0;
+let _drainWaiters = [];
+// True only for the duration of end(): new queries are refused with a normal
+// JS Error instead of reaching a handle that is about to disappear. Cleared
+// once the close completes, so a later query still reopens the DB exactly as
+// before (getDb() is lazy; `end()` then `query()` was never an error).
+let _closing = false;
+
+function trackStart() {
+  _inflight += 1;
+}
+
+function trackEnd() {
+  _inflight -= 1;
+  if (_inflight === 0 && _drainWaiters.length) {
+    const waiters = _drainWaiters;
+    _drainWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+}
+
+/** Resolve once no query is in flight (or after `timeoutMs`, so a wedged
+ *  driver can never hang shutdown forever). */
+function awaitDrain(timeoutMs = 5000) {
+  if (_inflight === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    _drainWaiters.push(resolve);
+    const timer = setTimeout(resolve, timeoutMs);
+    // Never hold the event loop open just for this deadline.
+    if (typeof timer.unref === 'function') timer.unref();
+  });
+}
+
 // --- Async mutex: serializes "clients" for withTransaction() ---
 // SQLite is single-connection; concurrent BEGIN/COMMIT would interleave.
 let _mutexPromise = Promise.resolve();
@@ -202,6 +249,18 @@ async function openDb(dbPath) {
  * @returns {Promise<{ rows: Array, rowCount: number, command: string }>}
  */
 async function query(sql, params) {
+  if (_closing) {
+    throw new Error('Cannot use a pool after calling end on the pool');
+  }
+  trackStart();
+  try {
+    return await _query(sql, params);
+  } finally {
+    trackEnd();
+  }
+}
+
+async function _query(sql, params) {
   const db = await getDb();
   const translated = translateSql(sql);
   let cleanParams = expandParams(sql, params || []);
@@ -299,28 +358,46 @@ async function connect() {
       // Track transaction state
       const upper = translated.trim().toUpperCase();
       if (upper === 'BEGIN') {
-        await db.exec('BEGIN');
-        inTransaction = true;
-        return { rows: [], rowCount: 0, command: 'BEGIN' };
+        trackStart();
+        try {
+          await db.exec('BEGIN');
+          inTransaction = true;
+          return { rows: [], rowCount: 0, command: 'BEGIN' };
+        } finally {
+          trackEnd();
+        }
       }
       if (upper === 'COMMIT') {
-        await db.exec('COMMIT');
-        inTransaction = false;
-        return { rows: [], rowCount: 0, command: 'COMMIT' };
+        trackStart();
+        try {
+          await db.exec('COMMIT');
+          inTransaction = false;
+          return { rows: [], rowCount: 0, command: 'COMMIT' };
+        } finally {
+          trackEnd();
+        }
       }
       if (upper === 'ROLLBACK') {
-        await db.exec('ROLLBACK');
-        inTransaction = false;
-        return { rows: [], rowCount: 0, command: 'ROLLBACK' };
+        trackStart();
+        try {
+          await db.exec('ROLLBACK');
+          inTransaction = false;
+          return { rows: [], rowCount: 0, command: 'ROLLBACK' };
+        } finally {
+          trackEnd();
+        }
       }
 
       // Regular query within transaction
       return query(sql, params);
     },
     release: () => {
-      // If user forgot to COMMIT/ROLLBACK, rollback to avoid stale state
+      // If user forgot to COMMIT/ROLLBACK, rollback to avoid stale state.
+      // Tracked like any other statement: this rollback runs on a captured
+      // handle, so an untracked one would race `end()` exactly like a query.
       if (inTransaction) {
-        db.exec('ROLLBACK').catch(() => {});
+        trackStart();
+        Promise.resolve(db.exec('ROLLBACK')).catch(() => {}).then(trackEnd, trackEnd);
         inTransaction = false;
       }
       if (releaseMutex) {
@@ -333,13 +410,22 @@ async function connect() {
 
 /**
  * Close the database connection.
+ *
+ * Waits for in-flight queries first: closing underneath one is what produces
+ * the uncatchable "Database handle is closed" throw (see _inflight above).
  */
 async function end() {
   if (_db) {
-    await _db.close();
-    _db = null;
-    _ready = null;
-    _mutexPromise = Promise.resolve();
+    _closing = true;
+    try {
+      await awaitDrain();
+      await _db.close();
+    } finally {
+      _db = null;
+      _ready = null;
+      _mutexPromise = Promise.resolve();
+      _closing = false;
+    }
   }
 }
 
