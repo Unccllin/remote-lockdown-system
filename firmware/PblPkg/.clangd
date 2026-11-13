@@ -1,0 +1,32 @@
+# clangd configuration for the PBL firmware sources.
+#
+# These files cannot be analysed standalone. `PblApp.h` includes EDK II headers
+# (`MdePkg/Include/Uefi.h`, `CryptoPkg/...`), which live in a separate EDK II
+# checkout (`EDK2_DIR`, default `$HOME/.local/src/edk2`), and the code uses
+# macros that only exist in the *generated* per-module `AutoGen.h`
+# (`FixedPcdGet32`, `STATIC`, ...). Neither is in the repository, and neither can
+# be pointed at with a committed path: EDK2 is cloned per machine and per CI run.
+#
+# Without that, clangd reports a cascade of errors that are not defects —
+# `'Uefi.h' file not found`, `Unknown type name 'STATIC'`, `undeclared 'UINT32'` —
+# because the first missing include makes every macro look undeclared. The
+# evidence that they are noise: CI's GCC compiles these same files, and when
+# firmware/PblPkg/PblApp/Decision.c really had a problem it reported exactly one
+# diagnostic (`'Now' may be used uninitialized`), not twenty-one.
+#
+# The gate for this subtree is the compiler (`make firmware-build`,
+# `make firmware-host-tests`, and PBL CI), so clangd's diagnostics are disabled
+# here rather than silenced one line at a time. If you build inside an EDK II
+# tree and want real analysis back, delete this file and run
+# `make firmware-build` first so `Build/PblPkg/.../AutoGen.h` exists.
+# -ferror-limit=0 so clang stops aborting with `fatal_too_many_errors` at the
+# default limit of 20; the missing headers are then reported (and suppressed
+# below) instead of truncating the parse into a single fatal.
+CompileFlags:
+  Add:
+    - -ferror-limit=0
+    - -fshort-wchar
+
+Diagnostics:
+  Suppress:
+    - '*'

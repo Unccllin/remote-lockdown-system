@@ -172,8 +172,16 @@ jobs:
           persist-credentials: false
 
       - name: Install test dependencies
+        # OVMF is a full EDK II firmware build, so it needs a compiler, nasm for
+        # the X64 assembly sources and uuid-dev for BaseTools — not just the
+        # emulator. Without them the build died with
+        #   error 7000: Failed to execute command
+        #   make tbuild [.../MdePkg/Library/BaseLib/BaseLib]
+        # in exactly the three NASM-using libraries, and the smoke test that
+        # needed the OVMF image was then skipped (S269).
         run: |
           ./scripts/apt-install-retry.sh /tmp/pbl-apt-qemu.log \
+            build-essential nasm uuid-dev \
             qemu-system-x86 \
             swtpm \
             mtools dosfstools gdisk
@@ -237,7 +245,11 @@ jobs:
             | tee /tmp/pbl-qemu.log
 
       - name: Annotate smoke test failure
-        if: failure()
+        # Guarded: when the build step above fails, the smoke test is skipped and
+        # /tmp/pbl-qemu.log does not exist — annotating it then failed the job a
+        # second time with "cannot read /tmp/pbl-qemu.log" and buried the real
+        # cause under a spurious error.
+        if: failure() && hashFiles('/tmp/pbl-qemu.log') != ''
         run: |
           python3 scripts/ci-annotate.py /tmp/pbl-qemu.log \
             "PBL CI: QEMU smoke test" 120
