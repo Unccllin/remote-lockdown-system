@@ -184,13 +184,22 @@
       "reviewed": "S251"
     },
     {
-      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "rule": "python.lang.security.audit.insecure-transport.urllib.insecure-request-object.insecure-request-object",
       "path": "agent/hw_test_harness.py",
-      "match": "urllib.request.urlopen(upload_req, timeout=10)  # noqa: S310",
+      "match": "request = urllib.request.Request(  # noqa: S310 - scheme allowlisted above",
       "occurrence": 1,
       "disposition": "accepted-risk",
-      "reason": "Artifact upload to the server the operator names with --upload (their own lab server). Harness-only code, run by an operator, never shipped to a device.",
-      "reviewed": "S251"
+      "reason": "Artifact upload to the server the operator names with --upload. Harness-only code, run by an operator, never shipped to a device. The request is built only after urllib.parse.urlsplit() proves the scheme is http(s) (upload_artifact(), S268), so file:/custom schemes are refused before this line.",
+      "reviewed": "S268"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/hw_test_harness.py",
+      "match": "urllib.request.urlopen(request, timeout=UPLOAD_TIMEOUT_SECONDS)  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Artifact upload to the server the operator names with --upload (their own lab server). Harness-only code, run by an operator, never shipped to a device; the URL passed the http(s) allowlist in upload_artifact() first.",
+      "reviewed": "S268"
     },
     {
       "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",

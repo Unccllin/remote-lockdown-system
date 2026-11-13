@@ -96,10 +96,16 @@
 
 ### Fog remaining
 
-- **`make test-scripts` still cannot run here past its first two files**: `scripts/test_tls_floor.py`
-  starts `docker run caddy` and fails `permission denied … /var/run/docker.sock` (daemon inactive,
-  user not in the `docker` group). Environmental; `scripts/test_hw_window_preflight.py` passes 19/19
-  when invoked directly from the repo root.
+- **`make test-scripts` cannot run here past `scripts/test_tls_floor.py`**: it starts
+  `docker run caddy` and fails `permission denied … /var/run/docker.sock` (daemon inactive, user not
+  in the `docker` group), and the runner `|| exit 1`s — so **every file after it never runs under
+  make**, `test_worker_update_e2e.py` included. Run them individually: 13 of 13 pass that way.
+- **`make lint-agent` is red at HEAD** with 6 findings, all in `agent/agent.py` — a file 268 did not
+  touch, so baseline per the AGENTS rule. 3 are `UP038` style; the 3 `F821 Undefined name` at
+  `agent.py:2626/2628` are a ruff 0.5.0 limitation, not a defect (`key`/`key_b64` are bound at
+  `agent.py:2598-2599` and the flag comes from a `del` in an except branch that returns first —
+  reproduced in eight lines in trace Addendum 6). So do not claim "lint-agent green" until the ruff
+  version is pinned or that `del` is removed.
 - **Whether `secure_boot:false` is an acceptable posture for this window is an operator decision that
   was not taken** (runbook §4 step 2). The device reports Secure Boot off, so nothing this run does
   evidences a PBL load under Secure Boot; D-130 (no signing certificate) is why it was never enabled.
@@ -143,6 +149,8 @@
   operator's account, and the `stop-track` remedy with its ordering caveat. Evidence:
   `docs/artifacts/s268-tracking-mode-lockout.txt` (the incident, the code citation for each of the
   three layers, the remedy, and the mutation check that proves the new test bites).
+- `scripts/sast-exceptions.json` — the `--upload` exception re-pointed at the two lines the Addendum 3
+  rewrite created, with the reason corrected to name the http(s) allowlist (`reviewed: S268`).
 
 ### Failure attribution
 

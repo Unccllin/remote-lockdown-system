@@ -15469,10 +15469,16 @@ exist on this path. Reproduced: default-UA urllib → 403 (cf-ray present), cust
 
 ### Fog remaining
 
-- **`make test-scripts` still cannot run here past its first two files**: `scripts/test_tls_floor.py`
-  starts `docker run caddy` and fails `permission denied … /var/run/docker.sock` (daemon inactive,
-  user not in the `docker` group). Environmental; `scripts/test_hw_window_preflight.py` passes 19/19
-  when invoked directly from the repo root.
+- **`make test-scripts` cannot run here past `scripts/test_tls_floor.py`**: it starts
+  `docker run caddy` and fails `permission denied … /var/run/docker.sock` (daemon inactive, user not
+  in the `docker` group), and the runner `|| exit 1`s — so **every file after it never runs under
+  make**, `test_worker_update_e2e.py` included. Run them individually: 13 of 13 pass that way.
+- **`make lint-agent` is red at HEAD** with 6 findings, all in `agent/agent.py` — a file 268 did not
+  touch, so baseline per the AGENTS rule. 3 are `UP038` style; the 3 `F821 Undefined name` at
+  `agent.py:2626/2628` are a ruff 0.5.0 limitation, not a defect (`key`/`key_b64` are bound at
+  `agent.py:2598-2599` and the flag comes from a `del` in an except branch that returns first —
+  reproduced in eight lines in trace Addendum 6). So do not claim "lint-agent green" until the ruff
+  version is pinned or that `del` is removed.
 - **Whether `secure_boot:false` is an acceptable posture for this window is an operator decision that
   was not taken** (runbook §4 step 2). The device reports Secure Boot off, so nothing this run does
   evidences a PBL load under Secure Boot; D-130 (no signing certificate) is why it was never enabled.
@@ -15516,6 +15522,8 @@ exist on this path. Reproduced: default-UA urllib → 403 (cf-ray present), cust
   operator's account, and the `stop-track` remedy with its ordering caveat. Evidence:
   `docs/artifacts/s268-tracking-mode-lockout.txt` (the incident, the code citation for each of the
   three layers, the remedy, and the mutation check that proves the new test bites).
+- `scripts/sast-exceptions.json` — the `--upload` exception re-pointed at the two lines the Addendum 3
+  rewrite created, with the reason corrected to name the http(s) allowlist (`reviewed: S268`).
 
 ### Failure attribution
 
@@ -15679,3 +15687,52 @@ sections only, so the four addenda above never reached it — it still claimed t
 and that the next step was to obtain an admin credential. Their conclusions are folded into
 `Fog cleared`, `Fog remaining`, `Blockers`, `Session artifacts`, `VERIFY` and `Next session opening`,
 and `make gen-state` was re-run. Nothing in the addenda themselves changed.
+
+### Addendum 6 — the close-out broke a gate that `make test-scripts` could not reach (found when pushing)
+
+Pushing 268 exposed a regression the session had introduced and could not have seen, because
+`make test-scripts` walks `scripts/test_*.py` in alphabetical order with `|| exit 1`: it dies at
+`scripts/test_tls_floor.py` (docker inactive), so **nothing after that file ever runs under `make
+test-scripts` on this host** — `test_worker_update_e2e.py` included. `test_sast_gate.py` sorts before
+the docker file (`… test_prepush_secrets`, `test_sast_gate`, `test_sign_release_metadata`,
+`test_tls_floor`, `test_worker_update_e2e`), so it did run — and it **failed**:
+
+```console
+AssertionError: agent/hw_test_harness.py: match text not found:
+                urllib.request.urlopen(upload_req, timeout=10)  # noqa: S310
+```
+
+`scripts/sast-exceptions.json` keeps an accepted-risk entry per semgrep finding and
+`test_sast_gate.py` asserts every `match` string still exists, so an exception cannot outlive the code
+it excused. Replacing the inline upload block in Addendum 3 deleted that line and left the exception
+pointing at nothing. Fixed by re-pointing the entry at the two lines that replaced it —
+`request = urllib.request.Request(  # noqa: S310 - scheme allowlisted above` and
+`urllib.request.urlopen(request, timeout=UPLOAD_TIMEOUT_SECONDS)  # noqa: S310` — and by correcting
+the reason: the old one ("every URL is a literal http://localhost:3000") was never true of the
+operator-supplied `--upload` URL; the mitigation is now the http(s) allowlist in `upload_artifact()`.
+`reviewed` moved from S251 to S268.
+
+VERIFY after the fix (semgrep itself is not installed here, so the match invariant is what is
+measurable): `scripts/test_sast_gate.py` → **24 passed**; all 13 `scripts/test_*.py` files pass when
+run individually, except `test_tls_floor.py` which needs the docker daemon (`systemctl is-active
+docker` → inactive, `docker info` → unusable) — environmental, as recorded in Fog.
+
+Also measured while pushing, and left alone as baseline: `make lint-agent` is **red at HEAD** with 6
+findings, all in `agent/agent.py`, a file 268 did not touch — 3 `F821 Undefined name` at
+`agent.py:2626/2628` and 3 `UP038`. The F821s are a ruff 0.5.0 limitation, not a defect: `key` and
+`key_b64` are bound at `agent.py:2598-2599`, and the flag comes from `del key, key_b64` sitting in an
+except branch that `return`s before the use. Reproduced in eight lines:
+
+```python
+def f():
+    k = 1
+    try: pass
+    except ValueError:
+        del k
+        return
+    print(k)        # ruff 0.5.0: F821 Undefined name `k` — the del path returned
+```
+
+So no NameError exists in the duress path, and per AGENTS rules (a finding in a file you did not
+change is baseline) it is reported, not silently fixed. It does mean "make lint-agent is green" must
+not be claimed until either the ruff version is pinned or that `del` is removed.
