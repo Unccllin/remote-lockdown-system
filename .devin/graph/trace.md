@@ -15255,3 +15255,151 @@ D-120 its real-media evidence), re-run `make hw-preflight` / `make hw-artifact` 
 are ones the checker accepts, and take D-130 only once a code-signing certificate exists.
 Software-side, nothing is queued: the four remaining debt items need hardware or a certificate,
 and the two host gates that could not run (Playwright, Semgrep) now both run and pass.
+
+---
+
+## Session 267 — 2026-11-13 (re-measure every gate, then fix the one that was lying)
+
+### RULE-ZERO — Understanding logged before code changes
+
+**Read**:
+- `.devin/graph/current-state.md` (S266 state), `docs/adr/PBL-DEBT-LEDGER.md` (D-120/D-129/D-130/D-134
+  status), `.devin/PENDING-RULING.md` + `scripts/check-ruling.sh` (task mode confirmed, no `- [ ]`)
+- `scripts/run-e2e.sh` (arg parsing, inline jest config: `testMatch`, `maxWorkers:1`, `forceExit`,
+  `detectOpenHandles`), `tests/e2e/{setup.js,agent-helpers.js,lockdown-flow.test.js,
+  recovery-flow.test.js,agent-integration.test.js,agent-update.e2e.test.js}`
+- `server/src/db/sqlitePool.js` in full (`openDb`/`getDb` lazy reopen, `query`, `connect` client with
+  BEGIN/COMMIT/ROLLBACK on a captured handle, `release()` fire-and-forget ROLLBACK, `end`)
+- `server/src/db/pool.js` (pg reference semantics), `server/src/db/pglitePool.js`,
+  `server/src/db/migrate.js` consumers of `end()`
+- `server/src/routes/agent.js:560-600` (ACK transaction: audit insert + device status, all awaited;
+  then fire-and-forget `sendNotification`), `server/src/routes/devices.js:390-480`
+- `server/tests/sqlitePool.test.js` (env contract, `:memory:`, `afterAll` calls `sqlitePool.end()`)
+- `AGENTS.md` verification section — every claimed count, to compare against measurement
+- Makefile targets: `test-*`, `test-coverage`, `sast`, `lint-workflows`, `verify-env`, `test-scripts`,
+  `firmware-host-tests`, `graph-check`, `full-verify`
+
+**Finding** (each of these shaped what follows):
+- **`npx jest` is not the server runner.** `npm test` wraps
+  `node --experimental-vm-modules node_modules/jest/bin/jest.js`; calling `npx jest` directly makes
+  `postgres-compat.test.js` die with `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` from PGlite's
+  dynamic import. A one-line detour that looked like a regression I had caused.
+- **`sqlitePool.getDb()` reopens lazily when `_db === null`**, so a query issued *after* `end()`
+  completes does not crash — it silently builds a fresh (empty) database. The crash window is
+  narrower and nastier: a query that already captured the handle and is mid-`await` when `end()`
+  closes underneath it. sqlite3 raises `SQLITE_MISUSE` from its **native error callback**, which is
+  an uncaught throw, not a rejected promise: process exit 2, no test-level trace.
+- **The repo had already met this bug and fixed it in one place only.** `tests/e2e/agent-helpers.js`
+  `cleanup()` drains the listening server before `pool.end()` and its comment records "observed
+  1-in-3 full sweeps, S196". `tests/e2e/setup.js` (lockdown + recovery suites) has no drain — but it
+  also has no listening server (supertest), so the per-suite fix could not simply be copied. The
+  right layer is the pool.
+- **pg.Pool already defines the contract worth copying**: `end()` refuses new work with a catchable
+  `Cannot use a pool after calling end on the pool` and waits for checked-out clients. The SQLite
+  pool claimed to mirror pg's interface but did neither.
+- **The gate tools the trace called absent are all installed** (`semgrep`, `actionlint`,
+  `shellcheck`, `k6`) — so "could not run" claims in older notes need re-testing, not repeating.
+
+### Fog cleared
+
+- **Every documented verification count was re-measured by running the owning command**, and nine of
+  them were stale: agent 857→**863**, dashboard 231→**260**, script harness 251→**255** (236 pytest
+  + 19 hand-rolled checks), verify-env 60→**63 PASS**, API E2E 10→**14** tests, dashboard coverage
+  floors 58/68/50/58→**statements 68 / branches 61 / functions 62 / lines 70**, Semgrep unscanned
+  files 17→**19**, server 840→**843** (+3 from the new suite). `AGENTS.md` now carries the measured
+  numbers with the date, because its own note says the list is cheaper to re-measure than to trust.
+- **`make test-e2e` was intermittently fatal and that was invisible in the docs** — "API+agent E2E
+  10/10 green" was wrong about both the count and the outcome. Root cause found, fixed at the pool
+  layer, and proven; see the fix note below and `docs/artifacts/s267-e2e-teardown-race.txt`.
+- **Semgrep's blind spot grew with S266's own work**: `host_tpm.c`, `host_tpm.h`, `host_crypto.c`,
+  `test_cose_verify.c`, `test_tpm_command.c` are unparsed or partially parsed, so the newest firmware
+  is exactly the code the SAST gate cannot see. Reported by the gate (19 files), not gated.
+- **Nothing renders "the sensors say green, therefore fine" true**: the whole point of this session
+  was that a documented green and a measured green are different objects.
+
+### Fog remaining
+
+- **The trigger for the pre-fix E2E crash is still not pinned to one call site.** The fix removes the
+  crash class at the pool (drain + refusal), so it does not need the culprit identified, but no log
+  line ever named the stale statement. Reproducing it required concurrency with a second harness
+  (Playwright); it never failed in isolation, under `forceExit`/`detectOpenHandles` toggles, or under
+  synthetic CPU load (`yes` ×4). Files checked: `tests/e2e/*.js`, `server/src/db/*.js`,
+  `server/src/routes/{agent,devices}.js`.
+- **`_ready` in `sqlitePool.js` is written and never read** (pre-existing, not touched — AGENTS rules
+  1 and 4 say a finding in a file you did not change is baseline). Same for the two `opengrep`
+  advisories (`_ready` write, unused `match` param in `replace` callbacks).
+- **D-120, D-129, D-130, D-134 remain CLOSED-to-work, open-in-fact**: real BitLocker media, a real
+  UEFI machine, a provisioned signing certificate. `localhost:3001/api/health` and
+  `192.168.1.43:3001/api/health` both returned HTTP 000 this session, so the lab server is down and
+  `make hw-preflight`'s network precondition does not hold today.
+- **`E-BCD` / `E-HP-UEFI`** remain `verified-in-unit-test` by decision (S264).
+- **CodeQL's alerts** remain unrunnable here (private repo without Code Security).
+
+### Debt items closed
+
+- None. All four open items are resource-bound (hardware/certificate); this session closed no debt.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — unchanged and resource-bound.
+
+### Blockers
+
+- Hardware and certificate only: a named sacrificial UEFI machine for D-129/D-134/D-120, and a
+  code-signing certificate for D-130. The lab server is currently **down** (HTTP 000 on both
+  `localhost:3001` and `192.168.1.43:3001`), so the D-129 window cannot even be preflighted until it
+  is started.
+
+### Session artifacts
+
+- `docs/artifacts/s267-e2e-teardown-race.txt` — pre-fix crash output, the each-suite-passes-alone
+  matrix, the mutation check against the reverted fix, and the 10/10 concurrent sweep.
+- `server/tests/sqlitePoolEnd.test.js` — 3 new regression tests (suite count 50→51, tests 840→843).
+- `server/src/db/sqlitePool.js` — in-flight tracking, drain-before-close, catchable refusal window.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback (primary).** The E2E gate could die without failing a test, and
+  the only record of its state was a prose claim ("10/10 green") that no run had produced for a long
+  time. A gate whose failure has no test-level trace, whose count was wrong in the docs, and which
+  was never re-run during any sweep, is a sensor that reports a constant. Harness change that fixes
+  the class: the sweep must re-run *every* gate it quotes a number for, and any gate that can exit
+  non-zero without a test failure needs a regression test that fails loudly (as the reverted-fix
+  check now does).
+- **Layer 3 — execution environment (secondary).** Two hours of this session were spent discovering
+  that `semgrep`/`actionlint`/`shellcheck`/`k6` are installed and that `npx jest` is not the server
+  runner. Both facts are now written down (`AGENTS.md` counts; the `--experimental-vm-modules` note)
+  instead of living in a previous session's head.
+- **Self-inflicted, recorded honestly**: I first ran the server suite with `npx jest` and read a
+  PGlite dynamic-import crash as my own regression; and my first regression test asserted promise
+  settlement order (`['query','end']`) when the real property is that the statement completes — the
+  fix was right, the assertion was about the wrong thing. Both were caught by running, not reasoning.
+
+### VERIFY
+
+- `cd server && npm test` → **843 passed, 51 suites, exit 0** (840 + the 3 new pool tests).
+- `npx jest tests/sqlitePoolEnd.test.js` ×3 → 3/3 pass each time; with the fix reverted
+  (`git stash push -- server/src/db/sqlitePool.js`) the same file reproduces
+  `Error: SQLITE_MISUSE: Database handle is closed` and the process dies before printing a summary.
+- `make test-e2e` ×10, run **concurrently with the full server suite** → **10 passed / 0 failed**,
+  14 tests each. Pre-fix the same command failed 2 of ~10 runs with exit 2.
+- `make graph-check` → all invariants pass. `make check-debt-ledger` → 0 mismatches.
+  `make check-firmware-todos` → clean.
+- Component suites: server 843 (51), agent 863, dashboard 260 (29 files), serverless 429 (2),
+  electron 30 (3), Playwright E2E 11, script harness 255 (236 pytest + 19 checks, 14 suites).
+- `make test-coverage` → server 74.12/70.97/79.55/75.03, agent 65%, dashboard 69.98/65.33/62.03/70.88,
+  worker 90.25/85.46/95.97/92.74, electron 39.40/47.36/30.95/39.30 — all above their floors.
+- `make sast` → 45 findings, 0 ERROR, every finding fixed or carrying a reviewed reason; NOTE names
+  19 files with no coverage.
+- `make firmware-host-tests` → 195 checks / 35 cases, 0 failures; vendored TPM headers match EDK II.
+- `make lint-workflows`, eslint (server + dashboard), ruff check + format, `make typecheck-worker` →
+  all clean. `make verify-env` → 63 PASS / 0 FAIL / 2 SKIP.
+
+### Next session opening
+
+Name the sacrificial UEFI machine and **start the lab server first** (`make hw-preflight` fails at its
+network precondition today: both `localhost:3001` and `192.168.1.43:3001` return HTTP 000), then run
+the D-129 window, which closes D-129 and D-134 together and gives D-120 its real-media evidence;
+take D-130 only once a code-signing certificate exists.
+
+---

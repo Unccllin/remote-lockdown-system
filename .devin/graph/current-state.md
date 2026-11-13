@@ -53,114 +53,109 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 266 — 2026-11-11 (D-224: test the code that talks to the TPM, not a model of it)
+## Latest session: 267 — 2026-11-13 (re-measure every gate, then fix the one that was lying)
 
 ### Fog cleared
 
-- **D-224 was described as blocked on "an EDK II crypto backend", and that description was wrong.**
-  Two facts made it reachable: (a) EDK II's `Tpm20.h` is a *wire-format* header, so vendoring it
-  costs nothing and needs no crypto backend; (b) the only crypto the compiled modules use is
-  SHA-256/HMAC-SHA256/AES-CBC/ECDSA-P-256, all of which OpenSSL provides on this host behind
-  `libssl-dev`. What the item actually lacked was a *seam*: `EFI_TCG2_PROTOCOL->SubmitCommand`
-  is the only path `TpmClient.c` has to a TPM, so faking it runs the shipped construction code and
-  the bytes become assertable. Source: `PblTcg2Locate`/`PblTpmSubmitCommand` in TpmClient.c:60-126.
-- **`EcDsaVerify` takes raw r||s, not DER** — `CryptoPkg/.../CryptEc.c:1060` rejects any
-  `SigSize != 2 * half` and rebuilds an `ECDSA_SIG` from the halves. A host backend that mirrored
-  OpenSSL's `ECDSA_verify` would have declared a nonexistent firmware bug. Read the implementation,
-  not the name.
-- **The host shim's EFI status table was wrong** and nothing could notice: `EFI_PROTOCOL_ERROR` was
-  `ENCODE_ERROR(11)` (EDK II: 24), and `EFI_NOT_STARTED`/`EFI_ALREADY_STARTED` were missing
-  entirely. The CBOR suite asserted the *macro*, so it passed either way; the error only became
-  visible once `TpmSession.c` — which returns those codes — was compiled for the first time.
-- **Byte offsets cannot be read off the C source.** `TPMS_AUTH_COMMAND` is 137 bytes because
-  `TPM2B_*` are fixed 66-byte buffers; the *serialized* empty auth area is 9. An assertion claiming
-  9 was rejected by the compiler, which is exactly why it was written.
-- **The tests are non-vacuous** — proven, not asserted: `artifacts/d224-mutation-check.txt`.
+- **Every documented verification count was re-measured by running the owning command**, and nine of
+  them were stale: agent 857→**863**, dashboard 231→**260**, script harness 251→**255** (236 pytest
+  + 19 hand-rolled checks), verify-env 60→**63 PASS**, API E2E 10→**14** tests, dashboard coverage
+  floors 58/68/50/58→**statements 68 / branches 61 / functions 62 / lines 70**, Semgrep unscanned
+  files 17→**19**, server 840→**843** (+3 from the new suite). `AGENTS.md` now carries the measured
+  numbers with the date, because its own note says the list is cheaper to re-measure than to trust.
+- **`make test-e2e` was intermittently fatal and that was invisible in the docs** — "API+agent E2E
+  10/10 green" was wrong about both the count and the outcome. Root cause found, fixed at the pool
+  layer, and proven; see the fix note below and `docs/artifacts/s267-e2e-teardown-race.txt`.
+- **Semgrep's blind spot grew with S266's own work**: `host_tpm.c`, `host_tpm.h`, `host_crypto.c`,
+  `test_cose_verify.c`, `test_tpm_command.c` are unparsed or partially parsed, so the newest firmware
+  is exactly the code the SAST gate cannot see. Reported by the gate (19 files), not gated.
+- **Nothing renders "the sensors say green, therefore fine" true**: the whole point of this session
+  was that a documented green and a measured green are different objects.
 
 ### Fog remaining
 
-- **D-120** (real BitLocker media + VMK lock-state proof), **D-129** (PBL on real UEFI hardware),
-  **D-130** (provisioned signing certificate) and **D-134** (owner-hierarchy confirmation on the
-  D-129 window) are unchanged and resource-bound. Files checked: `docs/adr/PBL-DEBT-LEDGER.md`
-  D-120/D-129/D-130/D-134; `firmware/PblPkg/artifacts/` (no new hardware evidence this session).
-- **A latent contract trap is now pinned but not fixed**: `PblTpmStartHmacSession` writes
-  `BindHandle` into `TPM2_StartAuthSession` verbatim, so "unbound" requires the caller to pass
-  `TPM_RH_NULL` (0x40000007) — passing 0 produces a command the TPM answers `TPM_RC_HANDLE`. The
-  sole caller (`PblApp.c:479`) binds to the NV index, so this is not a live defect. Pinned by
-  `session/start-auth-session-unbound`; treating it as a defect needs a decision, not a test edit.
+- **The trigger for the pre-fix E2E crash is still not pinned to one call site.** The fix removes the
+  crash class at the pool (drain + refusal), so it does not need the culprit identified, but no log
+  line ever named the stale statement. Reproducing it required concurrency with a second harness
+  (Playwright); it never failed in isolation, under `forceExit`/`detectOpenHandles` toggles, or under
+  synthetic CPU load (`yes` ×4). Files checked: `tests/e2e/*.js`, `server/src/db/*.js`,
+  `server/src/routes/{agent,devices}.js`.
+- **`_ready` in `sqlitePool.js` is written and never read** (pre-existing, not touched — AGENTS rules
+  1 and 4 say a finding in a file you did not change is baseline). Same for the two `opengrep`
+  advisories (`_ready` write, unused `match` param in `replace` callbacks).
+- **D-120, D-129, D-130, D-134 remain CLOSED-to-work, open-in-fact**: real BitLocker media, a real
+  UEFI machine, a provisioned signing certificate. `localhost:3001/api/health` and
+  `192.168.1.43:3001/api/health` both returned HTTP 000 this session, so the lab server is down and
+  `make hw-preflight`'s network precondition does not hold today.
 - **`E-BCD` / `E-HP-UEFI`** remain `verified-in-unit-test` by decision (S264).
-- **CodeQL's ~102 alerts** and **Playwright/Electron E2E** remain unrunnable here (private repo
-  without Code Security; missing `libnspr4.so`). `make sast` still cannot run: `semgrep` absent.
+- **CodeQL's alerts** remain unrunnable here (private repo without Code Security).
 
 ### Debt items closed
 
-- **D-224** — commit `e0dbec8`. Both close criteria delivered in
-  `firmware/PblPkg/host-tests/`: 8 byte-level TPM command cases (86 checks) and 8 COSE cases
-  (12 checks), 195 checks / 35 cases across all three suites, 0 failures. Artifacts:
-  `firmware/PblPkg/artifacts/d224-host-tests.txt`,
-  `firmware/PblPkg/artifacts/d224-mutation-check.txt`. Graph: 60/64 CLOSED.
+- None. All four open items are resource-bound (hardware/certificate); this session closed no debt.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134 — unchanged, resource-bound (see Fog remaining).
+- D-120, D-129, D-130, D-134 — unchanged and resource-bound.
 
 ### Blockers
 
-- Hardware/certificate only, unchanged: a real UEFI machine with a TPM for D-129/D-134, real
-  BitLocker media for D-120, a provisioned code-signing certificate for D-130. The lab server
-  answers `http://localhost:3001/api/health` → 200, so `make hw-preflight`'s network precondition
-  holds today; what remains is someone at the machine.
+- Hardware and certificate only: a named sacrificial UEFI machine for D-129/D-134/D-120, and a
+  code-signing certificate for D-130. The lab server is currently **down** (HTTP 000 on both
+  `localhost:3001` and `192.168.1.43:3001`), so the D-129 window cannot even be preflighted until it
+  is started.
+
+### Session artifacts
+
+- `docs/artifacts/s267-e2e-teardown-race.txt` — pre-fix crash output, the each-suite-passes-alone
+  matrix, the mutation check against the reverted fix, and the 10/10 concurrent sweep.
+- `server/tests/sqlitePoolEnd.test.js` — 3 new regression tests (suite count 50→51, tests 840→843).
+- `server/src/db/sqlitePool.js` — in-flight tracking, drain-before-close, catchable refusal window.
 
 ### Failure attribution
 
-- **Layer 2 — context provision (primary).** D-224's own text said the two missing tests "need an
-  EDK II crypto backend that the host build does not have". That sentence sent four sessions past
-  the item: it framed a *design* problem (no seam) as a *dependency* problem, and the fix (fake
-  `SubmitCommand`, vendor the wire header, use libcrypto) was never written down anywhere. One
-  line naming the seam would have made this a one-session task.
-- **Layer 4 — verification feedback (secondary).** The host shim carried a wrong EFI status table
-  (`EFI_PROTOCOL_ERROR` as 11) and nobody could notice, because the only suite consuming it
-  asserted the macro rather than the value. Harness change that would prevent it and is cheap:
-  when `$EDK2_DIR/MdePkg/Include/Base.h` exists, parse the `EFI_*` codes out of it and compare
-  them with the shim's — the same "compare against the real header when it is present" pattern
-  the vendored-TPM-header `cmp` check already uses.
-- **Self-inflicted, recorded honestly**: three generator bugs (a `\b` search that matched a
-  comment mention and duplicated six struct definitions; a backward walk that escaped into the
-  preceding struct because a field line ending in a comment does not end with `;`; an include
-  order that let the vendored header beat its own stand-in), four test expectations that were
-  wrong about the firmware (NV_Increment carries *two* handles; a failed epoch increment
-  short-circuits the counter read; `GetRandom` needs a `TPM2B_DIGEST` body; a truncated COSE
-  input is `BUFFER_TOO_SMALL`, not `PROTOCOL_ERROR`), and one real bug in my signing helper
-  (writing a `size_t` length through a cast of an `int`). Each was caught by running the tests
-  rather than reasoning about them.
+- **Layer 4 — verification feedback (primary).** The E2E gate could die without failing a test, and
+  the only record of its state was a prose claim ("10/10 green") that no run had produced for a long
+  time. A gate whose failure has no test-level trace, whose count was wrong in the docs, and which
+  was never re-run during any sweep, is a sensor that reports a constant. Harness change that fixes
+  the class: the sweep must re-run *every* gate it quotes a number for, and any gate that can exit
+  non-zero without a test failure needs a regression test that fails loudly (as the reverted-fix
+  check now does).
+- **Layer 3 — execution environment (secondary).** Two hours of this session were spent discovering
+  that `semgrep`/`actionlint`/`shellcheck`/`k6` are installed and that `npx jest` is not the server
+  runner. Both facts are now written down (`AGENTS.md` counts; the `--experimental-vm-modules` note)
+  instead of living in a previous session's head.
+- **Self-inflicted, recorded honestly**: I first ran the server suite with `npx jest` and read a
+  PGlite dynamic-import crash as my own regression; and my first regression test asserted promise
+  settlement order (`['query','end']`) when the real property is that the statement completes — the
+  fix was right, the assertion was about the wrong thing. Both were caught by running, not reasoning.
 
 ### VERIFY
 
-- `make firmware-host-tests` → **195 checks, 0 failures across 35 cases** (CBOR 97/19, TPM 86/8,
-  COSE 12/8); vendored TPM headers reported identical to EDK II (`cmp`, `~/.local/src/edk2`).
-- Mutation check (`artifacts/d224-mutation-check.txt`) → `authAreaSize 9→8` fails 9 TPM assertions
-  across 3 cases; `external_aad` empty→1 byte makes every valid COSE signature stop verifying while
-  both tamper cases still reject. Both firmware sources restored (`git diff --stat` → 0 lines).
-- `make firmware-build` → **Build successful**, `PblApp.efi` SHA-256 `336f5451…` — identical to
-  S265, confirming no firmware source was modified.
-- `scripts/run-agent-tests.sh` → **859 passed** (unchanged from S265; includes
-  `test_graph_assertions.py` covering I1–I7).
-- `python3 scripts/check_debt_ledger.py` → `mismatches now: 0 | recorded: 0 | new: 0 | stale
-  baseline: 0` (summary row and detail entry agree, B-102's failure mode checked).
-- `make graph-check` → **All invariants pass**; `make graph-status` → Phases 17/17, **Debt 60/64**,
-  Enforcement 11/13 (+2 by decision), 4 open items named.
-- `make check-firmware-todos` → `OK: no untraceable TODO/FIXME markers under firmware/PblPkg`.
-- Lens diagnostics on the six new/changed host-test files: 0 errors (2 stale advisories about
-  `stdio.h`/`Iinclude` fixed; the remaining `unused-includes` hits on generated headers are the
-  known false positive — include-cleaner cannot see macro expansion).
+- `cd server && npm test` → **843 passed, 51 suites, exit 0** (840 + the 3 new pool tests).
+- `npx jest tests/sqlitePoolEnd.test.js` ×3 → 3/3 pass each time; with the fix reverted
+  (`git stash push -- server/src/db/sqlitePool.js`) the same file reproduces
+  `Error: SQLITE_MISUSE: Database handle is closed` and the process dies before printing a summary.
+- `make test-e2e` ×10, run **concurrently with the full server suite** → **10 passed / 0 failed**,
+  14 tests each. Pre-fix the same command failed 2 of ~10 runs with exit 2.
+- `make graph-check` → all invariants pass. `make check-debt-ledger` → 0 mismatches.
+  `make check-firmware-todos` → clean.
+- Component suites: server 843 (51), agent 863, dashboard 260 (29 files), serverless 429 (2),
+  electron 30 (3), Playwright E2E 11, script harness 255 (236 pytest + 19 checks, 14 suites).
+- `make test-coverage` → server 74.12/70.97/79.55/75.03, agent 65%, dashboard 69.98/65.33/62.03/70.88,
+  worker 90.25/85.46/95.97/92.74, electron 39.40/47.36/30.95/39.30 — all above their floors.
+- `make sast` → 45 findings, 0 ERROR, every finding fixed or carrying a reviewed reason; NOTE names
+  19 files with no coverage.
+- `make firmware-host-tests` → 195 checks / 35 cases, 0 failures; vendored TPM headers match EDK II.
+- `make lint-workflows`, eslint (server + dashboard), ruff check + format, `make typecheck-worker` →
+  all clean. `make verify-env` → 63 PASS / 0 FAIL / 2 SKIP.
 
 ### Next session opening
 
-Name the real UEFI machine for the D-129 window (it closes D-129 and D-134 together and gives
-D-120 its real-media evidence), re-run `make hw-preflight` / `make hw-artifact` so the I3 citations
-are ones the checker accepts, and take D-130 only once a code-signing certificate exists.
-Software-side, nothing is queued: the four remaining debt items need hardware or a certificate,
-and the two host gates that could not run (Playwright, Semgrep) now both run and pass.
+Name the sacrificial UEFI machine and **start the lab server first** (`make hw-preflight` fails at its
+network precondition today: both `localhost:3001` and `192.168.1.43:3001` return HTTP 000), then run
+the D-129 window, which closes D-129 and D-134 together and gives D-120 its real-media evidence;
+take D-130 only once a code-signing certificate exists.
 
 ---
 

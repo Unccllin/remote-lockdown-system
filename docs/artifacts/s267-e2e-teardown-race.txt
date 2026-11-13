@@ -1,0 +1,42 @@
+S267 — make test-e2e teardown race: measured evidence
+Recorded 2026-11-13. Fix: in-flight query drain in server/src/db/sqlitePool.js end().
+
+=== 1. PRE-FIX FAILURE (2 of ~10 runs) ===
+/home/cllin/remote-lockdown-system/server/node_modules/sqlite/build/utils/format-error.js:9
+Error: SQLITE_MISUSE: Database handle is closed
+    at formatError (/home/cllin/remote-lockdown-system/server/node_modules/sqlite/src/utils/format-error.ts:7:22)
+    at /home/cllin/remote-lockdown-system/server/node_modules/sqlite/src/Database.ts:122:36
+  code: 'SQLITE_MISUSE'
+  RESULT: FAIL (one or more E2E tests failed; exit 1)
+REAL_EXIT=2
+
+=== 2. PRE-FIX: each suite passes alone (so the failure is cross-suite teardown) ===
+lockdown-flow      3 tests  PASS
+recovery-flow      3 tests  PASS
+agent-integration  4 tests  PASS
+agent-update.e2e   4 tests  PASS
+all four together 14 tests  crashed on 2 of ~10 runs
+
+=== 3. NON-VACUITY: new test file against the PRE-FIX source ===
+$ git stash push -- server/src/db/sqlitePool.js && npx jest tests/sqlitePoolEnd.test.js
+Error: SQLITE_MISUSE: Database handle is closed
+  code: 'SQLITE_MISUSE'
+(process died — no 'Tests:' summary line was printed)
+
+=== 4. POST-FIX: new regression suite ===
+$ npx jest tests/sqlitePoolEnd.test.js   (x3 consecutive)
+Test Suites: 1 passed, 1 total
+Tests:       3 passed, 3 total
+
+=== 5. POST-FIX: 10 full sweeps of `make test-e2e`, run CONCURRENTLY with the full server suite (the condition that produced both pre-fix crashes) ===
+sweep  1: exit=0 Tests:       14 passed, 14 total
+sweep  2: exit=0 Tests:       14 passed, 14 total
+sweep  3: exit=0 Tests:       14 passed, 14 total
+sweep  4: exit=0 Tests:       14 passed, 14 total
+sweep  5: exit=0 Tests:       14 passed, 14 total
+sweep  6: exit=0 Tests:       14 passed, 14 total
+sweep  7: exit=0 Tests:       14 passed, 14 total
+sweep  8: exit=0 Tests:       14 passed, 14 total
+sweep  9: exit=0 Tests:       14 passed, 14 total
+sweep 10: exit=0 Tests:       14 passed, 14 total
+=== RESULT: 10 passed / 0 failed over 10 sweeps ===

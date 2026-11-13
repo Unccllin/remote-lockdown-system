@@ -2844,3 +2844,43 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-128
+  statement: 'A database pool whose end() closes the handle without waiting for in-flight queries can
+    crash the process uncatchably: sqlite3 raises SQLITE_MISUSE from its native error callback, which
+    is an uncaught throw rather than a promise rejection, so the test runner dies with exit 2 and no test-level
+    failure. The fix belongs at the pool layer — the pg.Pool.end() contract: refuse new work with a catchable
+    error and drain in-flight statements before closing — not a per-suite teardown drain, because suites
+    built on supertest have no listening server to drain.'
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'server/src/db/sqlitePool.js + server/tests/sqlitePoolEnd.test.js: 3 tests pass with the
+    drain; reverting the fix reproduces Error: SQLITE_MISUSE: Database handle is closed and the process
+    dies before printing a summary; 10/10 concurrent make test-e2e sweeps pass after the fix.'
+  source: S267 code-read
+  asserted: '2026-11-13'
+  last_verified: '2026-11-13'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-129
+  statement: A documented verification count is not evidence that the gate passes. In S267 the AGENTS.md
+    sweep list claimed nine numbers no recent run had produced, including 'API+agent E2E 10/10 green'
+    for a suite that actually contains 14 tests and was dying intermittently with exit 2. Every quoted
+    count must be re-measured by running the owning command, and a gate that can exit non-zero without
+    failing a test needs a mutation-checked regression test.
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S267 re-measurement: nine AGENTS.md counts were stale, and make test-e2e held 14 tests
+    (not 10) while failing 2 of ~10 runs with exit 2 and no test-level failure.'
+  source: S267 code-read
+  asserted: '2026-11-13'
+  last_verified: '2026-11-13'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

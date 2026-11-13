@@ -257,9 +257,9 @@ export PATH="/home/cllin/.local/node/bin:$PATH"
 npm test
 
 # Per-component
-cd server   && npm test                       # 663 Jest tests
-scripts/run-agent-tests.sh -q                 # 857 pytest tests (uses agent/.venv)
-cd dashboard && npx vitest run                # 231 Vitest tests
+cd server   && npm test                       # 843 Jest tests (51 suites)
+scripts/run-agent-tests.sh -q                 # 863 pytest tests (uses agent/.venv)
+cd dashboard && npx vitest run                # 260 Vitest tests (29 files)
 cd electron  && npm test                      # 30 Jest tests
 cd serverless && npm test                     # 429 Vitest tests
 
@@ -376,7 +376,7 @@ find server/src electron -name '*.js' -o -name '*.cjs' | grep -v node_modules | 
 # Shell scripts
 bash -n scripts/*.sh && bash -n .devin/orchestration/orchestrator.sh
 
-# Full environment + artifact verification (61 checks)
+# Full environment + artifact verification (63 checks)
 make verify-env
 make check-structure      # non-fatal; electron/dist-electron is expected missing locally
 
@@ -439,16 +439,39 @@ make build
   check. The convention prepares for future failures without backfilling a
   failure log with no data.
 
-## Diagnostic Sweep Results (2026-08-04, updated 2026-10-27)
+## Diagnostic Sweep Results (2026-08-04, updated 2026-11-13)
 
-All green: 840 server tests (50 suites, measured 2026-11-05), 857 agent tests, 231 dashboard tests,
-30 electron tests, 429 serverless tests, 10 API E2E tests, 251 script-harness
-checks (232 pytest tests across 14 suites + 19 checks in the hand-rolled
-secret-scanner suite; 5 worker-update cases skip without a built worker),
-eslint clean on server + dashboard, ruff clean + formatted on
-agent, vite build OK, all shell scripts `bash -n` OK, all YAML configs valid, all
-local imports resolve, git tree clean. Also green: `make pg-smoke` 65/65 on real
-PostgreSQL 16, API+agent E2E 10/10, `actionlint` 1.7.12 clean on all 5 workflows.
+All green, re-measured 2026-11-13 (every number below was produced by running the
+command that owns it — the count is cheaper to re-take than to trust): 843 server
+tests (51 suites), 863 agent tests, 260 dashboard tests (29 files), 30 electron
+tests, 429 serverless tests, 14 API E2E tests, 255 script-harness checks (236
+pytest tests across 14 suites + 19 checks in the hand-rolled secret-scanner suite;
+5 worker-update cases skip without a built worker), eslint clean on server +
+dashboard, ruff clean + formatted on agent, vite build OK, all shell scripts
+`bash -n` OK, all YAML configs valid, all local imports resolve, git tree clean.
+Also green: `make pg-smoke` 65/65 on real PostgreSQL 16, `actionlint` 1.7.12 clean
+on all 5 workflows, Playwright dashboard E2E 11/11, `make graph-check` all
+invariants pass, `make test-coverage` all 5 components above floor, `make sast`
+45 findings / 0 ERROR all dispositioned, `make firmware-host-tests` 195 checks /
+35 cases, `make verify-env` 63 PASS / 0 FAIL / 2 SKIP.
+
+**`make test-e2e` was intermittently fatal until 2026-11-13; it is fixed and proven.** The
+suite holds 14 tests (not the 10 long claimed here) and passes on its own, but it twice died
+out of ~10 full sweeps with `Error: SQLITE_MISUSE: Database handle is closed` — an uncaught
+throw from the sqlite3 native error callback, exit 2, no test-level failure. Both crashes
+happened while the Playwright harness ran concurrently; neither reproduced in isolation,
+under `forceExit`/`detectOpenHandles` variations, or under synthetic CPU load, so the trigger
+was a timing race. Mechanism: a query that had already taken the handle was still mid-flight
+when `pool.end()` closed the connection underneath it — the same class
+`tests/e2e/agent-helpers.js` documents at its `cleanup()` ("observed 1-in-3 full sweeps,
+S196"), which fixed only the agent suites. Fixed at the pool instead of per-suite:
+`server/src/db/sqlitePool.js` now tracks in-flight statements, `end()` drains them before
+closing, and a query issued while closing is refused with a catchable
+`Cannot use a pool after calling end on the pool` (pg.Pool's own contract) instead of
+reaching a dying handle. Pinned by `server/tests/sqlitePoolEnd.test.js` (3 tests, verified to
+fail with the fix reverted — it reproduces the exact `SQLITE_MISUSE` and kills the process),
+and proven by 10 consecutive `make test-e2e` sweeps run *concurrently* with the full server
+suite — 10/10 pass. Evidence: `docs/artifacts/s267-e2e-teardown-race.txt`.
 **Playwright and Electron DO run on this host (fixed 2026-11-11).** The old note here said
 "not runnable: missing libnspr4.so", which was only the first of three independent blockers.
 The distro ships neither `libnspr4` nor `libnss3`; both were extracted from their Ubuntu
@@ -481,8 +504,8 @@ Electron runs too (`npx electron .` from `electron/`, same `LD_LIBRARY_PATH`); `
 **`make full-verify` now covers all five component suites** (server, agent,
 dashboard, worker, electron) plus the script-level harness tests, E2E, env and
 artifact checks — it previously ran only three of the five while its own comment
-claimed "all 5 test suites". Current measured totals: server 840 (50 suites),
-agent 830, dashboard 231, worker 429, electron 30, API E2E 10, script harness 251.
+claimed "all 5 test suites". Current measured totals (2026-11-13): server 843 (51 suites),
+agent 863, dashboard 260, worker 429, electron 30, API E2E 14, script harness 255.
 
 The script-level harness tests are **auto-discovered** (`scripts/test_*.py`, run
 by `make test-scripts` and the CI `script-tests` job). Counts measured 2026-11-05
@@ -518,7 +541,7 @@ Two harness bugs found while completing this (both fixed):
    SQLite DB (verified to fail when the bug is reintroduced) and
    `server/tests/loadSigning.test.js` locks the signing scheme in 11 tests.
 
-`verify-environment.sh` final: **60 PASS / 0 FAIL / 2 SKIP** (the skips are the
+`verify-environment.sh` final: **63 PASS / 0 FAIL / 2 SKIP** (the skips are the
 intentional `installer-windows-execpolicy` by-design skip).
 
 Hardware test harness (D-003): `make hw-test-dry` runs the harness in dry-run mode.
@@ -794,9 +817,11 @@ work — pick up here tomorrow.
 - No timeout protection (hanging test hangs forever)
 
 #### 3. Dashboard (84 tests) — 7 improvements
-- ~~No coverage reporting~~ — **DONE 2026-10-27**: thresholds 58/68/50/58 in
-  `vitest.config.js`; the coverage script raises `--testTimeout` to 60s because
-  v8 instrumentation roughly doubles render cost.
+- ~~No coverage reporting~~ — **DONE 2026-10-27**: thresholds statements 68 /
+  branches 61 / functions 62 / lines 70 in `vitest.config.js` (measured
+  2026-11-13: 69.98 / 65.33 / 62.03 / 70.88 — functions and lines are the tight
+  ones, so a small deletion can trip the gate); the coverage script raises
+  `--testTimeout` to 60s because v8 instrumentation roughly doubles render cost.
 - No renderWithRouter helper (each test redefines MemoryRouter)
 - @testing-library/user-event installed but unused (all use fireEvent)
 - Download buttons not tested (download-installer-btn, download-agent-btn)
@@ -926,8 +951,11 @@ reach a verdict:
   C files and 12 others produce *no findings* and are silently indistinguishable from clean.
   The gate now prints a `[sast] NOTE:` block naming every file that received no coverage,
   with a reason (`could not be parsed` / `partially parsed` / `timed out`) — reported, not
-  gated, because a permanently-red gate is one nobody reads. Measured 2026-11-11: 17 files,
-  45 findings (0 ERROR).
+  gated, because a permanently-red gate is one nobody reads. Measured 2026-11-13: 19 files,
+  45 findings (0 ERROR). The count grew from 17 when S266 added the TPM/COSE host tests —
+  `host_tpm.c`, `host_tpm.h`, `host_crypto.c`, `test_cose_verify.c` and
+  `test_tpm_command.c` are all unscanned or partially parsed, so the newest firmware code is
+  exactly the code Semgrep cannot see.
 
 Debug note: the `semgrep` on PATH may be a symlink into `/tmp` and silently gone
 (that is how S251 started). `make sast` fails loudly when the binary is missing;
