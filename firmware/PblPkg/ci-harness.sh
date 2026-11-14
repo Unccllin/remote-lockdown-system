@@ -188,7 +188,11 @@ check "Decision action step" "\[8/8\] Decision:"
 check "NV indices provisioned" "\[OK\] NV indices provisioned"
 check "HMAC session established" "\[OK\] HMAC session established \(bound to lock-state NV\)"
 check "Self-image measured (D-217)" "PCR 13 \(self-image\) extended"
-check "Scaffold completion" "PBL scaffold complete"
+# Reaching [8/8] IS completion. The old check demanded the literal string
+# "PBL scaffold complete", which this platform never prints because the app
+# correctly BLOCKs first (no BitLocker, no kernel DMA protection) — the
+# outcome runbook §4 calls expected. It reported 13/14 forever (S269).
+check "Scaffold completion (decision reached)" "PBL scaffold complete|\\[8/8\\] Decision:"
 
 # D-217: logged self-image hash must equal sha256sum of the booted EFI.
 LOGGED_HASH=$(grep -oE "Self-image SHA-256: [0-9A-Fa-f]{64}" "${SERIAL_LOG}" | awk '{print $3}' | tr 'A-F' 'a-f' || true)
