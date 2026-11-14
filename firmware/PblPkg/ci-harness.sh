@@ -124,16 +124,17 @@ timeout "${TIMEOUT}" "${QEMU}" \
   -drive if=pflash,format=raw,readonly=on,file="${OVMF_DIR}/OVMF_CODE.fd" \
   -drive if=pflash,format=raw,file="${BUILD_DIR}/OVMF_VARS_pbl.fd" \
   -drive format=raw,file="${DISK_IMG}" \
-  -nographic \
-  -serial mon:stdio \
   -display none \
+  -serial "file:${SERIAL_LOG}" \
+  -debugcon "file:${BUILD_DIR}/ovmf-debug.log" \
+  -global isa-debugcon.iobase=0x402 \
   -m 256M \
   -device e1000,netdev=net0,romfile=efi-e1000.rom \
   -netdev user,id=net0 \
   -object rng-random,id=rng0,filename=/dev/urandom \
   -device virtio-rng-pci,rng=rng0 \
   ${SWTPM_ARGS} \
-  > "${SERIAL_LOG}" 2>&1 || true
+  > "${BUILD_DIR}/qemu-stderr.log" 2>&1 || true
 
 # === Check results ===
 echo ""
@@ -144,8 +145,12 @@ echo "=== Checking serial output ==="
 if [ ! -s "${SERIAL_LOG}" ] || [ "$(wc -c < "${SERIAL_LOG}")" -lt 16 ]; then
   echo "  [NOTE] serial log is empty (${SERIAL_LOG})"
   if [ -f "${BUILD_DIR}/ovmf-debug.log" ]; then
-    echo "  === OVMF debug (last 40) ==="
-    tail -40 "${BUILD_DIR}/ovmf-debug.log"
+    echo "  === OVMF debug via 0x402 (last 20) ==="
+    tail -20 "${BUILD_DIR}/ovmf-debug.log"
+  fi
+  if [ -s "${BUILD_DIR}/qemu-stderr.log" ]; then
+    echo "  === QEMU stderr (last 20) ==="
+    tail -20 "${BUILD_DIR}/qemu-stderr.log"
   fi
 fi
 
