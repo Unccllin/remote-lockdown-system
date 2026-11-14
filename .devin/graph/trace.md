@@ -15876,3 +15876,45 @@ capture from before power-on, record the posture, then the second boot to prove 
 first line to read is the AK Name / `NV_Read` RC — `[OK]` closes D-134 as "production PCD fine",
 `0x9A2`/`0x18B` closes it the other way and needs `PcdPblTpmUsePlatformHierarchy=FALSE`. `BLOCK` is the
 expected outcome. Separately: decide AARCH64, and investigate the empty QEMU serial.
+
+### Addendum — the QEMU smoke test is green for the first time (14/14)
+
+Run 43581206874: *Build PblApp (X64)* success, *Static analysis* success, **QEMU + swtpm smoke
+test 14 PASS / 0 FAIL**. The only red job left is *Build PblApp (AARCH64)*, which is the
+`TimerLib` architecture question, not a regression.
+
+Three defects stood between "the gate reports 0/14" and "the gate reports on PblApp", and all three
+were in the harness, not the firmware:
+
+1. **`-nographic` together with `-serial mon:stdio`** — both claim stdio, so COM1 could be left
+   without a backend and every guest byte was discarded. Serial and the 0x402 `-debugcon` now go to
+   explicit files, and QEMU's stderr is kept separately.
+2. **OVMF hung before `BdsDxe`.** With a DEBUG OVMF (`-D DEBUG_ON_SERIAL_PORT`) the log finally said
+   `PlatformCpuCountBugCheck: The firmware will now stop (hang) deliberately` plus
+   `ASSERT [PlatformPei] …/PlatformInitLib/Platform.c(532)`. The ESP was never enumerated, so the app
+   never ran. Fixed with the override OVMF names:
+   `-fw_cfg name=opt/org.tianocore/X-Cpuhp-Bugcheck-Override,string=yes`.
+3. **The harness demanded the string `PBL scaffold complete`**, which this platform never prints
+   because the app correctly BLOCKs at `[8/8]` first — runbook §4 calls that expected. Reaching
+   `[8/8] Decision:` now counts as completion.
+
+What the green run proves, from the shipped binary rather than a scaffold:
+
+```text
+BdsDxe: loading Boot0002 "UEFI QEMU HARDDISK" ...
+Loading driver at 0xCE38000 EntryPoint=0xCF0B0BC PblApp.efi
+  PBL — Pre-Boot Lock v0
+[1/8] … [3/8] NV_Read(AK_NAME) RC=0x18B     ← D-134's line, on an unprovisioned platform
+      [OK] Lock state cached to TPM NV
+[8/8] Decision: BLOCK — lock screen
+Self-image hash matches PblApp.efi (6fa6ac41…)   ← D-217
+```
+
+`RC=0x18B` is AK Name failing with Device Error, i.e. the platform hierarchy is not available to the
+app — the same result S165 recorded in QEMU, now produced by the built artifact. On the hardware
+window the same line decides D-134: `[OK] device id from AK Name` closes it as "production PCD is
+fine"; `0x9A2`/`0x18B` closes it the other way and needs `PcdPblTpmUsePlatformHierarchy=FALSE`.
+
+Evidence chain for the window, all reproducible without the laptop: the artifact is committed at
+`firmware/PblPkg/artifacts/PblApp-6fa6ac418b726075.efi` (public raw URL), its behaviour is asserted
+by the smoke test above, and the remaining step is the same binary booting on real firmware.
