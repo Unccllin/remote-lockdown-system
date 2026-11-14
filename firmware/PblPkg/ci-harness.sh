@@ -119,6 +119,12 @@ cp "${OVMF_DIR}/OVMF_VARS.fd" "${BUILD_DIR}/OVMF_VARS_pbl.fd"
 
 SERIAL_LOG="${BUILD_DIR}/pbl-serial.log"
 
+# -fw_cfg X-Cpuhp-Bugcheck-Override, below: OVMF refuses to continue in
+# PlatformPei when it detects QEMU's CPU-hotplug inconsistency — "The firmware
+# will now stop (hang) deliberately" + ASSERT in PlatformInitLib/Platform.c(532).
+# It hangs BEFORE BdsDxe, so the ESP is never enumerated and the app never runs.
+# That, not PblApp, is the 0 PASS / 14 FAIL this harness reported with an empty
+# serial log (S269). This is the override OVMF itself names for it.
 timeout "${TIMEOUT}" "${QEMU}" \
   -L "${BUILD_DIR}/pc-bios" \
   -drive if=pflash,format=raw,readonly=on,file="${OVMF_DIR}/OVMF_CODE.fd" \
@@ -129,6 +135,7 @@ timeout "${TIMEOUT}" "${QEMU}" \
   -debugcon "file:${BUILD_DIR}/ovmf-debug.log" \
   -global isa-debugcon.iobase=0x402 \
   -m 256M \
+  -fw_cfg name=opt/org.tianocore/X-Cpuhp-Bugcheck-Override,string=yes \
   -device e1000,netdev=net0,romfile=efi-e1000.rom \
   -netdev user,id=net0 \
   -object rng-random,id=rng0,filename=/dev/urandom \
