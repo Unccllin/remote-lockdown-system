@@ -230,6 +230,28 @@ jobs:
           python3 scripts/ci-annotate.py /tmp/pbl-build-qemu.log \
             "PBL CI: PblApp + OVMF build (QEMU smoke)"
 
+      - name: Build DEBUG OVMF (firmware-side diagnostics)
+        # The smoke test reports 0/14 with an EMPTY serial log, which cannot say
+        # whether firmware refused to load PblApp or started it and it died
+        # before Print(). A DEBUG OVMF built with DEBUG_ON_SERIAL_PORT answers
+        # that from firmware's side: its BDS/LoadImage messages land in the
+        # same serial log the harness checks. Release output is unchanged.
+        run: |
+          set -o pipefail
+          export EDK2_DIR="$HOME/.local/src/edk2"
+          cd "$EDK2_DIR"
+          source edksetup.sh
+          build -p OvmfPkg/OvmfPkgX64.dsc -a X64 -t GCC -b DEBUG \
+            -D DEBUG_ON_SERIAL_PORT \
+            -D NETWORK_HTTP_ENABLE=TRUE \
+            -D NETWORK_HTTP_BOOT_ENABLE=FALSE \
+            -D NETWORK_TLS_ENABLE=TRUE \
+            -D NETWORK_ALLOW_HTTP_CONNECTIONS=TRUE \
+            -D NETWORK_IP6_ENABLE=TRUE \
+            -D TPM2_ENABLE=TRUE \
+            -D SECURE_BOOT_ENABLE=TRUE 2>&1 | tail -5
+          ls -l Build/OvmfX64/DEBUG_GCC/FV/*.fd
+
       - name: Run QEMU smoke test
         # Assign and export separately: `export X=$(cmd)` masks the command's
         # exit status (shellcheck SC2155) and actionlint escalates shellcheck
@@ -237,6 +259,8 @@ jobs:
         run: |
           set -o pipefail
           export EDK2_DIR="$HOME/.local/src/edk2"
+          # DEBUG OVMF, so the serial log carries BDS/LoadImage decisions.
+          export OVMF_DIR="$HOME/.local/src/edk2/Build/OvmfX64/DEBUG_GCC/FV"
           QEMU=$(command -v qemu-system-x86_64)
           MKFS=$(command -v mkfs.fat)
           MMD=$(command -v mmd)
@@ -247,10 +271,10 @@ jobs:
             | tee /tmp/pbl-qemu.log
 
       - name: Annotate smoke test failure
-        # Guarded: when the build step above fails, the smoke test is skipped and
-        # /tmp/pbl-qemu.log does not exist — annotating it then failed the job a
-        # second time with "cannot read /tmp/pbl-qemu.log" and buried the real
-        # cause under a spurious error.
+        # Guarded: when the build step above fails, the smoke test is skipped,
+        # so /tmp/pbl-qemu.log does not exist — annotating it then failed the
+        # job a second time with "cannot read /tmp/pbl-qemu.log" and buried
+        # the real cause under a spurious error.
         if: failure() && hashFiles('/tmp/pbl-qemu.log') != ''
         run: |
           python3 scripts/ci-annotate.py /tmp/pbl-qemu.log \

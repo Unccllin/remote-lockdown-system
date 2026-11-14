@@ -59,7 +59,10 @@ if [ ! -f "${PBL_APP}" ]; then
   exit 1
 fi
 
-OVMF_DIR="${EDK2_DIR}/Build/OvmfX64/RELEASE_GCC/FV"
+# Overridable: a DEBUG OVMF (built with -D DEBUG_ON_SERIAL_PORT) prints its own
+# BDS/LoadImage decisions to the same serial log, which is the only way to see
+# WHY firmware did or did not start PblApp on a machine whose console is dark.
+OVMF_DIR="${OVMF_DIR:-${EDK2_DIR}/Build/OvmfX64/RELEASE_GCC/FV}"
 if [ ! -f "${OVMF_DIR}/OVMF_CODE.fd" ]; then
   echo "ERROR: OVMF not built. Run build-pbl.sh first."
   exit 1
@@ -136,6 +139,16 @@ timeout "${TIMEOUT}" "${QEMU}" \
 echo ""
 echo "=== Checking serial output ==="
 
+# If the log is empty, nothing below can pass and the interesting question is why
+# firmware never started the image. Show what the log does contain, verbatim.
+if [ ! -s "${SERIAL_LOG}" ] || [ "$(wc -c < "${SERIAL_LOG}")" -lt 16 ]; then
+  echo "  [NOTE] serial log is empty (${SERIAL_LOG})"
+  if [ -f "${BUILD_DIR}/ovmf-debug.log" ]; then
+    echo "  === OVMF debug (last 40) ==="
+    tail -40 "${BUILD_DIR}/ovmf-debug.log"
+  fi
+fi
+
 PASS=0
 FAIL=0
 
@@ -186,8 +199,8 @@ fi
 
 if [ "${FAIL}" -gt 0 ]; then
   echo ""
-  echo "=== Serial log (last 30 lines) ==="
-  tail -30 "${SERIAL_LOG}"
+  echo "=== Serial log (last 80 lines) ==="
+  tail -80 "${SERIAL_LOG}"
   exit 1
 fi
 
