@@ -22,10 +22,22 @@
 # -ferror-limit=0 so clang stops aborting with `fatal_too_many_errors` at the
 # default limit of 20; the missing headers are then reported (and suppressed
 # below) instead of truncating the parse into a single fatal.
+# EDK II headers, so clang stops aborting with fatal_too_many_errors before the
+# suppressions below can apply. This is the checkout build-pbl.sh documents as the
+# default (EDK2_DIR=${EDK2_DIR:-$HOME/.local/src/edk2}). If it is absent on your
+# machine, clang reports missing include directories and nothing else — the
+# diagnostics stay suppressed either way. AutoGen.h is generated per-module by
+# the EDK II build, so a few references (FixedPcdGet32 and friends) still cannot
+# resolve outside a build tree; that is the reason for the blanket suppression.
 CompileFlags:
   Add:
     - -ferror-limit=0
     - -fshort-wchar
+    - -I/home/unccllin/.local/src/edk2/MdePkg/Include
+    - -I/home/unccllin/.local/src/edk2/MdePkg/Include/X64
+    - -I/home/unccllin/.local/src/edk2/MdeModulePkg/Include
+    - -I/home/unccllin/.local/src/edk2/CryptoPkg/Include
+    - -I/home/unccllin/.local/src/edk2/SecurityPkg/Include
 
 Diagnostics:
   Suppress:
