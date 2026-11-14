@@ -179,6 +179,39 @@ npx wrangler deploy         # publishes to lockdown-serverless.<account>.workers
 `serverless/package.json` also has `npm run deploy` (`wrangler deploy`) and
 `npm run dev` (`wrangler dev`).
 
+### Running it locally (no Cloudflare account needed)
+
+`npm run dev` boots workerd on `127.0.0.1:8787` with a **local KV** — it shares
+nothing with the deployed Worker, so it is safe to create admins and enrol
+devices there.
+
+1. `npm ci` (in `serverless/`), then `npm run dev`.
+2. Secrets come from `serverless/.dev.vars` — gitignored, never committed. It
+   needs `JWT_SECRET` and `ADMIN_TOKEN`; `PBL_SIGNING_KEY` /
+   `PBL_POLICY_SIGNING_KEY` only matter for the policy-signature paths (random
+   values there make those paths fail closed, which is the right local default).
+3. First run has no admins: `GET /api/setup/status` returns
+   `{"setupComplete":false}`. Create one with
+
+   ```bash
+   curl -s -X POST http://127.0.0.1:8787/api/setup/create-admin \
+     -H 'Content-Type: application/json' \
+     -d '{"username":"dev","password":"at-least-8-chars"}'
+   ```
+
+   and log in at `POST /api/auth/login` for a JWT that `GET /api/devices` accepts.
+
+`make hw-preflight SERVER_URL=http://127.0.0.1:8787 ADMIN_TOKEN=<jwt>` works
+against it, which is the cheapest way to exercise the window's readiness check
+end to end without touching the real fleet. It reports `no devices enrolled on
+this server` — an empty fleet is not a missing device.
+
+**If `wrangler` fails with `The package "@cloudflare/workerd-linux-64" could not
+be found`**, npm's install-scripts policy skipped workerd's postinstall: install
+the platform package that matches `node_modules/workerd/package.json`
+(`npm i --no-save @cloudflare/workerd-linux-64@<same version>`), or run
+`npm install-scripts approve workerd`.
+
 ## After deploying
 
 ```bash

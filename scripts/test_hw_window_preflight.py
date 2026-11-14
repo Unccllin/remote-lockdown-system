@@ -287,6 +287,30 @@ class TestCheckMode:
         assert code == 0, out
         assert "status=unknown" in out
 
+    def test_an_empty_fleet_is_not_a_missing_lookup(self, live_server, set_devices, capsys):
+        """Nothing enrolled and "the name you asked for is absent" are different facts.
+
+        Against a fresh local Worker (empty KV) the tool used to print
+        `no device named None`, because the message interpolated the unspecified --hostname. That
+        reads as a failed lookup of a device literally called None, and sends the reader hunting
+        for an enrollment bug in the wrong place.
+        """
+        set_devices([])
+        code = run_main(["--check", "--server-url", live_server, "--admin-token", "tkn"])
+        out = capsys.readouterr().out
+        assert code == 1, out
+        assert "no devices enrolled" in out
+        assert "None" not in out
+
+    def test_a_named_missing_device_still_names_itself(self, live_server, set_devices, capsys):
+        set_devices([ready_device()])
+        code = run_main(
+            ["--check", "--server-url", live_server, "--admin-token", "tkn", "--hostname", "OTHER"]
+        )
+        out = capsys.readouterr().out
+        assert code == 1, out
+        assert "no device named 'OTHER'" in out
+
 
 # ---------------------------------------------------------------------------
 # A tiny local server, so --check is exercised for real rather than mocked

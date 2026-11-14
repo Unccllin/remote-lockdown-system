@@ -274,9 +274,21 @@ def check_mode(server_url: str, admin_token: str | None, hostname: str | None) -
         matches = list(devices)
 
     if not matches:
-        print(f"  fleet       no device named {hostname!r}")
-        print()
-        print("[FAIL] the window cannot start: that machine is not enrolled on this server.")
+        # Two different facts, two different messages: an empty fleet means nothing is enrolled
+        # yet, while an empty filter means the one name the operator asked about is missing. The
+        # old single message printed `no device named None` for the first case, which reads as a
+        # lookup failure and sends the reader looking for the wrong thing (seen against a fresh
+        # local Worker).
+        if hostname is None:
+            print("  fleet       no devices enrolled on this server")
+            print()
+            print(
+                "[FAIL] the window cannot start: nothing is enrolled, so there is nothing to test."
+            )
+        else:
+            print(f"  fleet       no device named {hostname!r}")
+            print()
+            print("[FAIL] the window cannot start: that machine is not enrolled on this server.")
         return 1
 
     print(f"  fleet       {len(matches)} device(s)")
