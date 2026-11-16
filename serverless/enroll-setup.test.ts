@@ -138,7 +138,12 @@ describe('served enrolment (the dashboard one-liner)', () => {
     const resp = await worker.fetch(plain, makeEnv());
     const body = await resp.text();
     // No warning-only text any more: the script fixes verify_tls itself.
-    expect(body).toContain('verify_tls set to false');
+    // The write must be verified, not announced: the agent's tamper protection can
+    // deny even an elevated Set-Content, and a log line that lies about it sends the
+    // operator looking in the wrong place.
+    expect(body).toContain('verify_tls now:');
+    expect(body).toContain('could not set verify_tls');
+    expect(body).toContain('takeown.exe');
     expect(body).toContain('Restart-Service LockdownAgent');
     // The remedy has to name a real path. A backslash in a template literal is an
     // escape and JS drops unknown ones, so this line once rendered
