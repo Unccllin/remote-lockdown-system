@@ -5,3 +5,4 @@ assigned-secret:scripts/verify-environment.sh  # NSIS verify fixture: the key is
 assigned-secret:agent/installer_gui.py  # non-values: a parameter type annotation, an object key whose value is a variable, a call signature
 assigned-secret:dashboard/src/pages/EnrollPage.jsx  # non-values: object and template keys whose values are runtime variables
 assigned-secret:dashboard/src/pages/SetupPage.jsx  # non-values: form state initialised empty, and a human-readable validation message
+assigned-secret:serverless/README.md  # the local-dev curl example uses a human-readable placeholder as the password value, not a credential

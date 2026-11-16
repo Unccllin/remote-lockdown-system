@@ -15799,13 +15799,13 @@ developer checkout already had what CI lacked.
 
 ### Fog remaining
 
-- **The QEMU smoke test has never passed, and now it runs and says why it cannot be read: 0 PASS / 14
-  FAIL with a completely empty serial log.** The harness boots OVMF with `-nographic -serial
-  mon:stdio -display none` (`ci-harness.sh:120-126`) and QEMU ran until its timeout, printing only
-  `terminating on signal 15`; no OVMF output, no PBL banner. So this is "the guest produced no output",
-  not "PBL asserted something false", and it needs its own investigation (most likely the OVMF ConOut /
-  serial terminal pairing, or the ESP not being booted). It does **not** gate the hardware window, and
-  it was skipped on every previous run, so nothing regressed here.
+- **The QEMU smoke test is GREEN (14 PASS / 0 FAIL) — the earlier "never passed, 0/14, empty serial"
+  state is superseded by the addendum below.** Three harness defects were hiding the firmware
+  completely: `-nographic` contending with `-serial mon:stdio` for stdio; OVMF hanging in
+  `PlatformPei` on the CPU-hotplug bugcheck before `BdsDxe` (so the ESP was never enumerated); and a
+  completion check demanding a string the BLOCK path never prints. All three are fixed, and the run
+  now shows the real flow including `NV_Read(AK_NAME) RC=0x18B`. This is no longer fog; it is
+  evidence, and any statement that the smoke test cannot report on PblApp predates the fix.
 - **`build-aarch64` cannot build and never could.** It fails `F000: No files to be built in module
   [RELEASE, GCC, AARCH64]` on `MdePkg/Library/SecPeiDxeTimerLibCpu/SecPeiDxeTimerLibCpu.inf`, whose
   sources are x86-only, while `PblPkg.dsc` declares `SUPPORTED_ARCHITECTURES = X64|AARCH64` and maps
@@ -15876,7 +15876,9 @@ Boot `PblApp.efi` on FRANKENSTEIN (stream A): FAT32 ESP with `\EFI\BOOT\BOOTX64.
 capture from before power-on, record the posture, then the second boot to prove NV persistence. The
 first line to read is the AK Name / `NV_Read` RC — `[OK]` closes D-134 as "production PCD fine",
 `0x9A2`/`0x18B` closes it the other way and needs `PcdPblTpmUsePlatformHierarchy=FALSE`. `BLOCK` is the
-expected outcome. Separately: decide AARCH64, and investigate the empty QEMU serial.
+expected outcome. Separately: decide AARCH64 (drop the DSC claim and the job, or port it to
+`ArmArchTimerLib`), and note that the QEMU serial question is closed — the smoke test now reports
+14/14 with the firmware's own output in the log.
 
 ### Addendum — the QEMU smoke test is green for the first time (14/14)
 
@@ -15988,3 +15990,4 @@ reports 6 findings, so the linter is unpinned rather than red (R9). Worker branc
 **Not established**: SAST/CodeQL status, electron behaviour, Playwright and actionlint results,
 whether other make targets have the same .dev.vars coupling, and anything about the target
 machine's firmware until it boots the artifact.
+

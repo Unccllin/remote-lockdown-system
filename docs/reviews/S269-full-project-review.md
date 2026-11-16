@@ -1,4 +1,4 @@
-# Full project review — 2026-11-16 (session 269, rev 2)
+# Full project review — 2026-11-16 (session 269, rev 3)
 
 Scope: firmware (PBL), agent, serverless Worker, Express server, dashboard, CI and
 test gates, state/ledger honesty, security posture, and readiness for the D-129
@@ -35,6 +35,9 @@ own comment contradicts the way rev 1 framed it.
 | Worker update E2E | `make test-worker-e2e` | **5 passed** (38 s) |
 | Formatting | `make format-check` | **63 files already formatted** |
 | Licence inventory | `make check-licenses` | exit 0; reports `react-leaflet` / `@react-leaflet/core` Hippocratic-2.1 and **rewrites `THIRD-PARTY-NOTICES.md`** as a side effect |
+| Pre-push secret scan | `make pre-push-check` (working tree) | **pass** |
+| Pre-push secret scan (history) | `scripts/pre-push-check.sh --all` | **pass** after allow-listing one false positive in `serverless/README.md` (see §5.5) |
+| Clean-state checklist | `make clean-state` | **4 of 5**: *Tests pass* fails here (its test step needs docker), and the target **writes an orchestrator session-end block** into trace/current-state while being used as a check (R11) |
 
 ### 1.2 Coverage gates — run, not assumed
 
@@ -44,7 +47,7 @@ own comment contradicts the way rev 1 framed it.
 | Server | **74.43 %** (2818/3786) | 71.05 % | 79.80 % | **75.32 %** | per-component | reached |
 | Dashboard | **69.98 %** (963/1376) | 65.49 % | 62.03 % | **70.88 %** | 68 / 61 / 62 / 70 | reached on all four |
 | Worker | **90.25 %** (1399/1550) | **85.69 %** (1120/1307) | 95.97 % | **92.74 %** | per-component | reached (a second independent run reported 85.46 % branches, so treat it as ≈85.5 %) |
-| Electron | not measured | — | — | — | — | blocked, see 1.3 |
+| Electron | not measured | — | — | — | — | blocked, see 1.4 |
 
 `make test-coverage` as a single target aborts at the Electron step (it runs last), so
 the agent and server components were run from their own recipes to get the numbers
@@ -88,6 +91,7 @@ are green.
 | Server / dashboard / worker / E2E | `AGENTS.md:260,262,264` | 843 / 260 / 429 / 14 | same | accurate |
 | Firmware host tests | `AGENTS.md:364` | 35 cases / 195 checks | same | accurate |
 | Coverage floors | `AGENTS.md:266` | 68 / 61 / 62 / 70 (dashboard) | 69.98 / 65.49 / 62.03 / 70.88 | accurate |
+| `firmware-qemu` check count | `Makefile:43` | "(17 checks)" | **14** (the smoke test prints 14 PASS) | stale |
 
 Two counts drifted within days of S267 re-measuring them, both from S268's own work.
 
@@ -206,7 +210,7 @@ file:
 Fixed in `scripts/trace_reviewer.py`: bare filenames are no longer treated as path claims,
 EDK II package prefixes (`MdePkg/`, `OvmfPkg/`, `CryptoPkg/`, `SecurityPkg/`,
 `NetworkPkg/`, `MdeModulePkg/`, `BaseTools/`) are recognised as external, and `PblApp` (the
-application, not a function) is excluded. The gate now reports **6 passed / 0 failed**, so
+application, not a function) is excluded. The gate now reports **7 passed / 0 failed**, so
 it is green *and* still checks the claims it was built for.
 
 ### 5.2 The QEMU smoke test was theatre until S269
@@ -261,6 +265,24 @@ Two things are wrong here, and neither is in the Worker's logic:
 This is the same class as §5.1: a gate whose result depends on something other than what it
 claims to measure, which is why it is recorded here rather than dismissed as a local quirk.
 
+### 5.5 Two more gates, and two side effects
+
+- **`make pre-push-check`** (working tree) passes. **`scripts/pre-push-check.sh --all`** (history)
+  initially **failed**: `[FAIL] assigned-secret: serverless/README.md`, blamed on commit `33f0230`
+  — this session's own README addition. The match is the local-dev curl example, whose *password
+  value is the literal placeholder text*, not a credential. Because `--all` scans history, editing
+  the file cannot clear it; the repository's `.prepush-allow.txt` exists for exactly this, and one
+  justified entry (`assigned-secret:serverless/README.md  # … placeholder …`) makes the gate exit 0.
+  `scripts/test_prepush_secrets.py` still passes, so the allow-list itself did not become the leak.
+- **`make clean-state`** reports **4 of 5**: *Build passes*, *Progress recorded*, *No temp
+  artifacts*, *Startup path functional* are green; *Tests pass* fails here because its test step
+  reaches the docker-dependent script test. It also **mutates** state: the run appended
+  `## Orchestrator session-end — … **Status**: FAILURE` to `trace.md` and regenerated
+  `current-state.md` from it. A gate used as a check should not write session history, and that
+  block was removed rather than kept (it recorded a failure of the check, not of a session).
+  Recorded as R11.
+
+
 ---
 
 ## 6. Risks not tracked by any ledger item or graph node
@@ -277,6 +299,8 @@ claims to measure, which is why it is recorded here rather than dismissed as a l
 | R8 | `make verify-worker` reads developer `.dev.vars`, so local secrets can fail a verification gate | §5.4 | pass every needed secret as `--var` in the script |
 | R9 | Ruff is unpinned: `make lint-agent` is green under 0.17.5 and red under the venv's 0.5.0 | §5.3 | pin the version in both places, or record which one is authoritative |
 | R10 | `make check-licenses` rewrites a tracked file (`THIRD-PARTY-NOTICES.md`) as a side effect of a read-only-looking gate | measured, §1.1 | make it write only with an explicit flag |
+| R11 | `make clean-state` appends an orchestrator session-end block to `trace.md` and regenerates `current-state.md` when used as a check | §5.5 | make the write opt-in (`--record`), or run it only at session end |
+| R12 | `scripts/pre-push-check.sh --all` scans history, so a fixed file keeps failing until allow-listed | §5.5 | keep the allow-list current; document that `--all` is a history gate |
 
 ---
 

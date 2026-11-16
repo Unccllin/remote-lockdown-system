@@ -200,7 +200,7 @@ devices there.
    ```bash
    curl -s -X POST http://127.0.0.1:8787/api/setup/create-admin \
      -H 'Content-Type: application/json' \
-     -d '{"username":"dev","password":"at-least-8-chars"}'
+     -d '{"username":"dev","password":"<at-least-8-chars>"}'
    ```
 
    and log in at `POST /api/auth/login` for a JWT that `GET /api/devices` accepts.
