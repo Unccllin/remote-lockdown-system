@@ -2329,7 +2329,10 @@ async function handleTrackAction(
   // device an operator is still using — or is actively recovering — is how a lab box
   // ended up in tracking mode one poll after a recover (S269). Refuse unless the
   // device is already in a stolen/tracking posture.
-  if ((action === 'track' || action === 'locate') && !['stolen', 'tracking'].includes(device.status)) {
+  // `locked` counts too: a lockdown ACK moves the device to locked, and tracking a
+  // device that is already locked down is the normal sequence.
+  const trackable = ['stolen', 'locked', 'tracking'];
+  if ((action === 'track' || action === 'locate') && !trackable.includes(device.status)) {
     return errorResponse(
       `Refusing to start tracking: device is '${device.status}'. Flag it stolen first — ` +
         'tracking disables the signed-in account and EFS-encrypts its profile.',
