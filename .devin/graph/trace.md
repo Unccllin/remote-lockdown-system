@@ -15918,3 +15918,43 @@ fine"; `0x9A2`/`0x18B` closes it the other way and needs `PcdPblTpmUsePlatformHi
 Evidence chain for the window, all reproducible without the laptop: the artifact is committed at
 `firmware/PblPkg/artifacts/PblApp-6fa6ac418b726075.efi` (public raw URL), its behaviour is asserted
 by the smoke test above, and the remaining step is the same binary booting on real firmware.
+
+### Addendum — full project review across all perspectives
+
+Artifact: `docs/reviews/S269-full-project-review.md`. Every figure in it was measured on this host
+in the same turn; nothing is inherited from notes.
+
+**Measured**: agent 866 · server 843 (51 suites) · worker 429 · dashboard 260 (29 files) · API E2E
+14 (4 suites) · firmware host 195 checks/0 failures · 13 script files pass individually · graph
+invariants pass · all 11 `verified-on-hardware` refs resolve through `artifact_supports_claim`.
+
+**Could not run, with reasons recorded rather than assumed**: `test_tls_floor.py` and
+`make firmware-qemu` (docker inactive), local `firmware-build` (no nasm/iasl), electron
+(`node_modules` absent), coverage floors (not re-measured), Semgrep (absent), CodeQL (private repo).
+
+**Findings, ranked** (detail and citations in the review):
+
+1. High — D-129's close criteria contradict each other: the ledger allows "a real UEFI VM with
+   swtpm", `GRAPH-SPEC.yaml:1162` requires "real UEFI hardware". The QEMU+swtpm run from this
+   session (14/14, serial captured) satisfies the ledger and not the spec. A ruling is required.
+2. High — admin password hashing is both per-surface and non-increasing: server bcrypt cost 12
+   (`admins.js:81`); worker PBKDF2 100k for new admins (`worker.ts:447`) against 210k for legacy
+   ones (`worker.ts:451`). New credentials are the weakest, and KV↔SQLite migration is impossible.
+3. Medium — D-120 is described as "BitLocker detection not implemented" in `GRAPH-SPEC.yaml:1085`
+   and in the state summary, while `Bcd.c` and `Fve.c` implement BCD and FVE metadata parsing and
+   the ledger records QEMU tests. The honest residual is "never measured against a real
+   BitLocker-protected volume".
+4. Medium — `TpmClient.c:16` states the HMAC session setup and verdict-cache write are "stubbed
+   with TODO markers". They are implemented and exercised (`PblApp.c:481`, `PblApp.c:781`); no TODO
+   markers remain in the file. The comment is false in the direction that understates the work.
+5. Medium — documented counts drifted again within days of S267's re-measure: `AGENTS.md` says 863
+   agent tests (measured 866) and 14 preflight tests (measured 21).
+6. Medium — `build-aarch64` cannot pass (`PblPkg.dsc:18` claims AARCH64 while `TimerLib` is
+   x86-only), leaving a permanently red job.
+7. Low — `make test-scripts` stops at the docker-dependent file, so the last file never runs under
+   `make`; all 13 pass individually.
+8. Low — the dashboard keeps its JWT in `localStorage` (`api/client.js:16`): a documented-behaviour
+   gap, not a bug.
+
+**Not established**: coverage floors (last verified S267), SAST/CodeQL status, electron behaviour,
+and anything about the target machine's firmware until it boots the artifact.
