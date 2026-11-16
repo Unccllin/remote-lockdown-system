@@ -15937,9 +15937,14 @@ invariants pass · all 11 `verified-on-hardware` refs resolve through `artifact_
 1. High — D-129's close criteria contradict each other: the ledger allows "a real UEFI VM with
    swtpm", `GRAPH-SPEC.yaml:1162` requires "real UEFI hardware". The QEMU+swtpm run from this
    session (14/14, serial captured) satisfies the ledger and not the spec. A ruling is required.
-2. High — admin password hashing is both per-surface and non-increasing: server bcrypt cost 12
-   (`admins.js:81`); worker PBKDF2 100k for new admins (`worker.ts:447`) against 210k for legacy
-   ones (`worker.ts:451`). New credentials are the weakest, and KV↔SQLite migration is impossible.
+2. Medium — admin password hashing differs per surface and there is no migration path between
+   them: server bcrypt cost 12 (`admins.js:81`), worker PBKDF2-SHA256 at 100k iterations
+   (`worker.ts:447`) — which is the Workers WebCrypto *platform maximum*, documented at
+   `worker.ts:442-449` with "NotSupportedError above that" and a note that the 210k legacy value
+   "only ever ran in Node tests, never on the live Worker, so no live admin uses it". So there is
+   no work-factor regression; the real findings are (a) the platform cap sits below current
+   PBKDF2 guidance and is recorded only in a comment, and (b) a KV↔SQLite admin record cannot
+   authenticate across surfaces because the schemes differ.
 3. Medium — D-120 is described as "BitLocker detection not implemented" in `GRAPH-SPEC.yaml:1085`
    and in the state summary, while `Bcd.c` and `Fve.c` implement BCD and FVE metadata parsing and
    the ledger records QEMU tests. The honest residual is "never measured against a real
@@ -15956,5 +15961,16 @@ invariants pass · all 11 `verified-on-hardware` refs resolve through `artifact_
 8. Low — the dashboard keeps its JWT in `localStorage` (`api/client.js:16`): a documented-behaviour
    gap, not a bug.
 
-**Not established**: coverage floors (last verified S267), SAST/CodeQL status, electron behaviour,
+Rev 2 corrections (review feedback): the coverage gates were run per component and all four
+runnable ones are above floor — agent 64.63% (floor 59), server 74.43% stmts / 75.32% lines,
+dashboard 69.98 / 70.88, worker 90.25 / 92.74; only Electron is blocked (no `node_modules`), and
+`make test-coverage` reports failure solely because Electron runs last. `make trace-review` was
+run and was RED (12 passed / 3 failed) for three false positives — a bare artifact filename, an
+EDK II submodule path, and the CI job title "Build PblApp (X64, GCC)" parsed as a function
+definition; `scripts/trace_reviewer.py` now skips those classes and reports 6 passed / 0 failed.
+Also measured: lint-server, lint-dashboard, typecheck-worker, check-openapi, check-debt-ledger,
+check-firmware-todos, verify-env and check-artifacts all pass; `lint-workflows` cannot run here
+(actionlint absent) and `test-e2e-dashboard` cannot run here (Playwright browser binary missing).
+
+**Not established**: SAST/CodeQL status, electron behaviour, Playwright and actionlint results,
 and anything about the target machine's firmware until it boots the artifact.

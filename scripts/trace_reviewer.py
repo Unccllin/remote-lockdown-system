@@ -204,10 +204,24 @@ def extract_file_claims(body: str) -> list[tuple[str, str]]:
         # Skip template/placeholder paths (contain YYYY, NNN, or start with .)
         if "YYYY" in path_str or "NNN" in path_str or path_str.startswith("."):
             continue
-        # Skip paths that are just a filename without a directory and have
-        # no clear source extension context — these are often inline references
-        # in prose, not claims about file existence
-        if "/" not in path_str and "." not in path_str:
+        # Skip paths that are just a filename without a directory: `PblApp.efi`,
+        # `Bcd.c` and friends are artifact or source *names* used in prose, not
+        # claims that a file exists at the repository root.
+        if "/" not in path_str:
+            continue
+        # Skip EDK II package paths. `MdePkg/...`, `OvmfPkg/...` and the rest live
+        # in the EDK II checkout (EDK2_DIR), never in this repository, so a
+        # "file does not exist" verdict for them is always wrong. S269 recorded
+        # SecPeiDxeTimerLibCpu.inf this way while diagnosing the AARCH64 build.
+        if path_str.split("/")[0] in (
+            "MdePkg",
+            "MdeModulePkg",
+            "OvmfPkg",
+            "CryptoPkg",
+            "SecurityPkg",
+            "NetworkPkg",
+            "BaseTools",
+        ):
             continue
         claims.append((f"file `{path_str}`", path_str))
     return claims
@@ -273,8 +287,13 @@ def extract_function_claims(body: str) -> list[tuple[str, str]]:
         if fname in seen:
             continue
         seen.add(fname)
-        # Skip entry point — it's always defined
+        # Skip entry point — it's always defined.
         if fname == "PblAppEntryPoint":
+            continue
+        # Skip the application's own name. "Build PblApp (X64, GCC)" is a CI job
+        # title, and the regex reads the parenthesis as a function call — which
+        # made S269 fail a check for a function nobody claimed to have written.
+        if fname == "PblApp":
             continue
         claims.append((f"function `{fname}` is defined", fname))
     return claims
