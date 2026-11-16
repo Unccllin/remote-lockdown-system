@@ -15897,7 +15897,10 @@ Closing the findings the review ranked, in the order it ranked them.
 - **Documented counts (Medium)**: `AGENTS.md` now says 866 agent tests (three sites) and 21 preflight
   tests (two sites), and the Makefile's firmware-qemu line says 14 checks rather than 17.
 - **AARCH64 (Medium)**: claim withdrawn from `PblPkg.dsc`, job removed from `pbl-ci.yml` (65 lines),
-  with the x86-specific reasons recorded in the DSC next to the declaration.
+  with the x86-specific reasons recorded in the DSC next to the declaration. Result, measured: PBL CI
+  run 43833123818 is **fully green** — X64 build, static analysis and the QEMU+swtpm smoke test all
+  success, no failing job. That is the first time this workflow has been green end to end, and it means
+  "CI is red" is no longer a standing fact about the firmware.
 - **Admin hashing (Medium x2)**: `docs/adr/ADR-001-admin-password-hashing.md` records the split
   (bcrypt cost 12 on Express, PBKDF2 100k on Workers), the platform ceiling that forces the second
   number, and the no-migration consequence. `scripts/test_cross_surface_contract.py` gained four tests
