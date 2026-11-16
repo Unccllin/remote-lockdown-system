@@ -144,6 +144,10 @@ describe('served enrolment (the dashboard one-liner)', () => {
     expect(body).toContain('verify_tls now:');
     expect(body).toContain('could not set verify_tls');
     expect(body).toContain('takeown.exe');
+    // Windows PowerShell 5.1 writes a BOM with `Set-Content -Encoding UTF8`, and
+    // Python's json.load refuses one — the agent then cannot read its own config.
+    expect(body).toContain('[IO.File]::WriteAllText');
+    expect(body).not.toContain('Set-Content $cfg');
     expect(body).toContain('Restart-Service LockdownAgent');
     // The remedy has to name a real path. A backslash in a template literal is an
     // escape and JS drops unknown ones, so this line once rendered
