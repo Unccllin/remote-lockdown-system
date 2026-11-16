@@ -69,6 +69,15 @@ describe('served enrolment (the dashboard one-liner)', () => {
     // so the script must stage it under exactly that name or the run dies.
     expect(body).toContain('/api/download/agent');
     expect(body).toContain('lockdown-agent.exe');
+    // The frozen installer cannot install the service on its own: it copies only the
+    // agent, and service_installer needs a frozen lockdown-service.exe in the install
+    // dir. Without this the install "succeeds" (exit 0) and the device never checks in.
+    expect(body).toContain('/api/download/service');
+    // Pre-staged into the install dir, not registered by hand: the repo's own test
+    // forbids an executable sc.exe in these templates, because the installer owns
+    // service registration.
+    expect(body).toContain("Join-Path $env:PROGRAMDATA 'LockdownAgent'");
+    expect(body).toContain('lockdown-service.exe');
     expect(body).toContain('Test-NetConnection');
     // Silent install is the default — one command, no wizard.
     expect(body).toContain("Read-Host 'Enrollment token");

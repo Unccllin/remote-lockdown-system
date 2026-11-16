@@ -3065,6 +3065,15 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
     `Write-Host "Downloading the agent ..." -ForegroundColor Cyan`,
     `Invoke-WebRequest "$u/api/download/agent" -OutFile $g`,
     `Unblock-File $g`,
+    // The frozen installer copies only the agent, and service_installer.install()
+    // needs a frozen lockdown-service.exe in the install dir (a PyInstaller bundle
+    // carries no service_host.py beside it). Without it the installer logs
+    // "service_host.py is missing", warns, and still exits 0 — the device enrols
+    // and never checks in (S269).
+    `$svc = Join-Path $env:TEMP 'lockdown-service.exe'`,
+    `Write-Host "Downloading the service binary ..." -ForegroundColor Cyan`,
+    `Invoke-WebRequest "$u/api/download/service" -OutFile $svc`,
+    `Unblock-File $svc`,
     ``,
   ];
 
@@ -3092,8 +3101,19 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
     `$body = @'`,
     `$ErrorActionPreference = 'Continue'`,
     `$log = '__LOG__'`,
+    `# Stage the frozen service binary into the install directory FIRST: the`,
+    `# installer copies only the agent, and its service step needs either a frozen`,
+    `# lockdown-service.exe in that directory or a service_host.py beside itself —`,
+    `# which a PyInstaller bundle does not have. Without this it logs`,
+    `# "service_host.py is missing", warns, and still exits 0, so the device enrols`,
+    `# and never checks in (S269). This is a file copy, not a hand-rolled service`,
+    `# registration: the installer still owns sc.exe and the watchdog.`,
+    `$inst = Join-Path $env:PROGRAMDATA 'LockdownAgent'`,
+    `New-Item -ItemType Directory -Force -Path $inst | Out-Null`,
+    `if (Test-Path '__SVC__') { Copy-Item '__SVC__' (Join-Path $inst 'lockdown-service.exe') -Force }`,
     `& '__EXE__' --server-url '__URL__' --token '__TOKEN__' --silent *> $log`,
     `$code = $LASTEXITCODE`,
+    `Add-Content $log ("service state: " + (Get-Service LockdownAgent -ErrorAction SilentlyContinue).Status)`,
   );
   if (plainHttp) {
     // The installer always writes "verify_tls": true and has no flag to change it,
@@ -3116,7 +3136,7 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
     `exit $code`,
     `'@`,
     `Set-Content -Path $inner -Value $body -Encoding UTF8`,
-    `$body = $body.Replace('__EXE__', $e).Replace('__URL__', $u).Replace('__TOKEN__', $t).Replace('__LOG__', $log)`,
+    `$body = $body.Replace('__EXE__', $e).Replace('__URL__', $u).Replace('__TOKEN__', $t).Replace('__LOG__', $log).Replace('__SVC__', $svc)`,
     `Set-Content -Path $inner -Value $body -Encoding UTF8`,
     ``,
     `Write-Host "Installing (no wizard) ..." -ForegroundColor Cyan`,
@@ -3340,6 +3360,13 @@ async function handleEnrollSetupCommand(request: Request, env: Env): Promise<Res
 
     if (path === '/api/download/agent' && method === 'GET') {
       return handleDownloadBinary(env, 'agent');
+    }
+    if (path === '/api/download/service' && method === 'GET') {
+      // The frozen service binary: the installer needs it in the install directory to
+      // register the SCM service (service_installer._service_bin_path). Without a
+      // route for it the enrolment script could not stage the one file that makes the
+      // difference between "installed" and "checking in" (S269).
+      return handleDownloadBinary(env, 'service');
     }
 
     // The CLI installer that the generated per-device / re-arm scripts run.
