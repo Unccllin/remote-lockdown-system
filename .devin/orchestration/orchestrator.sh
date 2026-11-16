@@ -410,8 +410,12 @@ run_all() {
 
 # ─── Main ───────────────────────────────────────────────────────────────────
 
-# Trap failures and write session-end trace (Refactor 5, I4)
-trap 'write_session_end "FAILURE" "halted"' ERR
+# Trap failures and write session-end trace (Refactor 5, I4).
+# `ORCH_NO_SESSION_WRITE=1` suppresses it for commands that *check* state instead of
+# ending a session: `clean-state` used to append "Status: FAILURE" to trace.md and
+# current-state.md whenever one of its five checks failed, which recorded a failed
+# check as a failed session (S269 review, R11).
+trap 'if [ "${ORCH_NO_SESSION_WRITE:-0}" = "1" ]; then log "session-end write suppressed (check-only run)"; else write_session_end "FAILURE" "halted"; fi' ERR
 
 case "${1:-}" in
   all)     run_all ;;
@@ -421,7 +425,9 @@ case "${1:-}" in
     python3 "$GRAPH_DIR/graph_assert.py"
     ;;
   clean-state)
-    # Run the 5-condition clean state checklist (Lecture 12)
+    # Run the 5-condition clean state checklist (Lecture 12). Check-only: this must
+    # not write session history, even when a condition fails.
+    export ORCH_NO_SESSION_WRITE=1
     clean_state_check
     ;;
   test)

@@ -11,10 +11,18 @@
     - PCR 12/13 only (never 0-7 or 11)
     - PolicyAuthorize-based NV access policy
 
-  This implementation provides the boot-time read path (C2 §5.1) and the
-  PCR extend path (C2 §4.1). The HMAC session setup (C2 §3) and verdict
-  cache write (C2 §5.2) are stubbed with TODO markers — they require the
-  full PolicyAuthorize flow which depends on C4 policy blob parsing.
+  This implementation provides the boot-time read path (C2 §5.1), the PCR
+  extend path (C2 §4.1), the HMAC session setup (C2 §3) bound to the lock-state
+  NV index (PblTpmStartHmacSession), and the verdict-cache write (C2 §5.2,
+  PblTpmWriteLockState). What it does NOT implement is the PolicyAuthorize-based
+  NV access policy named above: the indices are created with an auth value and
+  AUTHWRITE rather than a signed policy, so a policy-signed write path remains
+  future work.
+
+  (An earlier revision of this comment claimed both paths were unimplemented
+  stubs. They were not — that text was stale and understated the implementation,
+  which is why it is called out here rather than quietly deleted: a reader trusted
+  that sentence to know what was missing.)
 
   Copyright (c) 2026 Remote Lockdown System. All rights reserved.
 **/

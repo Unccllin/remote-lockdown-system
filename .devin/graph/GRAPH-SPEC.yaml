@@ -1082,8 +1082,8 @@ debt_items:
     artifact_ref: "platform-state collection completes each QEMU boot"
 
   - id: D-120
-    description: "BitLocker detection not implemented"
-    close_criteria: "Detect BitLocker from ESP/BCD, read PCR binding metadata"
+    description: "BitLocker lock state never measured on a real protected volume (BCD and FVE parsing implemented)"
+    close_criteria: "Measure a real BitLocker-protected volume and report locked/unlocked from FVE VMK metadata plus TPM state, not from the BCD heuristic"
     status: OPEN
     category: TODO
 

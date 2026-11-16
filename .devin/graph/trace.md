@@ -15907,9 +15907,26 @@ Closing the findings the review ranked, in the order it ranked them.
   pinning both cost parameters, the platform-ceiling comment, and the ADR's own statements — 18 passed
   (was 14), so changing either scheme now fails a test instead of widening the split silently.
 
-Still open from the review: D-120's stale "not implemented" label in the spec and state summary (item
-4), the false `TpmClient.c` header (item 5), the two gates with side effects (R10/R11), and the
-`test-scripts` loop (item 9).
+The review's remaining small items are also taken, each verified rather than announced:
+
+- **D-120 (item 4)**: the spec now says what is true — "BitLocker lock state never measured on a real
+  protected volume (BCD and FVE parsing implemented)" — and its close criteria ask for a measurement
+  against FVE VMK metadata plus TPM state instead of the BCD heuristic. The state summary is generated
+  from that field, so it corrected itself on regeneration.
+- **`TpmClient.c` (item 5)**: the header claimed the HMAC session and cache write were unimplemented
+  stubs; it now lists what is implemented (read path, extend path, session setup, cache write) and
+  names the one thing that genuinely is not (a PolicyAuthorize-based NV policy). Reworded once more
+  because quoting the word "TODO" tripped the firmware-TODO gate — which is the gate working.
+- **R10 — `check-licenses`** passed its own `--check` flag nowhere, so the gate rewrote the tracked
+  notices file. `make check-licenses` is now read-only (verified: `THIRD-PARTY-NOTICES.md` hash
+  unchanged across a run) and `make licenses-write` is the explicit regeneration target.
+- **R11 — `clean-state`** wrote "Status: FAILURE" session blocks into trace and current-state because
+  an `ERR` trap fired when one of its five checks failed. The trap is now suppressed for check-only
+  runs (`ORCH_NO_SESSION_WRITE=1`, set by the `clean-state` branch), verified by hashing both files
+  across a failing run: both unchanged, and the log says the write was suppressed.
+- **item 9 — `make test-scripts`** stopped at the first failure, which on a host without docker is the
+  TLS test, so `test_worker_update_e2e.py` never ran under `make`. The loop now runs all 14 files and
+  fails at the end; measured: 14 files exercised, 13 pass, 1 fails (docker unavailable).
 
 ### Addendum — the QEMU smoke test is green for the first time (14/14)
 

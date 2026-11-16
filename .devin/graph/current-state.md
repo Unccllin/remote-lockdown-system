@@ -175,7 +175,7 @@ expected outcome. Separately: decide AARCH64 (drop the DSC claim and the job, or
 
 | ID | Description | Status | Blocks |
 |----|-------------|--------|--------|
-| D-120 | BitLocker detection not implemented | OPEN | — |
+| D-120 | BitLocker lock state never measured on a real protected volu | OPEN | — |
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |

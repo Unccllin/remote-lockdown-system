@@ -118,16 +118,24 @@ test-agent:
 test-dashboard:
 	@cd dashboard && npm test
 
+# Auto-discover the script-level harness tests. A hand-written list is exactly how the
+# memory suite silently stopped running, and how four graph-session tests were skipped
+# after being added. The venv interpreter is preferred because the memory suite needs
+# pytest and the system Python may not have it.
+#
+# Every file runs, and the target fails at the end. The previous `|| exit 1` stopped at
+# the first failure — on a host without docker that is test_tls_floor.py, so every file
+# after it, including test_worker_update_e2e.py, never ran under `make` (S269).
 test-scripts:
-	@# Auto-discover the script-level harness tests. A hand-written list is exactly
-	@# how the memory suite silently stopped running, and how four graph-session
-	@# tests were skipped after being added. Prefer the venv interpreter: the
-	@# memory suite needs pytest and the system Python may not have it.
 	@PY=$$( [ -x agent/.venv/bin/python ] && echo agent/.venv/bin/python || echo python3 ); \
+	failed=0; \
 	for t in scripts/test_*.py; do \
 	  echo "=== $$t ==="; \
-	  "$$PY" "$$t" || exit 1; \
-	done
+	  "$$PY" "$$t" || failed=$$((failed + 1)); \
+	done; \
+	if [ "$$failed" -ne 0 ]; then \
+	  echo "test-scripts: $$failed file(s) failed"; exit 1; \
+	fi
 
 test-worker:
 	@cd serverless && npx vitest run
@@ -496,6 +504,11 @@ clean:
 .PHONY: check-licenses check-licenses-strict
 
 check-licenses:
+	@# Read-only: --check suppresses the THIRD-PARTY-NOTICES.md rewrite, so a gate
+	@# used in review cannot dirty the tree. Regenerate with `make licenses-write`.
+	@python3 scripts/check_licenses.py --check
+
+licenses-write:
 	@python3 scripts/check_licenses.py
 
 check-licenses-strict:
