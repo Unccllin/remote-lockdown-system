@@ -15806,11 +15806,11 @@ developer checkout already had what CI lacked.
   completion check demanding a string the BLOCK path never prints. All three are fixed, and the run
   now shows the real flow including `NV_Read(AK_NAME) RC=0x18B`. This is no longer fog; it is
   evidence, and any statement that the smoke test cannot report on PblApp predates the fix.
-- **`build-aarch64` cannot build and never could.** It fails `F000: No files to be built in module
-  [RELEASE, GCC, AARCH64]` on `MdePkg/Library/SecPeiDxeTimerLibCpu/SecPeiDxeTimerLibCpu.inf`, whose
-  sources are x86-only, while `PblPkg.dsc` declares `SUPPORTED_ARCHITECTURES = X64|AARCH64` and maps
-  `TimerLib` to it unconditionally. Resolution is a decision, not a patch: drop AARCH64 from the DSC
-  and the job, or add `ArmArchTimerLib` + `ArmPkg` and whatever else AARCH64 needs.
+- **AARCH64 is settled: the architecture claim is withdrawn (review item 3).** `PblPkg.dsc` now declares
+  `SUPPORTED_ARCHITECTURES = X64` and the `build-aarch64` CI job is removed. The reason is not
+  convenience: the package reads PCH PCI config (SPI, DCI), MSRs and the TPM CRB/TIS interface, and
+  its `TimerLib` instance is x86-only, so an AARCH64 port is a project rather than a switch. The job
+  had failed `F000` on every run, and a permanently red job teaches reviewers to ignore red.
 - **`secure_boot:false` remains an untaken operator decision** (runbook §4 step 2). The window can run
   under the documented first-bring-up posture, but that must be recorded in the artifact, and no run
   under this posture can evidence a Secure Boot boot.
@@ -15879,6 +15879,34 @@ first line to read is the AK Name / `NV_Read` RC — `[OK]` closes D-134 as "pro
 expected outcome. Separately: decide AARCH64 (drop the DSC claim and the job, or port it to
 `ArmArchTimerLib`), and note that the QEMU serial question is closed — the smoke test now reports
 14/14 with the firmware's own output in the log.
+
+### Addendum — the review's first four action items are taken
+
+Closing the findings the review ranked, in the order it ranked them.
+
+- **D-129 (High)**: the VM allowance is withdrawn from the ledger, so the ledger and
+  `GRAPH-SPEC.yaml` now agree that hardware is required. The reasoning is recorded in the ledger: a
+  swtpm run exercises the TPM command set, not the *target firmware's* hierarchy policy, which is what
+  D-134 depends on. The 14/14 OVMF+swtpm run is recorded there as **prerequisite evidence** instead of
+  a close — so the item's own blocker reads "no code has run on this machine's firmware", not the now
+  false "all verification is compilation-only".
+- **Ledger totals (Medium)**: the "Totals" line claimed 56 items / 51 CLOSED / 5 OPEN and listed D-224
+  as open. Counted from the file's own rows: **59 items, 55 CLOSED, 4 OPEN**. It now also states the
+  graph's separate set (64 / 60 / 4) and why the two differ — the graph carries the legacy D-001…D-014
+  series and not D-212…D-220. Neither figure is derived from the other.
+- **Documented counts (Medium)**: `AGENTS.md` now says 866 agent tests (three sites) and 21 preflight
+  tests (two sites), and the Makefile's firmware-qemu line says 14 checks rather than 17.
+- **AARCH64 (Medium)**: claim withdrawn from `PblPkg.dsc`, job removed from `pbl-ci.yml` (65 lines),
+  with the x86-specific reasons recorded in the DSC next to the declaration.
+- **Admin hashing (Medium x2)**: `docs/adr/ADR-001-admin-password-hashing.md` records the split
+  (bcrypt cost 12 on Express, PBKDF2 100k on Workers), the platform ceiling that forces the second
+  number, and the no-migration consequence. `scripts/test_cross_surface_contract.py` gained four tests
+  pinning both cost parameters, the platform-ceiling comment, and the ADR's own statements — 18 passed
+  (was 14), so changing either scheme now fails a test instead of widening the split silently.
+
+Still open from the review: D-120's stale "not implemented" label in the spec and state summary (item
+4), the false `TpmClient.c` header (item 5), the two gates with side effects (R10/R11), and the
+`test-scripts` loop (item 9).
 
 ### Addendum — the QEMU smoke test is green for the first time (14/14)
 

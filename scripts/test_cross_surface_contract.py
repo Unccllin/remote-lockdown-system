@@ -424,6 +424,56 @@ def test_both_suites_read_the_vectors():
     )
 
 
+# ---------------------------------------------------------------------------
+# Admin password hashing — two surfaces, two schemes, one documented split.
+# ADR-001 records why they differ (bcrypt is unavailable on Workers; PBKDF2 is
+# capped at 100k iterations there) and why records cannot move between surfaces.
+# These tests exist so a change to either scheme fails here rather than silently
+# widening the divergence, and so the ADR cannot rot away from the code.
+# ---------------------------------------------------------------------------
+
+ADMIN_HASHING_ADR = REPO / "docs/adr/ADR-001-admin-password-hashing.md"
+
+
+def test_express_hashes_admin_passwords_with_bcrypt_cost_12():
+    src = (REPO / "server/src/routes/admins.js").read_text(encoding="utf-8")
+    assert "bcrypt" in src, "Express no longer uses bcrypt for admin passwords"
+    assert "bcrypt.hashSync(password, 12)" in src, (
+        "the bcrypt cost factor changed; ADR-001 states cost 12, so update both"
+    )
+
+
+def test_worker_pbkdf2_sits_at_the_documented_platform_ceiling():
+    src = (REPO / "serverless/worker.ts").read_text(encoding="utf-8")
+    assert "PBKDF2_ITERATIONS = 100_000" in src, (
+        "the Worker iteration count changed; ADR-001 explains it is the WebCrypto "
+        "maximum, so raising it requires a runtime that supports more"
+    )
+    assert "LEGACY_PBKDF2_ITERATIONS = 210_000" in src, (
+        "the legacy iteration record is gone; ADR-001 cites it as the value that "
+        "never ran on the live Worker"
+    )
+    assert "caps PBKDF2 at 100,000" in src, (
+        "the platform-ceiling comment is gone; without it 100k reads as a downgrade"
+    )
+
+
+def test_the_hashing_divergence_is_documented():
+    assert ADMIN_HASHING_ADR.exists(), (
+        "docs/adr/ADR-001-admin-password-hashing.md is missing; the two surfaces "
+        "hash admin passwords differently and that decision must be recorded"
+    )
+    adr = ADMIN_HASHING_ADR.read_text(encoding="utf-8")
+    for needle in ("bcrypt", "PBKDF2", "100,000", "cost **12**"):
+        assert needle in adr, f"ADR-001 no longer states {needle!r}"
+
+
+def test_both_surfaces_are_named_in_the_adr():
+    adr = ADMIN_HASHING_ADR.read_text(encoding="utf-8")
+    for path in ("server/src/routes/admins.js", "serverless/worker.ts"):
+        assert path in adr, f"ADR-001 no longer names {path}, so it cannot be checked against code"
+
+
 if __name__ == "__main__":
     from script_test_runner import run
 

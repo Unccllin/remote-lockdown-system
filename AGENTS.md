@@ -258,7 +258,7 @@ npm test
 
 # Per-component
 cd server   && npm test                       # 843 Jest tests (51 suites)
-scripts/run-agent-tests.sh -q                 # 863 pytest tests (uses agent/.venv)
+scripts/run-agent-tests.sh -q                 # 866 pytest tests (uses agent/.venv)
 cd dashboard && npx vitest run                # 260 Vitest tests (29 files)
 cd electron  && npm test                      # 30 Jest tests
 cd serverless && npm test                     # 429 Vitest tests
@@ -443,7 +443,7 @@ make build
 
 All green, re-measured 2026-11-13 (every number below was produced by running the
 command that owns it — the count is cheaper to re-take than to trust): 843 server
-tests (51 suites), 863 agent tests, 260 dashboard tests (29 files), 30 electron
+tests (51 suites), 866 agent tests, 260 dashboard tests (29 files), 30 electron
 tests, 429 serverless tests, 14 API E2E tests, 255 script-harness checks (236
 pytest tests across 14 suites + 19 checks in the hand-rolled secret-scanner suite;
 5 worker-update cases skip without a built worker), eslint clean on server +
@@ -505,13 +505,13 @@ Electron runs too (`npx electron .` from `electron/`, same `LD_LIBRARY_PATH`); `
 dashboard, worker, electron) plus the script-level harness tests, E2E, env and
 artifact checks — it previously ran only three of the five while its own comment
 claimed "all 5 test suites". Current measured totals (2026-11-13): server 843 (51 suites),
-agent 863, dashboard 260, worker 429, electron 30, API E2E 14, script harness 255.
+agent 866, dashboard 260, worker 429, electron 30, API E2E 14, script harness 255.
 
 The script-level harness tests are **auto-discovered** (`scripts/test_*.py`, run
 by `make test-scripts` and the CI `script-tests` job). Counts measured 2026-11-05
 (`agent/.venv/bin/python scripts/test_*.py`, one file at a time): 6
 build-windows-artifacts, 8 debt-ledger, 30 firmware-TODO, 18 ci-annotate, 14
-cross-surface-contract, 18 generic-installer, 40 graph-session, 14 hw-window-preflight,
+cross-surface-contract, 18 generic-installer, 40 graph-session, 21 hw-window-preflight,
 44 memory, 20 sast-gate, 18 sign-release-metadata, 2 tls-floor, 5 skipped worker-update, plus 19
 checks in the hand-rolled secret-scanner suite. Earlier revisions of this
 paragraph said "11 graph-session tests" for a suite that had 40 — the list is
@@ -569,7 +569,7 @@ persists the before-state to `--evidence-dir` *before* the action. See runbook �
 `hw-artifact` prints the `hardware_artifact_ref` strings I3 will actually accept —
 it calls `artifact_supports_claim()` itself, so a citation cannot be a guess — and
 exits 1 when a run evidences no graph path at all (E-TPM/E-HWID/E-ENROLL are real
-coverage but not graph nodes). Tests: `scripts/test_hw_window_preflight.py` (14).
+coverage but not graph nodes). Tests: `scripts/test_hw_window_preflight.py` (21).
 
 ### Bugs found and fixed during the sweep
 

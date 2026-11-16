@@ -95,11 +95,11 @@
   completion check demanding a string the BLOCK path never prints. All three are fixed, and the run
   now shows the real flow including `NV_Read(AK_NAME) RC=0x18B`. This is no longer fog; it is
   evidence, and any statement that the smoke test cannot report on PblApp predates the fix.
-- **`build-aarch64` cannot build and never could.** It fails `F000: No files to be built in module
-  [RELEASE, GCC, AARCH64]` on `MdePkg/Library/SecPeiDxeTimerLibCpu/SecPeiDxeTimerLibCpu.inf`, whose
-  sources are x86-only, while `PblPkg.dsc` declares `SUPPORTED_ARCHITECTURES = X64|AARCH64` and maps
-  `TimerLib` to it unconditionally. Resolution is a decision, not a patch: drop AARCH64 from the DSC
-  and the job, or add `ArmArchTimerLib` + `ArmPkg` and whatever else AARCH64 needs.
+- **AARCH64 is settled: the architecture claim is withdrawn (review item 3).** `PblPkg.dsc` now declares
+  `SUPPORTED_ARCHITECTURES = X64` and the `build-aarch64` CI job is removed. The reason is not
+  convenience: the package reads PCH PCI config (SPI, DCI), MSRs and the TPM CRB/TIS interface, and
+  its `TimerLib` instance is x86-only, so an AARCH64 port is a project rather than a switch. The job
+  had failed `F000` on every run, and a permanently red job teaches reviewers to ignore red.
 - **`secure_boot:false` remains an untaken operator decision** (runbook §4 step 2). The window can run
   under the documented first-bring-up posture, but that must be recorded in the artifact, and no run
   under this posture can evidence a Secure Boot boot.

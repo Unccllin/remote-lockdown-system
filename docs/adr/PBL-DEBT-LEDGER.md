@@ -733,9 +733,25 @@
 - **Blocker**: No PBL code has ever run on real hardware. All verification
   is compilation-only. Graph invariant I3 prohibits marking enforcement
   paths as "verified-on-hardware" without real hardware artifacts.
-- **Close criteria**: Boot PblApp.efi on real UEFI hardware (or a real
-  UEFI VM with swtpm). Capture serial/log output showing the full PBL
-  boot flow. Record as hardware artifact.
+- **Close criteria**: Boot PblApp.efi on **real UEFI hardware** and capture
+  serial/log output showing the full PBL boot flow. Record as hardware artifact.
+- **Update (2026-11-16, session 269) — the VM allowance is withdrawn, and the VM
+  run is recorded as a prerequisite instead.** This line used to read *"real UEFI
+  hardware (or a real UEFI VM with swtpm)"*; `GRAPH-SPEC.yaml` always said hardware
+  only, so the two documents disagreed about whether the item could be closed
+  without the machine. Ruling: the graph spec is authoritative, because a VM run
+  cannot answer this item's own question. `swtpm` implements the TPM 2.0 command
+  set, not the *target firmware's* hierarchy policy, which is exactly what D-134
+  turns on. Closing D-129 on OVMF would claim validation of firmware behaviour
+  that OVMF does not have.
+- **Prerequisite evidence now exists (was: "all verification is compilation-only")**.
+  PBL CI run 43581206874 boots
+  `firmware/PblPkg/artifacts/PblApp-6fa6ac418b726075.efi`
+  (`sha256 6fa6ac41…`, PE32+ x86-64, `.reloc` present) under OVMF + swtpm and
+  captures the full flow: banner, `[1/8]`…`[8/8] Decision: BLOCK`,
+  `[OK] Lock state cached to TPM NV`, and a self-image hash that matches the file.
+  14 checks pass. So the blocker is no longer "no code has run" — it is "no code
+  has run on *this machine's* firmware", which is a narrower and honest statement.
 
 ### D-130 — Code signing not configured
 - **Update (2026-10-30, session 159) — signing is proven; two provisioning items
@@ -2366,8 +2382,14 @@
 | D-220 | BLOCK-intent returns propagate error to BDS (BootOrder advance bypass) | CLOSED (`PblApp.c` policy-sig-fail and anti-rollback paths returned `EFI_SECURITY_VIOLATION` — per Boot#### semantics a non-success return advances BDS to the next boot option (Windows boots). Fixed via `PblBlockHalt()` — lock screen + MOR + ResetSystem + CpuDeadLoop, never returns; chain-load return checked at all 3 call sites, fail-closed on error. Note: D-219's harness passed the buggy code — it checked serial lines, not post-BLOCK behavior. QEMU+swtpm: fve 16/0, docker 15/0, persistence 16/0. Commit this session; artifacts /tmp/pbl-fve-ci/, /tmp/pbl-ci-persist/) | SECURITY |
 | D-224 | No host-side tests for TPM command construction or COSE verification with test keys | CLOSED (S266: host_tpm.c fakes EFI_TCG2_PROTOCOL->SubmitCommand so the shipped construction code runs and its bytes are asserted — 86 checks; COSE verify with throwaway ES256 keys — 12 checks; mutation-checked; commit e0dbec8) | TEST |
 
-**Totals**: 56 items — 51 CLOSED, 5 OPEN (D-120 real-media/VMK-lock-state, D-129 real hardware,
-D-130 signing certificate, D-134 TPM NV hierarchy, D-224 host-side TPM/COSE tests)
+**Totals** (measured 2026-11-16 by counting this file's own table rows): **59 items —
+55 CLOSED, 4 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
+D-130 signing certificate, D-134 TPM NV hierarchy). The previous line claimed
+56/51/5 and listed D-224 as open, three figures that contradicted both this table
+(D-224 is CLOSED) and the graph. The graph tracks a different, larger set —
+**64 debt items, 60 CLOSED, 4 OPEN** — because it also carries the legacy
+D-001…D-014 series from `DEBT-LEDGER.md` and does not carry D-212…D-220. Neither
+number is derived from the other; each is counted where it lives.
 
 ### D-224 — No host-side tests for TPM command construction or COSE verification with test keys
 - **Status**: CLOSED (2026-11-11, session 266; commit `e0dbec8`)

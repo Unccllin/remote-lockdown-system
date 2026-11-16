@@ -15,7 +15,11 @@
   PLATFORM_VERSION               = 0.1.0
   DSC_SPECIFICATION              = 0x00010005
   OUTPUT_DIRECTORY               = Build/PblPkg
-  SUPPORTED_ARCHITECTURES        = X64|AARCH64
+  # X64 only. The rest of PblPkg reads PCH PCI config (SPI, DCI), MSRs and the
+  # TPM CRB/TIS interface, and its TimerLib instance is SecPeiDxeTimerLibCpu,
+  # which ships x86 sources only. The earlier `X64|AARCH64` claim made
+  # build-aarch64 fail with F000 "No files to be built" on every run (S269).
+  SUPPORTED_ARCHITECTURES        = X64
   BUILD_TARGETS                  = RELEASE|DEBUG
   SKUID_IDENTIFIER               = DEFAULT
   FLASH_DEFINITION               = PblPkg/PblPkg.fdf

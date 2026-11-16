@@ -40,7 +40,7 @@ help:
 	@echo "  make test-e2e             run API-level E2E tests (lockdown + recovery + agent-integration)"
 	@echo "  make test-worker-e2e      run the Worker update path against local workerd (opt-in)"
 	@echo "  make firmware-build       rebuild PblApp.efi from source (reproducible; needs EDK II)"
-	@echo "  make firmware-qemu        boot PblApp.efi in QEMU+swtpm via Docker (17 checks)"
+	@echo "  make firmware-qemu        boot PblApp.efi in QEMU+swtpm via Docker (14 checks)"
 	@echo "  make test-e2e-dashboard   run Playwright browser E2E tests (dashboard)"
 	@echo "  make test-coverage        run all test suites with coverage reporting"
 	@echo "  make full-verify          run everything: lint + test + e2e + verify-env + graph-check"
