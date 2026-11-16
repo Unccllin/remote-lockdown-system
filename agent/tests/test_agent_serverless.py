@@ -688,3 +688,28 @@ class TestEfsCertUpload:
         with patch.object(agent, "_post_with_fallback", side_effect=err):
             result = agent.upload_efs_certificate(cfg, str(cert_file), "pw")
             assert result is False
+
+
+class TestLockdownEffectiveness:
+    """`lockdown_effective` must be produced and must be honest.
+
+    S269: the field existed in the API and the dashboard but nowhere in agent.py, so
+    the effectiveness panel always read null. And on MOLE the boot-lock layer rolled
+    back ("CRITICAL: WinRE disable failed") while the ACK still said executed — the
+    exact case that must report false.
+    """
+
+    def test_false_when_the_boot_lock_rolled_back(self):
+        assert agent._lockdown_effective([], "partial", True) is False
+
+    def test_false_when_files_were_left_blocked(self):
+        assert agent._lockdown_effective(["README.txt"], "success", True) is False
+
+    def test_true_when_encrypted_and_boot_lock_applied(self):
+        assert agent._lockdown_effective([], "success", True) is True
+
+    def test_true_when_boot_lock_was_not_attempted(self):
+        assert agent._lockdown_effective([], None, False) is True
+
+    def test_false_when_boot_lock_was_attempted_but_unreported(self):
+        assert agent._lockdown_effective([], None, True) is False

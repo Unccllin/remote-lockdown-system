@@ -656,6 +656,39 @@ def run_baked_install(config_path: Path, boot_lock_enabled: bool | None = None) 
 # ---------------------------------------------------------------------------
 
 
+def make_writable(path: Path) -> bool:
+    """Take ownership of `path` and grant Administrators full control.
+
+    Needed because the agent hardens its own install directory: after a first run the
+    binary carries `DELETE denied for Everyone`, so re-installing fails with
+    `PermissionError: ... lockdown-agent.exe` even as Administrator (S269). Reinstall
+    and in-place upgrade both hit this, so the copy step has to claim the file back.
+
+    Best effort: returns False when the tools are unavailable or refuse, and the
+    caller's copy will then fail with the original error.
+    """
+    if platform.system() != "Windows":
+        return False
+    try:
+        subprocess.run(["takeown", "/f", str(path)], capture_output=True, timeout=30)
+        subprocess.run(
+            [
+                "icacls",
+                str(path),
+                "/inheritance:r",
+                "/grant",
+                "Administrators:F",
+                "/grant",
+                "SYSTEM:F",
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        return True
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
 def install_files(agent_exe: Path) -> Path:
     """Copy the agent exe to the install directory."""
 
@@ -666,6 +699,14 @@ def install_files(agent_exe: Path) -> Path:
     if agent_exe.resolve() == dest.resolve():
         print_ok("Agent already in install location")
         return dest
+
+    # A previous install leaves the destination hardened (tamper protection), and a
+    # copy over a file with DELETE denied fails even as Administrator.
+    if dest.exists():
+        if make_writable(dest):
+            print_ok("Existing agent made writable (tamper protection lifted for the upgrade)")
+        else:
+            print_warn("Could not lift tamper protection on the existing agent — copy may fail")
 
     shutil.copy2(agent_exe, dest)
     print_ok(f"Agent copied: {dest}")

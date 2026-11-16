@@ -779,3 +779,29 @@ class TestConsoleEncoding:
         """A windowed build has stdout=None; the helper must not crash on it."""
         monkeypatch.setattr(installer.sys, "stdout", None)
         installer._make_console_safe()  # must not raise
+
+
+class TestReinstallOverTamperProtection:
+    """Re-installing must claim a hardened binary back before copying over it.
+
+    S269: the agent sets `DELETE denied for Everyone` on its own exe, so a second
+    install died with `PermissionError: ... lockdown-agent.exe` even as Administrator
+    — there was no upgrade path at all.
+    """
+
+    def test_install_files_makes_an_existing_destination_writable(self, tmp_path, monkeypatch):
+        dest_dir = tmp_path / "LockdownAgent"
+        dest_dir.mkdir()
+        dest = dest_dir / installer.AGENT_EXE_NAME
+        dest.write_text("old", encoding="utf-8")
+
+        source = tmp_path / "lockdown-agent.exe"
+        source.write_text("new", encoding="utf-8")
+
+        calls = []
+        monkeypatch.setattr(installer, "INSTALL_DIR", dest_dir)
+        monkeypatch.setattr(installer, "make_writable", lambda p: calls.append(p) or True)
+        installer.install_files(source)
+
+        assert calls == [dest], "the existing binary must be unlocked before the copy"
+        assert dest.read_text(encoding="utf-8") == "new"

@@ -1469,6 +1469,7 @@ def ack_command(
     power_on_password: str | None = None,
     bitlocker_pin: str | None = None,
     bitlocker_recovery_password: str | None = None,
+    lockdown_effective: bool | None = None,
 ) -> bool:
     """Send command ACK to server. Returns True on success, False on failure.
 
@@ -2052,6 +2053,27 @@ def show_lockdown_notification() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _lockdown_effective(
+    blocked_files: list[str] | None,
+    boot_lock_status: str | None,
+    boot_lock_attempted: bool,
+) -> bool:
+    """Is the device actually locked down, as opposed to merely asked to be?
+
+    Two conditions, both measured rather than assumed:
+      * every file in the lockdown folder was encrypted (nothing left blocked);
+      * the boot-lock layer, when attempted, did not partially fail or roll back.
+
+    The API has always advertised `lockdown_effective`; the agent never produced it,
+    so the dashboard panel could only read null. A rolled-back boot lock — measured on
+    MOLE as "CRITICAL: WinRE disable failed" — leaves the device encrypted but not
+    boot-locked, which must not read as effective.
+    """
+    encryption_ok = not blocked_files
+    boot_ok = (not boot_lock_attempted) or boot_lock_status == "success"
+    return bool(encryption_ok and boot_ok)
+
+
 def handle_lockdown(cfg: dict, command: dict) -> None:
     log.warning("LOCKDOWN command received — executing")
     folder = cfg["lockdown_folder"]
@@ -2205,6 +2227,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     if enable_pba:
         log.warning("PBA enabled for this lockdown — Power-On Password + BitLocker PIN will be set")
     if cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available:
+        boot_lock_failures = 0
         bcd_result = None
         hp_result = None
 
@@ -2214,18 +2237,18 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
             bcd_result = bcd_lockdown.apply_bcd_lockdown()
             if bcd_result.get("rolled_back"):
                 log.error("BCD lockdown critically failed and was rolled back")
-                boot_lock_status = "partial"
+                boot_lock_failures += 1
             elif bcd_result.get("partial"):
                 log.warning("BCD lockdown applied with some best-effort failures")
-                boot_lock_status = "partial"
+                boot_lock_failures += 1
             elif bcd_result.get("success"):
                 log.info("BCD lockdown fully applied")
             else:
                 log.error("BCD lockdown failed")
-                boot_lock_status = "partial"
+                boot_lock_failures += 1
         except (subprocess.SubprocessError, OSError, ValueError, TypeError) as e:
             log.error("BCD lockdown failed: %s", e)
-            boot_lock_status = "partial"
+            boot_lock_failures += 1
             bcd_result = {
                 "success": False,
                 "partial": False,
@@ -2252,16 +2275,16 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                     "UEFI lockdown BLOCKED by Sure Admin — "
                     "BIOS changes not applied (device is encrypted-only)"
                 )
-                boot_lock_status = "partial"
+                boot_lock_failures += 1
             elif hp_result.get("rolled_back"):
                 log.error(
                     "UEFI lockdown critically failed and was rolled back "
                     "— BIOS password retained for operator action"
                 )
-                boot_lock_status = "partial"
+                boot_lock_failures += 1
             elif hp_result.get("partial"):
                 log.warning("UEFI lockdown applied with some best-effort failures")
-                boot_lock_status = "partial" if boot_lock_status is None else boot_lock_status
+                boot_lock_failures += 1
             elif hp_result.get("success"):
                 log.warning("UEFI boot lockdown applied — BIOS password sent to server")
                 if power_on_password:
@@ -2272,11 +2295,10 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
             else:
                 log.warning("UEFI boot lockdown skipped (not HP or password required)")
                 if boot_lock_status is None:
-                    boot_lock_status = "partial"
+                    boot_lock_failures += 1
         except Exception as e:  # noqa: BLE001 — HP UEFI lockdown uses WMI which may raise platform-specific errors
             log.error("UEFI lockdown failed: %s", e)
-            if boot_lock_status is None:
-                boot_lock_status = "partial"
+            boot_lock_failures += 1
             hp_result = {
                 "bios_password": None,
                 "power_on_password": None,
@@ -2357,6 +2379,27 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
             log.error("T9: BitLocker PBA failed: %s", e)
             bitlocker_pba_result = {"success": False, "error": str(e)}
 
+    # Fold per-layer outcomes into ONE status, and compute the effectiveness the API
+    # has always advertised but the agent never sent: `lockdown_effective` did not
+    # exist in this file at all, so the dashboard's effectiveness panel could only
+    # read null. A rolled-back boot lock means the device is encrypted but not
+    # boot-locked — exactly the case that must not read as effective (S269).
+    if cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available:
+        boot_lock_status = "partial" if boot_lock_failures else "success"
+        if boot_lock_failures:
+            log.error("Boot lockdown incomplete: %s layer(s) did not apply", boot_lock_failures)
+    lockdown_effective = _lockdown_effective(
+        blocked_files,
+        boot_lock_status,
+        bool(cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available),
+    )
+    log.info(
+        "Lockdown effectiveness: %s (blocked_files=%d, boot_lock=%s)",
+        lockdown_effective,
+        len(blocked_files or []),
+        boot_lock_status,
+    )
+
     # Update File A with bios_password + boot_lock_status + boot_lock_detail for ACK retry
     update_pending_ack(
         pending_ack_file,
@@ -2378,6 +2421,7 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         boot_lock_status=boot_lock_status,
         boot_lock_detail=boot_lock_detail,
         encryption_blocked_files=blocked_files if blocked_files is not None else None,
+        lockdown_effective=lockdown_effective,
         lock_session_context=lock_session_context,
         power_on_password=power_on_password,
         bitlocker_pin=bitlocker_pin,
@@ -2872,9 +2916,7 @@ def _query_account_active(name: str) -> bool | None:
     verified layers are recorded.
     """
     try:
-        proc = subprocess.run(
-            ["net", "user", name], capture_output=True, text=True, timeout=10
-        )
+        proc = subprocess.run(["net", "user", name], capture_output=True, text=True, timeout=10)
     except (subprocess.SubprocessError, OSError):
         return None
     if proc.returncode != 0:
