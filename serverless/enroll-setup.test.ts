@@ -76,7 +76,10 @@ describe('served enrolment (the dashboard one-liner)', () => {
     // Pre-staged into the install dir, not registered by hand: the repo's own test
     // forbids an executable sc.exe in these templates, because the installer owns
     // service registration.
-    expect(body).toContain("Join-Path $env:PROGRAMDATA 'LockdownAgent'");
+    // Downloads happen inside the elevated session, into a machine-wide staging
+    // directory: elevation can switch accounts, and %TEMP% then belongs to someone
+    // else — which is how "Cannot find lockdown-agent.exe" came back after staging.
+    expect(body).toContain('LockdownAgent/staging');
     expect(body).toContain('lockdown-service.exe');
     expect(body).toContain('Test-NetConnection');
     // Silent install is the default — one command, no wizard.
@@ -152,13 +155,14 @@ describe('served enrolment (the dashboard one-liner)', () => {
     // The remedy has to name a real path. A backslash in a template literal is an
     // escape and JS drops unknown ones, so this line once rendered
     // "%PROGRAMDATA%LockdownAgentconfig.json" — advice that points at no file.
-    expect(body).toContain('PROGRAMDATA');
-    expect(body).toContain('LockdownAgent/config.json');
+    expect(body).toContain('ProgramData');
+    expect(body).toContain('LockdownAgent/install.log');
+    expect(body).toContain('config.json');
     expect(body).toContain('verify_tls');
     // The plain-HTTP install patches the config inside the same elevated run, so the
     // operator is not left with a second manual step (and no mangled path).
     expect(body).toContain('Restart-Service LockdownAgent');
-    expect(body).not.toContain('PROGRAMDATALockdownAgent');
+    expect(body).not.toContain('LockdownAgentconfig');
   });
 });
 
