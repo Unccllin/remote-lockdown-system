@@ -1,0 +1,131 @@
+/**
+ * Tests for the served-enrolment routes on the Worker.
+ *
+ * Why these exist: `GET /api/enroll/setup.ps1` existed only in the Express
+ * surface (`server/src/routes/enroll.js`), so the one-liner the dashboard shows
+ * — `iex (irm '<server>/api/enroll/setup.ps1')` — answered 404 for every
+ * serverless deployment. Nothing failed, because each surface was asserted
+ * separately. These tests pin the ports and the security properties:
+ *
+ *   * `setup.ps1` and `setup.cmd` are public (the target has no credential yet)
+ *     and carry **no secret**: the token is prompted for on the machine, never
+ *     placed in the URL (B-070 — query strings reach request logs).
+ *   * `setup-command` is operator-gated, because it is the operator's copy-paste
+ *     surface and returns server URLs and notes.
+ *   * The script delegates to the installer (`--server-url`, `--token`) instead
+ *     of re-implementing enrolment, and it checks reachability before
+ *     downloading so an unreachable server fails with a sentence.
+ */
+
+import { describe, it, expect } from 'vitest';
+
+class MockKV {
+  private data: Record<string, string> = {};
+
+  async get(key: string): Promise<string | null> {
+    return this.data[key] ?? null;
+  }
+
+  async put(key: string, value: string): Promise<void> {
+    this.data[key] = value;
+  }
+
+  async delete(key: string): Promise<void> {
+    delete this.data[key];
+  }
+
+  async list(): Promise<{ keys: { name: string }[]; list_complete: boolean }> {
+    return { keys: Object.keys(this.data).map((name) => ({ name })), list_complete: true };
+  }
+}
+
+const BASE = 'https://lockdown.example.com';
+
+function makeEnv(): { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV } {
+  return { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+}
+
+async function getWorker() {
+  const mod = await import('./worker.js');
+  return mod.default as { fetch: (req: Request, env: unknown) => Promise<Response> };
+}
+
+function req(path: string, headers: Record<string, string> = {}): Request {
+  return new Request(`${BASE}${path}`, { method: 'GET', headers });
+}
+
+describe('served enrolment (the dashboard one-liner)', () => {
+  it('serves setup.ps1 publicly, without a token in the URL', async () => {
+    const worker = await getWorker();
+    const resp = await worker.fetch(req('/api/enroll/setup.ps1'), makeEnv());
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get('Content-Type')).toContain('text/plain');
+    expect(resp.headers.get('Cache-Control')).toBe('no-store');
+
+    const body = await resp.text();
+    // The script builds the URL from its $u variable, so assert the path it names.
+    expect(body).toContain('/api/download/installer');
+    expect(body).toContain('Test-NetConnection');
+    // Default mode is the GUI: the wizard asks for the token, so the script only
+    // pre-fills the server URL on the clipboard.
+    expect(body).toContain('Set-Clipboard');
+    expect(body).toContain('Start-Process');
+    // The one property worth failing on: no secret may travel in the URL.
+    expect(body).not.toMatch(/token=/);
+  });
+
+  it('silent mode prompts for the token on the machine, still not in the URL', async () => {
+    const worker = await getWorker();
+    const env = { ...makeEnv(), INSTALLER_SILENT: 'true' };
+    const resp = await worker.fetch(req('/api/enroll/setup.ps1'), env);
+    const body = await resp.text();
+    expect(body).toContain("Read-Host 'Enrollment token");
+    expect(body).toContain("'--silent'");
+    expect(body).not.toMatch(/token=/);
+  });
+
+  it('serves setup.cmd as an attachment that runs the same one-liner', async () => {
+    const worker = await getWorker();
+    const resp = await worker.fetch(req('/api/enroll/setup.cmd'), makeEnv());
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get('Content-Disposition')).toContain('lockdown-setup.cmd');
+
+    const body = await resp.text();
+    expect(body).toContain(`iex (irm '${BASE}/api/enroll/setup.ps1')`);
+    // A script must not change the host's execution policy to run itself.
+    expect(body).not.toContain('Set-ExecutionPolicy');
+  });
+
+  it('refuses setup-command without an admin credential', async () => {
+    const worker = await getWorker();
+    const resp = await worker.fetch(req('/api/enroll/setup-command'), makeEnv());
+    expect(resp.status).toBe(401);
+  });
+
+  it('returns the one-liner and both URLs to an operator', async () => {
+    const worker = await getWorker();
+    const resp = await worker.fetch(
+      req('/api/enroll/setup-command', { Authorization: 'Bearer test-admin-token' }),
+      makeEnv(),
+    );
+    expect(resp.status).toBe(200);
+
+    const data = (await resp.json()) as Record<string, string>;
+    expect(data.server_url).toBe(BASE);
+    expect(data.one_liner).toBe(`iex (irm '${BASE}/api/enroll/setup.ps1')`);
+    expect(data.ps1_url).toBe(`${BASE}/api/enroll/setup.ps1`);
+    expect(data.cmd_url).toBe(`${BASE}/api/enroll/setup.cmd`);
+    expect(data.mode).toBe('gui');
+  });
+
+  it('warns about plain HTTP instead of pretending TLS will work', async () => {
+    const worker = await getWorker();
+    // Same handler, different request origin — the script is composed from the
+    // origin the target actually reached, not from a fixed setting.
+    const plain = new Request('http://10.0.0.5:8787/api/enroll/setup.ps1', { method: 'GET' });
+    const resp = await worker.fetch(plain, makeEnv());
+    const body = await resp.text();
+    expect(body).toContain('plain HTTP');
+    expect(body).toContain('verify_tls');
+  });
+});

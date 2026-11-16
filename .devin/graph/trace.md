@@ -15880,6 +15880,30 @@ expected outcome. Separately: decide AARCH64 (drop the DSC claim and the job, or
 `ArmArchTimerLib`), and note that the QEMU serial question is closed — the smoke test now reports
 14/14 with the firmware's own output in the log.
 
+### Addendum — the Worker now serves the enrolment one-liner (product gap closed)
+
+The dashboard's one-liner was `iex (irm '<base>/api/enroll/setup.ps1')`, and that route existed only
+in `server/src/routes/enroll.js` — so on every serverless deployment it answered 404 and the dashboard
+was showing a command that could not work. Ported to `worker.ts`: `GET /api/enroll/setup.ps1` and
+`GET /api/enroll/setup.cmd` are public (the target has no credential yet and the script carries no
+secret — B-070: the token is prompted on the machine, never placed in a URL that reaches request logs),
+and `GET /api/enroll/setup-command` is operator-gated and returns `one_liner`/`ps1_url`/`cmd_url`.
+
+The script is composed from the request origin, so a target that reached the Worker over plain HTTP is
+told the truth: the agent refuses `http://` unless `verify_tls` is false, and no installer flag sets it,
+so the generated script prints that remedy rather than letting the operator meet the guard after a
+successful install.
+
+Measured: worker suite **435 passed** (429 + 6 new in `serverless/enroll-setup.test.ts`, which also
+assert no `token=` appears in the script, that `setup.cmd` never calls `Set-ExecutionPolicy`, and that
+`setup-command` is 401 without a credential). Live against the local Worker: `setup.ps1` 200
+text/plain 1078 B, `setup.cmd` 200 application/octet-stream, `setup-command` 401 unauthenticated.
+`make typecheck-worker` passes and the route-contract test accepts the new routes.
+
+**Dependency worth knowing**: the script downloads `$u/api/download/installer`, and that Worker route
+serves the installer binary from KV. An empty or unprovisioned KV therefore answers 404 at the download
+step — the one-liner is only as complete as the binary stored in KV.
+
 ### Addendum — the review's first four action items are taken
 
 Closing the findings the review ranked, in the order it ranked them.
