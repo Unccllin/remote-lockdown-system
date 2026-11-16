@@ -16121,3 +16121,25 @@ Access: OpenSSH + `administrators_authorized_keys` on `192.168.1.249`, run as `l
 **Not defects, worth recording**: the lock-screen overlay cannot be created from Session 0
 (`CreateWindowEx failed: 2`), so an SSH-driven lock relies on `tsdiscon`; and unlock performs HP
 BIOS restore calls (D-009), each ~7 s, which delays the ACK.
+
+### Addendum — rebuilt agent verified on MOLE (S269 close-out)
+
+Fresh `windows-artifacts` build (run 43874927461 @ 473cd5d) published to local KV, then driven
+over SSH:
+
+- **one-command enrolment on a wiped machine**: pass (service Running/Automatic, `verify_tls` false
+  with no BOM, both binaries staged, checking in within a minute).
+- **boot-lock honesty (fix #1)**: measured live — `Boot lockdown incomplete: 2 layer(s) did not
+  apply`, `Lockdown effectiveness: False (blocked_files=0, boot_lock=partial)`, and the server
+  command record carries `boot_lock_status: partial`, `lockdown_effective: False`. Before this
+  session the field did not exist in agent.py at all.
+- **tracking guard**: `track` on an `active` device is refused (correct); the first version also
+  refused `locked`, which is the state a lockdown ACK leaves, so that was fixed and pushed.
+- **installer self-upgrade (fix #4)**: re-running the one-liner on an *installed* machine now
+  succeeds functionally — it overwrites the hardened binary that previously raised
+  `PermissionError`, service Running, config patched. **But the run exits non-zero**, so the
+  wrapper prints its failure banner and throws even though the install completed. Recorded as an
+  open defect: the exit code, not the install, is wrong.
+
+Not verified live: the tracking layers themselves (EFS-before-disable, decoy verification) — the
+cycle was not run to keep the machine out of tracking mode at the end of the session.
