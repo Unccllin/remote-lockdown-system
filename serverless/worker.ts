@@ -3079,37 +3079,55 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
     `if (-not $t) { throw 'An enrollment token is required.' }`,
     ``,
     `$inner = Join-Path $env:TEMP 'lockdown-setup-inner.ps1'`,
+    `$log = Join-Path $env:TEMP 'lockdown-install.log'`,
     `$body = @'`,
-    `$ErrorActionPreference = 'Stop'`,
-    `$p = Start-Process '__EXE__' -Wait -PassThru -ArgumentList @('--server-url','__URL__','--token','__TOKEN__','--silent')`,
-    `if ($p.ExitCode -ne 0) { exit $p.ExitCode }`,
+    `$ErrorActionPreference = 'Continue'`,
+    `$log = '__LOG__'`,
+    `& '__EXE__' --server-url '__URL__' --token '__TOKEN__' --silent *> $log`,
+    `$code = $LASTEXITCODE`,
   );
   if (plainHttp) {
     // The installer always writes "verify_tls": true and has no flag to change it,
-    // while the agent refuses http:// unless it is false (agent.py guard). Patching
-    // here keeps the operator to one command instead of a follow-up manual edit.
+    // while the agent refuses http:// unless it is false (agent.py guard). Patch it
+    // only when the install actually succeeded, inside the same elevation.
     lines.push(
-      `$cfg = Join-Path $env:PROGRAMDATA 'LockdownAgent\\config.json'`,
-      `if (Test-Path $cfg) {`,
-      `    $j = Get-Content $cfg -Raw | ConvertFrom-Json`,
-      `    $j.verify_tls = $false`,
-      `    $j | ConvertTo-Json -Depth 8 | Set-Content $cfg -Encoding UTF8`,
-      `    Write-Host 'verify_tls set to false (plain-HTTP lab server).' -ForegroundColor Yellow`,
+      `if ($code -eq 0) {`,
+      `    $cfg = Join-Path $env:PROGRAMDATA 'LockdownAgent/config.json'`,
+      `    if (Test-Path $cfg) {`,
+      `        $j = Get-Content $cfg -Raw | ConvertFrom-Json`,
+      `        $j.verify_tls = $false`,
+      `        $j | ConvertTo-Json -Depth 8 | Set-Content $cfg -Encoding UTF8`,
+      `        Add-Content $log 'verify_tls set to false (plain-HTTP lab server).'`,
+      `    }`,
+      `    Restart-Service LockdownAgent -ErrorAction SilentlyContinue`,
       `}`,
-      `Restart-Service LockdownAgent -ErrorAction SilentlyContinue`,
     );
   }
   lines.push(
+    `exit $code`,
     `'@`,
     `Set-Content -Path $inner -Value $body -Encoding UTF8`,
-    `$body = $body.Replace('__EXE__', $e).Replace('__URL__', $u).Replace('__TOKEN__', $t)`,
+    `$body = $body.Replace('__EXE__', $e).Replace('__URL__', $u).Replace('__TOKEN__', $t).Replace('__LOG__', $log)`,
     `Set-Content -Path $inner -Value $body -Encoding UTF8`,
     ``,
     `Write-Host "Installing (no wizard) ..." -ForegroundColor Cyan`,
     `$p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$inner)`,
     `Remove-Item $inner -ErrorAction SilentlyContinue`,
-    `if ($p.ExitCode -ne 0) { throw "Installer failed with exit code $($p.ExitCode)" }`,
-    `Write-Host 'Installed. The device appears in the dashboard within a minute.' -ForegroundColor Green`
+    ``,
+    `if ($p.ExitCode -ne 0) {`,
+    `    # The elevated window closes, so its output is only recoverable from the log.`,
+    `    # Print it here: a bare exit code sent the operator hunting a problem with no`,
+    `    # evidence at all (the first silent run failed with "exit code 1" and nothing else).`,
+    `    if (Test-Path $log) {`,
+    `        Write-Host "---- installer output (tail) ----" -ForegroundColor Yellow`,
+    `        Get-Content $log -Tail 25 | ForEach-Object { Write-Host $_ }`,
+    `        Write-Host "---- full log: $log ----" -ForegroundColor Yellow`,
+    `    } else {`,
+    `        Write-Host "No installer log at $log — the elevated run may not have started." -ForegroundColor Yellow`,
+    `    }`,
+    `    throw "Installer failed with exit code $($p.ExitCode)"`,
+    `}`,
+    `Write-Host 'Installed. The device appears in the dashboard within a minute.' -ForegroundColor Green`,
   );
   return lines.join('\r\n') + '\r\n';
 }

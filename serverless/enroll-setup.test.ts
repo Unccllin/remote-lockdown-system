@@ -68,7 +68,7 @@ describe('served enrolment (the dashboard one-liner)', () => {
     expect(body).toContain('Test-NetConnection');
     // Silent install is the default — one command, no wizard.
     expect(body).toContain("Read-Host 'Enrollment token");
-    expect(body).toContain("'--silent'");
+    expect(body).toContain('--silent');
     // The one property worth failing on: no secret may travel in the URL.
     expect(body).not.toMatch(/token=/);
   });
@@ -80,7 +80,7 @@ describe('served enrolment (the dashboard one-liner)', () => {
     const body = await resp.text();
     expect(body).toContain('setup wizard');
     expect(body).toContain('Set-Clipboard');
-    expect(body).not.toContain("'--silent'");
+    expect(body).not.toContain('--silent');
   });
 
   it('serves setup.cmd as an attachment that runs the same one-liner', async () => {
@@ -131,7 +131,7 @@ describe('served enrolment (the dashboard one-liner)', () => {
     // escape and JS drops unknown ones, so this line once rendered
     // "%PROGRAMDATA%LockdownAgentconfig.json" — advice that points at no file.
     expect(body).toContain('PROGRAMDATA');
-    expect(body).toContain('LockdownAgent');
+    expect(body).toContain('LockdownAgent/config.json');
     expect(body).toContain('verify_tls');
     // The plain-HTTP install patches the config inside the same elevated run, so the
     // operator is not left with a second manual step (and no mangled path).
