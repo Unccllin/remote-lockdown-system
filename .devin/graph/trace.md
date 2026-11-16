@@ -15815,7 +15815,8 @@ developer checkout already had what CI lacked.
   under the documented first-bring-up posture, but that must be recorded in the artifact, and no run
   under this posture can evidence a Secure Boot boot.
 - Unchanged: `make test-scripts` dies at `test_tls_floor.py` (docker inactive, root needed), and
-  `make lint-agent` is red with 6 findings in untouched `agent/agent.py` (3 `UP038`, 3 `F821` that are
+  `make lint-agent` (PATH python3 -> ruff 0.17.5) passes, while the repo venv's ruff 0.5.0 reports
+  6 findings in untouched `agent/agent.py` (3 `UP038`, 3 `F821` that are
   a ruff 0.5.0 flow false positive — eight-line repro in Addendum 6).
 
 ### Debt items closed
@@ -15972,5 +15973,18 @@ Also measured: lint-server, lint-dashboard, typecheck-worker, check-openapi, che
 check-firmware-todos, verify-env and check-artifacts all pass; `lint-workflows` cannot run here
 (actionlint absent) and `test-e2e-dashboard` cannot run here (Playwright browser binary missing).
 
+Rev 3 additions (second review feedback): the remaining runnable gates were run and recorded.
+`make verify-worker` was **red on this host and is now explained**: `wrangler dev` merges
+`serverless/.dev.vars` unconditionally, and the `PBL_SIGNING_KEY`/`PBL_POLICY_SIGNING_KEY` random
+hex created earlier in this session made `/v1/verdict` and `/v1/policy/1` answer 500. Moving the
+file aside, or dropping just those two lines, makes the gate pass (junk verdict -> 400,
+policy -> 200); the README's claim that random values "fail closed" was wrong and is corrected.
+`make test-worker-e2e` 5 passed, `make format-check` 63 files formatted, `make check-licenses`
+exit 0 (and rewrites the tracked `THIRD-PARTY-NOTICES.md` as a side effect — recorded as R10).
+Also corrected: `make lint-agent` is green under PATH ruff 0.17.5; only the venv's ruff 0.5.0
+reports 6 findings, so the linter is unpinned rather than red (R9). Worker branch coverage is
+85.69% (1120/1307) on this host, 85.46% on an independent run.
+
 **Not established**: SAST/CodeQL status, electron behaviour, Playwright and actionlint results,
-and anything about the target machine's firmware until it boots the artifact.
+whether other make targets have the same .dev.vars coupling, and anything about the target
+machine's firmware until it boots the artifact.

@@ -25,12 +25,16 @@ own comment contradicts the way rev 1 framed it.
 | Dashboard tests | `dashboard && npx vitest run` | **260 passed**, 29 files |
 | API/agent E2E | `make test-e2e` | **14 passed**, 4 suites |
 | Firmware host tests | `make firmware-host-tests` | **195 checks / 0 failures** (19+8+8 cases) |
-| Script harness | each `scripts/test_*.py` | 13 pass, 1 blocked (see 1.3) |
+| Script harness | each `scripts/test_*.py` | 13 pass, 1 blocked (see 1.4) |
 | QEMU + swtpm smoke | PBL CI run 43581206874 | **14 PASS / 0 FAIL** |
 | Graph invariants | `make graph-check` | all pass |
 | Graph session suite | `scripts/test_graph_session.py` | **40 passed** |
 | Enforcement citations | `artifact_supports_claim` × 11 refs | **11 valid / 0 invalid** |
-| Trace honesty gate | `make trace-review` | **6 passed / 0 failed** (see §5.1) |
+| Trace honesty gate | `make trace-review` | **7 passed / 0 failed** (see §5.1) |
+| Worker smoke (HTTP) | `make verify-worker` | **pass** — with a correct `.dev.vars`; see §5.4 |
+| Worker update E2E | `make test-worker-e2e` | **5 passed** (38 s) |
+| Formatting | `make format-check` | **63 files already formatted** |
+| Licence inventory | `make check-licenses` | exit 0; reports `react-leaflet` / `@react-leaflet/core` Hippocratic-2.1 and **rewrites `THIRD-PARTY-NOTICES.md`** as a side effect |
 
 ### 1.2 Coverage gates — run, not assumed
 
@@ -39,7 +43,7 @@ own comment contradicts the way rev 1 framed it.
 | Agent | **64.63 %** (TOTAL) | — | — | — | 59 % | reached |
 | Server | **74.43 %** (2818/3786) | 71.05 % | 79.80 % | **75.32 %** | per-component | reached |
 | Dashboard | **69.98 %** (963/1376) | 65.49 % | 62.03 % | **70.88 %** | 68 / 61 / 62 / 70 | reached on all four |
-| Worker | **90.25 %** (1399/1550) | 85.69 % | 95.97 % | **92.74 %** | per-component | reached |
+| Worker | **90.25 %** (1399/1550) | **85.69 %** (1120/1307) | 95.97 % | **92.74 %** | per-component | reached (a second independent run reported 85.46 % branches, so treat it as ≈85.5 %) |
 | Electron | not measured | — | — | — | — | blocked, see 1.3 |
 
 `make test-coverage` as a single target aborts at the Electron step (it runs last), so
@@ -221,13 +225,41 @@ fails" carried no information.
 - **`make test-scripts` stops at the first failure** (`|| exit 1`); on this host that is the
   docker-dependent `test_tls_floor.py`, so everything alphabetically after it — including
   `test_worker_update_e2e.py` — never runs under `make`.
-- **`make lint-agent` is red at HEAD** with 6 findings in `agent/agent.py`; three are a proven
-  ruff-0.5.0 flow false positive (eight-line repro in `trace.md`, S268 Addendum 6), three are
-  `UP038` style.
+- **Two ruff versions disagree about `agent/`, and `make` uses whichever is first on `PATH`.**
+  `make lint-agent` (PATH `python3` → ruff **0.17.5**) reports **All checks passed**. The
+  repository's own `agent/.venv` carries ruff **0.5.0**, which reports **6 findings** in
+  `agent/agent.py` (3 proven flow false positives — eight-line repro in `trace.md`, S268
+  Addendum 6 — and 3 `UP038`). CI does `pip install ruff`, i.e. latest, so CI is green. Rev 2 of
+  this review called `make lint-agent` red; that was wrong, and the version was undisclosed.
+  The real finding is that the linter is **unpinned**, so "green" depends on which interpreter
+  runs it.
 - **`make test-coverage` aborts at Electron**, so one blocked optional component makes the
   aggregate gate report failure while four components are green.
 - **`actionlint` and Playwright browsers are absent here**, so `lint-workflows` and
   `test-e2e-dashboard` cannot be evaluated on this host at all.
+
+### 5.4 A verification gate silently poisoned by a local dev file
+
+`make verify-worker` was red on this host — `POST /v1/verdict -> 500`,
+`GET /v1/policy/1 -> 500`, "worker verification FAILED" — while all 429 Worker unit tests passed.
+Cause, measured: `wrangler dev` merges `serverless/.dev.vars` unconditionally, and that file
+carried `PBL_SIGNING_KEY` / `PBL_POLICY_SIGNING_KEY` set to random hex created earlier in this
+session for local development. The Worker tries to parse them as keys, throws, and `/v1/*`
+answers 500. Moving the file aside makes the gate **pass (exit 0)**; so does removing just the two
+`PBL_*` lines, after which `/v1/verdict` answers 400 to a junk body and `/v1/policy/1` serves a
+blob.
+
+Two things are wrong here, and neither is in the Worker's logic:
+
+1. **The gate does not isolate itself from developer state.** A verification target that is
+   supposed to prove the bundle builds and routes answer should not be at the mercy of a
+   gitignored file; it should pass its own `--var`s for every secret it depends on.
+2. **The README asserted the opposite of the truth** — that random `PBL_*` values "make those
+   paths fail closed, which is the right local default". They make them 500. Corrected in
+   `serverless/README.md`.
+
+This is the same class as §5.1: a gate whose result depends on something other than what it
+claims to measure, which is why it is recorded here rather than dismissed as a local quirk.
 
 ---
 
@@ -242,6 +274,9 @@ fails" carried no information.
 | R5 | `build-aarch64` permanently red while the DSC claims AARCH64 | run logs, `PblPkg.dsc:18` | drop the claim or port |
 | R6 | Semgrep cannot parse 19 files incl. newest firmware | S267 record, not re-measured (semgrep absent) | re-measure when available |
 | R7 | `trace-review` had a false-positive class that could hide real red | §5.1 | fixed; keep the negative tests |
+| R8 | `make verify-worker` reads developer `.dev.vars`, so local secrets can fail a verification gate | §5.4 | pass every needed secret as `--var` in the script |
+| R9 | Ruff is unpinned: `make lint-agent` is green under 0.17.5 and red under the venv's 0.5.0 | §5.3 | pin the version in both places, or record which one is authoritative |
+| R10 | `make check-licenses` rewrites a tracked file (`THIRD-PARTY-NOTICES.md`) as a side effect of a read-only-looking gate | measured, §1.1 | make it write only with an explicit flag |
 
 ---
 
@@ -277,6 +312,9 @@ the fleet claim ("any company-owned machine, Secure Boot on") — that needs D-1
 | 8 | **Low** | Screening tools that cannot run here are indistinguishable from passing ones (`actionlint`, Playwright, docker tests) unless recorded | §1.4 | keep this matrix in the repo, refresh per session |
 | 9 | **Low** | `make test-scripts` never reaches its last file under `make` | §5.3 | run each file, or make the docker test opt-in |
 | 10 | **Low** | Dashboard keeps its JWT in `localStorage` | §4.2 | state the trade-off beside the decision |
+| 11 | **Medium** | `make verify-worker` is poisoned by developer `.dev.vars`: a red gate on the Worker that says nothing about the Worker | §5.4 | pass secrets via `--var`; drop `PBL_*` from the README's dev recipe (done) |
+| 12 | **Low** | Ruff is unpinned, so `make lint-agent` is green or red depending on which interpreter runs it | §5.3 | pin one version |
+| 13 | **Low** | `make check-licenses` mutates `THIRD-PARTY-NOTICES.md` while reporting | §1.1 | write only on an explicit flag |
 
 ---
 
@@ -286,6 +324,8 @@ the fleet claim ("any company-owned machine, Secure Boot on") — that needs D-1
   inherited, not measured.
 - **Coverage aggregate**: measured per component (§1.2) but `make test-coverage` as a whole
   cannot pass on this host because Electron is blocked.
+- **Gate isolation**: §5.4 shows at least one gate (`verify-worker`) depends on developer state;
+  no attempt was made to audit the other ~20 targets for the same property.
 - **SAST / CodeQL**: unverified (semgrep absent, private-repo CodeQL unavailable); the "19
   unparsed files" figure is S267's, not re-measured.
 - **Playwright E2E** and **actionlint**: not evaluated here (missing browser binary and tool).

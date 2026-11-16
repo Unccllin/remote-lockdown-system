@@ -104,7 +104,8 @@
   under the documented first-bring-up posture, but that must be recorded in the artifact, and no run
   under this posture can evidence a Secure Boot boot.
 - Unchanged: `make test-scripts` dies at `test_tls_floor.py` (docker inactive, root needed), and
-  `make lint-agent` is red with 6 findings in untouched `agent/agent.py` (3 `UP038`, 3 `F821` that are
+  `make lint-agent` (PATH python3 -> ruff 0.17.5) passes, while the repo venv's ruff 0.5.0 reports
+  6 findings in untouched `agent/agent.py` (3 `UP038`, 3 `F821` that are
   a ruff 0.5.0 flow false positive — eight-line repro in Addendum 6).
 
 ### Debt items closed

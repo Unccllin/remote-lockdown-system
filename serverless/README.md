@@ -187,9 +187,13 @@ devices there.
 
 1. `npm ci` (in `serverless/`), then `npm run dev`.
 2. Secrets come from `serverless/.dev.vars` — gitignored, never committed. It
-   needs `JWT_SECRET` and `ADMIN_TOKEN`; `PBL_SIGNING_KEY` /
-   `PBL_POLICY_SIGNING_KEY` only matter for the policy-signature paths (random
-   values there make those paths fail closed, which is the right local default).
+   needs `JWT_SECRET` and `ADMIN_TOKEN`, and **nothing else**: leave
+   `PBL_SIGNING_KEY` / `PBL_POLICY_SIGNING_KEY` out, and the Worker generates
+   ES256 keys into the local KV on first use. Placeholder values are worse than
+   absent — an unparseable string makes `/v1/verdict` and `/v1/policy/:v` answer
+   **500**, and because `wrangler dev` merges this file unconditionally it also
+   fails `make verify-worker`, a gate that is supposed to check the bundle rather
+   than your local secrets (S269).
 3. First run has no admins: `GET /api/setup/status` returns
    `{"setupComplete":false}`. Create one with
 
