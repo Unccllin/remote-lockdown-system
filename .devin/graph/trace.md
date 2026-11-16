@@ -16105,6 +16105,19 @@ Access: OpenSSH + `administrators_authorized_keys` on `192.168.1.249`, run as `l
 8. **Poll interval while `active` is 300 s**, so flagging a device can take five minutes to
    take effect. Documented, not changed.
 
+9. **Whole-record KV writes lose updates under concurrency.** Measured during the acceptance
+   run: the agent ACKed `unlock … status=executed` (and the audit gained `agent_unlock_confirmed`),
+   yet `GET /api/devices` reported `status=locked` with the unlock command still `pending`, and a
+   later read showed `last_checkin: null`. Each handler loads `devices`/`commands`, edits and saves
+   the whole list, so a check-in and an ACK racing each other overwrite each other's fields. It
+   self-heals on the next check-in, which is why it reads as "eventually consistent" rather than a
+   hard failure — but it means a command can look pending after it executed, and a status can be
+   stale in either direction. Fixing it properly means per-entity keys (`device:<id>`,
+   `command:<id>`) or a Durable Object per device; recorded, not attempted.
+10. **Adaptive polling delays a command by up to 300 s.** `poll_interval` becomes 300 s while
+   `active` (10 s while `stolen`), so flagging an active device can take five minutes to take
+   effect unless the service is restarted. Observed repeatedly; documented, not changed.
+
 **Not defects, worth recording**: the lock-screen overlay cannot be created from Session 0
 (`CreateWindowEx failed: 2`), so an SSH-driven lock relies on `tsdiscon`; and unlock performs HP
 BIOS restore calls (D-009), each ~7 s, which delays the ACK.
