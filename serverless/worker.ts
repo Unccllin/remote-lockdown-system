@@ -162,6 +162,12 @@ interface EncryptionKey {
   device_id: string;
   command_id: string;
   key_material: string;
+  /**
+   * ISO timestamp of escrow. Optional because records written before S269 have
+   * none; key selection must therefore fall back to array order (escrow appends),
+   * which is why "newest" is the last element rather than a sorted first.
+   */
+  created_at?: string;
   released_at: string | null;
 }
 
@@ -3105,8 +3111,11 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
     `    throw "Cannot reach $u on port ${port}. ${remedy}"`,
     `}`,
     ``,
-    `$t = Read-Host 'Enrollment token (from the dashboard)'`,
-    `if (-not $t) { throw 'An enrollment token is required.' }`,
+    `# $env:LOCKDOWN_ENROLL_TOKEN makes this non-interactive, which is what an MDM or`,
+    `# an automated acceptance test needs; Read-Host is the fallback for a human.`,
+    `$t = $env:LOCKDOWN_ENROLL_TOKEN`,
+    `if (-not $t) { $t = Read-Host 'Enrollment token (from the dashboard)' }`,
+    `if (-not $t) { throw 'An enrollment token is required (or set $env:LOCKDOWN_ENROLL_TOKEN).' }`,
     ``,
     `$inner = Join-Path $env:ProgramData 'LockdownAgent/setup-inner.ps1'`,
     `$log = Join-Path $env:ProgramData 'LockdownAgent/install.log'`,

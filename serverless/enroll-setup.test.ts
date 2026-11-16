@@ -83,6 +83,7 @@ describe('served enrolment (the dashboard one-liner)', () => {
     expect(body).toContain('lockdown-service.exe');
     expect(body).toContain('Test-NetConnection');
     // Silent install is the default — one command, no wizard.
+    expect(body).toContain('LOCKDOWN_ENROLL_TOKEN');
     expect(body).toContain("Read-Host 'Enrollment token");
     expect(body).toContain('--silent');
     // The one property worth failing on: no secret may travel in the URL.
