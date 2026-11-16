@@ -410,11 +410,13 @@ class TestTrackingDataProtection:
             assert state["applied"] == []
 
     def test_apply_protection_windows_disables_real_user(self, cfg):
-        """On Windows, should disable the real user's account."""
+        """On Windows, should disable the real user's account — verified after the fact."""
         with (
             patch.object(agent.platform, "system", return_value="Windows"),
             patch.object(agent, "_get_real_username", return_value="john"),
             patch.object(agent, "_run_net_user", return_value=True),
+            # Verification drives the record: the account must read as inactive.
+            patch.object(agent, "_query_account_active", side_effect=lambda n: False),
             patch.object(agent, "_run_cipher", return_value=True),
             patch("pathlib.Path.exists", return_value=False),
         ):
@@ -422,18 +424,34 @@ class TestTrackingDataProtection:
             assert "disable_real_user" in state["applied"]
             assert state["real_user"] == "john"
 
+    def test_disable_is_not_recorded_when_the_account_stays_active(self, cfg):
+        """The S269 defect: `net user /active:no` can exit 0 and change nothing."""
+        with (
+            patch.object(agent.platform, "system", return_value="Windows"),
+            patch.object(agent, "_get_real_username", return_value="john"),
+            patch.object(agent, "_run_net_user", return_value=True),
+            patch.object(agent, "_query_account_active", side_effect=lambda n: True),
+            patch.object(agent, "_run_cipher", return_value=False),
+            patch("pathlib.Path.exists", return_value=False),
+        ):
+            state = agent.apply_tracking_data_protection(cfg)
+            assert "disable_real_user" not in state["applied"]
+            assert "disable_real_user" in state["failed"]
+            assert "real_user" not in state
+
     def test_apply_protection_windows_creates_decoy(self, cfg):
         """On Windows, should create and enable a decoy account."""
         with (
             patch.object(agent.platform, "system", return_value="Windows"),
             patch.object(agent, "_get_real_username", return_value="john"),
             patch.object(agent, "_run_net_user", return_value=True),
+            patch.object(agent, "_query_account_active", side_effect=lambda n: True),
             patch.object(agent, "_run_cipher", return_value=True),
             patch("pathlib.Path.exists", return_value=False),
             patch("subprocess.run") as mock_run,
         ):
             state = agent.apply_tracking_data_protection(cfg)
-            assert "create_decoy" in state["applied"]
+            assert "enable_decoy" in state["applied"]
             assert "enable_decoy" in state["applied"]
             assert state["decoy_account"] == agent.DECOY_ACCOUNT_NAME
             assert "decoy_password" in state
@@ -447,7 +465,10 @@ class TestTrackingDataProtection:
             patch.object(agent.platform, "system", return_value="Windows"),
             patch.object(agent, "_get_real_username", return_value="john"),
             patch.object(agent, "_run_net_user", return_value=True),
+            patch.object(agent, "_query_account_active", side_effect=lambda n: False),
             patch.object(agent, "_run_cipher", return_value=True) as mock_cipher,
+            # EFS is recorded only when files actually carry the Encrypted attribute.
+            patch.object(agent, "_count_encrypted_files", return_value=3),
             patch("pathlib.Path.exists", return_value=True),
         ):
             state = agent.apply_tracking_data_protection(cfg)

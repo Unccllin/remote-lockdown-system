@@ -1274,7 +1274,10 @@ describe('Serverless Worker', () => {
       expect(data.command.command_type).toBe('lockdown');
     });
 
-    it('POST /api/devices/:id/track sets tracking status', async () => {
+    it('POST /api/devices/:id/track refuses a device that is not stolen', async () => {
+      // Tracking disables the signed-in account and EFS-encrypts its profile, so it
+      // must not be reachable from a device an operator is using. S269: a queued
+      // track fired one poll after a recover and locked the operator out.
       const { device } = await enrollDevice(worker, env, 'TRACK-001');
       const req = makeRequest(
         'POST',
@@ -1283,6 +1286,28 @@ describe('Serverless Worker', () => {
         { Authorization: 'Bearer test-admin-token' },
       );
       const resp = await worker.fetch(req, env);
+      expect(resp.status).toBe(409);
+      const body = await resp.text();
+      expect(body).toContain('Flag it stolen first');
+    });
+
+    it('POST /api/devices/:id/track is allowed once the device is stolen', async () => {
+      const { device } = await enrollDevice(worker, env, 'TRACK-002');
+      await worker.fetch(
+        makeRequest(
+          'POST',
+          `/api/devices/${device.id}/flag`,
+          { hostname_confirm: device.hostname },
+          { Authorization: 'Bearer test-admin-token' },
+        ),
+        env,
+      );
+      const resp = await worker.fetch(
+        makeRequest('POST', `/api/devices/${device.id}/track`, {}, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
       const data: any = await parseResponse(resp);
       expect(resp.status).toBe(200);
       expect(data.device.status).toBe('tracking');
@@ -1310,7 +1335,9 @@ describe('Serverless Worker', () => {
       expect(data.device.status).toBe('active');
     });
 
-    it('POST /api/devices/:id/locate queues track command', async () => {
+    it('POST /api/devices/:id/locate refuses to queue tracking on a healthy device', async () => {
+      // `locate` queues a `track` command, and `track` is what enters covert tracking
+      // mode — so "where is it?" silently changed a device's security posture (S269).
       const { device } = await enrollDevice(worker, env, 'LOCATE-001');
       const req = makeRequest(
         'POST',
@@ -1319,9 +1346,7 @@ describe('Serverless Worker', () => {
         { Authorization: 'Bearer test-admin-token' },
       );
       const resp = await worker.fetch(req, env);
-      const data: any = await parseResponse(resp);
-      expect(resp.status).toBe(200);
-      expect(data.command.command_type).toBe('track');
+      expect(resp.status).toBe(409);
     });
 
     it('GET /api/devices/:id/locations returns empty array initially', async () => {

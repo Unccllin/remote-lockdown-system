@@ -134,7 +134,7 @@ interface Command {
   id: string;
   device_id: string;
   command_type: 'lockdown' | 'unlock' | 'track' | 'stop_track';
-  status: 'pending' | 'executed' | 'failed';
+  status: 'pending' | 'executed' | 'failed' | 'cancelled';
   created_at: string;
   executed_at: string | null;
   command_uuid: string | null;
@@ -984,7 +984,11 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
 
   // No pending command — adaptive polling
   const status = devices[idx].status;
-  const pollInterval = status === 'stolen' ? 10 : 300;
+  // 60 s rather than 300 s: the agent only learns about a queued command when it
+  // polls, so a five-minute interval meant flagging a device could appear to do
+  // nothing for five minutes (S269). Override with ACTIVE_POLL_SECONDS.
+  const activePoll = Number((env as unknown as Record<string, unknown>).ACTIVE_POLL_SECONDS ?? 60);
+  const pollInterval = status === 'stolen' ? 10 : Number.isFinite(activePoll) ? activePoll : 60;
   return jsonResponse({
     status,
     poll_interval: pollInterval,
@@ -1439,6 +1443,29 @@ async function handleAgentLocation(request: Request, env: Env): Promise<Response
   await saveLocations(env, locations);
 
   return jsonResponse({ ok: true });
+}
+
+/**
+ * Serialize state mutations inside this isolate.
+ *
+ * Every handler that changes device or command state loads a whole JSON list from KV,
+ * edits it and writes it back. A check-in and a command-ACK arriving together therefore
+ * raced: the agent ACKed `unlock … status=executed`, the audit recorded the confirmation,
+ * and a read one second later still showed the command `pending` with the device
+ * `locked`, because the other request's older snapshot was written last (S269).
+ *
+ * A promise chain removes the race for requests served by the same isolate, which is the
+ * only case that can be fixed without Durable Objects. Cross-isolate races remain; a
+ * full fix means per-entity keys (`device:<id>`) instead of whole-list records.
+ */
+let mutationChain: Promise<unknown> = Promise.resolve();
+function serializeMutation<T>(fn: () => Promise<T>): Promise<T> {
+  const run = mutationChain.then(fn, fn);
+  mutationChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
 async function handleCommandAck(request: Request, env: Env): Promise<Response> {
@@ -2230,6 +2257,19 @@ async function handleRecover(
     await saveKeys(env, keys);
   }
 
+  // Cancel any other pending command for this device. A stale queued `track` firing
+  // one poll after an unlock is a real observed failure (S269): recovery must leave
+  // the device with exactly one instruction, the unlock.
+  const pending = await listCommands(env);
+  let cancelled = 0;
+  for (const c of pending) {
+    if (c.device_id === deviceId && c.status === 'pending') {
+      c.status = 'cancelled';
+      cancelled += 1;
+    }
+  }
+  if (cancelled) await saveCommands(env, pending);
+
   // Queue unlock command.
   // duress_code: when truthy, the agent pretends to unlock but silently
   // re-encrypts and re-locks.  Default is a normal (real) unlock.
@@ -2282,6 +2322,19 @@ async function handleTrackAction(
   const device = devices.find((d) => d.id === deviceId);
   if (!device) {
     return errorResponse('Device not found', 404);
+  }
+
+  // A track command puts the device into covert tracking mode: the account is
+  // disabled, a decoy is created and the profile is EFS-encrypted. Queuing that on a
+  // device an operator is still using — or is actively recovering — is how a lab box
+  // ended up in tracking mode one poll after a recover (S269). Refuse unless the
+  // device is already in a stolen/tracking posture.
+  if ((action === 'track' || action === 'locate') && !['stolen', 'tracking'].includes(device.status)) {
+    return errorResponse(
+      `Refusing to start tracking: device is '${device.status}'. Flag it stolen first — ` +
+        'tracking disables the signed-in account and EFS-encrypts its profile.',
+      409,
+    );
   }
 
   // Update device status for track/stop_track
@@ -3018,16 +3071,16 @@ export default {
       return handlePing(request, env);
     }
     if (path === '/api/command-ack' && method === 'POST') {
-      return handleCommandAck(request, env);
+      return serializeMutation(() => handleCommandAck(request, env));
     }
 
     // Agent-compatible paths (match the full Express server's routes so the
     // agent can use the Worker as a drop-in fallback without code changes)
     if (path === '/api/agent/checkin' && method === 'POST') {
-      return handleAgentCheckin(request, env);
+      return serializeMutation(() => handleAgentCheckin(request, env));
     }
     if (path === '/api/agent/command-ack' && method === 'POST') {
-      return handleCommandAck(request, env);
+      return serializeMutation(() => handleCommandAck(request, env));
     }
     if (path === '/api/agent/escrow-key' && method === 'POST') {
       return handleEscrowKey(request, env);
@@ -3305,19 +3358,19 @@ async function handleEnrollSetupCommand(request: Request, env: Env): Promise<Res
       }
       // flag-stolen (dashboard) and flag (legacy) — same handler
       if ((action === 'flag' || action === 'flag-stolen') && method === 'POST') {
-        return handleFlagStolen(request, env, deviceId);
+        return serializeMutation(() => handleFlagStolen(request, env, deviceId));
       }
       if (action === 'recover' && method === 'POST') {
-        return handleRecover(request, env, deviceId);
+        return serializeMutation(() => handleRecover(request, env, deviceId));
       }
       if (action === 'track' && method === 'POST') {
-        return handleTrackAction(request, env, deviceId, 'track');
+        return serializeMutation(() => handleTrackAction(request, env, deviceId, 'track'));
       }
       if (action === 'stop-track' && method === 'POST') {
-        return handleTrackAction(request, env, deviceId, 'stop_track');
+        return serializeMutation(() => handleTrackAction(request, env, deviceId, 'stop_track'));
       }
       if (action === 'locate' && method === 'POST') {
-        return handleTrackAction(request, env, deviceId, 'locate');
+        return serializeMutation(() => handleTrackAction(request, env, deviceId, 'locate'));
       }
       if (action === 'locations' && method === 'GET') {
         return handleGetLocations(request, env, deviceId);

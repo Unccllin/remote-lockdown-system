@@ -2863,49 +2863,146 @@ def upload_efs_certificate(cfg: dict, cert_path: str, cert_password: str) -> boo
         return False
 
 
+def _query_account_active(name: str) -> bool | None:
+    """Return True/False for "Account active", or None when the account is unknown.
+
+    `net user <name> /active:no` can exit 0 while changing nothing, which is how
+    tracking mode recorded `disable_real_user` on a machine where the account was
+    never touched (S269). Every layer is therefore checked after it runs, and only
+    verified layers are recorded.
+    """
+    try:
+        proc = subprocess.run(
+            ["net", "user", name], capture_output=True, text=True, timeout=10
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    for line in proc.stdout.splitlines():
+        if "Account active" in line:
+            return line.split()[-1].strip().lower() in ("yes", "ja", "si")
+    return None
+
+
+def _count_encrypted_files(path: Path) -> int:
+    """Files under `path` carrying the Windows Encrypted attribute."""
+    count = 0
+    try:
+        for entry in path.rglob("*"):
+            try:
+                if entry.is_file() and entry.stat().st_file_attributes & 0x4000:
+                    count += 1
+            except (OSError, AttributeError):
+                continue
+    except OSError:
+        return 0
+    return count
+
+
 def apply_tracking_data_protection(cfg: dict) -> dict:
     """Apply C5 data protection layers for covert tracking mode.
 
-    Layer 1: Disable the real user's Windows account.
-    Layer 2: Create and enable a decoy account.
-    Layer 3: EFS-encrypt the real user's sensitive files.
+    Order matters and was wrong until S269: EFS first, then disable, then decoy.
+    `cipher /e /s:` on another user's profile is denied once that account is
+    disabled, so disabling first made layer 3 fail on every folder while the state
+    file still described it as applied.
 
-    Returns a state dict with the information needed to reverse
-    the protection in remove_tracking_data_protection().
+    Every layer is verified after it runs; `applied` lists only what changed and
+    `failed` lists what did not. A caller that reports "applied" without checking is
+    the defect this function exists to stop repeating.
 
-    On non-Windows platforms, returns an empty dict (no-op).
+    Returns the state dict needed to reverse the protection, or an empty dict on a
+    non-Windows platform.
     """
-    state: dict = {"platform": platform.system(), "applied": []}
+    state: dict = {"platform": platform.system(), "applied": [], "failed": []}
 
     if platform.system() != "Windows":
         log.info("Tracking data protection skipped (not Windows)")
         return state
 
-    # Layer 1: Disable the real user's account
     real_user = _get_real_username()
+    real_profile = Path(f"C:\\Users\\{real_user}") if real_user else None
+
+    # --- Layer 1: EFS-encrypt the real user's sensitive files (BEFORE disabling) ---
+    if real_user and real_profile is not None:
+        efs_paths = cfg.get("tracking_efs_paths", DEFAULT_EFS_PATHS)
+
+        cert_result = _backup_efs_certificate(real_user)
+        if cert_result:
+            cert_path, cert_password = cert_result
+            state["efs_cert_backup"] = cert_path
+            state["efs_cert_password"] = cert_password
+            state["applied"].append("efs_cert_backup")
+            upload_efs_certificate(cfg, cert_path, cert_password)
+
+        encrypted_paths = []
+        for subdir in efs_paths:
+            target = real_profile / subdir
+            if not target.exists():
+                continue
+            log.info("EFS-encrypting: %s", target)
+            ok = _run_cipher("e", str(target))
+            verified = _count_encrypted_files(target)
+            if ok and verified > 0:
+                encrypted_paths.append(str(target))
+                log.info("EFS applied: %s (%d encrypted file(s))", target.name, verified)
+            else:
+                state["failed"].append(f"efs:{subdir}")
+                log.warning(
+                    "EFS NOT applied to %s (cipher rc=%s, %d encrypted file(s))",
+                    target.name,
+                    ok,
+                    verified,
+                )
+
+        if encrypted_paths:
+            state["efs_paths"] = encrypted_paths
+            state["applied"].append("efs_encrypt")
+
+    # --- Layer 2: Disable the real user's account, then verify ---
     if real_user:
         log.info("Disabling real user account: %s", real_user)
-        if _run_net_user([real_user, "/active:no"]):
+        _run_net_user([real_user, "/active:no"])
+        active = _query_account_active(real_user)
+        if active is False:
             state["real_user"] = real_user
             state["applied"].append("disable_real_user")
         else:
-            log.warning("Could not disable real user account")
+            state["failed"].append("disable_real_user")
+            log.error(
+                "Could not disable %s — account still active=%s (not recorded as applied)",
+                real_user,
+                active,
+            )
     else:
+        state["failed"].append("real_user_unknown")
         log.warning("Could not determine real username — skipping account lockout")
 
-    # Layer 2: Create and enable decoy account
+    # --- Layer 3: Create a decoy account, then verify it exists ---
     decoy_password = secrets.token_urlsafe(DECOY_ACCOUNT_PASSWORD_LENGTH)
     log.info("Creating decoy account: %s", DECOY_ACCOUNT_NAME)
-    if _run_net_user([DECOY_ACCOUNT_NAME, decoy_password, "/add"]):
-        state["applied"].append("create_decoy")
-    else:
-        # Account may already exist — try to set password
+    created = _run_net_user([DECOY_ACCOUNT_NAME, decoy_password, "/add"])
+    if not created:
         _run_net_user([DECOY_ACCOUNT_NAME, decoy_password])
+    _run_net_user([DECOY_ACCOUNT_NAME, "/active:yes"])
 
-    if _run_net_user([DECOY_ACCOUNT_NAME, "/active:yes"]):
-        state["applied"].append("enable_decoy")
+    # Verification, not intent: the account must be visible to `net user`.
+    decoy_active = _query_account_active(DECOY_ACCOUNT_NAME)
+    if decoy_active is None:
+        state["failed"].append("create_decoy")
+        log.error(
+            "Decoy account %s does not exist after create — not recorded as applied",
+            DECOY_ACCOUNT_NAME,
+        )
+    else:
+        state["decoy_account"] = DECOY_ACCOUNT_NAME
+        state["decoy_password"] = decoy_password
+        state["applied"].append("enable_decoy" if decoy_active else "create_decoy")
+        if not decoy_active:
+            state["failed"].append("enable_decoy")
 
-    # Add decoy to Users group so they can log in
+    # Add the decoy to Users so it can log in; harmless if already a member.
     try:
         subprocess.run(
             ["net", "localgroup", "Users", DECOY_ACCOUNT_NAME, "/add"],
@@ -2916,40 +3013,11 @@ def apply_tracking_data_protection(cfg: dict) -> dict:
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         pass
 
-    state["decoy_account"] = DECOY_ACCOUNT_NAME
-    state["decoy_password"] = decoy_password
-
-    # Layer 3: EFS-encrypt the real user's sensitive files
-    if real_user:
-        # Use the real user's profile path, not the agent's (USERPROFILE
-        # points to the agent's account when running as SYSTEM)
-        real_profile = Path(f"C:\\Users\\{real_user}")
-        efs_paths = cfg.get("tracking_efs_paths", DEFAULT_EFS_PATHS)
-
-        # Back up the real user's EFS certificate before encrypting,
-        # so recovery is possible if the certificate is lost.
-        cert_result = _backup_efs_certificate(real_user)
-        if cert_result:
-            cert_path, cert_password = cert_result
-            state["efs_cert_backup"] = cert_path
-            state["efs_cert_password"] = cert_password
-            state["applied"].append("efs_cert_backup")
-            # Upload cert to server for off-device backup
-            upload_efs_certificate(cfg, cert_path, cert_password)
-
-        encrypted_paths = []
-        for subdir in efs_paths:
-            target = real_profile / subdir
-            if target.exists():
-                log.info("EFS-encrypting: %s", target)
-                if _run_cipher("e", str(target)):
-                    encrypted_paths.append(str(target))
-
-        if encrypted_paths:
-            state["efs_paths"] = encrypted_paths
-            state["applied"].append("efs_encrypt")
-
-    log.info("Tracking data protection applied: %s", state["applied"])
+    log.info(
+        "Tracking data protection applied: %s%s",
+        state["applied"],
+        f" (failed: {state['failed']})" if state["failed"] else "",
+    )
     return state
 
 
