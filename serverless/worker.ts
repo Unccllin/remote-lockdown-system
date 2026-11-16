@@ -3057,6 +3057,15 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
     `Invoke-WebRequest "$u/api/download/installer" -OutFile $e`,
     `Unblock-File $e`,
     ``,
+    // The installer does not embed the agent: find_agent_exe() looks for
+    // lockdown-agent.exe next to its own exe, then in the cwd (installer.py:306).
+    // Without this the silent run dies with "Cannot find lockdown-agent.exe —
+    // place it next to this installer", which is what the first attempt did.
+    `$g = Join-Path $env:TEMP 'lockdown-agent.exe'`,
+    `Write-Host "Downloading the agent ..." -ForegroundColor Cyan`,
+    `Invoke-WebRequest "$u/api/download/agent" -OutFile $g`,
+    `Unblock-File $g`,
+    ``,
   ];
 
   if (gui) {

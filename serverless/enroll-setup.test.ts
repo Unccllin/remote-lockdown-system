@@ -63,8 +63,12 @@ describe('served enrolment (the dashboard one-liner)', () => {
     expect(resp.headers.get('Cache-Control')).toBe('no-store');
 
     const body = await resp.text();
-    // The script builds the URL from its $u variable, so assert the path it names.
+    // The script builds the URL from its $u variable, so assert the paths it names.
     expect(body).toContain('/api/download/installer');
+    // The installer looks for the agent BESIDE itself (installer.py find_agent_exe),
+    // so the script must stage it under exactly that name or the run dies.
+    expect(body).toContain('/api/download/agent');
+    expect(body).toContain('lockdown-agent.exe');
     expect(body).toContain('Test-NetConnection');
     // Silent install is the default — one command, no wizard.
     expect(body).toContain("Read-Host 'Enrollment token");
