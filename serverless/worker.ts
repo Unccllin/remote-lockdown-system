@@ -2193,7 +2193,11 @@ async function handleRecover(
   // active. Refusing here left an operator with a machine that re-locked every few
   // seconds and no command that could stop it (S269). Unlocking an unlocked device
   // is a no-op, so the wider guard is safe.
-  if (device.status !== 'stolen' && device.status !== 'locked' && device.status !== 'active') {
+  // Idempotent in every state that can hold a lock: a FAILED unlock leaves the
+  // device at `recovering`, and refusing to recover from there wedged it — the
+  // dashboard offered no action the state machine would accept (S269).
+  const recoverable = ['stolen', 'locked', 'active', 'recovering', 'tracking'];
+  if (!recoverable.includes(device.status)) {
     return errorResponse(
       `Device is not locked/stolen (current status: ${device.status}).`,
       409,
