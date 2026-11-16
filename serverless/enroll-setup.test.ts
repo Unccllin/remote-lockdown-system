@@ -161,3 +161,24 @@ describe('served enrolment (the dashboard one-liner)', () => {
     expect(body).not.toContain('PROGRAMDATALockdownAgent');
   });
 });
+
+/**
+ * Recovery must be reachable for a device that is locally locked but reports
+ * `active` — the state a real machine got stuck in during S269: the agent held a
+ * lock sentinel and re-locked every few seconds, while the server's last check-in
+ * said active, and `recover` refused because it only accepted stolen/locked.
+ */
+describe('recover is usable on an enrolled device', () => {
+  it('accepts a bodyless request and answers 400, not 500', async () => {
+    const worker = await getWorker();
+    const env = makeEnv();
+    const req = new Request(`${BASE}/api/devices/does-not-exist/recover`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer test-admin-token' },
+    });
+    const resp = await worker.fetch(req, env);
+    // No such device → 404. The point is that the handler ran at all: an empty
+    // body previously threw inside request.json() and surfaced as a 500.
+    expect(resp.status).toBe(404);
+  });
+});

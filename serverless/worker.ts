@@ -2160,10 +2160,16 @@ async function handleRecover(
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
 
-  const payload = await request.json() as {
-    hostname_confirm?: string;
-    duress_code?: boolean;
-  };
+  // A bodyless POST used to throw here and surface as a 500 with a stack trace.
+  // The confirmation is a safety check, not a body requirement: treat a missing or
+  // malformed body as "no confirmation given" and let the check below answer 400.
+  let payload: { hostname_confirm?: string; duress_code?: boolean } = {};
+  try {
+    const text = await request.text();
+    if (text.trim()) payload = JSON.parse(text);
+  } catch {
+    payload = {};
+  }
 
   const devices = await listDevices(env);
   const device = devices.find((d) => d.id === deviceId);
@@ -2175,7 +2181,12 @@ async function handleRecover(
     return errorResponse('Confirmation hostname does not match.', 400);
   }
 
-  if (device.status !== 'stolen' && device.status !== 'locked') {
+  // `active` is allowed on purpose: the agent reports its status on check-in, but a
+  // lock sentinel applied earlier survives locally while the server already reads
+  // active. Refusing here left an operator with a machine that re-locked every few
+  // seconds and no command that could stop it (S269). Unlocking an unlocked device
+  // is a no-op, so the wider guard is safe.
+  if (device.status !== 'stolen' && device.status !== 'locked' && device.status !== 'active') {
     return errorResponse(
       `Device is not locked/stolen (current status: ${device.status}).`,
       409,
