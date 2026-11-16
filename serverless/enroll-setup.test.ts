@@ -186,3 +186,23 @@ describe('recover is usable on an enrolled device', () => {
     expect(resp.status).toBe(404);
   });
 });
+
+/**
+ * Unlock must be handed the NEWEST escrowed key.
+ *
+ * After a second lockdown, `keys.find(...)` returned the first match — the oldest
+ * key — so the agent decrypted current files with a stale key and failed with
+ * cryptography.fernet.InvalidToken, while the correct key sat in KV untouched
+ * (S269). Escrow appends, so the newest is the last element.
+ */
+describe('unlock key selection', () => {
+  it('delivers the newest key, never the first match', async () => {
+    const { readFileSync } = await import('fs');
+    const src = readFileSync(new URL('./worker.ts', import.meta.url), 'utf8');
+
+    expect(src).toContain('deviceKeys[deviceKeys.length - 1]');
+    expect(src).toContain('unreleased[unreleased.length - 1]');
+    // The defect was a bare find() over the key list, which is first-match.
+    expect(/keys\s*\.find\(/.test(src)).toBe(false);
+  });
+});

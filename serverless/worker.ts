@@ -1302,9 +1302,15 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
     // deadman key). Match by device_id and exclude the synthetic 'deadman'
     // command_id. Sort by created_at implicitly via array order (most
     // recently pushed is last, but we search all and pick the first match).
-    const deviceKey = keys.find(
-      (k) => k.device_id === device.id && k.command_id !== 'deadman',
-    );
+    // Newest first. `find()` returns the FIRST match, which is the OLDEST escrowed
+    // key: after a second lockdown the agent was handed the previous key and
+    // decryption failed with cryptography.fernet.InvalidToken while the correct key
+    // sat in KV (S269). Escrow appends, so the last element is the newest; created_at
+    // is used when present because it is the explicit ordering.
+    const deviceKeys = keys
+      .filter((k) => k.device_id === device.id && k.command_id !== 'deadman')
+      .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
+    const deviceKey = deviceKeys.length ? deviceKeys[deviceKeys.length - 1] : undefined;
     if (deviceKey) {
       keyMaterial = deviceKey.key_material;
       // Mark as released for tracking purposes (the agent has it now)
@@ -1644,6 +1650,7 @@ async function handleEscrowKey(request: Request, env: Env): Promise<Response> {
       device_id: device.id,
       command_id,
       key_material,
+      created_at: new Date().toISOString(),
       released_at: null,
     });
     await saveKeys(env, keys);
@@ -2199,9 +2206,13 @@ async function handleRecover(
 
   // Release encryption key
   const keys = await listKeys(env);
-  const deviceKey = keys.find(
-    (k) => k.device_id === deviceId && k.released_at === null,
-  );
+  // Newest unreleased key, for the same reason as the check-in path: the first
+  // match is the oldest, and an older key cannot decrypt the current lockdown's
+  // files.
+  const unreleased = keys
+    .filter((k) => k.device_id === deviceId && k.released_at === null)
+    .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
+  const deviceKey = unreleased.length ? unreleased[unreleased.length - 1] : undefined;
   let releasedKey: string | null = null;
   if (deviceKey) {
     deviceKey.released_at = new Date().toISOString();
