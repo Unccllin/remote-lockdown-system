@@ -66,22 +66,21 @@ describe('served enrolment (the dashboard one-liner)', () => {
     // The script builds the URL from its $u variable, so assert the path it names.
     expect(body).toContain('/api/download/installer');
     expect(body).toContain('Test-NetConnection');
-    // Default mode is the GUI: the wizard asks for the token, so the script only
-    // pre-fills the server URL on the clipboard.
-    expect(body).toContain('Set-Clipboard');
-    expect(body).toContain('Start-Process');
+    // Silent install is the default — one command, no wizard.
+    expect(body).toContain("Read-Host 'Enrollment token");
+    expect(body).toContain("'--silent'");
     // The one property worth failing on: no secret may travel in the URL.
     expect(body).not.toMatch(/token=/);
   });
 
-  it('silent mode prompts for the token on the machine, still not in the URL', async () => {
+  it('still offers the wizard when INSTALLER_GUI=true', async () => {
     const worker = await getWorker();
-    const env = { ...makeEnv(), INSTALLER_SILENT: 'true' };
+    const env = { ...makeEnv(), INSTALLER_GUI: 'true' };
     const resp = await worker.fetch(req('/api/enroll/setup.ps1'), env);
     const body = await resp.text();
-    expect(body).toContain("Read-Host 'Enrollment token");
-    expect(body).toContain("'--silent'");
-    expect(body).not.toMatch(/token=/);
+    expect(body).toContain('setup wizard');
+    expect(body).toContain('Set-Clipboard');
+    expect(body).not.toContain("'--silent'");
   });
 
   it('serves setup.cmd as an attachment that runs the same one-liner', async () => {
@@ -115,7 +114,7 @@ describe('served enrolment (the dashboard one-liner)', () => {
     expect(data.one_liner).toBe(`iex (irm '${BASE}/api/enroll/setup.ps1')`);
     expect(data.ps1_url).toBe(`${BASE}/api/enroll/setup.ps1`);
     expect(data.cmd_url).toBe(`${BASE}/api/enroll/setup.cmd`);
-    expect(data.mode).toBe('gui');
+    expect(data.mode).toBe('silent');
   });
 
   it('warns about plain HTTP instead of pretending TLS will work', async () => {
@@ -125,12 +124,18 @@ describe('served enrolment (the dashboard one-liner)', () => {
     const plain = new Request('http://10.0.0.5:8787/api/enroll/setup.ps1', { method: 'GET' });
     const resp = await worker.fetch(plain, makeEnv());
     const body = await resp.text();
-    expect(body).toContain('plain HTTP');
-    expect(body).toContain('verify_tls');
+    // No warning-only text any more: the script fixes verify_tls itself.
+    expect(body).toContain('verify_tls set to false');
+    expect(body).toContain('Restart-Service LockdownAgent');
     // The remedy has to name a real path. A backslash in a template literal is an
     // escape and JS drops unknown ones, so this line once rendered
     // "%PROGRAMDATA%LockdownAgentconfig.json" — advice that points at no file.
-    expect(body).toContain('ProgramData/LockdownAgent/config.json');
+    expect(body).toContain('PROGRAMDATA');
+    expect(body).toContain('LockdownAgent');
+    expect(body).toContain('verify_tls');
+    // The plain-HTTP install patches the config inside the same elevated run, so the
+    // operator is not left with a second manual step (and no mangled path).
+    expect(body).toContain('Restart-Service LockdownAgent');
     expect(body).not.toContain('PROGRAMDATALockdownAgent');
   });
 });

@@ -3031,7 +3031,7 @@ export default {
  * (B-070). The script delegates to the shipped installer rather than
  * re-implementing enrolment, config writing or service registration.
  */
-function composeEnrollSetupScript(serverUrl: string, silent: boolean): string {
+function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
   const parsed = new URL(serverUrl);
   const host = parsed.hostname;
   const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
@@ -3059,43 +3059,67 @@ function composeEnrollSetupScript(serverUrl: string, silent: boolean): string {
     ``,
   ];
 
-  if (plainHttp) {
-    // The agent refuses plain http unless verify_tls is false (agent.py guard), and
-    // no installer flag exists to set it. Say so here rather than letting the
-    // operator meet that guard after a successful install.
-    lines.push(
-            // Forward slashes on purpose: a backslash in a template literal is an escape, and
-      // JS drops unknown ones, so "%PROGRAMDATA%\LockdownAgent\config.json" rendered as
-      // "%PROGRAMDATA%LockdownAgentconfig.json" — an instruction that names no file.
-      `Write-Host 'NOTE: this server is plain HTTP. The agent requires TLS, so after installing set "verify_tls": false in C:/ProgramData/LockdownAgent/config.json and restart the LockdownAgent service (lab only).' -ForegroundColor Yellow`
-    );
-  }
-
-  if (silent) {
-    lines.push(
-      `$t = Read-Host 'Enrollment token (from the dashboard)'`,
-      `Write-Host "Installing (no GUI) ..." -ForegroundColor Cyan`,
-      `$p = Start-Process $e -Verb RunAs -Wait -PassThru -ArgumentList @('--server-url', $u, '--token', $t, '--silent')`,
-      `if ($p.ExitCode -ne 0) { throw "Installer failed with exit code $($p.ExitCode)" }`,
-      `Write-Host 'Installed. The device appears in the dashboard within a minute.' -ForegroundColor Green`
-    );
-  } else {
+  if (gui) {
     lines.push(
       `Write-Host "Opening the setup wizard ..." -ForegroundColor Cyan`,
       `Write-Host 'Paste the server URL (already on your clipboard) and your token.'`,
+      `$t = Read-Host 'Enrollment token (from the dashboard)'`,
       `Set-Clipboard $u`,
       `Start-Process $e -Verb RunAs`
     );
+    return lines.join('\r\n') + '\r\n';
   }
+
+  // Silent is the default: one command, no wizard. Everything that needs
+  // elevation runs in a single elevated PowerShell whose body is written to a
+  // temp file — a script block would have to survive quoting of the server URL
+  // and the token, which is where these one-liners usually break.
+  lines.push(
+    `$t = Read-Host 'Enrollment token (from the dashboard)'`,
+    `if (-not $t) { throw 'An enrollment token is required.' }`,
+    ``,
+    `$inner = Join-Path $env:TEMP 'lockdown-setup-inner.ps1'`,
+    `$body = @'`,
+    `$ErrorActionPreference = 'Stop'`,
+    `$p = Start-Process '__EXE__' -Wait -PassThru -ArgumentList @('--server-url','__URL__','--token','__TOKEN__','--silent')`,
+    `if ($p.ExitCode -ne 0) { exit $p.ExitCode }`,
+  );
+  if (plainHttp) {
+    // The installer always writes "verify_tls": true and has no flag to change it,
+    // while the agent refuses http:// unless it is false (agent.py guard). Patching
+    // here keeps the operator to one command instead of a follow-up manual edit.
+    lines.push(
+      `$cfg = Join-Path $env:PROGRAMDATA 'LockdownAgent\\config.json'`,
+      `if (Test-Path $cfg) {`,
+      `    $j = Get-Content $cfg -Raw | ConvertFrom-Json`,
+      `    $j.verify_tls = $false`,
+      `    $j | ConvertTo-Json -Depth 8 | Set-Content $cfg -Encoding UTF8`,
+      `    Write-Host 'verify_tls set to false (plain-HTTP lab server).' -ForegroundColor Yellow`,
+      `}`,
+      `Restart-Service LockdownAgent -ErrorAction SilentlyContinue`,
+    );
+  }
+  lines.push(
+    `'@`,
+    `Set-Content -Path $inner -Value $body -Encoding UTF8`,
+    `$body = $body.Replace('__EXE__', $e).Replace('__URL__', $u).Replace('__TOKEN__', $t)`,
+    `Set-Content -Path $inner -Value $body -Encoding UTF8`,
+    ``,
+    `Write-Host "Installing (no wizard) ..." -ForegroundColor Cyan`,
+    `$p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$inner)`,
+    `Remove-Item $inner -ErrorAction SilentlyContinue`,
+    `if ($p.ExitCode -ne 0) { throw "Installer failed with exit code $($p.ExitCode)" }`,
+    `Write-Host 'Installed. The device appears in the dashboard within a minute.' -ForegroundColor Green`
+  );
   return lines.join('\r\n') + '\r\n';
 }
 
 /** Public: carries no secret, and the target has no credential yet. */
 function handleEnrollSetupPs1(request: Request, env: Env): Response {
-  const silent = String((env as unknown as Record<string, unknown>).INSTALLER_SILENT ?? '') === 'true';
+  const gui = String((env as unknown as Record<string, unknown>).INSTALLER_GUI ?? '') === 'true';
   let script: string;
   try {
-    script = composeEnrollSetupScript(new URL(request.url).origin, silent);
+    script = composeEnrollSetupScript(new URL(request.url).origin, gui);
   } catch {
     return new Response(
       'ERROR: the request origin is not a valid absolute URL (use scheme://host[:port]).\n',
@@ -3133,10 +3157,10 @@ async function handleEnrollSetupCommand(request: Request, env: Env): Promise<Res
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
   const serverUrl = new URL(request.url).origin;
-  const silent = String((env as unknown as Record<string, unknown>).INSTALLER_SILENT ?? '') === 'true';
+  const gui = String((env as unknown as Record<string, unknown>).INSTALLER_GUI ?? '') === 'true';
   return jsonResponse({
     server_url: serverUrl,
-    mode: silent ? 'silent' : 'gui',
+    mode: gui ? 'gui' : 'silent',
     // `iex (irm '…')`, not `powershell -Command "irm … | iex"`: the nested form breaks
     // when pasted into an existing prompt (S216).
     one_liner: `iex (irm '${serverUrl}/api/enroll/setup.ps1')`,
