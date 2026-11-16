@@ -127,5 +127,10 @@ describe('served enrolment (the dashboard one-liner)', () => {
     const body = await resp.text();
     expect(body).toContain('plain HTTP');
     expect(body).toContain('verify_tls');
+    // The remedy has to name a real path. A backslash in a template literal is an
+    // escape and JS drops unknown ones, so this line once rendered
+    // "%PROGRAMDATA%LockdownAgentconfig.json" — advice that points at no file.
+    expect(body).toContain('ProgramData/LockdownAgent/config.json');
+    expect(body).not.toContain('PROGRAMDATALockdownAgent');
   });
 });

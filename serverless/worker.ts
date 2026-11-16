@@ -3064,7 +3064,10 @@ function composeEnrollSetupScript(serverUrl: string, silent: boolean): string {
     // no installer flag exists to set it. Say so here rather than letting the
     // operator meet that guard after a successful install.
     lines.push(
-      `Write-Host 'NOTE: this server is plain HTTP. The agent requires TLS, so after installing set "verify_tls": false in %PROGRAMDATA%\LockdownAgent\config.json and restart the LockdownAgent service (lab only).' -ForegroundColor Yellow`
+            // Forward slashes on purpose: a backslash in a template literal is an escape, and
+      // JS drops unknown ones, so "%PROGRAMDATA%\LockdownAgent\config.json" rendered as
+      // "%PROGRAMDATA%LockdownAgentconfig.json" — an instruction that names no file.
+      `Write-Host 'NOTE: this server is plain HTTP. The agent requires TLS, so after installing set "verify_tls": false in C:/ProgramData/LockdownAgent/config.json and restart the LockdownAgent service (lab only).' -ForegroundColor Yellow`
     );
   }
 
