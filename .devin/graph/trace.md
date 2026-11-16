@@ -16063,3 +16063,48 @@ reports 6 findings, so the linter is unpinned rather than red (R9). Worker branc
 whether other make targets have the same .dev.vars coupling, and anything about the target
 machine's firmware until it boots the artifact.
 
+
+### Addendum — live lifecycle test on MOLE (Win11), driven over SSH
+
+Access: OpenSSH + `administrators_authorized_keys` on `192.168.1.249`, run as `labadmin`
+(elevated). Every step below was executed from this host, not pasted by the operator.
+
+**Matrix**
+
+| Step | Result |
+|---|---|
+| Fresh enrol (state cleared, binaries staged, token) | pass — same hardware id, serial `5CG0398GCN`, `agent_version 1.0.0`, check-in confirmed |
+| Lock (flag → lockdown) | pass — sentinel, guardian every 10 s, `tsdiscon`, EFS of the lockdown folder, key escrowed, `agent_lockdown_confirmed` |
+| Unlock (recover → unlock) | **fail → fixed → pass** — first attempt `fernet.InvalidToken`; after `72a7f02` the same command logged `Decrypted: README.txt`, removed the lock screen and sent `status=executed` |
+| Track → stop-track | pass with caveats — account disabled, then re-enabled by `stop_track`; decoy **not** created; EFS layer **failed** on all three folders |
+| Offline behaviour | pass — worker stopped: `Check-in failed … actively refused`; worker restarted: agent reconnected and checked in within one poll |
+
+**Defects found live, in order of severity**
+
+1. **Unlock was handed the oldest escrowed key** — FIXED (`72a7f02`). Proof: the ciphertext
+   decrypted offline with the key from lockdown `cf7b24e0` and failed with the key from
+   `305a0365`; the Worker's `keys.find()` returned the first (oldest) match while its own comment
+   said newest-is-last.
+2. **`recover` refused states it must accept** — FIXED (`ecccbdd`, `cbdf29f`). `active` left a
+   locally-locked machine unrecoverable; `recovering` wedged a device after a failed unlock.
+3. **Tracking protection reports layers it did not apply.** Measured: `disable_real_user` worked
+   (`Account active: No`), the decoy did **not** exist (`Get-LocalUser GuestUser` → false) while
+   `tracking_state.json` recorded `decoy_account: "GuestUser"`, and EFS failed on `Documents`,
+   `Downloads` and `Pictures` with `cipher /e /s: … Access is denied`. Open.
+4. **The EFS layer cannot succeed as ordered**: the flow disables the account first and then
+   EFS-encrypts that user's folders, which `cipher` refuses. Open — either encrypt first, or run
+   as the user, or drop the layer and say so.
+5. **Boot-lock fails closed but still reports confirmed**: `CRITICAL: WinRE disable failed` →
+   all BCD changes rolled back → `agent_lockdown_confirmed` still recorded and
+   `lockdown_effective` never set. Open.
+6. **The installer cannot reinstall over its own hardened binary** (`PermissionError` on
+   `lockdown-agent.exe`, ACL `DELETE denied for Everyone`); recovery needs `takeown`. Open.
+7. **A queued `track` can fire on a device the operator is recovering** — observed when
+   `/locate` queued a track that would have fired one poll later; cancelled from KV by hand.
+   Open.
+8. **Poll interval while `active` is 300 s**, so flagging a device can take five minutes to
+   take effect. Documented, not changed.
+
+**Not defects, worth recording**: the lock-screen overlay cannot be created from Session 0
+(`CreateWindowEx failed: 2`), so an SSH-driven lock relies on `tsdiscon`; and unlock performs HP
+BIOS restore calls (D-009), each ~7 s, which delays the ACK.
