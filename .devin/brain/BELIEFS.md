@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-17 09:39:27 — 134 beliefs
+Generated: 2026-11-17 09:52:58 — 135 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -364,3 +364,9 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-126 | confirmed | code-read | A green Semgrep gate does not mean the code was scanned: the OSS C parser cannot read EDK II C, so 17 files in this repo yield no findings at all and are indistinguishable from clean ones in the report. |
+
+## verification
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-135 | confirmed | hardware | A LogonUserW probe with a deliberately wrong password CANNOT detect a disabled account: on MOLE a nonexistent user, an enabled user and a disabled user all returned 1326 ERROR_LOGON_FAILURE. Windows reports 1331 ERROR_ACCOUNT_DISABLED only when the credentials are otherwise valid, which a test harness must not have. To prove that sign-in is refused, read the account's UF_ACCOUNTDISABLE bit (ADSI WinNT://<computer>/<user>,user → UserFlags & 0x2): measured 513 when enabled and 515 when disabled. General rule: a probe that maps a Win32 error code to a state must first be calibrated against known states of that state machine. |
