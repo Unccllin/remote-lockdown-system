@@ -25,9 +25,9 @@
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
 | Debt items | 60 | 64 | ✗ |
-| Enforcement paths (on hardware) | 11 | 13 | ✗ |
+| Enforcement paths (on hardware) | 10 | 13 | ✗ |
 
-**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 60 of 64 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
+**The project is NOT converged.** All phases are complete and 60 of 64 debt items are closed, but **1 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
 
 **The 2 paths with a documented verification ceiling (a failed run damages state the test cannot undo):**
 
@@ -36,13 +36,18 @@
 | E-BCD | bcd-lockdown | NOT hardware-verified by decision (S264). A failed run rewrites this machine's boot con... |
 | E-HP-UEFI | hp-uefi-lockdown | NOT hardware-verified by decision (S264). The test sets a FIRMWARE Setup Password that ... |
 
-**The 11 already verified on hardware:**
+**The 1 enforcement paths that still need hardware verification:**
+
+| ID | Name | Status | Blocker |
+|----|------|--------|---------|
+| E-LOCK-SCREEN | workstation-lock | verified-in-unit-test | S270: lock no longer merely disconnects — it disables the interactive account... |
+
+**The 10 already verified on hardware:**
 
 | ID | Name | Artifact |
 |----|------|----------|
 | E-ENCRYPT | file-encryption | agent/hw_test_artifact_azure.json |
 | E-DECRYPT | file-decryption | agent/hw_test_artifact_frankenstein_win2.json#E-DECRYPT-01 |
-| E-LOCK-SCREEN | workstation-lock | agent/hw_test_artifact_azure.json |
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 | E-ACK | command-ack | agent/hw_test_artifact_frankenstein_win2.json#E-ACK-01 |
 | E-RECOVERY | unlock-recovery | agent/hw_test_artifact_frankenstein_win2.json#E-RECOVERY-01 |
@@ -53,77 +58,54 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 270 — 2026-11-17 (the installer was not wrong about the exit code — the log was wrong about which run it belonged to)
+## Latest session: 271 — 2026-11-17 (a lock that does not lock, and a notification that stops the agent)
 
 ### Fog cleared
 
-- **The S269 installer defect, corrected.** Quoted: *"the run exits non-zero, so the
-  wrapper prints its failure banner and throws even though the install completed.
-  Recorded as an open defect: the exit code, not the install, is wrong."* Measurement:
-  the install never ran. `install.log`'s tail was the 16:26 run's (LastWriteTime
-  16:26:04 across a 17:31 run that downloaded its binaries at 17:31:5x). The class is
-  *stale artifact presented as this run's evidence*, not a wrong exit code.
-- **An upgrade now lands on a running machine.** `installer.py::_copy_binary` lifts both
-  locks in one place — tamper protection (`make_writable`) and the running image
-  (`service_installer.stop_service()`, then one retry) — and `install_files` uses it for
-  the agent as well as the service host. Live: agent sha256 `77AE143E…` (the b6f6f47
-  build) installed over the running agent, exit 0.
-- **The served install log is a ledger.** Per-run `=== installer run started <iso> ===`
-  and `=== installer exited <code> ===`, appended, plus a trap that records an early
-  abort. Live: the log now shows null / 1 / 0 across this session's three runs, in order.
-- **stderr can no longer abort the install.** `Start-Process
-  -RedirectStandardOutput/-RedirectStandardError`, both appended to the log, `$code` from
-  `$p.ExitCode`.
-- **Plain HTTP is the installer's decision, and it is read back.** The script passes
-  `--allow-insecure-http`, then reports `verify_tls in config: False` (live) and exits 3
-  if the value is not false. The takeown/icacls/JSON-rewrite block is deleted — it was a
-  manual step after install, and unreachable exactly when needed.
-- **One poll interval for both response branches.** `activePollSeconds(env)` is used by
-  `handleAgentCheckin` and `handlePing`; `ACTIVE_POLL_SECONDS` and `INSTALLER_GUI` are
-  declared on `Env` instead of `as unknown as Record<…>`. Live: the agent checks in every
-  ~68 s (was 300).
-- **The ACK's evidence is readable.** `GET /api/devices/:id/commands` on both surfaces
-  (viewer, newest first, limit clamped, 404 for an unknown device). Previously
-  `lockdown_effective` / `boot_lock_status` were written and unreachable.
-- **A lifecycle acceptance harness exists and runs.** `scripts/acceptance_lifecycle.py` +
-  `scripts/acceptance_probe.ps1` (read-only snapshot): enroll -> lock -> recover -> track
-  -> stop-track, each step asserting the observed post-condition on the machine *and* the
-  server, SKIP when unobservable, `--snapshot` to re-derive a report offline. Live:
-  `[PASS] enroll  service Running · config parses · agent checked in 68s ago (limit 300s)
-  · device id matches the server · hostname matches`.
+- **A locked device is now sign-in-proof, and says so.** `lock` holds the interactive
+  account disabled, verified by reading the account back (`net user /active:no` can exit 0
+  and change nothing). `lockdown_effective` requires it, so an encrypted-but-signable
+  machine reports false instead of looking locked. `recover` re-enables first, before it
+  looks at the key, so a `failed` ACK cannot strand the account.
+- **The notification can no longer stop the agent.** Fire-and-forget daemon thread.
+- **The service host supervises on evidence, not existence.** `.last_checkin_ok` (written
+  only when the server ANSWERS) replaces the pid check; a stalled agent is restarted only
+  when `/api/health` also answers, so an offline machine is left alone. Proven live:
+  `agent stalled — no answered check-in for 921s; terminating it` → fresh agent →
+  `UNLOCK command received` → `BIOS password backup deleted (unlock successful)` →
+  `sentinel: False`.
+- **One owner for the account.** `lock` and `track` used independent files and reversed
+  each other's disable; a reason set `.logon_holds = {"user", "reasons"}` now decides, and
+  the account is re-enabled only when the set is empty.
+- **E-LOCK-SCREEN demoted** to `verified-in-unit-test` with the reason in GRAPH-SPEC: its
+  Azure artifact recorded that `tsdiscon` was *issued*, not that a sign-in was *refused*.
+  `make graph-check` passes.
+- **The acceptance harness runs the whole non-destructive half on the real machine** and
+  reports `[PASS] enroll`, `[FAIL] lock` for exactly the reasons above. Four harness
+  defects fixed en route: `hostname_confirm` (400), the recover wait predicate, the
+  `__INSECURE__` quoting (PowerShell parse error), and `tracking_state.json` read from the
+  wrong directory.
 
-### Fog remaining (measured, open)
+### Fog remaining
 
-- **A wedged agent is invisible to every layer that should notice.** MOLE stopped
-  checking in at 2026-11-16T14:33Z and was still wedged at 05:12Z the next day (~14 h):
-  `Get-Service` said `Running`, `service_host.py` logged `agent already running — not
-  starting another` every 30 s, and `agent_is_running()` is process existence only
-  (`service_host.py:79-95`). The scheduled-task watchdog that would have killed it is
-  **removed by `remove_legacy_starters()` when the service is installed**, so a
-  service-based install has no liveness check at all. Recovery required
-  `Stop-Process -Id 6124 -Force` by hand; `Restart-Service` cannot fix it, because the
-  service host refuses to start a second agent while the wedged one exists. The heartbeat
-  file the agent already writes (`.heartbeat`) is the right signal and is not consulted.
-- **The GUI installer does not upgrade `lockdown-service.exe`.** `installer_gui.py:497`
-  copies the agent and the lock screen only. Live after the successful upgrade:
-  agent `77AE143E…` (new) vs service `8029CCA0…` (the 16:25 build). The service keeps
-  running the old host until it is replaced by hand.
-- **`verify_tls` defaults to true while the config's `server_url` is plain HTTP** when no
-  flag is passed, which is a self-contradictory config the installer will happily write.
-  The flag fixes the two shipped paths; the default is still wrong for `http://`.
-- **The destructive half of the acceptance cycle has not been run.** lock / recover /
-  track / stop-track are implemented and unit-tested (32 checks) but only `enroll` has
-  been run live this session; `track` disables the signed-in account and EFS-encrypts its
-  profile.
-- Unchanged from S269: `make test-scripts` stops at the docker-dependent TLS suite on this
-  host, and seven PGlite-backed server suites cannot run on Node 26.13.1
-  (`ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG`) — proven at b6f6f47 in a clean worktree,
-  so it is the environment, not the change.
+- **The tracking half has still not run live** (`track` → `stop-track`). It EFS-encrypts
+  the console user's profile and disables them; the interlock is in place, but the cycle
+  needs a window and the console user's cooperation.
+- **E-LOCK-SCREEN is re-promotable only by a hardware run** that shows a console sign-in
+  REFUSED. The harness now asserts it; no artifact exists yet.
+- **The 14 h wedge mechanism is now explained for locks** (blocking notification) but the
+  earlier S269 instance had no pending unlock to disprove other causes; the supervision
+  fix makes the mechanism moot for availability, not for root cause.
+- **The timezone question is unanswered**: the operator reports a time mismatch; the clocks
+  agree with this host to the second, so either their wall clock is not +03:00 (a timezone
+  setting) or they are comparing UTC (`Z`) records with local (`+03:00`) logs.
+- Deferred by decision: per-entity KV keys / Durable Object per device (whole-record writes
+  still race across isolates), and cross-surface installer-flag contract tests.
 
 ### Debt items closed
 
-- None. This session fixed live defects (D-119/D-120-adjacent behaviour) and added
-  evidence paths; no graph-tracked debt item met its close criteria.
+- None. D-119/D-120-adjacent behaviour changed; no graph-tracked item met its close
+  criteria.
 
 ### Debt items still open
 
@@ -131,45 +113,34 @@
 
 ### Blockers
 
-- MOLE was unreachable for ~13 h (`No route to host` from 2026-11-16T14:33Z, back at
-  05:10Z on 2026-11-17) — unexplained; nothing in this session's commands could take the
-  box off the network, and it returned without intervention.
-- The destructive lifecycle steps need a named window: a failed `track` leaves the machine
-  with a disabled account and EFS-encrypted profile folders.
+- None. The build for `ae415f0` is running; MOLE is unlocked, supervised, and checking in.
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback (primary, three times).** A successful install was
-  "confirmed" by printing the log without checking which run produced it; a fix was
-  "verified" by reading the code path that was edited, not the handler the agent calls;
-  a test pinned 300 on the branch the fleet was not on. In all three the report was
-  consulted instead of the artifact.
-- **Layer 2 — context provision (secondary).** The Express one-liner and the Worker one
-  had diverged on `--allow-insecure-http`, and nothing in the repo states that the two
-  surfaces must carry the same flags. `scripts/test_cross_surface_contract.py` exists for
-  exactly this and does not cover the installers.
+- **Layer 4 — verification feedback (primary).** E-LOCK-SCREEN carried `verified-on-hardware`
+  on an artifact that proved a command was issued. The harness that produced it asserted the
+  action, not the post-condition — the same acceptance criterion this session spent on
+  everything else. New check: "logon prevented (interactive account disabled)".
+- **Layer 2 — context provision.** Nothing recorded that `lock` only means "disconnected +
+  encrypted", so the product's name implied enforcement the code did not do. GRAPH-SPEC now
+  says what each layer does and does not do.
 
 ### VERIFY
 
-- Live one-command re-install on MOLE over SSH: exit **0**, log
-  `=== installer run started 2026-11-17T08:20:42 === … === installer exited 0 ===`,
-  `verify_tls in config: False`, `service: Running`, agent sha256 `77AE143E…`
-  (published build), device checking in every ~68 s.
-- `scripts/acceptance_lifecycle.py --step enroll --dry-run` → `[PASS] enroll`, artifact
-  `docs/artifacts/s270-acceptance-enroll.json`.
-- Suites: agent 884 passed, worker 447 passed (2 new poll-interval tests), server 773
-  passed in 44 suites (7 PGlite suites excluded, see above), acceptance harness 32 passed,
-  `tsc --noEmit -p .` clean, eslint clean, ruff check + format clean on the new scripts.
-- Local KV republished from CI run 44020904202 (b6f6f47): `binary:installer`,
-  `binary:agent`, `binary:service`, `binary:agent-installer`; each verified by comparing
-  the served `x-content-sha256` with the artifact's own digest.
+- Live: `[PASS] enroll` (service Running, config parses, checked in 68 s, device id matches);
+  `lock` ACK `executed effective=False boot_lock_status=partial`; supervision restart at 921 s
+  → `UNLOCK command received` → `sentinel: False`.
+- Suites: agent 922, worker 447, server 773 (44 suites), acceptance harness 48,
+  `tsc --noEmit` clean, ruff clean on every touched file, `make graph-check` all invariants
+  pass.
+- Published to local KV from CI: `binary:installer/agent/service/agent-installer`, each
+  verified against the served `x-content-sha256`.
 
 ### Next session opening
 
-Run the destructive half of the acceptance cycle on MOLE
-(`--step lock --step recover --step track --step stop-track --allow-destructive`) and fix
-what it finds; then make the service host notice a wedged agent (heartbeat-fresh, kill and
-restart) and make `installer_gui.py` stage `lockdown-service.exe`.
+Publish the `ae415f0` build, install it on MOLE, then run `lock` and confirm from the
+console that `newark user` is disabled and a sign-in is refused, followed by `recover`; only
+then re-promote E-LOCK-SCREEN.
 
 ---
 

@@ -16304,3 +16304,125 @@ what it finds; then make the service host notice a wedged agent (heartbeat-fresh
 restart) and make `installer_gui.py` stage `lockdown-service.exe`.
 
 ---
+
+---
+
+## Session 271 — 2026-11-17 (a lock that does not lock, and a notification that stops the agent)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `agent/agent.py` (`_lock_workstation`, `handle_lockdown`, `handle_unlock`,
+`show_lockdown_notification`, `apply_tracking_data_protection`,
+`remove_tracking_data_protection`, `_lockdown_effective`, `agent_is_running` callers,
+`checkin`, the main loop), `agent/lock_screen.py` (`CreateWindowExW`),
+`agent/service_host.py` (`run_supervisor`, `agent_is_running`),
+`agent/service_installer.py` (`remove_legacy_starters`, `install`),
+`agent/installer_gui.py` (`install_files`, `stop_running_agent`),
+`serverless/worker.ts` (`handleAgentCheckin`, `handlePing`, `ADAPTIVE_POLL`,
+`handleTrackAction`, `handleFlagStolen`), `.devin/graph/GRAPH-SPEC.yaml`
+(`E-LOCK-SCREEN`, `E-BCD` as the demotion precedent), `agent/tests/*` for the pinned
+contracts.
+
+**Findings**, each measured before it was changed:
+
+- `lock` prevents no logon. From Session 0 `_lock_workstation` only runs `tsdiscon`; the
+  overlay cannot be created (`CreateWindowEx failed: 2` every 10 s in MOLE's log); and
+  `handle_lockdown` never touches the account (grep for `/active:`/`GuestUser`: 0 hits).
+  The operator signed straight back in — "i can still sign in even on lock".
+- The main loop blocks forever right after the lockdown ACK, in
+  `show_lockdown_notification()` — a `MessageBoxW` that waits for a click in Session 0,
+  where nobody can click. That is the ~14 h silence after the S269 lockdown, reproduced on
+  demand: ACKed at 08:54:13, no further check-in, pending unlock unfetchable.
+- `w32time` was Stopped/Manual on MOLE, so the clock only advanced from the CMOS value at
+  boot and never resynced (the operator's "it does not have correct time"). Measured:
+  MOLE 06:07:50Z = host 06:07:50Z, so no drift *yet*; nothing prevents it.
+- The S269 poll-interval fix had landed in `handlePing` (`/api/ping`, legacy) while the
+  agent uses `handleAgentCheckin` (`ADAPTIVE_POLL['active'] = 300`). MOLE logged
+  `Adaptive polling: 30s -> 300s` AFTER the fix.
+- The GUI installer (`lockdown-setup.exe`, the binary the one-liner runs) never staged
+  `lockdown-service.exe`: after a "successful" upgrade agent `77AE143E…` (new) but service
+  `8029CCA0…` (previous build).
+
+### Fog cleared
+
+- **A locked device is now sign-in-proof, and says so.** `lock` holds the interactive
+  account disabled, verified by reading the account back (`net user /active:no` can exit 0
+  and change nothing). `lockdown_effective` requires it, so an encrypted-but-signable
+  machine reports false instead of looking locked. `recover` re-enables first, before it
+  looks at the key, so a `failed` ACK cannot strand the account.
+- **The notification can no longer stop the agent.** Fire-and-forget daemon thread.
+- **The service host supervises on evidence, not existence.** `.last_checkin_ok` (written
+  only when the server ANSWERS) replaces the pid check; a stalled agent is restarted only
+  when `/api/health` also answers, so an offline machine is left alone. Proven live:
+  `agent stalled — no answered check-in for 921s; terminating it` → fresh agent →
+  `UNLOCK command received` → `BIOS password backup deleted (unlock successful)` →
+  `sentinel: False`.
+- **One owner for the account.** `lock` and `track` used independent files and reversed
+  each other's disable; a reason set `.logon_holds = {"user", "reasons"}` now decides, and
+  the account is re-enabled only when the set is empty.
+- **E-LOCK-SCREEN demoted** to `verified-in-unit-test` with the reason in GRAPH-SPEC: its
+  Azure artifact recorded that `tsdiscon` was *issued*, not that a sign-in was *refused*.
+  `make graph-check` passes.
+- **The acceptance harness runs the whole non-destructive half on the real machine** and
+  reports `[PASS] enroll`, `[FAIL] lock` for exactly the reasons above. Four harness
+  defects fixed en route: `hostname_confirm` (400), the recover wait predicate, the
+  `__INSECURE__` quoting (PowerShell parse error), and `tracking_state.json` read from the
+  wrong directory.
+
+### Fog remaining
+
+- **The tracking half has still not run live** (`track` → `stop-track`). It EFS-encrypts
+  the console user's profile and disables them; the interlock is in place, but the cycle
+  needs a window and the console user's cooperation.
+- **E-LOCK-SCREEN is re-promotable only by a hardware run** that shows a console sign-in
+  REFUSED. The harness now asserts it; no artifact exists yet.
+- **The 14 h wedge mechanism is now explained for locks** (blocking notification) but the
+  earlier S269 instance had no pending unlock to disprove other causes; the supervision
+  fix makes the mechanism moot for availability, not for root cause.
+- **The timezone question is unanswered**: the operator reports a time mismatch; the clocks
+  agree with this host to the second, so either their wall clock is not +03:00 (a timezone
+  setting) or they are comparing UTC (`Z`) records with local (`+03:00`) logs.
+- Deferred by decision: per-entity KV keys / Durable Object per device (whole-record writes
+  still race across isolates), and cross-surface installer-flag contract tests.
+
+### Debt items closed
+
+- None. D-119/D-120-adjacent behaviour changed; no graph-tracked item met its close
+  criteria.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — unchanged.
+
+### Blockers
+
+- None. The build for `ae415f0` is running; MOLE is unlocked, supervised, and checking in.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback (primary).** E-LOCK-SCREEN carried `verified-on-hardware`
+  on an artifact that proved a command was issued. The harness that produced it asserted the
+  action, not the post-condition — the same acceptance criterion this session spent on
+  everything else. New check: "logon prevented (interactive account disabled)".
+- **Layer 2 — context provision.** Nothing recorded that `lock` only means "disconnected +
+  encrypted", so the product's name implied enforcement the code did not do. GRAPH-SPEC now
+  says what each layer does and does not do.
+
+### VERIFY
+
+- Live: `[PASS] enroll` (service Running, config parses, checked in 68 s, device id matches);
+  `lock` ACK `executed effective=False boot_lock_status=partial`; supervision restart at 921 s
+  → `UNLOCK command received` → `sentinel: False`.
+- Suites: agent 922, worker 447, server 773 (44 suites), acceptance harness 48,
+  `tsc --noEmit` clean, ruff clean on every touched file, `make graph-check` all invariants
+  pass.
+- Published to local KV from CI: `binary:installer/agent/service/agent-installer`, each
+  verified against the served `x-content-sha256`.
+
+### Next session opening
+
+Publish the `ae415f0` build, install it on MOLE, then run `lock` and confirm from the
+console that `newark user` is disabled and a sign-in is refused, followed by `recover`; only
+then re-promote E-LOCK-SCREEN.
+
+---
