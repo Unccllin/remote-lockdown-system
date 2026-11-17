@@ -16543,3 +16543,37 @@ environment (not argv), verify by reading the account back, and fall back to a �
 
 Rule worth keeping: when a fix's evidence is "the fake was called with the right arguments",
 it has not been verified. The verification is the account existing on the machine.
+
+### S271 close-out — the lifecycle is green on hardware
+
+`track → stop-track → recover` on MOLE against the `54b216f` build (agent `BB32C3D2…`,
+service `A0B437D0…`):
+
+```text
+[PASS] track       decoy GuestUser created · account disabled · profile EFS declared
+                   unsupported · both state-file claims corroborated · command executed
+[PASS] stop-track  account still held by lock (correct) · decoy removed · command executed
+[PASS] recover     sentinel gone · folder decrypted · account re-enabled (513) · unlock executed
+3 passed, 0 failed, 0 skipped
+```
+
+Artifact: `docs/artifacts/s271-acceptance-track-cycle-v4.json`.
+
+The line that had been red since S269 is now `decoy account exists: GuestUser=True`, and it is
+true because `New-LocalUser` created it — not because a fake was called with the right
+argument (`2ffcd84` records that correction).
+
+What the machine now demonstrably does, per assertion and not per intention:
+
+| Claim | Evidence |
+|---|---|
+| a locked device refuses sign-in | `UF_ACCOUNTDISABLE` set on the console account, cleared by `recover` |
+| tracking disables logon and creates the decoy | both observed on the machine, both corroborated against `tracking_state.json` |
+| tracking does NOT encrypt the profile | declared `unsupported`; never claimed as applied |
+| the account interlock holds | after `stop_track` the account stays disabled while `lock` holds it |
+| recovery restores everything | sentinel, folder, account (`UserFlags=513`), one unlock executed |
+| a stalled agent is supervised | restart at 921 s of unanswered check-ins, then the pending unlock executed |
+
+Still open, unchanged and deliberate: `E-LOCK-SCREEN` stays `verified-in-unit-test` until a
+console sign-in is shown refused on hardware (the OS flag is the mechanism, not the attempt);
+per-entity KV keys / DO-per-device; and D-120/D-129/D-130/D-134.
