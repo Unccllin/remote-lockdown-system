@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-17 09:52:58 — 135 beliefs
+Generated: 2026-11-17 10:47:55 — 137 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -370,3 +370,10 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-135 | confirmed | hardware | A LogonUserW probe with a deliberately wrong password CANNOT detect a disabled account: on MOLE a nonexistent user, an enabled user and a disabled user all returned 1326 ERROR_LOGON_FAILURE. Windows reports 1331 ERROR_ACCOUNT_DISABLED only when the credentials are otherwise valid, which a test harness must not have. To prove that sign-in is refused, read the account's UF_ACCOUNTDISABLE bit (ADSI WinNT://<computer>/<user>,user → UserFlags & 0x2): measured 513 when enabled and 515 when disabled. General rule: a probe that maps a Win32 error code to a state must first be calibrated against known states of that state machine. |
+
+## windows
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-136 | refuted | assumed | On Windows,  asks an interactive question when the password is longer than 14 characters ('Do you want to continue this operation? (Y/N)') and reads it from the CONSOLE, not stdin — piping 'Y' has no effect (exit -1, account not created). Scripted account creation must use New-LocalUser with the password passed via the child process environment, then verify by reading the account back; a <=13-character password avoids the net.exe prompt entirely. Measured on MOLE (S271). → see B-137 |
+| B-137 | proposed | assumed | On Windows, "net user NAME PASSWORD /add" asks an interactive question when the password is longer than 14 characters ("Do you want to continue this operation? (Y/N)") and reads it from the CONSOLE, not stdin — piping "Y" has no effect (exit -1, account not created). Scripted account creation must use New-LocalUser with the password passed via the child process environment, then verify by reading the account back; a 13-character-or-shorter password avoids the net.exe prompt entirely. Measured on MOLE (S271). |

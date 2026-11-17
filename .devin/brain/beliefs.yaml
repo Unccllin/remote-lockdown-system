@@ -3022,3 +3022,50 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-136
+  statement: On Windows,  asks an interactive question when the password is longer than 14 characters
+    ('Do you want to continue this operation? (Y/N)') and reads it from the CONSOLE, not stdin — piping
+    'Y' has no effect (exit -1, account not created). Scripted account creation must use New-LocalUser
+    with the password passed via the child process environment, then verify by reading the account back;
+    a <=13-character password avoids the net.exe prompt entirely. Measured on MOLE (S271).
+  domain: windows
+  status: refuted
+  evidence_level: assumed
+  provenance: 'Probe on MOLE: ''Y'' | net user GuestUser2 <24-char> /add -> exit -1, exists=False; New-LocalUser
+    -Name GuestUser -Password <24-char> -> exists=True, no prompt. Fix in 54b216f; the ineffective earlier
+    attempt is d8dc169.'
+  source: S271
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: B-137
+  dependents: []
+  notes: ''
+  refuted_on: '2026-11-17'
+  refute_evidence: 'The original statement was mangled by shell backtick expansion when it was recorded;
+    this replacement states the same finding correctly. Probe on MOLE: "Y" | net user GuestUser2 <24-char>
+    /add -> exit -1, exists=False; New-LocalUser -> exists=True. Fix in 54b216f, ineffective earlier attempt
+    d8dc169.'
+- id: B-137
+  statement: On Windows, "net user NAME PASSWORD /add" asks an interactive question when the password
+    is longer than 14 characters ("Do you want to continue this operation? (Y/N)") and reads it from the
+    CONSOLE, not stdin — piping "Y" has no effect (exit -1, account not created). Scripted account creation
+    must use New-LocalUser with the password passed via the child process environment, then verify by
+    reading the account back; a 13-character-or-shorter password avoids the net.exe prompt entirely. Measured
+    on MOLE (S271).
+  domain: windows
+  status: proposed
+  evidence_level: assumed
+  provenance: 'The original statement was mangled by shell backtick expansion when it was recorded; this
+    replacement states the same finding correctly. Probe on MOLE: "Y" | net user GuestUser2 <24-char>
+    /add -> exit -1, exists=False; New-LocalUser -> exists=True. Fix in 54b216f, ineffective earlier attempt
+    d8dc169.'
+  source: refutes B-136
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: B-136
+  superseded_by: null
+  dependents: []
+  notes: ''

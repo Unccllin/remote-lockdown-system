@@ -15462,7 +15462,7 @@ exist on this path. Reproduced: default-UA urllib → 403 (cf-ray present), cust
 - **A device in `tracking` mode locks its operator out, and `--check` called it ready.** Opening
   stream B, the operator's Windows account vanished from the login screen and the console fell back
   to the `GuestUser` decoy. Cause from the code: `apply_tracking_data_protection()` (`agent.py:2866`)
-  runs `net user <real> /active:no`, creates the decoy and EFS-encrypts that profile. Remedy that
+  runs `net user` with `/active:no` for the real user, creates the decoy and EFS-encrypts that profile. Remedy that
   worked: `POST /api/devices/<id>/stop-track` → `status=active` → account back. The feature applied
   and reversed exactly as designed, so the defect was in the procedure, not the code — both halves
   are now closed: runbook §2a states the precondition, and `--check` refuses a non-`active` device.
@@ -16494,8 +16494,8 @@ Artifact: `docs/artifacts/s271-acceptance-track-cycle-v2.json`.
 
 **Two real defects, both found by the agent's own `failed` list, then confirmed by hand.**
 
-1. **The decoy was never created** (open since S269). `net user GuestUser <24-char password>
-   /add` prints "The password entered is longer than 14 characters … continue? (Y/N) [Y]:"
+1. **The decoy was never created** (open since S269). `net user GuestUser` with a 24-char password
+   `/add` prints "The password entered is longer than 14 characters … continue? (Y/N) [Y]:"
    and, with no console and no stdin, answers nothing: exit -1, no account. Same family as the
    MessageBox that stopped the poll loop — the tool asked a human who was not there. Fixed
    in `d8dc169` (`_run_net_user` takes optional stdin; the decoy answers "Y").
