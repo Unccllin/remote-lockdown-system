@@ -16577,3 +16577,27 @@ What the machine now demonstrably does, per assertion and not per intention:
 Still open, unchanged and deliberate: `E-LOCK-SCREEN` stays `verified-in-unit-test` until a
 console sign-in is shown refused on hardware (the OS flag is the mechanism, not the attempt);
 per-entity KV keys / DO-per-device; and D-120/D-129/D-130/D-134.
+
+### Correction — the PGlite suites DO run on Node 26
+
+S270 recorded, and `0418fe9`'s message repeated, that "seven PGlite-backed server suites
+cannot run on this host's Node 26.13.1 (`ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG`),
+proven at b6f6f47 in a clean worktree". That conclusion was wrong, and the evidence was in my
+own hands: the suites failed only under **my** invocation, which ran jest directly without the
+VM-module flags the repo's target supplies.
+
+Measured through the documented entry point (`make test-server`, part of `make full-verify`):
+
+```text
+Test Suites: 51 passed, 51 total
+Tests:       848 passed, 848 total
+```
+
+51 suites includes the seven that had been "excluded". So the environment was never the
+problem — a test runner invoked one way (bare `npx jest`) and another way (`make`) disagreed,
+and I reported the first as a property of the host. The clean-worktree check at b6f6f47 had
+the same flaw, which is why it "reproduced": it reproduced the missing flag, not an
+incompatibility.
+
+Rule: a suite that fails only under a hand-rolled command is a defect in the command until the
+documented target is shown to fail too.
