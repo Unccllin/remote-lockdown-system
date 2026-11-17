@@ -293,10 +293,11 @@ lint-agent:
 	@scripts/lint-agent.sh
 
 # Format check is now part of lint-agent. This target is kept for backwards
-# compatibility but simply delegates to lint-agent's format check.
+# compatibility and delegates to the same script, so it can never drift back to a
+# `python3 -m ruff` line that only works where ruff is installed for the system Python.
 .PHONY: format-check
 format-check:
-	@cd agent && python3 -m ruff format --check . tests/
+	@scripts/lint-agent.sh --format-only
 
 # API-level E2E tests — runs lockdown + recovery + agent-integration suites
 # against a real Express app with isolated SQLite temp database.

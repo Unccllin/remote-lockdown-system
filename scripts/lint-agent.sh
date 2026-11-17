@@ -43,6 +43,13 @@ run_ruff() {
 }
 
 cd "$AGENT_DIR" || exit 2
+if [ "${1:-}" = "--format-only" ]; then
+    # `make format-check` delegates here for the same interpreter resolution; it used to
+    # carry its own `python3 -m ruff` line, which is the bug this script exists to remove.
+    run_ruff format --check . tests/ || exit 1
+    echo "[OK] ruff format clean"
+    exit 0
+fi
 run_ruff check . tests/ || exit 1
 if [ "${1:-}" = "--check" ]; then
     exit 0
