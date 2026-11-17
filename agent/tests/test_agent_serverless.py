@@ -459,23 +459,29 @@ class TestTrackingDataProtection:
             localgroup_calls = [c for c in mock_run.call_args_list if "localgroup" in str(c)]
             assert len(localgroup_calls) > 0
 
-    def test_apply_protection_windows_efs_encrypts(self, cfg):
-        """On Windows, should EFS-encrypt the real user's profile dirs."""
+    def test_apply_protection_declares_profile_efs_unsupported(self):
+        """The layer cannot work without a Data Recovery Agent, so it is stated, not tried.
+
+        Measured on MOLE (S271) with the account ENABLED: `cipher /e` on a file inside the
+        console user's Downloads folder returned [ERR], exit 1, attribute unchanged — the
+        service context cannot encrypt another user's file. Reporting it as `failed` every run
+        invites a fix that does not exist; it is `unsupported`, with the reason.
+        """
         with (
             patch.object(agent.platform, "system", return_value="Windows"),
             patch.object(agent, "_get_real_username", return_value="john"),
             patch.object(agent, "_run_net_user", return_value=True),
             patch.object(agent, "_query_account_active", side_effect=lambda n: False),
-            patch.object(agent, "_run_cipher", return_value=True) as mock_cipher,
-            # EFS is recorded only when files actually carry the Encrypted attribute.
-            patch.object(agent, "_count_encrypted_files", return_value=3),
+            patch.object(agent, "_run_cipher") as mock_cipher,
             patch("pathlib.Path.exists", return_value=True),
         ):
-            state = agent.apply_tracking_data_protection(cfg)
-            assert "efs_encrypt" in state["applied"]
-            assert len(state["efs_paths"]) == len(agent.DEFAULT_EFS_PATHS)
-            # Verify cipher was called for each path
-            assert mock_cipher.call_count == len(agent.DEFAULT_EFS_PATHS)
+            state = agent.apply_tracking_data_protection({})
+
+        assert any(s.startswith("efs_profile:") for s in state["unsupported"])
+        assert "needs a Data Recovery Agent" in state["unsupported"][0]
+        mock_cipher.assert_not_called()
+        assert "efs_encrypt" not in state["applied"]
+        assert not any(s.startswith("efs:") for s in state["failed"])
 
     def test_remove_protection_reverses_all_layers(self, cfg, tmp_path):
         """remove_tracking_data_protection should reverse all applied layers."""

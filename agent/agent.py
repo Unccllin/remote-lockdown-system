@@ -3153,50 +3153,44 @@ def apply_tracking_data_protection(cfg: dict) -> dict:
     Returns the state dict needed to reverse the protection, or an empty dict on a
     non-Windows platform.
     """
-    state: dict = {"platform": platform.system(), "applied": [], "failed": []}
+    state: dict = {
+        "platform": platform.system(),
+        "applied": [],
+        "failed": [],
+        # Layers the product deliberately does NOT attempt, with the reason. Separate from
+        # `failed` because a failure invites retrying and a "fix" that cannot exist; an
+        # unsupported layer is a stated limitation.
+        "unsupported": [],
+    }
 
     if platform.system() != "Windows":
         log.info("Tracking data protection skipped (not Windows)")
         return state
 
     real_user = _get_real_username()
-    real_profile = Path(f"C:\\Users\\{real_user}") if real_user else None
 
-    # --- Layer 1: EFS-encrypt the real user's sensitive files (BEFORE disabling) ---
-    if real_user and real_profile is not None:
-        efs_paths = cfg.get("tracking_efs_paths", DEFAULT_EFS_PATHS)
-
-        cert_result = _backup_efs_certificate(real_user)
-        if cert_result:
-            cert_path, cert_password = cert_result
-            state["efs_cert_backup"] = cert_path
-            state["efs_cert_password"] = cert_password
-            state["applied"].append("efs_cert_backup")
-            upload_efs_certificate(cfg, cert_path, cert_password)
-
-        encrypted_paths = []
-        for subdir in efs_paths:
-            target = real_profile / subdir
-            if not target.exists():
-                continue
-            log.info("EFS-encrypting: %s", target)
-            ok = _run_cipher("e", str(target))
-            verified = _count_encrypted_files(target)
-            if ok and verified > 0:
-                encrypted_paths.append(str(target))
-                log.info("EFS applied: %s (%d encrypted file(s))", target.name, verified)
-            else:
-                state["failed"].append(f"efs:{subdir}")
-                log.warning(
-                    "EFS NOT applied to %s (cipher rc=%s, %d encrypted file(s))",
-                    target.name,
-                    ok,
-                    verified,
-                )
-
-        if encrypted_paths:
-            state["efs_paths"] = encrypted_paths
-            state["applied"].append("efs_encrypt")
+    # --- Layer 1: profile EFS — DECLARED UNSUPPORTED, never attempted --------------
+    # Measured on MOLE (S271), with the account ENABLED:
+    #   cipher /e "C:\Users\Newark User\Downloads\efs-probe.txt"  ->  [ERR], exit 1
+    # `cipher` cannot encrypt another user's file from a different account context, and the
+    # agent runs as LocalSystem. Even if it could, the files would be encrypted to SYSTEM's
+    # EFS key, which this agent never escrows — so recovery would need that key rather than
+    # the lockdown key. Doing it correctly needs a Data Recovery Agent certificate in the
+    # machine's EFS recovery policy, which is a deployment decision.
+    #
+    # So the layer is stated as unsupported instead of being attempted and reported as a
+    # failure that can never pass. Tracking still disables logon and creates the decoy; what
+    # it does NOT do is make the profile unreadable from another account, and the operator
+    # is told exactly that.
+    if real_user:
+        state["unsupported"].append(
+            "efs_profile: needs a Data Recovery Agent certificate in machine policy; "
+            "profile files stay readable from another account or offline media"
+        )
+        log.warning(
+            "Tracking: profile EFS is unsupported without a DRA — not attempted "
+            "(logon is still disabled; the lockdown folder is encrypted separately)"
+        )
 
     # --- Layer 2: Disable the real user's account, then verify ---
     # Through the shared hold, not a raw `net user`: `lock` may already have disabled this

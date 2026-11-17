@@ -226,7 +226,8 @@ class TestTrack:
                 {"path": "C:/Users/labadmin/Downloads", "encrypted": 2},
             ],
             "tracking_state": {
-                "applied": ["efs_encrypt", "disable_real_user", "create_decoy"]
+                "applied": ["disable_real_user", "create_decoy"],
+                "unsupported": ["efs_profile: needs a Data Recovery Agent certificate"],
             },
         }
         base.update(overrides)
@@ -256,22 +257,21 @@ class TestTrack:
         assert claim.passed is False
         assert "machine says False" in claim.observed
 
-    def test_efs_that_did_not_apply_fails_even_when_the_state_file_says_it_did(self):
+    def test_a_false_efs_claim_is_a_failure(self):
+        """The layer cannot run without a DRA, so claiming it applied is the lie to catch."""
         result = mod.evaluate_track(
             device(status="tracking"),
             self.tracking_snapshot(
-                efs_paths=[
-                    {"path": "C:/Users/labadmin/Documents", "encrypted": 0},
-                    {"path": "C:/Users/labadmin/Downloads", "encrypted": 0},
-                ],
+                tracking_state={
+                    "applied": ["disable_real_user", "create_decoy", "efs_encrypt"],
+                    "unsupported": [],
+                },
             ),
             self.track_command(),
         )
-        assert (
-            by_name(result, "EFS applied to at least one profile folder").passed
-            is False
-        )
-        assert by_name(result, "state file claim 'efs_encrypt'").passed is False
+        assert by_name(result, "profile EFS not falsely claimed").passed is False
+        assert by_name(result, "profile EFS declared unsupported").passed is False
+        assert result.status == "FAIL"
 
     def test_an_enabled_account_fails_the_disable_layer(self):
         result = mod.evaluate_track(

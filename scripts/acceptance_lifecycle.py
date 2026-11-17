@@ -415,13 +415,23 @@ def evaluate_track(device: dict | None, snap: dict, command: dict | None) -> Ste
         )
     )
 
-    paths = snap.get("efs_paths") or []
-    encrypted_paths = [p for p in paths if (p.get("encrypted") or 0) > 0]
+    # Profile EFS cannot work from the service context without a Data Recovery Agent
+    # (measured on MOLE, S271: `cipher /e` on another user's file returns [ERR]). The
+    # product now DECLARES that instead of failing every run, so what is asserted is the
+    # honesty of the claim: declared, and never reported as applied.
+    unsupported = [str(u) for u in (state.get("unsupported") or [])]
     result.checks.append(
         check(
-            "EFS applied to at least one profile folder",
-            bool(encrypted_paths),
-            f"{len(encrypted_paths)}/{len(paths)} folder(s) with encrypted files",
+            "profile EFS declared unsupported (not silently skipped)",
+            any(u.startswith("efs_profile") for u in unsupported),
+            unsupported or "not declared",
+        )
+    )
+    result.checks.append(
+        check(
+            "profile EFS not falsely claimed as applied",
+            "efs_encrypt" not in applied,
+            f"applied={applied}",
         )
     )
 
@@ -431,7 +441,9 @@ def evaluate_track(device: dict | None, snap: dict, command: dict | None) -> Ste
         "enable_decoy": snap.get("decoy_exists"),
         "create_decoy": snap.get("decoy_exists"),
         "disable_real_user": snap.get("real_user_active") is False,
-        "efs_encrypt": bool(encrypted_paths),
+        # `efs_encrypt` is deliberately absent: the layer is unsupported, so a claim of it is
+        # handled by the dedicated "not falsely claimed" check above rather than measured
+        # against folders that should never carry the attribute.
     }
     for claimed in applied:
         if claimed in claims:
@@ -843,7 +855,7 @@ def track_needs_relock(step: str, status: str | None) -> bool:
 
 
 def wait_for_command(
-    server: "Server", device_id: str, command_type: str, timeout: float
+    server: Server, device_id: str, command_type: str, timeout: float
 ) -> dict | None:
     """Wait until the newest command of this type is no longer pending.
 

@@ -557,7 +557,13 @@ enforcement_paths:
 
   - id: E-TRACK
     name: covert-tracking
-    description: "Silent geolocation reporting (wifi scan + IP geo)"
+    description: "Silent geolocation reporting (wifi scan + IP geo), plus tracking-mode
+                  protection: interactive account disabled + decoy account (S271).
+                  Profile-folder EFS is NOT part of this path: it needs a Data Recovery
+                  Agent certificate in machine policy and cannot run from the service
+                  context — measured on MOLE, `cipher /e` on another user's file returns
+                  [ERR] even with the account enabled, so the agent declares it
+                  `unsupported` instead of attempting it."
     component: C-AGENT
     entry_function: "agent.handle_track"
     verified_by: [V-AGENT]
