@@ -16715,3 +16715,51 @@ Candidate fix, and it is a fork rather than an obvious call:
 2. **Never roll back a write that was accepted.** Roll back only refusals, on the grounds that
    a rollback whose own writes cannot be verified leaves the machine in a state nobody
    recorded — which is what happened here.
+
+---
+
+## Session 271 — 2026-11-17 (close) — a lock that does not lock, and a notification that stops the agent
+
+
+### RULE-ZERO
+- **Read**: `agent/agent.py` (handle_lockdown, disable_console_account, hold_logon, report_location, drain_offline_queue, apply_tracking_data_protection), `agent/hp_uefi_lockdown.py` (_set_and_verify, _rollback_bios_settings, remove_boot_lockdown, _is_setup_password_set), `serverless/worker.ts` (command helpers, handleListDevices, handleCommandAck), `scripts/acceptance_lifecycle.py` + `acceptance_probe.ps1`, `docs/adr/DEBT-LEDGER.md` index, `agent/service_host.py`, `agent/installer.py`.
+- **Finding**: the agent's *claims* and the machine's *state* disagreed in five independent places — `lockdown_effective` reported true with sign-in possible, tracking reported layers it never applied, a BIOS rollback reported "restored" after deleting the only record, `stop_track` re-enabled a account a lockdown still held, and the escrow served an operator's own password as the device's. Every one was fixed by making the record read the observation rather than the intention.
+
+### Fog cleared
+- Sign-in was possible on a "locked" device: `UF_ACCOUNTDISABLE` was never verified; the probe now reads it via ADSI (513 enabled / 515 disabled) — `52d5509`, artifact `docs/artifacts/s271-acceptance-lock-recover-v2.json`.
+- `LogonUserW` with a wrong password cannot detect a disabled account (1326 for nonexistent/enabled/disabled alike) — calibrated on MOLE, B-135.
+- The lockdown folder is Fernet-encrypted (`.enc` siblings), not EFS — a false FAIL corrected in the same commit.
+- Tracking's decoy never existed: `net user` asks its >14-char password prompt on the CONSOLE, not stdin — `New-LocalUser` fix `54b216f`, recorded correction `2ffcd84`.
+- Profile EFS cannot work from a service context (measured `[ERR]`), declared `unsupported` — `d94293b`, ADR note in GRAPH-SPEC.
+- `net user`/BIOS dead ends now carry `reason` + `next_action` in the record — `36c8f7e`, `86c2299` (dashboard card).
+- A refused BIOS write is the only failure; accepted-but-uncommitted is `pending_reboot` — `111ab45`.
+- A failed rollback deleted the boot-state file; the removal claimed a restore it never verified — `d44b931`, `9a43329`.
+- An operator-supplied BIOS password echoed into the escrow — `dc9ba13`.
+- Commands were a whole-list KV write (ACK clobbered by concurrent check-in) — ADR-002 per-entity records, migration verified on live KV (37 `command:<id>` keys, legacy key gone) — `6da840d`, ADR `docs/adr/ADR-002-per-entity-command-records.md`.
+- `status: stolen` is a queue-time claim: `lock_state` derived (`applied`/`applying`/`armed`/`failed`/`none`), amber chip + red "Lockdown Not Applied" alert — `2f79c12`, `9e464ab`.
+- Offline tracking: the raw WiFi scan is queued when no fix is obtainable and resolved on reconnect with `observed_at` — `33a99c8`.
+- Gate defects: `make full-verify` aborted three times on its own tooling (no system ruff; ruff pin disagreed with CI; actionlint/shellcheck absent; electron `node_modules` absent) — `51f4b6c`, `f69034e`, plus installed actionlint 1.7.12 + shellcheck 0.10.0 to `~/.local/bin`.
+
+### Fog remaining
+- The firmware password itself. Not recoverable: SPI-protected verifier, `HP_BIOSPassword` exposes only `IsSet`, BIOS minimum length is 8 (so the supplied 4-char value was never a candidate), and a full sweep of Panther/Setup/ProgramData\HP/Temp/profiles/scheduled-tasks/PS-history found no provisioning artifact. HP signed reset (serial `5CG0398GCN`) is the only route.
+- Why `SetBIOSSetting` returns `4 Failed` after the reboot while the same writes were accepted before it — not documented by HP, unchanged by password/no-password/encoding variants.
+- Express parity for `lock_state`, and whether the server should honour `observed_at`.
+
+### Debt items closed
+
+None formally. The graph I2 gate requires `commit_ref` + a resolving `artifact_ref` per item; these were defect fixes, not ledger closures. Artifacts produced: `docs/artifacts/s271-acceptance-lock-recover.json`, `…-v2.json`, `…-track-cycle.json`, `…-track-cycle-v2.json`, `…-v3.json`, `…-v4.json`, `…-per-entity-commands.json`.
+
+### Debt items still open
+
+D-120 (BitLocker), D-129/D-134 (firmware hardware time), D-130 (update signing), D-210 (PBL route integration), plus the new named gaps above (Express parity, device/audit per-entity writes).
+
+### Blockers
+- MOLE's boot settings remain `Disable` (USB/PXE/Legacy/Fast Boot) with every software write refused; needs the HP reset or a BIOS visit. OPEN, operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`: the evidence is the OS account flag, not a console sign-in attempt. OPEN, needs a human attempt.
+- 60-device rollout: `devices`/`audit`/`bios_passwords`/`locations` are still whole-list KV writes. OPEN, next engineering item.
+
+### Next session opening
+
+Close the two one-subquery gaps (`lock_state` on Express, honouring `observed_at`) and ship `9e464ab` to MOLE, then start the `devices` per-entity write migration before any fleet rollout.
+
+---

@@ -58,89 +58,44 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 271 — 2026-11-17 (a lock that does not lock, and a notification that stops the agent)
+## Latest session: 271 — 2026-11-17 (close) — a lock that does not lock, and a notification that stops the agent
 
 ### Fog cleared
-
-- **A locked device is now sign-in-proof, and says so.** `lock` holds the interactive
-  account disabled, verified by reading the account back (`net user /active:no` can exit 0
-  and change nothing). `lockdown_effective` requires it, so an encrypted-but-signable
-  machine reports false instead of looking locked. `recover` re-enables first, before it
-  looks at the key, so a `failed` ACK cannot strand the account.
-- **The notification can no longer stop the agent.** Fire-and-forget daemon thread.
-- **The service host supervises on evidence, not existence.** `.last_checkin_ok` (written
-  only when the server ANSWERS) replaces the pid check; a stalled agent is restarted only
-  when `/api/health` also answers, so an offline machine is left alone. Proven live:
-  `agent stalled — no answered check-in for 921s; terminating it` → fresh agent →
-  `UNLOCK command received` → `BIOS password backup deleted (unlock successful)` →
-  `sentinel: False`.
-- **One owner for the account.** `lock` and `track` used independent files and reversed
-  each other's disable; a reason set `.logon_holds = {"user", "reasons"}` now decides, and
-  the account is re-enabled only when the set is empty.
-- **E-LOCK-SCREEN demoted** to `verified-in-unit-test` with the reason in GRAPH-SPEC: its
-  Azure artifact recorded that `tsdiscon` was *issued*, not that a sign-in was *refused*.
-  `make graph-check` passes.
-- **The acceptance harness runs the whole non-destructive half on the real machine** and
-  reports `[PASS] enroll`, `[FAIL] lock` for exactly the reasons above. Four harness
-  defects fixed en route: `hostname_confirm` (400), the recover wait predicate, the
-  `__INSECURE__` quoting (PowerShell parse error), and `tracking_state.json` read from the
-  wrong directory.
+- Sign-in was possible on a "locked" device: `UF_ACCOUNTDISABLE` was never verified; the probe now reads it via ADSI (513 enabled / 515 disabled) — `52d5509`, artifact `docs/artifacts/s271-acceptance-lock-recover-v2.json`.
+- `LogonUserW` with a wrong password cannot detect a disabled account (1326 for nonexistent/enabled/disabled alike) — calibrated on MOLE, B-135.
+- The lockdown folder is Fernet-encrypted (`.enc` siblings), not EFS — a false FAIL corrected in the same commit.
+- Tracking's decoy never existed: `net user` asks its >14-char password prompt on the CONSOLE, not stdin — `New-LocalUser` fix `54b216f`, recorded correction `2ffcd84`.
+- Profile EFS cannot work from a service context (measured `[ERR]`), declared `unsupported` — `d94293b`, ADR note in GRAPH-SPEC.
+- `net user`/BIOS dead ends now carry `reason` + `next_action` in the record — `36c8f7e`, `86c2299` (dashboard card).
+- A refused BIOS write is the only failure; accepted-but-uncommitted is `pending_reboot` — `111ab45`.
+- A failed rollback deleted the boot-state file; the removal claimed a restore it never verified — `d44b931`, `9a43329`.
+- An operator-supplied BIOS password echoed into the escrow — `dc9ba13`.
+- Commands were a whole-list KV write (ACK clobbered by concurrent check-in) — ADR-002 per-entity records, migration verified on live KV (37 `command:<id>` keys, legacy key gone) — `6da840d`, ADR `docs/adr/ADR-002-per-entity-command-records.md`.
+- `status: stolen` is a queue-time claim: `lock_state` derived (`applied`/`applying`/`armed`/`failed`/`none`), amber chip + red "Lockdown Not Applied" alert — `2f79c12`, `9e464ab`.
+- Offline tracking: the raw WiFi scan is queued when no fix is obtainable and resolved on reconnect with `observed_at` — `33a99c8`.
+- Gate defects: `make full-verify` aborted three times on its own tooling (no system ruff; ruff pin disagreed with CI; actionlint/shellcheck absent; electron `node_modules` absent) — `51f4b6c`, `f69034e`, plus installed actionlint 1.7.12 + shellcheck 0.10.0 to `~/.local/bin`.
 
 ### Fog remaining
-
-- **The tracking half has still not run live** (`track` → `stop-track`). It EFS-encrypts
-  the console user's profile and disables them; the interlock is in place, but the cycle
-  needs a window and the console user's cooperation.
-- **E-LOCK-SCREEN is re-promotable only by a hardware run** that shows a console sign-in
-  REFUSED. The harness now asserts it; no artifact exists yet.
-- **The 14 h wedge mechanism is now explained for locks** (blocking notification) but the
-  earlier S269 instance had no pending unlock to disprove other causes; the supervision
-  fix makes the mechanism moot for availability, not for root cause.
-- **The timezone question is unanswered**: the operator reports a time mismatch; the clocks
-  agree with this host to the second, so either their wall clock is not +03:00 (a timezone
-  setting) or they are comparing UTC (`Z`) records with local (`+03:00`) logs.
-- Deferred by decision: per-entity KV keys / Durable Object per device (whole-record writes
-  still race across isolates), and cross-surface installer-flag contract tests.
+- The firmware password itself. Not recoverable: SPI-protected verifier, `HP_BIOSPassword` exposes only `IsSet`, BIOS minimum length is 8 (so the supplied 4-char value was never a candidate), and a full sweep of Panther/Setup/ProgramData\HP/Temp/profiles/scheduled-tasks/PS-history found no provisioning artifact. HP signed reset (serial `5CG0398GCN`) is the only route.
+- Why `SetBIOSSetting` returns `4 Failed` after the reboot while the same writes were accepted before it — not documented by HP, unchanged by password/no-password/encoding variants.
+- Express parity for `lock_state`, and whether the server should honour `observed_at`.
 
 ### Debt items closed
 
-- None. D-119/D-120-adjacent behaviour changed; no graph-tracked item met its close
-  criteria.
+None formally. The graph I2 gate requires `commit_ref` + a resolving `artifact_ref` per item; these were defect fixes, not ledger closures. Artifacts produced: `docs/artifacts/s271-acceptance-lock-recover.json`, `…-v2.json`, `…-track-cycle.json`, `…-track-cycle-v2.json`, `…-v3.json`, `…-v4.json`, `…-per-entity-commands.json`.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134 — unchanged.
+D-120 (BitLocker), D-129/D-134 (firmware hardware time), D-130 (update signing), D-210 (PBL route integration), plus the new named gaps above (Express parity, device/audit per-entity writes).
 
 ### Blockers
-
-- None. The build for `ae415f0` is running; MOLE is unlocked, supervised, and checking in.
-
-### Failure attribution
-
-- **Layer 4 — verification feedback (primary).** E-LOCK-SCREEN carried `verified-on-hardware`
-  on an artifact that proved a command was issued. The harness that produced it asserted the
-  action, not the post-condition — the same acceptance criterion this session spent on
-  everything else. New check: "logon prevented (interactive account disabled)".
-- **Layer 2 — context provision.** Nothing recorded that `lock` only means "disconnected +
-  encrypted", so the product's name implied enforcement the code did not do. GRAPH-SPEC now
-  says what each layer does and does not do.
-
-### VERIFY
-
-- Live: `[PASS] enroll` (service Running, config parses, checked in 68 s, device id matches);
-  `lock` ACK `executed effective=False boot_lock_status=partial`; supervision restart at 921 s
-  → `UNLOCK command received` → `sentinel: False`.
-- Suites: agent 922, worker 447, server 773 (44 suites), acceptance harness 48,
-  `tsc --noEmit` clean, ruff clean on every touched file, `make graph-check` all invariants
-  pass.
-- Published to local KV from CI: `binary:installer/agent/service/agent-installer`, each
-  verified against the served `x-content-sha256`.
+- MOLE's boot settings remain `Disable` (USB/PXE/Legacy/Fast Boot) with every software write refused; needs the HP reset or a BIOS visit. OPEN, operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`: the evidence is the OS account flag, not a console sign-in attempt. OPEN, needs a human attempt.
+- 60-device rollout: `devices`/`audit`/`bios_passwords`/`locations` are still whole-list KV writes. OPEN, next engineering item.
 
 ### Next session opening
 
-Publish the `ae415f0` build, install it on MOLE, then run `lock` and confirm from the
-console that `newark user` is disabled and a sign-in is refused, followed by `recover`; only
-then re-promote E-LOCK-SCREEN.
+Close the two one-subquery gaps (`lock_state` on Express, honouring `observed_at`) and ship `9e464ab` to MOLE, then start the `devices` per-entity write migration before any fleet rollout.
 
 ---
 
