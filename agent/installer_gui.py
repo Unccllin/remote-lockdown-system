@@ -94,6 +94,7 @@ DEFAULT_SERVER_URL = ""
 INSTALL_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
 CONFIG_FILE = INSTALL_DIR / "config.json"
 AGENT_EXE_NAME = "lockdown-agent.exe"
+SERVICE_EXE_NAME = "lockdown-service.exe"
 LOCKDOWN_FOLDER = INSTALL_DIR / "lockdown_folder"
 
 # ---------------------------------------------------------------------------
@@ -507,6 +508,12 @@ def install_files(agent_exe: Path) -> Path:
             )
         shutil.copy2(agent_exe, dest)
 
+    # The SCM runs lockdown-service.exe FROM the install directory, so an upgrade that
+    # copies only the agent leaves the service host on the old build. Measured on MOLE
+    # after a "successful" upgrade: agent 77AE143E… (new), service 8029CCA0… (previous
+    # build) — the service kept running the old host until it was replaced by hand (S270).
+    install_service_binary(agent_exe)
+
     # Also install the lock screen overlay if it's next to the agent exe
     lockscreen_src = agent_exe.parent / "lockdown-lockscreen.exe"
     if lockscreen_src.exists():
@@ -514,6 +521,31 @@ def install_files(agent_exe: Path) -> Path:
         if lockscreen_src.resolve() != lockscreen_dest.resolve():
             shutil.copy2(lockscreen_src, lockscreen_dest)
 
+    return dest
+
+
+def install_service_binary(agent_exe: Path) -> Path | None:
+    """Stage `lockdown-service.exe` from beside the agent, replacing a running one.
+
+    Returns the installed path, or None when this build ships no service binary (the SCM
+    then falls back to service_host.py, which service_installer handles).
+    """
+    source = agent_exe.parent / SERVICE_EXE_NAME
+    if not source.is_file():
+        return None
+
+    dest = INSTALL_DIR / SERVICE_EXE_NAME
+    if source.resolve() == dest.resolve():
+        return dest
+
+    unlock_for_upgrade(dest)
+    try:
+        shutil.copy2(source, dest)
+    except OSError:
+        # A running service holds its own image: ERROR_SHARING_VIOLATION. The same remedy
+        # the agent copy uses (sc stop + taskkill); the service is recreated at step 5.
+        stop_running_agent()
+        shutil.copy2(source, dest)
     return dest
 
 

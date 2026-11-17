@@ -286,6 +286,11 @@ RECOVERY_KEY_FILE = _STATE_DIR / ".recovery_key"
 DEADMAN_FILE = _STATE_DIR / ".deadman"
 HEARTBEAT_FILE = _STATE_DIR / ".heartbeat"
 DEADMAN_KEY_FILE = _STATE_DIR / ".deadman_key"
+# Written only when the SERVER ANSWERED a check-in. The heartbeat proves the loop ticked,
+# which is not the same thing: on MOLE the heartbeat kept being touched while no check-in
+# reached the server for ~14 hours (S270). The service host supervises on this file, so a
+# device that is running but unreachable is restarted instead of looking healthy forever.
+LAST_CHECKIN_OK_FILE = _STATE_DIR / ".last_checkin_ok"
 
 
 def _find_config_file(cli_config_path=None):
@@ -4196,6 +4201,13 @@ def main() -> None:
 
         data = checkin(cfg)
         if data:
+            # The service host's liveness signal: the server actually answered. Cheap
+            # (one touch) and it cannot be faked by a loop that merely iterates.
+            try:
+                LAST_CHECKIN_OK_FILE.touch()
+            except OSError as e:
+                log.debug("Could not update last-check-in marker: %s", e)
+
             # Upload deadman key (if any) now that we have connectivity
             report_deadman_key(cfg)
 

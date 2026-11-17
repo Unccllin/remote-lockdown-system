@@ -43,6 +43,15 @@ SERVICE_DESCRIPTION = "Remote lockdown agent (device policy, EFS, tracking, reco
 # Seconds between restart attempts; the last value repeats.
 _RESTART_DELAYS = (5, 10, 30, 60)
 
+# A running agent that has not had a check-in ANSWERED for this long is not supervising
+# the device any more, even though its process exists. On MOLE the process lived for ~14
+# hours past its last check-in while this host logged "agent already running" every 30 s
+# (S270) — process existence is not evidence of anything.
+CHECKIN_STALL_SEC = 900
+# A freshly started agent has not reported yet; do not judge it during this window.
+STARTUP_GRACE_SEC = 180
+HEALTH_TIMEOUT_SEC = 5
+
 
 def install_dir() -> Path:
     return Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "LockdownAgent"
@@ -76,23 +85,146 @@ def log_line(message: str) -> None:
         pass
 
 
-def agent_is_running() -> bool:
-    """True when a lockdown-agent process already exists.
-
-    The frozen agent has no single-instance guard, so the host and the agent's own
-    watchdog could both start one — two pollers for one device (S220/S221). Until the
-    agent itself guards, the host does.
-    """
+def _tasklist() -> str:
     try:
-        out = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq lockdown-agent.exe", "/NH"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        ).stdout
+        return (
+            subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq lockdown-agent.exe", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout
+            or ""
+        )
     except (FileNotFoundError, subprocess.SubprocessError):
+        return ""
+
+
+def agent_pids() -> list[int]:
+    """PIDs of running lockdown-agent processes (parent bootloader + child included)."""
+    pids: list[int] = []
+    for line in _tasklist().splitlines():
+        parts = line.split()
+        # "lockdown-agent.exe  7540 Services  0  6,716 K"
+        if parts and parts[0].lower() == "lockdown-agent.exe":
+            try:
+                pids.append(int(parts[1]))
+            except (IndexError, ValueError):
+                continue
+    return pids
+
+
+def agent_is_running() -> bool:
+    """True when a lockdown-agent process exists (regardless of whether it works)."""
+    return bool(agent_pids()) or "lockdown-agent.exe" in _tasklist().lower()
+
+
+def marker_age(path: Path, now: float | None = None) -> float | None:
+    """Seconds since `path` was last written, or None when it does not exist."""
+    try:
+        return (now if now is not None else time.time()) - path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def last_checkin_age(now: float | None = None) -> float | None:
+    """Seconds since the SERVER last answered a check-in (None if never, for this build).
+
+    The heartbeat file is deliberately NOT used for this: it proves the loop ticked, and on
+    MOLE it kept ticking while no check-in arrived for 14 hours (S270). "Alive" and
+    "supervising the device" are different questions.
+    """
+    return marker_age(install_dir() / ".last_checkin_ok", now)
+
+
+def agent_liveness(
+    running: bool,
+    checkin_age: float | None,
+    uptime: float | None = None,
+) -> str:
+    """Classify a running agent: absent | starting | healthy | stalled | unjudged.
+
+    Pure so the decision can be tested without a Windows machine or a real process.
+
+    * absent   — nothing is running
+    * starting — younger than STARTUP_GRACE_SEC; it has not had a chance to report
+    * healthy  — a check-in was answered within CHECKIN_STALL_SEC
+    * stalled  — running, older than the grace window, no answered check-in in evidence
+    * unjudged — running, but no `.last_checkin_ok` marker at all (a build from before the
+                 marker existed). Killing on absence of evidence is how a supervisor ends
+                 up in a restart loop, so it reports and waits instead.
+    """
+    if not running:
+        return "absent"
+    if checkin_age is not None and checkin_age <= CHECKIN_STALL_SEC:
+        return "healthy"
+    if uptime is not None and uptime <= STARTUP_GRACE_SEC:
+        return "starting"
+    if checkin_age is None:
+        return "unjudged"
+    return "stalled"
+
+
+def terminate_agent_processes() -> int:
+    """Force-kill every lockdown-agent process. Returns how many were signalled.
+
+    `taskkill /F /PID` rather than Popen.terminate(): the process we need to remove is
+    usually not our child (it survived a previous host instance), which is exactly the
+    MOLE case — `Restart-Service` could not clear it (S270).
+    """
+    killed = 0
+    for pid in agent_pids():
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            killed += 1
+        except (FileNotFoundError, subprocess.SubprocessError):
+            continue
+    return killed
+
+
+def _config() -> dict:
+    """The agent's config.json, or {} when it cannot be read."""
+    import json
+
+    try:
+        return json.loads((install_dir() / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def server_reachable(timeout: float = HEALTH_TIMEOUT_SEC) -> bool:
+    """Is the configured server answering /api/health right now?
+
+    Needed before restarting a "stalled" agent: an offline laptop also has no answered
+    check-ins, and killing the agent every 15 minutes while it queues commands offline
+    would be worse than leaving it alone. The distinction is not available from the
+    device's own state — it requires asking the server.
+    """
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    cfg = _config()
+    base = str(cfg.get("server_url") or "").rstrip("/")
+    if not base.startswith(("http://", "https://")):
         return False
-    return "lockdown-agent.exe" in (out or "").lower()
+    context = None
+    if base.startswith("https://") and cfg.get("verify_tls") is False:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(  # noqa: S310 - scheme checked above
+            f"{base}/api/health", timeout=timeout, context=context
+        ) as response:
+            return response.status == 200
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
 
 
 # SetThreadExecutionState flags (kernel32). Held for the life of the service so the
@@ -127,6 +259,20 @@ def release_keep_awake() -> None:
         pass
 
 
+def _age_text(age: float | None) -> str:
+    return "never" if age is None else f"{age:.0f}s ago"
+
+
+def _wait_or_stop(stop_event, seconds: float) -> bool:
+    """Sleep in slices, returning True when a stop was requested."""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if stop_event is not None and stop_event.is_set():
+            return True
+        time.sleep(1)
+    return False
+
+
 def run_supervisor(stop_event=None) -> int:
     """Start the agent and restart it when it exits, until asked to stop.
 
@@ -135,20 +281,44 @@ def run_supervisor(stop_event=None) -> int:
     """
     attempt = 0
     child: subprocess.Popen | None = None
+    started_at: float | None = None
 
     while True:
         if stop_event is not None and stop_event.is_set():
             break
 
         if agent_is_running():
-            # Nothing to do; wait and re-check rather than adding a second poller.
-            log_line("agent already running — not starting another")
-            deadline = time.time() + 30
-            while time.time() < deadline:
-                if stop_event is not None and stop_event.is_set():
+            age = last_checkin_age()
+            uptime = (time.time() - started_at) if started_at is not None else None
+            verdict = agent_liveness(True, age, uptime)
+            if verdict == "stalled":
+                # The process exists and is not doing its job. Only restart when the
+                # SERVER is answering: an offline device also has no answered check-ins,
+                # and killing the agent every 15 minutes while it queues commands offline
+                # would be worse than leaving it alone.
+                if server_reachable():
+                    log_line(f"agent stalled — no answered check-in for {age:.0f}s; terminating it")
+                    terminate_agent_processes()
+                    started_at = None
+                    # fall through and start a fresh one
+                else:
+                    log_line(
+                        f"agent has no answered check-in for {age:.0f}s, but the server is "
+                        "unreachable — leaving it running (it may be offline, not wedged)"
+                    )
+                    if _wait_or_stop(stop_event, 30):
+                        return 0
+                    continue
+            else:
+                # healthy / starting / unjudged: nothing to do, and a second poller for one
+                # device is the bug this guard exists for (S220).
+                log_line(
+                    f"agent {verdict} (last answered check-in {_age_text(age)}, "
+                    f"heartbeat {_age_text(marker_age(install_dir() / '.heartbeat'))})"
+                )
+                if _wait_or_stop(stop_event, 30):
                     return 0
-                time.sleep(2)
-            continue
+                continue
 
         cmd = agent_command()
         log_line(f"starting agent: {' '.join(cmd)}")
@@ -163,6 +333,8 @@ def run_supervisor(stop_event=None) -> int:
         except OSError as exc:
             log_line(f"could not start agent: {exc}")
             child = None
+        if child is not None:
+            started_at = time.time()
 
         if child is not None:
             while child.poll() is None:

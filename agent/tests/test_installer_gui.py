@@ -764,3 +764,79 @@ def test_unlock_reports_failure_when_the_file_stays_unwritable(monkeypatch, tmp_
     monkeypatch.setattr(Path, "open", deny)
 
     assert installer_gui.unlock_for_upgrade(blocked) is False
+
+
+# ---------------------------------------------------------------------------
+# The service host is part of the install (S270)
+# ---------------------------------------------------------------------------
+
+
+def test_install_files_stages_the_service_host(tmp_path, monkeypatch):
+    """An upgrade that copies only the agent leaves the SCM on the old binary.
+
+    Measured on MOLE after a "successful" upgrade: agent 77AE143E… (new) but service
+    8029CCA0… (previous build), because installer_gui.install_files never copied it.
+    """
+    import installer_gui
+
+    src = tmp_path / "stage"
+    src.mkdir()
+    (src / "lockdown-agent.exe").write_text("NEW AGENT")
+    (src / "lockdown-service.exe").write_text("NEW SERVICE HOST")
+
+    monkeypatch.setattr(installer_gui, "INSTALL_DIR", tmp_path / "install")
+
+    installer_gui.install_files(src / "lockdown-agent.exe")
+
+    service_dest = tmp_path / "install" / "lockdown-service.exe"
+    assert service_dest.exists()
+    assert service_dest.read_text() == "NEW SERVICE HOST"
+
+
+def test_install_files_stops_the_service_before_replacing_its_image(tmp_path, monkeypatch):
+    """A running service holds its own exe: the copy must be retried after stopping."""
+    import installer_gui
+
+    src = tmp_path / "stage"
+    src.mkdir()
+    (src / "lockdown-agent.exe").write_text("NEW AGENT")
+    (src / "lockdown-service.exe").write_text("NEW SERVICE HOST")
+
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "lockdown-service.exe").write_text("OLD SERVICE HOST")
+
+    monkeypatch.setattr(installer_gui, "INSTALL_DIR", install_dir)
+
+    real_copy = installer_gui.shutil.copy2
+    attempts = []
+    stops = []
+
+    def flaky_copy(source, dest):
+        if str(dest).endswith("lockdown-service.exe"):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise OSError(32, "The process cannot access the file")
+        return real_copy(source, dest)
+
+    monkeypatch.setattr(installer_gui.shutil, "copy2", flaky_copy)
+    monkeypatch.setattr(installer_gui, "stop_running_agent", lambda: stops.append(1))
+
+    installer_gui.install_files(src / "lockdown-agent.exe")
+
+    assert attempts == [1, 1], "the service copy must be retried"
+    assert stops == [1], "the service must be stopped once before the retry"
+    assert (install_dir / "lockdown-service.exe").read_text() == "NEW SERVICE HOST"
+
+
+def test_install_files_without_a_service_binary_is_not_an_error(tmp_path, monkeypatch):
+    """Bundles that ship only the agent still install (service_host.py fallback)."""
+    import installer_gui
+
+    src = tmp_path / "stage"
+    src.mkdir()
+    (src / "lockdown-agent.exe").write_text("NEW AGENT")
+
+    monkeypatch.setattr(installer_gui, "INSTALL_DIR", tmp_path / "install")
+
+    assert installer_gui.install_files(src / "lockdown-agent.exe").exists()
