@@ -502,7 +502,9 @@ LOCK_STATES = ("applied", "applying", "armed", "failed", "none")
 
 def test_both_surfaces_define_the_same_lock_states():
     express = (REPO / "server/src/routes/devices.js").read_text(encoding="utf-8")
-    worker = (REPO / "serverless/worker.ts").read_text(encoding="utf-8")
+    # S278 moved the Worker's stores into serverless/kv-store.ts; the contract is about the
+    # values both surfaces derive, so it follows the code rather than the file it used to sit in.
+    worker = (REPO / "serverless/kv-store.ts").read_text(encoding="utf-8")
 
     for state in LOCK_STATES:
         assert f"'{state}'" in express, f"Express no longer produces lock_state {state!r}"
@@ -511,7 +513,7 @@ def test_both_surfaces_define_the_same_lock_states():
 
 def test_the_freshness_window_is_the_same_number_on_both_surfaces():
     express = (REPO / "server/src/routes/devices.js").read_text(encoding="utf-8")
-    worker = (REPO / "serverless/worker.ts").read_text(encoding="utf-8")
+    worker = (REPO / "serverless/kv-store.ts").read_text(encoding="utf-8")
 
     assert "LOCK_STATE_FRESH_MS = 180_000" in worker, (
         "the Worker freshness window changed; the Express constant documents that it "
