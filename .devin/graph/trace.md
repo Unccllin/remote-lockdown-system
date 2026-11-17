@@ -16468,3 +16468,55 @@ with the real password (which the harness must never hold).
 Calibration lesson recorded as B-135: a probe that maps a Win32 error code to a state must be
 calibrated against known states of that state machine first — `LogonUserW` with a wrong
 password returns 1326 for a nonexistent, an enabled and a disabled account alike.
+
+### Addendum — S271: the tracking cycle, measured, and the layer that cannot work
+
+`track → stop-track → recover` on MOLE with the harness corrected (`01b9c79`):
+
+```text
+[FAIL] track
+   FAIL  decoy account exists: GuestUser=False
+    ok   real user disabled: active=False
+   FAIL  EFS applied to at least one profile folder: 0/3 folder(s) with encrypted files
+    ok   state file claim 'disable_real_user' corroborated: claimed applied, machine says True
+    ok   server reports tracking: tracking
+    ok   track command executed: executed
+[PASS] stop-track
+    ok   account still held by lock (correct while locked): UserFlags=515; holds=['lock']
+    ok   decoy account removed: exists=False
+    ok   server no longer reports tracking: active
+    ok   stop_track command executed: executed
+[PASS] recover
+    ok   lock sentinel gone · folder decrypted · account re-enabled (513) · unlock executed
+```
+
+Artifact: `docs/artifacts/s271-acceptance-track-cycle-v2.json`.
+
+**Two real defects, both found by the agent's own `failed` list, then confirmed by hand.**
+
+1. **The decoy was never created** (open since S269). `net user GuestUser <24-char password>
+   /add` prints "The password entered is longer than 14 characters … continue? (Y/N) [Y]:"
+   and, with no console and no stdin, answers nothing: exit -1, no account. Same family as the
+   MessageBox that stopped the poll loop — the tool asked a human who was not there. Fixed
+   in `d8dc169` (`_run_net_user` takes optional stdin; the decoy answers "Y").
+
+2. **Profile EFS cannot work from the service context**, and this is not a bug to fix but a
+   design gap. Measured with the account ENABLED: `cipher /e` on one file in
+   `C:\Users\Newark User\Downloads` returned `[ERR]`, exit 1, attribute unchanged (the folder
+   holds 899 files, 0 encrypted). `cipher` needs the file's owner or a Data Recovery Agent;
+   the agent runs as LocalSystem, and even a successful SYSTEM encryption would bind the
+   files to SYSTEM's EFS key, which this agent never escrows. Ruling (`d94293b`): drop the
+   layer and say so — `apply_tracking_data_protection` records
+   `unsupported: ["efs_profile: needs a Data Recovery Agent certificate …"]`, `unsupported`
+   is kept separate from `failed`, and E-TRACK's GRAPH-SPEC description states what tracking
+   does and does not do.
+
+**What the run also proved.** The account interlock works: `stop-track` released only its own
+reason and left the account disabled while the `lock` hold remained; `recover` then cleared
+the last hold and re-enabled the account (513). Nothing was left behind — no decoy, no holds,
+no `.enc` files, account enabled.
+
+**Harness defects fixed on the way** (`01b9c79`): steps now wait for their COMMAND to reach a
+terminal state (the Worker flips device status when a command is queued, so the first run
+asserted against `pending`); `stop-track` expects the account to stay held while a reason
+remains; the probe's `efs_paths` scan was restored after a rebuild lost it.
