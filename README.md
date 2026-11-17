@@ -169,8 +169,11 @@ Admin Dashboard (React SPA)
 ## Lockdown Flow
 
 1. Admin clicks **Flag as Stolen** → types hostname to confirm → server sets `status=stolen`, queues `lockdown` command
-2. Agent polls → receives command → encrypts `LOCKDOWN_FOLDER` with a fresh Fernet key → applies lock screen → sends key to server → wipes local key copy → ACKs command
-3. Dashboard shows **"Lockdown confirmed"** — audit log records everything
+2. Agent polls → receives command → encrypts `LOCKDOWN_FOLDER` with a fresh Fernet key → escrows the key to the server before encryption (a crash must not lose it) → **disables the interactive account** → applies the lock screen (from a service in Session 0 this is `tsdiscon`; the overlay cannot be created there) → attempts the boot lockdown → ACKs
+3. The ACK carries the evidence, and the dashboard shows it rather than a bare "locked":
+   - `lockdown_effective` — true only when nothing was left unencrypted **and** logon was actually prevented **and** the boot layer did not roll back
+   - `boot_lock_status` — `success` / `partial`, with per-layer counts in `boot_lock_detail`
+   - `reason` + `next_action` — a machine-readable cause and the operator's next step when a layer cannot apply (e.g. the firmware already has a Setup password and the agent has no `uefi_password` configured, so the boot layers roll back and the machine is left encrypted and sign-in-blocked but not boot-locked)
 
 ## Recovery Flow
 

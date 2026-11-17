@@ -253,6 +253,43 @@ class TestHpUefiLockdown:
     @patch("hp_uefi_lockdown._is_admin", return_value=True)
     @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
     @patch("hp_uefi_lockdown._is_setup_password_set", return_value=True)
+    @patch("hp_uefi_lockdown._check_secure_boot", return_value={"enabled": False, "warning": None})
+    @patch(
+        "hp_uefi_lockdown._check_sure_admin",
+        return_value={
+            "sure_admin_detected": False,
+            "any_sure_feature": False,
+            "warning": None,
+        },
+    )
+    def test_missing_uefi_password_records_the_reason(self, *_):
+        """A dead end must name the next action, not just report zero layers.
+
+        Measured on MOLE (S271): the ACK carried boot_lock_status=partial with every layer at
+        0 and no field explaining why, so "boot lock did not apply" was unactionable. The
+        cause — the firmware already has a Setup password and the agent has none configured —
+        was only in the log.
+        """
+        result = hp_uefi_lockdown.apply_boot_lockdown()
+
+        assert result["reason"] == "existing_bios_password_without_uefi_password"
+        assert "uefi_password" in result["next_action"]
+        assert result["critical_applied"] == 0
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=False)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._check_secure_boot", return_value={"enabled": False, "warning": None})
+    @patch(
+        "hp_uefi_lockdown._check_sure_admin",
+        return_value={"sure_admin_detected": False, "any_sure_feature": False, "warning": None},
+    )
+    def test_missing_admin_records_the_reason(self, *_):
+        result = hp_uefi_lockdown.apply_boot_lockdown()
+        assert result["reason"] == "requires_admin"
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=True)
     @patch("hp_uefi_lockdown._set_setting")
     @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_with_existing_password(

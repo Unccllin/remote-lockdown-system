@@ -1515,6 +1515,7 @@ def apply_boot_lockdown(
     # Phase 4.1: Admin check — fail-fast before any state writes
     if not _is_admin():
         log.error("UEFI lockdown requires admin privileges — aborting (fail-fast)")
+        result["reason"] = "requires_admin"
         return result
 
     # T5: Check BitLocker status before BIOS changes. If BitLocker is enabled,
@@ -1544,6 +1545,15 @@ def apply_boot_lockdown(
             "Cannot apply BIOS lockdown without the existing password. "
             "Set UEFI_PASSWORD in the agent config to the current BIOS password."
         )
+        # The record must carry the reason, not just zeroes. Measured on MOLE (S271): the
+        # ACK said boot_lock_status=partial with every layer at 0 and no field saying why, so
+        # the operator could see "boot lock did not apply" and had no next action. The log line
+        # above is not where an operator looks.
+        result["reason"] = "existing_bios_password_without_uefi_password"
+        result["next_action"] = (
+            "Set uefi_password in the agent config to the BIOS Setup password this machine "
+            "already has, then re-apply the lockdown."
+        )
         return result
 
     # Declared explicitly so the type is `str` at every use site below without
@@ -1565,6 +1575,7 @@ def apply_boot_lockdown(
             log.error(
                 "Failed to set Setup password: %s", SET_BIOS_RETURN_CODES.get(rc, f"code {rc}")
             )
+            result["reason"] = "setup_password_write_failed"
             return result
         # Return password even on verification failure (for operator manual BIOS clear)
         result["bios_password"] = bios_password
