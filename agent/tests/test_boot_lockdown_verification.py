@@ -226,23 +226,29 @@ class TestD013ReadBackVerification:
     def test_d013_site3_restore_verification_fails(
         self, mock_pw, mock_read, mock_set, mock_state, _, __, mock_resolve_settings
     ):
-        """Site 3: If restore _set_setting returns 0 but read-back doesn't
-        match, the setting must NOT be counted as restored."""
+        """Site 3: a restore the read-back contradicts must not count as restored.
+
+        The verdict is now `False` rather than an unconditional `True`: the return value says
+        whether the restore was verified, and a caller that logs "BIOS restored" needs that to
+        mean something (S271, measured on MOLE).
+        """
         mock_state.return_value = {
-            "setup_password_was_set": False,
+            "setup_password_was_set": True,
             "settings": {"Fast Boot": "Disable"},
         }
         mock_set.return_value = 0  # WMI says success
-        # Read-back returns wrong value → verification fails
-        mock_read.return_value = "Enable"  # expected "Disable"
+        with (
+            patch.object(
+                hp_uefi_lockdown,
+                "_resolve_setting_names",
+                return_value=([("Fast Boot", "Disable")], []),
+            ),
+            patch.object(hp_uefi_lockdown, "_read_setting", return_value="Enable"),  # not restored
+        ):
+            result = hp_uefi_lockdown.remove_boot_lockdown("password")
 
-        # Should not raise, should complete
-        result = hp_uefi_lockdown.remove_boot_lockdown("password")
-        assert result is True  # remove always returns True (non-fatal)
-        # D-013: _read_setting MUST be called after _set_setting for
-        # verification. In the pre-fix code, _read_setting is never called
-        # during the restore loop — this assertion fails red without the fix.
-        mock_read.assert_any_call("Fast Boot")
+        assert result is False, "an unverified restore is not a restore"
+        assert mock_set.called, "the restore write was still attempted (non-fatal)"
 
     @patch("hp_uefi_lockdown._is_admin", return_value=True)
     @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
@@ -253,22 +259,22 @@ class TestD013ReadBackVerification:
     def test_d013_site3_restore_verification_passes(
         self, mock_pw, mock_read, mock_set, mock_state, _, __, mock_resolve_settings
     ):
-        """Site 3: When restore read-back matches, setting is restored."""
+        """Site 3: when the read-back matches, the restore is verified and the verdict True."""
         mock_state.return_value = {
-            "setup_password_was_set": False,
+            "setup_password_was_set": True,
             "settings": {"Fast Boot": "Disable"},
         }
         mock_set.return_value = 0
+        with (
+            patch.object(
+                hp_uefi_lockdown,
+                "_resolve_setting_names",
+                return_value=([("Fast Boot", "Disable")], []),
+            ),
+            patch.object(hp_uefi_lockdown, "_read_setting", return_value="Disable"),
+        ):
+            result = hp_uefi_lockdown.remove_boot_lockdown("password")
 
-        # Read-back matches for the setting, and password clear verifies
-        def read_side_effect(name):
-            if name == "Fast Boot":
-                return "Disable"  # matches expected
-            return None
-
-        mock_read.side_effect = read_side_effect
-
-        result = hp_uefi_lockdown.remove_boot_lockdown("password")
         assert result is True
 
     # --- Site 4: Clear Setup Password in remove_boot_lockdown ---
@@ -282,21 +288,28 @@ class TestD013ReadBackVerification:
     def test_d013_site4_clear_password_verification_fails(
         self, mock_pw, mock_read, mock_set, mock_state, _, __, mock_resolve_settings
     ):
-        """Site 4: If clear password _set_setting returns 0 but password is
-        still set, a warning must be logged (verification surfaces failure)."""
+        """Site 4: if the clear reports success but the password is still set, warn.
+
+        The restore itself is made to verify here, so this test keeps its original subject —
+        the password-clear verification — instead of the restore verdict.
+        """
         mock_state.return_value = {
             "setup_password_was_set": False,  # agent set it → should clear
-            "settings": {},
+            "settings": {"Fast Boot": "Disable"},
         }
-        mock_set.return_value = 0  # WMI says success
-        # Password is STILL set after clear → verification fails
-        mock_pw.return_value = True
+        mock_set.return_value = 0
+        mock_pw.return_value = True  # STILL set after clear → verification fails
+        with (
+            patch.object(
+                hp_uefi_lockdown,
+                "_resolve_setting_names",
+                return_value=([("Fast Boot", "Disable")], []),
+            ),
+            patch.object(hp_uefi_lockdown, "_verify_setting", return_value=True),
+        ):
+            result = hp_uefi_lockdown.remove_boot_lockdown("password")
 
-        # Should not raise
-        result = hp_uefi_lockdown.remove_boot_lockdown("password")
-        assert result is True  # non-fatal, but warning was logged
-        # Verify _is_setup_password_set was called for verification
-        # (at least once for the clear-password check)
+        assert result is True, "the restore verified; the password failure is separate"
         mock_pw.assert_called()
 
     @patch("hp_uefi_lockdown._is_admin", return_value=True)
@@ -308,15 +321,23 @@ class TestD013ReadBackVerification:
     def test_d013_site4_clear_password_verification_passes(
         self, mock_pw, mock_read, mock_set, mock_state, _, __, mock_resolve_settings
     ):
-        """Site 4: When clear password verification passes, logs success."""
+        """Site 4: a verified password clear is logged as success."""
         mock_state.return_value = {
             "setup_password_was_set": False,
-            "settings": {},
+            "settings": {"Fast Boot": "Disable"},
         }
         mock_set.return_value = 0
-        mock_pw.return_value = False  # password is cleared → verified
+        mock_pw.return_value = False  # cleared → verified
+        with (
+            patch.object(
+                hp_uefi_lockdown,
+                "_resolve_setting_names",
+                return_value=([("Fast Boot", "Disable")], []),
+            ),
+            patch.object(hp_uefi_lockdown, "_verify_setting", return_value=True),
+        ):
+            result = hp_uefi_lockdown.remove_boot_lockdown("password")
 
-        result = hp_uefi_lockdown.remove_boot_lockdown("password")
         assert result is True
 
 
