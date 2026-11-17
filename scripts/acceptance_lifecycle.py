@@ -220,6 +220,23 @@ def evaluate_enroll(
     return result
 
 
+def logon_refusal(snap: dict) -> tuple[bool | None, str]:
+    """Did the OS actually refuse an interactive logon for the console user?
+
+    The probe attempts one logon with a deliberately wrong password and reads the refusal
+    reason: ERROR_ACCOUNT_DISABLED (1331) means the account cannot sign in whatever the
+    password is; ERROR_LOGON_FAILURE (1326) means it is enabled and only the password was
+    wrong. That is the difference between "locked" as a claim and "locked" as an
+    observation (S271: the operator could sign in to a device the dashboard called locked).
+    """
+    probe = snap.get("logon_probe") or {}
+    if not probe.get("attempted"):
+        return None, probe.get("meaning") or "not attempted"
+    refused = probe.get("refused")
+    detail = f"{probe.get('meaning')} (win32={probe.get('win32_error')})"
+    return (None if refused is None else bool(refused)), detail
+
+
 def evaluate_lock(device: dict | None, snap: dict, command: dict | None) -> StepResult:
     result = StepResult("lock")
     result.checks.append(
@@ -238,8 +255,11 @@ def evaluate_lock(device: dict | None, snap: dict, command: dict | None) -> Step
         )
     )
     # Sign-in is the half that was missing: the operator signed straight back in to a
-    # "locked" MOLE with their own password (S270). None = no interactive user was found,
-    # which is unobservable rather than a pass.
+    # "locked" MOLE with their own password (S270). The OS refusal is the authority; the
+    # account's Enabled flag is corroboration.
+    refused, refusal_detail = logon_refusal(snap)
+    result.checks.append(check("logon refused by the OS", refused, refusal_detail))
+
     console_active = snap.get("real_user_active")
     result.checks.append(
         check(
@@ -311,6 +331,15 @@ def evaluate_recover(
         )
     )
     # Recovery must hand the account back even when decryption is what failed.
+    refused, refusal_detail = logon_refusal(snap)
+    result.checks.append(
+        check(
+            "logon possible again (not refused as disabled)",
+            None if refused is None else refused is False,
+            refusal_detail,
+        )
+    )
+
     console_active = snap.get("real_user_active")
     result.checks.append(
         check(

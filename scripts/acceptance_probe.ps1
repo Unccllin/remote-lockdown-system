@@ -62,6 +62,11 @@ function Get-EncryptedFileCount([string]$path) {
 }
 
 function Get-RealUserName {
+    # Mirrors agent.py::_get_real_username exactly, including the registry fallback: the
+    # probe must look at the account the AGENT will act on. With no console session,
+    # `query user` returns nothing and the agent falls back to LastLoggedOnUser — a probe
+    # that only asked `query user` reported "no interactive user" while the agent had
+    # disabled one, which made the whole check unobservable (measured on MOLE, S271).
     if (-not [string]::IsNullOrWhiteSpace($RealUser)) { return $RealUser }
     try {
         $out = & query.exe user 2>$null
@@ -72,6 +77,16 @@ function Get-RealUserName {
             if ($name -ieq $decoyName) { continue }
             if ($name -match '^>') { $name = $name.Substring(1) }
             return $name
+        }
+    } catch { }
+    try {
+        $reg = & reg.exe query 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI' /v LastLoggedOnUser 2>$null
+        foreach ($line in $reg) {
+            if ($line -match 'LastLoggedOnUser' -and $line -match 'REG_SZ') {
+                $val = ($line -split 'REG_SZ')[-1].Trim()
+                if ($val -match '\\') { $val = $val.Split('\')[1] }
+                if (-not [string]::IsNullOrWhiteSpace($val) -and $val -ine $decoyName) { return $val }
+            }
         }
     } catch { }
     return $null
@@ -122,6 +137,14 @@ foreach ($candidate in @(
         } catch { }
     }
 }
+
+# An ACTUAL interactive logon attempt for the console user, with a deliberately wrong
+# password. The point is not to authenticate — it is to read the OS's refusal reason, which
+# is the only evidence that "locked" really means "cannot sign in":
+#   ERROR_ACCOUNT_DISABLED (1331) -> refused, whatever the password
+#   ERROR_LOGON_FAILURE   (1326) -> the account is enabled; the password was simply wrong
+# One attempt cannot trip a lockout (the default threshold is 5+).
+$logonProbe = [pscustomobject]@{ attempted = $false; refused = $null; win32_error = $null; meaning = $null }
 
 $realUser = Get-RealUserName
 $realProfile = if ($realUser) { Join-Path 'C:\Users' $realUser } else { $null }
@@ -179,6 +202,43 @@ try {
     }
 } catch { $agentSha = $null }
 
+if ($realUser) {
+    try {
+        if (-not ('Win32.Native' -as [type])) {
+            Add-Type -Namespace Win32 -Name Native -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("advapi32.dll", SetLastError=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern bool LogonUserW(string user, string domain, string password, int logonType, int provider, out System.IntPtr token);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern bool CloseHandle(System.IntPtr handle);
+'@
+        }
+        $token = [IntPtr]::Zero
+        # 2 = LOGON32_LOGON_INTERACTIVE, 0 = LOGON32_PROVIDER_DEFAULT
+        $ok = [Win32.Native]::LogonUserW($realUser, $env:COMPUTERNAME, 'wrong-password-probe-do-not-use', 2, 0, [ref]$token)
+        if ($ok) {
+            [Win32.Native]::CloseHandle($token) | Out-Null
+            $logonProbe.attempted = $true
+            $logonProbe.refused = $false
+            $logonProbe.win32_error = 0
+            $logonProbe.meaning = 'LOGGED ON — the account works (a wrong password cannot succeed, so this is unexpected)'
+        } else {
+            $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            $logonProbe.attempted = $true
+            $logonProbe.win32_error = $err
+            switch ($err) {
+                1331 { $logonProbe.refused = $true;  $logonProbe.meaning = 'ERROR_ACCOUNT_DISABLED' }
+                1326 { $logonProbe.refused = $false; $logonProbe.meaning = 'ERROR_LOGON_FAILURE (account enabled)' }
+                1907 { $logonProbe.refused = $true;  $logonProbe.meaning = 'ERROR_PASSWORD_MUST_CHANGE' }
+                1909 { $logonProbe.refused = $true;  $logonProbe.meaning = 'ERROR_ACCOUNT_LOCKED_OUT' }
+                default { $logonProbe.refused = $null; $logonProbe.meaning = 'unclassified' }
+            }
+        }
+    } catch {
+        $logonProbe.attempted = $false
+        $logonProbe.meaning = "probe failed: $($_.Exception.Message)"
+    }
+}
+
 $snapshot = [pscustomobject]@{
     hostname            = $env:COMPUTERNAME
     service             = $service
@@ -196,6 +256,7 @@ $snapshot = [pscustomobject]@{
     decoy_name          = $decoyName
     decoy_exists        = Get-AccountExists $decoyName
     decoy_active        = Get-AccountActive $decoyName
+    logon_probe         = $logonProbe
     efs_paths           = $efsPaths
     tracking_state      = $trackingState
     agent_binary_sha256 = $agentSha

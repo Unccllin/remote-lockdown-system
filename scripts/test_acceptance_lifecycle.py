@@ -163,7 +163,17 @@ class TestLock:
     def test_a_complete_lock_passes(self):
         result = mod.evaluate_lock(
             device(status="locked"),
-            snapshot(lock_sentinel=True, lockdown_encrypted=3, real_user_active=False),
+            snapshot(
+                lock_sentinel=True,
+                lockdown_encrypted=3,
+                real_user_active=False,
+                logon_probe={
+                    "attempted": True,
+                    "refused": True,
+                    "win32_error": 1331,
+                    "meaning": "ERROR_ACCOUNT_DISABLED",
+                },
+            ),
             command(lockdown_effective=True),
         )
         assert result.status == "PASS", result.checks
@@ -344,7 +354,19 @@ class TestEnrollAndRecovery:
             command_type="unlock", lockdown_effective=None, boot_lock_status=None
         )
         result = mod.evaluate_recover(
-            device(), snapshot(lock_sentinel=False, lockdown_encrypted=0), unlock
+            device(),
+            snapshot(
+                lock_sentinel=False,
+                lockdown_encrypted=0,
+                real_user_active=True,
+                logon_probe={
+                    "attempted": True,
+                    "refused": False,
+                    "win32_error": 1326,
+                    "meaning": "ERROR_LOGON_FAILURE (account enabled)",
+                },
+            ),
+            unlock,
         )
         assert result.status == "PASS", result.checks
 
@@ -577,3 +599,82 @@ class TestLogonPreventionCheck:
         )
         assert by_name(result, "account re-enabled").passed is False
         assert result.status == "FAIL"
+
+
+class TestLogonRefusalEvidence:
+    """The OS's refusal reason is the evidence; the account's Enabled flag is corroboration.
+
+    One logon attempt with a wrong password distinguishes
+    ERROR_ACCOUNT_DISABLED (1331 -> cannot sign in) from
+    ERROR_LOGON_FAILURE (1326 -> enabled, password simply wrong).
+    """
+
+    def locked_snapshot(self, probe, **overrides):
+        base = {
+            "lock_sentinel": True,
+            "lockdown_encrypted": 3,
+            "real_user": "Newark User",
+            "real_user_active": probe.get("refused") is True,
+            "logon_probe": probe,
+        }
+        base.update(overrides)
+        return snapshot(**base)
+
+    def test_a_disabled_account_is_reported_as_refused(self):
+        probe = {
+            "attempted": True,
+            "refused": True,
+            "win32_error": 1331,
+            "meaning": "ERROR_ACCOUNT_DISABLED",
+        }
+        result = mod.evaluate_lock(
+            device(status="locked"), self.locked_snapshot(probe), command()
+        )
+        check = by_name(result, "logon refused by the OS")
+        assert check.passed is True
+        assert "1331" in check.observed
+
+    def test_an_enabled_account_fails_the_lock_even_with_a_wrong_password(self):
+        probe = {
+            "attempted": True,
+            "refused": False,
+            "win32_error": 1326,
+            "meaning": "ERROR_LOGON_FAILURE (account enabled)",
+        }
+        result = mod.evaluate_lock(
+            device(status="locked"), self.locked_snapshot(probe), command()
+        )
+        check = by_name(result, "logon refused by the OS")
+        assert check.passed is False
+        assert "1326" in check.observed
+        assert result.status == "FAIL"
+
+    def test_an_unattempted_probe_is_unobservable(self):
+        result = mod.evaluate_lock(
+            device(status="locked"),
+            self.locked_snapshot({"attempted": False, "refused": None}),
+            command(),
+        )
+        assert by_name(result, "logon refused by the OS").passed is None
+
+    def test_recovery_requires_logon_to_work_again(self):
+        unlock = command(
+            command_type="unlock", lockdown_effective=None, boot_lock_status=None
+        )
+        still_disabled = {
+            "attempted": True,
+            "refused": True,
+            "win32_error": 1331,
+            "meaning": "ERROR_ACCOUNT_DISABLED",
+        }
+        result = mod.evaluate_recover(
+            device(),
+            snapshot(
+                lock_sentinel=False,
+                lockdown_encrypted=0,
+                real_user_active=False,
+                logon_probe=still_disabled,
+            ),
+            unlock,
+        )
+        assert by_name(result, "logon possible again").passed is False
