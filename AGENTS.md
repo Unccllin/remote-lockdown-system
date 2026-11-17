@@ -295,8 +295,13 @@ make load-smoke
 # Lint
 cd server    && npx eslint .                  # exit 0 = clean
 cd dashboard && npx eslint .                  # exit 0 = clean
-cd agent     && python3 -m ruff check .       # exit 0 = clean
-cd agent     && python3 -m ruff format --check .
+scripts/lint-agent.sh                         # ruff 0.17.5 check + format, resolved interpreter
+#   NOT `python3 -m ruff`: this host has no system ruff, and that command is how
+#   `make full-verify` used to abort one target in (S271). The script finds the venv,
+#   then PATH, then python3, and fails with the install line when none has it.
+#   The version matters too: agent/requirements-dev.txt pins 0.17.5, which is what CI
+#   installs (`pip install -r requirements-dev.txt`). The old 0.5.0 pin reported 6
+#   findings that 0.17.5 does not — a pin that disagrees with CI is worse than none.
 
 # Workflow lint — must match CI. CI runs actionlint v1.7.12 through
 # raven-actions/actionlint, which BUNDLES shellcheck, so CI also lints the shell
@@ -306,6 +311,10 @@ cd agent     && python3 -m ruff format --check .
 # locally (2026-10-28). `make lint-workflows` therefore fails when either tool
 # is missing instead of silently linting less than CI does.
 make lint-workflows                           # actionlint + shellcheck, exit 0 = clean
+#   Both must be installed or the target fails by design (it will not lint less than CI):
+#     curl -sSL .../actionlint_1.7.12_linux_amd64.tar.gz | tar xz actionlint  -> ~/.local/bin
+#     curl -sSL .../shellcheck-v0.10.0.linux.x86_64.tar.xz | tar xJ            -> ~/.local/bin
+#   Installed on this host 2026-11-17 (S271); no root needed.
 
 ### pyright / ast-grep: advisory, and there is a large baseline
 
@@ -375,6 +384,14 @@ find server/src electron -name '*.js' -o -name '*.cjs' | grep -v node_modules | 
 
 # Shell scripts
 bash -n scripts/*.sh && bash -n .devin/orchestration/orchestrator.sh
+
+# Whole-tree sweep: graph invariants + lint + all five suites + API E2E + env + artifacts.
+# On this host its only red is scripts/test_tls_floor.py, which needs a readable
+# /var/run/docker.sock (this login session is not in the `docker` group; `sudo -n` is
+# unavailable). That test is deliberately not softened to a SKIP — a gate that cannot run
+# has not passed. Measured 2026-11-17 (S271): server 848 (51 suites), agent 925,
+# dashboard 260, worker 447, electron 30, API E2E 14, verify-env 56 PASS / 0 FAIL / 5 SKIP.
+make full-verify
 
 # Full environment + artifact verification (63 checks)
 make verify-env
