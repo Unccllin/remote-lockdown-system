@@ -444,14 +444,22 @@ enforcement_paths:
   - id: E-LOCK-SCREEN
     name: workstation-lock
     description: "LockWorkStation (Windows) / dm-tool (Linux) / CGSession \
-                 (macOS)"
+                 (macOS) + disabling the interactive account (S270)"
     component: C-AGENT
-    entry_function: "agent._lock_workstation"
-    verified_by: [V-AGENT, V-HW-HARNESS]
-    status: verified-on-hardware
-    hardware_artifact_ref: "agent/hw_test_artifact_azure.json"
-    risk_notes: "D-007 CLOSED: Verified on Azure Windows 11 VM. tsdiscon \
-                issued with session_id=0, console_session_id=1."
+    entry_function: "agent._lock_workstation / agent.disable_console_account"
+    verified_by: [V-AGENT]
+    # Demoted 2026-11-17 from verified-on-hardware (S270). The Azure artifact cited
+    # here records that tsdiscon was ISSUED with session_id=0 — not that a sign-in
+    # attempt was refused, which is the claim the path's name makes. The operator
+    # signed straight back in to a "locked" MOLE with the same password; the code says
+    # why: from Session 0 tsdiscon only disconnects the console, and the overlay cannot
+    # be created at all (CreateWindowEx failed: 2, repeating every 10 s). `lock` now
+    # disables the interactive account and verifies it by reading the account back, so
+    # re-promote only after a console sign-in is shown REFUSED on hardware.
+    status: verified-in-unit-test
+    risk_notes: "S270: lock no longer merely disconnects — it disables the interactive
+                account (verified by read-back) and lockdown_effective is false when
+                logon was not prevented. Hardware re-verification outstanding."
 
   - id: E-GUARDIAN
     name: lock-guardian

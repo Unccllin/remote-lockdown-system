@@ -419,6 +419,49 @@ def install_service() -> bool:
     return False
 
 
+def ensure_time_service() -> bool:
+    """Make Windows keep its own clock right, and resync once.
+
+    Measured on MOLE (S270): `w32time` was **Stopped** with start type **Manual**, so the
+    clock only ever advanced from whatever the CMOS held at boot and never resynced. That
+    is not cosmetic here — a drifted clock invalidates TLS against the Worker, skews the
+    deadman switch (which anchors on the server's clock, B-005), and makes "last seen"
+    useless.
+
+    Best effort by design: a domain policy may forbid the time service, and an install must
+    not fail because of it. Returns True when the service is running afterwards.
+    """
+    if not _is_windows():
+        return False
+
+    try:
+        subprocess.run(
+            ["sc.exe", "config", "w32time", "start=", "auto"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        subprocess.run(
+            ["net", "start", "w32time"], capture_output=True, text=True, timeout=30
+        )
+        # /resync can legitimately refuse ("The computer did not resync because no time
+        # data was available") on a lab network with no reachable NTP source; the service
+        # being up is what matters, the first sync is a bonus.
+        subprocess.run(
+            ["w32tm", "/resync", "/force"], capture_output=True, text=True, timeout=30
+        )
+        query = _sc("query", "w32time")
+        running = "RUNNING" in (query.stdout or "")
+        if running:
+            log.info("Windows time service is running (clock will resync)")
+        else:
+            log.warning("Windows time service did not reach RUNNING — the clock will drift")
+        return running
+    except (FileNotFoundError, subprocess.SubprocessError, OSError) as exc:
+        log.warning("Could not enable the Windows time service: %s", exc)
+        return False
+
+
 def stop_service(wait_seconds: float = 30.0) -> bool:
     """Stop the agent service and wait until it is really stopped.
 
@@ -485,6 +528,9 @@ def install() -> bool:
     if install_service():
         log.info("Installed as a Windows service (%s)", SERVICE_NAME)
         apply_managed_power_policy()
+        # Install-quality, not a manual step: an unsynced clock is a defect the operator
+        # should never have to notice (S270).
+        ensure_time_service()
         remove_legacy_starters()
         if _HAS_TAMPER_PROTECTION:
             log.info("Applying tamper protection (file ACLs + registry protection)...")

@@ -291,6 +291,10 @@ DEADMAN_KEY_FILE = _STATE_DIR / ".deadman_key"
 # reached the server for ~14 hours (S270). The service host supervises on this file, so a
 # device that is running but unreachable is restarted instead of looking healthy forever.
 LAST_CHECKIN_OK_FILE = _STATE_DIR / ".last_checkin_ok"
+# Who this agent disabled at lockdown, written BEFORE the account is touched so a crash,
+# a failed ACK or a reboot still leaves the operator a name to re-enable. The tracking path
+# records the same fact in tracking_state.json; this one is for `lock`/`recover`.
+LOCK_LOGON_STATE_FILE = _STATE_DIR / ".lock_logon"
 
 
 def _find_config_file(cli_config_path=None):
@@ -2001,13 +2005,23 @@ def delete_recovery_key() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _show_lockdown_notification_safely() -> None:
+    """Run show_lockdown_notification() off the main loop, swallowing every failure."""
+    try:
+        show_lockdown_notification()
+    except (OSError, AttributeError, FileNotFoundError, subprocess.SubprocessError) as e:
+        log.info("Lockdown notification failed: %s", e)
+
+
 def show_lockdown_notification() -> None:
     """Show a desktop notification when the device is marked stolen.
 
     This is an ethical transparency measure — the user is informed that
     their device has been flagged as stolen and is being tracked.
 
-    On Windows: uses MessageBox (blocking, but the agent runs in a thread)
+    On Windows: uses MessageBox, which BLOCKS until someone clicks OK. It is therefore
+    only ever called from a daemon thread (`_show_lockdown_notification_safely`); calling
+    it on the main loop in Session 0 wedged the agent after every lockdown (S270).
     On Linux: uses notify-send if available, falls back to log
     On macOS: uses osascript if available, falls back to log
 
@@ -2058,25 +2072,118 @@ def show_lockdown_notification() -> None:
 # ---------------------------------------------------------------------------
 
 
+# Accounts that must never be disabled, whichever way the interactive user is detected:
+# disabling a service account would take the machine's own management plane down with it.
+_SERVICE_ACCOUNTS = frozenset(
+    {"system", "local service", "network service", "localservice", "networkservice", "nt authority"}
+)
+
+
+def read_locked_user() -> str | None:
+    """The account this agent disabled at lockdown, or None when it disabled nobody."""
+    try:
+        data = json.loads(LOCK_LOGON_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    user = data.get("disabled_user")
+    return user if isinstance(user, str) and user else None
+
+
+def disable_console_account() -> tuple[str | None, bool]:
+    """Disable the interactive user's account so a thief cannot sign in.
+
+    Lock used to enforce nothing about logons: on a service install `_lock_workstation`
+    only issues `tsdiscon`, the overlay cannot be created from Session 0, and the account
+    stayed enabled — so "locked" meant "the console is disconnected and one folder is
+    encrypted, sign in again with your own password" (reported by the operator after
+    testing MOLE, S270).
+
+    The state file is written BEFORE `net user /active:no`, because a crash between the
+    two must still leave the operator a name to re-enable. Returns (user, verified) where
+    `verified` is the account state read back from the machine, not the command's exit
+    code — `net user /active:no` can exit 0 and change nothing.
+    """
+    user = _get_real_username()
+    if not user:
+        log.error(
+            "Cannot prevent logon: no interactive user detected (no console session and no "
+            "LastLoggedOnUser) — the machine will be encrypted but still signable-in"
+        )
+        return None, False
+    if user.strip().lower() in _SERVICE_ACCOUNTS:
+        log.error("Refusing to disable the service account '%s'", user)
+        return None, False
+
+    try:
+        _atomic_write_text(
+            LOCK_LOGON_STATE_FILE,
+            json.dumps({"disabled_user": user, "disabled_at": time.time()}),
+        )
+    except OSError as e:
+        log.error("Could not record the account to re-enable (%s) — not disabling it", e)
+        return None, False
+
+    if not _run_net_user([user, "/active:no"]):
+        log.error("Could not disable '%s' — logon is NOT prevented", user)
+        return user, False
+
+    active = _query_account_active(user)
+    if active is False:
+        log.info("Logon prevented: account '%s' is disabled", user)
+        return user, True
+
+    log.error(
+        "Disabling '%s' did not take effect (account active=%s) — logon is NOT prevented",
+        user,
+        active,
+    )
+    return user, False
+
+
+def re_enable_console_account() -> tuple[str | None, bool]:
+    """Re-enable the account `disable_console_account` disabled. Verified by read-back.
+
+    Called first in handle_unlock — before the key is even checked — so a failed or
+    missing decryption cannot leave the operator locked out of their own machine.
+    """
+    user = read_locked_user()
+    if not user:
+        return None, True
+    if not _run_net_user([user, "/active:yes"]):
+        log.error("Could not re-enable '%s' — the account stays disabled", user)
+        return user, False
+    active = _query_account_active(user)
+    if active is True:
+        log.info("Account '%s' re-enabled", user)
+        LOCK_LOGON_STATE_FILE.unlink(missing_ok=True)
+        return user, True
+    log.error("Re-enabling '%s' did not take effect (active=%s)", user, active)
+    return user, False
+
+
 def _lockdown_effective(
     blocked_files: list[str] | None,
     boot_lock_status: str | None,
     boot_lock_attempted: bool,
+    logon_prevented: bool | None = None,
 ) -> bool:
     """Is the device actually locked down, as opposed to merely asked to be?
 
-    Two conditions, both measured rather than assumed:
+    Three conditions, all measured rather than assumed:
       * every file in the lockdown folder was encrypted (nothing left blocked);
-      * the boot-lock layer, when attempted, did not partially fail or roll back.
+      * the boot-lock layer, when attempted, did not partially fail or roll back;
+      * logon was prevented — the interactive account is disabled.
 
-    The API has always advertised `lockdown_effective`; the agent never produced it,
-    so the dashboard panel could only read null. A rolled-back boot lock — measured on
-    MOLE as "CRITICAL: WinRE disable failed" — leaves the device encrypted but not
-    boot-locked, which must not read as effective.
+    The last one was missing until the operator signed in to a "locked" MOLE with their own
+    password (S270): a lock that only disconnects the console and encrypts one folder is not
+    a lockdown, and the effectiveness flag now says so instead of reading true.
+
+    `logon_prevented=None` means "not attempted" (non-Windows, or no interactive user to
+    disable) and is treated as NOT effective: the operator must be told.
     """
     encryption_ok = not blocked_files
     boot_ok = (not boot_lock_attempted) or boot_lock_status == "success"
-    return bool(encryption_ok and boot_ok)
+    return bool(encryption_ok and boot_ok and logon_prevented is True)
 
 
 def handle_lockdown(cfg: dict, command: dict) -> None:
@@ -2198,6 +2305,16 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     # Update sentinel with final payload (already created atomically above).
     _atomic_write_text(sentinel, json.dumps({"locked": True, "command_id": command["id"]}))
     log.info("Sentinel updated: %s", sentinel)
+
+    # --- Prevent logon: disable the interactive account -----------------------
+    # The console was only being disconnected (tsdiscon), and the overlay cannot be created
+    # from Session 0, so a thief could sign back in with the same password. This is the
+    # layer that actually stops that, and its result feeds `lockdown_effective` — a device
+    # that is encrypted but still signable-in is not effective.
+    disabled_user, logon_prevented = disable_console_account()
+    if logon_prevented:
+        # The account is already out; make sure no console session survives the change.
+        _lock_workstation()
 
     # --- Boot lockdown: lock UEFI/BIOS + BCD to prevent bypass via boot ---
     # CC17: Key files (A + B) are already on disk. Boot lockdown rollback
@@ -2397,12 +2514,15 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
         blocked_files,
         boot_lock_status,
         bool(cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available),
+        logon_prevented=logon_prevented,
     )
     log.info(
-        "Lockdown effectiveness: %s (blocked_files=%d, boot_lock=%s)",
+        "Lockdown effectiveness: %s (blocked_files=%d, boot_lock=%s, logon_prevented=%s, user=%s)",
         lockdown_effective,
         len(blocked_files or []),
         boot_lock_status,
+        logon_prevented,
+        disabled_user or "none",
     )
 
     # Update File A with bios_password + boot_lock_status + boot_lock_detail for ACK retry
@@ -2452,17 +2572,31 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     if bitlocker_recovery_password:
         del bitlocker_recovery_password
 
-    # Phase 7: Show user notification (ethical transparency)
-    # Non-blocking on Linux/macOS, blocking on Windows (MessageBox).
-    # The lockdown is already complete, so blocking is acceptable.
-    try:
-        show_lockdown_notification()
-    except (OSError, AttributeError, FileNotFoundError, subprocess.SubprocessError) as e:
-        log.info("Lockdown notification failed: %s", e)
+    # Phase 7: Show user notification (ethical transparency).
+    #
+    # Fire-and-forget, because on Windows this is a BLOCKING MessageBox (see
+    # show_lockdown_notification) and the agent usually runs in Session 0, where nobody
+    # can click it. It blocked the main loop permanently: the ACK went out and then the
+    # device never polled again — no check-in for ~14 h on MOLE after the S269 lockdown,
+    # and again on 2026-11-17 (ACK 08:54:13, last heartbeat 08:53:53, a pending unlock
+    # that could never be fetched). A notification must never be the reason an agent
+    # stops listening.
+    threading.Thread(
+        target=_show_lockdown_notification_safely,
+        name="lockdown-notification",
+        daemon=True,
+    ).start()
 
 
 def handle_unlock(cfg: dict, command: dict) -> None:
     log.info("UNLOCK command received")
+
+    # First, before anything that can fail: give the operator their account back. A missing
+    # or invalid key returns early below with a `failed` ACK, and leaving the account
+    # disabled in that path would strand the machine exactly when recovery is already
+    # going badly.
+    re_enable_console_account()
+
     key_material = command.get("key_material")
     if not key_material:
         log.error("No key_material in unlock command — cannot decrypt")

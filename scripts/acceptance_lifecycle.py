@@ -563,8 +563,26 @@ class Server:
                 f"{method} {path} returned non-JSON: {payload[:120]}"
             ) from exc
 
-    def get(self, path: str) -> object:
-        return self._request("GET", path)
+    def get(self, path: str, attempts: int = 3) -> object:
+        """GET with a short retry, because the dev server restarts under you.
+
+        `wrangler dev` restarts on file changes and on some KV writes; a run that dies on
+        its first read with "Connection refused" costs the entire destructive cycle it was
+        about to drive (observed, S270). Only GETs are retried: a POST that queues a
+        command must never be replayed, because a duplicated lockdown is worse than a
+        failed run.
+        """
+        last: ApiError | None = None
+        for attempt in range(attempts):
+            try:
+                return self._request("GET", path)
+            except ApiError as exc:
+                last = exc
+                if "Connection refused" not in str(exc) or attempt == attempts - 1:
+                    raise
+                time.sleep(2.0)
+        assert last is not None
+        raise last
 
     def post(self, path: str, body: dict | None = None) -> object:
         return self._request("POST", path, body if body is not None else {})
@@ -869,9 +887,14 @@ def run(args: argparse.Namespace) -> int:
             # the whole timeout on a perfectly good recovery. The work itself is slow
             # (boot-lock layers, EFS on three folders, ~7 s per HP BIOS call).
             expected = EXPECTED_STATUS[step]
+            # Bound as a default argument: B023 is right that a bare closure over a loop
+            # variable reads whatever the LAST iteration assigned, which would make this
+            # wait match the wrong step as soon as the loop is ever reused.
             wait_for(
-                lambda: (server.device_by_hostname(args.device) or {}).get("status")
-                in expected,
+                lambda exp=expected: (server.device_by_hostname(args.device) or {}).get(
+                    "status"
+                )
+                in exp,
                 timeout=args.timeout,
                 interval=5.0,
                 label=f"status in {sorted(expected)}",

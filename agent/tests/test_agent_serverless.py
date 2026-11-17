@@ -700,16 +700,160 @@ class TestLockdownEffectiveness:
     """
 
     def test_false_when_the_boot_lock_rolled_back(self):
-        assert agent._lockdown_effective([], "partial", True) is False
+        assert agent._lockdown_effective([], "partial", True, logon_prevented=True) is False
 
     def test_false_when_files_were_left_blocked(self):
-        assert agent._lockdown_effective(["README.txt"], "success", True) is False
+        assert (
+            agent._lockdown_effective(["README.txt"], "success", True, logon_prevented=True)
+            is False
+        )
 
-    def test_true_when_encrypted_and_boot_lock_applied(self):
-        assert agent._lockdown_effective([], "success", True) is True
+    def test_true_when_encrypted_and_boot_lock_applied_and_logon_blocked(self):
+        assert agent._lockdown_effective([], "success", True, logon_prevented=True) is True
 
     def test_true_when_boot_lock_was_not_attempted(self):
-        assert agent._lockdown_effective([], None, False) is True
+        assert agent._lockdown_effective([], None, False, logon_prevented=True) is True
 
     def test_false_when_boot_lock_was_attempted_but_unreported(self):
-        assert agent._lockdown_effective([], None, True) is False
+        assert agent._lockdown_effective([], None, True, logon_prevented=True) is False
+
+    def test_false_when_logon_was_not_prevented(self):
+        """The operator signed in to a "locked" MOLE with their own password (S270).
+
+        Encryption alone is not a lockdown: if the interactive account still works, the
+        thief has the machine and only one folder is unreadable.
+        """
+        assert agent._lockdown_effective([], "success", True, logon_prevented=False) is False
+
+    def test_false_when_logon_prevention_was_not_attempted(self):
+        # Unknown is not good enough to call a lockdown effective.
+        assert agent._lockdown_effective([], "success", True, logon_prevented=None) is False
+
+    def test_the_default_is_not_effective(self):
+        # A caller that forgets the new argument must fail closed, not open.
+        assert agent._lockdown_effective([], "success", True) is False
+
+
+class TestLogonPrevention:
+    """`lock` must stop the interactive account from signing in, and `recover` undo it.
+
+    S270, measured on MOLE: `lock` issued `tsdiscon` and encrypted one folder. The account
+    stayed enabled, so the console user signed straight back in. Every layer here is
+    verified by reading the account back — `net user /active:no` can exit 0 and change
+    nothing, which is how tracking once recorded a disable that never happened.
+    """
+
+    def test_no_interactive_user_means_no_disable_and_not_effective(self, monkeypatch):
+        monkeypatch.setattr(agent, "_get_real_username", lambda: None)
+        ran: list[list[str]] = []
+        monkeypatch.setattr(agent, "_run_net_user", lambda args: ran.append(args) or True)
+
+        user, prevented = agent.disable_console_account()
+
+        assert (user, prevented) == (None, False)
+        assert ran == [], "nothing to disable, and nothing should be touched"
+
+    def test_a_service_account_is_never_disabled(self, monkeypatch):
+        # Disabling LocalSystem would take the machine's own management plane down.
+        monkeypatch.setattr(agent, "_get_real_username", lambda: "SYSTEM")
+        ran: list[list[str]] = []
+        monkeypatch.setattr(agent, "_run_net_user", lambda args: ran.append(args) or True)
+
+        user, prevented = agent.disable_console_account()
+
+        assert (user, prevented) == (None, False)
+        assert ran == []
+
+    def test_the_state_file_is_written_before_the_account_is_touched(self, tmp_path, monkeypatch):
+        """A crash between the two must still leave the operator a name to re-enable."""
+        state = tmp_path / ".lock_logon"
+        order: list[str] = []
+        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", state)
+        monkeypatch.setattr(agent, "_get_real_username", lambda: "labuser")
+        monkeypatch.setattr(agent, "_query_account_active", lambda user: False)
+
+        def fake_net(args):
+            order.append("net:" + " ".join(args))
+            order.append("state-exists" if state.exists() else "no-state")
+            return True
+
+        monkeypatch.setattr(agent, "_run_net_user", fake_net)
+
+        user, prevented = agent.disable_console_account()
+
+        assert (user, prevented) == ("labuser", True)
+        assert order[:2] == ["net:labuser /active:no", "state-exists"]
+        assert json.loads(state.read_text())["disabled_user"] == "labuser"
+
+    def test_a_disable_that_did_not_take_effect_is_reported_as_not_prevented(
+        self, tmp_path, monkeypatch
+    ):
+        # `net user` exits 0 and the account is still active — believe the account.
+        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", tmp_path / ".lock_logon")
+        monkeypatch.setattr(agent, "_get_real_username", lambda: "labuser")
+        monkeypatch.setattr(agent, "_run_net_user", lambda args: True)
+        monkeypatch.setattr(agent, "_query_account_active", lambda user: True)
+
+        user, prevented = agent.disable_console_account()
+
+        assert (user, prevented) == ("labuser", False)
+
+    def test_a_failed_disable_still_records_the_user_for_recovery(self, tmp_path, monkeypatch):
+        state = tmp_path / ".lock_logon"
+        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", state)
+        monkeypatch.setattr(agent, "_get_real_username", lambda: "labuser")
+        monkeypatch.setattr(agent, "_run_net_user", lambda args: False)
+
+        user, prevented = agent.disable_console_account()
+
+        assert (user, prevented) == ("labuser", False)
+        assert json.loads(state.read_text())["disabled_user"] == "labuser"
+
+    def test_re_enable_verifies_and_clears_the_state(self, tmp_path, monkeypatch):
+        state = tmp_path / ".lock_logon"
+        state.write_text(json.dumps({"disabled_user": "labuser"}))
+        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", state)
+        monkeypatch.setattr(agent, "_query_account_active", lambda user: True)
+        ran: list[list[str]] = []
+        monkeypatch.setattr(agent, "_run_net_user", lambda args: ran.append(args) or True)
+
+        user, ok = agent.re_enable_console_account()
+
+        assert (user, ok) == ("labuser", True)
+        assert ran == [["labuser", "/active:yes"]]
+        assert not state.exists(), "the state file must not outlive the re-enable"
+
+    def test_re_enable_keeps_the_state_when_it_did_not_take_effect(self, tmp_path, monkeypatch):
+        state = tmp_path / ".lock_logon"
+        state.write_text(json.dumps({"disabled_user": "labuser"}))
+        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", state)
+        monkeypatch.setattr(agent, "_run_net_user", lambda args: True)
+        monkeypatch.setattr(agent, "_query_account_active", lambda user: False)
+
+        user, ok = agent.re_enable_console_account()
+
+        assert (user, ok) == ("labuser", False)
+        assert state.exists(), "keep the record: the account is still disabled"
+
+    def test_nothing_to_re_enable_is_success(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", tmp_path / ".lock_logon")
+        ran: list[list[str]] = []
+        monkeypatch.setattr(agent, "_run_net_user", lambda args: ran.append(args) or True)
+
+        assert agent.re_enable_console_account() == (None, True)
+        assert ran == []
+
+    def test_unlock_re_enables_before_it_checks_the_key(self, monkeypatch):
+        """A `failed` ACK (no key material) must not strand a disabled account."""
+        calls: list[str] = []
+        monkeypatch.setattr(
+            agent, "re_enable_console_account", lambda: calls.append("re-enable") or (None, True)
+        )
+        monkeypatch.setattr(
+            agent, "ack_command", lambda *a, **k: calls.append("ack") or True
+        )
+        monkeypatch.setattr(agent, "log", __import__("logging").getLogger("test"))
+
+        agent.handle_unlock({"lockdown_folder": "/tmp/x", "lock_sentinel": "/tmp/y"}, {"id": "c1"})
+
+        assert calls == ["re-enable", "ack"], calls

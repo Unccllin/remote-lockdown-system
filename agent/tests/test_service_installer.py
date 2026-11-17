@@ -376,3 +376,60 @@ class TestStopServiceForBinaryReplace:
             patch.object(service_installer.time, "sleep"),
         ):
             assert service_installer.stop_service(wait_seconds=0.05) is False
+
+
+class TestWindowsTimeService:
+    """An install must leave the clock able to keep itself right (S270).
+
+    MOLE's w32time was Stopped/Manual: the clock only advanced from the CMOS value at boot.
+    A drifted clock breaks TLS against the Worker and skews the deadman timer (B-005), so
+    the install turns the service on — best effort, because a policy may refuse.
+    """
+
+    def test_non_windows_is_a_no_op(self):
+        with (
+            patch.object(service_installer, "_is_windows", return_value=False),
+            patch.object(service_installer.subprocess, "run") as run,
+        ):
+            assert service_installer.ensure_time_service() is False
+        run.assert_not_called()
+
+    def test_it_sets_automatic_starts_and_resyncs(self):
+        calls = []
+        with (
+            patch.object(service_installer, "_is_windows", return_value=True),
+            patch.object(
+                service_installer.subprocess,
+                "run",
+                side_effect=lambda argv, **kw: calls.append(argv),
+            ),
+            patch.object(
+                service_installer, "_sc", return_value=MagicMock(stdout="STATE : 4  RUNNING")
+            ),
+        ):
+            assert service_installer.ensure_time_service() is True
+
+        assert calls[0] == ["sc.exe", "config", "w32time", "start=", "auto"]
+        assert calls[1] == ["net", "start", "w32time"]
+        assert calls[2] == ["w32tm", "/resync", "/force"]
+
+    def test_a_service_that_does_not_start_is_reported_not_raised(self):
+        with (
+            patch.object(service_installer, "_is_windows", return_value=True),
+            patch.object(service_installer.subprocess, "run"),
+            patch.object(
+                service_installer, "_sc", return_value=MagicMock(stdout="STATE : 1  STOPPED")
+            ),
+        ):
+            assert service_installer.ensure_time_service() is False
+
+    def test_a_missing_w32tm_binary_does_not_fail_the_install(self):
+        with (
+            patch.object(service_installer, "_is_windows", return_value=True),
+            patch.object(
+                service_installer.subprocess,
+                "run",
+                side_effect=FileNotFoundError("w32tm"),
+            ),
+        ):
+            assert service_installer.ensure_time_service() is False
