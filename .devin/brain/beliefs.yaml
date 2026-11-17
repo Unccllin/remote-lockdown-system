@@ -3194,3 +3194,21 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: 'Ship to MOLE is still blocked: lab server HTTP 000 and wrangler not authenticated.'
+- id: B-145
+  statement: The Worker's per-entity storage (ADR-002 devices/commands, ADR-003 devices, ADR-004 locations,
+    ADR-005 audit, ADR-006 secrets) and the ten types they speak live in serverless/kv-store.ts (1203
+    lines), which imports only pbl/env and http.ts; worker.ts is 3751 lines after the S277/S278 splits
+  domain: api/devices
+  status: proposed
+  evidence_level: assumed
+  provenance: S278 commit 8881171; 480 worker tests unchanged across a pure move, tsc clean, cross-surface
+    23 passed
+  source: serverless/kv-store.ts; serverless/worker.ts
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Remaining cuts: /v1 PBL routes (~460 lines) and the agent handlers. Ship to MOLE still blocked
+    on operator access.'

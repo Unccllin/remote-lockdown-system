@@ -1062,3 +1062,101 @@ Ship S272–S277 to MOLE — the only remaining requirement is operator access (
 it is the cohesive 900-line block the last five ADRs describe.
 
 ---
+
+---
+
+## Session 278 — 2026-11-18 (the stores get their own module)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `serverless/worker.ts` (top-level declaration map, the storage block boundaries, the
+dependency direction of every store helper), `serverless/http.ts`, `serverless/admin-auth.ts`,
+`scripts/test_cross_surface_contract.py` (the assertions that grep `worker.ts` for values),
+`docs/adr/ADR-00{2,3,4,5,6}-*.md` (the decisions the code implements).
+
+**Findings**, measured before the change:
+
+- The storage block was **contiguous** — devices (ADR-003, with the check-in metadata split and
+  derived `lock_state`), commands (ADR-002), secrets (ADR-006), locations (ADR-004), audit
+  (ADR-005) — 986 lines plus 195 lines of the ten types they speak. The largest cohesive block
+  left in a 4,925-line file.
+- The dependency direction allows an acyclic split: every storage helper needs only `Env` and
+  `http.ts`'s zero-dependency helpers, so nothing in the module imports back from `worker.ts`.
+- Two cross-surface assertions grep `worker.ts` for `lock_state` values and
+  `LOCK_STATE_FRESH_MS = 180_000`, so the move would break them — the same coupling S277 hit with
+  `PBKDF2_ITERATIONS`.
+- 97 declarations are exported by the store module and only **42** are referenced by `worker.ts`.
+  The import list had to be derived from usage, not hand-written.
+
+### Fog cleared
+
+- **`worker.ts` is 3,751 lines** (from 4,925) and `serverless/kv-store.ts` is 1,203. The file now
+  has a five-module layout: `http.ts` (134), `admin-auth.ts` (214), `installer-scripts.ts` (188),
+  `kv-store.ts` (1,203), `worker.ts` (3,751).
+- **The five storage ADRs now map to one module.** The ADR comments travel with the code that
+  implements them, so "where is ADR-004 implemented" has a file answer rather than a line range in
+  a 5,000-line file.
+- **Both broken contract assertions follow the value, not the path** — they pin the Worker/Express
+  agreement, which is the actual contract; the file it lives in is incidental.
+
+### Fog remaining
+
+- **`worker.ts` is still 3,751 lines** with a `fetch` dispatch measuring complexity 145. The
+  remaining obvious cuts: the `/v1` PBL routes (~460 lines, into `pbl/routes.ts`) and the agent
+  handlers (check-in, ACK, escrow, deadman).
+- **The ship to MOLE is still blocked on operator access** — unchanged and re-verified this
+  session: `agent/.venv/bin/python -m pytest scripts/test_tls_floor.py` fails on the unreadable
+  `docker.sock` (the documented host limitation), and the lab server + wrangler remain
+  unreachable/unauthenticated as recorded in S277.
+- **`admins` and `hw_test_artifacts` remain whole-list writes** (small, not per-device volume).
+- Index residuals (`device_index`, `audit_index`, `location_index`) unchanged.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+- **Ship to MOLE / deploy the Worker: BLOCKED, operator action** (port proxy on MOLE,
+  `wrangler login` here). Unchanged since S277.
+
+### Session artifacts
+
+- None beyond the harness verdicts: 480 tests, `tsc` clean, 23 contract tests, invariants pass,
+  and `worker.ts` at 3,751 lines.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), twice, both mine and both caught by the gates rather than by
+  review**: (1) the type-block slice came back empty because my banner regex matched the file's
+  FIRST banner instead of the one after the interfaces — the stores moved without their types and
+  `tsc` reported 33 missing names immediately; (2) my import-pruning regex silently matched
+  nothing, so four unused imports survived until the linter named them. The lesson is the same in
+  both cases: a scripted edit's own success message is not evidence — grep the file afterwards.
+- **Layer 4 (contract coupling), third occurrence this series**: two cross-surface tests broke
+  because they grep `worker.ts` by path. Each time the right fix was to follow the value and say
+  why, not to weaken the assertion.
+
+### VERIFY
+
+- `serverless`: `npx vitest run` → **480 passed / 4 files** (unchanged count — a pure move).
+- `serverless`: `npx tsc --noEmit -p .` → clean.
+- `scripts/test_cross_surface_contract.py` → **23 passed** (two assertions repointed at
+  `kv-store.ts`).
+- `make graph-check` → all invariants pass.
+- `scripts/test_tls_floor.py` → still the one documented host failure (docker socket), unrelated.
+
+### Next session opening
+
+Ship S272–S278 to MOLE if the operator has restored access (port proxy up, `wrangler login`);
+otherwise cut the `/v1` PBL routes into `pbl/routes.ts`, which is the next ~460 lines and the last
+block that is not already behind a module boundary.
+
+---

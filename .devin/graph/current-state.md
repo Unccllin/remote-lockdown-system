@@ -58,32 +58,30 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 277 — 2026-11-18 (the Worker comes back into view)
+## Latest session: 278 — 2026-11-18 (the stores get their own module)
 
 ### Fog cleared
 
-- **`worker.ts` is 4,925 lines** (from 5,419) and the LSP now reports `too_large=0` — the file is
-  analysable again. Three modules were extracted in dependency order:
-  `serverless/http.ts` (134), `serverless/admin-auth.ts` (214),
-  `serverless/installer-scripts.ts` (188).
-- **Three unsafe `new URL` sites now use `requestUrl()`**, so a malformed request URL degrades to
-  empty route params instead of throwing — which is the behaviour `requestUrl` was written for.
-- **The installer composer takes a validated `URL`**, so that module contains no throwing
-  construction at all (the checker was right about this one).
-- **The contract test follows the code it pins**: it asserts `PBKDF2_ITERATIONS = 100_000` against
-  ADR-001 in `admin-auth.ts` now, rather than in the file that happened to hold it.
+- **`worker.ts` is 3,751 lines** (from 4,925) and `serverless/kv-store.ts` is 1,203. The file now
+  has a five-module layout: `http.ts` (134), `admin-auth.ts` (214), `installer-scripts.ts` (188),
+  `kv-store.ts` (1,203), `worker.ts` (3,751).
+- **The five storage ADRs now map to one module.** The ADR comments travel with the code that
+  implements them, so "where is ADR-004 implemented" has a file answer rather than a line range in
+  a 5,000-line file.
+- **Both broken contract assertions follow the value, not the path** — they pin the Worker/Express
+  agreement, which is the actual contract; the file it lives in is incidental.
 
 ### Fog remaining
 
-- **`worker.ts` is still 4,925 lines** and its `fetch` dispatch measures complexity 145. The two
-  obvious next cuts are the storage layer (~900 lines, ADR-002..006) into `serverless/kv/`, and
-  the `/v1` PBL routes (~460 lines) into `pbl/routes.ts`. Both need the same dependency care.
-- **The ship to MOLE is blocked on the operator, with evidence**: the lab server at
-  `192.168.1.43:3001` is unreachable (HTTP 000 — MOLE's port proxy does not survive a WSL restart)
-  and `wrangler whoami` reports **not authenticated**, so neither a Worker deploy nor a hardware
-  acceptance run is possible from this host.
+- **`worker.ts` is still 3,751 lines** with a `fetch` dispatch measuring complexity 145. The
+  remaining obvious cuts: the `/v1` PBL routes (~460 lines, into `pbl/routes.ts`) and the agent
+  handlers (check-in, ACK, escrow, deadman).
+- **The ship to MOLE is still blocked on operator access** — unchanged and re-verified this
+  session: `agent/.venv/bin/python -m pytest scripts/test_tls_floor.py` fails on the unreadable
+  `docker.sock` (the documented host limitation), and the lab server + wrangler remain
+  unreachable/unauthenticated as recorded in S277.
 - **`admins` and `hw_test_artifacts` remain whole-list writes** (small, not per-device volume).
-- The index residuals (`device_index`, `audit_index`, `location_index`) are unchanged.
+- Index residuals (`device_index`, `audit_index`, `location_index`) unchanged.
 
 ### Debt items closed
 
@@ -98,40 +96,40 @@ D-210 (PBL route integration).
 
 - MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
 - `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
-- **Ship to MOLE / deploy the Worker: BLOCKED, operator action.** Two independent requirements:
-  bring the Windows port proxy back up on MOLE, and `wrangler login` (or `CLOUDFLARE_API_TOKEN`)
-  on this host. Verified this session: `curl` → HTTP 000, `wrangler whoami` → not authenticated.
+- **Ship to MOLE / deploy the Worker: BLOCKED, operator action** (port proxy on MOLE,
+  `wrangler login` here). Unchanged since S277.
 
 ### Session artifacts
 
-- None produced. This session's evidence is the harness verdict change itself: `too_large=1` →
-  `too_large=0` on `serverless/worker.ts`, plus 480 tests / `tsc` / 23 contract tests green.
+- None beyond the harness verdicts: 480 tests, `tsc` clean, 23 contract tests, invariants pass,
+  and `worker.ts` at 3,751 lines.
 
 ### Failure attribution
 
-- **Layer 3 (execution environment), caught and corrected mid-session**: a `cd serverless` in a
-  command did not take effect (the shell's working directory had persisted from the previous call),
-  so a `vitest run` executed from the repo root and reported **dashboard** suites failing. It
-  looked like a catastrophic break of code I had not touched. The fix is a habit, not a check:
-  use absolute paths for gate commands and read `pwd`, rather than trusting a silent `cd` chain.
-- **Layer 4 (verification feedback)**: moving `PBKDF2_ITERATIONS` broke a cross-surface test that
-  greps `worker.ts` by source text. The test was right to fail — it pins a value — but the coupling
-  to a file path is the hazard. It now reads the module the value lives in, with the reason stated.
+- **Layer 4 (verification feedback), twice, both mine and both caught by the gates rather than by
+  review**: (1) the type-block slice came back empty because my banner regex matched the file's
+  FIRST banner instead of the one after the interfaces — the stores moved without their types and
+  `tsc` reported 33 missing names immediately; (2) my import-pruning regex silently matched
+  nothing, so four unused imports survived until the linter named them. The lesson is the same in
+  both cases: a scripted edit's own success message is not evidence — grep the file afterwards.
+- **Layer 4 (contract coupling), third occurrence this series**: two cross-surface tests broke
+  because they grep `worker.ts` by path. Each time the right fix was to follow the value and say
+  why, not to weaken the assertion.
 
 ### VERIFY
 
-- `serverless`: `npx vitest run` → **480 passed / 4 files**.
+- `serverless`: `npx vitest run` → **480 passed / 4 files** (unchanged count — a pure move).
 - `serverless`: `npx tsc --noEmit -p .` → clean.
-- `scripts/test_cross_surface_contract.py` → **23 passed**.
+- `scripts/test_cross_surface_contract.py` → **23 passed** (two assertions repointed at
+  `kv-store.ts`).
 - `make graph-check` → all invariants pass.
-- `lens_diagnostics` (full, LSP) on the four modules → no errors, and `worker.ts` no longer
-  reports `too_large`.
+- `scripts/test_tls_floor.py` → still the one documented host failure (docker socket), unrelated.
 
 ### Next session opening
 
-Ship S272–S277 to MOLE — the only remaining requirement is operator access (port proxy up,
-`wrangler login`) — and if that stays blocked, cut the storage layer out of `worker.ts` next, since
-it is the cohesive 900-line block the last five ADRs describe.
+Ship S272–S278 to MOLE if the operator has restored access (port proxy up, `wrangler login`);
+otherwise cut the `/v1` PBL routes into `pbl/routes.ts`, which is the next ~460 lines and the last
+block that is not already behind a module boundary.
 
 ---
 

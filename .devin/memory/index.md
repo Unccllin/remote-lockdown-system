@@ -1,13 +1,14 @@
 # Memory Index
 
-Last rebuilt: 2026-11-17 15:50:03
-Active memories: 1277 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-17 17:00:55
+Active memories: 1308 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
 | ID | Title | Tags | Conf | Last Seen | Score | Rel | Impact |
 |----|-------|------|------|-----------|-------|-----|--------|
 | m-1142 | MISTAKE: mistake: first version of the ruling used |  | 0.55 | 2026-11-17 | 0.275 | 0 |  |
+| m-1281 | Converting list-based storage to per-entity turns  |  | 0.55 | 2026-11-17 | 0.275 | 0 |  |
 | m-002 | FMP capsule payload has a 16-byte FMP_PAYLOAD_HEAD |  | 0.70 | 2026-08-18 | 0.255 | 0 |  |
 | m-003 | Signed FMP capsules have EFI_FIRMWARE_IMAGE_AUTHEN |  | 0.70 | 2026-08-18 | 0.255 | 0 |  |
 | m-004 | OVMF does not support FMP capsule updates — QueryC |  | 0.70 | 2026-08-18 | 0.255 | 0 |  |
@@ -93,7 +94,6 @@ Active memories: 1277 | Superseded: 0 | Decayed: 20
 | m-1278 | Per-entity records need a keyed lookup or auth bec |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
 | m-1279 | The migration blueprint is ADR-002 exactly: <entit |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
 | m-1280 | Deleting saveDevices() at the end is what makes th |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
-| m-1281 | Converting list-based storage to per-entity turns  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
 | m-1282 | Tests that read KV keys directly break on any stor |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
 | m-1283 | MockKV only implements get/put/delete, and the Wor |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
 | m-1284 | MISTAKE: mistake: ran a multi-step python rewrite  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
@@ -110,6 +110,37 @@ Active memories: 1277 | Superseded: 0 | Decayed: 20
 | m-1295 | A retention limit no test can cross is untested: m |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
 | m-1296 | MISTAKE: mistake: the first test version reached i |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
 | m-1297 | MISTAKE: mistake: passed backticks inside a shell  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1298 | The write path every mutation goes through is wher |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1299 | One index carrying {id, device_id} beats two index |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1300 | An artifact that counts KV gets proves a cost clai |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1301 | Release/anonymisation cascades that rewrite a whol |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1302 | MISTAKE: mistake: asserted "an append never reads  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1303 | MISTAKE: mistake: flag-stolen was used twice in a  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1304 | MISTAKE: mistake: the cap pruned the bystander ent |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1305 | When every access to a store is already scoped to  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1306 | Never put a retention cap on secrets: a cap that s |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1307 | A migration must preserve the storage encoding (KE |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1308 | Each store migrates on its own first read: reading |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1309 | API state machines block test fixtures in ways wor |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1310 | MISTAKE: mistake: wrote ACKs with a made-up comman |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1311 | MISTAKE: mistake: asserted both stores migrated af |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1312 | MISTAKE: mistake: tried to release a device after  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1313 | MISTAKE: mistake: compared an unsorted list() resu |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1314 | A file over the harness LSP limit reports too_larg |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1315 | Extraction order is forced by dependency direction |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1316 | Taking a validated URL object into a pure function |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1317 | Source-grep contract tests couple to file layout:  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1318 | The shell working directory can persist between to |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1319 | MISTAKE: mistake: read a dashboard test failure st |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1320 | MISTAKE: mistake: first brace-matching extractor s |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1321 | MISTAKE: mistake: over-imported symbols into worke |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1322 | A cohesive contiguous block with one dependency di |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1323 | Derive an extracted module import list from actual |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1324 | Source-grep contract tests break on any move; repo |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1325 | After a scripted multi-file edit, grep the file to |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1326 | MISTAKE: mistake: sliced the interface block using |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1327 | MISTAKE: mistake: import-pruning regex used patter |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1328 | MISTAKE: mistake: assumed tsc exit 0 meant no unus |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
 | m-541 | MISTAKE: mistake: assumed the reported crash was a |  | 0.55 | 2026-11-04 | 0.238 | 0 |  |
 | m-019 | DXE_DRIVER modules cannot use UefiRuntimeLib (it's |  | 0.65 | 2026-08-18 | 0.236 | 0 |  |
 | m-020 | When splitting a UEFI driver into multiple .c file |  | 0.65 | 2026-08-18 | 0.236 | 0 |  |

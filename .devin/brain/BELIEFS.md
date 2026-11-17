@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-17 16:42:11 — 144 beliefs
+Generated: 2026-11-17 16:59:21 — 145 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -53,6 +53,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-141 | proposed | assumed | The Worker stores location reports as per-report records (location:<id>) indexed per device (location_index:<deviceId>), capped per device by LOCATION_HISTORY_LIMIT (default 500, env-overridable), and pruning deletes the evicted records as well as the index entries |
 | B-143 | proposed | assumed | Every fleet-scale KV store in the Worker is per-entity now: commands (ADR-002), devices (device:<id> + index + agent_key pointer, ADR-003), locations (per-report + per-device index, ADR-004), audit (per-entry + one index carrying device_id, ADR-005), encryption keys and BIOS credentials (one key per device, no index, no cap, ADR-006). The only remaining single-value lists are admins and hw_test_artifacts |
 | B-144 | proposed | assumed | serverless/worker.ts is 4925 lines after extracting http.ts, admin-auth.ts and installer-scripts.ts in dependency order, so the harness LSP analyses it again (too_large=0); the remaining big cohesive blocks are the storage layer (ADR-002..006, ~900 lines) and the /v1 PBL routes (~460) |
+| B-145 | proposed | assumed | The Worker's per-entity storage (ADR-002 devices/commands, ADR-003 devices, ADR-004 locations, ADR-005 audit, ADR-006 secrets) and the ten types they speak live in serverless/kv-store.ts (1203 lines), which imports only pbl/env and http.ts; worker.ts is 3751 lines after the S277/S278 splits |
 
 ## api/enrolment
 
