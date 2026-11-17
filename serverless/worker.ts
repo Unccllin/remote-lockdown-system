@@ -801,13 +801,123 @@ function mergeCheckinMetadata(device: Device, metadata: CheckinMetadata | null):
   };
 }
 
-async function listCommands(env: Env): Promise<Command[]> {
-  const data = await env.LOCKDOWN_KV.get(COMMANDS_KEY);
-  return data ? parseKvJson<Command[]>(data, COMMANDS_KEY) : [];
+const COMMAND_INDEX_KEY = 'command_index';
+const COMMAND_KEY_PREFIX = 'command:';
+
+/** KV key for one command record (ADR-002). */
+function commandKey(id: string): string {
+  return `${COMMAND_KEY_PREFIX}${id}`;
 }
 
-async function saveCommands(env: Env, commands: Command[]): Promise<void> {
-  await env.LOCKDOWN_KV.put(COMMANDS_KEY, JSON.stringify(commands));
+/** One command record, or null when the key is absent or unreadable. */
+async function getCommand(env: Env, id: string): Promise<Command | null> {
+  const data = await env.LOCKDOWN_KV.get(commandKey(id));
+  if (!data) return null;
+  try {
+    return JSON.parse(data) as Command;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ids of every command, migrating the legacy whole-list key on first read.
+ *
+ * ADR-002: commands are per-entity records so an ACK cannot rewrite the list a concurrent
+ * lock/flag was building. The migration is lazy and idempotent — two isolates migrating at
+ * once write identical `command:<id>` records and the same index, then both delete the
+ * legacy key.
+ */
+async function listCommandIds(env: Env): Promise<string[]> {
+  const data = await env.LOCKDOWN_KV.get(COMMAND_INDEX_KEY);
+  if (data) {
+    try {
+      const parsed: unknown = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((id): id is string => typeof id === 'string' && id.length > 0);
+      }
+    } catch {
+      // Corrupt index: fall through and rebuild it from the legacy key if that exists.
+    }
+  }
+
+  const legacy = await env.LOCKDOWN_KV.get(COMMANDS_KEY);
+  if (!legacy) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(legacy);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const commands = parsed.filter(
+    (c): c is Command => !!c && typeof (c as Command).id === 'string',
+  );
+  if (commands.length === 0) return [];
+
+  for (const command of commands) {
+    await env.LOCKDOWN_KV.put(commandKey(command.id), JSON.stringify(command));
+  }
+  const ids = commands.map((c) => c.id);
+  await env.LOCKDOWN_KV.put(COMMAND_INDEX_KEY, JSON.stringify(ids));
+  await env.LOCKDOWN_KV.delete(COMMANDS_KEY);
+  return ids;
+}
+
+async function listCommands(env: Env): Promise<Command[]> {
+  const ids = await listCommandIds(env);
+  const records = await Promise.all(ids.map((id) => getCommand(env, id)));
+  // An index entry whose record is gone — deleted, or an append that has not propagated
+  // across colos yet — is skipped rather than thrown: a poll must not fail because one id
+  // lagged, which is the same tolerance the list-based read had.
+  return records.filter((c): c is Command => c !== null);
+}
+
+/** Remove every command belonging to a device, one record at a time. */
+async function deleteCommandsForDevice(env: Env, deviceId: string): Promise<number> {
+  const ids = await listCommandIds(env);
+  const keep: string[] = [];
+  let removed = 0;
+  for (const id of ids) {
+    const command = await getCommand(env, id);
+    if (command && command.device_id === deviceId) {
+      await env.LOCKDOWN_KV.delete(commandKey(id));
+      removed += 1;
+    } else {
+      keep.push(id);
+    }
+  }
+  if (removed > 0) {
+    await env.LOCKDOWN_KV.put(COMMAND_INDEX_KEY, JSON.stringify(keep));
+  }
+  return removed;
+}
+
+async function createCommand(env: Env, command: Command): Promise<void> {
+  await env.LOCKDOWN_KV.put(commandKey(command.id), JSON.stringify(command));
+  const ids = await listCommandIds(env);
+  if (!ids.includes(command.id)) {
+    await env.LOCKDOWN_KV.put(COMMAND_INDEX_KEY, JSON.stringify([...ids, command.id]));
+  }
+}
+
+/**
+ * Apply a patch to one command. Returns the stored record, or null when it is gone.
+ *
+ * This is the point of ADR-002: an ACK reads and writes exactly one key, so it cannot
+ * clobber a device/command list that another request is building from an older snapshot.
+ */
+async function updateCommand(
+  env: Env,
+  id: string,
+  patch: Partial<Command>,
+): Promise<Command | null> {
+  const current = await getCommand(env, id);
+  if (!current) return null;
+  const next: Command = { ...current, ...patch };
+  await env.LOCKDOWN_KV.put(commandKey(id), JSON.stringify(next));
+  return next;
 }
 
 async function listKeys(env: Env): Promise<EncryptionKey[]> {
@@ -1508,17 +1618,15 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
     return errorResponse('command_id and result_status required', 400);
   }
 
-  // Update command status
-  const commands = await listCommands(env);
-  const cmdIdx = commands.findIndex(
-    (c) => c.id === command_id && c.device_id === device.id,
-  );
-  if (cmdIdx < 0) {
+  // Update command status. One command, one key (ADR-002): this used to read and rewrite
+  // the whole list, so an ACK and a concurrent lock/flag overwrote each other's fields.
+  const command = await getCommand(env, command_id);
+  if (!command || command.device_id !== device.id) {
     return errorResponse('Command not found', 404);
   }
 
   // Idempotent: if already executed, return success
-  if (commands[cmdIdx].status === 'executed') {
+  if (command.status === 'executed') {
     return jsonResponse({ ok: true, deduplicated: true });
   }
 
@@ -1527,7 +1635,6 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
   // The rule is Express's (server/src/routes/agent.js:411-418). This handler used
   // to destructure boot_lock_detail and discard it, so on the serverless backend
   // every silently no-op'd boot-lock was recorded as a plain success.
-  const command = commands[cmdIdx];
   let lockdownEffective: boolean | null = null;
   if (result_status === 'executed' && command.command_type === 'lockdown' && boot_lock_detail) {
     const detail = boot_lock_detail as {
@@ -1541,17 +1648,18 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
     }
   }
 
-  command.status = result_status;
-  command.executed_at = new Date().toISOString();
-  command.boot_lock_status = typeof boot_lock_status === 'string' ? boot_lock_status : null;
-  command.boot_lock_detail = boot_lock_detail ?? null;
-  command.lockdown_effective = lockdownEffective;
-  command.encryption_blocked_files = encryption_blocked_files ?? null;
-  command.lock_session_context = lock_session_context ?? null;
-  if (payload.command_uuid) {
-    command.command_uuid = payload.command_uuid;
-  }
-  await saveCommands(env, commands);
+  const confirmed = (await updateCommand(env, command_id, {
+    status: result_status,
+    executed_at: new Date().toISOString(),
+    boot_lock_status: typeof boot_lock_status === 'string' ? boot_lock_status : null,
+    boot_lock_detail: (boot_lock_detail ?? null) as Command['boot_lock_detail'],
+    lockdown_effective: lockdownEffective,
+    encryption_blocked_files: (encryption_blocked_files ?? null) as Command['encryption_blocked_files'],
+    lock_session_context: (lock_session_context ?? null) as Command['lock_session_context'],
+    ...(payload.command_uuid ? { command_uuid: payload.command_uuid } : {}),
+  })) ?? command;
+  // `confirmed` is the record as stored; the audit detail below must read THAT, not the
+  // snapshot taken before the update (which is what the in-place mutation used to hide).
 
   // Store encryption key if provided
   if (key_material) {
@@ -1601,13 +1709,13 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
   const devIdx = devices.findIndex((d) => d.id === device.id);
   if (devIdx >= 0) {
     if (result_status === 'executed') {
-      if (commands[cmdIdx].command_type === 'lockdown') {
+      if (command.command_type === 'lockdown') {
         devices[devIdx].status = 'locked';
-      } else if (commands[cmdIdx].command_type === 'unlock') {
+      } else if (command.command_type === 'unlock') {
         devices[devIdx].status = 'active';
-      } else if (commands[cmdIdx].command_type === 'track') {
+      } else if (command.command_type === 'track') {
         devices[devIdx].status = 'tracking';
-      } else if (commands[cmdIdx].command_type === 'stop_track') {
+      } else if (command.command_type === 'stop_track') {
         devices[devIdx].status = 'active';
       }
     }
@@ -1628,12 +1736,12 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
       `agent_${command.command_type}_confirmed`,
       JSON.stringify({
         command_id,
-        command_uuid: command.command_uuid ?? undefined,
-        boot_lock_status: command.boot_lock_status ?? undefined,
-        boot_lock_detail: command.boot_lock_detail ?? undefined,
-        lockdown_effective: command.lockdown_effective ?? undefined,
-        encryption_blocked_files: command.encryption_blocked_files ?? undefined,
-        lock_session_context: command.lock_session_context ?? undefined,
+        command_uuid: confirmed.command_uuid ?? undefined,
+        boot_lock_status: confirmed.boot_lock_status ?? undefined,
+        boot_lock_detail: confirmed.boot_lock_detail ?? undefined,
+        lockdown_effective: confirmed.lockdown_effective ?? undefined,
+        encryption_blocked_files: confirmed.encryption_blocked_files ?? undefined,
+        lock_session_context: confirmed.lock_session_context ?? undefined,
       }),
     );
   }
@@ -2177,7 +2285,6 @@ async function handleFlagStolen(
   await saveDevices(env, devices);
 
   // Queue lockdown command
-  const commands = await listCommands(env);
   const cmd: Command = {
     id: generateId(),
     device_id: deviceId,
@@ -2190,8 +2297,7 @@ async function handleFlagStolen(
     executed_at: null,
     command_uuid: null,
   };
-  commands.push(cmd);
-  await saveCommands(env, commands);
+  await createCommand(env, cmd);
 
   await addAuditEntry(env, deviceId, 'admin_flag_stolen', '');
 
@@ -2274,19 +2380,16 @@ async function handleRecover(
   // one poll after an unlock is a real observed failure (S269): recovery must leave
   // the device with exactly one instruction, the unlock.
   const pending = await listCommands(env);
-  let cancelled = 0;
   for (const c of pending) {
     if (c.device_id === deviceId && c.status === 'pending') {
-      c.status = 'cancelled';
-      cancelled += 1;
+      // Per-entity update: cancelling one command must not rewrite the rest (ADR-002).
+      await updateCommand(env, c.id, { status: 'cancelled' });
     }
   }
-  if (cancelled) await saveCommands(env, pending);
 
   // Queue unlock command.
   // duress_code: when truthy, the agent pretends to unlock but silently
   // re-encrypts and re-locks.  Default is a normal (real) unlock.
-  const commands = await listCommands(env);
   const cmd: Command = {
     id: generateId(),
     device_id: deviceId,
@@ -2297,8 +2400,7 @@ async function handleRecover(
     command_uuid: null,
     duress_code: payload.duress_code === true ? true : null,
   };
-  commands.push(cmd);
-  await saveCommands(env, commands);
+  await createCommand(env, cmd);
 
   await addAuditEntry(
     env,
@@ -2364,7 +2466,6 @@ async function handleTrackAction(
   // 'locate' doesn't change status — it just queues a one-time location report
 
   // Queue the command
-  const commands = await listCommands(env);
   const cmdType = action === 'locate' ? 'track' : action;
   const cmd: Command = {
     id: generateId(),
@@ -2375,8 +2476,7 @@ async function handleTrackAction(
     executed_at: null,
     command_uuid: null,
   };
-  commands.push(cmd);
-  await saveCommands(env, commands);
+  await createCommand(env, cmd);
 
   await addAuditEntry(env, deviceId, `admin_${action}`, '');
 
@@ -2605,7 +2705,7 @@ async function handleReleaseDevice(
 
   // Cascade-delete the device's data across the KV stores.
   await saveDevices(env, devices.filter((d) => d.id !== deviceId));
-  await saveCommands(env, (await listCommands(env)).filter((c) => c.device_id !== deviceId));
+  await deleteCommandsForDevice(env, deviceId);
   await saveKeys(env, (await listKeys(env)).filter((k) => k.device_id !== deviceId));
   await saveBiosPasswords(env, (await listBiosPasswords(env)).filter((p) => p.device_id !== deviceId));
   await saveLocations(env, (await listLocations(env)).filter((l) => l.device_id !== deviceId));

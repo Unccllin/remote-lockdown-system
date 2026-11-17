@@ -14,7 +14,7 @@ CBOR/COSE (`pbl/`).
 
 | name | kind | purpose |
 |------|------|---------|
-| `LOCKDOWN_KV` | KV namespace | all durable state: devices, commands, admins, audit, binaries |
+| `LOCKDOWN_KV` | KV namespace | all durable state: devices, commands (one key each — see [Command storage](#command-storage-adr-002)), admins, audit, binaries |
 | `ADMIN_TOKEN` | secret | break-glass super-admin. Maps to a synthetic admin, so treat it as a root credential |
 | `JWT_SECRET` | secret | signs admin JWTs (falls back to `ADMIN_TOKEN`, then a dev string — do not rely on the fallback in production) |
 | `PBL_SIGNING_KEY` / `PBL_POLICY_SIGNING_KEY` | secret | keys for the firmware-facing `/v1/*` COSE signatures |
@@ -33,6 +33,34 @@ npx wrangler secret put ADMIN_TOKEN
 npx wrangler secret put JWT_SECRET
 npx wrangler secret put PBL_SIGNING_KEY
 npx wrangler secret put PBL_POLICY_SIGNING_KEY
+```
+
+## Command storage (ADR-002)
+
+Commands are **per-entity records**, not one list:
+
+| key | value |
+|-----|-------|
+| `command:<id>` | one command record (status, timestamps, the ACK's evidence) |
+| `command_index` | the ids, append-mostly |
+| `commands` | legacy whole-list key; read once for migration, then deleted |
+
+Why: every mutation used to load the whole list, edit it, and write it back, so two
+overlapping requests destroyed each other's fields. Observed live in S269 — the agent ACKed
+`unlock … status=executed` and the device still reported the unlock `pending`, because a
+concurrent check-in had written an older snapshot over it. Mutation now reads and writes
+exactly one key (`updateCommand`), and `serializeMutation()` remains as belt-and-braces for the
+`devices` list, which is still one value.
+
+Residual, stated rather than hidden: `command_index` is itself one key. It is append-mostly
+and holds only ids, so a lost append hides a command (recoverable from the audit log) instead
+of corrupting a record. Removing that residual means a Durable Object per device; see
+[docs/adr/ADR-002-per-entity-command-records.md](../docs/adr/ADR-002-per-entity-command-records.md).
+
+Reading a command back for the UI or a test goes through the API, not the KV layout:
+
+```bash
+GET /api/devices/:id/commands?limit=20      # newest first, viewer role
 ```
 
 ## Agent auto-update (`/api/agent/update`)

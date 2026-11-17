@@ -137,6 +137,40 @@ async function enrollDevice(
   return { device: data.device, apiKey: data.api_key };
 }
 
+/**
+ * Read one command back through the API instead of out of KV.
+ *
+ * ADR-002 stores commands as per-entity records behind an index, so asserting on the old
+ * `commands` list would pin a storage layout rather than the behaviour under test.
+ */
+async function readCommandViaApi(
+  env: unknown,
+  deviceId: string | undefined,
+  commandId: string,
+): Promise<any | undefined> {
+  if (!deviceId) throw new Error('device not found for command lookup');
+  const resp = await worker.fetch(
+    makeRequest('GET', `/api/devices/${deviceId}/commands?limit=100`, undefined, {
+      Authorization: 'Bearer test-admin-token',
+    }),
+    env,
+  );
+  const body = await parseResponse(resp);
+  if (!Array.isArray(body)) {
+    // A non-array here means the route answered an error payload; say so instead of letting
+    // `.find` throw "is not a function" and hide the status.
+    throw new Error(
+      `GET /api/devices/${deviceId}/commands returned ${resp.status}: ${JSON.stringify(body)}`,
+    );
+  }
+  return body.find((c) => c.id === commandId);
+}
+
+async function deviceIdByHostname(env: unknown, hostname: string): Promise<string | undefined> {
+  const devices = JSON.parse((await (env as any).LOCKDOWN_KV.get('devices')) as string) as any[];
+  return devices.find((d) => d.hostname === hostname)?.id;
+}
+
 // Helper to parse JSON response
 async function parseResponse(resp: Response): Promise<unknown> {
   return JSON.parse(await resp.text());
@@ -899,8 +933,8 @@ describe('Serverless Worker', () => {
       expect(secondData.deduplicated).toBe(true);
 
       // ...and the stored status is still `executed`.
-      const stored = JSON.parse((await env.LOCKDOWN_KV.get('commands')) as string);
-      expect(stored.find((c: any) => c.id === cmdId).status).toBe('executed');
+      const stored = await readCommandViaApi(env, device.id, cmdId);
+      expect(stored.status).toBe('executed');
     });
 
     it('persists command_uuid so a retried ACK can be deduplicated', async () => {
@@ -934,8 +968,8 @@ describe('Serverless Worker', () => {
         env,
       );
 
-      const stored = JSON.parse((await env.LOCKDOWN_KV.get('commands')) as string);
-      expect(stored.find((c: any) => c.id === cmdId).command_uuid).toBe('cmd-uuid-abc-123');
+      const stored = await readCommandViaApi(env, device.id, cmdId);
+      expect(stored?.command_uuid).toBe('cmd-uuid-abc-123');
     });
   });
 
@@ -4887,8 +4921,7 @@ describe('D-210: PBL route integration', () => {
         env,
       );
       expect(resp.status).toBe(200);
-      const stored = JSON.parse((await env.LOCKDOWN_KV.get('commands')) as string);
-      return stored.find((c: any) => c.id === commandId);
+      return readCommandViaApi(env, await deviceIdByHostname(env, hostname), commandId);
     }
 
     it('records a lockdown that applied zero critical controls as NOT effective', async () => {
@@ -4946,11 +4979,11 @@ describe('D-210: PBL route integration', () => {
         env,
       );
       expect(resp.status).toBe(200);
-      const stored = JSON.parse((await env.LOCKDOWN_KV.get('commands')) as string);
       const devices = JSON.parse((await env.LOCKDOWN_KV.get('devices')) as string);
+      const device = devices.find((d: any) => d.hostname === hostname);
       return {
-        command: stored.find((c: any) => c.id === commandId),
-        device: devices.find((d: any) => d.hostname === hostname),
+        command: await readCommandViaApi(env, device?.id, commandId),
+        device,
       };
     }
 

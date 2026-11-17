@@ -239,4 +239,19 @@ cd server && npm install && npm test
 cd dashboard && npm install && npm test
 ```
 
+Run everything with one command:
+
+```bash
+make full-verify     # graph invariants, lint, all five suites, E2E, env and artifact checks
+```
+
+Three gates need a tool that plain `npm`/`pip` install does not give you, and each one
+**fails loudly** rather than linting less than CI does:
+
+| gate | needs | how |
+|------|-------|-----|
+| `lint-agent` | `ruff` **0.17.5** (the version CI installs) | `agent/.venv/bin/pip install -r agent/requirements-dev.txt`; the target runs `scripts/lint-agent.sh`, which finds the venv, PATH or python3 |
+| `lint-workflows` | `actionlint` 1.7.12 **and** `shellcheck` 0.10.x | both are static binaries; actionlint bundles neither, and without shellcheck CI checks shell inside `run:` blocks that a local run would skip |
+| `test-scripts` → `test_tls_floor.py` | a reachable Docker socket | the user must be in the `docker` group in the current login session (or the socket must be readable); the test is not softened to a SKIP when Docker is absent |
+
 See [docs/E2E_TEST.md](docs/E2E_TEST.md) for the full end-to-end test flow.
