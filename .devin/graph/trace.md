@@ -16631,3 +16631,35 @@ So the only red is one test that needs the Docker socket, and this host's user i
 `usermod -aG docker` takes effect, or a root-owned chmod. **The test is deliberately not
 softened into a SKIP** — a gate that cannot run is a gate that has not passed, and
 `test_tls_floor` is checking that the TLS terminator refuses TLS 1.0/1.1 at the protocol layer.
+
+### Addendum — S271: ADR-002 implemented, and the migration verified on live KV
+
+`6da840d` converts commands to per-entity records. The five mutations the ADR mapped are the
+five that changed; `listCommands()` kept its signature for the nine read sites.
+
+The migration was not assumed — it ran on the local Worker's real namespace (the device had
+accumulated 37 commands across this session) and was then inspected in KV directly:
+
+```text
+legacy 'commands' key present: False
+command_index present        : True
+per-entity command keys      : 37
+```
+
+and the route returned the history correctly (`GET /api/devices/:id/commands` → 5 newest:
+unlock executed, stop_track executed, track executed, lockdown executed, unlock executed).
+
+One conversion bug found and fixed during the change, worth recording because it is the exact
+class this session kept hitting: the `agent_*_confirmed` audit detail read the command object
+that the old code had mutated *in place*. With per-entity writes that object is a pre-update
+snapshot, so `lockdown_effective` would have gone back to `undefined` on the dashboard again.
+It now reads the record `updateCommand` returns.
+
+Tests: the ACK assertions parse the API response instead of the `commands` KV key — asserting
+the behaviour rather than the storage layout. Worker 447 passed, `tsc --noEmit` clean.
+
+Docs updated per the standing instruction: `serverless/README.md` ("Command storage
+(ADR-002)": the key layout, the race it removes, the stated index residual, and the API to read
+a command back) and the root `README.md` (the three gates that need a tool installed — ruff
+0.17.5 via `scripts/lint-agent.sh`, actionlint + shellcheck, a readable Docker socket), each of
+which fails loudly instead of linting less than CI does.
