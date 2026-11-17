@@ -242,78 +242,13 @@ function groupPbaCredentials(rows: BiosPassword[]): {
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function sha256(data: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const hash = await crypto.subtle.digest('SHA-256', encoder.encode(data));
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
 
-/**
- * SHA-256 of raw bytes, lowercase hex.
- *
- * Used to label binary downloads with x-content-sha256 so a client can prove the
- * body it received is the body this Worker served. It is transport integrity,
- * not authenticity — a hash delivered alongside the bytes is self-certifying
- * (see the same caveat in agent/agent.py's update path). Authenticity needs a
- * signature; the installer binaries are not Authenticode-signed yet.
- */
-async function sha256HexBytes(bytes: ArrayBuffer): Promise<string> {
-  const hash = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
 
-/** Constant-time string comparison (length + byte-wise). */
-function timingSafeEqualStr(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
 
-async function hmacSha256(key: string, message: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(key),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(message));
-  return Array.from(new Uint8Array(signature))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
 
-function generateId(): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(16)))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
 
-function generateApiKey(): string {
-  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
-}
 
-function jsonResponse(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': TOKEN_API_CORS_ORIGIN,
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Agent-Key, X-Timestamp, X-Nonce, X-Signature, X-Sig-Version',
-    },
-  });
-}
 
-function errorResponse(message: string, status = 400): Response {
-  return jsonResponse({ error: message }, status);
-}
 
 // ---------------------------------------------------------------------------
 // Agent auth (HMAC-SHA256)
@@ -368,270 +303,6 @@ async function verifyAgentAuth(
 // break-glass ADMIN_TOKEN env secret (which maps to a synthetic super-admin).
 // Returns the authenticated admin claims (id, username, role) or null.
 // ---------------------------------------------------------------------------
-
-interface AdminClaims {
-  id: string;
-  username: string;
-  role: AdminRole;
-}
-
-async function resolveAdminAuth(request: Request, env: Env): Promise<AdminClaims | null> {
-  const auth = request.headers.get('Authorization');
-  if (!auth || !auth.startsWith('Bearer ')) {
-    return null;
-  }
-  const token = auth.slice(7);
-
-  // Break-glass: the env ADMIN_TOKEN maps to a synthetic super-admin so the
-  // Worker is usable before any admin is created (bootstrap / recovery).
-  if (token === env.ADMIN_TOKEN) {
-    return { id: 'admin-token', username: 'admin', role: 'super-admin' };
-  }
-
-  // Otherwise verify a signed session token.
-  return verifyAdminToken(env, token);
-}
-
-/**
- * Role gate — mirrors the Express server's requireRole(minRole).
- * Returns the admin claims if authorized, or a Response (401/403) to return.
- */
-async function requireRole(
-  request: Request,
-  env: Env,
-  minRole: AdminRole,
-): Promise<AdminClaims | Response> {
-  const admin = await resolveAdminAuth(request, env);
-  if (!admin) {
-    return errorResponse('Admin authentication required', 401);
-  }
-  const level = ROLE_HIERARCHY[admin.role] ?? 0;
-  if (level < ROLE_HIERARCHY[minRole]) {
-    return errorResponse(
-      `Insufficient permissions. This endpoint requires the '${minRole}' role.`,
-      403,
-    );
-  }
-  return admin;
-}
-
-// ---------------------------------------------------------------------------
-// KV storage helpers
-// ---------------------------------------------------------------------------
-
-
-
-// ---------------------------------------------------------------------------
-// S4-serverless: multi-admin RBAC on KV (end-state serverless auth).
-//
-// The end goal is a fully-serverless system; the Worker is the deployed
-// authority. This layer ports the Express server's admin model (username +
-// password + role) onto KV so the dashboard and admin-plane endpoints work
-// without Postgres.
-//
-// - admins[] stored in a single KV key (low-cardinality, mirrors devices).
-// - Passwords hashed with PBKDF2-SHA256 (native WebCrypto, NIST floor).
-// - Sessions are stateless HMAC-signed tokens ({id, username, role, exp}).
-// - ADMIN_TOKEN remains as a break-glass super-admin fallback so the Worker
-//   still works before any admin is created (bootstrap / recovery).
-// ---------------------------------------------------------------------------
-
-type AdminRole = 'viewer' | 'operator' | 'super-admin';
-
-interface Admin {
-  id: string;
-  username: string;
-  password_hash: string; // base64 PBKDF2
-  salt: string;          // base64
-  // PBKDF2 iteration count used for password_hash. Optional for backward
-  // compat — admins created before this field existed used the then-current
-  // PBKDF2_ITERATIONS default. Recording it per-admin lets us change the
-  // cost without invalidating existing hashes.
-  pbkdf2_iterations?: number;
-  role: AdminRole;
-  created_at: string;
-}
-
-const ADMINS_KEY = 'admins';
-// Cloudflare Workers' WebCrypto caps PBKDF2 at 100,000 iterations
-// (NotSupportedError above that). 210k was the NIST floor we targeted but it
-// crashes on the real Workers runtime (error 1101 on create-admin). 100k is
-// the platform max and still a strong PBKDF2-SHA256 cost.
-const PBKDF2_ITERATIONS = 100_000;
-// Iteration count used for admins created before pbkdf2_iterations was
-// recorded (they were hashed at the original 210k — which only ever ran in
-// Node tests, never on the live Worker, so no live admin uses it).
-const LEGACY_PBKDF2_ITERATIONS = 210_000;
-const TOKEN_TTL_SECONDS = 8 * 3600; // match server's JWT_EXPIRES_IN default (8h)
-
-const ROLE_HIERARCHY: Record<AdminRole, number> = {
-  viewer: 0,
-  operator: 1,
-  'super-admin': 2,
-};
-
-/**
- * Parse a JSON blob read from KV.
- *
- * KV is external storage: a truncated or hand-edited value would otherwise raise
- * a bare SyntaxError from deep inside a handler with no clue which key was bad.
- * This names the key and re-throws. It deliberately does NOT fall back to an empty
- * collection — silently treating corruption as "no data" would make a tampered
- * fleet look empty, which is the wrong direction for an anti-theft system.
- */
-function parseKvJson<T>(raw: string, key: string): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    throw new Error(`corrupt KV value at "${key}" — refusing to treat it as empty`);
-  }
-}
-
-/**
- * Parse a request body that was already read as text (agent HMAC verification
- * needs the raw bytes, so the handlers cannot re-read the stream).
- *
- * Returns null instead of throwing: a malformed body from an authenticated agent
- * is the caller's bug, and the honest answer is 400. Before this, the throw
- * escaped the handler and the runtime turned it into a 500 with no explanation.
- */
-function parseJsonBody(text: string): any | null {
-  try {
-    const value = JSON.parse(text);
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The request's URL.
- *
- * `Request.url` is absolute by construction, so a throw here means the Request
- * itself is malformed and never reached a handler. Centralised so the seven call
- * sites do not each need a try/catch, and so a hypothetical malformed URL
- * degrades to empty route params rather than a 500.
- */
-function requestUrl(request: Request): URL {
-  try {
-    return new URL(request.url);
-  } catch {
-    return new URL('https://invalid.invalid/');
-  }
-}
-
-async function listAdmins(env: Env): Promise<Admin[]> {
-  const data = await env.LOCKDOWN_KV.get(ADMINS_KEY);
-  return data ? parseKvJson<Admin[]>(data, ADMINS_KEY) : [];
-}
-
-async function saveAdmins(env: Env, admins: Admin[]): Promise<void> {
-  await env.LOCKDOWN_KV.put(ADMINS_KEY, JSON.stringify(admins));
-}
-
-function b64encode(buf: ArrayBuffer): string {
-  return btoa(String.fromCharCode(...new Uint8Array(buf)));
-}
-
-function b64decode(b64: string): Uint8Array {
-  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-}
-
-/** PBKDF2-SHA256 password hash (base64) for a given salt + iteration count. */
-async function pbkdf2Hash(password: string, saltB64: string, iterations: number = PBKDF2_ITERATIONS): Promise<string> {
-  const encoder = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(password),
-    'PBKDF2',
-    false,
-    ['deriveBits'],
-  );
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      hash: 'SHA-256',
-      salt: b64decode(saltB64) as BufferSource,
-      iterations,
-    },
-    keyMaterial,
-    256,
-  );
-  return b64encode(bits);
-}
-
-/** Create an admin record with a fresh random salt + PBKDF2 hash. */
-async function makeAdmin(username: string, password: string, role: AdminRole): Promise<Admin> {
-  const salt = b64encode(crypto.getRandomValues(new Uint8Array(16)).buffer);
-  const password_hash = await pbkdf2Hash(password, salt, PBKDF2_ITERATIONS);
-  return {
-    id: generateId(),
-    username,
-    password_hash,
-    salt,
-    pbkdf2_iterations: PBKDF2_ITERATIONS,
-    role,
-    created_at: new Date().toISOString(),
-  };
-}
-
-function b64urlEncode(str: string): string {
-  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function b64urlDecode(s: string): string {
-  const pad = s.length % 4 === 0 ? '' : '='.repeat(4 - (s.length % 4));
-  return atob(s.replace(/-/g, '+').replace(/_/g, '/') + pad);
-}
-
-/** Issue a stateless HMAC-signed session token (JWT-shape: header.payload.sig). */
-async function signAdminToken(env: Env, admin: Admin): Promise<string> {
-  const secret = env.JWT_SECRET || env.ADMIN_TOKEN || 'dev-secret';
-  const header = b64urlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = b64urlEncode(
-    JSON.stringify({
-      id: admin.id,
-      username: admin.username,
-      role: admin.role,
-      exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS,
-    }),
-  );
-  const sig = await hmacSha256(secret, `${header}.${payload}`);
-  return `${header}.${payload}.${b64urlEncode(sig)}`;
-}
-
-/** Verify a signed token; returns the embedded admin claims or null. */
-async function verifyAdminToken(
-  env: Env,
-  token: string,
-): Promise<{ id: string; username: string; role: AdminRole } | null> {
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-  const secret = env.JWT_SECRET || env.ADMIN_TOKEN || 'dev-secret';
-  const expected = await hmacSha256(secret, `${parts[0]}.${parts[1]}`);
-  const sig = b64urlDecode(parts[2]);
-  // Constant-time comparison.
-  if (sig.length !== expected.length) return null;
-  let diff = 0;
-  for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
-  if (diff !== 0) return null;
-  try {
-    const payload = JSON.parse(b64urlDecode(parts[1]));
-    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null; // expired
-    if (!payload.id || !payload.role) return null;
-    return { id: payload.id, username: payload.username, role: payload.role };
-  } catch {
-    return null;
-  }
-}
-
-// The Worker authenticates with `Authorization: Bearer` and `X-Agent-Key` headers —
-// never cookies — so a wildcard origin does not expose credentials: a hostile page
-// can send the request but cannot attach a token it does not have. Restricting it
-// would break the Electron app, which loads the dashboard from file:// and
-// therefore sends a null origin. Named once here so the decision is reviewable
-// rather than repeated as a bare literal in three response paths.
-const TOKEN_API_CORS_ORIGIN = '*';
 
 const DEVICES_KEY = 'devices';
 const COMMANDS_KEY = 'commands';
@@ -2681,7 +2352,7 @@ async function handleListDevices(request: Request, env: Env): Promise<Response> 
   }));
   // D-222: a rollout asks "which devices are not on build X?". `unknown` is a distinct
   // query from any literal version — never-reported is not "on some other version".
-  const url = new URL(request.url);
+  const url = requestUrl(request);
   const requestedVersion = (url.searchParams.get('agent_version') || '').trim();
   if (!requestedVersion) return jsonResponse(safe);
   if (requestedVersion === 'unknown') {
@@ -3839,186 +3510,11 @@ export default {
 
     // Admin endpoints (bearer auth)
 
-/**
- * GET /api/enroll/setup.ps1 — the script behind the dashboard's one-liner.
- *
- * Served by the Worker as well as by Express: the serverless deployment is the
- * one operators actually point at, and until S269 it had no served installer
- * path, so the one-liner the dashboard displays answered 404 for every Worker
- * user (the route only existed in server/src/routes/enroll.js).
- *
- * No secret is in the URL: the token is prompted for on the target, because a
- * `?token=` would be written to request logs, shell history and browser history
- * (B-070). The script delegates to the shipped installer rather than
- * re-implementing enrolment, config writing or service registration.
- */
-function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
-  const parsed = new URL(serverUrl);
-  const host = parsed.hostname;
-  const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
-  const isIpLiteral = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
-  const remedy = isIpLiteral
-    ? `Check this machine is on the same network as ${host}, and that the server is running.`
-    : `Check the VPN is connected, then try: Resolve-DnsName ${host}`;
-  const plainHttp = parsed.protocol === 'http:';
-
-  // Substituted as ONE PowerShell argument, and quoted for the here-string it lands in:
-  // the inner script body is a single-quoted here-string, so a bare `,'--flag'` closes
-  // the enclosing `.Replace(...)` call — measured on MOLE as
-  // `Missing ')' in method call` (S270). A double-quoted PowerShell string carries the
-  // inner single quotes intact.
-  const insecureReplacement = plainHttp ? `${'"'},\'--allow-insecure-http\'${'"'}` : "''";
-
-  if (gui) {
-    const guiLines = [
-      `# Lockdown agent installer for ${serverUrl}`,
-      `$ErrorActionPreference = 'Stop'`,
-      `$u = '${serverUrl}'`,
-      `if (-not (Test-NetConnection '${host}' -Port ${port}).TcpTestSucceeded) {`,
-      `    throw "Cannot reach $u on port ${port}. ${remedy}"`,
-      `}`,
-      `$e = Join-Path $env:TEMP 'lockdown-setup.exe'`,
-      `Invoke-WebRequest "$u/api/download/installer" -OutFile $e`,
-      `Invoke-WebRequest "$u/api/download/agent" -OutFile (Join-Path $env:TEMP 'lockdown-agent.exe')`,
-      `Unblock-File $e`,
-      `$t = Read-Host 'Enrollment token (from the dashboard)'`,
-      `Write-Host "Opening the setup wizard ..." -ForegroundColor Cyan`,
-      `Set-Clipboard $u`,
-      `Start-Process $e -Verb RunAs`,
-    ];
-    return `${guiLines.join('\r\n')}\r\n`;
-  }
-
-  // Everything below runs in ONE elevated PowerShell. The downloads happen there
-  // rather than in the caller's session: elevation can switch accounts (a standard
-  // user entering Administrator's credentials), and %TEMP% then points somewhere
-  // else entirely — which is how "Cannot find lockdown-agent.exe" came back after
-  // the agent had already been staged (S269).
-  //
-  // Paths are machine-wide for the same reason: C:\ProgramData is visible to both
-  // the elevated process and the caller that prints the log.
-  const setupLines = [
-    `# Lockdown agent installer for ${serverUrl}`,
-    `# Generated by the dashboard. Paste into PowerShell, or run setup.cmd.`,
-    `$ErrorActionPreference = 'Stop'`,
-    `$u = '${serverUrl}'`,
-    ``,
-    `Write-Host "Checking $u ..." -ForegroundColor Cyan`,
-    `if (-not (Test-NetConnection '${host}' -Port ${port}).TcpTestSucceeded) {`,
-    `    throw "Cannot reach $u on port ${port}. ${remedy}"`,
-    `}`,
-    ``,
-    `# $env:LOCKDOWN_ENROLL_TOKEN makes this non-interactive, which is what an MDM or`,
-    `# an automated acceptance test needs; Read-Host is the fallback for a human.`,
-    `$t = $env:LOCKDOWN_ENROLL_TOKEN`,
-    `if (-not $t) { $t = Read-Host 'Enrollment token (from the dashboard)' }`,
-    `if (-not $t) { throw 'An enrollment token is required (or set $env:LOCKDOWN_ENROLL_TOKEN).' }`,
-    ``,
-    `$inner = Join-Path $env:ProgramData 'LockdownAgent/setup-inner.ps1'`,
-    `$log = Join-Path $env:ProgramData 'LockdownAgent/install.log'`,
-    `New-Item -ItemType Directory -Force -Path (Split-Path $inner) | Out-Null`,
-    `$body = @'`,
-    `$ErrorActionPreference = 'Stop'`,
-    `$log = '__LOG__'`,
-    `$stage = Join-Path $env:ProgramData 'LockdownAgent/staging'`,
-    `New-Item -ItemType Directory -Force -Path $stage | Out-Null`,
-    `$inst = Join-Path $env:ProgramData 'LockdownAgent'`,
-    `# Plain HTTP is a lab posture, and the AGENT refuses it unless its config says`,
-    `# verify_tls false ("key material must be transported over TLS"). The installer owns`,
-    `# that decision — --allow-insecure-http writes it — so this script passes the flag`,
-    `# and then READS the result back. It used to patch config.json itself after a`,
-    `# successful install (takeown + icacls + a JSON rewrite), which is the "manual step`,
-    `# after install" the repo's rule forbids, and it could not run at all when the`,
-    `# install failed — leaving a config that makes the agent refuse to start (S270).`,
-    `$t0 = Get-Date`,
-    `# The log is a ledger, not a snapshot: it is APPENDED to, and every run writes a`,
-    `# start marker and an exit line. It used to be truncated by the installer's own`,
-    `# redirection, which meant a run that died before the installer started left the`,
-    `# PREVIOUS run's log in place — and the caller printed that as this run's output,`,
-    `# "Installation Complete" and all (S270 on MOLE: a re-install that never ran`,
-    `# looked like a success with a broken exit code).`,
-    `Add-Content -LiteralPath $log ("=== installer run started " + (Get-Date).ToString('o') + " ===")`,
-    `# $ErrorActionPreference is Stop, so any download/staging failure aborts this`,
-    `# script before a single line reaches the log. The trap is what makes such an`,
-    `# abort visible instead of silent — otherwise the tail below is the last run's.`,
-    `trap {`,
-    `    Add-Content -LiteralPath $log ("=== ABORTED before the installer ran: " + $_.Exception.Message + " ===")`,
-    `    exit 1`,
-    `}`,
-    `Invoke-WebRequest '__URL__/api/download/installer' -OutFile (Join-Path $stage 'lockdown-setup.exe')`,
-    `Invoke-WebRequest '__URL__/api/download/agent' -OutFile (Join-Path $stage 'lockdown-agent.exe')`,
-    `Invoke-WebRequest '__URL__/api/download/service' -OutFile (Join-Path $stage 'lockdown-service.exe')`,
-    `Get-ChildItem $stage | Unblock-File`,
-    `# lockdown-service.exe is NOT copied here. The SCM runs it, so a second copy over a`,
-    `# running service fails with "used by another process" — which aborted this script`,
-    `# before the installer started and exited 1 (S270). installer.py::_copy_binary now`,
-    `# stages both binaries, stopping the service to replace an image it holds and`,
-    `# leaving step 6 to recreate and start it. One owner for installation, as intended.`,
-    `$outF = Join-Path $env:TEMP ('lockdown-install-' + [guid]::NewGuid().ToString('N') + '.out.txt')`,
-    `$errF = Join-Path $env:TEMP ('lockdown-install-' + [guid]::NewGuid().ToString('N') + '.err.txt')`,
-    `# Start-Process with redirected files, NOT a native call redirected inline. Under`,
-    `# $ErrorActionPreference = 'Stop' a native command's FIRST stderr line becomes a`,
-    `# terminating error in Windows PowerShell 5.1, so the trap below fired mid-run and`,
-    `# the log kept one line — "Traceback (most recent call last):" — with the actual`,
-    `# PermissionError discarded (measured on MOLE, S270). Redirected files carry the`,
-    `# whole traceback and cannot abort the script; the exit code stays the verdict.`,
-    `$p = Start-Process -FilePath (Join-Path $stage 'lockdown-setup.exe') -ArgumentList @('--server-url','__URL__','--token','__TOKEN__','--silent'__INSECURE__) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $outF -RedirectStandardError $errF`,
-    `$code = $p.ExitCode`,
-    `Add-Content -LiteralPath $log (Get-Content $outF -ErrorAction SilentlyContinue)`,
-    `if ((Get-Item $errF -ErrorAction SilentlyContinue).Length -gt 0) {`,
-    `    Add-Content -LiteralPath $log '--- installer stderr ---'`,
-    `    Add-Content -LiteralPath $log (Get-Content $errF -ErrorAction SilentlyContinue)`,
-    `}`,
-    `Remove-Item $outF,$errF -Force -ErrorAction SilentlyContinue`,
-    `Add-Content -LiteralPath $log ("=== installer exited " + $code + " ===")`,
-    `Add-Content $log ("service state: " + (Get-Service LockdownAgent -ErrorAction SilentlyContinue).Status)`,
-    `if ($code -eq 0 -and '__PLAIN__' -eq 'yes') {`,
-    `    # Evidence, not intent: read what the installer actually wrote. A plain-HTTP`,
-    `    # server with verify_tls left true is a device that will not start, so this exits`,
-    `    # non-zero instead of printing a cheerful line next to a dead agent.`,
-    `    $cfg = Join-Path $inst 'config.json'`,
-    `    $check = $null`,
-    `    if (Test-Path $cfg) {`,
-    `        try { $check = (Get-Content $cfg -Raw | ConvertFrom-Json).verify_tls } catch { $check = $null }`,
-    `    }`,
-    `    Add-Content -LiteralPath $log ("verify_tls in config: " + $check)`,
-    `    if ($check -ne $false) {`,
-    `        Add-Content -LiteralPath $log 'FAILED: plain-HTTP server but verify_tls is not false — the agent will refuse to start.'`,
-    `        $code = 3`,
-    `    } else {`,
-    `        Restart-Service LockdownAgent -ErrorAction SilentlyContinue`,
-    `    }`,
-    `}`,
-    `exit $code`,
-    `'@`,
-    `$body = $body.Replace('__EXE__', '').Replace('__URL__', $u).Replace('__TOKEN__', $t).Replace('__LOG__', $log).Replace('__PLAIN__', '${plainHttp ? 'yes' : 'no'}').Replace('__INSECURE__', ${insecureReplacement})`,
-    `[IO.File]::WriteAllText($inner, $body)`,
-    ``,
-    `Write-Host "Installing (no wizard) ..." -ForegroundColor Cyan`,
-    `$p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$inner)`,
-    `Remove-Item $inner -ErrorAction SilentlyContinue`,
-    ``,
-    `if ($p.ExitCode -ne 0) {`,
-    `    if (Test-Path $log) {`,
-    `        Write-Host "---- install.log tail (this run starts at the last 'installer run started' line) ----" -ForegroundColor Yellow`,
-    `        Get-Content $log -Tail 25 | ForEach-Object { Write-Host $_ }`,
-    `        Write-Host "---- full log: $log ----" -ForegroundColor Yellow`,
-    `    } else {`,
-    `        Write-Host "No installer log at $log — the elevated run may not have started." -ForegroundColor Yellow`,
-    `    }`,
-    `    throw "Installer failed with exit code $($p.ExitCode)"`,
-    `}`,
-    `Write-Host 'Installed. The device appears in the dashboard within a minute.' -ForegroundColor Green`,
-  ];
-  return `${setupLines.join('\r\n')}\r\n`;
-}
-
-/** Public: carries no secret, and the target has no credential yet. */
 function handleEnrollSetupPs1(request: Request, env: Env): Response {
   const gui = String(env.INSTALLER_GUI ?? '') === 'true';
   let script: string;
   try {
-    script = composeEnrollSetupScript(new URL(request.url).origin, gui);
+    script = composeEnrollSetupScript(requestUrl(request), gui);
   } catch {
     return new Response(
       'ERROR: the request origin is not a valid absolute URL (use scheme://host[:port]).\n',
@@ -4032,7 +3528,7 @@ function handleEnrollSetupPs1(request: Request, env: Env): Response {
 
 /** GET /api/enroll/setup.cmd — the same thing as a double-clickable file. */
 function handleEnrollSetupCmd(request: Request, _env: Env): Response {
-  const serverUrl = new URL(request.url).origin;
+  const serverUrl = requestUrl(request).origin;
   const body = [
     '@echo off',
     'setlocal',
@@ -4055,7 +3551,7 @@ function handleEnrollSetupCmd(request: Request, _env: Env): Response {
 async function handleEnrollSetupCommand(request: Request, env: Env): Promise<Response> {
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
-  const serverUrl = new URL(request.url).origin;
+  const serverUrl = requestUrl(request).origin;
   const gui = String(env.INSTALLER_GUI ?? '') === 'true';
   return jsonResponse({
     server_url: serverUrl,
@@ -4932,6 +4428,16 @@ import { handleFirmwareDownload } from './pbl/routes/firmware';
 import { listDevices as listPblDevices, deleteDevice as deletePblDevice, getDevice as getPblDevice, setDeviceStatus as setPblDeviceStatus } from './pbl/devices';
 import { checkIpRateLimit, rateLimitResponse, IP_RATE_LIMITS } from './pbl/rateLimit';
 import type { Env } from './pbl/env';
+import {
+  TOKEN_API_CORS_ORIGIN, b64decode, b64encode, errorResponse, generateApiKey, generateId,
+  hmacSha256, jsonResponse, parseJsonBody, parseKvJson, requestUrl, sha256, sha256HexBytes,
+  timingSafeEqualStr,
+} from './http';
+import {
+  Admin, AdminRole, LEGACY_PBKDF2_ITERATIONS, TOKEN_TTL_SECONDS,
+  listAdmins, makeAdmin, pbkdf2Hash, requireRole, saveAdmins, signAdminToken,
+} from './admin-auth';
+import { composeEnrollSetupScript } from './installer-scripts';
 
 // Cache the signing key pair across requests within the same isolate.
 let cachedKeys: SigningKeyPair | null = null;

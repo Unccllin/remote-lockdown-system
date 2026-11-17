@@ -444,7 +444,10 @@ def test_express_hashes_admin_passwords_with_bcrypt_cost_12():
 
 
 def test_worker_pbkdf2_sits_at_the_documented_platform_ceiling():
-    src = (REPO / "serverless/worker.ts").read_text(encoding="utf-8")
+    # S277 moved admin hashing into serverless/admin-auth.ts to get the Worker back under the
+    # 5000-line analysis limit. The VALUE is what ADR-001 pins, so the test follows it rather
+    # than the file it used to live in.
+    src = (REPO / "serverless/admin-auth.ts").read_text(encoding="utf-8")
     assert "PBKDF2_ITERATIONS = 100_000" in src, (
         "the Worker iteration count changed; ADR-001 explains it is the WebCrypto "
         "maximum, so raising it requires a runtime that supports more"
