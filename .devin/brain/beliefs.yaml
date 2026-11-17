@@ -3069,3 +3069,41 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-138
+  statement: Both surfaces derive lock_state (applied/applying/armed/failed/none) from the newest lockdown
+    plus newest unlock per device, with a 180 s freshness window; Express attaches it in the two device
+    GET routes, never in publicDevice, because that helper also shapes command-less POST responses
+  domain: api/devices
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S272: server/src/routes/devices.js attaches it in both device GET routes; scripts/test_cross_surface_contract.py
+    pins the five values and the 180 s window on both surfaces'
+  source: server/src/routes/devices.js; serverless/worker.ts
+  asserted: '2026-11-17'
+  last_verified: '2026-11-17'
+  commit_ref: 1f6d399
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Verified against real SQLite through the real Express routes: none -> armed -> applying -> applied
+    -> none. Contract pinned in scripts/test_cross_surface_contract.py.'
+- id: B-139
+  statement: 'In SQLite, location_reports.reported_at is ''YYYY-MM-DD HH:MM:SS'' while an agent-supplied
+    observed_at is ISO-8601, so a bare ORDER BY COALESCE(observed_at, reported_at) compares characters:
+    ''T'' (0x54) sorts above '' '' (0x20) and an earlier fix outranks a later one. datetime(COALESCE(...))
+    normalises both shapes; PostgreSQL''s TIMESTAMPTZ columns need no normalisation'
+  domain: db/sqlite
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'S272: measured on a real SQLite database through the real Express routes — artifact step
+    15 showed Middle>Earlier>Newer before the normalisation and Newer>Middle>Earlier after; pinned by
+    server/tests/locationOrdering.test.js (mutation-checked)'
+  source: server/src/db/timestamps.js
+  asserted: '2026-11-17'
+  last_verified: '2026-11-17'
+  commit_ref: 1f6d399
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'The dialect switch must read pool.driver, not process.env.USE_SQLITE: callers that require sqlitePool
+    directly never set that env var.'
