@@ -2991,10 +2991,23 @@ def _get_real_username() -> str | None:
     return os.environ.get("USERNAME")
 
 
-def _run_net_user(args: list[str]) -> bool:
-    """Run a `net user` command. Returns True on success."""
+def _run_net_user(args: list[str], stdin: str | None = None) -> bool:
+    """Run a `net user` command. Returns True on success.
+
+    `stdin` exists for one specific prompt: with a password longer than 14 characters,
+    `net user <name> <password> /add` asks "Do you want to continue this operation? (Y/N)"
+    and, with no console and no stdin, answers nothing — "No valid response was provided",
+    exit -1, no account. That is why the decoy was never created (measured on MOLE, S271);
+    the caller now answers the prompt instead of hoping it is not asked.
+    """
     try:
-        result = subprocess.run(["net", "user"] + args, capture_output=True, timeout=10, text=True)
+        result = subprocess.run(
+            ["net", "user"] + args,
+            capture_output=True,
+            timeout=10,
+            text=True,
+            input=stdin,
+        )
         if result.returncode != 0:
             log.warning("net user %s failed: %s", " ".join(args), result.stderr.strip())
             return False
@@ -3204,7 +3217,9 @@ def apply_tracking_data_protection(cfg: dict) -> dict:
     # --- Layer 3: Create a decoy account, then verify it exists ---
     decoy_password = secrets.token_urlsafe(DECOY_ACCOUNT_PASSWORD_LENGTH)
     log.info("Creating decoy account: %s", DECOY_ACCOUNT_NAME)
-    created = _run_net_user([DECOY_ACCOUNT_NAME, decoy_password, "/add"])
+    # "Y" answers the >14-character password prompt (see _run_net_user); without it the
+    # account is never created and the layer silently fails.
+    created = _run_net_user([DECOY_ACCOUNT_NAME, decoy_password, "/add"], stdin="Y\n")
     if not created:
         _run_net_user([DECOY_ACCOUNT_NAME, decoy_password])
     _run_net_user([DECOY_ACCOUNT_NAME, "/active:yes"])

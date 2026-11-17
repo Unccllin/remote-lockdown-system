@@ -945,3 +945,35 @@ class TestLogonPrevention:
         agent.handle_unlock({"lockdown_folder": "/tmp/x", "lock_sentinel": "/tmp/y"}, {"id": "c1"})
 
         assert calls == ["re-enable", "ack"], calls
+
+
+class TestDecoyAccountPrompt:
+    """`net user <name> <24-char password> /add` asks a human question.
+
+    Measured on MOLE (S271): with no console and no stdin the prompt gets nothing, the
+    command exits -1 with "No valid response was provided", and the decoy is never created —
+    which is why `create_decoy` has been in `failed` since S269.
+    """
+
+    def test_the_decoy_creation_answers_the_password_prompt(self, monkeypatch):
+        calls = []
+
+        def fake_net(args, stdin=None):
+            calls.append((args, stdin))
+            return True
+
+        monkeypatch.setattr(agent, "_run_net_user", fake_net)
+        monkeypatch.setattr(agent.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(agent, "_get_real_username", lambda: "labuser")
+        monkeypatch.setattr(agent, "hold_logon", lambda reason, user=None: (user, True))
+        monkeypatch.setattr(agent, "_query_account_active", lambda user: False)
+        monkeypatch.setattr(agent, "_backup_efs_certificate", lambda user: None)
+        monkeypatch.setattr(agent, "_run_cipher", lambda mode, path: True)
+        monkeypatch.setattr(agent, "_count_encrypted_files", lambda path: 0)
+        monkeypatch.setattr(type(agent.log), "info", lambda *a, **k: None, raising=False)
+
+        agent.apply_tracking_data_protection({})
+
+        add_calls = [c for c in calls if "/add" in c[0]]
+        assert add_calls, "the decoy must be created"
+        assert add_calls[0][1] == "Y\n", "the >14-character password prompt must be answered"
