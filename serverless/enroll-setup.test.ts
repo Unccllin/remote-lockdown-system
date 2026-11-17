@@ -137,36 +137,55 @@ describe('served enrolment (the dashboard one-liner)', () => {
     expect(data.mode).toBe('silent');
   });
 
-  it('warns about plain HTTP instead of pretending TLS will work', async () => {
+  it('passes the TLS decision to the installer and verifies what it wrote', async () => {
     const worker = await getWorker();
     // Same handler, different request origin — the script is composed from the
     // origin the target actually reached, not from a fixed setting.
     const plain = new Request('http://10.0.0.5:8787/api/enroll/setup.ps1', { method: 'GET' });
     const resp = await worker.fetch(plain, makeEnv());
     const body = await resp.text();
-    // No warning-only text any more: the script fixes verify_tls itself.
-    // The write must be verified, not announced: the agent's tamper protection can
-    // deny even an elevated Set-Content, and a log line that lies about it sends the
-    // operator looking in the wrong place.
-    expect(body).toContain('verify_tls now:');
-    expect(body).toContain('could not set verify_tls');
-    expect(body).toContain('takeown.exe');
-    // Windows PowerShell 5.1 writes a BOM with `Set-Content -Encoding UTF8`, and
-    // Python's json.load refuses one — the agent then cannot read its own config.
-    expect(body).toContain('[IO.File]::WriteAllText');
-    expect(body).not.toContain('Set-Content $cfg');
+
+    // The agent refuses a plain-HTTP server unless its config says verify_tls false
+    // ("key material must be transported over TLS"), and the installer owns that —
+    // --allow-insecure-http is its flag. The Express surface has passed it for
+    // months; this one did not, so every plain-HTTP lab install failed at the check
+    // while the script's own post-install config patch sat unreachable behind it
+    // (S270, MOLE: the installer printed "FAILED: this server URL is http://" and the
+    // agent then refused to start).
+    // Only the plain-HTTP branch of the verify_tls check may run. The marker is
+    // substituted at compose time, so an https response says 'no' here and the branch
+    // is unreachable rather than merely unexecuted.
+    expect(body).toContain(".Replace('__PLAIN__', 'yes')")
+
+    // And then the result is read back, not announced. The script no longer edits
+    // config.json: takeown + icacls + a JSON rewrite was a manual step after install,
+    // it fights tamper protection, and it cannot run when the install fails.
+    expect(body).toContain('verify_tls in config: ');
+    expect(body).toContain('FAILED: plain-HTTP server but verify_tls is not false');
+    expect(body).not.toContain('takeown.exe');
+    expect(body).not.toContain('[IO.File]::WriteAllText($cfg');
+    expect(body).not.toContain('could not set verify_tls');
     expect(body).toContain('Restart-Service LockdownAgent');
+
     // The remedy has to name a real path. A backslash in a template literal is an
     // escape and JS drops unknown ones, so this line once rendered
     // "%PROGRAMDATA%LockdownAgentconfig.json" — advice that points at no file.
     expect(body).toContain('ProgramData');
     expect(body).toContain('LockdownAgent/install.log');
     expect(body).toContain('config.json');
-    expect(body).toContain('verify_tls');
-    // The plain-HTTP install patches the config inside the same elevated run, so the
-    // operator is not left with a second manual step (and no mangled path).
-    expect(body).toContain('Restart-Service LockdownAgent');
     expect(body).not.toContain('LockdownAgentconfig');
+  });
+
+  it('does not weaken TLS for an https server', async () => {
+    const worker = await getWorker();
+    const resp = await worker.fetch(req('/api/enroll/setup.ps1'), makeEnv());
+    const body = await resp.text();
+    // The flag is plain-HTTP-only: an https deployment must never carry a switch that
+    // turns certificate verification off. Asserted on the ARGUMENT form, because the
+    // comment explaining it is part of the served text — and on the branch gate, since
+    // the verify_tls text itself is present in both variants.
+    expect(body).not.toContain(",'--allow-insecure-http'");
+    expect(body).toContain(".Replace('__PLAIN__', 'no')");
   });
 });
 

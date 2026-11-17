@@ -1,0 +1,49 @@
+{
+  "generated_at": "2026-11-17T05:31:12.724876+00:00",
+  "steps": [
+    {
+      "step": "enroll",
+      "status": "PASS",
+      "checks": [
+        {
+          "name": "service Running",
+          "passed": true,
+          "observed": "Running"
+        },
+        {
+          "name": "config.json parses",
+          "passed": true,
+          "observed": "True"
+        },
+        {
+          "name": "agent checked in",
+          "passed": true,
+          "observed": "68s ago (limit 300s)"
+        },
+        {
+          "name": "device enrolled on the server",
+          "passed": true,
+          "observed": "49d228023bfd6cd7823bbab8f1ce18f2"
+        },
+        {
+          "name": "config device_id matches the server",
+          "passed": true,
+          "observed": "49d228023bfd6cd7823bbab8f1ce18f2 vs 49d228023bfd6cd7823bbab8f1ce18f2"
+        },
+        {
+          "name": "hostname matches",
+          "passed": true,
+          "observed": "MOLE vs MOLE"
+        },
+        {
+          "name": "agent reports a version",
+          "passed": true,
+          "observed": "1.0.0"
+        }
+      ]
+    }
+  ],
+  "snapshot": {},
+  "device": "MOLE",
+  "server_url": "http://192.168.1.43:8787"
+}

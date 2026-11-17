@@ -20,4 +20,19 @@ export interface Env {
   PBL_POLICY_SIGNING_KEY?: string;
   /** S4-serverless: HMAC secret for admin session tokens. */
   JWT_SECRET?: string;
+  /**
+   * How often an ACTIVE device polls, in seconds (default 60 when unset).
+   *
+   * Declared on Env rather than reached for with `as unknown as Record<…>` at each call
+   * site: the agent learns about a queued command only when it polls, so this number is
+   * the difference between "flag a device" taking a second and taking five minutes.
+   */
+  ACTIVE_POLL_SECONDS?: string;
+  /**
+   * "true" serves the GUI setup wizard instead of the silent installer.
+   *
+   * Declared here for the same reason as ACTIVE_POLL_SECONDS: these are wrangler `[vars]`
+   * and each call site used to reach for them with `as unknown as Record<…>`.
+   */
+  INSTALLER_GUI?: string;
 }

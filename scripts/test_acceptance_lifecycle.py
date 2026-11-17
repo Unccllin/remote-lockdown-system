@@ -76,7 +76,9 @@ def device(**overrides) -> dict:
         "id": "dev-1",
         "hostname": "MOLE",
         "status": "active",
-        "last_checkin": (NOW - timedelta(seconds=20)).isoformat().replace("+00:00", "Z"),
+        "last_checkin": (NOW - timedelta(seconds=20))
+        .isoformat()
+        .replace("+00:00", "Z"),
         "agent_version": "1.0.0",
     }
     base.update(overrides)
@@ -120,7 +122,9 @@ class TestUnobservableIsNotPass:
 
     def test_lock_skips_when_no_command_record_exists(self):
         result = mod.evaluate_lock(
-            device(status="locked"), snapshot(lock_sentinel=True, lockdown_encrypted=3), None
+            device(status="locked"),
+            snapshot(lock_sentinel=True, lockdown_encrypted=3),
+            None,
         )
         assert by_name(result, "lockdown command executed").passed is None
         assert result.status == "SKIP"
@@ -128,12 +132,19 @@ class TestUnobservableIsNotPass:
     def test_skip_beats_pass_and_fail_beats_skip(self):
         assert mod.StepResult("x", [mod.check("a", True, 1)]).status == "PASS"
         assert (
-            mod.StepResult("x", [mod.check("a", True, 1), mod.check("b", None, "n/a")]).status
+            mod.StepResult(
+                "x", [mod.check("a", True, 1), mod.check("b", None, "n/a")]
+            ).status
             == "SKIP"
         )
         assert (
             mod.StepResult(
-                "x", [mod.check("a", None, "n/a"), mod.check("b", False, 0), mod.check("c", True, 1)]
+                "x",
+                [
+                    mod.check("a", None, "n/a"),
+                    mod.check("b", False, 0),
+                    mod.check("c", True, 1),
+                ],
             ).status
             == "FAIL"
         )
@@ -204,13 +215,17 @@ class TestTrack:
                 {"path": "C:/Users/labadmin/Documents", "encrypted": 4},
                 {"path": "C:/Users/labadmin/Downloads", "encrypted": 2},
             ],
-            "tracking_state": {"applied": ["efs_encrypt", "disable_real_user", "create_decoy"]},
+            "tracking_state": {
+                "applied": ["efs_encrypt", "disable_real_user", "create_decoy"]
+            },
         }
         base.update(overrides)
         return snapshot(**base)
 
     def track_command(self):
-        return command(command_type="track", lockdown_effective=None, boot_lock_status=None)
+        return command(
+            command_type="track", lockdown_effective=None, boot_lock_status=None
+        )
 
     def test_a_verified_tracking_cycle_passes(self):
         result = mod.evaluate_track(
@@ -242,7 +257,10 @@ class TestTrack:
             ),
             self.track_command(),
         )
-        assert by_name(result, "EFS applied to at least one profile folder").passed is False
+        assert (
+            by_name(result, "EFS applied to at least one profile folder").passed
+            is False
+        )
         assert by_name(result, "state file claim 'efs_encrypt'").passed is False
 
     def test_an_enabled_account_fails_the_disable_layer(self):
@@ -269,7 +287,9 @@ class TestTrack:
 
 class TestEnrollAndRecovery:
     def test_a_healthy_enrolment_passes(self):
-        result = mod.evaluate_enroll(device(), snapshot(), NOW, expected_hostname="MOLE")
+        result = mod.evaluate_enroll(
+            device(), snapshot(), NOW, expected_hostname="MOLE"
+        )
         assert result.status == "PASS", result.checks
 
     def test_a_stopped_service_fails_and_names_the_condition(self):
@@ -286,14 +306,46 @@ class TestEnrollAndRecovery:
         result = mod.evaluate_enroll(None, snapshot(), NOW)
         assert by_name(result, "device enrolled on the server").passed is False
 
+    def test_a_healthy_device_on_a_slow_adaptive_interval_passes(self):
+        """MOLE reported poll_interval 30 in its config while the server told it 300.
+
+        A 2-interval limit therefore failed a device that was checking in every five
+        minutes exactly as instructed (measured: 137s old, limit 60s, S270). The floor is
+        what keeps the harness from inventing failures out of a correct configuration.
+        """
+        slow = device(
+            last_checkin=(NOW - timedelta(seconds=137))
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        result = mod.evaluate_enroll(slow, snapshot(poll_interval=30), NOW)
+        assert by_name(result, "agent checked in").passed is True
+        assert "limit 300s" in by_name(result, "agent checked in").observed
+
+    def test_the_floor_does_not_hide_a_device_that_stopped_talking(self):
+        # 300 s of floor, not "any age passes": a wedged agent (12 hours on MOLE) fails.
+        dead = device(
+            last_checkin=(NOW - timedelta(hours=12)).isoformat().replace("+00:00", "Z")
+        )
+        result = mod.evaluate_enroll(dead, snapshot(poll_interval=30), NOW)
+        assert by_name(result, "agent checked in").passed is False
+
     def test_a_stale_checkin_fails(self):
-        stale = device(last_checkin=(NOW - timedelta(minutes=30)).isoformat().replace("+00:00", "Z"))
+        stale = device(
+            last_checkin=(NOW - timedelta(minutes=30))
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
         result = mod.evaluate_enroll(stale, snapshot(poll_interval=30), NOW)
         assert by_name(result, "agent checked in").passed is False
 
     def test_recovery_requires_the_sentinel_to_be_gone_and_files_decrypted(self):
-        unlock = command(command_type="unlock", lockdown_effective=None, boot_lock_status=None)
-        result = mod.evaluate_recover(device(), snapshot(lock_sentinel=False, lockdown_encrypted=0), unlock)
+        unlock = command(
+            command_type="unlock", lockdown_effective=None, boot_lock_status=None
+        )
+        result = mod.evaluate_recover(
+            device(), snapshot(lock_sentinel=False, lockdown_encrypted=0), unlock
+        )
         assert result.status == "PASS", result.checks
 
         still_locked = mod.evaluate_recover(
@@ -302,8 +354,12 @@ class TestEnrollAndRecovery:
         assert still_locked.status == "FAIL"
 
     def test_stop_track_requires_the_account_back_and_the_decoy_gone(self):
-        stop = command(command_type="stop_track", lockdown_effective=None, boot_lock_status=None)
-        result = mod.evaluate_stop_track(device(), snapshot(real_user_active=True, decoy_exists=False), stop)
+        stop = command(
+            command_type="stop_track", lockdown_effective=None, boot_lock_status=None
+        )
+        result = mod.evaluate_stop_track(
+            device(), snapshot(real_user_active=True, decoy_exists=False), stop
+        )
         assert result.status == "PASS", result.checks
 
 
@@ -315,9 +371,21 @@ class TestEnrollAndRecovery:
 class TestCommandSelection:
     def test_the_newest_command_of_the_requested_type_is_used(self):
         commands = [
-            {"command_type": "lockdown", "created_at": "2026-11-17T10:00:00Z", "status": "failed"},
-            {"command_type": "lockdown", "created_at": "2026-11-17T11:00:00Z", "status": "executed"},
-            {"command_type": "unlock", "created_at": "2026-11-17T12:00:00Z", "status": "pending"},
+            {
+                "command_type": "lockdown",
+                "created_at": "2026-11-17T10:00:00Z",
+                "status": "failed",
+            },
+            {
+                "command_type": "lockdown",
+                "created_at": "2026-11-17T11:00:00Z",
+                "status": "executed",
+            },
+            {
+                "command_type": "unlock",
+                "created_at": "2026-11-17T12:00:00Z",
+                "status": "pending",
+            },
         ]
         latest = mod.latest_command(commands, "lockdown")
         assert latest is not None and latest["status"] == "executed"
@@ -328,7 +396,11 @@ class TestCommandSelection:
     def test_evaluate_step_routes_lock_to_the_lockdown_command(self):
         commands = [command()]
         result = mod.evaluate_step(
-            "lock", device(status="locked"), snapshot(lock_sentinel=True, lockdown_encrypted=2), commands, NOW
+            "lock",
+            device(status="locked"),
+            snapshot(lock_sentinel=True, lockdown_encrypted=2),
+            commands,
+            NOW,
         )
         assert by_name(result, "lockdown command executed").passed is True
 
@@ -354,7 +426,9 @@ class TestRendering:
         # missing, so the step is SKIP — not PASS (nothing proved the ACK) and not FAIL.
         results = [
             mod.evaluate_lock(
-                device(status="locked"), snapshot(lock_sentinel=True, lockdown_encrypted=3), None
+                device(status="locked"),
+                snapshot(lock_sentinel=True, lockdown_encrypted=3),
+                None,
             )
         ]
         text = mod.render(results)
@@ -372,7 +446,9 @@ class TestRendering:
         payload = mod.artifact(results, {"service": "Running"}, {"device": "MOLE"})
         step = payload["steps"][0]
         assert step["status"] == "FAIL"
-        effective = next(c for c in step["checks"] if c["name"].startswith("lockdown effective"))
+        effective = next(
+            c for c in step["checks"] if c["name"].startswith("lockdown effective")
+        )
         assert effective["passed"] is False
         assert "partial" in effective["observed"]
 
@@ -383,7 +459,9 @@ class TestRendering:
 
 
 class TestServerGuard:
-    @pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.com", "gopher://host"])
+    @pytest.mark.parametrize(
+        "url", ["file:///etc/passwd", "ftp://example.com", "gopher://host"]
+    )
     def test_a_non_http_scheme_is_refused_before_anything_is_opened(self, url):
         with pytest.raises(mod.ApiError):
             mod.Server(url, "token")

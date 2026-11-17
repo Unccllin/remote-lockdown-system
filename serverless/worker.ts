@@ -737,7 +737,23 @@ function parseDbTimestamp(value: unknown): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-/** Longer than the maximum adaptive poll interval (300 s), so a normal cycle never trips it. */
+/**
+ * How often an ACTIVE device should poll, in seconds.
+ *
+ * 60 rather than 300: the agent only learns about a queued command when it polls, so a
+ * five-minute interval made flagging a device look inert for five minutes (S269).
+ *
+ * A function, not two literals, because the S269 fix landed in one response branch while
+ * `ADAPTIVE_POLL` kept returning 300 from the other — measured on MOLE as
+ * "Adaptive polling: 30s -> 300s (status=active)" AFTER the fix (S270). A change nobody
+ * read back is a change nobody can rely on.
+ */
+function activePollSeconds(env: Env): number {
+  const raw = Number(env.ACTIVE_POLL_SECONDS ?? 60);
+  return Number.isFinite(raw) && raw > 0 ? raw : 60;
+}
+
+
 const AGENT_VERSION_STALE_MS = 60 * 60 * 1000;
 
 function isAgentVersionStale(device: Device): boolean {
@@ -984,11 +1000,7 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
 
   // No pending command — adaptive polling
   const status = devices[idx].status;
-  // 60 s rather than 300 s: the agent only learns about a queued command when it
-  // polls, so a five-minute interval meant flagging a device could appear to do
-  // nothing for five minutes (S269). Override with ACTIVE_POLL_SECONDS.
-  const activePoll = Number((env as unknown as Record<string, unknown>).ACTIVE_POLL_SECONDS ?? 60);
-  const pollInterval = status === 'stolen' ? 10 : Number.isFinite(activePoll) ? activePoll : 60;
+  const pollInterval = status === 'stolen' ? 10 : activePollSeconds(env);
   return jsonResponse({
     status,
     poll_interval: pollInterval,
@@ -1280,12 +1292,13 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
   const pendingCmd = pendingCmds[0] || null;
 
-  // Adaptive poll interval based on device status
+  // Adaptive poll interval based on device status. `active` comes from
+  // activePollSeconds() so both response branches agree.
   const status = devices[idx].status;
   const ADAPTIVE_POLL: Record<string, number> = {
-    stolen: 30, tracking: 30, recovering: 30, locked: 60, active: 300,
+    stolen: 30, tracking: 30, recovering: 30, locked: 60, active: activePollSeconds(env),
   };
-  const pollInterval = ADAPTIVE_POLL[status] ?? 300;
+  const pollInterval = ADAPTIVE_POLL[status] ?? activePollSeconds(env);
 
   if (!pendingCmd) {
     return jsonResponse({
@@ -3166,6 +3179,13 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
     : `Check the VPN is connected, then try: Resolve-DnsName ${host}`;
   const plainHttp = parsed.protocol === 'http:';
 
+  // Substituted as ONE PowerShell argument, and quoted for the here-string it lands in:
+  // the inner script body is a single-quoted here-string, so a bare `,'--flag'` closes
+  // the enclosing `.Replace(...)` call — measured on MOLE as
+  // `Missing ')' in method call` (S270). A double-quoted PowerShell string carries the
+  // inner single quotes intact.
+  const insecureReplacement = plainHttp ? `${'"'},\'--allow-insecure-http\'${'"'}` : "''";
+
   if (gui) {
     return [
       `# Lockdown agent installer for ${serverUrl}`,
@@ -3219,9 +3239,13 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
     `$stage = Join-Path $env:ProgramData 'LockdownAgent/staging'`,
     `New-Item -ItemType Directory -Force -Path $stage | Out-Null`,
     `$inst = Join-Path $env:ProgramData 'LockdownAgent'`,
-    `# The installer refuses plain HTTP unless this config says otherwise, and its`,
-    `# own flag for that does not exist — so the config is written here, after a`,
-    `# successful install, with a verification step instead of a claim.`,
+    `# Plain HTTP is a lab posture, and the AGENT refuses it unless its config says`,
+    `# verify_tls false ("key material must be transported over TLS"). The installer owns`,
+    `# that decision — --allow-insecure-http writes it — so this script passes the flag`,
+    `# and then READS the result back. It used to patch config.json itself after a`,
+    `# successful install (takeown + icacls + a JSON rewrite), which is the "manual step`,
+    `# after install" the repo's rule forbids, and it could not run at all when the`,
+    `# install failed — leaving a config that makes the agent refuse to start (S270).`,
     `$t0 = Get-Date`,
     `# The log is a ledger, not a snapshot: it is APPENDED to, and every run writes a`,
     `# start marker and an exit line. It used to be truncated by the installer's own`,
@@ -3254,7 +3278,7 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
     `# the log kept one line — "Traceback (most recent call last):" — with the actual`,
     `# PermissionError discarded (measured on MOLE, S270). Redirected files carry the`,
     `# whole traceback and cannot abort the script; the exit code stays the verdict.`,
-    `$p = Start-Process -FilePath (Join-Path $stage 'lockdown-setup.exe') -ArgumentList @('--server-url','__URL__','--token','__TOKEN__','--silent') -Wait -PassThru -NoNewWindow -RedirectStandardOutput $outF -RedirectStandardError $errF`,
+    `$p = Start-Process -FilePath (Join-Path $stage 'lockdown-setup.exe') -ArgumentList @('--server-url','__URL__','--token','__TOKEN__','--silent'__INSECURE__) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $outF -RedirectStandardError $errF`,
     `$code = $p.ExitCode`,
     `Add-Content -LiteralPath $log (Get-Content $outF -ErrorAction SilentlyContinue)`,
     `if ((Get-Item $errF -ErrorAction SilentlyContinue).Length -gt 0) {`,
@@ -3265,28 +3289,25 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
     `Add-Content -LiteralPath $log ("=== installer exited " + $code + " ===")`,
     `Add-Content $log ("service state: " + (Get-Service LockdownAgent -ErrorAction SilentlyContinue).Status)`,
     `if ($code -eq 0 -and '__PLAIN__' -eq 'yes') {`,
+    `    # Evidence, not intent: read what the installer actually wrote. A plain-HTTP`,
+    `    # server with verify_tls left true is a device that will not start, so this exits`,
+    `    # non-zero instead of printing a cheerful line next to a dead agent.`,
     `    $cfg = Join-Path $inst 'config.json'`,
+    `    $check = $null`,
     `    if (Test-Path $cfg) {`,
-    `        & takeown.exe /f $cfg *> $null`,
-    `        & icacls.exe $cfg /grant "Administrators:F" *> $null`,
-    `        try {`,
-    `            $j = Get-Content $cfg -Raw | ConvertFrom-Json`,
-    `            $j.verify_tls = $false`,
-    `            # Set-Content -Encoding UTF8 writes a BOM on Windows PowerShell 5.1 and`,
-    `            # Python's json.load refuses one: the agent then dies with "Expecting`,
-    `            # value: line 1 column 1 (char 0)" and cannot read its own config.`,
-    `            [IO.File]::WriteAllText($cfg, ($j | ConvertTo-Json -Depth 8))`,
-    `            $check = (Get-Content $cfg -Raw | ConvertFrom-Json).verify_tls`,
-    `            Add-Content $log "verify_tls now: $check"`,
-    `        } catch {`,
-    `            Add-Content $log "could not set verify_tls: $($_.Exception.Message)"`,
-    `        }`,
+    `        try { $check = (Get-Content $cfg -Raw | ConvertFrom-Json).verify_tls } catch { $check = $null }`,
     `    }`,
-    `    Restart-Service LockdownAgent -ErrorAction SilentlyContinue`,
+    `    Add-Content -LiteralPath $log ("verify_tls in config: " + $check)`,
+    `    if ($check -ne $false) {`,
+    `        Add-Content -LiteralPath $log 'FAILED: plain-HTTP server but verify_tls is not false — the agent will refuse to start.'`,
+    `        $code = 3`,
+    `    } else {`,
+    `        Restart-Service LockdownAgent -ErrorAction SilentlyContinue`,
+    `    }`,
     `}`,
     `exit $code`,
     `'@`,
-    `$body = $body.Replace('__EXE__', '').Replace('__URL__', $u).Replace('__TOKEN__', $t).Replace('__LOG__', $log).Replace('__PLAIN__', '${plainHttp ? 'yes' : 'no'}')`,
+    `$body = $body.Replace('__EXE__', '').Replace('__URL__', $u).Replace('__TOKEN__', $t).Replace('__LOG__', $log).Replace('__PLAIN__', '${plainHttp ? 'yes' : 'no'}').Replace('__INSECURE__', ${insecureReplacement})`,
     `[IO.File]::WriteAllText($inner, $body)`,
     ``,
     `Write-Host "Installing (no wizard) ..." -ForegroundColor Cyan`,
@@ -3309,7 +3330,7 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
 
 /** Public: carries no secret, and the target has no credential yet. */
 function handleEnrollSetupPs1(request: Request, env: Env): Response {
-  const gui = String((env as unknown as Record<string, unknown>).INSTALLER_GUI ?? '') === 'true';
+  const gui = String(env.INSTALLER_GUI ?? '') === 'true';
   let script: string;
   try {
     script = composeEnrollSetupScript(new URL(request.url).origin, gui);
@@ -3350,7 +3371,7 @@ async function handleEnrollSetupCommand(request: Request, env: Env): Promise<Res
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
   const serverUrl = new URL(request.url).origin;
-  const gui = String((env as unknown as Record<string, unknown>).INSTALLER_GUI ?? '') === 'true';
+  const gui = String(env.INSTALLER_GUI ?? '') === 'true';
   return jsonResponse({
     server_url: serverUrl,
     mode: gui ? 'gui' : 'silent',

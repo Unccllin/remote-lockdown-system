@@ -501,8 +501,38 @@ describe('Serverless Worker', () => {
       expect(resp.status).toBe(200);
       expect(data.device_id).toBe(device.id);
       expect(data.status).toBe('active');
-      expect(data.poll_interval).toBe(300);
+      // 60, not 300. S269 lowered the ACTIVE interval because a device learns about a
+      // queued command only when it polls, but the fix went into one response branch
+      // while this suite kept pinning 300 — so the test agreed with a path the agent was
+      // not on, and MOLE still logged "30s -> 300s (status=active)" after the change
+      // (S270). Both intervals now come from activePollSeconds().
+      expect(data.poll_interval).toBe(60);
       expect(data.command).toBeNull();
+    });
+
+    it('honours ACTIVE_POLL_SECONDS and reports the same number on /api/ping', async () => {
+      // The two response branches disagreed once: S269 lowered the interval in
+      // handlePing (/api/ping, a legacy path the current agent does not call) while
+      // handleAgentCheckin — the path the agent IS on — kept returning 300 from
+      // ADAPTIVE_POLL (measured on MOLE, S270). This asserts they cannot diverge again.
+      const { apiKey, device } = await enrollDevice(worker, env, 'CHECKIN-POLL');
+      const tuned = { ...env, ACTIVE_POLL_SECONDS: '90' };
+
+      const body = JSON.stringify({ hostname: 'CHECKIN-POLL' });
+      const checkinResp = await worker.fetch(
+        makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)),
+        tuned,
+      );
+      const checkinData: any = await parseResponse(checkinResp);
+      expect(checkinData.poll_interval).toBe(90);
+
+      const pingBody = JSON.stringify({ device_id: device.id });
+      const pingResp = await worker.fetch(
+        makeRequest('POST', '/api/ping', pingBody, signRequest(pingBody, apiKey)),
+        tuned,
+      );
+      const pingData: any = await parseResponse(pingResp);
+      expect(pingData.poll_interval).toBe(90);
     });
 
     it('returns lockdown command with type field (not command_type)', async () => {

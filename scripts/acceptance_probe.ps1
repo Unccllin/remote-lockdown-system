@@ -147,14 +147,36 @@ if (Test-Path -LiteralPath (Join-Path $inst 'install.log')) {
     } catch { }
 }
 
+# Computed before the object literal: Windows PowerShell 5.1 rejects `try {}` and `if`
+# as a hashtable VALUE (`IncompleteHashLiteral`), which is how this probe first failed on
+# MOLE — the parser, not the machine, was the problem.
+$configDeviceId = $null
+$configServerUrl = $null
+$configPollInterval = $null
+$configVerifyTls = $null
+if ($config) {
+    $configDeviceId = $config.device_id
+    $configServerUrl = $config.server_url
+    $configPollInterval = $config.poll_interval
+    $configVerifyTls = $config.verify_tls
+}
+
+$agentSha = $null
+try {
+    $exePath = Join-Path $inst 'lockdown-agent.exe'
+    if (Test-Path -LiteralPath $exePath) {
+        $agentSha = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
+    }
+} catch { $agentSha = $null }
+
 $snapshot = [pscustomobject]@{
     hostname            = $env:COMPUTERNAME
     service             = $service
     config_parses       = $configParses
-    config_device_id    = if ($config) { $config.device_id } else { $null }
-    config_server_url   = if ($config) { $config.server_url } else { $null }
-    poll_interval       = if ($config) { $config.poll_interval } else { $null }
-    verify_tls          = if ($config) { $config.verify_tls } else { $null }
+    config_device_id    = $configDeviceId
+    config_server_url   = $configServerUrl
+    poll_interval       = $configPollInterval
+    verify_tls          = $configVerifyTls
     lock_sentinel       = $sentinel
     lockdown_folder     = $lockdownFolder
     lockdown_files      = $lockdownFiles
@@ -166,10 +188,7 @@ $snapshot = [pscustomobject]@{
     decoy_active        = Get-AccountActive $decoyName
     efs_paths           = $efsPaths
     tracking_state      = $trackingState
-    agent_binary_sha256 = try {
-        $exe = Join-Path $inst 'lockdown-agent.exe'
-        if (Test-Path -LiteralPath $exe) { (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash } else { $null }
-    } catch { $null }
+    agent_binary_sha256 = $agentSha
     installer_runs      = $installRuns
     observed_at         = (Get-Date).ToUniversalTime().ToString('o')
 }

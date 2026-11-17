@@ -45,11 +45,11 @@ usage error (which is a failure of the harness, not of the device).
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -61,9 +61,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PROBE_PATH = HERE / "acceptance_probe.ps1"
 
-# A device that has not checked in for two poll intervals is not reporting; the check
-# allows one extra interval of slack because the agent polls on its own clock.
+# A device that has not checked in for two poll intervals is not reporting. The limit is
+# never allowed below CHECKIN_FLOOR_SECONDS, because the agent's interval is ADAPTIVE and
+# server-driven: MOLE reported poll_interval 30 in its config while the server told it 300,
+# so a 60 s limit failed a perfectly healthy device (measured, S270). The observation
+# prints both the age and the limit, so a loose pass is still readable.
 CHECKIN_INTERVALS = 2
+CHECKIN_FLOOR_SECONDS = 300
 
 STEPS = ("enroll", "lock", "recover", "track", "stop-track")
 
@@ -144,7 +148,10 @@ def _poll_seconds(snapshot: dict) -> int:
 
 
 def checkin_fresh(
-    device: dict, now: datetime, poll_seconds: int = 60, intervals: int = CHECKIN_INTERVALS
+    device: dict,
+    now: datetime,
+    poll_seconds: int = 60,
+    intervals: int = CHECKIN_INTERVALS,
 ) -> tuple[bool | None, str]:
     """Is the device's last check-in recent enough to call it connected?
 
@@ -156,7 +163,7 @@ def checkin_fresh(
     if last is None:
         return None, "last_checkin absent"
     age = (now - last).total_seconds()
-    limit = poll_seconds * intervals
+    limit = max(poll_seconds * intervals, CHECKIN_FLOOR_SECONDS)
     return age <= limit, f"{age:.0f}s ago (limit {limit}s)"
 
 
@@ -164,16 +171,24 @@ def evaluate_enroll(
     device: dict | None, snap: dict, now: datetime, expected_hostname: str | None = None
 ) -> StepResult:
     result = StepResult("enroll")
-    result.checks.append(check("service Running", snap.get("service") == "Running", snap.get("service")))
     result.checks.append(
-        check("config.json parses", snap.get("config_parses") is True, snap.get("config_parses"))
+        check("service Running", snap.get("service") == "Running", snap.get("service"))
+    )
+    result.checks.append(
+        check(
+            "config.json parses",
+            snap.get("config_parses") is True,
+            snap.get("config_parses"),
+        )
     )
 
     fresh, detail = checkin_fresh(device or {}, now, _poll_seconds(snap))
     result.checks.append(check("agent checked in", fresh, detail))
 
     if device is None:
-        result.checks.append(check("device enrolled on the server", False, "no device record"))
+        result.checks.append(
+            check("device enrolled on the server", False, "no device record")
+        )
         return result
 
     result.checks.append(check("device enrolled on the server", True, device.get("id")))
@@ -181,7 +196,11 @@ def evaluate_enroll(
     # machine is checking in as somebody else.
     same = snap.get("config_device_id") == device.get("id")
     result.checks.append(
-        check("config device_id matches the server", same, f"{snap.get('config_device_id')} vs {device.get('id')}")
+        check(
+            "config device_id matches the server",
+            same,
+            f"{snap.get('config_device_id')} vs {device.get('id')}",
+        )
     )
     if expected_hostname:
         result.checks.append(
@@ -192,27 +211,51 @@ def evaluate_enroll(
             )
         )
     result.checks.append(
-        check("agent reports a version", bool(device.get("agent_version")), device.get("agent_version"))
+        check(
+            "agent reports a version",
+            bool(device.get("agent_version")),
+            device.get("agent_version"),
+        )
     )
     return result
 
 
 def evaluate_lock(device: dict | None, snap: dict, command: dict | None) -> StepResult:
     result = StepResult("lock")
-    result.checks.append(check("lock sentinel present", snap.get("lock_sentinel"), snap.get("lock_sentinel")))
+    result.checks.append(
+        check(
+            "lock sentinel present",
+            snap.get("lock_sentinel"),
+            snap.get("lock_sentinel"),
+        )
+    )
     encrypted = snap.get("lockdown_encrypted")
     result.checks.append(
-        check("lockdown folder encrypted", (encrypted or 0) > 0, f"{encrypted} encrypted file(s)")
+        check(
+            "lockdown folder encrypted",
+            (encrypted or 0) > 0,
+            f"{encrypted} encrypted file(s)",
+        )
     )
     status = (device or {}).get("status")
-    result.checks.append(check("server reports a locked device", status in ("locked", "recovering"), status))
+    result.checks.append(
+        check(
+            "server reports a locked device", status in ("locked", "recovering"), status
+        )
+    )
 
     if command is None:
-        result.checks.append(check("lockdown command executed", None, "no lockdown command on record"))
+        result.checks.append(
+            check("lockdown command executed", None, "no lockdown command on record")
+        )
         return result
 
     result.checks.append(
-        check("lockdown command executed", command.get("status") == "executed", command.get("status"))
+        check(
+            "lockdown command executed",
+            command.get("status") == "executed",
+            command.get("status"),
+        )
     )
     # The pair that must never be conflated: the lock CAN be applied and be ineffective.
     # `lockdown_effective is False` is an honest negative report, not a failed step — it
@@ -236,22 +279,42 @@ def evaluate_lock(device: dict | None, snap: dict, command: dict | None) -> Step
     return result
 
 
-def evaluate_recover(device: dict | None, snap: dict, command: dict | None) -> StepResult:
+def evaluate_recover(
+    device: dict | None, snap: dict, command: dict | None
+) -> StepResult:
     result = StepResult("recover")
     result.checks.append(
-        check("lock sentinel gone", not snap.get("lock_sentinel"), snap.get("lock_sentinel"))
+        check(
+            "lock sentinel gone",
+            not snap.get("lock_sentinel"),
+            snap.get("lock_sentinel"),
+        )
     )
     encrypted = snap.get("lockdown_encrypted")
     result.checks.append(
-        check("lockdown folder decrypted", (encrypted or 0) == 0, f"{encrypted} still encrypted")
+        check(
+            "lockdown folder decrypted",
+            (encrypted or 0) == 0,
+            f"{encrypted} still encrypted",
+        )
     )
     status = (device or {}).get("status")
-    result.checks.append(check("server reports the device usable", status in ("active", "locked"), status))
+    result.checks.append(
+        check(
+            "server reports the device usable", status in ("active", "locked"), status
+        )
+    )
     if command is None:
-        result.checks.append(check("unlock command executed", None, "no unlock command on record"))
+        result.checks.append(
+            check("unlock command executed", None, "no unlock command on record")
+        )
     else:
         result.checks.append(
-            check("unlock command executed", command.get("status") == "executed", command.get("status"))
+            check(
+                "unlock command executed",
+                command.get("status") == "executed",
+                command.get("status"),
+            )
         )
     return result
 
@@ -264,10 +327,18 @@ def evaluate_track(device: dict | None, snap: dict, command: dict | None) -> Ste
 
     # Observed on the machine, not taken from the agent's state file:
     result.checks.append(
-        check("decoy account exists", snap.get("decoy_exists"), f"{snap.get('decoy_name')}={snap.get('decoy_exists')}")
+        check(
+            "decoy account exists",
+            snap.get("decoy_exists"),
+            f"{snap.get('decoy_name')}={snap.get('decoy_exists')}",
+        )
     )
     result.checks.append(
-        check("real user disabled", snap.get("real_user_active") is False, f"active={snap.get('real_user_active')}")
+        check(
+            "real user disabled",
+            snap.get("real_user_active") is False,
+            f"active={snap.get('real_user_active')}",
+        )
     )
 
     paths = snap.get("efs_paths") or []
@@ -301,23 +372,45 @@ def evaluate_track(device: dict | None, snap: dict, command: dict | None) -> Ste
     status = (device or {}).get("status")
     result.checks.append(check("server reports tracking", status == "tracking", status))
     if command is not None:
-        result.checks.append(check("track command executed", command.get("status") == "executed", command.get("status")))
+        result.checks.append(
+            check(
+                "track command executed",
+                command.get("status") == "executed",
+                command.get("status"),
+            )
+        )
     return result
 
 
-def evaluate_stop_track(device: dict | None, snap: dict, command: dict | None) -> StepResult:
+def evaluate_stop_track(
+    device: dict | None, snap: dict, command: dict | None
+) -> StepResult:
     result = StepResult("stop-track")
     result.checks.append(
-        check("real user re-enabled", snap.get("real_user_active") is True, f"active={snap.get('real_user_active')}")
+        check(
+            "real user re-enabled",
+            snap.get("real_user_active") is True,
+            f"active={snap.get('real_user_active')}",
+        )
     )
     result.checks.append(
-        check("decoy account removed", snap.get("decoy_exists") is False, f"exists={snap.get('decoy_exists')}")
+        check(
+            "decoy account removed",
+            snap.get("decoy_exists") is False,
+            f"exists={snap.get('decoy_exists')}",
+        )
     )
     status = (device or {}).get("status")
-    result.checks.append(check("server no longer reports tracking", status != "tracking", status))
+    result.checks.append(
+        check("server no longer reports tracking", status != "tracking", status)
+    )
     if command is not None:
         result.checks.append(
-            check("stop_track command executed", command.get("status") == "executed", command.get("status"))
+            check(
+                "stop_track command executed",
+                command.get("status") == "executed",
+                command.get("status"),
+            )
         )
     return result
 
@@ -394,7 +487,8 @@ def artifact(results: list[StepResult], snapshot: dict, extra: dict) -> dict:
                 "step": r.step,
                 "status": r.status,
                 "checks": [
-                    {"name": c.name, "passed": c.passed, "observed": c.observed} for c in r.checks
+                    {"name": c.name, "passed": c.passed, "observed": c.observed}
+                    for c in r.checks
                 ],
             }
             for r in results
@@ -456,7 +550,9 @@ class Server:
         try:
             return json.loads(payload)
         except json.JSONDecodeError as exc:
-            raise ApiError(f"{method} {path} returned non-JSON: {payload[:120]}") from exc
+            raise ApiError(
+                f"{method} {path} returned non-JSON: {payload[:120]}"
+            ) from exc
 
     def get(self, path: str) -> object:
         return self._request("GET", path)
@@ -490,31 +586,90 @@ class ApiError(RuntimeError):
 class Target:
     """The Windows machine, over SSH. Credentials come from the environment."""
 
-    def __init__(self, host: str | None = None, user: str | None = None, key: str | None = None,
-                 port: str = "22", timeout: float = 120.0):
+    def __init__(
+        self,
+        host: str | None = None,
+        user: str | None = None,
+        key: str | None = None,
+        port: str = "22",
+        timeout: float = 120.0,
+    ):
         self.host = host or os.environ.get("RLS_SSH_HOST", "")
         self.user = user or os.environ.get("RLS_SSH_USER", "")
         self.key = key or os.environ.get("RLS_SSH_KEY", "")
         self.port = port or os.environ.get("RLS_SSH_PORT", "22")
         self.timeout = timeout
         if not self.host or not self.user:
-            raise ApiError("RLS_SSH_HOST and RLS_SSH_USER must be set (see scripts/rsh.py)")
+            raise ApiError(
+                "RLS_SSH_HOST and RLS_SSH_USER must be set (see scripts/rsh.py)"
+            )
 
     def powershell(self, script: str) -> str:
-        """Run a PowerShell script on the target; return stdout.
+        """Run a SHORT PowerShell script on the target; return stdout.
 
-        Passed as an -EncodedCommand (UTF-16LE base64), which avoids every layer of
-        shell quoting between here and Windows — the version of this that built command
-        lines by string concatenation mangled `$` variables.
+        The script arrives on **stdin** (`powershell -Command -`), which avoids every
+        layer of shell quoting between here and Windows — the version of this that built
+        command lines by string concatenation mangled `$` variables.
+
+        stdin is only for one-liners: with `-Command -` PowerShell executes statement by
+        statement, so a multi-line construct (a hashtable, a try block) is a parse error.
+        Anything structured goes through :meth:`run_script` instead.
         """
-        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        return self._ssh(
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command -",
+            input_text=script,
+        )
+
+    def run_script(self, script: str, remote_name: str) -> str:
+        """Upload a multi-line PowerShell script and run it with `-File`.
+
+        Not `-EncodedCommand`: that base64 is UTF-16LE, so a ~7 KB probe becomes ~19 KB
+        and fails with "The command line is too long." (measured on MOLE) — the Windows
+        limit is ~8 KB. scp plus `-File` has no limit and keeps PowerShell's normal
+        multi-line parsing.
+        """
+        remote = f"C:/ProgramData/LockdownAgent/{remote_name}"
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".ps1", delete=False, encoding="utf-8"
+        ) as handle:
+            handle.write(script)
+            local = handle.name
+        try:
+            upload = ["scp", "-P", self.port, "-o", "BatchMode=yes"]
+            if self.key:
+                upload += ["-i", self.key]
+            upload += [local, f"{self.user}@{self.host}:{remote}"]
+            completed = subprocess.run(
+                upload,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise ApiError(
+                    f"scp {local} -> {self.host}:{remote} exited {completed.returncode}: "
+                    f"{(completed.stderr or completed.stdout).strip()[:300]}"
+                )
+            return self._ssh(
+                f'powershell -NoProfile -ExecutionPolicy Bypass -File "{remote}"'
+            )
+        finally:
+            Path(local).unlink(missing_ok=True)
+
+    def _ssh(self, remote_command: str, input_text: str | None = None) -> str:
         command = ["ssh", "-p", self.port, "-o", "BatchMode=yes"]
         if self.key:
             command += ["-i", self.key]
-        command += [f"{self.user}@{self.host}", f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}"]
+        command += [f"{self.user}@{self.host}", remote_command]
         try:
             completed = subprocess.run(
-                command, capture_output=True, text=True, timeout=self.timeout, check=False
+                command,
+                input=input_text,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise ApiError(f"ssh {self.user}@{self.host}: {exc}") from exc
@@ -529,9 +684,9 @@ class Target:
         """Read the machine's state. Changes nothing."""
         script = PROBE_PATH.read_text(encoding="utf-8")
         if real_user:
-            script = script.replace("param([string]$RealUser = '')", f"param([string]$RealUser = '{real_user}')")
+            script = script.replace("$RealUser = ''", f"$RealUser = '{real_user}'")
         # The probe prints ONE JSON line; anything else on stdout is a runner banner.
-        output = self.powershell(script)
+        output = self.run_script(script, "acceptance_probe.ps1")
         for line in reversed([ln.strip() for ln in output.splitlines() if ln.strip()]):
             if line.startswith("{") and line.endswith("}"):
                 try:
@@ -540,7 +695,9 @@ class Target:
                     continue
                 if isinstance(parsed, dict):
                     return parsed
-        raise ApiError(f"probe returned no JSON object (stdout: {output.strip()[:300]})")
+        raise ApiError(
+            f"probe returned no JSON object (stdout: {output.strip()[:300]})"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -548,7 +705,9 @@ class Target:
 # ---------------------------------------------------------------------------
 
 
-def wait_for(predicate, timeout: float, interval: float = 5.0, label: str = "condition"):
+def wait_for(
+    predicate, timeout: float, interval: float = 5.0, label: str = "condition"
+):
     """Poll `predicate` until truthy. Returns the value, or None on timeout.
 
     A timeout is not an exception: the caller reports the post-condition as FAIL with
@@ -564,14 +723,15 @@ def wait_for(predicate, timeout: float, interval: float = 5.0, label: str = "con
     return last
 
 
-def action_enroll(server: Server, target: Target, hostname: str, one_liner_url: str) -> str:
+def action_enroll(
+    server: Server, target: Target, hostname: str, one_liner_url: str
+) -> str:
     """Enrol the device with the dashboard's own one-liner, non-interactively."""
     token = server.post("/api/enroll/token", {})
     assert isinstance(token, dict)
     enroll_token = str(token["token"])
     script = (
-        f"$env:LOCKDOWN_ENROLL_TOKEN='{enroll_token}'; "
-        f"iex (irm '{one_liner_url}')"
+        f"$env:LOCKDOWN_ENROLL_TOKEN='{enroll_token}'; " f"iex (irm '{one_liner_url}')"
     )
     target.powershell(script)
     return enroll_token
@@ -585,14 +745,18 @@ def run(args: argparse.Namespace) -> int:
         try:
             snapshot = json.loads(Path(args.snapshot).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            print(f"ERROR: cannot read snapshot {args.snapshot}: {exc}", file=sys.stderr)
+            print(
+                f"ERROR: cannot read snapshot {args.snapshot}: {exc}", file=sys.stderr
+            )
             return 2
         replay = {k: v for k, v in snapshot.items() if k != "steps"}
         device = replay.get("device")
         commands = replay.get("commands") or []
         steps = args.step or list(STEPS)
         results = [
-            evaluate_step(step, device, replay.get("probe") or {}, commands, now, args.device)
+            evaluate_step(
+                step, device, replay.get("probe") or {}, commands, now, args.device
+            )
             for step in steps
         ]
         print(render(results))
@@ -628,7 +792,9 @@ def run(args: argparse.Namespace) -> int:
     for step in steps:
         if not args.dry_run and step != "enroll":
             if device is None:
-                results.append(StepResult(step, [check("device exists", False, "not enrolled")]))
+                results.append(
+                    StepResult(step, [check("device exists", False, "not enrolled")])
+                )
                 continue
             endpoint = {
                 "lock": f"/api/devices/{device['id']}/flag",
@@ -639,20 +805,33 @@ def run(args: argparse.Namespace) -> int:
             server.post(endpoint, {})
             # Give the agent a poll interval plus the work itself (boot lock layers,
             # EFS on three folders, ~7s per HP BIOS call) before reading back.
-            wait_for(lambda: (server.device_by_hostname(args.device) or {}).get("status") != "active",
-                     timeout=args.timeout, interval=5.0)
+            wait_for(
+                lambda: (server.device_by_hostname(args.device) or {}).get("status")
+                != "active",
+                timeout=args.timeout,
+                interval=5.0,
+            )
         elif not args.dry_run and step == "enroll":
             server_url = args.server_url.rstrip("/")
-            action_enroll(server, target, args.device or "", f"{server_url}/api/enroll/setup.ps1")
-            wait_for(lambda: server.device_by_hostname(args.device or ""), timeout=args.timeout)
+            action_enroll(
+                server, target, args.device or "", f"{server_url}/api/enroll/setup.ps1"
+            )
+            wait_for(
+                lambda: server.device_by_hostname(args.device or ""),
+                timeout=args.timeout,
+            )
 
         device = server.device_by_hostname(args.device) if args.device else None
         snapshot = target.probe()
         commands = server.commands(device["id"]) if device else []
-        result = evaluate_step(step, device, snapshot, commands, datetime.now(UTC), args.device)
+        result = evaluate_step(
+            step, device, snapshot, commands, datetime.now(UTC), args.device
+        )
         results.append(result)
 
-    report = artifact(results, {}, {"device": args.device, "server_url": args.server_url})
+    report = artifact(
+        results, {}, {"device": args.device, "server_url": args.server_url}
+    )
     if args.artifact:
         Path(args.artifact).parent.mkdir(parents=True, exist_ok=True)
         Path(args.artifact).write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -663,7 +842,9 @@ def run(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--server-url", help="Worker/Express base URL")
     parser.add_argument("--device", help="target hostname, as enrolled")
     parser.add_argument(
@@ -672,11 +853,19 @@ def build_parser() -> argparse.ArgumentParser:
         choices=STEPS,
         help="step to run (repeatable; default: every step in lifecycle order)",
     )
-    parser.add_argument("--admin-token-env", default="ADMIN_TOKEN", help="env var holding the admin JWT")
-    parser.add_argument("--timeout", type=float, default=600.0, help="seconds to wait per step")
+    parser.add_argument(
+        "--admin-token-env", default="ADMIN_TOKEN", help="env var holding the admin JWT"
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=600.0, help="seconds to wait per step"
+    )
     parser.add_argument("--artifact", help="write the JSON report here")
-    parser.add_argument("--snapshot", help="re-derive the report from a stored snapshot (no IO)")
-    parser.add_argument("--dry-run", action="store_true", help="observe and assert, run no actions")
+    parser.add_argument(
+        "--snapshot", help="re-derive the report from a stored snapshot (no IO)"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="observe and assert, run no actions"
+    )
     parser.add_argument(
         "--allow-destructive",
         action="store_true",
@@ -688,7 +877,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not args.snapshot and not args.server_url:
-        print("ERROR: --server-url is required (or --snapshot to replay)", file=sys.stderr)
+        print(
+            "ERROR: --server-url is required (or --snapshot to replay)", file=sys.stderr
+        )
         return 2
     return run(args)
 
