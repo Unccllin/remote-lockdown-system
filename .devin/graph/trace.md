@@ -16601,3 +16601,33 @@ incompatibility.
 
 Rule: a suite that fails only under a hand-rolled command is a defect in the command until the
 documented target is shown to fail too.
+
+### Addendum — S271: `make full-verify` on this host, per target
+
+Ran to a real conclusion rather than to the first abort. Three attempts stopped on **gate
+defects**, not test failures; each was fixed before the next run:
+
+| Target | Result |
+|---|---|
+| `graph-check` | all invariants pass |
+| `lint` (server, dashboard, agent, workflows) | clean — after `scripts/lint-agent.sh` (rum 0.17.5) and installing actionlint 1.7.12 + shellcheck 0.10.0 |
+| `test` — server | **848 passed, 51 suites** (including the 7 PGlite suites S270 wrongly excluded) |
+| `test` — agent | **925 passed** |
+| `test` — dashboard | **260 passed, 29 files** |
+| `test` — worker | **447 passed, 4 files** |
+| `test` — electron | **30 passed, 3 suites** (after `npm install`) |
+| `test-scripts` | 13 of 14 files pass; `test_tls_floor.py::…refuses_tls1_0_and_1_1` **fails** — `permission denied … /var/run/docker.sock` |
+| `test-e2e` | **14 passed** |
+| `verify-env` | **56 PASS / 0 FAIL / 5 SKIP** |
+| `check-artifacts` | all artifacts present and non-empty |
+
+The five skips are named, not silent: `nsis-available` (makensis absent),
+`installer-windows-ps-syntax` and `installer-windows-execpolicy` (Windows PowerShell absent),
+`docker-daemon` and `docker-live` (Docker unreachable).
+
+So the only red is one test that needs the Docker socket, and this host's user is not in the
+`docker` group in this login session (`sudo -n` is unavailable, so `chmod 666
+/var/run/docker.sock` cannot be issued here). Two ways to clear it: a new login session after
+`usermod -aG docker` takes effect, or a root-owned chmod. **The test is deliberately not
+softened into a SKIP** — a gate that cannot run is a gate that has not passed, and
+`test_tls_floor` is checking that the TLS terminator refuses TLS 1.0/1.1 at the protocol layer.
