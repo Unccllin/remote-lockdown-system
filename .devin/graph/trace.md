@@ -961,3 +961,104 @@ Ship S272–S276 to MOLE and run the lock → recover acceptance with `lock_stat
 storage blocker is closed, so the next evidence needed is a hardware run, not more refactoring.
 
 ---
+
+---
+
+## Session 277 — 2026-11-18 (the Worker comes back into view)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `serverless/worker.ts` (all top-level declarations with line numbers, the helper
+dependency graph, the three `new URL(request.url)` call sites), `serverless/pbl/env.ts`,
+`scripts/test_cross_surface_contract.py` (the tests that grep `worker.ts` for values),
+`serverless/enroll-setup.test.ts` + `serverless/pbl.test.ts` (coverage for the code being moved),
+`AGENTS.md`'s harness notes on the 5000-line LSP limit.
+
+**Findings**, measured before the change:
+
+- `worker.ts` was **5,419 lines**. The harness LSP refuses files over 5,000, so it reported
+  `too_large` instead of a verdict: the file every storage and route change of the last five
+  sessions went through was **invisible to diagnostics**. That is a tooling defect, not a style
+  one, and it is why this session's work started with a measurement rather than a fix.
+- Extraction order is forced by the dependency graph: the zero-dependency primitives
+  (`jsonResponse`, `sha256`, `parseKvJson`, `b64*`, `generateId`, `requestUrl`) must move first or
+  `admin-auth`/storage would import from `worker.ts` and create a cycle.
+- Three call sites built `new URL(request.url)` directly when `requestUrl()` — the total parser
+  that exists precisely so handlers do not need try/catch — was already imported.
+- `composeEnrollSetupScript` took a **string** and constructed a `URL` inside: the one genuinely
+  throwing construction in the moved code.
+
+### Fog cleared
+
+- **`worker.ts` is 4,925 lines** (from 5,419) and the LSP now reports `too_large=0` — the file is
+  analysable again. Three modules were extracted in dependency order:
+  `serverless/http.ts` (134), `serverless/admin-auth.ts` (214),
+  `serverless/installer-scripts.ts` (188).
+- **Three unsafe `new URL` sites now use `requestUrl()`**, so a malformed request URL degrades to
+  empty route params instead of throwing — which is the behaviour `requestUrl` was written for.
+- **The installer composer takes a validated `URL`**, so that module contains no throwing
+  construction at all (the checker was right about this one).
+- **The contract test follows the code it pins**: it asserts `PBKDF2_ITERATIONS = 100_000` against
+  ADR-001 in `admin-auth.ts` now, rather than in the file that happened to hold it.
+
+### Fog remaining
+
+- **`worker.ts` is still 4,925 lines** and its `fetch` dispatch measures complexity 145. The two
+  obvious next cuts are the storage layer (~900 lines, ADR-002..006) into `serverless/kv/`, and
+  the `/v1` PBL routes (~460 lines) into `pbl/routes.ts`. Both need the same dependency care.
+- **The ship to MOLE is blocked on the operator, with evidence**: the lab server at
+  `192.168.1.43:3001` is unreachable (HTTP 000 — MOLE's port proxy does not survive a WSL restart)
+  and `wrangler whoami` reports **not authenticated**, so neither a Worker deploy nor a hardware
+  acceptance run is possible from this host.
+- **`admins` and `hw_test_artifacts` remain whole-list writes** (small, not per-device volume).
+- The index residuals (`device_index`, `audit_index`, `location_index`) are unchanged.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+- **Ship to MOLE / deploy the Worker: BLOCKED, operator action.** Two independent requirements:
+  bring the Windows port proxy back up on MOLE, and `wrangler login` (or `CLOUDFLARE_API_TOKEN`)
+  on this host. Verified this session: `curl` → HTTP 000, `wrangler whoami` → not authenticated.
+
+### Session artifacts
+
+- None produced. This session's evidence is the harness verdict change itself: `too_large=1` →
+  `too_large=0` on `serverless/worker.ts`, plus 480 tests / `tsc` / 23 contract tests green.
+
+### Failure attribution
+
+- **Layer 3 (execution environment), caught and corrected mid-session**: a `cd serverless` in a
+  command did not take effect (the shell's working directory had persisted from the previous call),
+  so a `vitest run` executed from the repo root and reported **dashboard** suites failing. It
+  looked like a catastrophic break of code I had not touched. The fix is a habit, not a check:
+  use absolute paths for gate commands and read `pwd`, rather than trusting a silent `cd` chain.
+- **Layer 4 (verification feedback)**: moving `PBKDF2_ITERATIONS` broke a cross-surface test that
+  greps `worker.ts` by source text. The test was right to fail — it pins a value — but the coupling
+  to a file path is the hazard. It now reads the module the value lives in, with the reason stated.
+
+### VERIFY
+
+- `serverless`: `npx vitest run` → **480 passed / 4 files**.
+- `serverless`: `npx tsc --noEmit -p .` → clean.
+- `scripts/test_cross_surface_contract.py` → **23 passed**.
+- `make graph-check` → all invariants pass.
+- `lens_diagnostics` (full, LSP) on the four modules → no errors, and `worker.ts` no longer
+  reports `too_large`.
+
+### Next session opening
+
+Ship S272–S277 to MOLE — the only remaining requirement is operator access (port proxy up,
+`wrangler login`) — and if that stays blocked, cut the storage layer out of `worker.ts` next, since
+it is the cohesive 900-line block the last five ADRs describe.
+
+---

@@ -3177,3 +3177,20 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: 'Residual: device_index/audit_index/location_index are whole-value writes, capped or append-mostly.'
+- id: B-144
+  statement: serverless/worker.ts is 4925 lines after extracting http.ts, admin-auth.ts and installer-scripts.ts
+    in dependency order, so the harness LSP analyses it again (too_large=0); the remaining big cohesive
+    blocks are the storage layer (ADR-002..006, ~900 lines) and the /v1 PBL routes (~460)
+  domain: api/devices
+  status: proposed
+  evidence_level: assumed
+  provenance: S277 commit 9212930; lens_diagnostics full probe reports too_large=0 and no errors across
+    the four modules
+  source: serverless/worker.ts; serverless/http.ts; serverless/admin-auth.ts; serverless/installer-scripts.ts
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Ship to MOLE is still blocked: lab server HTTP 000 and wrangler not authenticated.'

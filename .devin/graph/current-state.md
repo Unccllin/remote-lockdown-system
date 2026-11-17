@@ -58,38 +58,36 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 276 — 2026-11-18 (the last two whole-list stores hold secrets)
+## Latest session: 277 — 2026-11-18 (the Worker comes back into view)
 
 ### Fog cleared
 
-- **Both secret stores are per-device (ADR-006)**: `encryption_keys:<deviceId>` and
-  `bios_passwords:<deviceId>`, legacy lists migrated once and deleted. `listKeys`, `saveKeys`,
-  `listBiosPasswords` and `saveBiosPasswords` no longer exist, so a whole-list write cannot return.
-- **No index and no cap, by construction.** The key set is exactly the device set and the rows per
-  device are bounded by the command and credential types, so there is nothing to prune — which is
-  the only safe design for material that must never be truncated.
-- **The S269 rule survived and is now pinned**: `recover` releases the *newest* unreleased key with
-  two candidates present, asserted on both the response and the stored `released_at` flags.
-- **Every fleet-scale store is now per-entity**: commands (ADR-002), devices (ADR-003), locations
-  (ADR-004), audit (ADR-005), secrets (ADR-006). What remains as single-value lists is `admins` and
-  `hw_test_artifacts` — small, and not per-device collections.
+- **`worker.ts` is 4,925 lines** (from 5,419) and the LSP now reports `too_large=0` — the file is
+  analysable again. Three modules were extracted in dependency order:
+  `serverless/http.ts` (134), `serverless/admin-auth.ts` (214),
+  `serverless/installer-scripts.ts` (188).
+- **Three unsafe `new URL` sites now use `requestUrl()`**, so a malformed request URL degrades to
+  empty route params instead of throwing — which is the behaviour `requestUrl` was written for.
+- **The installer composer takes a validated `URL`**, so that module contains no throwing
+  construction at all (the checker was right about this one).
+- **The contract test follows the code it pins**: it asserts `PBKDF2_ITERATIONS = 100_000` against
+  ADR-001 in `admin-auth.ts` now, rather than in the file that happened to hold it.
 
 ### Fog remaining
 
-- **`admins` and `hw_test_artifacts` are still whole-list writes.** Neither is a per-device
-  collection and both are small; named rather than implied. An admin mutation still rewrites the
-  admin list, which is acceptable at this size but is the same shape.
-- **The three indexes are whole-value writes** — `device_index`, `audit_index`, and the per-device
-  `location_index` — capped (audit) or append-mostly (devices), the residual ADR-002 accepted.
-- **Location history still loads a device's whole retained window** (≤500 records) to keep the
-  S272 `observed_at` ordering exact; the fix, if it proves slow, is a stored sort key.
-- **`worker.ts` is past 5,000 lines**, so harness diagnostics report "too_large" and `tsc` + the
-  suite are the only gates on it.
-- **MOLE has none of S272–S276** — `lock_state`, `observed_at`, and four storage changes.
+- **`worker.ts` is still 4,925 lines** and its `fetch` dispatch measures complexity 145. The two
+  obvious next cuts are the storage layer (~900 lines, ADR-002..006) into `serverless/kv/`, and
+  the `/v1` PBL routes (~460 lines) into `pbl/routes.ts`. Both need the same dependency care.
+- **The ship to MOLE is blocked on the operator, with evidence**: the lab server at
+  `192.168.1.43:3001` is unreachable (HTTP 000 — MOLE's port proxy does not survive a WSL restart)
+  and `wrangler whoami` reports **not authenticated**, so neither a Worker deploy nor a hardware
+  acceptance run is possible from this host.
+- **`admins` and `hw_test_artifacts` remain whole-list writes** (small, not per-device volume).
+- The index residuals (`device_index`, `audit_index`, `location_index`) are unchanged.
 
 ### Debt items closed
 
-None formally — ADR-006 closes the last part of a blocker line, not a ledger item.
+None formally.
 
 ### Debt items still open
 
@@ -100,41 +98,40 @@ D-210 (PBL route integration).
 
 - MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
 - `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
-- **The 60-device rollout storage blocker is CLOSED**: the four stores it named — `devices`,
-  `audit`, `bios_passwords`, `locations` — are all per-entity. The remaining single-value lists
-  (`admins`, `hw_test_artifacts`) are not per-device volume, and the index residuals are recorded
-  above. What is left before a rollout is the MOLE shipment and a hardware acceptance run.
+- **Ship to MOLE / deploy the Worker: BLOCKED, operator action.** Two independent requirements:
+  bring the Windows port proxy back up on MOLE, and `wrangler login` (or `CLOUDFLARE_API_TOKEN`)
+  on this host. Verified this session: `curl` → HTTP 000, `wrangler whoami` → not authenticated.
 
 ### Session artifacts
 
-- `docs/artifacts/s276-secret-stores-per-device-keys.json` — the real Worker taking two devices
-  through ACK → deadman → recover → release: **13 assertions**, including "B's key bytes are
-  untouched by A's escrow", "the newest key was the one released", and "the bystander device's key
-  record is untouched" after a release.
+- None produced. This session's evidence is the harness verdict change itself: `too_large=1` →
+  `too_large=0` on `serverless/worker.ts`, plus 480 tests / `tsc` / 23 contract tests green.
 
 ### Failure attribution
 
-- **No suite failures from the change**; the four new tests needed **three rounds of fixture
-  correction**, all mine and all about API state I had not checked before writing them:
-  an ACK needs a real queued command id (not `'ignored'`), the PBA route migrates only *its* store
-  (the key store needed its own reader to migrate), and `recover` leaves a device in `recovering`
-  where release refuses it (so the unlock must be ACKed to reach `active`).
-- **Layer 4, cost:** each of those was a guess about a state machine I had read but not traced.
-  The lesson is the one this repo keeps re-learning: drive the fixture through the real endpoints
-  and read the status codes, rather than seeding the store and assuming the transitions.
+- **Layer 3 (execution environment), caught and corrected mid-session**: a `cd serverless` in a
+  command did not take effect (the shell's working directory had persisted from the previous call),
+  so a `vitest run` executed from the repo root and reported **dashboard** suites failing. It
+  looked like a catastrophic break of code I had not touched. The fix is a habit, not a check:
+  use absolute paths for gate commands and read `pwd`, rather than trusting a silent `cd` chain.
+- **Layer 4 (verification feedback)**: moving `PBKDF2_ITERATIONS` broke a cross-surface test that
+  greps `worker.ts` by source text. The test was right to fail — it pins a value — but the coupling
+  to a file path is the hazard. It now reads the module the value lives in, with the reason stated.
 
 ### VERIFY
 
-- `serverless`: `npx vitest run` → **480 passed / 4 files** (was 476; +4 ADR-006 tests).
+- `serverless`: `npx vitest run` → **480 passed / 4 files**.
 - `serverless`: `npx tsc --noEmit -p .` → clean.
 - `scripts/test_cross_surface_contract.py` → **23 passed**.
-- Artifact: 13/13 assertions on a real Worker run.
 - `make graph-check` → all invariants pass.
+- `lens_diagnostics` (full, LSP) on the four modules → no errors, and `worker.ts` no longer
+  reports `too_large`.
 
 ### Next session opening
 
-Ship S272–S276 to MOLE and run the lock → recover acceptance with `lock_state` visible — the
-storage blocker is closed, so the next evidence needed is a hardware run, not more refactoring.
+Ship S272–S277 to MOLE — the only remaining requirement is operator access (port proxy up,
+`wrangler login`) — and if that stays blocked, cut the storage layer out of `worker.ts` next, since
+it is the cohesive 900-line block the last five ADRs describe.
 
 ---
 
