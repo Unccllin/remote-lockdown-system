@@ -490,6 +490,9 @@ class TestTrackingDataProtection:
         }
         state_file.write_text(json.dumps(state))
         cfg["tracking_state_file"] = state_file
+        # stop_track releases its own reason through the shared hold file, which is what
+        # keeps a lockdown's hold intact while tracking ends (S270).
+        (tmp_path / ".logon_holds").write_text(json.dumps({"user": "john", "reasons": ["track"]}))
 
         with (
             patch.object(agent.platform, "system", return_value="Windows"),
@@ -690,6 +693,17 @@ class TestEfsCertUpload:
             assert result is False
 
 
+@pytest.fixture(autouse=True)
+def _isolate_logon_holds(tmp_path, monkeypatch):
+    """Isolate the shared account-hold file per test.
+
+    `lock` and `track` now record their reasons in one file, so a tracking test that
+    disables 'john' left that name behind for the next test to read — 'john' appeared as a
+    phantom user in an unrelated logon test.
+    """
+    monkeypatch.setattr(agent, "LOGON_HOLDS_FILE", tmp_path / ".logon_holds")
+
+
 class TestLockdownEffectiveness:
     """`lockdown_effective` must be produced and must be honest.
 
@@ -766,15 +780,18 @@ class TestLogonPrevention:
 
     def test_the_state_file_is_written_before_the_account_is_touched(self, tmp_path, monkeypatch):
         """A crash between the two must still leave the operator a name to re-enable."""
-        state = tmp_path / ".lock_logon"
+        state = tmp_path / ".logon_holds"
         order: list[str] = []
-        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", state)
+        account = {"active": True}
+        monkeypatch.setattr(agent, "LOGON_HOLDS_FILE", state)
         monkeypatch.setattr(agent, "_get_real_username", lambda: "labuser")
-        monkeypatch.setattr(agent, "_query_account_active", lambda user: False)
+        monkeypatch.setattr(agent, "_query_account_active", lambda user: account["active"])
 
         def fake_net(args):
             order.append("net:" + " ".join(args))
             order.append("state-exists" if state.exists() else "no-state")
+            if "/active:no" in args:
+                account["active"] = False
             return True
 
         monkeypatch.setattr(agent, "_run_net_user", fake_net)
@@ -783,13 +800,13 @@ class TestLogonPrevention:
 
         assert (user, prevented) == ("labuser", True)
         assert order[:2] == ["net:labuser /active:no", "state-exists"]
-        assert json.loads(state.read_text())["disabled_user"] == "labuser"
+        assert json.loads(state.read_text())["user"] == "labuser"
 
     def test_a_disable_that_did_not_take_effect_is_reported_as_not_prevented(
         self, tmp_path, monkeypatch
     ):
         # `net user` exits 0 and the account is still active — believe the account.
-        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", tmp_path / ".lock_logon")
+        monkeypatch.setattr(agent, "LOGON_HOLDS_FILE", tmp_path / ".logon_holds")
         monkeypatch.setattr(agent, "_get_real_username", lambda: "labuser")
         monkeypatch.setattr(agent, "_run_net_user", lambda args: True)
         monkeypatch.setattr(agent, "_query_account_active", lambda user: True)
@@ -799,20 +816,20 @@ class TestLogonPrevention:
         assert (user, prevented) == ("labuser", False)
 
     def test_a_failed_disable_still_records_the_user_for_recovery(self, tmp_path, monkeypatch):
-        state = tmp_path / ".lock_logon"
-        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", state)
+        state = tmp_path / ".logon_holds"
+        monkeypatch.setattr(agent, "LOGON_HOLDS_FILE", state)
         monkeypatch.setattr(agent, "_get_real_username", lambda: "labuser")
         monkeypatch.setattr(agent, "_run_net_user", lambda args: False)
 
         user, prevented = agent.disable_console_account()
 
         assert (user, prevented) == ("labuser", False)
-        assert json.loads(state.read_text())["disabled_user"] == "labuser"
+        assert json.loads(state.read_text())["user"] == "labuser"
 
     def test_re_enable_verifies_and_clears_the_state(self, tmp_path, monkeypatch):
-        state = tmp_path / ".lock_logon"
-        state.write_text(json.dumps({"disabled_user": "labuser"}))
-        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", state)
+        state = tmp_path / ".logon_holds"
+        state.write_text(json.dumps({"user": "labuser", "reasons": ["lock"]}))
+        monkeypatch.setattr(agent, "LOGON_HOLDS_FILE", state)
         monkeypatch.setattr(agent, "_query_account_active", lambda user: True)
         ran: list[list[str]] = []
         monkeypatch.setattr(agent, "_run_net_user", lambda args: ran.append(args) or True)
@@ -824,9 +841,9 @@ class TestLogonPrevention:
         assert not state.exists(), "the state file must not outlive the re-enable"
 
     def test_re_enable_keeps_the_state_when_it_did_not_take_effect(self, tmp_path, monkeypatch):
-        state = tmp_path / ".lock_logon"
-        state.write_text(json.dumps({"disabled_user": "labuser"}))
-        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", state)
+        state = tmp_path / ".logon_holds"
+        state.write_text(json.dumps({"user": "labuser", "reasons": ["lock"]}))
+        monkeypatch.setattr(agent, "LOGON_HOLDS_FILE", state)
         monkeypatch.setattr(agent, "_run_net_user", lambda args: True)
         monkeypatch.setattr(agent, "_query_account_active", lambda user: False)
 
@@ -836,12 +853,85 @@ class TestLogonPrevention:
         assert state.exists(), "keep the record: the account is still disabled"
 
     def test_nothing_to_re_enable_is_success(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(agent, "LOCK_LOGON_STATE_FILE", tmp_path / ".lock_logon")
+        monkeypatch.setattr(agent, "LOGON_HOLDS_FILE", tmp_path / ".logon_holds")
         ran: list[list[str]] = []
         monkeypatch.setattr(agent, "_run_net_user", lambda args: ran.append(args) or True)
 
         assert agent.re_enable_console_account() == (None, True)
         assert ran == []
+
+    def test_two_reasons_share_one_disable(self, tmp_path, monkeypatch):
+        """`lock` and `track` both need the account closed; one file records why."""
+        monkeypatch.setattr(agent, "LOGON_HOLDS_FILE", tmp_path / ".logon_holds")
+        monkeypatch.setattr(agent, "_get_real_username", lambda: "labuser")
+        account = {"active": True}
+        monkeypatch.setattr(agent, "_query_account_active", lambda user: account["active"])
+        ran: list[list[str]] = []
+
+        def fake_net(args):
+            ran.append(args)
+            if "/active:no" in args:
+                account["active"] = False
+            return True
+
+        monkeypatch.setattr(agent, "_run_net_user", fake_net)
+
+        assert agent.hold_logon("lock") == ("labuser", True)
+        assert agent.hold_logon("track") == ("labuser", True)
+
+        assert ran == [["labuser", "/active:no"]], "a second reason must not re-disable"
+        holds = json.loads((tmp_path / ".logon_holds").read_text())
+        assert holds["reasons"] == ["lock", "track"]
+
+    def test_releasing_one_reason_leaves_the_account_disabled_when_another_holds(
+        self, tmp_path, monkeypatch
+    ):
+        """The defect this replaces: `recover` during covert tracking handed the account back."""
+        state = tmp_path / ".logon_holds"
+        state.write_text(json.dumps({"user": "labuser", "reasons": ["lock", "track"]}))
+        monkeypatch.setattr(agent, "LOGON_HOLDS_FILE", state)
+        ran: list[list[str]] = []
+        monkeypatch.setattr(agent, "_run_net_user", lambda args: ran.append(args) or True)
+
+        user, ok = agent.release_logon("lock")
+
+        assert (user, ok) == ("labuser", True), "the account is in the state this reason wanted"
+        assert ran == [], "tracking still holds it: nothing may be re-enabled"
+        assert json.loads(state.read_text())["reasons"] == ["track"]
+
+    def test_the_last_release_re_enables_and_clears_the_file(self, tmp_path, monkeypatch):
+        state = tmp_path / ".logon_holds"
+        state.write_text(json.dumps({"user": "labuser", "reasons": ["lock", "track"]}))
+        monkeypatch.setattr(agent, "LOGON_HOLDS_FILE", state)
+        monkeypatch.setattr(agent, "_query_account_active", lambda user: True)
+        ran: list[list[str]] = []
+        monkeypatch.setattr(agent, "_run_net_user", lambda args: ran.append(args) or True)
+
+        agent.release_logon("lock")
+        user, ok = agent.release_logon("track")
+
+        assert (user, ok) == ("labuser", True)
+        assert ran == [["labuser", "/active:yes"]], "exactly one re-enable, at the end"
+        assert not state.exists()
+
+    def test_stop_track_releases_its_own_reason(self, tmp_path, monkeypatch):
+        """`stop_track` must not re-enable an account a lockdown still needs disabled."""
+        state = tmp_path / ".logon_holds"
+        state.write_text(json.dumps({"user": "labuser", "reasons": ["lock", "track"]}))
+        monkeypatch.setattr(agent, "LOGON_HOLDS_FILE", state)
+        monkeypatch.setattr(agent, "platform", agent.platform)
+        tracking_state = tmp_path / "tracking_state.json"
+        tracking_state.write_text(
+            json.dumps({"applied": ["disable_real_user"], "real_user": "labuser"})
+        )
+        monkeypatch.setattr(agent.platform, "system", lambda: "Windows")
+        ran: list[list[str]] = []
+        monkeypatch.setattr(agent, "_run_net_user", lambda args: ran.append(args) or True)
+
+        agent.remove_tracking_data_protection({"tracking_state_file": tracking_state})
+
+        assert ran == [], "the lock still holds the account"
+        assert json.loads(state.read_text())["reasons"] == ["lock"]
 
     def test_unlock_re_enables_before_it_checks_the_key(self, monkeypatch):
         """A `failed` ACK (no key material) must not strand a disabled account."""
@@ -849,9 +939,7 @@ class TestLogonPrevention:
         monkeypatch.setattr(
             agent, "re_enable_console_account", lambda: calls.append("re-enable") or (None, True)
         )
-        monkeypatch.setattr(
-            agent, "ack_command", lambda *a, **k: calls.append("ack") or True
-        )
+        monkeypatch.setattr(agent, "ack_command", lambda *a, **k: calls.append("ack") or True)
         monkeypatch.setattr(agent, "log", __import__("logging").getLogger("test"))
 
         agent.handle_unlock({"lockdown_folder": "/tmp/x", "lock_sentinel": "/tmp/y"}, {"id": "c1"})

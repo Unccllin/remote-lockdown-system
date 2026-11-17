@@ -291,10 +291,14 @@ DEADMAN_KEY_FILE = _STATE_DIR / ".deadman_key"
 # reached the server for ~14 hours (S270). The service host supervises on this file, so a
 # device that is running but unreachable is restarted instead of looking healthy forever.
 LAST_CHECKIN_OK_FILE = _STATE_DIR / ".last_checkin_ok"
-# Who this agent disabled at lockdown, written BEFORE the account is touched so a crash,
-# a failed ACK or a reboot still leaves the operator a name to re-enable. The tracking path
-# records the same fact in tracking_state.json; this one is for `lock`/`recover`.
-LOCK_LOGON_STATE_FILE = _STATE_DIR / ".lock_logon"
+# Why the interactive account is disabled, and who it is. One owner for the account:
+# `lock` and `track` both need it disabled, and they used to keep separate state
+# (`tracking_state.json` and a lock file) while re-enabling it independently — so
+# `recover` during covert tracking handed the thief a working account, and `stop_track`
+# during a lockdown did the same (S270). A reason SET is what makes "enabled only when
+# nobody needs it disabled" expressible; the file is written BEFORE the account is touched
+# so a crash, a failed ACK or a reboot still leaves the operator a name to re-enable.
+LOGON_HOLDS_FILE = _STATE_DIR / ".logon_holds"
 
 
 def _find_config_file(cli_config_path=None):
@@ -2079,86 +2083,126 @@ _SERVICE_ACCOUNTS = frozenset(
 )
 
 
-def read_locked_user() -> str | None:
-    """The account this agent disabled at lockdown, or None when it disabled nobody."""
+def _read_logon_holds() -> dict:
+    """The account state file: {"user": <name>, "reasons": [...]} (empty when unset)."""
     try:
-        data = json.loads(LOCK_LOGON_STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(LOGON_HOLDS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None
-    user = data.get("disabled_user")
-    return user if isinstance(user, str) and user else None
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    reasons = [r for r in (data.get("reasons") or []) if isinstance(r, str) and r]
+    user = data.get("user")
+    return {"user": user if isinstance(user, str) and user else None, "reasons": reasons}
 
 
-def disable_console_account() -> tuple[str | None, bool]:
-    """Disable the interactive user's account so a thief cannot sign in.
-
-    Lock used to enforce nothing about logons: on a service install `_lock_workstation`
-    only issues `tsdiscon`, the overlay cannot be created from Session 0, and the account
-    stayed enabled — so "locked" meant "the console is disconnected and one folder is
-    encrypted, sign in again with your own password" (reported by the operator after
-    testing MOLE, S270).
-
-    The state file is written BEFORE `net user /active:no`, because a crash between the
-    two must still leave the operator a name to re-enable. Returns (user, verified) where
-    `verified` is the account state read back from the machine, not the command's exit
-    code — `net user /active:no` can exit 0 and change nothing.
-    """
-    user = _get_real_username()
-    if not user:
-        log.error(
-            "Cannot prevent logon: no interactive user detected (no console session and no "
-            "LastLoggedOnUser) — the machine will be encrypted but still signable-in"
-        )
-        return None, False
-    if user.strip().lower() in _SERVICE_ACCOUNTS:
-        log.error("Refusing to disable the service account '%s'", user)
-        return None, False
-
+def _write_logon_holds(user: str, reasons: list[str]) -> bool:
     try:
         _atomic_write_text(
-            LOCK_LOGON_STATE_FILE,
-            json.dumps({"disabled_user": user, "disabled_at": time.time()}),
+            LOGON_HOLDS_FILE,
+            json.dumps({"user": user, "reasons": sorted(set(reasons))}),
         )
+        return True
     except OSError as e:
-        log.error("Could not record the account to re-enable (%s) — not disabling it", e)
+        log.error("Could not record the logon hold (%s)", e)
+        return False
+
+
+def read_locked_user() -> str | None:
+    """The account held disabled by any reason, or None when logon is not held."""
+    return _read_logon_holds().get("user")
+
+
+def hold_logon(reason: str, user: str | None = None) -> tuple[str | None, bool]:
+    """Disable the interactive account on behalf of `reason`, verifying it took effect.
+
+    `lock` and `track` both need this. The state file records the *set* of reasons, so
+    ending one never re-enables an account the other still needs closed. Everything is
+    verified by reading the account back — `net user /active:no` can exit 0 and change
+    nothing, which is how tracking once recorded a disable that never happened.
+    """
+    holds = _read_logon_holds()
+    target = user or holds.get("user") or _get_real_username()
+    if not target:
+        log.error(
+            "Cannot prevent logon (%s): no interactive user detected — the machine is "
+            "encrypted but still signable-in",
+            reason,
+        )
+        return None, False
+    if target.strip().lower() in _SERVICE_ACCOUNTS:
+        log.error("Refusing to disable the service account '%s'", target)
         return None, False
 
-    if not _run_net_user([user, "/active:no"]):
-        log.error("Could not disable '%s' — logon is NOT prevented", user)
-        return user, False
+    reasons = [*(holds.get("reasons") or []), reason]
+    if not _write_logon_holds(target, reasons):
+        return None, False
 
-    active = _query_account_active(user)
+    if _query_account_active(target) is False:
+        log.info(
+            "Logon already held for '%s' (reasons=%s)",
+            target,
+            ",".join(sorted(set(reasons))),
+        )
+        return target, True
+
+    if not _run_net_user([target, "/active:no"]):
+        log.error("Could not disable '%s' — logon is NOT prevented", target)
+        return target, False
+
+    active = _query_account_active(target)
     if active is False:
-        log.info("Logon prevented: account '%s' is disabled", user)
-        return user, True
+        log.info(
+            "Logon prevented: '%s' disabled (reasons=%s)", target, ",".join(sorted(set(reasons)))
+        )
+        return target, True
 
     log.error(
-        "Disabling '%s' did not take effect (account active=%s) — logon is NOT prevented",
-        user,
+        "Disabling '%s' did not take effect (active=%s) — logon is NOT prevented",
+        target,
         active,
     )
-    return user, False
+    return target, False
 
 
-def re_enable_console_account() -> tuple[str | None, bool]:
-    """Re-enable the account `disable_console_account` disabled. Verified by read-back.
+def release_logon(reason: str) -> tuple[str | None, bool]:
+    """Drop `reason`'s hold. Re-enable ONLY when no other reason still needs it disabled.
 
-    Called first in handle_unlock — before the key is even checked — so a failed or
-    missing decryption cannot leave the operator locked out of their own machine.
+    Returns (user, ok) where ok means "the machine is in the state this reason asked for" —
+    which for a remaining hold is "still disabled", not "enabled".
     """
-    user = read_locked_user()
+    holds = _read_logon_holds()
+    user = holds.get("user")
     if not user:
         return None, True
+
+    reasons = [r for r in (holds.get("reasons") or []) if r != reason]
+    if reasons:
+        _write_logon_holds(user, reasons)
+        log.info(
+            "Logon still held for '%s' by %s — not re-enabling", user, ",".join(sorted(reasons))
+        )
+        return user, True
+
     if not _run_net_user([user, "/active:yes"]):
         log.error("Could not re-enable '%s' — the account stays disabled", user)
         return user, False
-    active = _query_account_active(user)
-    if active is True:
+    if _query_account_active(user) is True:
         log.info("Account '%s' re-enabled", user)
-        LOCK_LOGON_STATE_FILE.unlink(missing_ok=True)
+        LOGON_HOLDS_FILE.unlink(missing_ok=True)
         return user, True
-    log.error("Re-enabling '%s' did not take effect (active=%s)", user, active)
+    log.error("Re-enabling '%s' did not take effect", user)
     return user, False
+
+
+def disable_console_account() -> tuple[str | None, bool]:
+    """`lock`'s hold on the interactive account."""
+    return hold_logon("lock")
+
+
+def re_enable_console_account() -> tuple[str | None, bool]:
+    """`recover`'s release. Called before the unlock key is even looked at."""
+    return release_logon("lock")
 
 
 def _lockdown_effective(
@@ -3142,20 +3186,17 @@ def apply_tracking_data_protection(cfg: dict) -> dict:
             state["applied"].append("efs_encrypt")
 
     # --- Layer 2: Disable the real user's account, then verify ---
+    # Through the shared hold, not a raw `net user`: `lock` may already have disabled this
+    # account, and the two used to record and reverse that independently — so `recover`
+    # during tracking, or `stop_track` during a lockdown, handed the account back while the
+    # other layer still needed it closed (S270).
     if real_user:
-        log.info("Disabling real user account: %s", real_user)
-        _run_net_user([real_user, "/active:no"])
-        active = _query_account_active(real_user)
-        if active is False:
-            state["real_user"] = real_user
+        held_user, held = hold_logon("track", real_user)
+        if held:
+            state["real_user"] = held_user or real_user
             state["applied"].append("disable_real_user")
         else:
             state["failed"].append("disable_real_user")
-            log.error(
-                "Could not disable %s — account still active=%s (not recorded as applied)",
-                real_user,
-                active,
-            )
     else:
         state["failed"].append("real_user_unknown")
         log.warning("Could not determine real username — skipping account lockout")
@@ -3246,12 +3287,10 @@ def remove_tracking_data_protection(cfg: dict) -> None:
             except OSError:
                 pass
 
-    # Reverse Layer 1: Re-enable real user's account
+    # Reverse Layer 1: release tracking's hold on the account. If `lock` still holds it,
+    # the account stays disabled — that is the point of the shared reason set.
     if "disable_real_user" in applied:
-        real_user = state.get("real_user")
-        if real_user:
-            log.info("Re-enabling real user account: %s", real_user)
-            _run_net_user([real_user, "/active:yes"])
+        release_logon("track")
 
     # Reverse Layer 2: Delete decoy account
     if "create_decoy" in applied or "enable_decoy" in applied:
