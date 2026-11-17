@@ -2957,3 +2957,45 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-133
+  statement: 'The agent''s main loop blocked permanently in show_lockdown_notification() after the lockdown
+    ACK: on Windows it calls MessageBoxW, and a service runs in Session 0 where nobody can click the dialog.
+    Measured on MOLE — ACK at 2026-11-17T05:54:13Z, no further check-in, heartbeat frozen at 08:53:53
+    local, a queued unlock that could never be fetched until the service host restarted the agent. Fixed
+    by firing the notification from a daemon thread (5d378fb); the notification must never be able to
+    stop the poll loop.'
+  domain: lifecycle
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'Observed on MOLE twice: the agent blocked after the lockdown ACK and only a process restart
+    resumed polling (S269''s ~14h silence; S271''s stall from 05:54:13Z with a pending unlock, cleared
+    by the service host at 921s). Code-read of agent.py:show_lockdown_notification (MessageBoxW) and the
+    Session 0 context in the log (CreateWindowEx failed: 2).'
+  source: S271
+  asserted: '2026-11-17'
+  last_verified: '2026-11-17'
+  commit_ref: 5d378fb
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-134
+  statement: 'When two components both need one Windows account disabled (lock and covert tracking), they
+    must share a single owner of that state: separate files let each reverse the other''s disable, so
+    recover during tracking (or stop_track during a lockdown) hands the account back while the other layer
+    still needs it closed. The working shape is a reason set — {user, reasons:[...]} — with the account
+    enabled only when the set is empty, written BEFORE the account is touched so a crash still leaves
+    a recovery path.'
+  domain: design
+  status: proposed
+  evidence_level: assumed
+  provenance: agent.py hold_logon/release_logon (.logon_holds), replacing .lock_logon + tracking_state.json's
+    disable_real_user (ae415f0); tests pin the interlock
+  source: S271
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

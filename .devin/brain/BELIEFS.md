@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-17 08:45:35 — 132 beliefs
+Generated: 2026-11-17 09:39:27 — 134 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -85,6 +85,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-047 | confirmed | code-read | The one-click Windows installer runs on the target with native Windows facilities only (certutil, sc.exe, registry, the frozen lockdown-agent.exe/watchdog exe). No WSL, no Python, no NSSM on the target; makensis is a server-side Linux build dependency only. The IT-admin alternative agent/install_service.ps1 does require Python + NSSM on the target, so it is not interchangeable with the one-click path. |
+
+## design
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-134 | proposed | assumed | When two components both need one Windows account disabled (lock and covert tracking), they must share a single owner of that state: separate files let each reverse the other's disable, so recover during tracking (or stop_track during a lockdown) hands the account back while the other layer still needs it closed. The working shape is a reason set — {user, reasons:[...]} — with the account enabled only when the set is empty, written BEFORE the account is touched so a crash still leaves a recovery path. |
 
 ## firmware
 
@@ -293,6 +299,7 @@ mkfs.fat 4.2 (2021-01-31)
 | B-130 | refuted | hardware | service_host.agent_is_running() is process existence only, so a WEDGED agent blocks its own recovery: on MOLE the agent stopped checking in at 2026-11-16T14:33Z and was still wedged ~14h later while Get-Service said Running and the host logged 'agent already running - not starting another' every 30s. Restart-Service cannot fix it (the new host refuses to start a second agent while the wedged pid exists); only Stop-Process did. The heartbeat file the agent already writes (.heartbeat) is the right liveness signal and is not consulted, and the scheduled-task watchdog that would have killed it is removed by remove_legacy_starters() when the service is installed. → see B-132 |
 | B-131 | confirmed | hardware | S269's ACTIVE poll-interval fix (300s -> 60s) was applied to handlePing (served at /api/ping, a legacy path the current agent does not call) while handleAgentCheckin (/api/agent/checkin) still returned 300 from ADAPTIVE_POLL; MOLE logged 'Adaptive polling: 30s -> 300s (status=active)' AFTER the fix, and the worker test pinned 300 on the wrong branch. Both branches now use activePollSeconds(env). |
 | B-132 | confirmed | code-read | A service-installed agent had NO liveness supervision, and process existence was the only test: agent_is_running() only asked whether a lockdown-agent pid existed, the scheduled-task watchdog that would have killed a stuck agent is removed by remove_legacy_starters() at service install, and Restart-Service could not recover MOLE (the new host refuses to start a second agent while the old pid exists) — only Stop-Process cleared it. What the agent was doing is NOT established: its .heartbeat kept being touched (171 s old at the time of inspection) while no check-in reached the server for ~14 h, and no 'Check-in failed' warning (agent.py:1454, logged on every requests.RequestException) appeared after 17:33 — so the poll path was not being reached, or it was reached and blocked, and the heartbeat is therefore NOT a valid liveness signal. Supervision now uses .last_checkin_ok, written only when the server answers a check-in, and restarts only when /api/health also answers. |
+| B-133 | confirmed | hardware | The agent's main loop blocked permanently in show_lockdown_notification() after the lockdown ACK: on Windows it calls MessageBoxW, and a service runs in Session 0 where nobody can click the dialog. Measured on MOLE — ACK at 2026-11-17T05:54:13Z, no further check-in, heartbeat frozen at 08:53:53 local, a queued unlock that could never be fetched until the service host restarted the agent. Fixed by firing the notification from a daemon thread (5d378fb); the notification must never be able to stop the poll loop. |
 
 ## meta/process
 
