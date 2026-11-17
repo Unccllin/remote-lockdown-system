@@ -3155,14 +3155,12 @@ def _query_account_exists(name: str) -> bool:
     if platform.system() != "Windows":
         return False
     try:
+        probe = (
+            f"if (Get-LocalUser -Name '{name}' -ErrorAction SilentlyContinue) "
+            "{ 'yes' } else { 'no' }"
+        )
         result = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                f"if (Get-LocalUser -Name '{name}' -ErrorAction SilentlyContinue) {{ 'yes' }} else {{ 'no' }}",
-            ],
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", probe],
             capture_output=True,
             text=True,
             timeout=15,

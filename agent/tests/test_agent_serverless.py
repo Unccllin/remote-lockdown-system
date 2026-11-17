@@ -1004,9 +1004,9 @@ class TestDecoyAccountCreation:
 
         assert agent._create_decoy_account("GuestUser", "B" * 24) is True
 
-        assert net_calls == [
-            ["GuestUser", "B" * 13, "/add"]
-        ], "the fallback password must be under the 14-character prompt threshold"
+        assert net_calls == [["GuestUser", "B" * 13, "/add"]], (
+            "the fallback password must be under the 14-character prompt threshold"
+        )
 
     def test_a_creation_that_did_not_take_effect_is_false(self, monkeypatch):
         result = MagicMock(returncode=0, stdout="", stderr="")

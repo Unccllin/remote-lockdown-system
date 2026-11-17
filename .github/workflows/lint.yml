@@ -94,8 +94,10 @@ jobs:
           python-version: '3.12'
           cache: pip
 
+      # Pinned by the file, not by "latest": an unpinned gate is how the local venv and CI
+      # came to disagree about 6 findings that only one of them reports (S271).
       - name: Install ruff
-        run: pip install ruff
+        run: pip install -r requirements-dev.txt
 
       - name: Run ruff check
         run: ruff check . tests/

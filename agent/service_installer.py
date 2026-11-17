@@ -441,15 +441,11 @@ def ensure_time_service() -> bool:
             text=True,
             timeout=15,
         )
-        subprocess.run(
-            ["net", "start", "w32time"], capture_output=True, text=True, timeout=30
-        )
+        subprocess.run(["net", "start", "w32time"], capture_output=True, text=True, timeout=30)
         # /resync can legitimately refuse ("The computer did not resync because no time
         # data was available") on a lab network with no reachable NTP source; the service
         # being up is what matters, the first sync is a bonus.
-        subprocess.run(
-            ["w32tm", "/resync", "/force"], capture_output=True, text=True, timeout=30
-        )
+        subprocess.run(["w32tm", "/resync", "/force"], capture_output=True, text=True, timeout=30)
         query = _sc("query", "w32time")
         running = "RUNNING" in (query.stdout or "")
         if running:
