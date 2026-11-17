@@ -14,7 +14,7 @@ CBOR/COSE (`pbl/`).
 
 | name | kind | purpose |
 |------|------|---------|
-| `LOCKDOWN_KV` | KV namespace | all durable state: devices, commands (one key each — see [Command storage](#command-storage-adr-002)), admins, audit, binaries |
+| `LOCKDOWN_KV` | KV namespace | all durable state: devices (one key each — see [Device storage](#device-storage-adr-003)), commands (one key each — see [Command storage](#command-storage-adr-002)), admins, audit, binaries |
 | `ADMIN_TOKEN` | secret | break-glass super-admin. Maps to a synthetic admin, so treat it as a root credential |
 | `JWT_SECRET` | secret | signs admin JWTs (falls back to `ADMIN_TOKEN`, then a dev string — do not rely on the fallback in production) |
 | `PBL_SIGNING_KEY` / `PBL_POLICY_SIGNING_KEY` | secret | keys for the firmware-facing `/v1/*` COSE signatures |
@@ -49,13 +49,42 @@ Why: every mutation used to load the whole list, edit it, and write it back, so 
 overlapping requests destroyed each other's fields. Observed live in S269 — the agent ACKed
 `unlock … status=executed` and the device still reported the unlock `pending`, because a
 concurrent check-in had written an older snapshot over it. Mutation now reads and writes
-exactly one key (`updateCommand`), and `serializeMutation()` remains as belt-and-braces for the
-`devices` list, which is still one value.
+exactly one key (`updateCommand`). `serializeMutation()` remains as belt-and-braces for the
+stores that are still whole lists: `locations`, `audit_log`, `bios_passwords`,
+`encryption_keys`.
 
 Residual, stated rather than hidden: `command_index` is itself one key. It is append-mostly
 and holds only ids, so a lost append hides a command (recoverable from the audit log) instead
 of corrupting a record. Removing that residual means a Durable Object per device; see
 [docs/adr/ADR-002-per-entity-command-records.md](../docs/adr/ADR-002-per-entity-command-records.md).
+
+## Device storage (ADR-003)
+
+Devices follow the same shape, for the same reason — a lost field there can be `api_key_hash`
+(the device stops authenticating) or `status` (the dashboard says `active` for a machine that is
+locked):
+
+| key | value |
+|-----|-------|
+| `device:<id>` | one device record |
+| `device_index` | the ids, append-mostly |
+| `agent_key:<sha256>` | the id of the device that owns that API key |
+| `device_checkin:<id>` | check-in metadata (KV-RACE-001), merged on read |
+| `devices` | legacy whole-list key; read once for migration, then deleted |
+
+`agent_key:` exists so authentication is **one read**. Without it, `verifyAgentAuth` scanning
+per-entity records would turn one fleet read per agent request into N — a 60-device fleet
+polling every 300 s would go from ~288 reads/day to ~17,000. The pointer is derived data: the
+record stays the source of truth, `verifyAgentAuth` still compares the hash it computed against
+the hash on the record, and a pointer to a re-keyed device fails closed. See
+[docs/adr/ADR-003-per-entity-device-records.md](../docs/adr/ADR-003-per-entity-device-records.md).
+
+Reading a device back for the UI or a test goes through the API, not the KV layout:
+
+```bash
+GET /api/devices                            # the fleet, with derived lock_state
+GET /api/devices/:id                        # one device
+```
 
 Reading a command back for the UI or a test goes through the API, not the KV layout:
 

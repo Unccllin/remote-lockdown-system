@@ -1,0 +1,220 @@
+{
+  "session": "S272",
+  "adr": "ADR-003-per-entity-device-records.md",
+  "started_at": "2026-11-17T12:23:45.727Z",
+  "steps": [
+    {
+      "step": "01-layout-after-enrol",
+      "detail": {
+        "keys": [
+          "agent_key:5f54552e2c443554cf5bf5ae9bed458f46782726f819a0dc8e69e5f12bcf10c0",
+          "agent_key:d4e95e425caa87c1627113d74ecb5c4b4e9c5d7f6c69aeac32ff0310b1d5d378",
+          "device:54692c97f6d8b27ed10a7f708feeadd9",
+          "device:a08c3fc295d09213ecd7eac06f601ec3",
+          "device_index"
+        ]
+      }
+    },
+    {
+      "step": "02-after-flag-stolen",
+      "detail": {
+        "keys": [
+          "agent_key:5f54552e2c443554cf5bf5ae9bed458f46782726f819a0dc8e69e5f12bcf10c0",
+          "agent_key:d4e95e425caa87c1627113d74ecb5c4b4e9c5d7f6c69aeac32ff0310b1d5d378",
+          "audit_log",
+          "command:243c8697e290b3f038527958cd5135e7",
+          "command_index",
+          "device:54692c97f6d8b27ed10a7f708feeadd9",
+          "device:a08c3fc295d09213ecd7eac06f601ec3",
+          "device_index"
+        ],
+        "writes": [
+          "device:54692c97f6d8b27ed10a7f708feeadd9",
+          "agent_key:d4e95e425caa87c1627113d74ecb5c4b4e9c5d7f6c69aeac32ff0310b1d5d378",
+          "command:243c8697e290b3f038527958cd5135e7",
+          "command_index",
+          "audit_log"
+        ]
+      }
+    },
+    {
+      "step": "03-after-ack",
+      "detail": {
+        "a_status": "locked",
+        "command_id": "243c8697e290b3f038527958cd5135e7"
+      }
+    },
+    {
+      "step": "04-after-release",
+      "detail": {
+        "keys": [
+          "agent_key:d4e95e425caa87c1627113d74ecb5c4b4e9c5d7f6c69aeac32ff0310b1d5d378",
+          "audit_log",
+          "bios_passwords",
+          "command:243c8697e290b3f038527958cd5135e7",
+          "command_index",
+          "device:54692c97f6d8b27ed10a7f708feeadd9",
+          "device_index",
+          "encryption_keys",
+          "locations"
+        ]
+      }
+    },
+    {
+      "step": "05-final-device-list",
+      "detail": {
+        "devices": [
+          {
+            "id": "54692c97f6d8b27ed10a7f708feeadd9",
+            "hostname": "ART-A",
+            "status": "locked",
+            "lock_state": "applied"
+          }
+        ]
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "what": "both devices enrolled",
+      "ok": true,
+      "detail": {
+        "a": 201,
+        "b": 201
+      }
+    },
+    {
+      "what": "no whole-list devices key exists",
+      "ok": true,
+      "detail": {
+        "keys": [
+          "agent_key:5f54552e2c443554cf5bf5ae9bed458f46782726f819a0dc8e69e5f12bcf10c0",
+          "agent_key:d4e95e425caa87c1627113d74ecb5c4b4e9c5d7f6c69aeac32ff0310b1d5d378",
+          "device:54692c97f6d8b27ed10a7f708feeadd9",
+          "device:a08c3fc295d09213ecd7eac06f601ec3",
+          "device_index"
+        ]
+      }
+    },
+    {
+      "what": "each device has its own record key",
+      "ok": true
+    },
+    {
+      "what": "the index lists both ids",
+      "ok": true,
+      "detail": "[\"54692c97f6d8b27ed10a7f708feeadd9\",\"a08c3fc295d09213ecd7eac06f601ec3\"]"
+    },
+    {
+      "what": "an API-key pointer exists for each key",
+      "ok": true
+    },
+    {
+      "what": "flag-stolen succeeded",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "what": "B's record was not rewritten by A's mutation",
+      "ok": true
+    },
+    {
+      "what": "the whole fleet was not written",
+      "ok": true
+    },
+    {
+      "what": "A's record carries the new status",
+      "ok": true
+    },
+    {
+      "what": "ACK accepted",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "what": "the ACK moved A to locked",
+      "ok": true,
+      "detail": {
+        "status": "locked"
+      }
+    },
+    {
+      "what": "rotate-key issued a new key",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "what": "the old API-key pointer is gone",
+      "ok": true
+    },
+    {
+      "what": "the new pointer points at B",
+      "ok": true
+    },
+    {
+      "what": "release succeeded",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"ok\":true,\"message\":\"Device 'ART-B' has been released. All associated data has been deleted.\"}"
+      }
+    },
+    {
+      "what": "the record is gone",
+      "ok": true
+    },
+    {
+      "what": "the new pointer is gone",
+      "ok": true
+    },
+    {
+      "what": "the index no longer lists it",
+      "ok": true,
+      "detail": {
+        "index": [
+          "54692c97f6d8b27ed10a7f708feeadd9"
+        ]
+      }
+    },
+    {
+      "what": "A is still listed",
+      "ok": true,
+      "detail": {
+        "index": [
+          "54692c97f6d8b27ed10a7f708feeadd9"
+        ]
+      }
+    },
+    {
+      "what": "the list shows exactly A, with its lock_state",
+      "ok": true,
+      "detail": {
+        "list": [
+          {
+            "id": "54692c97f6d8b27ed10a7f708feeadd9",
+            "hostname": "ART-A",
+            "owner_name": "A",
+            "status": "locked",
+            "mac_address": null,
+            "hardware_uuid": null,
+            "serial_number": null,
+            "last_checkin": null,
+            "enrolled_at": "2026-11-17T12:23:45.806Z",
+            "lock_state": "applied"
+          }
+        ]
+      }
+    }
+  ],
+  "finished_at": "2026-11-17T12:23:45.824Z",
+  "ok": true
+}

@@ -331,10 +331,10 @@ async function verifyAgentAuth(
     return null;
   }
 
-  // Find device by API key hash
+  // Find device by API key hash. ADR-003: one read through the `agent_key:` pointer, instead
+  // of a scan of every device on every agent request.
   const keyHash = await sha256(agentKey);
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.api_key_hash === keyHash);
+  const device = await getDeviceByApiKeyHash(env, keyHash);
   if (!device) {
     return null;
   }
@@ -653,13 +653,152 @@ const BIOS_PASSWORDS_KEY = 'bios_passwords';
 // `devices`. Admin endpoints merge checkin metadata when returning device data.
 const CHECKIN_KEY_PREFIX = 'device_checkin:';
 
-async function listDevices(env: Env): Promise<Device[]> {
-  const data = await env.LOCKDOWN_KV.get(DEVICES_KEY);
-  return data ? parseKvJson<Device[]>(data, DEVICES_KEY) : [];
+// ADR-003: a device is its own KV record, so a mutation writes one device instead of the
+// whole fleet. `device_index` lists the ids (append-mostly, ids only), and `agent_key:<hash>`
+// points at a device so authentication is one read rather than a scan of every device.
+//
+// `devices` is the legacy whole-list key: read once by the migration, deleted after.
+const DEVICE_INDEX_KEY = 'device_index';
+const DEVICE_KEY_PREFIX = 'device:';
+const AGENT_KEY_PREFIX = 'agent_key:';
+
+/** KV key for one device record (ADR-003). */
+function deviceKey(id: string): string {
+  return `${DEVICE_KEY_PREFIX}${id}`;
 }
 
-async function saveDevices(env: Env, devices: Device[]): Promise<void> {
-  await env.LOCKDOWN_KV.put(DEVICES_KEY, JSON.stringify(devices));
+/** KV key for the API-key-hash → device-id pointer (ADR-003). */
+function agentKeyKey(hash: string): string {
+  return `${AGENT_KEY_PREFIX}${hash}`;
+}
+
+/** One device record, or null when the key is absent or unreadable. */
+async function getDeviceRecord(env: Env, id: string): Promise<Device | null> {
+  const data = await env.LOCKDOWN_KV.get(deviceKey(id));
+  if (!data) return null;
+  try {
+    return JSON.parse(data) as Device;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ids of every device, migrating the legacy whole-list key on first read.
+ *
+ * Same lazy, idempotent migration ADR-002 used for commands: two isolates migrating at once
+ * write identical `device:<id>` records and the same index, then both delete the legacy key.
+ */
+async function listDeviceIds(env: Env): Promise<string[]> {
+  const data = await env.LOCKDOWN_KV.get(DEVICE_INDEX_KEY);
+  if (data) {
+    try {
+      const parsed: unknown = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((id): id is string => typeof id === 'string' && id.length > 0);
+      }
+    } catch {
+      // Corrupt index: fall through and rebuild it from the legacy key if that exists.
+    }
+  }
+
+  const legacy = await env.LOCKDOWN_KV.get(DEVICES_KEY);
+  if (!legacy) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(legacy);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const devices = parsed.filter(
+    (d): d is Device => !!d && typeof (d as Device).id === 'string',
+  );
+  if (devices.length === 0) return [];
+
+  for (const device of devices) {
+    await env.LOCKDOWN_KV.put(deviceKey(device.id), JSON.stringify(device));
+    if (device.api_key_hash) {
+      await env.LOCKDOWN_KV.put(agentKeyKey(device.api_key_hash), device.id);
+    }
+  }
+  const ids = devices.map((d) => d.id);
+  await env.LOCKDOWN_KV.put(DEVICE_INDEX_KEY, JSON.stringify(ids));
+  await env.LOCKDOWN_KV.delete(DEVICES_KEY);
+  return ids;
+}
+
+async function listDevices(env: Env): Promise<Device[]> {
+  const ids = await listDeviceIds(env);
+  const records = await Promise.all(ids.map((id) => getDeviceRecord(env, id)));
+  // An index entry whose record is gone — released, or an append that has not propagated
+  // across colos yet — is skipped rather than thrown, the same tolerance the list read had.
+  return records.filter((d): d is Device => d !== null);
+}
+
+/**
+ * Write one device, and keep the two derived structures in step with it.
+ *
+ * The index append is skipped when the id is already there, and an id the index is missing is
+ * re-appended on every write: a lost append would hide the device from `listDevices`, which on
+ * `devices` means a check-in that 404s.
+ *
+ * The `agent_key:` mapping follows `api_key_hash`. When a device is re-keyed the old mapping is
+ * deleted; a notification that still carries the old key then fails closed instead of
+ * authenticating against a device it no longer belongs to.
+ */
+async function putDevice(env: Env, device: Device): Promise<void> {
+  const previous = await getDeviceRecord(env, device.id);
+  await env.LOCKDOWN_KV.put(deviceKey(device.id), JSON.stringify(device));
+
+  const ids = await listDeviceIds(env);
+  if (!ids.includes(device.id)) {
+    await env.LOCKDOWN_KV.put(DEVICE_INDEX_KEY, JSON.stringify([...ids, device.id]));
+  }
+
+  if (device.api_key_hash) {
+    await env.LOCKDOWN_KV.put(agentKeyKey(device.api_key_hash), device.id);
+  }
+  const staleHash = previous?.api_key_hash;
+  if (staleHash && staleHash !== device.api_key_hash) {
+    await env.LOCKDOWN_KV.delete(agentKeyKey(staleHash));
+  }
+}
+
+/** Remove one device and everything derived from it. */
+async function deleteDevice(env: Env, id: string): Promise<void> {
+  const existing = await getDeviceRecord(env, id);
+  await env.LOCKDOWN_KV.delete(deviceKey(id));
+  if (existing?.api_key_hash) {
+    await env.LOCKDOWN_KV.delete(agentKeyKey(existing.api_key_hash));
+  }
+  const ids = await listDeviceIds(env);
+  if (ids.includes(id)) {
+    await env.LOCKDOWN_KV.put(DEVICE_INDEX_KEY, JSON.stringify(ids.filter((x) => x !== id)));
+  }
+}
+
+/**
+ * The device that owns an API-key hash, in one read.
+ *
+ * `agent_key:<hash>` is a pointer, not the source of truth: the hash on the loaded record must
+ * still match, so a stale pointer to a re-keyed device fails closed. When the pointer is absent
+ * (a namespace written before ADR-003, or a lost append) the fleet is scanned once and the
+ * pointer is healed — correctness first, then the fast path.
+ */
+async function getDeviceByApiKeyHash(env: Env, keyHash: string): Promise<Device | null> {
+  const id = await env.LOCKDOWN_KV.get(agentKeyKey(keyHash));
+  if (id) {
+    const device = await getDeviceRecord(env, id);
+    if (device && device.api_key_hash === keyHash) return device;
+  }
+
+  const devices = await listDevices(env);
+  const found = devices.find((d) => d.api_key_hash === keyHash);
+  if (!found) return null;
+  await env.LOCKDOWN_KV.put(agentKeyKey(keyHash), found.id);
+  return found;
 }
 
 // Checkin metadata helpers — separate KV key per device.
@@ -1119,11 +1258,10 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   if (!payload) return errorResponse('Invalid JSON body', 400);
   const { mac_address, hardware_uuid, serial_number } = payload;
 
-  // KV-RACE-001: Write checkin metadata to a separate KV key, NOT to
-  // the `devices` key. Same fix as handleAgentCheckin.
-  const devices = await listDevices(env);
-  const idx = devices.findIndex((d) => d.id === device.id);
-  if (idx >= 0) {
+  // KV-RACE-001: write check-in metadata to a separate KV key, NOT to the device record. Same
+  // fix as handleAgentCheckin; ADR-003 means `device` is already loaded, so there is neither an
+  // index to find nor a fleet to read.
+  {
     // A ping is a partial heartbeat. Spread the stored metadata so fields this
     // payload does not carry — firmware_audit, a previously reported
     // update_verification — survive: replacing the object wholesale dropped the
@@ -1132,9 +1270,9 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
     await saveCheckinMetadata(env, device.id, {
       ...existing,
       last_checkin: new Date().toISOString(),
-      mac_address: mac_address || devices[idx].mac_address,
-      hardware_uuid: hardware_uuid || devices[idx].hardware_uuid,
-      serial_number: serial_number || devices[idx].serial_number,
+      mac_address: mac_address || device.mac_address,
+      hardware_uuid: hardware_uuid || device.hardware_uuid,
+      serial_number: serial_number || device.serial_number,
       update_verification:
         normalizeUpdateVerification(payload.update_verification)
         ?? existing?.update_verification,
@@ -1149,7 +1287,7 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
 
   if (pendingCmd) {
     return jsonResponse({
-      status: devices[idx].status,
+      status: device.status,
       command: {
         id: pendingCmd.id,
         command_type: pendingCmd.command_type,
@@ -1160,7 +1298,7 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   }
 
   // No pending command — adaptive polling
-  const status = devices[idx].status;
+  const status = device.status;
   const pollInterval = status === 'stolen' ? 10 : activePollSeconds(env);
   return jsonResponse({
     status,
@@ -1236,8 +1374,9 @@ async function uninstallAuth(
   const token = authHeader.replace(/^Bearer\s+/i, '');
 
   if (apiKey) {
+    // ADR-003: one read through the `agent_key:` pointer, not a scan of the fleet.
     const apiKeyHash = await sha256(apiKey);
-    const device = (await listDevices(env)).find((d) => d.api_key_hash === apiKeyHash);
+    const device = await getDeviceByApiKeyHash(env, apiKeyHash);
     if (device) return { device };
   }
   if (token && env.ADMIN_TOKEN && token === env.ADMIN_TOKEN) {
@@ -1410,16 +1549,11 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
     ? payload.firmware_audit as Record<string, unknown>
     : null;
 
-  // KV-RACE-001: Write checkin metadata to a separate KV key, NOT to the
-  // `devices` key. This prevents the checkin handler from overwriting the
-  // ACK handler's device status update when KV reads return stale data.
-  // The device's status is read from `devices` (which is only written by
-  // enroll, ACK, flag-stolen, and recover — never by checkin).
-  const devices = await listDevices(env);
-  const idx = devices.findIndex((d) => d.id === device.id);
-  if (idx < 0) {
-    return errorResponse('Device not found', 404);
-  }
+  // KV-RACE-001: write check-in metadata to `device_checkin:<id>`, never to the device record,
+  // so a check-in cannot overwrite an ACK's status write.
+  //
+  // ADR-003: `device` is the record verifyAgentAuth just loaded — one read. Reading the fleet
+  // here to find it again would cost one get per device on the hottest path in the system.
   // Save checkin metadata to a separate KV key (the fix for KV-RACE-001)
   // update_verification falls back to the stored value when this check-in omits
   // it, mirroring the Express server's `COALESCE($6, update_verification)`: an
@@ -1427,9 +1561,9 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
   const existingMetadata = await getCheckinMetadata(env, device.id);
   await saveCheckinMetadata(env, device.id, {
     last_checkin: new Date().toISOString(),
-    mac_address: mac_address || devices[idx].mac_address,
-    hardware_uuid: hardware_uuid || devices[idx].hardware_uuid,
-    serial_number: serial_number || devices[idx].serial_number,
+    mac_address: mac_address || device.mac_address,
+    hardware_uuid: hardware_uuid || device.hardware_uuid,
+    serial_number: serial_number || device.serial_number,
     firmware_audit: firmwareAudit,
     firmware_audit_at: firmwareAudit ? new Date().toISOString() : null,
     update_verification:
@@ -1444,7 +1578,8 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
       ? new Date().toISOString()
       : (existingMetadata?.agent_version_at ?? null),
   });
-  // Do NOT call saveDevices() here — that would race with the ACK handler.
+  // The check-in deliberately writes NO device record: it updates only `device_checkin:<id>`,
+  // so it cannot race with an ACK's status write on `device:<id>` (KV-RACE-001, ADR-003).
 
   // Check for pending commands (oldest first)
   const commands = await listCommands(env);
@@ -1455,7 +1590,7 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
 
   // Adaptive poll interval based on device status. `active` comes from
   // activePollSeconds() so both response branches agree.
-  const status = devices[idx].status;
+  const status = device.status;
   const ADAPTIVE_POLL: Record<string, number> = {
     stolen: 30, tracking: 30, recovering: 30, locked: 60, active: activePollSeconds(env),
   };
@@ -1571,13 +1706,9 @@ async function handleDeadmanReport(request: Request, env: Env): Promise<Response
   });
   await saveKeys(env, filtered);
 
-  // Mark device as locked (the deadman switch actually encrypted it)
-  const devices = await listDevices(env);
-  const idx = devices.findIndex((d) => d.id === device.id);
-  if (idx >= 0) {
-    devices[idx].status = 'locked';
-    await saveDevices(env, devices);
-  }
+  // Mark device as locked (the deadman switch actually encrypted it). ADR-003: one device.
+  device.status = 'locked';
+  await putDevice(env, device);
 
   console.log('Deadman report: device=%s key stored, status=locked', device.hostname);
   return jsonResponse({ ok: true });
@@ -1643,15 +1774,20 @@ async function handleAgentLocation(request: Request, env: Env): Promise<Response
 /**
  * Serialize state mutations inside this isolate.
  *
- * Every handler that changes device or command state loads a whole JSON list from KV,
- * edits it and writes it back. A check-in and a command-ACK arriving together therefore
- * raced: the agent ACKed `unlock … status=executed`, the audit recorded the confirmation,
- * and a read one second later still showed the command `pending` with the device
- * `locked`, because the other request's older snapshot was written last (S269).
+ * This was the first fix for the class of defect that whole-list KV records cause: every
+ * handler that changed device or command state loaded a whole JSON list, edited it and wrote
+ * it back, so a check-in and a command-ACK arriving together raced. The agent ACKed
+ * `unlock … status=executed`, the audit recorded the confirmation, and a read one second later
+ * still showed the command `pending` with the device `locked` (S269).
  *
- * A promise chain removes the race for requests served by the same isolate, which is the
- * only case that can be fixed without Durable Objects. Cross-isolate races remain; a
- * full fix means per-entity keys (`device:<id>`) instead of whole-list records.
+ * ADR-002 and ADR-003 removed the cause for commands and devices — they are per-entity records
+ * now, so two writers touch different keys. What remains here is the multi-key paths
+ * (an enrolment writes a record, an index entry and an API-key pointer) and the stores still
+ * kept as whole lists: `locations`, `audit_log`, `bios_passwords`, `encryption_keys`.
+ *
+ * A promise chain serialises requests served by the same isolate, which is the only case that
+ * can be fixed without Durable Objects. Cross-isolate races remain for those stores; the fix is
+ * the same one, applied store by store.
  */
 let mutationChain: Promise<unknown> = Promise.resolve();
 function serializeMutation<T>(fn: () => Promise<T>): Promise<T> {
@@ -1776,22 +1912,21 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
     await saveBiosPasswords(env, pws);
   }
 
-  // Update device status based on command result
-  const devices = await listDevices(env);
-  const devIdx = devices.findIndex((d) => d.id === device.id);
-  if (devIdx >= 0) {
-    if (result_status === 'executed') {
-      if (command.command_type === 'lockdown') {
-        devices[devIdx].status = 'locked';
-      } else if (command.command_type === 'unlock') {
-        devices[devIdx].status = 'active';
-      } else if (command.command_type === 'track') {
-        devices[devIdx].status = 'tracking';
-      } else if (command.command_type === 'stop_track') {
-        devices[devIdx].status = 'active';
-      }
+  // Update device status based on command result. ADR-003: write this one device, and only
+  // when the status actually changes — the old shape rewrote the whole fleet, including for an
+  // ACK that moved nothing.
+  if (result_status === 'executed') {
+    const statusForCommand: Record<Command['command_type'], Device['status']> = {
+      lockdown: 'locked',
+      unlock: 'active',
+      track: 'tracking',
+      stop_track: 'active',
+    };
+    const nextStatus = statusForCommand[command.command_type];
+    if (nextStatus && device.status !== nextStatus) {
+      device.status = nextStatus;
+      await putDevice(env, device);
     }
-    await saveDevices(env, devices);
   }
 
   // The dashboard's lockdown-effectiveness panel does not read the command record:
@@ -1920,7 +2055,7 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
       existing.mac_address = payload.mac_address || existing.mac_address;
       existing.serial_number = payload.serial_number || existing.serial_number;
       existing.status = 'active';
-      await saveDevices(env, devices);
+      await putDevice(env, existing);
 
       return jsonResponse(
         {
@@ -1954,8 +2089,7 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
     api_key_hash: apiKeyHash,
   };
 
-  devices.push(device);
-  await saveDevices(env, devices);
+  await putDevice(env, device);
 
   return jsonResponse(
     {
@@ -2103,7 +2237,7 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
       existing.mac_address = payload.mac_address || existing.mac_address;
       existing.serial_number = payload.serial_number || existing.serial_number;
       existing.status = 'active';
-      await saveDevices(env, devices);
+      await putDevice(env, existing);
 
       return jsonResponse(
         {
@@ -2137,8 +2271,7 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
     api_key_hash: apiKeyHash,
   };
 
-  devices.push(device);
-  await saveDevices(env, devices);
+  await putDevice(env, device);
 
   return jsonResponse(
     {
@@ -2182,12 +2315,13 @@ async function handleListDevices(request: Request, env: Env): Promise<Response> 
   const url = new URL(request.url);
   const requestedVersion = (url.searchParams.get('agent_version') || '').trim();
   if (!requestedVersion) return jsonResponse(safe);
-  const filtered = requestedVersion === 'unknown'
-    ? safe.filter((d) => !d.agent_version)
-    : requestedVersion === 'stale'
-      ? safe.filter((d) => d.agent_version_stale)
-      : safe.filter((d) => d.agent_version === requestedVersion);
-  return jsonResponse(filtered);
+  if (requestedVersion === 'unknown') {
+    return jsonResponse(safe.filter((d) => !d.agent_version));
+  }
+  if (requestedVersion === 'stale') {
+    return jsonResponse(safe.filter((d) => d.agent_version_stale));
+  }
+  return jsonResponse(safe.filter((d) => d.agent_version === requestedVersion));
 }
 
 async function handleGetDevice(
@@ -2265,7 +2399,7 @@ async function handleRearm(request: Request, env: Env): Promise<Response> {
   // dropped bootstrap can install the real agent on first Windows boot.
   const apiKey = generateApiKey();
   device.api_key_hash = await sha256(apiKey);
-  await saveDevices(env, devices);
+  await putDevice(env, device);
   await addAuditEntry(env, device.id, 'rearm',
     `hardware_uuid=${payload.hardware_uuid} status=${device.status}`);
 
@@ -2359,7 +2493,7 @@ async function handleFlagStolen(
 
   // Update device status
   device.status = 'stolen';
-  await saveDevices(env, devices);
+  await putDevice(env, device);
 
   // Queue lockdown command
   const cmd: Command = {
@@ -2435,7 +2569,7 @@ async function handleRecover(
 
   // Update device status
   device.status = 'recovering';
-  await saveDevices(env, devices);
+  await putDevice(env, device);
 
   // Release encryption key
   const keys = await listKeys(env);
@@ -2533,12 +2667,13 @@ async function handleTrackAction(
   }
 
   // Update device status for track/stop_track
+  // ADR-003: the transition writes this device, not the fleet.
   if (action === 'track') {
     device.status = 'tracking';
-    await saveDevices(env, devices);
+    await putDevice(env, device);
   } else if (action === 'stop_track') {
     device.status = 'active';
-    await saveDevices(env, devices);
+    await putDevice(env, device);
   }
   // 'locate' doesn't change status — it just queues a one-time location report
 
@@ -2785,7 +2920,7 @@ async function handleReleaseDevice(
   await addAuditEntry(env, deviceId, 'device_released', `hostname=${device.hostname} by=${auth.username}`);
 
   // Cascade-delete the device's data across the KV stores.
-  await saveDevices(env, devices.filter((d) => d.id !== deviceId));
+  await deleteDevice(env, deviceId);
   await deleteCommandsForDevice(env, deviceId);
   await saveKeys(env, (await listKeys(env)).filter((k) => k.device_id !== deviceId));
   await saveBiosPasswords(env, (await listBiosPasswords(env)).filter((p) => p.device_id !== deviceId));
@@ -2928,7 +3063,7 @@ async function handleInstaller(request: Request, env: Env, deviceId: string): Pr
   // Fresh api_key for this install (re-keys the device; old key is replaced).
   const apiKey = generateApiKey();
   device.api_key_hash = await sha256(apiKey);
-  await saveDevices(env, devices);
+  await putDevice(env, device);
   await addAuditEntry(env, deviceId, 'installer_generated', `by=${auth.username} host=${device.hostname}`);
 
   // Base URL the agent should check in against (this Worker's origin).
@@ -3368,7 +3503,7 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
   const insecureReplacement = plainHttp ? `${'"'},\'--allow-insecure-http\'${'"'}` : "''";
 
   if (gui) {
-    return [
+    const guiLines = [
       `# Lockdown agent installer for ${serverUrl}`,
       `$ErrorActionPreference = 'Stop'`,
       `$u = '${serverUrl}'`,
@@ -3383,7 +3518,8 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
       `Write-Host "Opening the setup wizard ..." -ForegroundColor Cyan`,
       `Set-Clipboard $u`,
       `Start-Process $e -Verb RunAs`,
-    ].join('\r\n') + '\r\n';
+    ];
+    return `${guiLines.join('\r\n')}\r\n`;
   }
 
   // Everything below runs in ONE elevated PowerShell. The downloads happen there
@@ -3394,7 +3530,7 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
   //
   // Paths are machine-wide for the same reason: C:\ProgramData is visible to both
   // the elevated process and the caller that prints the log.
-  return [
+  const setupLines = [
     `# Lockdown agent installer for ${serverUrl}`,
     `# Generated by the dashboard. Paste into PowerShell, or run setup.cmd.`,
     `$ErrorActionPreference = 'Stop'`,
@@ -3506,7 +3642,8 @@ function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
     `    throw "Installer failed with exit code $($p.ExitCode)"`,
     `}`,
     `Write-Host 'Installed. The device appears in the dashboard within a minute.' -ForegroundColor Green`,
-  ].join('\r\n') + '\r\n';
+  ];
+  return `${setupLines.join('\r\n')}\r\n`;
 }
 
 /** Public: carries no secret, and the target has no credential yet. */
@@ -3878,11 +4015,12 @@ async function handleAgentUpdate(request: Request, env: Env): Promise<Response> 
   // platform's hash. The top-level fallback keeps metadata published before
   // per-platform signing (a single build, one signature) working.
   const signature = perPlatform?.signature || release.signature || null;
-  const signatureAlg = signature
-    ? (perPlatform?.signature
-        ? perPlatform.signature_alg || 'ed25519'
-        : release.signature_alg || 'ed25519')
-    : null;
+  let signatureAlg: string | null = null;
+  if (signature) {
+    signatureAlg = perPlatform?.signature
+      ? perPlatform.signature_alg || 'ed25519'
+      : release.signature_alg || 'ed25519';
+  }
 
   return jsonResponse({
     update_available: compareVersions(currentVersion, release.latest_version) < 0,
@@ -4213,7 +4351,7 @@ async function handleLinkPbl(
   }
 
   device.pbl_device_id = pblId;
-  await saveDevices(env, devices);
+  await putDevice(env, device);
   await addAuditEntry(env, device.id, 'pbl_device_linked', `pbl_device_id=${pblId}`);
   return jsonResponse({ linked: true, device_id: device.id, pbl_device_id: pblId });
 }
@@ -4239,7 +4377,7 @@ async function handleUnlinkPbl(
 
   const previous = device.pbl_device_id;
   device.pbl_device_id = null;
-  await saveDevices(env, devices);
+  await putDevice(env, device);
   await addAuditEntry(env, device.id, 'pbl_device_unlinked', `pbl_device_id=${previous}`);
   return jsonResponse({ unlinked: true, device_id: device.id });
 }
@@ -4298,7 +4436,7 @@ async function handleRotateKey(
 
   const newApiKey = generateApiKey();
   device.api_key_hash = await sha256(newApiKey);
-  await saveDevices(env, devices);
+  await putDevice(env, device);
   await addAuditEntry(env, device.id, 'api_key_rotated', '');
 
   return jsonResponse({

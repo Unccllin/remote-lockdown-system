@@ -166,9 +166,22 @@ async function readCommandViaApi(
   return body.find((c) => c.id === commandId);
 }
 
+/**
+ * Device id for a hostname, read through the API.
+ *
+ * ADR-003 moved devices to per-entity keys, so reading the `devices` list here would pin a
+ * storage layout instead of the behaviour under test — the same reason `readCommandViaApi`
+ * exists (ADR-002).
+ */
 async function deviceIdByHostname(env: unknown, hostname: string): Promise<string | undefined> {
-  const devices = JSON.parse((await (env as any).LOCKDOWN_KV.get('devices')) as string) as any[];
-  return devices.find((d) => d.hostname === hostname)?.id;
+  const resp = await worker.fetch(
+    makeRequest('GET', '/api/devices', undefined, {
+      Authorization: 'Bearer test-admin-token',
+    }),
+    env,
+  );
+  const devices = (await parseResponse(resp)) as any[];
+  return devices.find((d: any) => d.hostname === hostname)?.id;
 }
 
 // Helper to parse JSON response
@@ -4979,10 +4992,16 @@ describe('D-210: PBL route integration', () => {
         env,
       );
       expect(resp.status).toBe(200);
-      const devices = JSON.parse((await env.LOCKDOWN_KV.get('devices')) as string);
-      const device = devices.find((d: any) => d.hostname === hostname);
+      const deviceId = await deviceIdByHostname(env, hostname);
+      const deviceResp = await worker.fetch(
+        makeRequest('GET', `/api/devices/${deviceId}`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const device = (await parseResponse(deviceResp)) as any;
       return {
-        command: await readCommandViaApi(env, device?.id, commandId),
+        command: await readCommandViaApi(env, deviceId, commandId),
         device,
       };
     }
@@ -5204,10 +5223,13 @@ describe('lock_state on the device payload', () => {
     lastCheckin: string,
   ): Promise<any> {
     const { device } = await enrollDevice(worker, env, hostname);
-    const list = JSON.parse((await env.LOCKDOWN_KV.get('devices')) as string) as any[];
-    const idx = list.findIndex((d) => d.id === device.id);
-    list[idx].last_checkin = lastCheckin;
-    await env.LOCKDOWN_KV.put('devices', JSON.stringify(list));
+    // `last_checkin` lives on the per-device check-in metadata key (KV-RACE-001) — the same
+    // field `mergeCheckinMetadata` reads when the list endpoint shapes the row. Patching it
+    // there keeps this test on the read path instead of on the storage layout (ADR-003).
+    await env.LOCKDOWN_KV.put(
+      `device_checkin:${device.id}`,
+      JSON.stringify({ last_checkin: lastCheckin }),
+    );
     if (commands.length) {
       await env.LOCKDOWN_KV.put(
         'commands',
@@ -5374,5 +5396,166 @@ describe('observed_at on location reports', () => {
 
     const rows = await listLocations(device.id);
     expect(rows[0].observed_at).toBeNull();
+  });
+});
+
+/**
+ * ADR-003: devices are per-entity KV records.
+ *
+ * The defect this removes: every device mutation loaded the whole `devices` list, edited it and
+ * wrote it back, so two writers that overlapped each other's snapshot silently lost one of the
+ * changes — across isolates, where `serializeMutation()` cannot help. On `devices` the lost
+ * field can be `api_key_hash` (the device stops authenticating) or `status` (the dashboard says
+ * `active` for a machine that is locked).
+ *
+ * These tests assert the storage contract the ADR chose — the key layout, the migration, the
+ * API-key pointer — because that contract IS the fix. Behaviour under it is covered by the 458
+ * tests that ran before it.
+ */
+describe('ADR-003: per-entity device records', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV };
+  const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  const hashOf = (key: string): string =>
+    crypto.createHash('sha256').update(key).digest('hex');
+
+  function legacyDevice(id: string, hostname: string, apiKeyHash: string) {
+    return {
+      id,
+      hostname,
+      owner_name: 'Legacy',
+      status: 'active',
+      mac_address: null,
+      hardware_uuid: null,
+      serial_number: null,
+      last_checkin: null,
+      enrolled_at: '2026-11-01T00:00:00.000Z',
+      api_key_hash: apiKeyHash,
+    };
+  }
+
+  async function listFromApi(): Promise<any[]> {
+    const resp = await worker.fetch(makeRequest('GET', '/api/devices', undefined, ADMIN), env);
+    return (await parseResponse(resp)) as any[];
+  }
+
+  it('migrates the legacy whole-list key on first read', async () => {
+    await env.LOCKDOWN_KV.put(
+      'devices',
+      JSON.stringify([
+        legacyDevice('legacy-1', 'LEG-1', 'hash-one'),
+        legacyDevice('legacy-2', 'LEG-2', 'hash-two'),
+      ]),
+    );
+
+    const devices = await listFromApi();
+    expect(devices.map((d) => d.id).sort()).toEqual(['legacy-1', 'legacy-2']);
+
+    // Per-entity records, an index, and the API-key pointer for each device.
+    expect(await env.LOCKDOWN_KV.get('device:legacy-1')).toBeTruthy();
+    expect(await env.LOCKDOWN_KV.get('device:legacy-2')).toBeTruthy();
+    expect(JSON.parse((await env.LOCKDOWN_KV.get('device_index')) as string)).toEqual([
+      'legacy-1',
+      'legacy-2',
+    ]);
+    expect(await env.LOCKDOWN_KV.get('agent_key:hash-one')).toBe('legacy-1');
+    // …and the legacy key is gone, so the whole-list write cannot come back.
+    expect(await env.LOCKDOWN_KV.get('devices')).toBeNull();
+  });
+
+  it('is idempotent — a second read migrates nothing and changes nothing', async () => {
+    await env.LOCKDOWN_KV.put(
+      'devices',
+      JSON.stringify([legacyDevice('legacy-1', 'LEG-1', 'hash-one')]),
+    );
+    await listFromApi();
+    const indexAfterFirst = await env.LOCKDOWN_KV.get('device_index');
+    const recordAfterFirst = await env.LOCKDOWN_KV.get('device:legacy-1');
+
+    const devices = await listFromApi();
+    expect(devices).toHaveLength(1);
+    expect(await env.LOCKDOWN_KV.get('device_index')).toBe(indexAfterFirst);
+    expect(await env.LOCKDOWN_KV.get('device:legacy-1')).toBe(recordAfterFirst);
+  });
+
+  it('a mutation of one device cannot overwrite another', async () => {
+    // The cross-isolate case, made deterministic: write B's record the way a second isolate
+    // would (straight to its key, after this isolate has already read the fleet), then mutate A
+    // through the API. A whole-list write would rebuild B from the stale snapshot it read.
+    const { device: a } = await enrollDevice(worker, env, 'RACE-A');
+    const { device: b } = await enrollDevice(worker, env, 'RACE-B');
+    await env.LOCKDOWN_KV.put(
+      `device:${b.id}`,
+      JSON.stringify({ ...b, status: 'tracking', owner_name: 'Changed elsewhere' }),
+    );
+
+    const flag = await worker.fetch(
+      makeRequest('POST', `/api/devices/${a.id}/flag-stolen`, { hostname_confirm: 'RACE-A' }, ADMIN),
+      env,
+    );
+    expect(flag.status).toBe(200);
+
+    const bAfter = JSON.parse((await env.LOCKDOWN_KV.get(`device:${b.id}`)) as string);
+    expect(bAfter.status).toBe('tracking');
+    expect(bAfter.owner_name).toBe('Changed elsewhere');
+  });
+
+  it('records an API-key pointer so auth is one read', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'PTR-001');
+    expect(await env.LOCKDOWN_KV.get(`agent_key:${hashOf(apiKey)}`)).toBe(device.id);
+  });
+
+  it('a re-keyed device fails closed with the old key and works with the new one', async () => {
+    const { device, apiKey: oldKey } = await enrollDevice(worker, env, 'REKEY-001');
+
+    const rotate = await worker.fetch(
+      makeRequest('POST', `/api/devices/${device.id}/rotate-key`, {}, ADMIN),
+      env,
+    );
+    expect(rotate.status).toBe(200);
+    const newKey = ((await parseResponse(rotate)) as any).api_key as string;
+    expect(newKey).toBeTruthy();
+
+    // The stale pointer is gone, so the old key cannot authenticate at all.
+    expect(await env.LOCKDOWN_KV.get(`agent_key:${hashOf(oldKey)}`)).toBeNull();
+    const oldBody = JSON.stringify({ hostname: 'REKEY-001' });
+    const oldResp = await worker.fetch(
+      makeRequest('POST', '/api/agent/checkin', oldBody, signRequest(oldBody, oldKey)),
+      env,
+    );
+    expect(oldResp.status).toBe(401);
+
+    // The new one can.
+    const newBody = JSON.stringify({ hostname: 'REKEY-001' });
+    const newResp = await worker.fetch(
+      makeRequest('POST', '/api/agent/checkin', newBody, signRequest(newBody, newKey)),
+      env,
+    );
+    expect(newResp.status).toBe(200);
+  });
+
+  it('a released device loses its record, its index entry and its key pointer', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'RELEASE-001');
+
+    const resp = await worker.fetch(
+      makeRequest(
+        'DELETE',
+        `/api/devices/${device.id}/release`,
+        { hostname_confirm: 'RELEASE-001' },
+        ADMIN,
+      ),
+      env,
+    );
+    expect(resp.status).toBe(200);
+
+    expect(await env.LOCKDOWN_KV.get(`device:${device.id}`)).toBeNull();
+    expect(await env.LOCKDOWN_KV.get(`agent_key:${hashOf(apiKey)}`)).toBeNull();
+    const index = JSON.parse((await env.LOCKDOWN_KV.get('device_index')) as string) as string[];
+    expect(index).not.toContain(device.id);
+    expect((await listFromApi()).some((d) => d.id === device.id)).toBe(false);
   });
 });
