@@ -16426,3 +16426,45 @@ console that `newark user` is disabled and a sign-in is refused, followed by `re
 then re-promote E-LOCK-SCREEN.
 
 ---
+
+### Addendum — S271: the lock now refuses sign-in, measured on MOLE
+
+Calibrated harness run (metrics fixed in `52d5509` after the first attempt reported a
+false failure on a lock that worked):
+
+```text
+[FAIL] lock
+    ok   lock sentinel present: True
+    ok   lockdown folder encrypted: 1 .enc file(s), 0 plaintext left
+    ok   account disabled (Newark User): UF_ACCOUNTDISABLE set (UserFlags=515); net user says active=False
+    ok   server reports a locked device: locked
+    ok   lockdown command executed: executed
+   FAIL  lockdown effective (not just applied): lockdown_effective=False boot_lock_status=partial
+   skip  no files left unencrypted: not observable (None)
+[PASS] recover
+    ok   lock sentinel gone: False
+    ok   lockdown folder decrypted: 0 .enc file(s) left, 1 plaintext
+    ok   account re-enabled (Newark User): account enabled (UserFlags=513); net user says active=True
+    ok   server reports the device usable: active
+    ok   unlock command executed: executed
+```
+
+Artifact: `docs/artifacts/s271-acceptance-lock-recover-v2.json`.
+
+What this settles: the operator's report ("i can still sign in even on lock") is fixed and
+observed — the interactive account carries `UF_ACCOUNTDISABLE` while locked and is clear
+after `recover`, the lockdown folder is Fernet-encrypted and restored, and the server
+record agrees at every point. The lock step's single FAIL is the honest one: the boot layer
+rolled back (`boot_lock_status=partial`), so `lockdown_effective=false` — encrypted and
+sign-in-proof, but not boot-locked.
+
+What it does NOT settle, and therefore does not move: `E-LOCK-SCREEN` stays
+`verified-in-unit-test`. The evidence is the OS account flag, which is the mechanism Windows
+refuses on, but not a literal console sign-in attempt — and the ruling for this path was
+"re-promote only after a console sign-in is shown refused on hardware". Closing it needs one
+of: a person trying to sign in at the console and being refused, or an RDP/LogonUser attempt
+with the real password (which the harness must never hold).
+
+Calibration lesson recorded as B-135: a probe that maps a Win32 error code to a state must be
+calibrated against known states of that state machine first — `LogonUserW` with a wrong
+password returns 1326 for a nonexistent, an enabled and a disabled account alike.

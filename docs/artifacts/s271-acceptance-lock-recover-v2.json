@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-11-17T06:54:16.126235+00:00",
+  "steps": [
+    {
+      "step": "lock",
+      "status": "FAIL",
+      "checks": [
+        {
+          "name": "lock sentinel present",
+          "passed": true,
+          "observed": "True"
+        },
+        {
+          "name": "lockdown folder encrypted",
+          "passed": true,
+          "observed": "1 .enc file(s), 0 plaintext left"
+        },
+        {
+          "name": "account disabled (Newark User)",
+          "passed": true,
+          "observed": "UF_ACCOUNTDISABLE set (UserFlags=515); net user says active=False"
+        },
+        {
+          "name": "server reports a locked device",
+          "passed": true,
+          "observed": "locked"
+        },
+        {
+          "name": "lockdown command executed",
+          "passed": true,
+          "observed": "executed"
+        },
+        {
+          "name": "lockdown effective (not just applied)",
+          "passed": false,
+          "observed": "lockdown_effective=False boot_lock_status=partial"
+        },
+        {
+          "name": "no files left unencrypted",
+          "passed": null,
+          "observed": "not observable (None)"
+        }
+      ]
+    },
+    {
+      "step": "recover",
+      "status": "PASS",
+      "checks": [
+        {
+          "name": "lock sentinel gone",
+          "passed": true,
+          "observed": "False"
+        },
+        {
+          "name": "lockdown folder decrypted",
+          "passed": true,
+          "observed": "0 .enc file(s) left, 1 plaintext"
+        },
+        {
+          "name": "account re-enabled (Newark User)",
+          "passed": true,
+          "observed": "account enabled (UserFlags=513); net user says active=True"
+        },
+        {
+          "name": "server reports the device usable",
+          "passed": true,
+          "observed": "active"
+        },
+        {
+          "name": "unlock command executed",
+          "passed": true,
+          "observed": "executed"
+        }
+      ]
+    }
+  ],
+  "snapshot": {},
+  "device": "MOLE",
+  "server_url": "http://192.168.1.43:8787"
+}
