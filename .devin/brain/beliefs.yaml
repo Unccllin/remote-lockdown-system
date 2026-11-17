@@ -3142,3 +3142,20 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: audit_log, bios_passwords and encryption_keys remain whole-list writes.
+- id: B-142
+  statement: The Worker stores audit entries as per-entry records (audit:<id>) behind one capped index
+    (audit_index) of {id, device_id}, and no worker code path scans the fleet to find a single device
+    any more (handleLinkPbl is the only remaining listDevices read for uniqueness)
+  domain: api/audit
+  status: proposed
+  evidence_level: assumed
+  provenance: S275 commit 5a0c52a + ADR-005; docs/artifacts/s275-audit-per-entity-keys.json measures 3
+    device-record reads for one mutation with 6 devices enrolled
+  source: serverless/worker.ts; docs/adr/ADR-005-per-entity-audit-entries.md
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: bios_passwords and encryption_keys remain whole-list writes.

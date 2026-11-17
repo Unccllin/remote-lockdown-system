@@ -58,86 +58,86 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 274 — 2026-11-18 (location reports leave the shared window)
+## Latest session: 275 — 2026-11-18 (audit leaves the fleet scan)
 
 ### Fog cleared
 
-- **Location reports are per-entity (ADR-004)**: `location:<id>` records plus a **per-device**
-  `location_index:<deviceId>`. No two devices share a window any more, so one device's report
-  cannot evict another's.
-- **The per-device cap is a real retention policy** — `LOCATION_HISTORY_LIMIT` (default 500 ≈ 4 h
-  of continuous tracking), overridable as a `[vars]` entry the way `ACTIVE_POLL_SECONDS` is, so
-  the pruning path is reachable by a test rather than asserted by inspection.
-- **Pruning deletes the records**, not just the index: a command is rewritten in place, a report
-  never is, so an unindexed report would otherwise live forever. Verified on a real run.
-- **The legacy migration is idempotent under concurrency** because migrated rows get a
-  deterministic id derived from their content — `generateId()` would duplicate every report when
-  two isolates migrate at once.
-- **The response gained a stable id.** The two read routes used to synthesise
-  `loc-<deviceId>-<idx>`, which changed whenever the window shifted; the row now keeps its
-  identity across reads.
-- `listLocations`/`saveLocations` are deleted, and `serializeMutation`'s docstring plus the README
-  now name only the stores still whole-list: `audit_log`, `bios_passwords`, `encryption_keys`.
+- **Audit entries are per-entity (ADR-005)**: `audit:<id>` records behind one `audit_index` of
+  `{id, device_id}`, capped at `AUDIT_HISTORY_LIMIT` (1000, env-overridable) with records pruned
+  alongside their index entries. Legacy `audit_log` migrated with deterministic ids and deleted.
+- **The fleet scan in the audit path is gone.** A mutation now reads a constant number of device
+  records (3 with 6 devices enrolled), not one per device.
+- **Release amends only its own entries** — asserted byte-for-byte that another device's entry is
+  untouched — so it can no longer drop entries while rewriting the trail.
+- **A device-scoped audit read selects its own ids** from the index instead of loading everything.
+- **Nine admin handlers** now do one record read instead of a fleet scan; `handleLinkPbl` is the
+  one that genuinely needs the fleet (pbl_device_id uniqueness) and its read moved after the 404.
+- README and the `serializeMutation` docstring now name only `bios_passwords` and
+  `encryption_keys` as whole lists.
 
 ### Fog remaining
 
-- **Two stores plus one remain whole-list**: `audit_log`, `bios_passwords`, `encryption_keys`.
-  The release cascade still rewrites all three per delete (visible in the S273 artifact).
-- **The index writes per report are still whole-value writes**, bounded per device by the cap —
-  the residual ADR-002 accepted, now scoped to one device instead of the fleet.
-- **History reads load the device's whole retained window** (≤500 records) and sort it by
-  `locationTime` before slicing, to keep the S272 `observed_at` semantics exact. A device at the
-  cap therefore costs up to 500 gets per history request. If that proves slow, the fix is a
-  stored sort key, not a narrower fetch — narrowing the fetch would reintroduce the S272 defect
-  (a backfilled report with an older scan time dropping rows).
-- **`worker.ts` is 5,006+ lines**, past the harness LSP's 5000-line limit: diagnostics report
-  "too_large" and only `tsc` + the suite can see it. Splitting it is a named task.
-- **MOLE has not been shipped** `9e464ab`, the `lock_state` work, or either storage change.
-  Operator action.
+- **Two stores remain whole-list**: `bios_passwords`, `encryption_keys`. Both are small,
+  per-device, and the release cascade still rewrites them.
+- **`audit_index` is a whole-value write**, bounded by the cap — the residual ADR-002 accepted,
+  now over 1000 `{id, device_id}` tuples rather than over the entries.
+- **The audit trail is still truncated by retention** (1000 entries). That is a compliance limit
+  inherent to KV without an external sink; named here rather than discovered at an audit.
+- **`addAuditEntry` still reads the device record for the hostname** on every call. Callers that
+  already hold the device could pass it — a signature change across 16 sites, deliberately not
+  bundled into this one.
+- **`worker.ts` is past 5,000 lines**: harness diagnostics report "too_large"; `tsc` and the
+  suite are the gates until it is split.
+- **MOLE has not been shipped** any of the S272–S275 work. Operator action.
 
 ### Debt items closed
 
-None formally — ADR-004 closes a blocker line, not a ledger item, so no `commit_ref`/
-`artifact_ref` pair is claimed.
+None formally — ADR-005 closes a blocker line, not a ledger item.
 
 ### Debt items still open
 
 D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
-D-210 (PBL route integration), plus the store-by-store work named above.
+D-210 (PBL route integration), plus the two stores named above.
 
 ### Blockers
 
 - MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
 - `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
-- **The 60-device rollout blocker is down to two stores plus one**: `audit_log`,
-  `bios_passwords`, `encryption_keys`. `devices` (S273) and `locations` (this session) are done.
+- **The rollout blocker is down to two stores**: `bios_passwords`, `encryption_keys`. `devices`,
+  `locations` and `audit_log` are all per-entity now.
 
 ### Session artifacts
 
-- `docs/artifacts/s274-location-per-entity-keys.json` — the real Worker with a 5-report cap,
-  driven through two interleaved devices, 8 reports on one of them (crossing the cap), and a
-  release: **11 assertions**, including "evicted reports were deleted, not just unindexed",
-  "B is untouched by A crossing its cap", and "no shared whole-list key exists".
+- `docs/artifacts/s275-audit-per-entity-keys.json` — the real Worker with 6 devices enrolled,
+  driven through mutations, a scoped read, a cap crossing and a release: **13 assertions**,
+  including "a mutation does not scan the fleet for device records" (3 reads, 6 devices),
+  "pruned entries took their records with them", and "another device's entry bytes are untouched
+  by the release".
 
 ### Failure attribution
 
-- **No failures this session.** The only adjustments were mine: the first version of the new
-  tests reached into `MockKV`'s private storage (`data.keys()`), which does not exist — the fix
-  was to assert through the KV interface (`list({prefix})`) the mock actually implements. That is
-  the same lesson as S272/S273 from the other direction: assert the contract, not the internals.
+- **No suite failures.** Two artifact fixtures were mine and both were corrected by measuring
+  rather than by guess: `flag-stolen` 409s on an already-stolen device (so it writes no second
+  entry — used `rotate-key` instead), and the cap correctly pruned the bystander entry the release
+  test wanted to protect (raised the limit for that section). Layer 4 in the useful direction: the
+  artifact told me something the tests had not.
+- **One real defect found by the artifact, not the suite**: nine admin handlers were still
+  scanning the fleet to find one device. Fixed in the same commit, and the artifact's assertion
+  now measures it (3 record reads with 6 devices enrolled).
 
 ### VERIFY
 
-- `serverless`: `npx vitest run` → **470 passed / 4 files** (was 464; +6 ADR-004 tests).
-- `serverless`: `npx tsc --noEmit -p .` → clean.
+- `serverless`: `npx vitest run` → **476 passed / 4 files** (was 470; +6 ADR-005 tests).
+- `serverless`: `npx tsc --noEmit -p .` → clean (covers `pbl/`; a harness "name cascade" advisory
+  on `pbl/signing.ts` was checked and is a shared-name artifact, not a break).
 - `scripts/test_cross_surface_contract.py` → **23 passed**.
-- Artifact: 11/11 assertions on a real Worker run.
+- Artifact: 13/13 assertions on a real Worker run.
 - `make graph-check` → all invariants pass.
 
 ### Next session opening
 
-Take `audit_log` off the whole-list write — it is the highest-volume of the three remaining stores
-and every mutation in the Worker appends to it — and ship the accumulated work to MOLE so the
+Take the last two whole-list stores — `bios_passwords` and `encryption_keys`, both small and
+per-device — off the rewrite in one pass, and ship the accumulated S272–S276 work to MOLE so the
 lock → recover acceptance finally runs against something current.
 
 ---

@@ -751,3 +751,110 @@ and every mutation in the Worker appends to it — and ship the accumulated work
 lock → recover acceptance finally runs against something current.
 
 ---
+
+---
+
+## Session 275 — 2026-11-18 (audit leaves the fleet scan)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `docs/adr/ADR-00{2,3,4}-*.md` (the shape being extended a fourth time),
+`serverless/worker.ts` (`listAudit`, `saveAudit`, `addAuditEntry` and its 16 call sites,
+`handleGetAudit`, `handleReleaseDevice`, `AuditEntry`), `serverless/worker.test.ts`,
+`serverless/README.md`, `serverless/pbl/env.ts` (where `[vars]` are declared).
+
+**Findings**, measured before the change:
+
+- `addAuditEntry` reads the whole audit list **and** scans the whole fleet for one hostname.
+  Since ADR-003 that scan is one index read plus one read per device, on the write path **every
+  mutation takes**. Measured on the artifact afterwards: 3 device-record reads for one mutation
+  with 6 devices enrolled, versus one per device before.
+- The append rewrote up to 500 entries to add one line, so two concurrent appends lost one.
+- `GET /api/audit?device_id=` loaded the whole trail and discarded most of it.
+- `handleReleaseDevice` rewrote the **entire** trail to amend a few lines, and in doing so could
+  drop entries that fell off the 500-row cap mid-rewrite.
+- Nine admin handlers found their device with `listDevices(env).find(d => d.id === deviceId)` —
+  the same N+1 S273 fixed for the agent paths but not for admin ones. The artifact surfaced this;
+  no test did.
+
+### Fog cleared
+
+- **Audit entries are per-entity (ADR-005)**: `audit:<id>` records behind one `audit_index` of
+  `{id, device_id}`, capped at `AUDIT_HISTORY_LIMIT` (1000, env-overridable) with records pruned
+  alongside their index entries. Legacy `audit_log` migrated with deterministic ids and deleted.
+- **The fleet scan in the audit path is gone.** A mutation now reads a constant number of device
+  records (3 with 6 devices enrolled), not one per device.
+- **Release amends only its own entries** — asserted byte-for-byte that another device's entry is
+  untouched — so it can no longer drop entries while rewriting the trail.
+- **A device-scoped audit read selects its own ids** from the index instead of loading everything.
+- **Nine admin handlers** now do one record read instead of a fleet scan; `handleLinkPbl` is the
+  one that genuinely needs the fleet (pbl_device_id uniqueness) and its read moved after the 404.
+- README and the `serializeMutation` docstring now name only `bios_passwords` and
+  `encryption_keys` as whole lists.
+
+### Fog remaining
+
+- **Two stores remain whole-list**: `bios_passwords`, `encryption_keys`. Both are small,
+  per-device, and the release cascade still rewrites them.
+- **`audit_index` is a whole-value write**, bounded by the cap — the residual ADR-002 accepted,
+  now over 1000 `{id, device_id}` tuples rather than over the entries.
+- **The audit trail is still truncated by retention** (1000 entries). That is a compliance limit
+  inherent to KV without an external sink; named here rather than discovered at an audit.
+- **`addAuditEntry` still reads the device record for the hostname** on every call. Callers that
+  already hold the device could pass it — a signature change across 16 sites, deliberately not
+  bundled into this one.
+- **`worker.ts` is past 5,000 lines**: harness diagnostics report "too_large"; `tsc` and the
+  suite are the gates until it is split.
+- **MOLE has not been shipped** any of the S272–S275 work. Operator action.
+
+### Debt items closed
+
+None formally — ADR-005 closes a blocker line, not a ledger item.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration), plus the two stores named above.
+
+### Blockers
+
+- MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+- **The rollout blocker is down to two stores**: `bios_passwords`, `encryption_keys`. `devices`,
+  `locations` and `audit_log` are all per-entity now.
+
+### Session artifacts
+
+- `docs/artifacts/s275-audit-per-entity-keys.json` — the real Worker with 6 devices enrolled,
+  driven through mutations, a scoped read, a cap crossing and a release: **13 assertions**,
+  including "a mutation does not scan the fleet for device records" (3 reads, 6 devices),
+  "pruned entries took their records with them", and "another device's entry bytes are untouched
+  by the release".
+
+### Failure attribution
+
+- **No suite failures.** Two artifact fixtures were mine and both were corrected by measuring
+  rather than by guess: `flag-stolen` 409s on an already-stolen device (so it writes no second
+  entry — used `rotate-key` instead), and the cap correctly pruned the bystander entry the release
+  test wanted to protect (raised the limit for that section). Layer 4 in the useful direction: the
+  artifact told me something the tests had not.
+- **One real defect found by the artifact, not the suite**: nine admin handlers were still
+  scanning the fleet to find one device. Fixed in the same commit, and the artifact's assertion
+  now measures it (3 record reads with 6 devices enrolled).
+
+### VERIFY
+
+- `serverless`: `npx vitest run` → **476 passed / 4 files** (was 470; +6 ADR-005 tests).
+- `serverless`: `npx tsc --noEmit -p .` → clean (covers `pbl/`; a harness "name cascade" advisory
+  on `pbl/signing.ts` was checked and is a shared-name artifact, not a break).
+- `scripts/test_cross_surface_contract.py` → **23 passed**.
+- Artifact: 13/13 assertions on a real Worker run.
+- `make graph-check` → all invariants pass.
+
+### Next session opening
+
+Take the last two whole-list stores — `bios_passwords` and `encryption_keys`, both small and
+per-device — off the rewrite in one pass, and ship the accumulated S272–S276 work to MOLE so the
+lock → recover acceptance finally runs against something current.
+
+---

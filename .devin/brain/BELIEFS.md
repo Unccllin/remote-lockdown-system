@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-17 15:25:45 — 140 beliefs
+Generated: 2026-11-17 16:01:14 — 142 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -27,6 +27,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-049 | confirmed | code-read | Agent release metadata is produced by scripts/sign-release-metadata.py with one detached Ed25519 signature PER PLATFORM, because the signed message is 'v1:{version}:{sha256}' and therefore binds exactly one hash: a single top-level signature cannot be valid for both a Windows and a Linux build. CI (release.yml publish-agent-release-metadata) signs with the UPDATE_SIGNING_KEY secret, skips the companion binaries (the glob matches lockdown-agent-windows-x64-watchdog.exe before .exe), and attaches agent-release.json to the release; without the secret it publishes unsigned metadata behind a warning annotation, which a pinned agent refuses. The Worker serves platforms[<X-Agent-Platform>].signature first and falls back to the top-level signature only for metadata published before per-platform signing. |
 | B-053 | confirmed | code-read | The Worker's update path was structurally broken until S198: /api/agent/update advertised download_url '/api/agent/download?platform=...' while the Worker only implemented '/api/download/agent', so every serverless update download 404'd; and agent.py's download_update called tmp_file.unlink() in its except handler although tmp_file is created only after requests.get() returns, so any pre-response failure raised UnboundLocalError (not in the except tuple) and escaped check_for_update. Both were found only when an end-to-end test followed the advertised URL. Fixes: an agent-authenticated /api/agent/download route serving binary:agent:<platform> with a shared binary:agent fallback (plus x-content-sha256), and a guarded cleanup. The Worker requires full HMAC auth (all four X- headers) unlike Express's transition-tolerant hmacAuth. |
 
+## api/audit
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-142 | proposed | assumed | The Worker stores audit entries as per-entry records (audit:<id>) behind one capped index (audit_index) of {id, device_id}, and no worker code path scans the fleet to find a single device any more (handleLinkPbl is the only remaining listDevices read for uniqueness) |
+
 ## api/auth
 
 | ID | Status | Evidence | Statement |
@@ -44,6 +50,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-112 | confirmed | code-read | Agent-version staleness is computed in the API layer, not SQL: a device is agent_version_stale when it has checked in and its agent_version_at is absent or more than 60 minutes older than last_checkin (longer than the 300 s max poll interval). The comparison needs a zone-normalising parser because SQLite stores datetime('now') as 'YYYY-MM-DD HH:MM:SS' with no zone marker while PostgreSQL returns ...T...Z, and V8 parses the zoneless form as local time — asserting the exact epoch is the only TZ-independent test. A device that never checked in is offline, not stale. |
 | B-138 | confirmed | code-read | Both surfaces derive lock_state (applied/applying/armed/failed/none) from the newest lockdown plus newest unlock per device, with a 180 s freshness window; Express attaches it in the two device GET routes, never in publicDevice, because that helper also shapes command-less POST responses |
 | B-140 | confirmed | code-read | The Worker stores devices as per-entity records (device:<id>), indexed by device_index, with an agent_key:<sha256> -> device-id pointer; saveDevices no longer exists, so a whole-list devices write is a compile error |
+| B-141 | proposed | assumed | The Worker stores location reports as per-report records (location:<id>) indexed per device (location_index:<deviceId>), capped per device by LOCATION_HISTORY_LIMIT (default 500, env-overridable), and pruning deletes the evicted records as well as the index entries |
 
 ## api/enrolment
 
