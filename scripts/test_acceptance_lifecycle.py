@@ -496,3 +496,23 @@ class TestActionPayload:
         dev = {"hostname": "MOLE"}
         assert mod.action_payload("track", dev) == {}
         assert mod.action_payload("stop-track", dev) == {}
+
+
+class TestTrackNeedsRelock:
+    """Tracking a device that is not stolen/locked is refused by the Worker (S269).
+
+    The harness mirrors that rule instead of posting a command destined for a 409: after
+    `recover` the device is `active`, and an operator would flag it again before tracking.
+    """
+
+    @pytest.mark.parametrize("status", ["active", None, "recovering"])
+    def test_an_active_device_is_relocked_first(self, status):
+        assert mod.track_needs_relock("track", status) is True
+
+    @pytest.mark.parametrize("status", ["stolen", "locked", "tracking"])
+    def test_a_lost_device_needs_no_relock(self, status):
+        assert mod.track_needs_relock("track", status) is False
+
+    @pytest.mark.parametrize("step", ["lock", "recover", "stop-track", "enroll"])
+    def test_other_steps_never_relock(self, step):
+        assert mod.track_needs_relock(step, "active") is False

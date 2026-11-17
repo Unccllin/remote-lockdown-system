@@ -722,6 +722,16 @@ class Target:
 # ---------------------------------------------------------------------------
 
 
+# Statuses in which the Worker accepts a `track` (handleTrackAction): a device must already
+# be treated as lost before it is put into covert tracking.
+TRACKABLE_STATUSES = ("stolen", "locked", "tracking")
+
+
+def track_needs_relock(step: str, status: str | None) -> bool:
+    """True when a `track` step must flag the device stolen again first."""
+    return step == "track" and status not in TRACKABLE_STATUSES
+
+
 def action_payload(step: str, device: dict) -> dict:
     """Body for a step's POST.
 
@@ -829,6 +839,24 @@ def run(args: argparse.Namespace) -> int:
                     StepResult(step, [check("device exists", False, "not enrolled")])
                 )
                 continue
+            # `track` is only accepted on a device already in a stolen/locked posture, and
+            # rightly so: it disables the signed-in account. After `recover` the device is
+            # active, so an operator re-locks it first — the harness does the same rather
+            # than posting a command the server will (correctly) refuse.
+            if track_needs_relock(step, device.get("status")):
+                server.post(
+                    f"/api/devices/{device['id']}/flag",
+                    {"hostname_confirm": device.get("hostname", "")},
+                )
+                wait_for(
+                    lambda: (server.device_by_hostname(args.device) or {}).get("status")
+                    in ("locked", "recovering"),
+                    timeout=args.timeout,
+                    interval=5.0,
+                    label="relock before track",
+                )
+                device = server.device_by_hostname(args.device) or device
+
             endpoint = {
                 "lock": f"/api/devices/{device['id']}/flag",
                 "recover": f"/api/devices/{device['id']}/recover",
