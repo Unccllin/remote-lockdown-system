@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-17 08:34:03 — 131 beliefs
+Generated: 2026-11-17 08:45:35 — 132 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -290,8 +290,9 @@ mkfs.fat 4.2 (2021-01-31)
 
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
-| B-130 | confirmed | hardware | service_host.agent_is_running() is process existence only, so a WEDGED agent blocks its own recovery: on MOLE the agent stopped checking in at 2026-11-16T14:33Z and was still wedged ~14h later while Get-Service said Running and the host logged 'agent already running - not starting another' every 30s. Restart-Service cannot fix it (the new host refuses to start a second agent while the wedged pid exists); only Stop-Process did. The heartbeat file the agent already writes (.heartbeat) is the right liveness signal and is not consulted, and the scheduled-task watchdog that would have killed it is removed by remove_legacy_starters() when the service is installed. |
+| B-130 | refuted | hardware | service_host.agent_is_running() is process existence only, so a WEDGED agent blocks its own recovery: on MOLE the agent stopped checking in at 2026-11-16T14:33Z and was still wedged ~14h later while Get-Service said Running and the host logged 'agent already running - not starting another' every 30s. Restart-Service cannot fix it (the new host refuses to start a second agent while the wedged pid exists); only Stop-Process did. The heartbeat file the agent already writes (.heartbeat) is the right liveness signal and is not consulted, and the scheduled-task watchdog that would have killed it is removed by remove_legacy_starters() when the service is installed. → see B-132 |
 | B-131 | confirmed | hardware | S269's ACTIVE poll-interval fix (300s -> 60s) was applied to handlePing (served at /api/ping, a legacy path the current agent does not call) while handleAgentCheckin (/api/agent/checkin) still returned 300 from ADAPTIVE_POLL; MOLE logged 'Adaptive polling: 30s -> 300s (status=active)' AFTER the fix, and the worker test pinned 300 on the wrong branch. Both branches now use activePollSeconds(env). |
+| B-132 | confirmed | code-read | A service-installed agent had NO liveness supervision, and process existence was the only test: agent_is_running() only asked whether a lockdown-agent pid existed, the scheduled-task watchdog that would have killed a stuck agent is removed by remove_legacy_starters() at service install, and Restart-Service could not recover MOLE (the new host refuses to start a second agent while the old pid exists) — only Stop-Process cleared it. What the agent was doing is NOT established: its .heartbeat kept being touched (171 s old at the time of inspection) while no check-in reached the server for ~14 h, and no 'Check-in failed' warning (agent.py:1454, logged on every requests.RequestException) appeared after 17:33 — so the poll path was not being reached, or it was reached and blocked, and the heartbeat is therefore NOT a valid liveness signal. Supervision now uses .last_checkin_ok, written only when the server answers a check-in, and restarts only when /api/health also answers. |
 
 ## meta/process
 

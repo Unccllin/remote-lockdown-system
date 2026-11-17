@@ -423,6 +423,15 @@ EVALUATORS = {
     "stop-track": evaluate_stop_track,
 }
 
+# The device status each step is supposed to reach. `recover` returns to `active`, so a
+# "changed from active" predicate would wait out the timeout on a successful recovery.
+EXPECTED_STATUS = {
+    "lock": ("locked", "recovering"),
+    "recover": ("active",),
+    "track": ("tracking",),
+    "stop-track": ("active", "locked"),
+}
+
 # Which command type each step's server-side evidence lives on.
 COMMAND_FOR_STEP = {
     "lock": "lockdown",
@@ -713,6 +722,19 @@ class Target:
 # ---------------------------------------------------------------------------
 
 
+def action_payload(step: str, device: dict) -> dict:
+    """Body for a step's POST.
+
+    `flag` and `recover` demand the hostname typed back as a confirmation — they are the
+    two actions that can lock or unlock a real machine, and the Worker rejects them with
+    HTTP 400 otherwise ("Confirmation hostname does not match"). Sending `{}` made the
+    harness die on its first destructive step with a server-side 400 (S270).
+    """
+    if step in ("lock", "recover"):
+        return {"hostname_confirm": device.get("hostname", "")}
+    return {}
+
+
 def wait_for(
     predicate, timeout: float, interval: float = 5.0, label: str = "condition"
 ):
@@ -813,14 +835,18 @@ def run(args: argparse.Namespace) -> int:
                 "track": f"/api/devices/{device['id']}/track",
                 "stop-track": f"/api/devices/{device['id']}/stop-track",
             }[step]
-            server.post(endpoint, {})
-            # Give the agent a poll interval plus the work itself (boot lock layers,
-            # EFS on three folders, ~7s per HP BIOS call) before reading back.
+            server.post(endpoint, action_payload(step, device))
+            # Wait for the status THIS step should produce, not just "changed from active":
+            # a recover moves recovering -> active, so a "not active" predicate waits out
+            # the whole timeout on a perfectly good recovery. The work itself is slow
+            # (boot-lock layers, EFS on three folders, ~7 s per HP BIOS call).
+            expected = EXPECTED_STATUS[step]
             wait_for(
                 lambda: (server.device_by_hostname(args.device) or {}).get("status")
-                != "active",
+                in expected,
                 timeout=args.timeout,
                 interval=5.0,
+                label=f"status in {sorted(expected)}",
             )
         elif not args.dry_run and step == "enroll":
             server_url = args.server_url.rstrip("/")

@@ -2893,7 +2893,7 @@ beliefs:
     right liveness signal and is not consulted, and the scheduled-task watchdog that would have killed
     it is removed by remove_legacy_starters() when the service is installed.'
   domain: lifecycle
-  status: confirmed
+  status: refuted
   evidence_level: hardware
   provenance: 'Measured on MOLE (HP EliteBook 830 G6, real Windows host): agent last check-in 2026-11-16T14:33Z,
     still wedged 2026-11-17T05:12Z; Get-Service Running; service_host.py logged ''agent already running
@@ -2904,9 +2904,14 @@ beliefs:
   last_verified: '2026-11-17'
   commit_ref: 511b81d
   supersedes: null
-  superseded_by: null
+  superseded_by: B-132
   dependents: []
   notes: ''
+  refuted_on: '2026-11-17'
+  refute_evidence: 'Refutes the ''wedged process'' mechanism of B-130: measured heartbeat age 171s at
+    2026-11-17T08:11 vs last check-in 2026-11-16T14:33Z; agent.log has no Check-in-failed line after 17:33;
+    code-read of agent.py:1454 (warning on RequestException) and agent.py:4156 (heartbeat touched at loop
+    top). Fix in fd13fba.'
 - id: B-131
   statement: 'S269''s ACTIVE poll-interval fix (300s -> 60s) was applied to handlePing (served at /api/ping,
     a legacy path the current agent does not call) while handleAgentCheckin (/api/agent/checkin) still
@@ -2923,6 +2928,32 @@ beliefs:
   last_verified: '2026-11-17'
   commit_ref: 511b81d
   supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-132
+  statement: 'A service-installed agent had NO liveness supervision, and process existence was the only
+    test: agent_is_running() only asked whether a lockdown-agent pid existed, the scheduled-task watchdog
+    that would have killed a stuck agent is removed by remove_legacy_starters() at service install, and
+    Restart-Service could not recover MOLE (the new host refuses to start a second agent while the old
+    pid exists) — only Stop-Process cleared it. What the agent was doing is NOT established: its .heartbeat
+    kept being touched (171 s old at the time of inspection) while no check-in reached the server for
+    ~14 h, and no ''Check-in failed'' warning (agent.py:1454, logged on every requests.RequestException)
+    appeared after 17:33 — so the poll path was not being reached, or it was reached and blocked, and
+    the heartbeat is therefore NOT a valid liveness signal. Supervision now uses .last_checkin_ok, written
+    only when the server answers a check-in, and restarts only when /api/health also answers.'
+  domain: lifecycle
+  status: confirmed
+  evidence_level: code-read
+  provenance: code-read of service_host.py:79-95 (process existence), service_host.py:339-358 (remove_legacy_starters
+    deletes the task + Run key), agent.py:1454 (warning on every RequestException) and agent.py:4156 (heartbeat
+    touched at loop top) plus the live observations in the refutation evidence; the fix (fd13fba) is covered
+    by 18 new tests but the restart path has not yet been exercised on MOLE.
+  source: refutes B-130
+  asserted: '2026-11-17'
+  last_verified: '2026-11-17'
+  commit_ref: null
+  supersedes: B-130
   superseded_by: null
   dependents: []
   notes: ''

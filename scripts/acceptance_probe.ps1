@@ -107,10 +107,20 @@ if (Test-Path -LiteralPath $lockdownFolder) {
 $lockdownEncrypted = Get-EncryptedFileCount $lockdownFolder
 
 # --- tracking state (the file that lied) ---
+# Both locations: the agent's default is %ProgramData%\LockdownSystem\tracking_state.json
+# (agent.py:2710), while config.json may point elsewhere. Reading only the install
+# directory silently reported "no tracking state" for a machine that had one.
 $trackingState = $null
-$trackingStatePath = Join-Path $inst 'tracking_state.json'
-if (Test-Path -LiteralPath $trackingStatePath) {
-    try { $trackingState = Get-Content -LiteralPath $trackingStatePath -Raw | ConvertFrom-Json } catch { }
+foreach ($candidate in @(
+    (Join-Path $inst 'tracking_state.json'),
+    (Join-Path $env:ProgramData 'LockdownSystem\tracking_state.json')
+)) {
+    if (Test-Path -LiteralPath $candidate) {
+        try {
+            $trackingState = Get-Content -LiteralPath $candidate -Raw | ConvertFrom-Json
+            break
+        } catch { }
+    }
 }
 
 $realUser = Get-RealUserName

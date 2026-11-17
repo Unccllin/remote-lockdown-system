@@ -477,3 +477,22 @@ if __name__ == "__main__":
     from script_test_runner import run
 
     raise SystemExit(run(__file__))
+
+
+class TestActionPayload:
+    """The body each step posts — pinned because a 400 is discovered only on a real device.
+
+    `flag` and `recover` require the hostname typed back (the Worker rejects with
+    "Confirmation hostname does not match" otherwise), and the first destructive run of
+    this harness died on exactly that (S270).
+    """
+
+    def test_lock_and_recover_send_the_hostname_confirmation(self):
+        dev = {"hostname": "MOLE"}
+        assert mod.action_payload("lock", dev) == {"hostname_confirm": "MOLE"}
+        assert mod.action_payload("recover", dev) == {"hostname_confirm": "MOLE"}
+
+    def test_tracking_needs_no_confirmation(self):
+        dev = {"hostname": "MOLE"}
+        assert mod.action_payload("track", dev) == {}
+        assert mod.action_payload("stop-track", dev) == {}
