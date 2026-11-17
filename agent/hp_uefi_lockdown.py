@@ -1385,13 +1385,22 @@ def _rollback_bios_settings(saved_settings: dict, bios_password: str) -> bool:
             )
             all_ok = False
 
-    # Remove the boot state file (rollback complete)
-    clear_boot_state()
-
     if all_ok:
+        # Only now is the record of the original values redundant.
+        clear_boot_state()
         log.info("BIOS rollback complete — settings restored (password NOT cleared per CC18)")
     else:
-        log.error("BIOS rollback completed with errors — some settings may need manual restoration")
+        # KEEP the boot state file. Deleting it here destroyed the only record of the values
+        # the firmware held before the lockdown, on a path that had just failed to restore
+        # them — measured on MOLE (S271): the rollback's writes were refused, the lockdown's
+        # writes committed at the next boot, and the machine came back with USB/PXE boot
+        # disabled while the record said "rolled back". A later attempt (or an operator) needs
+        # those values.
+        log.error(
+            "BIOS rollback completed with errors — boot state KEPT at %s so the original values "
+            "can still be restored",
+            BOOT_STATE_FILE,
+        )
     return all_ok
 
 

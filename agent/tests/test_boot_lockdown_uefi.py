@@ -1124,3 +1124,37 @@ class TestHpUefiLockdown:
         assert result["sure_admin_status"]["sure_admin_detected"] is True
         assert result["sure_admin_status"]["sure_start_detected"] is True
         assert result["sure_admin_status"]["any_sure_feature"] is True
+
+
+class TestFailedRollbackKeepsTheBootState:
+    """A rollback that could not restore must not delete the record of what to restore.
+
+    Measured on MOLE (S271): the lockdown's writes committed at the next boot, the rollback's
+    writes were refused, and `clear_boot_state()` deleted the only copy of the original values —
+    so the machine came back with USB/PXE/Legacy boot disabled and nothing left that knew the
+    values they had before.
+    """
+
+    def test_a_failed_restore_keeps_the_state_file(self, tmp_path, monkeypatch):
+        state_file = tmp_path / ".boot_state"
+        state_file.write_text('{"USB Storage Boot": "Enable"}')
+        monkeypatch.setattr(hp_uefi_lockdown, "BOOT_STATE_FILE", state_file)
+        monkeypatch.setattr(hp_uefi_lockdown, "_set_setting", lambda *a, **k: 6)  # refused
+        monkeypatch.setattr(hp_uefi_lockdown, "_verify_setting", lambda *a, **k: False)
+
+        ok = hp_uefi_lockdown._rollback_bios_settings({"USB Storage Boot": "Enable"}, "pw")
+
+        assert ok is False
+        assert state_file.exists(), "the original values must stay recoverable"
+
+    def test_a_successful_restore_clears_the_state_file(self, tmp_path, monkeypatch):
+        state_file = tmp_path / ".boot_state"
+        state_file.write_text('{"USB Storage Boot": "Enable"}')
+        monkeypatch.setattr(hp_uefi_lockdown, "BOOT_STATE_FILE", state_file)
+        monkeypatch.setattr(hp_uefi_lockdown, "_set_setting", lambda *a, **k: 0)
+        monkeypatch.setattr(hp_uefi_lockdown, "_verify_setting", lambda *a, **k: True)
+
+        ok = hp_uefi_lockdown._rollback_bios_settings({"USB Storage Boot": "Enable"}, "pw")
+
+        assert ok is True
+        assert not state_file.exists()
