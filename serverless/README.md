@@ -50,8 +50,7 @@ overlapping requests destroyed each other's fields. Observed live in S269 — th
 `unlock … status=executed` and the device still reported the unlock `pending`, because a
 concurrent check-in had written an older snapshot over it. Mutation now reads and writes
 exactly one key (`updateCommand`). `serializeMutation()` remains as belt-and-braces for the
-stores that are still whole lists: `locations`, `audit_log`, `bios_passwords`,
-`encryption_keys`.
+stores that are still whole lists: `audit_log`, `bios_passwords`, `encryption_keys`.
 
 Residual, stated rather than hidden: `command_index` is itself one key. It is append-mostly
 and holds only ids, so a lost append hides a command (recoverable from the audit log) instead
@@ -85,6 +84,24 @@ Reading a device back for the UI or a test goes through the API, not the KV layo
 GET /api/devices                            # the fleet, with derived lock_state
 GET /api/devices/:id                        # one device
 ```
+
+## Location storage (ADR-004)
+
+Reports are per-entity too, with the index **per device** so devices do not share a window:
+
+| key | value |
+|-----|-------|
+| `location:<id>` | one report (latitude/longitude/city…, `observed_at`, `created_at`) |
+| `location_index:<deviceId>` | that device's report ids, oldest first |
+| `locations` | legacy whole-list key; migrated once, then deleted |
+
+Why: the old shape was ONE list capped at 1000 rows for the whole fleet. A tracking device polls
+every 30 s, so at 60 tracked devices each kept **16 reports — about eight minutes of trail** — the
+chattiest device starved the rest, and every single report rewrote up to 1000 rows. Each device
+now keeps `LOCATION_HISTORY_LIMIT` reports (default 500 ≈ 4 hours of continuous tracking,
+overridable with that `[vars]` entry), and any report that falls off the end is deleted rather
+than left behind. See
+[docs/adr/ADR-004-per-entity-location-reports.md](../docs/adr/ADR-004-per-entity-location-reports.md).
 
 Reading a command back for the UI or a test goes through the API, not the KV layout:
 

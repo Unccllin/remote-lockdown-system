@@ -1,0 +1,171 @@
+{
+  "session": "S274",
+  "adr": "ADR-004-per-entity-location-reports.md",
+  "started_at": "2026-11-17T12:46:33.479Z",
+  "steps": [
+    {
+      "step": "01-layout-after-interleaved-reports",
+      "detail": {
+        "keys": [
+          "location:3d656fee92d1a7c3bd0e6ab7d0b34379",
+          "location:4150d949e89a35c78be522d0ed34ef58",
+          "location:d8ef0952da78573820b147557ebf3a2e",
+          "location_index:2c25d87713a255f567dbe088b9d6f1d7",
+          "location_index:bd191de552b305c15accaeda41246964"
+        ]
+      }
+    },
+    {
+      "step": "02-history-per-device",
+      "detail": {
+        "a": [
+          "A-2",
+          "A-1"
+        ],
+        "b": [
+          "B-1"
+        ]
+      }
+    },
+    {
+      "step": "03-after-crossing-the-cap",
+      "detail": {
+        "limit": "5",
+        "keys": [
+          "location:3d656fee92d1a7c3bd0e6ab7d0b34379",
+          "location:ae1d92217892cf3f79cbe55c9dbad716",
+          "location:b9757fedb2c7a54444a49963cd35a042",
+          "location:e68130265cd73b43da378876be7cee0b",
+          "location:ecb4623bbffd16c79dbac735a8be5689",
+          "location:f528507381a8e13c9c5d16c9dfbd1602",
+          "location_index:2c25d87713a255f567dbe088b9d6f1d7",
+          "location_index:bd191de552b305c15accaeda41246964"
+        ],
+        "writes": 12,
+        "deletes": [
+          "location:4150d949e89a35c78be522d0ed34ef58",
+          "location:d8ef0952da78573820b147557ebf3a2e",
+          "location:d23c7fb175857cd313f0ae96a5712f62"
+        ]
+      }
+    },
+    {
+      "step": "04-layout-after-release",
+      "detail": {
+        "keys": [
+          "location:ae1d92217892cf3f79cbe55c9dbad716",
+          "location:b9757fedb2c7a54444a49963cd35a042",
+          "location:e68130265cd73b43da378876be7cee0b",
+          "location:ecb4623bbffd16c79dbac735a8be5689",
+          "location:f528507381a8e13c9c5d16c9dfbd1602",
+          "location_index:2c25d87713a255f567dbe088b9d6f1d7"
+        ]
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "what": "each device has its own index key",
+      "ok": true,
+      "detail": {
+        "keys": [
+          "location:3d656fee92d1a7c3bd0e6ab7d0b34379",
+          "location:4150d949e89a35c78be522d0ed34ef58",
+          "location:d8ef0952da78573820b147557ebf3a2e",
+          "location_index:2c25d87713a255f567dbe088b9d6f1d7",
+          "location_index:bd191de552b305c15accaeda41246964"
+        ]
+      }
+    },
+    {
+      "what": "A keeps both of its own reports, newest first",
+      "ok": true,
+      "detail": [
+        "A-2",
+        "A-1"
+      ]
+    },
+    {
+      "what": "B keeps its report and none of A's",
+      "ok": true,
+      "detail": [
+        "B-1"
+      ]
+    },
+    {
+      "what": "no shared whole-list key exists",
+      "ok": true,
+      "detail": {
+        "keys": [
+          "location:3d656fee92d1a7c3bd0e6ab7d0b34379",
+          "location:4150d949e89a35c78be522d0ed34ef58",
+          "location:d8ef0952da78573820b147557ebf3a2e",
+          "location_index:2c25d87713a255f567dbe088b9d6f1d7",
+          "location_index:bd191de552b305c15accaeda41246964"
+        ]
+      }
+    },
+    {
+      "what": "rows carry a stored id",
+      "ok": true,
+      "detail": "d8ef0952da78573820b147557ebf3a2e"
+    },
+    {
+      "what": "only the newest `limit` reports remain",
+      "ok": true,
+      "detail": [
+        "A-8",
+        "A-7",
+        "A-6",
+        "A-5",
+        "A-4"
+      ]
+    },
+    {
+      "what": "evicted reports were deleted, not just unindexed",
+      "ok": true,
+      "detail": {
+        "recordKeys": [
+          "location:3d656fee92d1a7c3bd0e6ab7d0b34379",
+          "location:ae1d92217892cf3f79cbe55c9dbad716",
+          "location:b9757fedb2c7a54444a49963cd35a042",
+          "location:e68130265cd73b43da378876be7cee0b",
+          "location:ecb4623bbffd16c79dbac735a8be5689",
+          "location:f528507381a8e13c9c5d16c9dfbd1602"
+        ],
+        "kept": 5
+      }
+    },
+    {
+      "what": "B is untouched by A crossing its cap",
+      "ok": true
+    },
+    {
+      "what": "release succeeded",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "what": "B's index is gone",
+      "ok": true,
+      "detail": {
+        "keys": [
+          "location:ae1d92217892cf3f79cbe55c9dbad716",
+          "location:b9757fedb2c7a54444a49963cd35a042",
+          "location:e68130265cd73b43da378876be7cee0b",
+          "location:ecb4623bbffd16c79dbac735a8be5689",
+          "location:f528507381a8e13c9c5d16c9dfbd1602",
+          "location_index:2c25d87713a255f567dbe088b9d6f1d7"
+        ]
+      }
+    },
+    {
+      "what": "A's reports survive the release",
+      "ok": true
+    }
+  ],
+  "finished_at": "2026-11-17T12:46:33.729Z",
+  "ok": true
+}

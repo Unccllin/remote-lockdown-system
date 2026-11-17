@@ -5559,3 +5559,155 @@ describe('ADR-003: per-entity device records', () => {
     expect((await listFromApi()).some((d) => d.id === device.id)).toBe(false);
   });
 });
+
+/**
+ * ADR-004: location reports are per-entity records, indexed per device.
+ *
+ * The defect this removes: reports lived in one list capped at 1000 rows for the WHOLE fleet, so
+ * at 60 tracked devices each kept 16 reports — about eight minutes of trail — and every report
+ * rewrote up to 1000 rows. Two devices reporting at once also lost one of the two, and a lost
+ * report is the evidence a tracking trail exists to produce.
+ */
+describe('ADR-004: per-entity location reports', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV; LOCATION_HISTORY_LIMIT?: string };
+  const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  async function report(hostname: string, apiKey: string, body: Record<string, unknown>): Promise<void> {
+    const raw = JSON.stringify({ hostname, location: body });
+    const resp = await worker.fetch(
+      makeRequest('POST', '/api/agent/location', raw, signRequest(raw, apiKey)),
+      env,
+    );
+    expect(resp.status).toBe(200);
+  }
+
+  async function history(deviceId: string, query = ''): Promise<any[]> {
+    const resp = await worker.fetch(
+      makeRequest('GET', `/api/devices/${deviceId}/locations${query}`, undefined, ADMIN),
+      env,
+    );
+    return (await parseResponse(resp)) as any[];
+  }
+
+  // Through the KV interface (`list`), not the mock's private storage.
+  const keysWithPrefix = async (prefix: string): Promise<string[]> =>
+    (await env.LOCKDOWN_KV.list({ prefix })).keys.map((k) => k.name);
+  const locationKeys = () => keysWithPrefix('location:');
+  const indexKeys = () => keysWithPrefix('location_index:');
+
+  it('migrates the legacy whole-list key into per-report records and per-device indexes', async () => {
+    await env.LOCKDOWN_KV.put(
+      'locations',
+      JSON.stringify([
+        { device_id: 'legacy-a', latitude: 1, longitude: 2, source: 'ip', city: 'A1',
+          accuracy_meters: null, region: null, country: null, ip_address: null, wifi_count: null,
+          created_at: '2026-11-01T10:00:00.000Z' },
+        { device_id: 'legacy-b', latitude: 3, longitude: 4, source: 'ip', city: 'B1',
+          accuracy_meters: null, region: null, country: null, ip_address: null, wifi_count: null,
+          created_at: '2026-11-01T10:01:00.000Z' },
+        { device_id: 'legacy-a', latitude: 5, longitude: 6, source: 'ip', city: 'A2',
+          accuracy_meters: null, region: null, country: null, ip_address: null, wifi_count: null,
+          created_at: '2026-11-01T10:02:00.000Z' },
+      ]),
+    );
+
+    const aRows = await history('legacy-a');
+    const bRows = await history('legacy-b');
+
+    expect(aRows.map((r) => r.city)).toEqual(['A2', 'A1']); // newest first on the wire
+    expect(bRows.map((r) => r.city)).toEqual(['B1']);
+    // Records are per report, indexes are per device.
+    expect(await locationKeys()).toHaveLength(3);
+    expect((await indexKeys()).sort()).toEqual(['location_index:legacy-a', 'location_index:legacy-b']);
+    // The legacy key is gone, so the whole-list write cannot come back.
+    expect(await env.LOCKDOWN_KV.get('locations')).toBeNull();
+  });
+
+  it('a second migration of the same rows does not duplicate them', async () => {
+    // Deterministic ids are what make this safe: two isolates migrating concurrently would
+    // otherwise write two copies of every report.
+    const legacy = JSON.stringify([
+      { device_id: 'dup-a', latitude: 1, longitude: 2, source: 'ip', city: 'Only',
+        accuracy_meters: null, region: null, country: null, ip_address: null, wifi_count: null,
+        created_at: '2026-11-01T10:00:00.000Z' },
+    ]);
+    await env.LOCKDOWN_KV.put('locations', legacy);
+    await history('dup-a');
+    const afterFirst = (await env.LOCKDOWN_KV.get('location_index:dup-a')) as string;
+
+    // Simulate the other isolate: the legacy key reappears with the same content.
+    await env.LOCKDOWN_KV.put('locations', legacy);
+    await history('dup-a');
+
+    expect((await env.LOCKDOWN_KV.get('location_index:dup-a')) as string).toBe(afterFirst);
+    expect(await locationKeys()).toHaveLength(1);
+  });
+
+  it('two devices reporting at the same time keep both trails', async () => {
+    const { device: a, apiKey: keyA } = await enrollDevice(worker, env, 'LOC-A');
+    const { device: b, apiKey: keyB } = await enrollDevice(worker, env, 'LOC-B');
+
+    await report('LOC-A', keyA, { latitude: 1, longitude: 1, source: 'ip', city: 'A-1' });
+    await report('LOC-B', keyB, { latitude: 2, longitude: 2, source: 'ip', city: 'B-1' });
+    await report('LOC-A', keyA, { latitude: 3, longitude: 3, source: 'ip', city: 'A-2' });
+
+    const aRows = await history(a.id);
+    const bRows = await history(b.id);
+    expect(aRows.map((r) => r.city)).toEqual(['A-2', 'A-1']);
+    expect(bRows.map((r) => r.city)).toEqual(['B-1']);
+    expect((await indexKeys()).sort()).toEqual([`location_index:${a.id}`, `location_index:${b.id}`].sort());
+  });
+
+  it('the cap prunes the records as well as the index', async () => {
+    // A cap nobody crosses is a cap nobody has seen work — this is the only path that deletes.
+    env.LOCATION_HISTORY_LIMIT = '3';
+    const { device, apiKey } = await enrollDevice(worker, env, 'LOC-CAP');
+
+    for (let i = 1; i <= 5; i += 1) {
+      await report('LOC-CAP', apiKey, { latitude: i, longitude: i, source: 'ip', city: `C-${i}` });
+    }
+
+    const rows = await history(device.id, '?limit=10');
+    expect(rows.map((r) => r.city)).toEqual(['C-5', 'C-4', 'C-3']);
+    const index = JSON.parse((await env.LOCKDOWN_KV.get(`location_index:${device.id}`)) as string);
+    expect(index).toHaveLength(3);
+    // The two evicted reports are deleted, not merely unindexed.
+    expect(await locationKeys()).toHaveLength(3);
+  });
+
+  it('a released device leaves no location records or index behind', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'LOC-REL');
+    await report('LOC-REL', apiKey, { latitude: 1, longitude: 2, source: 'ip', city: 'R-1' });
+    expect((await locationKeys()).length).toBeGreaterThan(0);
+
+    const resp = await worker.fetch(
+      makeRequest(
+        'DELETE',
+        `/api/devices/${device.id}/release`,
+        { hostname_confirm: 'LOC-REL' },
+        ADMIN,
+      ),
+      env,
+    );
+    expect(resp.status).toBe(200);
+    expect(await locationKeys()).toHaveLength(0);
+    expect(await env.LOCKDOWN_KV.get(`location_index:${device.id}`)).toBeNull();
+  });
+
+  it('reports carry a stable id, so a row does not change identity between reads', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'LOC-ID');
+    await report('LOC-ID', apiKey, { latitude: 1, longitude: 2, source: 'ip', city: 'I-1' });
+
+    const first = await history(device.id);
+    await report('LOC-ID', apiKey, { latitude: 3, longitude: 4, source: 'ip', city: 'I-2' });
+    const second = await history(device.id);
+
+    const earlierRow = second.find((r) => r.city === 'I-1');
+    expect(earlierRow.id).toBe(first[0].id);
+    expect(earlierRow.id).toMatch(/^[0-9a-f]+$/);
+  });
+});

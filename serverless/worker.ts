@@ -172,6 +172,8 @@ interface EncryptionKey {
 }
 
 interface LocationReport {
+  /** Stable record id (ADR-004). Deterministic for migrated rows, generated for new ones. */
+  id: string;
   device_id: string;
   latitude: number | null;
   longitude: number | null;
@@ -1193,19 +1195,175 @@ async function saveBiosPasswords(env: Env, pws: BiosPassword[]): Promise<void> {
   await env.LOCKDOWN_KV.put(BIOS_PASSWORDS_KEY, JSON.stringify(stored));
 }
 
-async function listLocations(env: Env): Promise<LocationReport[]> {
-  const data = await env.LOCKDOWN_KV.get(LOCATIONS_KEY);
-  return data ? parseKvJson<LocationReport[]>(data, LOCATIONS_KEY) : [];
+// ADR-004: a location report is its own KV record, and the index is PER DEVICE — so two
+// devices in tracking cannot push each other out of a shared window, and a report never
+// rewrites the fleet's history. `locations` is the legacy whole list: migrated once, deleted.
+const LOCATION_KEY_PREFIX = 'location:';
+const LOCATION_INDEX_PREFIX = 'location_index:';
+
+/**
+ * How many reports one device keeps.
+ *
+ * 500 × the 30 s tracking poll ≈ 4 hours of continuous trail. The old shape was ONE list capped
+ * at 1000 rows for the whole fleet — 16 reports per device at 60 devices, about 8 minutes — so a
+ * device that went dark kept almost nothing and the chattiest device starved the rest. Bounded
+ * on purpose: nothing sweeps these keys, and an unbounded trail is a privacy liability as much
+ * as a storage cost.
+ */
+const LOCATION_HISTORY_LIMIT = 500;
+
+/**
+ * The per-device cap, overridable the same way `ACTIVE_POLL_SECONDS` is — a limit nothing can
+ * exercise is a limit nobody has seen work. Read per call, so a test (or an operator trimming
+ * retention) does not need a different build.
+ */
+function locationHistoryLimit(env: Env): number {
+  const raw = Number(env.LOCATION_HISTORY_LIMIT ?? LOCATION_HISTORY_LIMIT);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : LOCATION_HISTORY_LIMIT;
+}
+
+/** KV key for one location report (ADR-004). */
+function locationKey(id: string): string {
+  return `${LOCATION_KEY_PREFIX}${id}`;
+}
+
+/** KV key for one device's report ids, oldest first (ADR-004). */
+function locationIndexKey(deviceId: string): string {
+  return `${LOCATION_INDEX_PREFIX}${deviceId}`;
+}
+
+/** One report, or null when the key is absent or unreadable. */
+async function getLocationReport(env: Env, id: string): Promise<LocationReport | null> {
+  const data = await env.LOCKDOWN_KV.get(locationKey(id));
+  if (!data) return null;
+  try {
+    return JSON.parse(data) as LocationReport;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A stable id for a row in the legacy list.
+ *
+ * Deterministic on purpose: two isolates migrating at the same moment then write the same keys
+ * instead of duplicating every report, which `generateId()` would do.
+ */
+async function legacyLocationId(row: LocationReport): Promise<string> {
+  const material = JSON.stringify([
+    row.device_id,
+    row.created_at,
+    row.observed_at ?? null,
+    row.latitude,
+    row.longitude,
+    row.city,
+  ]);
+  return `loc-${(await sha256(material)).slice(0, 24)}`;
+}
+
+/**
+ * Move the legacy whole-list key into per-report records, once.
+ *
+ * Legacy rows are older than anything written after the change, so their ids go in front of
+ * whatever index a device already has — that keeps the oldest-first order the read paths rely
+ * on even if a device reported before the first location read triggered this.
+ */
+async function migrateLegacyLocations(env: Env): Promise<void> {
+  const legacy = await env.LOCKDOWN_KV.get(LOCATIONS_KEY);
+  if (!legacy) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(legacy);
+  } catch {
+    return;
+  }
+  if (!Array.isArray(parsed)) return;
+
+  const rows = parsed.filter(
+    (r): r is LocationReport => !!r && typeof (r as LocationReport).device_id === 'string',
+  );
+
+  const legacyIdsByDevice = new Map<string, string[]>();
+  for (const row of rows) {
+    const id = await legacyLocationId(row);
+    await env.LOCKDOWN_KV.put(locationKey(id), JSON.stringify({ ...row, id }));
+    const ids = legacyIdsByDevice.get(row.device_id) ?? [];
+    ids.push(id);
+    legacyIdsByDevice.set(row.device_id, ids);
+  }
+
+  for (const [deviceId, legacyIds] of legacyIdsByDevice) {
+    const existing = await listLocationIdsRaw(env, deviceId);
+    const merged = [...legacyIds, ...existing.filter((id) => !legacyIds.includes(id))];
+    await saveLocationIndex(env, deviceId, merged);
+  }
+
+  await env.LOCKDOWN_KV.delete(LOCATIONS_KEY);
+}
+
+/** One device's report ids, oldest first. No migration pass — the read paths do that. */
+async function listLocationIdsRaw(env: Env, deviceId: string): Promise<string[]> {
+  const data = await env.LOCKDOWN_KV.get(locationIndexKey(deviceId));
+  if (!data) return [];
+  try {
+    const parsed: unknown = JSON.parse(data);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((id): id is string => typeof id === 'string' && id.length > 0);
+    }
+  } catch {
+    // Corrupt index: treat as empty rather than failing the request.
+  }
+  return [];
+}
+
+/**
+ * Persist a device's index, deleting the records that fall off the end.
+ *
+ * Trimming the records (not just the index) is what keeps the key count bounded: a command is
+ * rewritten in place, but a report is immutable, so an id dropped from the index would otherwise
+ * leave its record behind forever.
+ */
+async function saveLocationIndex(env: Env, deviceId: string, ids: string[]): Promise<void> {
+  const kept = ids.slice(-locationHistoryLimit(env));
+  const evicted = ids.slice(0, Math.max(0, ids.length - kept.length));
+  await env.LOCKDOWN_KV.put(locationIndexKey(deviceId), JSON.stringify(kept));
+  for (const id of evicted) {
+    await env.LOCKDOWN_KV.delete(locationKey(id));
+  }
+}
+
+/** One device's reports, oldest first. */
+async function listLocationsForDevice(env: Env, deviceId: string): Promise<LocationReport[]> {
+  await migrateLegacyLocations(env);
+  const ids = await listLocationIdsRaw(env, deviceId);
+  const records = await Promise.all(ids.map((id) => getLocationReport(env, id)));
+  return records.filter((r): r is LocationReport => r !== null);
+}
+
+/** Append one report for one device. */
+async function addLocationReport(env: Env, report: LocationReport): Promise<void> {
+  await env.LOCKDOWN_KV.put(locationKey(report.id), JSON.stringify(report));
+  const ids = await listLocationIdsRaw(env, report.device_id);
+  await saveLocationIndex(env, report.device_id, [...ids, report.id]);
+}
+
+/** Remove every report belonging to a device, plus its index. */
+async function deleteLocationsForDevice(env: Env, deviceId: string): Promise<number> {
+  // Migrate first: rows still sitting in the legacy list would otherwise be re-indexed to a
+  // device that no longer exists.
+  await migrateLegacyLocations(env);
+  const ids = await listLocationIdsRaw(env, deviceId);
+  for (const id of ids) {
+    await env.LOCKDOWN_KV.delete(locationKey(id));
+  }
+  if (ids.length > 0) {
+    await env.LOCKDOWN_KV.delete(locationIndexKey(deviceId));
+  }
+  return ids.length;
 }
 
 async function saveHwArtifacts(env: Env, artifacts: HwTestArtifact[]): Promise<void> {
   await env.LOCKDOWN_KV.put(HW_ARTIFACTS_KEY, JSON.stringify(artifacts));
-}
-
-async function saveLocations(env: Env, locations: LocationReport[]): Promise<void> {
-  // Cap at 1000 most recent to stay within KV value size limits
-  const capped = locations.slice(-1000);
-  await env.LOCKDOWN_KV.put(LOCATIONS_KEY, JSON.stringify(capped));
 }
 
 async function listAudit(env: Env): Promise<AuditEntry[]> {
@@ -1751,8 +1909,8 @@ async function handleAgentLocation(request: Request, env: Env): Promise<Response
     return errorResponse('location required', 400);
   }
 
-  const locations = await listLocations(env);
-  locations.push({
+  await addLocationReport(env, {
+    id: generateId(),
     device_id: device.id,
     latitude: location.latitude ?? null,
     longitude: location.longitude ?? null,
@@ -1766,7 +1924,6 @@ async function handleAgentLocation(request: Request, env: Env): Promise<Response
     observed_at: normalizeObservedAt(payload.observed_at),
     created_at: new Date().toISOString(),
   });
-  await saveLocations(env, locations);
 
   return jsonResponse({ ok: true });
 }
@@ -1783,7 +1940,7 @@ async function handleAgentLocation(request: Request, env: Env): Promise<Response
  * ADR-002 and ADR-003 removed the cause for commands and devices — they are per-entity records
  * now, so two writers touch different keys. What remains here is the multi-key paths
  * (an enrolment writes a record, an index entry and an API-key pointer) and the stores still
- * kept as whole lists: `locations`, `audit_log`, `bios_passwords`, `encryption_keys`.
+ * kept as whole lists: `audit_log`, `bios_passwords`, `encryption_keys`.
  *
  * A promise chain serialises requests served by the same isolate, which is the only case that
  * can be fixed without Durable Objects. Cross-isolate races remain for those stores; the fix is
@@ -2747,23 +2904,16 @@ async function handleGetLocations(
   if (auth instanceof Response) return auth;
   const url = requestUrl(request);
   const limit = parseInt(url.searchParams.get('limit') || '20', 10);
-  const locations = await listLocations(env);
-  const deviceLocs = locations
-    .filter((l) => l.device_id === deviceId)
-    // Order by when each fix was TAKEN, then slice: taking the last `limit` rows in insertion
-    // order (the old behaviour) drops the newest rows once a backfilled report arrives with an
-    // older scan time than what is already stored.
+  const reports = await listLocationsForDevice(env, deviceId);
+  const deviceLocs = reports
+    // Order by when each fix was TAKEN, then slice: ordering by insertion alone drops the newest
+    // rows once a backfilled report arrives with an older scan time than what is stored.
     .sort((a, b) => locationTime(a).localeCompare(locationTime(b)))
     .slice(-limit)
-    // Map created_at → reported_at for dashboard compatibility (the Express
-    // server uses `reported_at`, the Worker uses `created_at` internally).
-    // Also add a synthetic id (the Worker doesn't store one) and reverse to
-    // most-recent-first, matching the Express server's ORDER BY DESC.
-    .map((l, idx) => ({
-      ...l,
-      id: `loc-${deviceId}-${idx}`,
-      reported_at: l.created_at,
-    }))
+    // Map created_at → reported_at for dashboard compatibility (the Express server uses
+    // `reported_at`). `id` is the stored record id (ADR-004) — the old synthetic
+    // `loc-<deviceId>-<idx>` changed whenever the window shifted.
+    .map((l) => ({ ...l, reported_at: l.created_at }))
     .reverse();
   return jsonResponse(deviceLocs);
 }
@@ -2924,7 +3074,7 @@ async function handleReleaseDevice(
   await deleteCommandsForDevice(env, deviceId);
   await saveKeys(env, (await listKeys(env)).filter((k) => k.device_id !== deviceId));
   await saveBiosPasswords(env, (await listBiosPasswords(env)).filter((p) => p.device_id !== deviceId));
-  await saveLocations(env, (await listLocations(env)).filter((l) => l.device_id !== deviceId));
+  await deleteLocationsForDevice(env, deviceId);
   await env.LOCKDOWN_KV.delete(`${CHECKIN_KEY_PREFIX}${deviceId}`);
 
   return jsonResponse({
@@ -4105,12 +4255,10 @@ async function handleLatestLocation(
   const auth = await requireRole(request, env, 'viewer');
   if (auth instanceof Response) return auth;
 
-  const locations = await listLocations(env);
-  const deviceLocs = locations
-    .filter((l) => l.device_id === deviceId)
-    // Same key as the history route, so "latest" and "first row of the history" cannot
-    // disagree about which fix is the newest.
-    .sort((a, b) => locationTime(a).localeCompare(locationTime(b)));
+  // Same source and same key as the history route, so "latest" and "first row of the history"
+  // cannot disagree about which fix is the newest.
+  const deviceLocs = (await listLocationsForDevice(env, deviceId)).sort((a, b) =>
+    locationTime(a).localeCompare(locationTime(b)));
   const latest = deviceLocs[deviceLocs.length - 1];
 
   if (!latest) {
@@ -4120,11 +4268,7 @@ async function handleLatestLocation(
     );
   }
 
-  return jsonResponse({
-    ...latest,
-    id: `loc-${deviceId}-0`,
-    reported_at: latest.created_at,
-  });
+  return jsonResponse({ ...latest, reported_at: latest.created_at });
 }
 
 async function listHwArtifacts(env: Env): Promise<HwTestArtifact[]> {

@@ -35,4 +35,12 @@ export interface Env {
    * and each call site used to reach for them with `as unknown as Record<…>`.
    */
   INSTALLER_GUI?: string;
+  /**
+   * How many location reports one device keeps (ADR-004; default 500 when unset).
+   *
+   * Declared on Env for the same reason as ACTIVE_POLL_SECONDS — and because a retention limit
+   * that cannot be exercised is one nobody has watched work: the pruning path is only reachable
+   * by crossing it.
+   */
+  LOCATION_HISTORY_LIMIT?: string;
 }
