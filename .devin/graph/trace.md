@@ -16663,3 +16663,55 @@ Docs updated per the standing instruction: `serverless/README.md` ("Command stor
 a command back) and the root `README.md` (the three gates that need a tool installed — ruff
 0.17.5 via `scripts/lint-agent.sh`, actionlint + shellcheck, a readable Docker socket), each of
 which fails loudly instead of linting less than CI does.
+
+### Addendum — S271: the firmware password was accepted, and the verification is what lies
+
+With `uefi_password` supplied (via the operator hand-off file, erased after use), MOLE's
+lockdown got further than it ever had — and then reported a rollback that the firmware
+contradicts. The evidence, all from the same run:
+
+```text
+12:20:46 [INFO]  Using existing BIOS Setup password for lockdown changes
+12:20:49 [INFO]  D-009: Concept 'network_boot' resolved to setting name 'Network (PXE) Boot'
+… five concepts resolved (usb_boot, legacy_boot, fast_boot, dma_protection) …
+12:21:27 [ERROR] UEFI lockdown: 3 critical setting(s) failed — rolling back BIOS changes
+12:21:28 [ERROR] Rollback: failed to restore 'Network (PXE) Boot' to 'Enable': Failed
+…
+12:21:31 [ERROR] BIOS rollback completed with errors — some settings may need manual restoration
+```
+
+Firmware read back on the machine afterwards:
+
+```text
+Network (PXE) Boot  = Disable      USB Storage Boot = Disable
+Legacy Boot Options = Disable      Fast Boot = Disable      DMA Protection = Disable
+Setup Password      IsSet=1
+```
+
+`_set_and_verify` (`hp_uefi_lockdown.py:1172`) logs a warning **only when the write is
+refused** (`rc != 0`); it returns `_verify_setting(name, value)` silently otherwise. No such
+warning appears for any of the three "failed" settings — so **every write was accepted**. What
+failed was the read-back: HP commits many BIOS settings at the next boot, so an in-session
+read returns the *previous* value. The rollback then wrote `Enable` and could not verify that
+either, and `Boot state file removed` deleted the only record of what the values were before.
+
+Net effect: the agent reports "rolled back", the firmware holds the lockdown values, and the
+original values are no longer written down anywhere. The device still boots Windows (the
+internal disk is still the boot entry), so this is not a brick — but the record and the machine
+disagree, which is the same class of defect this session kept finding, now one layer down in
+the firmware.
+
+Operationally: the machine's boot settings are pending a reboot, and the rollback (`Enable`)
+was the last write queued, so a reboot should settle at the original values — **to be checked
+at the BIOS, not assumed**. The device itself was recovered (`recover` → sentinel gone, folder
+decrypted, account re-enabled 513, status active).
+
+Candidate fix, and it is a fork rather than an obvious call:
+
+1. **`pending_reboot` is a state, not a failure.** Fail only when the write is refused; when
+   the write is accepted but the read-back still shows the old value, record
+   `boot_lock_status: pending_reboot`, KEEP the boot-state file, and settle it on the next
+   agent start (or a later read). Safe: nothing claims success it has not seen.
+2. **Never roll back a write that was accepted.** Roll back only refusals, on the grounds that
+   a rollback whose own writes cannot be verified leaves the machine in a state nobody
+   recorded — which is what happened here.
