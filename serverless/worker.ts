@@ -1112,13 +1112,78 @@ async function updateCommand(
   return next;
 }
 
-async function listKeys(env: Env): Promise<EncryptionKey[]> {
-  const data = await env.LOCKDOWN_KV.get(KEYS_KEY);
-  return data ? parseKvJson<EncryptionKey[]>(data, KEYS_KEY) : [];
+// ADR-006: encryption keys and BIOS credentials are per-DEVICE collections. Every reader and
+// writer of both stores already scopes to one device, so `device_id` is the partition — no index
+// and no cap, because the population is the device set and the rows per device are single digits.
+// Truncating secrets is the one thing a cap must never do: a lost key is an unrecoverable device.
+const KEYS_PREFIX = 'encryption_keys:';
+const BIOS_PASSWORDS_PREFIX = 'bios_passwords:';
+
+function keysKey(deviceId: string): string {
+  return `${KEYS_PREFIX}${deviceId}`;
 }
 
-async function saveKeys(env: Env, keys: EncryptionKey[]): Promise<void> {
-  await env.LOCKDOWN_KV.put(KEYS_KEY, JSON.stringify(keys));
+function biosPasswordsKey(deviceId: string): string {
+  return `${BIOS_PASSWORDS_PREFIX}${deviceId}`;
+}
+
+/**
+ * Move the legacy whole lists into per-device keys, once per store.
+ *
+ * No ids are generated, so two isolates migrating at once write identical values.
+ */
+async function migrateLegacyKeys(env: Env): Promise<void> {
+  const legacy = await env.LOCKDOWN_KV.get(KEYS_KEY);
+  if (!legacy) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(legacy);
+  } catch {
+    return;
+  }
+  if (!Array.isArray(parsed)) return;
+  const rows = parsed.filter(
+    (r): r is EncryptionKey => !!r && typeof (r as EncryptionKey).device_id === 'string',
+  );
+  const byDevice = new Map<string, EncryptionKey[]>();
+  for (const row of rows) {
+    const list = byDevice.get(row.device_id) ?? [];
+    list.push(row);
+    byDevice.set(row.device_id, list);
+  }
+  for (const [deviceId, deviceKeys] of byDevice) {
+    const existing = await listKeysForDeviceRaw(env, deviceId);
+    // Legacy rows are older than anything written after the change; keep both, oldest first.
+    await env.LOCKDOWN_KV.put(
+      keysKey(deviceId),
+      JSON.stringify([...deviceKeys, ...existing]),
+    );
+  }
+  await env.LOCKDOWN_KV.delete(KEYS_KEY);
+}
+
+/** One device's encryption keys, oldest first. No migration pass — the callers do that. */
+async function listKeysForDeviceRaw(env: Env, deviceId: string): Promise<EncryptionKey[]> {
+  const data = await env.LOCKDOWN_KV.get(keysKey(deviceId));
+  return data ? parseKvJson<EncryptionKey[]>(data, keysKey(deviceId)) : [];
+}
+
+/** One device's encryption keys, oldest first, migrating the legacy list on first read. */
+async function listKeysForDevice(env: Env, deviceId: string): Promise<EncryptionKey[]> {
+  await migrateLegacyKeys(env);
+  return listKeysForDeviceRaw(env, deviceId);
+}
+
+async function saveKeysForDevice(
+  env: Env,
+  deviceId: string,
+  keys: EncryptionKey[],
+): Promise<void> {
+  await env.LOCKDOWN_KV.put(keysKey(deviceId), JSON.stringify(keys));
+}
+
+async function deleteKeysForDevice(env: Env, deviceId: string): Promise<void> {
+  await env.LOCKDOWN_KV.delete(keysKey(deviceId));
 }
 
 // S4-serverless: secrets envelope for bios_passwords at rest. When KV_KEK
@@ -1164,11 +1229,51 @@ async function decSecret(env: Env, row: StoredBiosPassword): Promise<string> {
   return row.password ?? '';
 }
 
-async function listBiosPasswords(env: Env): Promise<BiosPassword[]> {
-  const data = await env.LOCKDOWN_KV.get(BIOS_PASSWORDS_KEY);
-  if (!data) return [];
-  const stored = parseKvJson<StoredBiosPassword[]>(data, BIOS_PASSWORDS_KEY);
-  // Decrypt each row's password transparently.
+/** Move the legacy BIOS-credential list into per-device keys, once. */
+async function migrateLegacyBiosPasswords(env: Env): Promise<void> {
+  const legacy = await env.LOCKDOWN_KV.get(BIOS_PASSWORDS_KEY);
+  if (!legacy) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(legacy);
+  } catch {
+    return;
+  }
+  if (!Array.isArray(parsed)) return;
+  const rows = parsed.filter(
+    (r): r is StoredBiosPassword =>
+      !!r && typeof (r as StoredBiosPassword).device_id === 'string',
+  );
+  const byDevice = new Map<string, StoredBiosPassword[]>();
+  for (const row of rows) {
+    const list = byDevice.get(row.device_id) ?? [];
+    list.push(row);
+    byDevice.set(row.device_id, list);
+  }
+  for (const [deviceId, deviceRows] of byDevice) {
+    const existing = await listStoredBiosPasswordsForDeviceRaw(env, deviceId);
+    await env.LOCKDOWN_KV.put(
+      biosPasswordsKey(deviceId),
+      JSON.stringify([...deviceRows, ...existing]),
+    );
+  }
+  await env.LOCKDOWN_KV.delete(BIOS_PASSWORDS_KEY);
+}
+
+async function listStoredBiosPasswordsForDeviceRaw(
+  env: Env,
+  deviceId: string,
+): Promise<StoredBiosPassword[]> {
+  const data = await env.LOCKDOWN_KV.get(biosPasswordsKey(deviceId));
+  return data
+    ? parseKvJson<StoredBiosPassword[]>(data, biosPasswordsKey(deviceId))
+    : [];
+}
+
+/** One device's BIOS/PBA credentials, decrypted. Migrates the legacy list on first read. */
+async function listBiosPasswordsForDevice(env: Env, deviceId: string): Promise<BiosPassword[]> {
+  await migrateLegacyBiosPasswords(env);
+  const stored = await listStoredBiosPasswordsForDeviceRaw(env, deviceId);
   const out: BiosPassword[] = [];
   for (const r of stored) {
     out.push({
@@ -1181,7 +1286,11 @@ async function listBiosPasswords(env: Env): Promise<BiosPassword[]> {
   return out;
 }
 
-async function saveBiosPasswords(env: Env, pws: BiosPassword[]): Promise<void> {
+async function saveBiosPasswordsForDevice(
+  env: Env,
+  deviceId: string,
+  pws: BiosPassword[],
+): Promise<void> {
   const stored: StoredBiosPassword[] = [];
   for (const p of pws) {
     const enc = await encSecret(env, p.password);
@@ -1192,7 +1301,11 @@ async function saveBiosPasswords(env: Env, pws: BiosPassword[]): Promise<void> {
       ...enc,
     });
   }
-  await env.LOCKDOWN_KV.put(BIOS_PASSWORDS_KEY, JSON.stringify(stored));
+  await env.LOCKDOWN_KV.put(biosPasswordsKey(deviceId), JSON.stringify(stored));
+}
+
+async function deleteBiosPasswordsForDevice(env: Env, deviceId: string): Promise<void> {
+  await env.LOCKDOWN_KV.delete(biosPasswordsKey(deviceId));
 }
 
 // ADR-004: a location report is its own KV record, and the index is PER DEVICE — so two
@@ -1879,7 +1992,7 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
   let bitlockerPin: string | null = null;
   let bitlockerRecoveryPassword: string | null = null;
   if (pendingCmd.command_type === 'unlock') {
-    const keys = await listKeys(env);
+    const keys = await listKeysForDevice(env, device.id);
     // Find the most recent key for this device (lockdown ACK key, not
     // deadman key). Match by device_id and exclude the synthetic 'deadman'
     // command_id. Sort by created_at implicitly via array order (most
@@ -1898,16 +2011,14 @@ async function handleAgentCheckin(request: Request, env: Env): Promise<Response>
       // Mark as released for tracking purposes (the agent has it now)
       if (!deviceKey.released_at) {
         deviceKey.released_at = new Date().toISOString();
-        await saveKeys(env, keys);
+        await saveKeysForDevice(env, device.id, keys);
       }
     }
     // S4-serverless: fetch the stored BIOS/PBA credentials the agent needs
     // to remove UEFI lockdown (setup + power-on) and that the dashboard
     // shows in the PBA Recovery panel (bitlocker pin + recovery).
-    const pws = await listBiosPasswords(env);
-    const devicePws = pws
-      .filter((p) => p.device_id === device.id)
-      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const devicePws = (await listBiosPasswordsForDevice(env, device.id)).sort((a, b) =>
+      b.created_at.localeCompare(a.created_at));
     const creds = groupPbaCredentials(devicePws);
     biosPassword = creds.setup_password;
     powerOnPassword = creds.power_on_password;
@@ -1959,15 +2070,15 @@ async function handleDeadmanReport(request: Request, env: Env): Promise<Response
   }
 
   // Store the encryption key (idempotent — replace if exists for this device)
-  const keys = await listKeys(env);
-  const filtered = keys.filter((k) => !(k.device_id === device.id && k.command_id === 'deadman'));
+  const keys = await listKeysForDevice(env, device.id);
+  const filtered = keys.filter((k) => k.command_id !== 'deadman');
   filtered.push({
     device_id: device.id,
     command_id: 'deadman',
     key_material,
     released_at: null,
   });
-  await saveKeys(env, filtered);
+  await saveKeysForDevice(env, device.id, filtered);
 
   // Mark device as locked (the deadman switch actually encrypted it). ADR-003: one device.
   device.status = 'locked';
@@ -2044,8 +2155,8 @@ async function handleAgentLocation(request: Request, env: Env): Promise<Response
  *
  * ADR-002 and ADR-003 removed the cause for commands and devices — they are per-entity records
  * now, so two writers touch different keys. What remains here is the multi-key paths
- * (an enrolment writes a record, an index entry and an API-key pointer) and the stores still
- * kept as whole lists: `bios_passwords`, `encryption_keys`.
+ * (an enrolment writes a record, an index entry and an API-key pointer) and the two small lists
+ * that are still single values: `admins`, `hw_test_artifacts`.
  *
  * A promise chain serialises requests served by the same isolate, which is the only case that
  * can be fixed without Durable Objects. Cross-isolate races remain for those stores; the fix is
@@ -2133,18 +2244,16 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
 
   // Store encryption key if provided
   if (key_material) {
-    const keys = await listKeys(env);
-    // Remove any existing key for this device+command
-    const filtered = keys.filter(
-      (k) => !(k.device_id === device.id && k.command_id === command_id),
-    );
+    const keys = await listKeysForDevice(env, device.id);
+    // Remove any existing key for this command (the rows are already this device's).
+    const filtered = keys.filter((k) => k.command_id !== command_id);
     filtered.push({
       device_id: device.id,
       command_id,
       key_material,
       released_at: null,
     });
-    await saveKeys(env, filtered);
+    await saveKeysForDevice(env, device.id, filtered);
   }
 
   // S4-serverless: store BIOS/PBA credentials by type (mirrors server's
@@ -2158,11 +2267,11 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
   ];
   const anyCreds = credsToStore.some(([v]) => v != null && v !== '');
   if (anyCreds) {
-    const pws = await listBiosPasswords(env);
+    const pws = await listBiosPasswordsForDevice(env, device.id);
     for (const [value, type] of credsToStore) {
       if (value == null || value === '') continue;
       // Replace any existing credential of this type for the device.
-      const idx = pws.findIndex((p) => p.device_id === device.id && p.password_type === type);
+      const idx = pws.findIndex((p) => p.password_type === type);
       const row: BiosPassword = {
         device_id: device.id,
         password_type: type,
@@ -2171,7 +2280,7 @@ async function handleCommandAck(request: Request, env: Env): Promise<Response> {
       };
       if (idx >= 0) pws[idx] = row; else pws.push(row);
     }
-    await saveBiosPasswords(env, pws);
+    await saveBiosPasswordsForDevice(env, device.id, pws);
   }
 
   // Update device status based on command result. ADR-003: write this one device, and only
@@ -2264,10 +2373,8 @@ async function handleEscrowKey(request: Request, env: Env): Promise<Response> {
   }
 
   // Idempotent: keep the first escrowed key for this device+command.
-  const keys = await listKeys(env);
-  const exists = keys.some(
-    (k) => k.device_id === device.id && k.command_id === command_id,
-  );
+  const keys = await listKeysForDevice(env, device.id);
+  const exists = keys.some((k) => k.command_id === command_id);
   if (!exists) {
     keys.push({
       device_id: device.id,
@@ -2276,7 +2383,7 @@ async function handleEscrowKey(request: Request, env: Env): Promise<Response> {
       created_at: new Date().toISOString(),
       released_at: null,
     });
-    await saveKeys(env, keys);
+    await saveKeysForDevice(env, device.id, keys);
   }
 
   return jsonResponse({ escrowed: true, command_id });
@@ -2834,19 +2941,19 @@ async function handleRecover(
   await putDevice(env, device);
 
   // Release encryption key
-  const keys = await listKeys(env);
+  const keys = await listKeysForDevice(env, deviceId);
   // Newest unreleased key, for the same reason as the check-in path: the first
   // match is the oldest, and an older key cannot decrypt the current lockdown's
   // files.
   const unreleased = keys
-    .filter((k) => k.device_id === deviceId && k.released_at === null)
+    .filter((k) => k.released_at === null)
     .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
   const deviceKey = unreleased.length ? unreleased[unreleased.length - 1] : undefined;
   let releasedKey: string | null = null;
   if (deviceKey) {
     deviceKey.released_at = new Date().toISOString();
     releasedKey = deviceKey.key_material;
-    await saveKeys(env, keys);
+    await saveKeysForDevice(env, deviceId, keys);
   }
 
   // Cancel any other pending command for this device. A stale queued `track` firing
@@ -3120,10 +3227,8 @@ async function handleGetPbaCredentials(
   const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
 
-  const pws = await listBiosPasswords(env);
-  const devicePws = pws
-    .filter((p) => p.device_id === deviceId)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const devicePws = (await listBiosPasswordsForDevice(env, deviceId)).sort((a, b) =>
+    b.created_at.localeCompare(a.created_at));
   const creds = groupPbaCredentials(devicePws);
 
   await addAuditEntry(
@@ -3181,8 +3286,8 @@ async function handleReleaseDevice(
   // Cascade-delete the device's data across the KV stores.
   await deleteDevice(env, deviceId);
   await deleteCommandsForDevice(env, deviceId);
-  await saveKeys(env, (await listKeys(env)).filter((k) => k.device_id !== deviceId));
-  await saveBiosPasswords(env, (await listBiosPasswords(env)).filter((p) => p.device_id !== deviceId));
+  await deleteKeysForDevice(env, deviceId);
+  await deleteBiosPasswordsForDevice(env, deviceId);
   await deleteLocationsForDevice(env, deviceId);
   await env.LOCKDOWN_KV.delete(`${CHECKIN_KEY_PREFIX}${deviceId}`);
 

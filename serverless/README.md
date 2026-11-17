@@ -49,8 +49,10 @@ Why: every mutation used to load the whole list, edit it, and write it back, so 
 overlapping requests destroyed each other's fields. Observed live in S269 — the agent ACKed
 `unlock … status=executed` and the device still reported the unlock `pending`, because a
 concurrent check-in had written an older snapshot over it. Mutation now reads and writes
-exactly one key (`updateCommand`). `serializeMutation()` remains as belt-and-braces for the
-stores that are still whole lists: `bios_passwords` and `encryption_keys`.
+exactly one key (`updateCommand`). Every fleet-scale store is per-entity now (ADR-002 through
+ADR-006); `serializeMutation()` remains as belt-and-braces for the multi-key paths and for the two
+small lists that are still single values — `admins` and `hw_test_artifacts` — neither of which is a
+per-device collection.
 
 Residual, stated rather than hidden: `command_index` is itself one key. It is append-mostly
 and holds only ids, so a lost append hides a command (recoverable from the audit log) instead
@@ -122,6 +124,23 @@ append, while the id in the index gives a scoped read its own ids for one write.
 `AUDIT_HISTORY_LIMIT` (default 1000) is overridable, and pruning deletes the record with its
 index entry. See
 [docs/adr/ADR-005-per-entity-audit-entries.md](../docs/adr/ADR-005-per-entity-audit-entries.md).
+
+## Secret storage (ADR-006)
+
+Encryption key material and BIOS/PBA credentials are one key **per device**, holding that
+device's rows:
+
+| key | value |
+|-----|-------|
+| `encryption_keys:<deviceId>` | that device's escrowed keys (one per command that escrowed) |
+| `bios_passwords:<deviceId>` | that device's credentials, KEK-encrypted as before |
+| `encryption_keys` / `bios_passwords` | legacy whole lists; migrated once, then deleted |
+
+Why: every access to both stores was already scoped to one device, so `device_id` *is* the
+partition — an index would add a write per escrow, and a cap would truncate secrets that must
+never be truncated (a lost encryption key is an unrecoverable device). Rows per device are single
+digits: one key per escrowing command, one credential per type of which there are four. See
+[docs/adr/ADR-006-per-device-secret-stores.md](../docs/adr/ADR-006-per-device-secret-stores.md).
 
 Reading a command back for the UI or a test goes through the API, not the KV layout:
 

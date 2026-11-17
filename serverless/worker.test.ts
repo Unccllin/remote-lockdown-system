@@ -233,7 +233,7 @@ describe('route contracts (a mentioned path must be dispatched)', () => {
         routed.add(match[1].replace(/\/$/, ''));
       }
       for (const match of line.matchAll(/path\.startsWith\('([^']+)'\)/g)) {
-        routed.add(match[1].replace(/\/$/, '') + '*');
+        routed.add(`${match[1].replace(/\/$/, '')}*`);
       }
     }
     return { mentioned, routed };
@@ -1935,8 +1935,11 @@ describe('Serverless Worker', () => {
       });
       await worker.fetch(makeRequest('POST', '/api/agent/command-ack', ackBody, signRequest(ackBody, apiKey)), env2);
 
-      // The KV record must NOT contain the plaintext password.
-      const stored = JSON.parse(await (env2.LOCKDOWN_KV as any).get('bios_passwords'));
+      // The KV record must NOT contain the plaintext password. ADR-006 moved credentials to one
+      // key per device, so the assertion reads that key — the property under test is unchanged.
+      const stored = JSON.parse(
+        await (env2.LOCKDOWN_KV as any).get(`bios_passwords:${device.id}`),
+      );
       const row = stored.find((r: any) => r.device_id === device.id);
       expect(row.password).toBeUndefined();
       expect(row.password_enc).toBeDefined();
@@ -5849,5 +5852,171 @@ describe('ADR-005: per-entity audit entries', () => {
     expect(await env.LOCKDOWN_KV.get(`audit:${bId}`)).toBe(bBefore); // untouched
     const aEntries = await audit(`?device_id=${a.id}`);
     expect(aEntries.some((e) => e.detail.includes('released_at='))).toBe(true);
+  });
+});
+
+/**
+ * ADR-006: encryption keys and BIOS credentials are per-DEVICE collections.
+ *
+ * Both stores held every device's secrets in one value, and every access was already scoped to one
+ * device — so one device's escrow rewrote every other device's key. A lost encryption key is an
+ * unrecoverable device, which is why this store gets no index and no cap: the population is the
+ * device set and the rows per device are single digits.
+ */
+describe('ADR-006: per-device secret stores', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV };
+  const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  const keysWithPrefix = async (prefix: string): Promise<string[]> =>
+    (await env.LOCKDOWN_KV.list({ prefix })).keys.map((k) => k.name);
+
+  /** The id of the command just queued for a device — an ACK must name a real one. */
+  async function queuedCommandId(deviceId: string): Promise<string> {
+    const resp = await worker.fetch(
+      makeRequest('GET', `/api/devices/${deviceId}/commands`, undefined, ADMIN),
+      env,
+    );
+    const commands = (await parseResponse(resp)) as any[];
+    return commands[0].id;
+  }
+
+  async function flag(hostname: string, deviceId: string): Promise<string> {
+    await worker.fetch(
+      makeRequest('POST', `/api/devices/${deviceId}/flag-stolen`, { hostname_confirm: hostname }, ADMIN),
+      env,
+    );
+    return queuedCommandId(deviceId);
+  }
+
+  async function ack(
+    hostname: string,
+    apiKey: string,
+    commandId: string,
+    extra: Record<string, unknown>,
+  ): Promise<Response> {
+    const body = JSON.stringify({ hostname, command_id: commandId, result_status: 'executed', ...extra });
+    return worker.fetch(
+      makeRequest('POST', '/api/agent/command-ack', body, signRequest(body, apiKey)),
+      env,
+    );
+  }
+
+  it('migrates both legacy lists into per-device keys', async () => {
+    const { device: a, apiKey: keyA } = await enrollDevice(worker, env, 'SEC-MIG-A');
+    const { device: b } = await enrollDevice(worker, env, 'SEC-MIG-B');
+    await env.LOCKDOWN_KV.put(
+      'encryption_keys',
+      JSON.stringify([
+        { device_id: a.id, command_id: 'c1', key_material: 'KEY-A', created_at: '2026-11-01T10:00:00.000Z', released_at: null },
+        { device_id: b.id, command_id: 'c2', key_material: 'KEY-B', created_at: '2026-11-01T10:01:00.000Z', released_at: null },
+      ]),
+    );
+    await env.LOCKDOWN_KV.put(
+      'bios_passwords',
+      JSON.stringify([
+        { device_id: a.id, password_type: 'setup', password: 'PW-A', created_at: '2026-11-01T10:00:00.000Z' },
+      ]),
+    );
+
+    // A read of either store triggers its own migration.
+    const pba = await worker.fetch(
+      makeRequest('GET', `/api/devices/${a.id}/pba-credentials`, undefined, ADMIN),
+      env,
+    );
+    expect(pba.status).toBe(200);
+    expect(((await parseResponse(pba)) as any).setup_password).toBe('PW-A');
+
+    // The key store needs its own reader to migrate: the deadman report reads that device's keys.
+    const deadBody = JSON.stringify({ hostname: 'SEC-MIG-A', key_material: 'DEADMAN-KEY' });
+    await worker.fetch(
+      makeRequest('POST', '/api/agent/deadman-report', deadBody, signRequest(deadBody, keyA)),
+      env,
+    );
+
+    // `list()` returns insertion order; sort both sides so the assertion is about the key set.
+    expect((await keysWithPrefix('encryption_keys:')).sort()).toEqual([
+      `encryption_keys:${a.id}`,
+      `encryption_keys:${b.id}`,
+    ].sort());
+    expect(await keysWithPrefix('bios_passwords:')).toEqual([`bios_passwords:${a.id}`]);
+    // Legacy keys are gone, so a whole-list write cannot come back.
+    expect(await env.LOCKDOWN_KV.get('encryption_keys')).toBeNull();
+    expect(await env.LOCKDOWN_KV.get('bios_passwords')).toBeNull();
+  });
+
+  it('escrowing on one device leaves another device\'s key byte-identical', async () => {
+    const { device: a, apiKey: keyA } = await enrollDevice(worker, env, 'SEC-A');
+    const { device: b, apiKey: keyB } = await enrollDevice(worker, env, 'SEC-B');
+    await ack('SEC-A', keyA, await flag('SEC-A', a.id), { key_material: 'KEY-A' });
+    await ack('SEC-B', keyB, await flag('SEC-B', b.id), { key_material: 'KEY-B' });
+
+    const bBefore = await env.LOCKDOWN_KV.get(`encryption_keys:${b.id}`);
+    expect(bBefore).toBeTruthy();
+
+    // Re-escrow on A through a different write site than the ACK: the deadman report.
+    const deadBody = JSON.stringify({ hostname: 'SEC-A', key_material: 'KEY-A2' });
+    await worker.fetch(
+      makeRequest('POST', '/api/agent/deadman-report', deadBody, signRequest(deadBody, keyA)),
+      env,
+    );
+
+    expect(await env.LOCKDOWN_KV.get(`encryption_keys:${b.id}`)).toBe(bBefore);
+    const aKeys = JSON.parse((await env.LOCKDOWN_KV.get(`encryption_keys:${a.id}`)) as string);
+    expect(aKeys.some((k: any) => k.key_material === 'KEY-A2')).toBe(true);
+  });
+
+  it('recover releases the NEWEST unreleased key, not the first match (S269)', async () => {
+    const { device } = await enrollDevice(worker, env, 'SEC-NEW');
+    await flag('SEC-NEW', device.id);
+    // Two unreleased keys, one per lockdown — the state after a second lockdown, which is where
+    // the SDK bug lived: the first match is the OLDEST key and cannot decrypt current files.
+    await env.LOCKDOWN_KV.put(
+      `encryption_keys:${device.id}`,
+      JSON.stringify([
+        { device_id: device.id, command_id: 'c-old', key_material: 'OLD-KEY', created_at: '2026-11-01T10:00:00.000Z', released_at: null },
+        { device_id: device.id, command_id: 'c-new', key_material: 'NEW-KEY', created_at: '2026-11-02T10:00:00.000Z', released_at: null },
+      ]),
+    );
+
+    const recover = await worker.fetch(
+      makeRequest('POST', `/api/devices/${device.id}/recover`, { hostname_confirm: 'SEC-NEW' }, ADMIN),
+      env,
+    );
+    expect(recover.status).toBe(200);
+    expect(((await parseResponse(recover)) as any).key_material).toBe('NEW-KEY');
+    // Only the released one is marked; the older key stays as it was.
+    const keys = JSON.parse((await env.LOCKDOWN_KV.get(`encryption_keys:${device.id}`)) as string);
+    expect(keys.find((k: any) => k.key_material === 'NEW-KEY').released_at).toBeTruthy();
+    expect(keys.find((k: any) => k.key_material === 'OLD-KEY').released_at).toBeNull();
+  });
+
+  it('release deletes both per-device keys', async () => {
+    const { device: a, apiKey: keyA } = await enrollDevice(worker, env, 'SEC-REL');
+    await ack('SEC-REL', keyA, await flag('SEC-REL', a.id), {
+      key_material: 'K',
+      bios_password: 'PW',
+    });
+    await worker.fetch(
+      makeRequest('POST', `/api/devices/${a.id}/recover`, { hostname_confirm: 'SEC-REL' }, ADMIN),
+      env,
+    );
+    // recover leaves the device `recovering`; the agent's unlock ACK is what makes it active, and
+    // release refuses `recovering`. ACK the unlock command it just queued.
+    const unlockId = await queuedCommandId(a.id);
+    await ack('SEC-REL', keyA, unlockId, {});
+    expect(await env.LOCKDOWN_KV.get(`encryption_keys:${a.id}`)).toBeTruthy();
+    expect(await env.LOCKDOWN_KV.get(`bios_passwords:${a.id}`)).toBeTruthy();
+
+    const release = await worker.fetch(
+      makeRequest('DELETE', `/api/devices/${a.id}/release`, { hostname_confirm: 'SEC-REL' }, ADMIN),
+      env,
+    );
+    expect(release.status).toBe(200);
+    expect(await env.LOCKDOWN_KV.get(`encryption_keys:${a.id}`)).toBeNull();
+    expect(await env.LOCKDOWN_KV.get(`bios_passwords:${a.id}`)).toBeNull();
   });
 });
