@@ -858,3 +858,106 @@ per-device — off the rewrite in one pass, and ship the accumulated S272–S276
 lock → recover acceptance finally runs against something current.
 
 ---
+
+---
+
+## Session 276 — 2026-11-18 (the last two whole-list stores hold secrets)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `docs/adr/ADR-00{2,3,4,5}-*.md`, `serverless/worker.ts` (`listKeys`/`saveKeys`,
+`listBiosPasswords`/`saveBiosPasswords`, the KEK encrypt/decrypt helpers `encSecret`/`decSecret`,
+and all eight call sites: check-in unlock, ACK, deadman, escrow, recover, PBA credentials, release),
+`serverless/worker.test.ts` (the KEK at-rest test), `serverless/README.md`.
+
+**Findings**, measured before the change:
+
+- Both stores are read and written **only ever for one device**, at eight sites between them.
+  There is no global read of either. So the defect was not the read shape — it was that a
+  per-device operation rebuilt every other device's secrets into one value: two devices escrowing
+  at once could lose a key, and **a lost encryption key is an unrecoverable device**.
+- The population is the device set itself, and the rows per device are single digits (one key per
+  escrowing command; one credential per type, of which there are four). That is the opposite of
+  ADR-004/005, where the population was unbounded — so an index and a cap would be wrong here,
+  and a cap on secrets could silently evict the key an unlock still needs.
+- The key-selection rule is "newest wins", which exists because of the S269 defect (`find()`
+  returned the oldest key and decryption failed). Any change had to preserve it.
+- BIOS credentials are KEK-encrypted at rest; a migration must carry the encoding, not re-encrypt.
+
+### Fog cleared
+
+- **Both secret stores are per-device (ADR-006)**: `encryption_keys:<deviceId>` and
+  `bios_passwords:<deviceId>`, legacy lists migrated once and deleted. `listKeys`, `saveKeys`,
+  `listBiosPasswords` and `saveBiosPasswords` no longer exist, so a whole-list write cannot return.
+- **No index and no cap, by construction.** The key set is exactly the device set and the rows per
+  device are bounded by the command and credential types, so there is nothing to prune — which is
+  the only safe design for material that must never be truncated.
+- **The S269 rule survived and is now pinned**: `recover` releases the *newest* unreleased key with
+  two candidates present, asserted on both the response and the stored `released_at` flags.
+- **Every fleet-scale store is now per-entity**: commands (ADR-002), devices (ADR-003), locations
+  (ADR-004), audit (ADR-005), secrets (ADR-006). What remains as single-value lists is `admins` and
+  `hw_test_artifacts` — small, and not per-device collections.
+
+### Fog remaining
+
+- **`admins` and `hw_test_artifacts` are still whole-list writes.** Neither is a per-device
+  collection and both are small; named rather than implied. An admin mutation still rewrites the
+  admin list, which is acceptable at this size but is the same shape.
+- **The three indexes are whole-value writes** — `device_index`, `audit_index`, and the per-device
+  `location_index` — capped (audit) or append-mostly (devices), the residual ADR-002 accepted.
+- **Location history still loads a device's whole retained window** (≤500 records) to keep the
+  S272 `observed_at` ordering exact; the fix, if it proves slow, is a stored sort key.
+- **`worker.ts` is past 5,000 lines**, so harness diagnostics report "too_large" and `tsc` + the
+  suite are the only gates on it.
+- **MOLE has none of S272–S276** — `lock_state`, `observed_at`, and four storage changes.
+
+### Debt items closed
+
+None formally — ADR-006 closes the last part of a blocker line, not a ledger item.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+- **The 60-device rollout storage blocker is CLOSED**: the four stores it named — `devices`,
+  `audit`, `bios_passwords`, `locations` — are all per-entity. The remaining single-value lists
+  (`admins`, `hw_test_artifacts`) are not per-device volume, and the index residuals are recorded
+  above. What is left before a rollout is the MOLE shipment and a hardware acceptance run.
+
+### Session artifacts
+
+- `docs/artifacts/s276-secret-stores-per-device-keys.json` — the real Worker taking two devices
+  through ACK → deadman → recover → release: **13 assertions**, including "B's key bytes are
+  untouched by A's escrow", "the newest key was the one released", and "the bystander device's key
+  record is untouched" after a release.
+
+### Failure attribution
+
+- **No suite failures from the change**; the four new tests needed **three rounds of fixture
+  correction**, all mine and all about API state I had not checked before writing them:
+  an ACK needs a real queued command id (not `'ignored'`), the PBA route migrates only *its* store
+  (the key store needed its own reader to migrate), and `recover` leaves a device in `recovering`
+  where release refuses it (so the unlock must be ACKed to reach `active`).
+- **Layer 4, cost:** each of those was a guess about a state machine I had read but not traced.
+  The lesson is the one this repo keeps re-learning: drive the fixture through the real endpoints
+  and read the status codes, rather than seeding the store and assuming the transitions.
+
+### VERIFY
+
+- `serverless`: `npx vitest run` → **480 passed / 4 files** (was 476; +4 ADR-006 tests).
+- `serverless`: `npx tsc --noEmit -p .` → clean.
+- `scripts/test_cross_surface_contract.py` → **23 passed**.
+- Artifact: 13/13 assertions on a real Worker run.
+- `make graph-check` → all invariants pass.
+
+### Next session opening
+
+Ship S272–S276 to MOLE and run the lock → recover acceptance with `lock_state` visible — the
+storage blocker is closed, so the next evidence needed is a hardware run, not more refactoring.
+
+---

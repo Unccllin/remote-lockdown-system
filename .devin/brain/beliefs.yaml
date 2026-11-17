@@ -3159,3 +3159,21 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: bios_passwords and encryption_keys remain whole-list writes.
+- id: B-143
+  statement: 'Every fleet-scale KV store in the Worker is per-entity now: commands (ADR-002), devices
+    (device:<id> + index + agent_key pointer, ADR-003), locations (per-report + per-device index, ADR-004),
+    audit (per-entry + one index carrying device_id, ADR-005), encryption keys and BIOS credentials (one
+    key per device, no index, no cap, ADR-006). The only remaining single-value lists are admins and hw_test_artifacts'
+  domain: api/devices
+  status: proposed
+  evidence_level: assumed
+  provenance: S272-S276 commits 2f79c12/dfa7462/30f44a1/5a0c52a/f4765e6 + ADRs 002-006; each artifact
+    asserts the key layout on the real Worker
+  source: serverless/worker.ts; docs/adr/ADR-00{2,3,4,5,6}-*.md
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Residual: device_index/audit_index/location_index are whole-value writes, capped or append-mostly.'

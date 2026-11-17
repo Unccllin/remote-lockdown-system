@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-17 16:01:14 — 142 beliefs
+Generated: 2026-11-17 16:18:29 — 143 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -51,6 +51,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-138 | confirmed | code-read | Both surfaces derive lock_state (applied/applying/armed/failed/none) from the newest lockdown plus newest unlock per device, with a 180 s freshness window; Express attaches it in the two device GET routes, never in publicDevice, because that helper also shapes command-less POST responses |
 | B-140 | confirmed | code-read | The Worker stores devices as per-entity records (device:<id>), indexed by device_index, with an agent_key:<sha256> -> device-id pointer; saveDevices no longer exists, so a whole-list devices write is a compile error |
 | B-141 | proposed | assumed | The Worker stores location reports as per-report records (location:<id>) indexed per device (location_index:<deviceId>), capped per device by LOCATION_HISTORY_LIMIT (default 500, env-overridable), and pruning deletes the evicted records as well as the index entries |
+| B-143 | proposed | assumed | Every fleet-scale KV store in the Worker is per-entity now: commands (ADR-002), devices (device:<id> + index + agent_key pointer, ADR-003), locations (per-report + per-device index, ADR-004), audit (per-entry + one index carrying device_id, ADR-005), encryption keys and BIOS credentials (one key per device, no index, no cap, ADR-006). The only remaining single-value lists are admins and hw_test_artifacts |
 
 ## api/enrolment
 

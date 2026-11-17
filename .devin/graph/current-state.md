@@ -58,87 +58,83 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 275 — 2026-11-18 (audit leaves the fleet scan)
+## Latest session: 276 — 2026-11-18 (the last two whole-list stores hold secrets)
 
 ### Fog cleared
 
-- **Audit entries are per-entity (ADR-005)**: `audit:<id>` records behind one `audit_index` of
-  `{id, device_id}`, capped at `AUDIT_HISTORY_LIMIT` (1000, env-overridable) with records pruned
-  alongside their index entries. Legacy `audit_log` migrated with deterministic ids and deleted.
-- **The fleet scan in the audit path is gone.** A mutation now reads a constant number of device
-  records (3 with 6 devices enrolled), not one per device.
-- **Release amends only its own entries** — asserted byte-for-byte that another device's entry is
-  untouched — so it can no longer drop entries while rewriting the trail.
-- **A device-scoped audit read selects its own ids** from the index instead of loading everything.
-- **Nine admin handlers** now do one record read instead of a fleet scan; `handleLinkPbl` is the
-  one that genuinely needs the fleet (pbl_device_id uniqueness) and its read moved after the 404.
-- README and the `serializeMutation` docstring now name only `bios_passwords` and
-  `encryption_keys` as whole lists.
+- **Both secret stores are per-device (ADR-006)**: `encryption_keys:<deviceId>` and
+  `bios_passwords:<deviceId>`, legacy lists migrated once and deleted. `listKeys`, `saveKeys`,
+  `listBiosPasswords` and `saveBiosPasswords` no longer exist, so a whole-list write cannot return.
+- **No index and no cap, by construction.** The key set is exactly the device set and the rows per
+  device are bounded by the command and credential types, so there is nothing to prune — which is
+  the only safe design for material that must never be truncated.
+- **The S269 rule survived and is now pinned**: `recover` releases the *newest* unreleased key with
+  two candidates present, asserted on both the response and the stored `released_at` flags.
+- **Every fleet-scale store is now per-entity**: commands (ADR-002), devices (ADR-003), locations
+  (ADR-004), audit (ADR-005), secrets (ADR-006). What remains as single-value lists is `admins` and
+  `hw_test_artifacts` — small, and not per-device collections.
 
 ### Fog remaining
 
-- **Two stores remain whole-list**: `bios_passwords`, `encryption_keys`. Both are small,
-  per-device, and the release cascade still rewrites them.
-- **`audit_index` is a whole-value write**, bounded by the cap — the residual ADR-002 accepted,
-  now over 1000 `{id, device_id}` tuples rather than over the entries.
-- **The audit trail is still truncated by retention** (1000 entries). That is a compliance limit
-  inherent to KV without an external sink; named here rather than discovered at an audit.
-- **`addAuditEntry` still reads the device record for the hostname** on every call. Callers that
-  already hold the device could pass it — a signature change across 16 sites, deliberately not
-  bundled into this one.
-- **`worker.ts` is past 5,000 lines**: harness diagnostics report "too_large"; `tsc` and the
-  suite are the gates until it is split.
-- **MOLE has not been shipped** any of the S272–S275 work. Operator action.
+- **`admins` and `hw_test_artifacts` are still whole-list writes.** Neither is a per-device
+  collection and both are small; named rather than implied. An admin mutation still rewrites the
+  admin list, which is acceptable at this size but is the same shape.
+- **The three indexes are whole-value writes** — `device_index`, `audit_index`, and the per-device
+  `location_index` — capped (audit) or append-mostly (devices), the residual ADR-002 accepted.
+- **Location history still loads a device's whole retained window** (≤500 records) to keep the
+  S272 `observed_at` ordering exact; the fix, if it proves slow, is a stored sort key.
+- **`worker.ts` is past 5,000 lines**, so harness diagnostics report "too_large" and `tsc` + the
+  suite are the only gates on it.
+- **MOLE has none of S272–S276** — `lock_state`, `observed_at`, and four storage changes.
 
 ### Debt items closed
 
-None formally — ADR-005 closes a blocker line, not a ledger item.
+None formally — ADR-006 closes the last part of a blocker line, not a ledger item.
 
 ### Debt items still open
 
 D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
-D-210 (PBL route integration), plus the two stores named above.
+D-210 (PBL route integration).
 
 ### Blockers
 
 - MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
 - `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
-- **The rollout blocker is down to two stores**: `bios_passwords`, `encryption_keys`. `devices`,
-  `locations` and `audit_log` are all per-entity now.
+- **The 60-device rollout storage blocker is CLOSED**: the four stores it named — `devices`,
+  `audit`, `bios_passwords`, `locations` — are all per-entity. The remaining single-value lists
+  (`admins`, `hw_test_artifacts`) are not per-device volume, and the index residuals are recorded
+  above. What is left before a rollout is the MOLE shipment and a hardware acceptance run.
 
 ### Session artifacts
 
-- `docs/artifacts/s275-audit-per-entity-keys.json` — the real Worker with 6 devices enrolled,
-  driven through mutations, a scoped read, a cap crossing and a release: **13 assertions**,
-  including "a mutation does not scan the fleet for device records" (3 reads, 6 devices),
-  "pruned entries took their records with them", and "another device's entry bytes are untouched
-  by the release".
+- `docs/artifacts/s276-secret-stores-per-device-keys.json` — the real Worker taking two devices
+  through ACK → deadman → recover → release: **13 assertions**, including "B's key bytes are
+  untouched by A's escrow", "the newest key was the one released", and "the bystander device's key
+  record is untouched" after a release.
 
 ### Failure attribution
 
-- **No suite failures.** Two artifact fixtures were mine and both were corrected by measuring
-  rather than by guess: `flag-stolen` 409s on an already-stolen device (so it writes no second
-  entry — used `rotate-key` instead), and the cap correctly pruned the bystander entry the release
-  test wanted to protect (raised the limit for that section). Layer 4 in the useful direction: the
-  artifact told me something the tests had not.
-- **One real defect found by the artifact, not the suite**: nine admin handlers were still
-  scanning the fleet to find one device. Fixed in the same commit, and the artifact's assertion
-  now measures it (3 record reads with 6 devices enrolled).
+- **No suite failures from the change**; the four new tests needed **three rounds of fixture
+  correction**, all mine and all about API state I had not checked before writing them:
+  an ACK needs a real queued command id (not `'ignored'`), the PBA route migrates only *its* store
+  (the key store needed its own reader to migrate), and `recover` leaves a device in `recovering`
+  where release refuses it (so the unlock must be ACKed to reach `active`).
+- **Layer 4, cost:** each of those was a guess about a state machine I had read but not traced.
+  The lesson is the one this repo keeps re-learning: drive the fixture through the real endpoints
+  and read the status codes, rather than seeding the store and assuming the transitions.
 
 ### VERIFY
 
-- `serverless`: `npx vitest run` → **476 passed / 4 files** (was 470; +6 ADR-005 tests).
-- `serverless`: `npx tsc --noEmit -p .` → clean (covers `pbl/`; a harness "name cascade" advisory
-  on `pbl/signing.ts` was checked and is a shared-name artifact, not a break).
+- `serverless`: `npx vitest run` → **480 passed / 4 files** (was 476; +4 ADR-006 tests).
+- `serverless`: `npx tsc --noEmit -p .` → clean.
 - `scripts/test_cross_surface_contract.py` → **23 passed**.
 - Artifact: 13/13 assertions on a real Worker run.
 - `make graph-check` → all invariants pass.
 
 ### Next session opening
 
-Take the last two whole-list stores — `bios_passwords` and `encryption_keys`, both small and
-per-device — off the rewrite in one pass, and ship the accumulated S272–S276 work to MOLE so the
-lock → recover acceptance finally runs against something current.
+Ship S272–S276 to MOLE and run the lock → recover acceptance with `lock_state` visible — the
+storage blocker is closed, so the next evidence needed is a hardware run, not more refactoring.
 
 ---
 
