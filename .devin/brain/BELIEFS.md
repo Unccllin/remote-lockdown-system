@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-13 09:13:45 — 129 beliefs
+Generated: 2026-11-17 08:34:03 — 131 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -285,6 +285,13 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-061 | confirmed | code-read | The device-inventory integration is presented as part of OUR PBL surface (on PblDevicesPage), in our own vocabulary, with the upstream never named: server/src/integrations/ holds a connector registry with TWO connectors (meshcentral and graph/Intune) behind GET /api/integrations and GET /api/integrations/:id/devices (operator-gated, read-only), and the dashboard binds to 'any enabled and configured source' rather than a hardcoded id, so swapping an upstream changes nothing in the UI. Three degraded states are distinct and must stay so: nothing connected (isEnabled() requires MESHCENTRAL_URL or a Graph tenant), connected-but-not-authorised (URL set, no credentials), and source unreachable (502) — and in every one of them enforcement is unaffected because lockdown/unlock/policy stay on our command queue, never a third-party API. Before S206 the backend was finished and invisible: dashboard/src had zero references to the integration surface. |
+
+## lifecycle
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-130 | confirmed | hardware | service_host.agent_is_running() is process existence only, so a WEDGED agent blocks its own recovery: on MOLE the agent stopped checking in at 2026-11-16T14:33Z and was still wedged ~14h later while Get-Service said Running and the host logged 'agent already running - not starting another' every 30s. Restart-Service cannot fix it (the new host refuses to start a second agent while the wedged pid exists); only Stop-Process did. The heartbeat file the agent already writes (.heartbeat) is the right liveness signal and is not consulted, and the scheduled-task watchdog that would have killed it is removed by remove_legacy_starters() when the service is installed. |
+| B-131 | confirmed | hardware | S269's ACTIVE poll-interval fix (300s -> 60s) was applied to handlePing (served at /api/ping, a legacy path the current agent does not call) while handleAgentCheckin (/api/agent/checkin) still returned 300 from ADAPTIVE_POLL; MOLE logged 'Adaptive polling: 30s -> 300s (status=active)' AFTER the fix, and the worker test pinned 300 on the wrong branch. Both branches now use activePollSeconds(env). |
 
 ## meta/process
 

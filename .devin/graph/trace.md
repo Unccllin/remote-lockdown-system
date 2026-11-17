@@ -16143,3 +16143,164 @@ over SSH:
 
 Not verified live: the tracking layers themselves (EFS-before-disable, decoy verification) — the
 cycle was not run to keep the machine out of tracking mode at the end of the session.
+
+---
+
+## Session 270 — 2026-11-17 (the installer was not wrong about the exit code — the log was wrong about which run it belonged to)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `.devin/graph/current-state.md`, `.devin/graph/trace.md` (S269 block and both
+MOLE addenda), `agent/installer.py` (`main`, `run_baked_install`, `install_files`,
+`verify_checkin`, `make_writable`), `agent/service_installer.py` (`install_service`,
+`_copy_service_host`, `_service_bin_path`), `agent/service_host.py` (`agent_is_running`,
+`run_supervisor`), `serverless/worker.ts` (`composeEnrollSetupScript`,
+`generateServerlessInstallScript`, `handleAgentCheckin`, `handlePing`, the `/api/*`
+dispatch table), `server/src/routes/enroll.js` (the Express one-liner, for parity),
+`server/src/routes/devices.js`, `agent/agent.py` (`apply_tracking_data_protection`,
+`_get_real_username`, `_count_encrypted_files`, `write_pending_ack`, heartbeat writes),
+`agent/installer_gui.py` (`install_files`), `scripts/hw-window-preflight.py` (the
+established S310/urllib pattern), `scripts/rsh.py` (env-only credentials).
+
+**Findings** (each one measured on MOLE, not inferred):
+
+- `setup-inner.ps1` copied `lockdown-service.exe` over a **running** service. `Copy-Item`
+  threw `IOException: ... being used by another process`, `$ErrorActionPreference='Stop'`
+  aborted the script **before the installer started**, and exit 1 was therefore correct.
+  What lied was the artifact: `install.log` still held the PREVIOUS run's text, which the
+  wrapper printed as this run's output — so S269's "the install completed, only the exit
+  code is wrong" was itself an unverified reading. Corrected below, verbatim quoted.
+- With the copy removed the installer ran and crashed for a *second* lock:
+  `installer.py:711 install_files -> shutil.copy2 -> PermissionError: [WinError 32]` on
+  **lockdown-agent.exe**. S269's "it overwrites the hardened binary" held only because
+  the agent was not running during that run (agent restarted at 16:28:49, after the
+  16:25 install).
+- A native child's **stderr** is a terminating error under `$ErrorActionPreference='Stop'`
+  in Windows PowerShell 5.1, so the first `trap` I added fired mid-run and kept one line
+  ("Traceback (most recent call last):") with the PermissionError discarded.
+- The agent refuses `http://` unless its config says `verify_tls: false`
+  (`agent.py:517`), the GUI installer owns that decision (`--allow-insecure-http`,
+  `installer_gui.py:1296-1306`), and the Express one-liner passes it
+  (`server/src/routes/enroll.js:369`) — the Worker's did not, while patching the config
+  *after* a successful install that could never happen.
+- The S269 poll-interval fix (300 s -> 60 s) landed in `handlePing`, served at `/api/ping`;
+  the agent calls `/api/agent/checkin`, whose `ADAPTIVE_POLL` still returned 300. MOLE
+  logged `Adaptive polling: 30s -> 300s (status=active)` **after** the fix.
+
+### Fog cleared
+
+- **The S269 installer defect, corrected.** Quoted: *"the run exits non-zero, so the
+  wrapper prints its failure banner and throws even though the install completed.
+  Recorded as an open defect: the exit code, not the install, is wrong."* Measurement:
+  the install never ran. `install.log`'s tail was the 16:26 run's (LastWriteTime
+  16:26:04 across a 17:31 run that downloaded its binaries at 17:31:5x). The class is
+  *stale artifact presented as this run's evidence*, not a wrong exit code.
+- **An upgrade now lands on a running machine.** `installer.py::_copy_binary` lifts both
+  locks in one place — tamper protection (`make_writable`) and the running image
+  (`service_installer.stop_service()`, then one retry) — and `install_files` uses it for
+  the agent as well as the service host. Live: agent sha256 `77AE143E…` (the b6f6f47
+  build) installed over the running agent, exit 0.
+- **The served install log is a ledger.** Per-run `=== installer run started <iso> ===`
+  and `=== installer exited <code> ===`, appended, plus a trap that records an early
+  abort. Live: the log now shows null / 1 / 0 across this session's three runs, in order.
+- **stderr can no longer abort the install.** `Start-Process
+  -RedirectStandardOutput/-RedirectStandardError`, both appended to the log, `$code` from
+  `$p.ExitCode`.
+- **Plain HTTP is the installer's decision, and it is read back.** The script passes
+  `--allow-insecure-http`, then reports `verify_tls in config: False` (live) and exits 3
+  if the value is not false. The takeown/icacls/JSON-rewrite block is deleted — it was a
+  manual step after install, and unreachable exactly when needed.
+- **One poll interval for both response branches.** `activePollSeconds(env)` is used by
+  `handleAgentCheckin` and `handlePing`; `ACTIVE_POLL_SECONDS` and `INSTALLER_GUI` are
+  declared on `Env` instead of `as unknown as Record<…>`. Live: the agent checks in every
+  ~68 s (was 300).
+- **The ACK's evidence is readable.** `GET /api/devices/:id/commands` on both surfaces
+  (viewer, newest first, limit clamped, 404 for an unknown device). Previously
+  `lockdown_effective` / `boot_lock_status` were written and unreachable.
+- **A lifecycle acceptance harness exists and runs.** `scripts/acceptance_lifecycle.py` +
+  `scripts/acceptance_probe.ps1` (read-only snapshot): enroll -> lock -> recover -> track
+  -> stop-track, each step asserting the observed post-condition on the machine *and* the
+  server, SKIP when unobservable, `--snapshot` to re-derive a report offline. Live:
+  `[PASS] enroll  service Running · config parses · agent checked in 68s ago (limit 300s)
+  · device id matches the server · hostname matches`.
+
+### Fog remaining (measured, open)
+
+- **A wedged agent is invisible to every layer that should notice.** MOLE stopped
+  checking in at 2026-11-16T14:33Z and was still wedged at 05:12Z the next day (~14 h):
+  `Get-Service` said `Running`, `service_host.py` logged `agent already running — not
+  starting another` every 30 s, and `agent_is_running()` is process existence only
+  (`service_host.py:79-95`). The scheduled-task watchdog that would have killed it is
+  **removed by `remove_legacy_starters()` when the service is installed**, so a
+  service-based install has no liveness check at all. Recovery required
+  `Stop-Process -Id 6124 -Force` by hand; `Restart-Service` cannot fix it, because the
+  service host refuses to start a second agent while the wedged one exists. The heartbeat
+  file the agent already writes (`.heartbeat`) is the right signal and is not consulted.
+- **The GUI installer does not upgrade `lockdown-service.exe`.** `installer_gui.py:497`
+  copies the agent and the lock screen only. Live after the successful upgrade:
+  agent `77AE143E…` (new) vs service `8029CCA0…` (the 16:25 build). The service keeps
+  running the old host until it is replaced by hand.
+- **`verify_tls` defaults to true while the config's `server_url` is plain HTTP** when no
+  flag is passed, which is a self-contradictory config the installer will happily write.
+  The flag fixes the two shipped paths; the default is still wrong for `http://`.
+- **The destructive half of the acceptance cycle has not been run.** lock / recover /
+  track / stop-track are implemented and unit-tested (32 checks) but only `enroll` has
+  been run live this session; `track` disables the signed-in account and EFS-encrypts its
+  profile.
+- Unchanged from S269: `make test-scripts` stops at the docker-dependent TLS suite on this
+  host, and seven PGlite-backed server suites cannot run on Node 26.13.1
+  (`ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG`) — proven at b6f6f47 in a clean worktree,
+  so it is the environment, not the change.
+
+### Debt items closed
+
+- None. This session fixed live defects (D-119/D-120-adjacent behaviour) and added
+  evidence paths; no graph-tracked debt item met its close criteria.
+
+### Debt items still open
+
+- D-120, D-129, D-130, D-134 — unchanged.
+
+### Blockers
+
+- MOLE was unreachable for ~13 h (`No route to host` from 2026-11-16T14:33Z, back at
+  05:10Z on 2026-11-17) — unexplained; nothing in this session's commands could take the
+  box off the network, and it returned without intervention.
+- The destructive lifecycle steps need a named window: a failed `track` leaves the machine
+  with a disabled account and EFS-encrypted profile folders.
+
+### Failure attribution
+
+- **Layer 4 — verification feedback (primary, three times).** A successful install was
+  "confirmed" by printing the log without checking which run produced it; a fix was
+  "verified" by reading the code path that was edited, not the handler the agent calls;
+  a test pinned 300 on the branch the fleet was not on. In all three the report was
+  consulted instead of the artifact.
+- **Layer 2 — context provision (secondary).** The Express one-liner and the Worker one
+  had diverged on `--allow-insecure-http`, and nothing in the repo states that the two
+  surfaces must carry the same flags. `scripts/test_cross_surface_contract.py` exists for
+  exactly this and does not cover the installers.
+
+### VERIFY
+
+- Live one-command re-install on MOLE over SSH: exit **0**, log
+  `=== installer run started 2026-11-17T08:20:42 === … === installer exited 0 ===`,
+  `verify_tls in config: False`, `service: Running`, agent sha256 `77AE143E…`
+  (published build), device checking in every ~68 s.
+- `scripts/acceptance_lifecycle.py --step enroll --dry-run` → `[PASS] enroll`, artifact
+  `docs/artifacts/s270-acceptance-enroll.json`.
+- Suites: agent 884 passed, worker 447 passed (2 new poll-interval tests), server 773
+  passed in 44 suites (7 PGlite suites excluded, see above), acceptance harness 32 passed,
+  `tsc --noEmit -p .` clean, eslint clean, ruff check + format clean on the new scripts.
+- Local KV republished from CI run 44020904202 (b6f6f47): `binary:installer`,
+  `binary:agent`, `binary:service`, `binary:agent-installer`; each verified by comparing
+  the served `x-content-sha256` with the artifact's own digest.
+
+### Next session opening
+
+Run the destructive half of the acceptance cycle on MOLE
+(`--step lock --step recover --step track --step stop-track --allow-destructive`) and fix
+what it finds; then make the service host notice a wedged agent (heartbeat-fresh, kill and
+restart) and make `installer_gui.py` stage `lockdown-service.exe`.
+
+---

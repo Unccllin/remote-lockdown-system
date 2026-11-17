@@ -2884,3 +2884,45 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-130
+  statement: 'service_host.agent_is_running() is process existence only, so a WEDGED agent blocks its
+    own recovery: on MOLE the agent stopped checking in at 2026-11-16T14:33Z and was still wedged ~14h
+    later while Get-Service said Running and the host logged ''agent already running - not starting another''
+    every 30s. Restart-Service cannot fix it (the new host refuses to start a second agent while the wedged
+    pid exists); only Stop-Process did. The heartbeat file the agent already writes (.heartbeat) is the
+    right liveness signal and is not consulted, and the scheduled-task watchdog that would have killed
+    it is removed by remove_legacy_starters() when the service is installed.'
+  domain: lifecycle
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'Measured on MOLE (HP EliteBook 830 G6, real Windows host): agent last check-in 2026-11-16T14:33Z,
+    still wedged 2026-11-17T05:12Z; Get-Service Running; service_host.py logged ''agent already running
+    - not starting another'' every 30s; Restart-Service left pid 6124 alive; Stop-Process -Id 6124 -Force
+    recovered it and a new pid 20124 checked in 68s later (device last_checkin 05:12:59Z).'
+  source: S270
+  asserted: '2026-11-17'
+  last_verified: '2026-11-17'
+  commit_ref: 511b81d
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-131
+  statement: 'S269''s ACTIVE poll-interval fix (300s -> 60s) was applied to handlePing (served at /api/ping,
+    a legacy path the current agent does not call) while handleAgentCheckin (/api/agent/checkin) still
+    returned 300 from ADAPTIVE_POLL; MOLE logged ''Adaptive polling: 30s -> 300s (status=active)'' AFTER
+    the fix, and the worker test pinned 300 on the wrong branch. Both branches now use activePollSeconds(env).'
+  domain: lifecycle
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'Measured on MOLE: agent.log 2026-11-17 08:13:06 ''Adaptive polling: 30s -> 300s (status=active)''
+    while worker.ts handleAgentCheckin returned ADAPTIVE_POLL[''active'']=300 and handlePing returned
+    60; after unifying on activePollSeconds() the device checks in every ~68s (live acceptance run, 210a475).'
+  source: S270
+  asserted: '2026-11-17'
+  last_verified: '2026-11-17'
+  commit_ref: 511b81d
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

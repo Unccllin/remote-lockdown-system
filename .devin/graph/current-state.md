@@ -53,65 +53,77 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 269 — 2026-11-13 (the window was blocked by its own build, not by hardware)
+## Latest session: 270 — 2026-11-17 (the installer was not wrong about the exit code — the log was wrong about which run it belonged to)
 
 ### Fog cleared
 
-- **`make hw-preflight` against the live Worker reports the window READY** — measured with a real
-  admin session JWT, not a stub: `health ok`, `fleet 1 device(s)`, `FRANKENSTEIN status=active
-  last_checkin=226s agent_version=1.0.0`, `[OK] the window is ready`. The device record is
-  `c724f400…`, serial `5CG2422FJR`, BIOS `T39 Ver. 01.24.02`, `secure_boot:false`,
-  `update_verification:"signature"`, `enrolled_at 2026-11-12T14:32:04Z`.
-- **Stream B's upload path works end to end.** `hw_test_harness.py --mode simulate --tag
-  E-HWID,E-DECRYPT,E-OFFLINE-QUEUE --upload … --upload-token $env:LOCKDOWN_ADMIN_TOKEN` on the device →
-  `3 passed`, `Artifact uploaded to: https://…workers.dev`. Pulled back with `GET
-  /api/hw-test-artifact/1` (the record wraps the CTRF in `artifact_json`) into
-  `agent/hw_test_artifact_frankenstein_s269_safe.json`; `--artifact` accepts
-  `E-DECRYPT`/`E-OFFLINE-QUEUE` citations from it. Both were already `verified-on-hardware`, so no
-  status moved — as the tool says itself.
-- **The credential question is settled.** The Worker's `JWT_SECRET` is not the value in `secrets/`
-  (that token mints to 401), there is no Cloudflare API token or wrangler session on this host, and no
-  dashboard session is stored in any browser profile. A dashboard login JWT works for every operation
-  the window needs, and the break-glass `ADMIN_TOKEN` is an equality-compared Cloudflare secret with no
-  repo fallback.
-- **PBL CI was fixed in five layers, each one CI-only.** (1) the BaseTools guard tested the
-  `BinWrappers/PosixLike` *wrapper*, which every clone ships, so the compiled tools were never built →
-  `Unable to find the real 'GenFw'` / make Error 127 (`f973c57`). (2) `BaseTools/Source/C/
-  BrotliCompress/brotli` is its own submodule and was not in the CI submodule list → missing brotli
-  header (`ab54d35`). (3) a genuine diagnostic: `Decision.c:175 'Now' may be used uninitialized
-  [-Werror=maybe-uninitialized]` — correct code the runner's GCC cannot prove, initialised to 0
-  (`ed11967`). (4) the QEMU job built OVMF with no `build-essential`/`nasm`/`uuid-dev` (`c4784d7`).
-  (5) OVMF also needs `iasl` for its ACPI tables (`eced39e`).
-- **`PblApp.efi` now exists as a CI artifact**: run 43444819018, job *Build PblApp (X64, GCC)* →
-  `PE32+ executable for EFI (application), x86-64, 3 sections`, 1,380,352 bytes, SHA-256
-  `6fa6ac418b726075a6b97588c8ed580fe955ffff7dc21f545b2ca6aa8b5e5a05`. Static analysis also green.
+- **The S269 installer defect, corrected.** Quoted: *"the run exits non-zero, so the
+  wrapper prints its failure banner and throws even though the install completed.
+  Recorded as an open defect: the exit code, not the install, is wrong."* Measurement:
+  the install never ran. `install.log`'s tail was the 16:26 run's (LastWriteTime
+  16:26:04 across a 17:31 run that downloaded its binaries at 17:31:5x). The class is
+  *stale artifact presented as this run's evidence*, not a wrong exit code.
+- **An upgrade now lands on a running machine.** `installer.py::_copy_binary` lifts both
+  locks in one place — tamper protection (`make_writable`) and the running image
+  (`service_installer.stop_service()`, then one retry) — and `install_files` uses it for
+  the agent as well as the service host. Live: agent sha256 `77AE143E…` (the b6f6f47
+  build) installed over the running agent, exit 0.
+- **The served install log is a ledger.** Per-run `=== installer run started <iso> ===`
+  and `=== installer exited <code> ===`, appended, plus a trap that records an early
+  abort. Live: the log now shows null / 1 / 0 across this session's three runs, in order.
+- **stderr can no longer abort the install.** `Start-Process
+  -RedirectStandardOutput/-RedirectStandardError`, both appended to the log, `$code` from
+  `$p.ExitCode`.
+- **Plain HTTP is the installer's decision, and it is read back.** The script passes
+  `--allow-insecure-http`, then reports `verify_tls in config: False` (live) and exits 3
+  if the value is not false. The takeown/icacls/JSON-rewrite block is deleted — it was a
+  manual step after install, and unreachable exactly when needed.
+- **One poll interval for both response branches.** `activePollSeconds(env)` is used by
+  `handleAgentCheckin` and `handlePing`; `ACTIVE_POLL_SECONDS` and `INSTALLER_GUI` are
+  declared on `Env` instead of `as unknown as Record<…>`. Live: the agent checks in every
+  ~68 s (was 300).
+- **The ACK's evidence is readable.** `GET /api/devices/:id/commands` on both surfaces
+  (viewer, newest first, limit clamped, 404 for an unknown device). Previously
+  `lockdown_effective` / `boot_lock_status` were written and unreachable.
+- **A lifecycle acceptance harness exists and runs.** `scripts/acceptance_lifecycle.py` +
+  `scripts/acceptance_probe.ps1` (read-only snapshot): enroll -> lock -> recover -> track
+  -> stop-track, each step asserting the observed post-condition on the machine *and* the
+  server, SKIP when unobservable, `--snapshot` to re-derive a report offline. Live:
+  `[PASS] enroll  service Running · config parses · agent checked in 68s ago (limit 300s)
+  · device id matches the server · hostname matches`.
 
-### Fog remaining
+### Fog remaining (measured, open)
 
-- **The QEMU smoke test is GREEN (14 PASS / 0 FAIL) — the earlier "never passed, 0/14, empty serial"
-  state is superseded by the addendum below.** Three harness defects were hiding the firmware
-  completely: `-nographic` contending with `-serial mon:stdio` for stdio; OVMF hanging in
-  `PlatformPei` on the CPU-hotplug bugcheck before `BdsDxe` (so the ESP was never enumerated); and a
-  completion check demanding a string the BLOCK path never prints. All three are fixed, and the run
-  now shows the real flow including `NV_Read(AK_NAME) RC=0x18B`. This is no longer fog; it is
-  evidence, and any statement that the smoke test cannot report on PblApp predates the fix.
-- **AARCH64 is settled: the architecture claim is withdrawn (review item 3).** `PblPkg.dsc` now declares
-  `SUPPORTED_ARCHITECTURES = X64` and the `build-aarch64` CI job is removed. The reason is not
-  convenience: the package reads PCH PCI config (SPI, DCI), MSRs and the TPM CRB/TIS interface, and
-  its `TimerLib` instance is x86-only, so an AARCH64 port is a project rather than a switch. The job
-  had failed `F000` on every run, and a permanently red job teaches reviewers to ignore red.
-- **`secure_boot:false` remains an untaken operator decision** (runbook §4 step 2). The window can run
-  under the documented first-bring-up posture, but that must be recorded in the artifact, and no run
-  under this posture can evidence a Secure Boot boot.
-- Unchanged: `make test-scripts` dies at `test_tls_floor.py` (docker inactive, root needed), and
-  `make lint-agent` (PATH python3 -> ruff 0.17.5) passes, while the repo venv's ruff 0.5.0 reports
-  6 findings in untouched `agent/agent.py` (3 `UP038`, 3 `F821` that are
-  a ruff 0.5.0 flow false positive — eight-line repro in Addendum 6).
+- **A wedged agent is invisible to every layer that should notice.** MOLE stopped
+  checking in at 2026-11-16T14:33Z and was still wedged at 05:12Z the next day (~14 h):
+  `Get-Service` said `Running`, `service_host.py` logged `agent already running — not
+  starting another` every 30 s, and `agent_is_running()` is process existence only
+  (`service_host.py:79-95`). The scheduled-task watchdog that would have killed it is
+  **removed by `remove_legacy_starters()` when the service is installed**, so a
+  service-based install has no liveness check at all. Recovery required
+  `Stop-Process -Id 6124 -Force` by hand; `Restart-Service` cannot fix it, because the
+  service host refuses to start a second agent while the wedged one exists. The heartbeat
+  file the agent already writes (`.heartbeat`) is the right signal and is not consulted.
+- **The GUI installer does not upgrade `lockdown-service.exe`.** `installer_gui.py:497`
+  copies the agent and the lock screen only. Live after the successful upgrade:
+  agent `77AE143E…` (new) vs service `8029CCA0…` (the 16:25 build). The service keeps
+  running the old host until it is replaced by hand.
+- **`verify_tls` defaults to true while the config's `server_url` is plain HTTP** when no
+  flag is passed, which is a self-contradictory config the installer will happily write.
+  The flag fixes the two shipped paths; the default is still wrong for `http://`.
+- **The destructive half of the acceptance cycle has not been run.** lock / recover /
+  track / stop-track are implemented and unit-tested (32 checks) but only `enroll` has
+  been run live this session; `track` disables the signed-in account and EFS-encrypts its
+  profile.
+- Unchanged from S269: `make test-scripts` stops at the docker-dependent TLS suite on this
+  host, and seven PGlite-backed server suites cannot run on Node 26.13.1
+  (`ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG`) — proven at b6f6f47 in a clean worktree,
+  so it is the environment, not the change.
 
 ### Debt items closed
 
-- None. D-129 is now *startable* rather than blocked, which is not a close; D-120/D-130/D-134 likewise
-  wait on the same hardware run or a certificate.
+- None. This session fixed live defects (D-119/D-120-adjacent behaviour) and added
+  evidence paths; no graph-tracked debt item met its close criteria.
 
 ### Debt items still open
 
@@ -119,55 +131,45 @@
 
 ### Blockers
 
-- The physical FRANKENSTEIN box for stream A (PBL boot + capture). Everything on the server side is
-  ready and proven; no credential is outstanding while a dashboard session is active.
-- A decision on AARCH64 (see Fog), and a recorded decision on the Secure Boot posture.
-
-### Session artifacts
-
-- `agent/hw_test_artifact_frankenstein_s269_safe.json` — the first artifact uploaded through the fixed
-  path, pulled back from `GET /api/hw-test-artifact/1` (E-HWID, E-DECRYPT, E-OFFLINE-QUEUE).
-- `.github/workflows/pbl-ci.yml` — BaseTools in all three submodule lists; QEMU job deps
-  (`build-essential nasm uuid-dev iasl`); `hashFiles` guard on the smoke-test annotation; every line
-  ≤80 columns.
-- `firmware/PblPkg/build-pbl.sh` — guard on `Source/C/bin/GenFw`; no `/home/cllin` PATH prefix.
-- `firmware/PblPkg/PblApp/Decision.c` — `UINT32 Now = 0` with the reason recorded at the declaration.
-- `.yamllint` — the repository's YAML policy (the gate is actionlint; yamllint defaults flagged 218
-  lines across six workflows).
-- `firmware/PblPkg/.clangd` — why these sources cannot be analysed without an EDK II tree.
+- MOLE was unreachable for ~13 h (`No route to host` from 2026-11-16T14:33Z, back at
+  05:10Z on 2026-11-17) — unexplained; nothing in this session's commands could take the
+  box off the network, and it returned without intervention.
+- The destructive lifecycle steps need a named window: a failed `track` leaves the machine
+  with a disabled account and EFS-encrypted profile folders.
 
 ### Failure attribution
 
-- **Layer 3 — execution environment (primary), five times over.** Every CI failure was a missing
-  artifact of the build environment (compiled BaseTools, a submodule, a compiler, an ASL compiler), and
-  each was masked locally by a developer checkout that already had it. The CI job could not say what it
-  was missing because `Error 127` and `7000 Failed to execute command` name the step, not the absence.
-- **Layer 4 — verification feedback (secondary).** The QEMU smoke test reported 14 specific FAILs —
-  banner, policy, TPM NV, verdict, decision, PCR, self-image — which reads as fourteen firmware
-  defects. The serial log being empty turns all fourteen into one finding. A check that cannot say "I
-  received nothing" invites exactly that misreading.
+- **Layer 4 — verification feedback (primary, three times).** A successful install was
+  "confirmed" by printing the log without checking which run produced it; a fix was
+  "verified" by reading the code path that was edited, not the handler the agent calls;
+  a test pinned 300 on the branch the fleet was not on. In all three the report was
+  consulted instead of the artifact.
+- **Layer 2 — context provision (secondary).** The Express one-liner and the Worker one
+  had diverged on `--allow-insecure-http`, and nothing in the repo states that the two
+  surfaces must carry the same flags. `scripts/test_cross_surface_contract.py` exists for
+  exactly this and does not cover the installers.
 
 ### VERIFY
 
-- Run 43444819018: *Build PblApp (X64, GCC)* **success** (artifact `PblApp.efi`, PE32+ x86-64,
-  1,380,352 B), *Static analysis* **success**, *AARCH64* failure (TimerLib, above), *QEMU + swtpm* 0/14.
-- `make hw-preflight SERVER_URL=… ADMIN_TOKEN=<jwt> HOSTNAME=FRANKENSTEIN` → `[OK] the window is ready`.
-- Device: harness `3 passed`, upload accepted; `--artifact` on the pulled file prints the two citations.
-- `scripts/sast-exceptions.json` re-pointed at the rewritten upload code (`reviewed: S268`) so
-  `test_sast_gate.py` passes: 24 passed.
-- `yamllint .github/workflows/` under `.yamllint` → **0 findings** (was 218 under yamllint defaults).
-- `make firmware-host-tests` → 195 checks, 0 failures. `make test-server` 843, `make test-worker` 429,
-  `scripts/run-agent-tests.sh` 866, `pytest scripts/test_hw_window_preflight.py` 19.
+- Live one-command re-install on MOLE over SSH: exit **0**, log
+  `=== installer run started 2026-11-17T08:20:42 === … === installer exited 0 ===`,
+  `verify_tls in config: False`, `service: Running`, agent sha256 `77AE143E…`
+  (published build), device checking in every ~68 s.
+- `scripts/acceptance_lifecycle.py --step enroll --dry-run` → `[PASS] enroll`, artifact
+  `docs/artifacts/s270-acceptance-enroll.json`.
+- Suites: agent 884 passed, worker 447 passed (2 new poll-interval tests), server 773
+  passed in 44 suites (7 PGlite suites excluded, see above), acceptance harness 32 passed,
+  `tsc --noEmit -p .` clean, eslint clean, ruff check + format clean on the new scripts.
+- Local KV republished from CI run 44020904202 (b6f6f47): `binary:installer`,
+  `binary:agent`, `binary:service`, `binary:agent-installer`; each verified by comparing
+  the served `x-content-sha256` with the artifact's own digest.
 
 ### Next session opening
 
-Boot `PblApp.efi` on FRANKENSTEIN (stream A): FAT32 ESP with `\EFI\BOOT\BOOTX64.EFI`, Secure Boot off,
-capture from before power-on, record the posture, then the second boot to prove NV persistence. The
-first line to read is the AK Name / `NV_Read` RC — `[OK]` closes D-134 as "production PCD fine",
-`0x9A2`/`0x18B` closes it the other way and needs `PcdPblTpmUsePlatformHierarchy=FALSE`. `BLOCK` is the
-expected outcome. Separately: decide AARCH64 (drop the DSC claim and the job, or port it to
-`ArmArchTimerLib`), and note that the QEMU serial question is closed — the smoke test now reports
-14/14 with the firmware's own output in the log.
+Run the destructive half of the acceptance cycle on MOLE
+(`--step lock --step recover --step track --step stop-track --allow-destructive`) and fix
+what it finds; then make the service host notice a wedged agent (heartbeat-fresh, kill and
+restart) and make `installer_gui.py` stage `lockdown-service.exe`.
 
 ---
 
