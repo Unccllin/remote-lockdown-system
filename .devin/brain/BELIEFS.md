@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-17 14:58:22 — 139 beliefs
+Generated: 2026-11-17 15:25:45 — 140 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -43,6 +43,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-111 | confirmed | code-read | The agent version is now persisted at check-in on both surfaces (Express devices.agent_version/agent_version_at via migration 018, Worker CheckinMetadata on the KV-RACE-001 key) and readable/filterable from GET /api/devices (?agent_version=<v> and a distinct ?agent_version=unknown). Normalisation is <=64 chars matching ^[A-Za-z0-9][A-Za-z0-9._+-]*$ with everything else stored as null, and an agent that omits the field keeps the previously reported value rather than resetting it. |
 | B-112 | confirmed | code-read | Agent-version staleness is computed in the API layer, not SQL: a device is agent_version_stale when it has checked in and its agent_version_at is absent or more than 60 minutes older than last_checkin (longer than the 300 s max poll interval). The comparison needs a zone-normalising parser because SQLite stores datetime('now') as 'YYYY-MM-DD HH:MM:SS' with no zone marker while PostgreSQL returns ...T...Z, and V8 parses the zoneless form as local time — asserting the exact epoch is the only TZ-independent test. A device that never checked in is offline, not stale. |
 | B-138 | confirmed | code-read | Both surfaces derive lock_state (applied/applying/armed/failed/none) from the newest lockdown plus newest unlock per device, with a 180 s freshness window; Express attaches it in the two device GET routes, never in publicDevice, because that helper also shapes command-less POST responses |
+| B-140 | confirmed | code-read | The Worker stores devices as per-entity records (device:<id>), indexed by device_index, with an agent_key:<sha256> -> device-id pointer; saveDevices no longer exists, so a whole-list devices write is a compile error |
 
 ## api/enrolment
 

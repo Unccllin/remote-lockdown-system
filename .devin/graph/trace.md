@@ -519,3 +519,125 @@ last blocker before any fleet rollout.
 
 ---
 
+## Session 273 — 2026-11-18 (the last rollout blocker: devices stop being one KV value)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `docs/adr/ADR-002-per-entity-command-records.md` (the blueprint being extended),
+`serverless/worker.ts` (`listDevices`, `saveDevices`, `listCommandIds`/`getCommand`/
+`deleteCommandsForDevice` as the ADR-002 shape, `verifyAgentAuth`, `serializeMutation`,
+`getCheckinMetadata`/`mergeCheckinMetadata`, all 27 `listDevices` read sites and all 17
+`saveDevices` write sites, `handleReleaseDevice`, `handleRotateKey`),
+`serverless/worker.test.ts` (`MockKV`, `signRequest`, `enrollDevice`, `readCommandViaApi` and
+the tests that read the `devices` key directly), `serverless/README.md` (the published KV
+layout), `docs/adr/ADR-003-per-entity-device-records.md` (written first, then implemented).
+
+**Findings**, each measured before the change:
+
+- `saveDevices` had **17 call sites** and `listDevices` **27**. Every write was a whole-fleet
+  read-modify-write, so two writers in different colos lose one of the two changes —
+  `serializeMutation()` cannot help across isolates (ADR-002 said so and left `devices` behind).
+- `verifyAgentAuth` found the device by scanning the list. Converting devices to per-entity
+  records *without* an index would have made every agent request an N-device read: a 60-device
+  fleet polling every 300 s goes from ~288 reads/day to ~17,000. The `agent_key:<hash>` pointer
+  is therefore part of the decision, not an optimisation for later.
+- `MockKV` implements only `get`/`put`/`delete` as far as the Worker uses them (grep of
+  `LOCKDOWN_KV.*`: 25 get, 27 put, 10 delete, **no list**), so a prefix scan was not an option
+  even in tests — the index is the mechanism, and `ROW_NUMBER`-style key listing does not exist
+  in KV without pagination.
+- 12 existing tests read the legacy `devices` key directly (`deviceIdByHostname` and two
+  helpers). They are the storage-layout coupling the repo already warns about — `readCommandViaApi`
+  exists for exactly this reason (ADR-002).
+- The check-in path and `/api/ping` re-read **the whole fleet** to find the device the auth
+  layer had just loaded. Under per-entity records that would be one get per device on the
+  hottest path in the system, so both now use the authenticated record.
+- `serverless/README.md` still documented `devices` as "still one value" — a published fact that
+  this session made false.
+
+### Fog cleared
+
+- **`devices` is per-entity (ADR-003).** `device:<id>` + `device_index` + `agent_key:<sha256>`,
+  lazy idempotent migration from the legacy `devices` key, and all 15 write sites converted.
+  `saveDevices` is deleted, so a whole-list write cannot come back without a compile error.
+- **Authentication is one read.** `verifyAgentAuth` and the `/v1` firmware auth path both use the
+  pointer; `rotate-key` deletes the stale mapping, so a re-keyed device fails closed with the old
+  key (asserted, not assumed).
+- **Two cost regressions avoided in the same commit**: the check-in path and `/api/ping` now use
+  the record `verifyAgentAuth` already loaded instead of re-reading the fleet.
+- **The storage change surfaced as 12 immediate test failures**, all of them tests reading the
+  KV layout. They were rewritten to go through the API (`deviceIdByHostname`) or through the
+  documented check-in metadata key — no test was weakened.
+- `serverless/README.md` gained a "Device storage (ADR-003)" section and no longer claims
+  `devices` is one value.
+- Four pre-existing style blockers in `worker.ts` (nested ternaries in the version filter and
+  `signature_alg`, two string-concatenation joins in the installer scripts) were cleared, since
+  the file is in this diff anyway and they blocked every edit.
+
+### Fog remaining
+
+- **Three stores are still whole lists**: `locations`, `audit_log`, `bios_passwords`,
+  `encryption_keys`. Named in ADR-003 and in the README rather than implied. The release cascade
+  still rewrites all four on every delete — visible in the artifact's final key snapshot.
+- **`device_index` is a whole-value write**, accepted for the same reason ADR-002 accepted
+  `command_index`: append-mostly, ids only, and `putDevice` re-appends a missing id on every
+  write so a lost append cannot hide a device from `listDevices` permanently.
+- **`worker.ts` is now 5056 lines**, past the harness LSP's 5000-line limit, so `lens_diagnostics`
+  reports "too_large" instead of a verdict. `tsc --noEmit` and the 464-test suite remain the
+  gates, as AGENTS.md already states for the serverless surface. Splitting the file is now a
+  concrete, named task rather than a style preference.
+- **MOLE has still not been shipped** `9e464ab` or this storage change. Operator action.
+- The 180 s `LOCK_STATE_FRESH_MS` vs 300 s adaptive poll mismatch (S272) is unchanged.
+
+### Debt items closed
+
+None formally. ADR-003 closes the rollout blocker recorded as a blocker line, not a ledger item,
+so no `commit_ref`/`artifact_ref` pair is claimed.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration), plus the store-by-store work named above.
+
+### Blockers
+
+- MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+- **The 60-device rollout blocker narrowed from four stores to three** (`locations`, `audit_log`,
+  `bios_passwords`). Devices are done; the rest is the same change applied store by store.
+
+### Session artifacts
+
+- `docs/artifacts/s272-device-per-entity-keys.json` — the real Worker (bundled from source,
+  driven through its own `fetch`) taken through enrol → flag-stolen → ACK → rotate-key →
+  release, with the full KV key layout at each step and **20 assertions**, including "B's record
+  was not rewritten by A's mutation" and "the whole fleet was not written".
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), and the harness worked this time**: 12 tests failed the
+  moment the storage shape changed because they read `devices` out of KV. That is the failure
+  mode this repo has already paid for once (tests pinning a layout instead of a contract), and
+  the fix was the one ADR-002 established — read through the API. Harness change: `deviceIdByHostname`
+  now goes through `GET /api/devices`, and the `lock_state` seed writes the documented
+  `device_checkin:<id>` key instead of patching a list.
+- **Layer 4, second signal**: the first artifact run for this change is what proved the write
+  set (`device:<A>`, `agent_key:<A>`, `command:<id>`, `command_index`, `audit_log` — no `devices`).
+  A passing suite would not have shown that.
+
+### VERIFY
+
+- `serverless`: `npx vitest run` → **464 passed / 4 files** (was 458; +6 ADR-003 tests).
+- `serverless`: `npx tsc --noEmit -p .` → clean.
+- `scripts/test_cross_surface_contract.py` → **23 passed**.
+- `make graph-check` → all invariants pass.
+- Agent suite (`scripts/run-agent-tests.sh -q`) → exit 0.
+- The only red anywhere on this host is `scripts/test_tls_floor.py`, the documented
+  unreadable-`/var/run/docker.sock` limitation (AGENTS.md), unrelated to this change.
+
+### Next session opening
+
+Take `locations` off the whole-list write next — it is the highest-volume of the three remaining
+stores and the same ADR-003 shape applies — and ship the accumulated dashboard/storage work to
+MOLE so the lock → recover acceptance runs against something current.
+
+---

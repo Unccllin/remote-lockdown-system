@@ -58,101 +58,93 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 272 — 2026-11-18 (close) — what the lock actually did, and when the fix was taken
+## Latest session: 273 — 2026-11-18 (the last rollout blocker: devices stop being one KV value)
 
 ### Fog cleared
 
-- **`lock_state` reaches Express.** `GET /api/devices` and `GET /api/devices/:id` now derive the
-  same five values as the Worker (`applied`/`applying`/`armed`/`failed`/`none`) from a ranked
-  `ROW_NUMBER() OVER (PARTITION BY device_id, command_type)` read of `commands`, with the same
-  180 s freshness window. Proven on real SQLite through the real routes: `none → armed` (flagged,
-  never checked in) `→ applying` (check-in) `→ applied` (ACK) `→ none` (recover).
-- **`observed_at` is stored and honoured.** Migration `019_location_observed_at.sql` in both
-  dialect directories; `POST /api/agent/location` accepts the scan time (top level, optional,
-  unparseable or future claims dropped — a device clock is not trusted); both read routes order
-  by it with receipt time as the fallback; the Worker gained the same field, clamp and ordering.
-- **A defect the tests did not catch, found by running the thing.** The first version ordered by
-  `COALESCE(observed_at, reported_at) DESC`, which in SQLite compares TEXT: `'T'` (0x54) sorts
-  after `' '` (0x20), so a fix taken at 06:45 outranked one taken at 11:45 and `/location/latest`
-  returned the older fix. Measured on real SQLite (artifact step 15: `Middle > Earlier > Newer`).
-  Fixed with `coalescedTimeOrderSql()` — `datetime(COALESCE(...))` on SQLite, plain `COALESCE` on
-  PostgreSQL, switched on `pool.driver` rather than an env var (a caller that requires
-  `sqlitePool` directly, as the migration and E2E harnesses do, gets it right too). After the fix
-  the same rows read `Newer > Middle > Earlier` and `/latest` returns `Newer`.
-- `parseDbTimestamp` moved to `server/src/db/timestamps.js` so `routes/agent.js` can validate
-  `observed_at` without the two route modules requiring each other; re-exported from
-  `devices.js` so the D-258 fixture still tests it through the same module.
+- **`devices` is per-entity (ADR-003).** `device:<id>` + `device_index` + `agent_key:<sha256>`,
+  lazy idempotent migration from the legacy `devices` key, and all 15 write sites converted.
+  `saveDevices` is deleted, so a whole-list write cannot come back without a compile error.
+- **Authentication is one read.** `verifyAgentAuth` and the `/v1` firmware auth path both use the
+  pointer; `rotate-key` deletes the stale mapping, so a re-keyed device fails closed with the old
+  key (asserted, not assumed).
+- **Two cost regressions avoided in the same commit**: the check-in path and `/api/ping` now use
+  the record `verifyAgentAuth` already loaded instead of re-reading the fleet.
+- **The storage change surfaced as 12 immediate test failures**, all of them tests reading the
+  KV layout. They were rewritten to go through the API (`deviceIdByHostname`) or through the
+  documented check-in metadata key — no test was weakened.
+- `serverless/README.md` gained a "Device storage (ADR-003)" section and no longer claims
+  `devices` is one value.
+- Four pre-existing style blockers in `worker.ts` (nested ternaries in the version filter and
+  `signature_alg`, two string-concatenation joins in the installer scripts) were cleared, since
+  the file is in this diff anyway and they blocked every edit.
 
 ### Fog remaining
 
-- **The freshness window does not match the poll interval.** `LOCK_STATE_FRESH_MS` is 180 s while
-  `ADAPTIVE_POLL['active']` is 300 s, so a healthy device that checked in 200 s ago reads `armed`.
-  Named, not changed: re-tuning a user-visible threshold in the same commit as a parity change is
-  how the two surfaces drifted apart in the first place. Both surfaces move together or not at all.
-- **Express parity is not completeness.** The dashboard alert added in `9e464ab` derives from
-  `/devices`, so it now works against Express — but only because the field is present. No field on
-  Express is now silently `undefined`-shaped for the alert path; nothing verifies that beyond the
-  contract test.
-- **The 60-device rollout blocker is untouched**: `devices`, `audit`, `bios_passwords` and
-  `locations` are still whole-list KV writes.
-- **The Worker's KV location list is capped at 1000 rows** (`saveLocations` keeps the last 1000,
-  in insertion order). A long backfill can now be evicted before it is read; ordering is fixed,
-  retention of the row is not.
-- **MOLE has not been shipped the dashboard work** (`9e464ab` + `lock_state` chip). Operator action.
+- **Three stores are still whole lists**: `locations`, `audit_log`, `bios_passwords`,
+  `encryption_keys`. Named in ADR-003 and in the README rather than implied. The release cascade
+  still rewrites all four on every delete — visible in the artifact's final key snapshot.
+- **`device_index` is a whole-value write**, accepted for the same reason ADR-002 accepted
+  `command_index`: append-mostly, ids only, and `putDevice` re-appends a missing id on every
+  write so a lost append cannot hide a device from `listDevices` permanently.
+- **`worker.ts` is now 5056 lines**, past the harness LSP's 5000-line limit, so `lens_diagnostics`
+  reports "too_large" instead of a verdict. `tsc --noEmit` and the 464-test suite remain the
+  gates, as AGENTS.md already states for the serverless surface. Splitting the file is now a
+  concrete, named task rather than a style preference.
+- **MOLE has still not been shipped** `9e464ab` or this storage change. Operator action.
+- The 180 s `LOCK_STATE_FRESH_MS` vs 300 s adaptive poll mismatch (S272) is unchanged.
 
 ### Debt items closed
 
-None formally — this closes fog, not ledger items. No `commit_ref`/`artifact_ref` pair is claimed
-for any D-xxx here, so no I2 closure was made.
+None formally. ADR-003 closes the rollout blocker recorded as a blocker line, not a ledger item,
+so no `commit_ref`/`artifact_ref` pair is claimed.
 
 ### Debt items still open
 
 D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
-D-210 (PBL route integration), plus the named gaps above (per-entity writes, freshness window,
-Worker location cap).
+D-210 (PBL route integration), plus the store-by-store work named above.
 
 ### Blockers
 
 - MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
-- `E-LOCK-SCREEN` stays `verified-in-unit-test` (the evidence is the OS account flag, not a console
-  sign-in attempt). OPEN, needs a human attempt.
-- 60-device rollout: `devices`/`audit`/`bios_passwords`/`locations` are whole-list KV writes.
-  OPEN, the next engineering item.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+- **The 60-device rollout blocker narrowed from four stores to three** (`locations`, `audit_log`,
+  `bios_passwords`). Devices are done; the rest is the same change applied store by store.
 
 ### Session artifacts
 
-- `docs/artifacts/s272-lock-state-observed-at.json` — 17 steps against a real SQLite database
-  through the real Express routes: the full state machine, the raw `ROW_NUMBER()` query result,
-  the backfill write, and the history/latest ordering before and after the fix.
+- `docs/artifacts/s272-device-per-entity-keys.json` — the real Worker (bundled from source,
+  driven through its own `fetch`) taken through enrol → flag-stolen → ACK → rotate-key →
+  release, with the full KV key layout at each step and **20 assertions**, including "B's record
+  was not rewritten by A's mutation" and "the whole fleet was not written".
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)**, first pass: the new tests asserted that the SQL *text*
-  contained `COALESCE(observed_at, reported_at)` instead of asserting the *ordering outcome*. The
-  defect passed every test and was caught only by the artifact run. Harness change made this
-  session: `server/tests/locationOrdering.test.js` runs the real migration files against a real
-  in-memory SQLite database and asserts the resulting row order — and the first of its tests pins
-  the WRONG order of a bare `COALESCE` as evidence the normalisation is doing work. Mutation-checked:
-  reverting the helper fails 2 of its 7 tests.
-- **Layer 3 (execution environment)**, advisory only: `scripts/test_tls_floor.py` fails on this host
-  because `/var/run/docker.sock` is not readable by this login session (documented in AGENTS.md);
-  `test_cross_surface_contract.py` carried a pre-existing `UP017` at line 365 in a file this session
-  was already editing, fixed as `datetime.UTC`.
+- **Layer 4 (verification feedback), and the harness worked this time**: 12 tests failed the
+  moment the storage shape changed because they read `devices` out of KV. That is the failure
+  mode this repo has already paid for once (tests pinning a layout instead of a contract), and
+  the fix was the one ADR-002 established — read through the API. Harness change: `deviceIdByHostname`
+  now goes through `GET /api/devices`, and the `lock_state` seed writes the documented
+  `device_checkin:<id>` key instead of patching a list.
+- **Layer 4, second signal**: the first artifact run for this change is what proved the write
+  set (`device:<A>`, `agent_key:<A>`, `command:<id>`, `command_index`, `audit_log` — no `devices`).
+  A passing suite would not have shown that.
 
 ### VERIFY
 
-- `server`: `npm test` → **876 passed / 52 suites** (was 848 / 51; +21 new tests, 1 new suite).
-- `serverless`: `npx vitest run` → **458 passed**; `npx tsc --noEmit -p .` → clean.
-- `scripts/test_cross_surface_contract.py` → **23 passed** (5 new parity assertions).
-- `npx eslint .` (server) → exit 0.
-- `make test-scripts` → 14 suites pass; the single red is `test_tls_floor.py`, host limitation above.
-- Artifact: `docs/artifacts/s272-lock-state-observed-at.json` (steps 01–17).
+- `serverless`: `npx vitest run` → **464 passed / 4 files** (was 458; +6 ADR-003 tests).
+- `serverless`: `npx tsc --noEmit -p .` → clean.
+- `scripts/test_cross_surface_contract.py` → **23 passed**.
+- `make graph-check` → all invariants pass.
+- Agent suite (`scripts/run-agent-tests.sh -q`) → exit 0.
+- The only red anywhere on this host is `scripts/test_tls_floor.py`, the documented
+  unreadable-`/var/run/docker.sock` limitation (AGENTS.md), unrelated to this change.
 
 ### Next session opening
 
-Ship `9e464ab` plus this `lock_state`/ordering work to MOLE and re-run the lock → recover
-acceptance with the chip visible, then start the `devices` per-entity KV write migration — the
-last blocker before any fleet rollout.
+Take `locations` off the whole-list write next — it is the highest-volume of the three remaining
+stores and the same ADR-003 shape applies — and ship the accumulated dashboard/storage work to
+MOLE so the lock → recover acceptance runs against something current.
 
 ---
 
