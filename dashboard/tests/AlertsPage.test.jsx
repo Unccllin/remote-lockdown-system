@@ -65,6 +65,34 @@ describe('AlertsPage', () => {
     expect(screen.getByText('Alerts')).toBeInTheDocument();
   });
 
+  it('shows a lockdown-not-applied alert when the lock is only armed (S271)', async () => {
+    // `status: stolen` is set when the lockdown is QUEUED, so the row alone cannot tell an
+    // operator whether the machine locked. `lock_state: armed` is the derived answer: the
+    // device is offline, the command is waiting, and nobody should be told "it's locked".
+    const armedDevice = {
+      id: 'dev-3',
+      hostname: 'ARMED-001',
+      owner_name: 'Carol',
+      status: 'stolen',
+      lock_state: 'armed',
+      last_checkin: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+      enrolled_at: '2025-01-01T00:00:00Z',
+    };
+
+    api.get.mockImplementation((url) => {
+      if (url === '/devices') return Promise.resolve({ data: [armedDevice] });
+      if (url.startsWith('/audit')) return Promise.resolve({ data: [] });
+      if (url.includes('/locations')) return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('Lockdown Not Applied')).toBeInTheDocument();
+    });
+  });
+
   it('shows missed check-in alert for device offline >24h', async () => {
     api.get.mockImplementation((url) => {
       if (url === '/devices') return Promise.resolve({ data: [staleDevice, freshDevice] });

@@ -33,6 +33,7 @@ const SEVERITY_STYLE = {
 
 const ALERT_ICON = {
   missed_checkin: <Monitor size={18} />,
+  lock_unconfirmed: <ShieldAlert size={18} />,
   location_jump: <MapPin size={18} />,
   failed_unlock: <ShieldAlert size={18} />,
 };

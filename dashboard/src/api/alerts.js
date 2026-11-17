@@ -27,6 +27,7 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 
 const SEVERITY = {
   missed_checkin: { level: 'amber', label: 'Missed Check-in' },
+  lock_unconfirmed: { level: 'red', label: 'Lockdown Not Applied' },
   location_jump: { level: 'red', label: 'Unexpected Location Jump' },
   failed_unlock: { level: 'red', label: 'Failed Unlock Attempt' },
 };
@@ -103,7 +104,26 @@ export async function getAlerts() {
       }
     }
 
-    // 2. Failed unlock attempts — audit entries with unlock-failed actions
+    // 2. Lockdown queued but not applied — the device has gone quiet since it was flagged.
+    // `status: stolen` is set when the lockdown is QUEUED, so the device row alone cannot
+    // tell an operator whether the machine locked. `lock_state === 'armed'` is the derived
+    // answer (Worker, S271): the command is waiting, and the machine will pick it up on
+    // reconnect — or self-lock after 24 h if it heard the flag before going dark. Reporting
+    // it as an alert is what stops "we locked it" being said before it is true.
+    for (const d of devices) {
+      if (d.lock_state === 'armed') {
+        alerts.push({
+          id: `lock_unconfirmed_${d.id}`,
+          type: 'lock_unconfirmed',
+          device_id: d.id,
+          hostname: d.hostname,
+          message: 'Lockdown queued, device offline — not applied yet',
+          timestamp: d.last_checkin || d.enrolled_at || new Date().toISOString(),
+        });
+      }
+    }
+
+    // 3. Location jump Failed unlock attempts — audit entries with unlock-failed actions
     for (const entry of audit) {
       if (
         entry.action?.includes('unlock') &&
@@ -157,6 +177,9 @@ export async function getAlerts() {
         } catch {
           // ignore devices with no location data
         }
+        // An array-method callback must return consistently; `Promise.all` reads the array,
+        // and a for/await loop here would serialise one location request per device.
+        return null;
       }),
     );
   } catch {
