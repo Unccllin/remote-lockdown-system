@@ -175,6 +175,30 @@ if ($realUser) {
     }
 }
 
+# EFS state per profile folder. The tracking layer encrypts these in place with
+# `cipher /e /s:` (agent.py::apply_tracking_data_protection), so the EFS attribute IS the
+# right observation here — unlike the lockdown folder, which uses Fernet .enc siblings.
+$realProfile = if ($realUser) { Join-Path 'C:\Users' $realUser } else { $null }
+$efsPaths = @()
+if ($realProfile -and (Test-Path -LiteralPath $realProfile)) {
+    foreach ($sub in @('Documents', 'Downloads', 'Pictures', 'Desktop')) {
+        $candidate = Join-Path $realProfile $sub
+        if (Test-Path -LiteralPath $candidate) {
+            $efsPaths += [pscustomobject]@{
+                path      = $candidate
+                encrypted = Get-EncryptedFileCount $candidate
+            }
+        }
+    }
+}
+
+# Which reasons currently hold the interactive account disabled (agent.py .logon_holds).
+$logonHolds = @()
+$holdsPath = Join-Path $inst '.logon_holds'
+if (Test-Path -LiteralPath $holdsPath) {
+    try { $logonHolds = @((Get-Content -LiteralPath $holdsPath -Raw | ConvertFrom-Json).reasons) } catch { }
+}
+
 $snapshot = [pscustomobject]@{
     hostname            = $env:COMPUTERNAME
     service             = $service
@@ -196,6 +220,7 @@ $snapshot = [pscustomobject]@{
     decoy_active        = Get-AccountActive $decoyName
     account_probe       = $accountProbe
     efs_paths           = $efsPaths
+    logon_holds         = $logonHolds
     tracking_state      = $trackingState
     agent_binary_sha256 = $agentSha
     installer_runs      = $installRuns

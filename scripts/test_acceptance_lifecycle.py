@@ -693,3 +693,74 @@ class TestLockdownFolderEncryption:
             unlock,
         )
         assert by_name(result, "lockdown folder decrypted").passed is False
+
+
+class TestStopTrackWithRemainingHolds:
+    """`stop_track` releases tracking's reason; a lockdown's hold is a different reason.
+
+    The harness re-locks before tracking (tracking a device nobody declared lost is refused
+    by design), so after `stop_track` the account SHOULD stay disabled. Asserting
+    "re-enabled" there would demand the interlock be broken (S271).
+    """
+
+    def stop_cmd(self):
+        return command(
+            command_type="stop_track", lockdown_effective=None, boot_lock_status=None
+        )
+
+    def test_staying_disabled_while_the_lock_holds_is_correct(self):
+        result = mod.evaluate_stop_track(
+            device(status="locked"),
+            snapshot(
+                real_user="Newark User",
+                real_user_active=False,
+                decoy_exists=False,
+                account_probe={
+                    "attempted": True,
+                    "disabled": True,
+                    "user_flags": 515,
+                    "meaning": "UF_ACCOUNTDISABLE set",
+                },
+                logon_holds=["lock"],
+            ),
+            self.stop_cmd(),
+        )
+        check = by_name(result, "account still held by lock")
+        assert check.passed is True
+        assert "holds=['lock']" in check.observed
+        assert result.status == "PASS", result.checks
+
+    def test_still_disabled_with_no_holds_left_is_a_failure(self):
+        result = mod.evaluate_stop_track(
+            device(status="active"),
+            snapshot(
+                real_user="Newark User",
+                account_probe={
+                    "attempted": True,
+                    "disabled": True,
+                    "user_flags": 515,
+                    "meaning": "UF_ACCOUNTDISABLE set",
+                },
+                logon_holds=[],
+            ),
+            self.stop_cmd(),
+        )
+        assert by_name(result, "real user re-enabled").passed is False
+        assert result.status == "FAIL"
+
+    def test_re_enabled_with_no_holds_passes(self):
+        result = mod.evaluate_stop_track(
+            device(status="active"),
+            snapshot(
+                real_user="Newark User",
+                account_probe={
+                    "attempted": True,
+                    "disabled": False,
+                    "user_flags": 513,
+                    "meaning": "account enabled",
+                },
+                logon_holds=[],
+            ),
+            self.stop_cmd(),
+        )
+        assert result.status == "PASS", result.checks

@@ -1,0 +1,96 @@
+{
+  "generated_at": "2026-11-17T07:00:18.506825+00:00",
+  "steps": [
+    {
+      "step": "track",
+      "status": "FAIL",
+      "checks": [
+        {
+          "name": "decoy account exists",
+          "passed": false,
+          "observed": "GuestUser=False"
+        },
+        {
+          "name": "real user disabled",
+          "passed": true,
+          "observed": "active=False"
+        },
+        {
+          "name": "EFS applied to at least one profile folder",
+          "passed": false,
+          "observed": "0/0 folder(s) with encrypted files"
+        },
+        {
+          "name": "server reports tracking",
+          "passed": true,
+          "observed": "tracking"
+        },
+        {
+          "name": "track command executed",
+          "passed": false,
+          "observed": "pending"
+        }
+      ]
+    },
+    {
+      "step": "stop-track",
+      "status": "FAIL",
+      "checks": [
+        {
+          "name": "real user re-enabled",
+          "passed": false,
+          "observed": "active=False"
+        },
+        {
+          "name": "decoy account removed",
+          "passed": true,
+          "observed": "exists=False"
+        },
+        {
+          "name": "server no longer reports tracking",
+          "passed": true,
+          "observed": "active"
+        },
+        {
+          "name": "stop_track command executed",
+          "passed": false,
+          "observed": "pending"
+        }
+      ]
+    },
+    {
+      "step": "recover",
+      "status": "PASS",
+      "checks": [
+        {
+          "name": "lock sentinel gone",
+          "passed": true,
+          "observed": "False"
+        },
+        {
+          "name": "lockdown folder decrypted",
+          "passed": true,
+          "observed": "0 .enc file(s) left, 1 plaintext"
+        },
+        {
+          "name": "account re-enabled (Newark User)",
+          "passed": true,
+          "observed": "account enabled (UserFlags=513); net user says active=True"
+        },
+        {
+          "name": "server reports the device usable",
+          "passed": true,
+          "observed": "active"
+        },
+        {
+          "name": "unlock command executed",
+          "passed": true,
+          "observed": "executed"
+        }
+      ]
+    }
+  ],
+  "snapshot": {},
+  "device": "MOLE",
+  "server_url": "http://192.168.1.43:8787"
+}

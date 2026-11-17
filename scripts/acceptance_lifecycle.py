@@ -460,13 +460,27 @@ def evaluate_stop_track(
     device: dict | None, snap: dict, command: dict | None
 ) -> StepResult:
     result = StepResult("stop-track")
-    result.checks.append(
-        check(
-            "real user re-enabled",
-            snap.get("real_user_active") is True,
-            f"active={snap.get('real_user_active')}",
+    # Tracking releases ITS reason. If a lockdown still holds the account — the harness
+    # re-locks to make tracking legal in the first place — staying disabled is correct,
+    # and asserting "re-enabled" would demand the interlock be broken.
+    disabled, disabled_detail = account_state(snap)
+    holds = [h for h in (snap.get("logon_holds") or []) if isinstance(h, str)]
+    if disabled is None:
+        result.checks.append(
+            check("account state after stop-track", None, disabled_detail)
         )
-    )
+    elif holds:
+        result.checks.append(
+            check(
+                f"account still held by {','.join(sorted(holds))} (correct while locked)",
+                disabled is True,
+                f"{disabled_detail}; holds={sorted(holds)}",
+            )
+        )
+    else:
+        result.checks.append(
+            check("real user re-enabled", disabled is False, disabled_detail)
+        )
     result.checks.append(
         check(
             "decoy account removed",
@@ -655,8 +669,12 @@ class Server:
                 if "Connection refused" not in str(exc) or attempt == attempts - 1:
                     raise
                 time.sleep(2.0)
-        assert last is not None
-        raise last
+        # `assert` disappears under `python -O`; a retry loop that runs out must say so.
+        raise (
+            last
+            if last is not None
+            else ApiError(f"GET {path} failed without an error")
+        )
 
     def post(self, path: str, body: dict | None = None) -> object:
         return self._request("POST", path, body if body is not None else {})
@@ -824,6 +842,27 @@ def track_needs_relock(step: str, status: str | None) -> bool:
     return step == "track" and status not in TRACKABLE_STATUSES
 
 
+def wait_for_command(
+    server: "Server", device_id: str, command_type: str, timeout: float
+) -> dict | None:
+    """Wait until the newest command of this type is no longer pending.
+
+    Device status is the WRONG signal for track/stop_track: the Worker flips it when the
+    command is QUEUED, so a status-based wait asserts while the agent has not even fetched
+    the command — both steps reported `pending` on MOLE (S271).
+    """
+
+    def terminal() -> dict | None:
+        newest = latest_command(server.commands(device_id), command_type)
+        if newest is None or newest.get("status") in (None, "pending"):
+            return None
+        return newest
+
+    return wait_for(
+        terminal, timeout=timeout, interval=5.0, label=f"{command_type} terminal"
+    )
+
+
 def action_payload(step: str, device: dict) -> dict:
     """Body for a step's POST.
 
@@ -960,6 +999,11 @@ def run(args: argparse.Namespace) -> int:
             # a recover moves recovering -> active, so a "not active" predicate waits out
             # the whole timeout on a perfectly good recovery. The work itself is slow
             # (boot-lock layers, EFS on three folders, ~7 s per HP BIOS call).
+            # The command itself must reach a terminal state before anything is asserted.
+            command_type = COMMAND_FOR_STEP.get(step)
+            if command_type:
+                wait_for_command(server, device["id"], command_type, args.timeout)
+
             expected = EXPECTED_STATUS[step]
             # Bound as a default argument: B023 is right that a bare closure over a loop
             # variable reads whatever the LAST iteration assigned, which would make this
