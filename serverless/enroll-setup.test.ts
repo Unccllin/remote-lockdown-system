@@ -73,9 +73,12 @@ describe('served enrolment (the dashboard one-liner)', () => {
     // agent, and service_installer needs a frozen lockdown-service.exe in the install
     // dir. Without this the install "succeeds" (exit 0) and the device never checks in.
     expect(body).toContain('/api/download/service');
-    // Pre-staged into the install dir, not registered by hand: the repo's own test
-    // forbids an executable sc.exe in these templates, because the installer owns
-    // service registration.
+    // ... but it is NOT copied into place here. The script did that until S270, and a
+    // copy over a RUNNING service fails with "used by another process": with
+    // $ErrorActionPreference='Stop' that aborted the run before the installer started,
+    // exiting 1. installer.py::install_files owns the staging now — it stops the service
+    // to replace the image and step 6 recreates and starts it.
+    expect(body).not.toContain("Copy-Item (Join-Path $stage 'lockdown-service.exe')");
     // Downloads happen inside the elevated session, into a machine-wide staging
     // directory: elevation can switch accounts, and %TEMP% then belongs to someone
     // else — which is how "Cannot find lockdown-agent.exe" came back after staging.
@@ -164,6 +167,55 @@ describe('served enrolment (the dashboard one-liner)', () => {
     // operator is not left with a second manual step (and no mangled path).
     expect(body).toContain('Restart-Service LockdownAgent');
     expect(body).not.toContain('LockdownAgentconfig');
+  });
+});
+
+/**
+ * The served install log is evidence, so it must belong to the run that printed it.
+ *
+ * S270, live on MOLE: a re-install over an installed machine exited 1 while the tail
+ * shown read "Installation Complete". The installer had not run at all — `Copy-Item`
+ * over the running `lockdown-service.exe` threw, `$ErrorActionPreference = 'Stop'`
+ * aborted the script before the installer started, and the log on disk was the
+ * PREVIOUS successful run's, which the wrapper printed as this run's output. A stale
+ * log cannot be replayed if every run announces itself.
+ */
+describe('the served install log belongs to the run that prints it', () => {
+  async function scriptBody(): Promise<string> {
+    const worker = await getWorker();
+    const resp = await worker.fetch(req('/api/enroll/setup.ps1'), makeEnv());
+    return resp.text();
+  }
+
+  it('marks the start and the exit of every run', async () => {
+    const body = await scriptBody();
+    expect(body).toContain('=== installer run started ');
+    expect(body).toContain('=== installer exited ');
+    expect(body).toContain('" + $code + "');
+    // The verdict is the installer process's own exit code, read from Start-Process —
+    // not $LASTEXITCODE, which any later command in this script can overwrite.
+    expect(body).toContain('-RedirectStandardOutput');
+    expect(body).toContain('-RedirectStandardError');
+    expect(body).toContain('$code = $p.ExitCode');
+    // Nothing redirects the native call inline: under $ErrorActionPreference = 'Stop'
+    // its FIRST stderr line is a terminating error, which aborted the run mid-flight and
+    // kept exactly one line of a traceback (measured on MOLE, S270).
+    expect(body).not.toContain('*>> $log');
+    expect(body).not.toContain('--silent *> $log');
+    expect(body).toContain('--- installer stderr ---');
+  });
+
+  it('writes an early abort into the log instead of dying silently', async () => {
+    const body = await scriptBody();
+    // $ErrorActionPreference is Stop, so a failed download or staging step ends the
+    // script; without a trap that leaves no trace at all in the log being printed.
+    expect(body).toContain('trap {');
+    expect(body).toContain('ABORTED before the installer ran: ');
+  });
+
+  it('labels the tail as install.log, not as fresh installer output', async () => {
+    const body = await scriptBody();
+    expect(body).toContain("last 'installer run started' line");
   });
 });
 

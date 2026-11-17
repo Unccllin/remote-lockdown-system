@@ -419,6 +419,39 @@ def install_service() -> bool:
     return False
 
 
+def stop_service(wait_seconds: float = 30.0) -> bool:
+    """Stop the agent service and wait until it is really stopped.
+
+    Needed to replace the service binary: a running service holds its own image, so a
+    copy over it fails with ERROR_SHARING_VIOLATION (S270: on MOLE the served installer
+    script copied the binary before running the installer and aborted the whole run).
+
+    Returns True when the service is not running afterwards — including the case where it
+    does not exist at all, which is what a first install looks like (`sc query` exits
+    1060). ``sc stop`` returns before the SCM has stopped anything, so the state is
+    polled instead of the exit code being trusted — the same lesson as install_service
+    (S218).
+    """
+    if not _is_windows():
+        return False
+
+    _sc("stop", SERVICE_NAME)
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        query = _sc("query", SERVICE_NAME)
+        output = query.stdout or ""
+        if "STOPPED" in output:
+            log.info("Service '%s' is stopped", SERVICE_NAME)
+            return True
+        if query.returncode != 0:
+            # 1060 = the service does not exist. Nothing is holding the binary.
+            log.info("Service '%s' is not installed", SERVICE_NAME)
+            return True
+        time.sleep(0.5)
+    log.error("Service '%s' did not reach STOPPED", SERVICE_NAME)
+    return False
+
+
 def remove_service() -> None:
     _sc("stop", SERVICE_NAME)
     _sc("delete", SERVICE_NAME)

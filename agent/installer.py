@@ -86,6 +86,7 @@ DEFAULT_SERVER_URL = ""
 INSTALL_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LockdownAgent"
 CONFIG_FILE = INSTALL_DIR / "config.json"
 AGENT_EXE_NAME = "lockdown-agent.exe"
+SERVICE_EXE_NAME = "lockdown-service.exe"
 LOCKSCREEN_EXE_NAME = "lockdown-lockscreen.exe"
 INSTALLER_EXE_NAME = "lockdown-installer.exe"
 LOCKDOWN_FOLDER = INSTALL_DIR / "lockdown_folder"
@@ -698,19 +699,106 @@ def install_files(agent_exe: Path) -> Path:
     dest = INSTALL_DIR / AGENT_EXE_NAME
     if agent_exe.resolve() == dest.resolve():
         print_ok("Agent already in install location")
+    else:
+        _copy_binary(agent_exe, dest)
+        print_ok(f"Agent copied: {dest}")
+
+    # The service host is installed here too, not by the caller's script: the SCM runs
+    # `lockdown-service.exe` from INSTALL_DIR (service_installer._service_bin_path), so
+    # an upgrade that copies only the agent leaves a stale service binary behind — and
+    # PyInstaller's bundle carries no service_host.py for the fallback path, so on a
+    # frozen build the service genuinely needs this file. It also puts the replace in
+    # the one place that can stop the service first (see below).
+    install_service_binary(agent_exe)
+    return dest
+
+
+def _is_sharing_violation(exc: OSError) -> bool:
+    """True when a copy failed because another process holds the destination open.
+
+    Windows reports this as ``WinError 32`` / ``ERROR_SHARING_VIOLATION`` ("The process
+    cannot access the file ... because it is being used by another process"). strerror
+    matching is only the fallback: the errno differs between the CRT and the Win32
+    mapping, which is why the numeric winerror is checked first.
+    """
+    if getattr(exc, "winerror", None) == 32:
+        return True
+    if exc.errno in (32, 11, 13):  # ERROR_SHARING_VIOLATION / EAGAIN / EACCES
+        return True
+    return "being used by another process" in str(exc)
+
+
+def install_service_binary(agent_exe: Path) -> Path | None:
+    """Stage `lockdown-service.exe` beside the agent, replacing a running one.
+
+    Returns the installed path, or None when the build ships no service binary (the
+    service then falls back to ``service_host.py``, which service_installer handles).
+
+    An upgrade that copies only the agent leaves the SCM running a stale service host,
+    so the replace belongs here — in the same step the agent is installed, before step 6
+    recreates and starts the service.
+    """
+    source = agent_exe.parent / SERVICE_EXE_NAME
+    if not source.is_file():
+        print_warn(f"No {SERVICE_EXE_NAME} beside the agent — the service will run service_host.py")
+        return None
+
+    dest = INSTALL_DIR / SERVICE_EXE_NAME
+    if source.resolve() == dest.resolve():
+        print_ok(f"{SERVICE_EXE_NAME} already in install location")
         return dest
 
-    # A previous install leaves the destination hardened (tamper protection), and a
-    # copy over a file with DELETE denied fails even as Administrator.
+    _copy_binary(source, dest)
+    print_ok(f"Service host updated: {dest}")
+    return dest
+
+
+def _copy_binary(source: Path, dest: Path) -> None:
+    """Copy a binary into INSTALL_DIR, lifting both locks that hold the old copy.
+
+    Two independent locks, both measured on MOLE (S270):
+
+    * **Tamper protection** denies DELETE on the installed file, so a copy fails even as
+      Administrator. ``make_writable`` takes ownership and grants Administrators:F.
+    * **The running process holds its own image**, so the copy fails with
+      ERROR_SHARING_VIOLATION — ``PermissionError: [WinError 32]`` at installer.py:711,
+      which is why re-running the one-liner on an installed, *running* machine never
+      upgraded anything (the earlier "it works but the exit code lies" reading was the
+      previous run's log; the installer had crashed).
+
+    Stopping the service for the second lock is safe: step 6 recreates and starts it
+    unconditionally, and an in-place upgrade is otherwise impossible on a machine that is
+    doing its job.
+    """
     if dest.exists():
         if make_writable(dest):
-            print_ok("Existing agent made writable (tamper protection lifted for the upgrade)")
+            print_ok(f"{dest.name} made writable (tamper protection lifted)")
         else:
-            print_warn("Could not lift tamper protection on the existing agent — copy may fail")
+            print_warn(f"Could not lift tamper protection on {dest.name} — copy may fail")
 
-    shutil.copy2(agent_exe, dest)
-    print_ok(f"Agent copied: {dest}")
-    return dest
+    try:
+        shutil.copy2(source, dest)
+    except OSError as exc:
+        if not _is_sharing_violation(exc):
+            raise
+        print_warn(f"{dest.name} is in use — stopping the agent service to replace it")
+        if not _stop_service_for_replace():
+            print_fail(f"Cannot replace {dest.name}: the service holds it and did not stop")
+            raise
+        shutil.copy2(source, dest)
+
+
+def _stop_service_for_replace() -> bool:
+    """Stop the agent service so its binary can be replaced. Step 6 restarts it."""
+    try:
+        # Imported by name, not as a module attribute: service_installer is imported
+        # lazily on purpose (PyInstaller's frozen build must not import the service host
+        # at installer start-up), and the symbol is what this function needs.
+        from service_installer import stop_service
+    except ImportError:
+        print_warn("service_installer module not found — cannot stop the running service")
+        return False
+    return stop_service()
 
 
 def add_defender_exclusions() -> bool:

@@ -805,3 +805,159 @@ class TestReinstallOverTamperProtection:
 
         assert calls == [dest], "the existing binary must be unlocked before the copy"
         assert dest.read_text(encoding="utf-8") == "new"
+
+
+class TestServiceBinaryIsInstalledWithTheAgent:
+    """The SCM runs `lockdown-service.exe` from the install directory, so an upgrade
+    that copies only the agent leaves the service binary stale — and a *frozen* build
+    has no service_host.py to fall back to.
+
+    The replace also has to survive its own image being held open: the running service
+    locks its exe, so the copy fails with ERROR_SHARING_VIOLATION. The served PowerShell
+    one-liner used to do this copy itself and `$ErrorActionPreference = 'Stop'` aborted
+    the whole run there — exit 1, installer never started, previous run's log printed as
+    if it were this run's (S270 on MOLE). One owner, and it stops the service first.
+    """
+
+    def _stage(self, tmp_path: Path) -> tuple[Path, Path]:
+        stage = tmp_path / "staging"
+        stage.mkdir()
+        agent = stage / installer.AGENT_EXE_NAME
+        agent.write_text("agent", encoding="utf-8")
+        service = stage / installer.SERVICE_EXE_NAME
+        service.write_text("service", encoding="utf-8")
+        return agent, service
+
+    def test_staged_service_binary_is_copied_beside_the_agent(self, tmp_path, monkeypatch):
+        agent, service = self._stage(tmp_path)
+        install_dir = tmp_path / "LockdownAgent"
+        install_dir.mkdir()
+        monkeypatch.setattr(installer, "INSTALL_DIR", install_dir)
+
+        result = installer.install_service_binary(agent)
+
+        assert result == install_dir / installer.SERVICE_EXE_NAME
+        assert result.read_text(encoding="utf-8") == "service"
+
+    def test_a_build_without_a_service_binary_is_not_an_error(self, tmp_path, monkeypatch):
+        stage = tmp_path / "staging"
+        stage.mkdir()
+        agent = stage / installer.AGENT_EXE_NAME
+        agent.write_text("agent", encoding="utf-8")
+        monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path / "LockdownAgent")
+
+        assert installer.install_service_binary(agent) is None
+
+    def test_a_locked_binary_stops_the_service_and_retries(self, tmp_path, monkeypatch):
+        agent, _ = self._stage(tmp_path)
+        install_dir = tmp_path / "LockdownAgent"
+        install_dir.mkdir()
+        dest = install_dir / installer.SERVICE_EXE_NAME
+        dest.write_text("stale", encoding="utf-8")
+        monkeypatch.setattr(installer, "INSTALL_DIR", install_dir)
+
+        real_copy = installer.shutil.copy2
+        attempts: list[int] = []
+        stops: list[int] = []
+
+        def flaky_copy(src: Any, dst: Any) -> Any:
+            attempts.append(1)
+            if len(attempts) == 1:
+                # Real Windows text for ERROR_SHARING_VIOLATION (WinError 32).
+                raise OSError(32, "The process cannot access the file")
+            return real_copy(src, dst)
+
+        monkeypatch.setattr(installer.shutil, "copy2", flaky_copy)
+        monkeypatch.setattr(installer, "_stop_service_for_replace", lambda: stops.append(1) or True)
+
+        installer.install_service_binary(agent)
+
+        assert len(attempts) == 2, "the copy must be retried after the service stops"
+        assert stops == [1], "the service must be stopped exactly once, before the retry"
+        assert dest.read_text(encoding="utf-8") == "service"
+
+    def test_an_unstoppable_service_fails_loudly(self, tmp_path, monkeypatch):
+        agent, _ = self._stage(tmp_path)
+        install_dir = tmp_path / "LockdownAgent"
+        install_dir.mkdir()
+        (install_dir / installer.SERVICE_EXE_NAME).write_text("stale", encoding="utf-8")
+        monkeypatch.setattr(installer, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(
+            installer.shutil,
+            "copy2",
+            MagicMock(side_effect=OSError(32, "being used by another process")),
+        )
+        monkeypatch.setattr(installer, "_stop_service_for_replace", lambda: False)
+
+        with pytest.raises(OSError):
+            installer.install_service_binary(agent)
+
+    def test_a_different_error_is_not_treated_as_a_lock(self, tmp_path, monkeypatch):
+        agent, _ = self._stage(tmp_path)
+        install_dir = tmp_path / "LockdownAgent"
+        install_dir.mkdir()
+        monkeypatch.setattr(installer, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(
+            installer.shutil, "copy2", MagicMock(side_effect=OSError(28, "No space left"))
+        )
+        stops: list[int] = []
+        monkeypatch.setattr(installer, "_stop_service_for_replace", lambda: stops.append(1) or True)
+
+        with pytest.raises(OSError):
+            installer.install_service_binary(agent)
+        assert stops == [], "a disk-full copy must not stop the service"
+
+    def test_install_files_stages_the_service_even_when_the_agent_is_in_place(
+        self, tmp_path, monkeypatch
+    ):
+        install_dir = tmp_path / "LockdownAgent"
+        install_dir.mkdir()
+        agent = install_dir / installer.AGENT_EXE_NAME
+        agent.write_text("agent", encoding="utf-8")
+        monkeypatch.setattr(installer, "INSTALL_DIR", install_dir)
+
+        calls: list[Path] = []
+        monkeypatch.setattr(
+            installer, "install_service_binary", lambda exe: calls.append(exe) or None
+        )
+
+        installer.install_files(agent)
+
+        assert calls == [agent], "an up-to-date agent must not skip the service binary"
+
+    def test_a_locked_agent_binary_stops_the_service_and_retries(self, tmp_path, monkeypatch):
+        """The measured crash: re-installing over a *running* agent.
+
+        `PermissionError: [WinError 32] ... being used by another process` at
+        installer.py's shutil.copy2 (S270, MOLE). Upgrading an installed machine is
+        impossible until this path stops the service and retries — which is the whole
+        point of an installer that can run twice.
+        """
+        stage = tmp_path / "staging"
+        stage.mkdir()
+        agent = stage / installer.AGENT_EXE_NAME
+        agent.write_text("new-agent", encoding="utf-8")
+        install_dir = tmp_path / "LockdownAgent"
+        install_dir.mkdir()
+        dest = install_dir / installer.AGENT_EXE_NAME
+        dest.write_text("old-agent", encoding="utf-8")
+        monkeypatch.setattr(installer, "INSTALL_DIR", install_dir)
+
+        real_copy = installer.shutil.copy2
+        attempts: list[int] = []
+        stops: list[int] = []
+
+        def flaky_copy(src: Any, dst: Any) -> Any:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise OSError(32, "The process cannot access the file")
+            return real_copy(src, dst)
+
+        monkeypatch.setattr(installer.shutil, "copy2", flaky_copy)
+        monkeypatch.setattr(installer, "_stop_service_for_replace", lambda: stops.append(1) or True)
+
+        installer.install_files(agent)
+
+        assert attempts == [1, 1], "the agent copy must be retried after the service stops"
+        assert stops == [1]
+        assert dest.read_text(encoding="utf-8") == "new-agent"

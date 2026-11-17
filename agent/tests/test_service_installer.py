@@ -322,3 +322,57 @@ class TestStatus:
         s = service_installer.status()
         assert "error" in s
         assert s["scheduled_task"] is False
+
+
+class TestStopServiceForBinaryReplace:
+    """`stop_service` exists so the service binary can be replaced.
+
+    A running service holds its own image, so copying `lockdown-service.exe` over it
+    fails with ERROR_SHARING_VIOLATION. The served installer script used to do that copy
+    itself and aborted the whole run on the failure — exit 1 with the previous run's log
+    (S270, MOLE). The replace now stops the service first, and `sc stop` returns before
+    anything has stopped, so the state is polled rather than the exit code trusted.
+    """
+
+    def _query(self, stdout: str, returncode: int = 0):
+        result = MagicMock()
+        result.stdout = stdout
+        result.stderr = ""
+        result.returncode = returncode
+        return result
+
+    def test_non_windows_returns_false_without_touching_sc(self):
+        with (
+            patch.object(service_installer, "_is_windows", return_value=False),
+            patch.object(service_installer, "_sc") as sc,
+        ):
+            assert service_installer.stop_service() is False
+        sc.assert_not_called()
+
+    def test_stopped_service_is_reported_as_stopped(self):
+        with (
+            patch.object(service_installer, "_is_windows", return_value=True),
+            patch.object(service_installer, "_sc", return_value=self._query("STATE : 1 STOPPED")),
+        ):
+            assert service_installer.stop_service(wait_seconds=0.1) is True
+
+    def test_a_service_that_does_not_exist_counts_as_stopped(self):
+        # `sc query` exits 1060 when the service is absent — the first-install case.
+        def fake_sc(*args):
+            if args and args[0] == "query":
+                return self._query("[SC] OpenService FAILED 1060:", returncode=1060)
+            return self._query("")
+
+        with (
+            patch.object(service_installer, "_is_windows", return_value=True),
+            patch.object(service_installer, "_sc", side_effect=fake_sc),
+        ):
+            assert service_installer.stop_service(wait_seconds=0.1) is True
+
+    def test_a_service_that_never_stops_returns_false(self):
+        with (
+            patch.object(service_installer, "_is_windows", return_value=True),
+            patch.object(service_installer, "_sc", return_value=self._query("STATE : 4 RUNNING")),
+            patch.object(service_installer.time, "sleep"),
+        ):
+            assert service_installer.stop_service(wait_seconds=0.05) is False
