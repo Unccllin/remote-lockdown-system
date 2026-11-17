@@ -1113,3 +1113,93 @@ describe('S141: api_key_hash never leaves the server', () => {
     expect(res.body.device).not.toHaveProperty('api_key_hash');
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/devices/:id/commands — the ledger that carries the ACK's evidence.
+//
+// Parity with the Worker route. `lockdown_effective` / `boot_lock_status` are written
+// onto the command record when an agent ACKs, and no surface returned that record, so
+// "locked" was visible while "locked but ineffective" was not (S270).
+// ---------------------------------------------------------------------------
+
+describe('GET /api/devices/:id/commands', () => {
+  const app = createApp();
+
+  function deviceRows() {
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', {
+      rows: [{ id: 'dev-1', hostname: 'MOLE', status: 'locked' }],
+    });
+  }
+
+  test('rejects without auth token', async () => {
+    const res = await request(app).get('/api/devices/dev-1/commands');
+    expect(res.status).toBe(401);
+  });
+
+  test('returns the ledger newest first, carrying the ACK evidence', async () => {
+    deviceRows();
+    mockPool.query.setResult('SELECT * FROM commands WHERE device_id', {
+      rows: [
+        { id: 'cmd-new', device_id: 'dev-1', command_type: 'unlock', status: 'pending' },
+        {
+          id: 'cmd-old',
+          device_id: 'dev-1',
+          command_type: 'lockdown',
+          status: 'executed',
+          lockdown_effective: false,
+          boot_lock_status: 'partial',
+        },
+      ],
+    });
+
+    const res = await request(app)
+      .get('/api/devices/dev-1/commands')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((c) => c.id)).toEqual(['cmd-new', 'cmd-old']);
+    expect(res.body[1].lockdown_effective).toBe(false);
+    expect(res.body[1].boot_lock_status).toBe('partial');
+  });
+
+  test('asks the database for newest-first, so the page cannot be arbitrary', async () => {
+    deviceRows();
+    await request(app)
+      .get('/api/devices/dev-1/commands')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    const ledgerCall = mockPool.query.mock.calls.find(([sql]) =>
+      String(sql).includes('FROM commands')
+    );
+    expect(ledgerCall).toBeDefined();
+    expect(ledgerCall[0]).toContain('ORDER BY created_at DESC');
+    expect(ledgerCall[1]).toEqual(['dev-1', 20]);
+  });
+
+  test('clamps `limit` instead of trusting it', async () => {
+    for (const [query, expected] of [
+      ['?limit=999', 100],
+      ['?limit=0', 1],
+      ['?limit=abc', 20],
+    ]) {
+      mockPool.query.reset();
+      deviceRows();
+      const res = await request(app)
+        .get(`/api/devices/dev-1/commands${query}`)
+        .set('Authorization', `Bearer ${makeToken()}`);
+      expect(res.status).toBe(200);
+      const ledgerCall = mockPool.query.mock.calls.find(([sql]) =>
+        String(sql).includes('FROM commands')
+      );
+      expect(ledgerCall[1][1]).toBe(expected);
+    }
+  });
+
+  test('404s for a device that does not exist', async () => {
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', { rows: [] });
+    const res = await request(app)
+      .get('/api/devices/nope/commands')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(404);
+  });
+});

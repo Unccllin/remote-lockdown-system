@@ -2376,6 +2376,43 @@ async function handleTrackAction(
 /**
  * GET /api/devices/:id/locations — return location reports for a device.
  */
+/**
+ * GET /api/devices/:id/commands — the command ledger for one device, newest first.
+ *
+ * The ACK's evidence lands on the command record — `status`, `executed_at`,
+ * `lockdown_effective`, `boot_lock_status`, `encryption_blocked_files` — and until this
+ * route existed no surface returned it: the POST that queues a command replies with the
+ * record it just created, and nothing read it back afterwards. So an operator could see
+ * `status: locked` and not the `lockdown_effective: false` that accompanies it, which is
+ * the one pair that must never be conflated (S270: the field was added to the ACK and
+ * remained unreadable).
+ */
+async function handleListDeviceCommands(
+  request: Request,
+  env: Env,
+  deviceId: string,
+): Promise<Response> {
+  const auth = await requireRole(request, env, 'viewer');
+  if (auth instanceof Response) return auth;
+
+  const devices = await listDevices(env);
+  if (!devices.some((d) => d.id === deviceId)) {
+    return errorResponse('Device not found', 404);
+  }
+
+  // Clamped rather than trusted: this is a read path an operator drives from a browser,
+  // and the list is a single KV value in serverless mode.
+  const requested = Number.parseInt(requestUrl(request).searchParams.get('limit') || '20', 10);
+  const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 20, 1), 100);
+
+  const commands = (await listCommands(env))
+    .filter((c) => c.device_id === deviceId)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .slice(0, limit);
+
+  return jsonResponse(commands);
+}
+
 async function handleGetLocations(
   request: Request,
   env: Env,
@@ -3406,6 +3443,9 @@ async function handleEnrollSetupCommand(request: Request, env: Env): Promise<Res
       }
       if (action === 'locations' && method === 'GET') {
         return handleGetLocations(request, env, deviceId);
+      }
+      if (action === 'commands' && method === 'GET') {
+        return handleListDeviceCommands(request, env, deviceId);
       }
       if (action === 'location/latest' && method === 'GET') {
         return handleLatestLocation(request, env, deviceId);

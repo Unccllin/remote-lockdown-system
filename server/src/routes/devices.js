@@ -219,6 +219,30 @@ router.get('/:id', requireAuth, async (req, res) => {
   res.json(publicDevice(device));
 });
 
+/**
+ * GET /api/devices/:id/commands — the command ledger for one device, newest first.
+ *
+ * Parity with the Worker route (`handleListDeviceCommands`), not an addition to it: the
+ * ACK's evidence lands on the command record (`status`, `executed_at`,
+ * `lockdown_effective`, `boot_lock_status`, `encryption_blocked_files`) and no surface
+ * returned it before S270. A device showing `locked` also reports whether the lockdown
+ * was effective, and the two must be readable together.
+ */
+router.get('/:id/commands', requireAuth, async (req, res) => {
+  const device = await getDeviceById(req.params.id);
+  if (!device) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
+
+  // Clamped, not trusted: the caller is a browser and `limit` is user input.
+  const requested = Number.parseInt(req.query.limit, 10);
+  const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 20, 1), 100);
+
+  const result = await pool.query(
+    'SELECT * FROM commands WHERE device_id = $1 ORDER BY created_at DESC LIMIT $2',
+    [req.params.id, limit]
+  );
+  res.json(result.rows);
+});
+
 router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
   const { hostname, owner_name } = req.body;
   if (!hostname || !owner_name) return res.status(400).json({ error: 'hostname and owner_name required. Provide both fields in the request body.' });
