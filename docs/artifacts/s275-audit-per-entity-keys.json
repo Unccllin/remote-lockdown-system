@@ -1,0 +1,216 @@
+{
+  "session": "S275",
+  "adr": "ADR-005-per-entity-audit-entries.md",
+  "started_at": "2026-11-17T12:59:31.839Z",
+  "steps": [
+    {
+      "step": "01-gets-for-one-mutation",
+      "detail": {
+        "devices_enrolled": 6,
+        "gets": [
+          "device:fc3b94e450036c58ec303d7bbb897576",
+          "device:fc3b94e450036c58ec303d7bbb897576",
+          "device_index",
+          "device:fc3b94e450036c58ec303d7bbb897576",
+          "audit_index",
+          "audit_log"
+        ],
+        "device_record_gets": 3
+      }
+    },
+    {
+      "step": "02-index-with-device-ids",
+      "detail": {
+        "index": [
+          {
+            "id": "577df8733656e21501d696d30d16bd1c",
+            "device_id": "fc3b94e450036c58ec303d7bbb897576"
+          },
+          {
+            "id": "4b2921e308466a25789e4005e3660bc7",
+            "device_id": "0c8d630f067e41aaff85f20e95eec55b"
+          },
+          {
+            "id": "364e61f043e65d576d75d3e79d7c78e7",
+            "device_id": "fc3b94e450036c58ec303d7bbb897576"
+          }
+        ]
+      }
+    },
+    {
+      "step": "03-device-scoped-read",
+      "detail": {
+        "count": 2,
+        "actions": [
+          "api_key_rotated",
+          "api_key_rotated"
+        ]
+      }
+    },
+    {
+      "step": "04-after-crossing-the-cap",
+      "detail": {
+        "limit": "3",
+        "index": [
+          {
+            "id": "03a90101dcc52f337e3a1cb78a1df4ca",
+            "device_id": "fc3b94e450036c58ec303d7bbb897576"
+          },
+          {
+            "id": "61673216bed47ef260601340575863c0",
+            "device_id": "fc3b94e450036c58ec303d7bbb897576"
+          },
+          {
+            "id": "29974c2e542bd69b92be2671d0e93fe1",
+            "device_id": "fc3b94e450036c58ec303d7bbb897576"
+          }
+        ],
+        "records": 3
+      }
+    },
+    {
+      "step": "05-after-release",
+      "detail": {
+        "index": [
+          {
+            "id": "03a90101dcc52f337e3a1cb78a1df4ca",
+            "device_id": "fc3b94e450036c58ec303d7bbb897576"
+          },
+          {
+            "id": "61673216bed47ef260601340575863c0",
+            "device_id": "fc3b94e450036c58ec303d7bbb897576"
+          },
+          {
+            "id": "29974c2e542bd69b92be2671d0e93fe1",
+            "device_id": "fc3b94e450036c58ec303d7bbb897576"
+          },
+          {
+            "id": "4068e84d060f6f76d8e984520b60a2f9",
+            "device_id": "3dbf5f9589eb8bae42141af56ab01e84"
+          },
+          {
+            "id": "f4156d3c4761357499834962ebfbd594",
+            "device_id": "0c8d630f067e41aaff85f20e95eec55b"
+          },
+          {
+            "id": "25022aaa3275a33cd63f254d36bfc2c6",
+            "device_id": "3dbf5f9589eb8bae42141af56ab01e84"
+          }
+        ]
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "what": "a mutation does not scan the fleet for device records",
+      "ok": true,
+      "detail": {
+        "device_record_gets": 3,
+        "devices_enrolled": 6
+      }
+    },
+    {
+      "what": "the audit append reads the audit index, never the legacy whole-list key",
+      "ok": true,
+      "detail": {
+        "gets": [
+          "device:fc3b94e450036c58ec303d7bbb897576",
+          "device:fc3b94e450036c58ec303d7bbb897576",
+          "device_index",
+          "device:fc3b94e450036c58ec303d7bbb897576",
+          "audit_index",
+          "audit_log"
+        ]
+      }
+    },
+    {
+      "what": "the index carries a device id per entry",
+      "ok": true
+    },
+    {
+      "what": "both devices are represented",
+      "ok": true
+    },
+    {
+      "what": "no whole-list audit key exists",
+      "ok": true,
+      "detail": {
+        "keys": [
+          "audit:364e61f043e65d576d75d3e79d7c78e7",
+          "audit:4b2921e308466a25789e4005e3660bc7",
+          "audit:577df8733656e21501d696d30d16bd1c"
+        ]
+      }
+    },
+    {
+      "what": "the scoped read returns only A's entries",
+      "ok": true
+    },
+    {
+      "what": "and keeps the dashboard timestamp mapping",
+      "ok": true
+    },
+    {
+      "what": "the index is capped",
+      "ok": true,
+      "detail": {
+        "index": [
+          {
+            "id": "03a90101dcc52f337e3a1cb78a1df4ca",
+            "device_id": "fc3b94e450036c58ec303d7bbb897576"
+          },
+          {
+            "id": "61673216bed47ef260601340575863c0",
+            "device_id": "fc3b94e450036c58ec303d7bbb897576"
+          },
+          {
+            "id": "29974c2e542bd69b92be2671d0e93fe1",
+            "device_id": "fc3b94e450036c58ec303d7bbb897576"
+          }
+        ]
+      }
+    },
+    {
+      "what": "pruned entries took their records with them",
+      "ok": true,
+      "detail": {
+        "records": [
+          "audit:03a90101dcc52f337e3a1cb78a1df4ca",
+          "audit:29974c2e542bd69b92be2671d0e93fe1",
+          "audit:61673216bed47ef260601340575863c0"
+        ]
+      }
+    },
+    {
+      "what": "a bystander device has an entry to protect",
+      "ok": true,
+      "detail": {
+        "bEntry": {
+          "id": "f4156d3c4761357499834962ebfbd594",
+          "device_id": "0c8d630f067e41aaff85f20e95eec55b"
+        }
+      }
+    },
+    {
+      "what": "release succeeded",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"ok\":true,\"message\":\"Device 'AUD-C' has been released. All associated data has been deleted.\"}"
+      }
+    },
+    {
+      "what": "another device's entry bytes are untouched by the release",
+      "ok": true
+    },
+    {
+      "what": "the released device's own entries carry released_at",
+      "ok": true,
+      "detail": {
+        "released": 1
+      }
+    }
+  ],
+  "finished_at": "2026-11-17T12:59:32.103Z",
+  "ok": true
+}

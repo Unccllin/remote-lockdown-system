@@ -50,7 +50,7 @@ overlapping requests destroyed each other's fields. Observed live in S269 — th
 `unlock … status=executed` and the device still reported the unlock `pending`, because a
 concurrent check-in had written an older snapshot over it. Mutation now reads and writes
 exactly one key (`updateCommand`). `serializeMutation()` remains as belt-and-braces for the
-stores that are still whole lists: `audit_log`, `bios_passwords`, `encryption_keys`.
+stores that are still whole lists: `bios_passwords` and `encryption_keys`.
 
 Residual, stated rather than hidden: `command_index` is itself one key. It is append-mostly
 and holds only ids, so a lost append hides a command (recoverable from the audit log) instead
@@ -102,6 +102,26 @@ now keeps `LOCATION_HISTORY_LIMIT` reports (default 500 ≈ 4 hours of continuou
 overridable with that `[vars]` entry), and any report that falls off the end is deleted rather
 than left behind. See
 [docs/adr/ADR-004-per-entity-location-reports.md](../docs/adr/ADR-004-per-entity-location-reports.md).
+
+## Audit storage (ADR-005)
+
+Audit entries are per-entity, behind **one** index that carries the device id:
+
+| key | value |
+|-----|-------|
+| `audit:<id>` | one entry (`action`, `detail`, `created_at`, `hostname`) |
+| `audit_index` | `[{id, device_id}]`, oldest first, capped |
+| `audit_log` | legacy whole-list key; migrated once, then deleted |
+
+Why: every mutation appended through a read of up to 500 entries **plus a scan of the whole
+fleet** to find one hostname — since ADR-003 that scan was one index read plus one read per
+device, on the busiest write in the system (measured: 61 gets for one `api_key_rotated` on a
+60-device fleet, 3 now). The index holds `device_id` as well as the id because the read API is
+either global or scoped to one device: per-device indexes would be a second write on every
+append, while the id in the index gives a scoped read its own ids for one write.
+`AUDIT_HISTORY_LIMIT` (default 1000) is overridable, and pruning deletes the record with its
+index entry. See
+[docs/adr/ADR-005-per-entity-audit-entries.md](../docs/adr/ADR-005-per-entity-audit-entries.md).
 
 Reading a command back for the UI or a test goes through the API, not the KV layout:
 

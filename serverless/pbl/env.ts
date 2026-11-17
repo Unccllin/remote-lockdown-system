@@ -43,4 +43,10 @@ export interface Env {
    * by crossing it.
    */
   LOCATION_HISTORY_LIMIT?: string;
+  /**
+   * How many audit entries are retained (ADR-005; default 1000 when unset).
+   *
+   * Same reasoning as the location cap: retention is only exercised by crossing it.
+   */
+  AUDIT_HISTORY_LIMIT?: string;
 }

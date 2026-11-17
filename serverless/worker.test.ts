@@ -5711,3 +5711,143 @@ describe('ADR-004: per-entity location reports', () => {
     expect(earlierRow.id).toMatch(/^[0-9a-f]+$/);
   });
 });
+
+/**
+ * ADR-005: audit entries are per-entity records behind one capped index.
+ *
+ * The defect this removes: every mutation read up to 500 entries, scanned the WHOLE FLEET for one
+ * hostname (since ADR-003 that is an index get plus one get per device), and rewrote the window.
+ * Two concurrent appends lost one — and a lost audit line is a compliance record.
+ */
+describe('ADR-005: per-entity audit entries', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV; AUDIT_HISTORY_LIMIT?: string };
+  const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  const keysWithPrefix = async (prefix: string): Promise<string[]> =>
+    (await env.LOCKDOWN_KV.list({ prefix })).keys.map((k) => k.name);
+  const auditKeys = () => keysWithPrefix('audit:');
+
+  async function audit(query = ''): Promise<any[]> {
+    const resp = await worker.fetch(
+      makeRequest('GET', `/api/audit${query}`, undefined, ADMIN),
+      env,
+    );
+    return (await parseResponse(resp)) as any[];
+  }
+
+  it('migrates the legacy whole-list key into records plus an index carrying the device ids', async () => {
+    await env.LOCKDOWN_KV.put(
+      'audit_log',
+      JSON.stringify([
+        { id: 'old-1', device_id: 'dev-a', action: 'admin_flag_stolen', detail: '',
+          created_at: '2026-11-01T10:00:00.000Z', hostname: 'A', admin_username: 'admin' },
+        { id: 'old-2', device_id: 'dev-b', action: 'admin_track', detail: '',
+          created_at: '2026-11-01T10:01:00.000Z', hostname: 'B', admin_username: 'admin' },
+      ]),
+    );
+
+    const entries = await audit();
+    expect(entries.map((e) => e.action)).toEqual(['admin_track', 'admin_flag_stolen']); // newest first
+    expect(await auditKeys()).toHaveLength(2);
+
+    const index = JSON.parse((await env.LOCKDOWN_KV.get('audit_index')) as string);
+    expect(index).toHaveLength(2);
+    // The device id travels in the index — that is what makes a scoped read cheap.
+    expect(index.map((e: any) => e.device_id).sort()).toEqual(['dev-a', 'dev-b']);
+    expect(await env.LOCKDOWN_KV.get('audit_log')).toBeNull();
+  });
+
+  it('re-migrating the same rows does not duplicate them', async () => {
+    const legacy = JSON.stringify([
+      { id: 'old-1', device_id: 'dev-a', action: 'admin_flag_stolen', detail: '',
+        created_at: '2026-11-01T10:00:00.000Z', hostname: 'A', admin_username: 'admin' },
+    ]);
+    await env.LOCKDOWN_KV.put('audit_log', legacy);
+    await audit();
+    const afterFirst = (await env.LOCKDOWN_KV.get('audit_index')) as string;
+
+    await env.LOCKDOWN_KV.put('audit_log', legacy); // the other isolate's copy
+    await audit();
+
+    expect((await env.LOCKDOWN_KV.get('audit_index')) as string).toBe(afterFirst);
+    expect(await auditKeys()).toHaveLength(1);
+  });
+
+  it('two devices mutating at once both keep their audit lines', async () => {
+    const { device: a } = await enrollDevice(worker, env, 'AUD-A');
+    const { device: b } = await enrollDevice(worker, env, 'AUD-B');
+
+    const flag = async (d: any, hostname: string) =>
+      worker.fetch(
+        makeRequest('POST', `/api/devices/${d.id}/flag-stolen`, { hostname_confirm: hostname }, ADMIN),
+        env,
+      );
+    expect((await flag(a, 'AUD-A')).status).toBe(200);
+    expect((await flag(b, 'AUD-B')).status).toBe(200);
+
+    const entries = await audit();
+    const actions = entries.filter((e) => e.action === 'admin_flag_stolen');
+    expect(actions).toHaveLength(2);
+    // The hostname proves the entry read exactly its own device, not the fleet.
+    expect(actions.map((e) => e.hostname).sort()).toEqual(['AUD-A', 'AUD-B']);
+  });
+
+  it('a device-filtered read returns only that device\'s entries', async () => {
+    const { device: a } = await enrollDevice(worker, env, 'FILT-A');
+    const { device: b } = await enrollDevice(worker, env, 'FILT-B');
+    // rotate-key is idempotent (a repeat is another entry), unlike flag-stolen, which 409s once
+    // the device is already stolen and so would write nothing the second time.
+    const rotate = (d: any) =>
+      worker.fetch(makeRequest('POST', `/api/devices/${d.id}/rotate-key`, {}, ADMIN), env);
+    await rotate(a);
+    await rotate(b);
+    await rotate(a);
+
+    const forA = await audit(`?device_id=${a.id}`);
+    expect(forA).toHaveLength(2);
+    expect(forA.every((e) => e.device_id === a.id)).toBe(true);
+    expect(forA.every((e) => e.timestamp === e.created_at)).toBe(true); // dashboard mapping kept
+  });
+
+  it('the cap prunes index entries and their records', async () => {
+    env.AUDIT_HISTORY_LIMIT = '2';
+    const { device } = await enrollDevice(worker, env, 'AUD-CAP');
+    // Enrolment itself writes audit lines, so drive enough to cross a cap of 2.
+    for (let i = 0; i < 3; i += 1) {
+      await worker.fetch(makeRequest('POST', `/api/devices/${device.id}/rotate-key`, {}, ADMIN), env);
+    }
+
+    const index = JSON.parse((await env.LOCKDOWN_KV.get('audit_index')) as string);
+    expect(index).toHaveLength(2);
+    expect(await auditKeys()).toHaveLength(2);
+  });
+
+  it('release amends only its own entries and leaves the rest untouched', async () => {
+    const { device: a } = await enrollDevice(worker, env, 'REL-A');
+    const { device: b } = await enrollDevice(worker, env, 'REL-B');
+    // Enrolment writes no audit line, so give A one to be amended by the release.
+    await worker.fetch(makeRequest('POST', `/api/devices/${a.id}/rotate-key`, {}, ADMIN), env);
+    await worker.fetch(
+      makeRequest('POST', `/api/devices/${b.id}/flag-stolen`, { hostname_confirm: 'REL-B' }, ADMIN),
+      env,
+    );
+    // Snapshot B's entry bytes: a whole-trail rewrite would rewrite them too.
+    const indexBefore = JSON.parse((await env.LOCKDOWN_KV.get('audit_index')) as string);
+    const bId = indexBefore.find((e: any) => e.device_id === b.id).id;
+    const bBefore = await env.LOCKDOWN_KV.get(`audit:${bId}`);
+
+    const release = await worker.fetch(
+      makeRequest('DELETE', `/api/devices/${a.id}/release`, { hostname_confirm: 'REL-A' }, ADMIN),
+      env,
+    );
+    expect(release.status).toBe(200);
+
+    expect(await env.LOCKDOWN_KV.get(`audit:${bId}`)).toBe(bBefore); // untouched
+    const aEntries = await audit(`?device_id=${a.id}`);
+    expect(aEntries.some((e) => e.detail.includes('released_at='))).toBe(true);
+  });
+});

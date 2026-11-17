@@ -1366,22 +1366,125 @@ async function saveHwArtifacts(env: Env, artifacts: HwTestArtifact[]): Promise<v
   await env.LOCKDOWN_KV.put(HW_ARTIFACTS_KEY, JSON.stringify(artifacts));
 }
 
-async function listAudit(env: Env): Promise<AuditEntry[]> {
-  const data = await env.LOCKDOWN_KV.get(AUDIT_KEY);
-  return data ? parseKvJson<AuditEntry[]>(data, AUDIT_KEY) : [];
+// ADR-005: an audit entry is its own record, behind ONE capped index. `audit_log` is the legacy
+// whole list: migrated once, deleted.
+const AUDIT_KEY_PREFIX = 'audit:';
+const AUDIT_INDEX_KEY = 'audit_index';
+
+/**
+ * How many audit entries are retained.
+ *
+ * Twice the old 500, because the old cap was one window for the whole fleet and an entry is
+ * small. Overridable as a `[vars]` entry like LOCATION_HISTORY_LIMIT — the pruning path is only
+ * reachable by crossing the limit, so a limit nothing can cross is a limit nobody has seen work.
+ */
+const AUDIT_HISTORY_LIMIT = 1000;
+
+function auditHistoryLimit(env: Env): number {
+  const raw = Number(env.AUDIT_HISTORY_LIMIT ?? AUDIT_HISTORY_LIMIT);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : AUDIT_HISTORY_LIMIT;
 }
 
-async function saveAudit(env: Env, entries: AuditEntry[]): Promise<void> {
-  // Cap at 500 most recent to stay within KV value size limits
-  const capped = entries.slice(-500);
-  await env.LOCKDOWN_KV.put(AUDIT_KEY, JSON.stringify(capped));
+/** An index entry: the id, plus the device it belongs to so a scoped read needs no records. */
+interface AuditIndexEntry {
+  id: string;
+  device_id: string;
 }
 
+/** KV key for one audit entry (ADR-005). */
+function auditKey(id: string): string {
+  return `${AUDIT_KEY_PREFIX}${id}`;
+}
+
+/** One audit entry, or null when the key is absent or unreadable. */
+async function getAuditEntry(env: Env, id: string): Promise<AuditEntry | null> {
+  const data = await env.LOCKDOWN_KV.get(auditKey(id));
+  if (!data) return null;
+  try {
+    return JSON.parse(data) as AuditEntry;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A stable id for a row in the legacy list.
+ *
+ * Deterministic so two isolates migrating at once write the same keys instead of duplicating
+ * every entry — `generateId()` would double them.
+ */
+async function legacyAuditId(row: AuditEntry): Promise<string> {
+  const material = JSON.stringify([row.device_id, row.action, row.detail, row.created_at]);
+  return `aud-${(await sha256(material)).slice(0, 24)}`;
+}
+
+/** The index, oldest first, migrating the legacy whole-list key on first use. */
+async function listAuditIndex(env: Env): Promise<AuditIndexEntry[]> {
+  const data = await env.LOCKDOWN_KV.get(AUDIT_INDEX_KEY);
+  if (data) {
+    try {
+      const parsed: unknown = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (e): e is AuditIndexEntry =>
+            !!e && typeof (e as AuditIndexEntry).id === 'string',
+        );
+      }
+    } catch {
+      // Corrupt index: fall through and rebuild it from the legacy key if that exists.
+    }
+  }
+
+  const legacy = await env.LOCKDOWN_KV.get(AUDIT_KEY);
+  if (!legacy) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(legacy);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const rows = parsed.filter(
+    (r): r is AuditEntry => !!r && typeof (r as AuditEntry).device_id === 'string',
+  );
+  if (rows.length === 0) return [];
+
+  const index: AuditIndexEntry[] = [];
+  for (const row of rows) {
+    const id = await legacyAuditId(row);
+    await env.LOCKDOWN_KV.put(auditKey(id), JSON.stringify({ ...row, id }));
+    index.push({ id, device_id: row.device_id });
+  }
+  await saveAuditIndex(env, index);
+  await env.LOCKDOWN_KV.delete(AUDIT_KEY);
+  return index.slice(-auditHistoryLimit(env));
+}
+
+/**
+ * Persist the index, deleting the records that fall off the end.
+ *
+ * Entries are immutable except for the release amendment, so a pruned id must take its record
+ * with it or the key count would grow forever.
+ */
+async function saveAuditIndex(env: Env, index: AuditIndexEntry[]): Promise<void> {
+  const kept = index.slice(-auditHistoryLimit(env));
+  const evicted = index.slice(0, Math.max(0, index.length - kept.length));
+  await env.LOCKDOWN_KV.put(AUDIT_INDEX_KEY, JSON.stringify(kept));
+  for (const entry of evicted) {
+    await env.LOCKDOWN_KV.delete(auditKey(entry.id));
+  }
+}
+
+/**
+ * Record one audit entry.
+ *
+ * ADR-005: the hostname comes from this device's record — one get — instead of scanning the
+ * fleet, which since ADR-003 was one index get plus one get per device on every mutation.
+ */
 async function addAuditEntry(env: Env, deviceId: string, action: string, detail: string): Promise<void> {
-  const entries = await listAudit(env);
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
-  entries.push({
+  const device = await getDeviceRecord(env, deviceId);
+  const entry: AuditEntry = {
     id: generateId(),
     device_id: deviceId,
     action,
@@ -1389,8 +1492,10 @@ async function addAuditEntry(env: Env, deviceId: string, action: string, detail:
     created_at: new Date().toISOString(),
     hostname: device?.hostname || null,
     admin_username: 'admin',
-  });
-  await saveAudit(env, entries);
+  };
+  await env.LOCKDOWN_KV.put(auditKey(entry.id), JSON.stringify(entry));
+  const index = await listAuditIndex(env);
+  await saveAuditIndex(env, [...index, { id: entry.id, device_id: deviceId }]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1940,7 +2045,7 @@ async function handleAgentLocation(request: Request, env: Env): Promise<Response
  * ADR-002 and ADR-003 removed the cause for commands and devices — they are per-entity records
  * now, so two writers touch different keys. What remains here is the multi-key paths
  * (an enrolment writes a record, an index entry and an API-key pointer) and the stores still
- * kept as whole lists: `audit_log`, `bios_passwords`, `encryption_keys`.
+ * kept as whole lists: `bios_passwords`, `encryption_keys`.
  *
  * A promise chain serialises requests served by the same isolate, which is the only case that
  * can be fixed without Durable Objects. Cross-isolate races remain for those stores; the fix is
@@ -2488,8 +2593,8 @@ async function handleGetDevice(
 ): Promise<Response> {
   const auth = await requireRole(request, env, 'viewer');
   if (auth instanceof Response) return auth;
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -2628,8 +2733,8 @@ async function handleFlagStolen(
 
   const payload = await request.json() as { hostname_confirm?: string; enable_pba?: boolean };
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -2698,8 +2803,8 @@ async function handleRecover(
     payload = {};
   }
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -2801,8 +2906,8 @@ async function handleTrackAction(
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -2975,8 +3080,8 @@ async function handleDownloadEfsCert(
   const auth = await requireRole(request, env, 'super-admin');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -3011,8 +3116,8 @@ async function handleGetPbaCredentials(
   const auth = await requireRole(request, env, 'super-admin');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
 
   const pws = await listBiosPasswords(env);
@@ -3047,8 +3152,8 @@ async function handleReleaseDevice(
   let payload: { hostname_confirm?: string } = {};
   try { payload = JSON.parse(await request.text()); } catch { /* empty ok */ }
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
   if (device.hostname !== payload.hostname_confirm) {
     return errorResponse('Confirmation hostname does not match.', 400);
@@ -3059,14 +3164,18 @@ async function handleReleaseDevice(
   }
 
   // Anonymize audit entries for this device (preserve for accountability).
-  const audit = await listAudit(env);
+  //
+  // ADR-005: amend this device's entries only. The old shape rewrote the whole trail to touch a
+  // few lines — and dropped whatever fell off the 500-entry cap mid-rewrite.
   const releasedAt = new Date().toISOString();
-  for (const e of audit) {
-    if (e.device_id === deviceId) {
-      e.detail = `${e.detail || ''} released_at=${releasedAt}`.trim();
-    }
+  const auditIndex = await listAuditIndex(env);
+  for (const indexed of auditIndex) {
+    if (indexed.device_id !== deviceId) continue;
+    const entry = await getAuditEntry(env, indexed.id);
+    if (!entry) continue;
+    entry.detail = `${entry.detail || ''} released_at=${releasedAt}`.trim();
+    await env.LOCKDOWN_KV.put(auditKey(entry.id), JSON.stringify(entry));
   }
-  await saveAudit(env, audit);
   await addAuditEntry(env, deviceId, 'device_released', `hostname=${device.hostname} by=${auth.username}`);
 
   // Cascade-delete the device's data across the KV stores.
@@ -3206,8 +3315,8 @@ async function handleInstaller(request: Request, env: Env, deviceId: string): Pr
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
 
   // Fresh api_key for this install (re-keys the device; old key is replaced).
@@ -3254,11 +3363,14 @@ async function handleGetAudit(request: Request, env: Env): Promise<Response> {
   const url = requestUrl(request);
   const limit = parseInt(url.searchParams.get('limit') || '50', 10);
   const deviceId = url.searchParams.get('device_id');
-  const entries = await listAudit(env);
-  let filtered = deviceId
-    ? entries.filter((e) => e.device_id === deviceId)
-    : entries;
-  filtered = filtered.slice(-limit).reverse(); // most recent first
+  // ADR-005: the index carries the device id, so a scoped read selects its own ids instead of
+  // loading the whole trail and discarding most of it.
+  const auditIndex = await listAuditIndex(env);
+  const selected = (deviceId ? auditIndex.filter((e) => e.device_id === deviceId) : auditIndex)
+    .slice(-limit)
+    .reverse(); // most recent first
+  const loaded = await Promise.all(selected.map((e) => getAuditEntry(env, e.id)));
+  const filtered = loaded.filter((e): e is AuditEntry => e !== null);
   // Map created_at → timestamp for dashboard compatibility (the Express
   // server uses `timestamp`, the Worker uses `created_at` internally)
   const mapped = filtered.map((e) => ({
@@ -4474,10 +4586,13 @@ async function handleLinkPbl(
     return errorResponse('pbl_device_id must be 64 hex chars (32 bytes)', 400);
   }
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
 
+  // The collision check is the one read in this handler that genuinely needs the fleet: a
+  // pbl_device_id must be unique across every device.
+  const devices = await listDevices(env);
   const collision = devices.find(
     (d) =>
       d.id !== device.id &&
@@ -4512,8 +4627,8 @@ async function handleUnlinkPbl(
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
   if (!device.pbl_device_id) {
     return errorResponse('Device has no PBL device_id linked', 400);
@@ -4569,8 +4684,8 @@ async function handleRotateKey(
   const auth = await requireRole(request, env, 'super-admin');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse(
       'Device not found. Verify the device ID is correct and the device is enrolled in the system.',
