@@ -274,6 +274,17 @@ export default function DevicesPage() {
                         {STATUS_ICON[d.status]}
                         {d.status}
                       </span>
+                      {/* S271: `stolen` is set when the lockdown is QUEUED, so it says what we
+                          asked for, not what happened. A device that was offline when it was
+                          flagged keeps that status while nothing on it has changed — this chip
+                          is the difference between "locked" and "armed, waiting for the
+                          device", and it is what stops an operator telling a manager a laptop
+                          is locked when it never heard us. */}
+                      {d.lock_state === 'armed' && (
+                        <span className="ml-2 badge-warning text-xs" title="A lockdown is queued but the device has not checked in — it will lock when it reconnects (or after 24 h if it heard the flag before going dark)">
+                          lock armed
+                        </span>
+                      )}
                     </td>
                     <td className="px-5 py-3 font-mono text-slate-200">
                       {d.hostname}

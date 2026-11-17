@@ -5181,3 +5181,83 @@ describe('D-210: PBL route integration', () => {
     });
   });
 });
+
+/**
+ * `lock_state` — what actually happened to a lock, not what was asked for.
+ *
+ * `status: stolen` is set the moment a lockdown is queued, so on its own it says nothing about
+ * the device. A machine that is offline when it is flagged keeps that status while nothing on it
+ * changes — measured on MOLE (S271). The operator-facing question is "did it lock?", and the
+ * answer has three distinguishable shapes: applied (the ACK), applying (reachable, queued),
+ * armed (queued, device quiet, will lock on reconnect or after the 24 h deadman).
+ */
+describe('lock_state on the device payload', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  async function seed(
+    hostname: string,
+    commands: Array<Record<string, unknown>>,
+    lastCheckin: string,
+  ): Promise<any> {
+    const { device } = await enrollDevice(worker, env, hostname);
+    const list = JSON.parse((await env.LOCKDOWN_KV.get('devices')) as string) as any[];
+    const idx = list.findIndex((d) => d.id === device.id);
+    list[idx].last_checkin = lastCheckin;
+    await env.LOCKDOWN_KV.put('devices', JSON.stringify(list));
+    if (commands.length) {
+      await env.LOCKDOWN_KV.put(
+        'commands',
+        JSON.stringify(commands.map((c) => ({ device_id: device.id, command_uuid: null, ...c }))),
+      );
+    }
+    const resp = await worker.fetch(
+      makeRequest('GET', '/api/devices', undefined, { Authorization: 'Bearer test-admin-token' }),
+      env,
+    );
+    const devices = (await parseResponse(resp)) as any[];
+    return devices.find((d) => d.id === device.id);
+  }
+
+  const now = new Date().toISOString();
+  const stale = new Date(Date.now() - 30 * 60_000).toISOString();
+  const lockdown = (status: string, at = '2026-11-17T10:00:00Z') => ({
+    id: `cmd-${status}`,
+    command_type: 'lockdown',
+    status,
+    created_at: at,
+  });
+
+  it('reports applied when the lockdown ACKed', async () => {
+    expect((await seed('LOCKST-001', [lockdown('executed')], now)).lock_state).toBe('applied');
+  });
+
+  it('reports applying when the lock is queued and the device is still checking in', async () => {
+    expect((await seed('LOCKST-002', [lockdown('pending')], now)).lock_state).toBe('applying');
+  });
+
+  it('reports armed when the lock is queued but the device has gone quiet', async () => {
+    // The case an operator must not mistake for "locked": flagged while offline.
+    expect((await seed('LOCKST-003', [lockdown('pending')], stale)).lock_state).toBe('armed');
+  });
+
+  it('reports failed when the lockdown reported failure', async () => {
+    expect((await seed('LOCKST-004', [lockdown('failed')], now)).lock_state).toBe('failed');
+  });
+
+  it('reports none when no lockdown is in play', async () => {
+    expect((await seed('LOCKST-005', [], now)).lock_state).toBe('none');
+  });
+
+  it('reports none after an unlock follows the lockdown', async () => {
+    const d = await seed(
+      'LOCKST-006',
+      [lockdown('executed'), { ...lockdown('executed', '2026-11-17T11:00:00Z'), id: 'cmd-u', command_type: 'unlock' }],
+      now,
+    );
+    expect(d.lock_state).toBe('none');
+  });
+});

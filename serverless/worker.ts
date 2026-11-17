@@ -894,6 +894,52 @@ async function deleteCommandsForDevice(env: Env, deviceId: string): Promise<numb
   return removed;
 }
 
+/**
+ * How far a device's lock has actually got, derived rather than stored.
+ *
+ * `status: stolen` is set when a lockdown is QUEUED, so on its own it says what we asked for,
+ * not what happened. A device that is offline when it is flagged keeps that status while
+ * nothing on it has changed — measured on MOLE, and the reason this field exists (S271): an
+ * operator must not tell anyone a laptop is locked when the machine never heard us.
+ *
+ * - `applied`  — a lockdown executed (evidence: the ACK)
+ * - `applying` — queued, and the device checked in recently enough to pick it up
+ * - `armed`    — queued, but the device has gone quiet: it will lock when it reconnects
+ *                (or, if it heard the flag before going dark, after the 24 h deadman)
+ * - `failed`   — a lockdown was attempted and reported failed
+ * - `none`     — no lockdown in play, or an unlock came after it
+ */
+const LOCK_STATE_FRESH_MS = 180_000;
+
+function lockStateFor(
+  commands: Command[],
+  // Narrow on purpose: this runs against the device as returned to the client, which has
+  // `api_key_hash` stripped. Asking for the whole Device type would force the hash back in.
+  device: { id: string; last_checkin?: string | null },
+  now: number = Date.now(),
+): 'applied' | 'applying' | 'armed' | 'failed' | 'none' {
+  const forDevice = commands.filter((c) => c.device_id === device.id);
+  const newest = (type: Command['command_type']): Command | undefined =>
+    forDevice
+      .filter((c) => c.command_type === type)
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
+
+  const lockdown = newest('lockdown');
+  if (!lockdown) return 'none';
+
+  const unlock = newest('unlock');
+  if (unlock && String(unlock.created_at) >= String(lockdown.created_at)) return 'none';
+
+  if (lockdown.status === 'executed') return 'applied';
+  if (lockdown.status === 'failed') return 'failed';
+  if (lockdown.status === 'cancelled') return 'none';
+
+  // Pending: is the device reachable enough to fetch it on its next poll?
+  const lastCheckin = device.last_checkin ? Date.parse(String(device.last_checkin)) : NaN;
+  const fresh = Number.isFinite(lastCheckin) && now - lastCheckin <= LOCK_STATE_FRESH_MS;
+  return fresh ? 'applying' : 'armed';
+}
+
 async function createCommand(env: Env, command: Command): Promise<void> {
   await env.LOCKDOWN_KV.put(commandKey(command.id), JSON.stringify(command));
   const ids = await listCommandIds(env);
@@ -2100,7 +2146,11 @@ async function handleListDevices(request: Request, env: Env): Promise<Response> 
   // `api_key_hash` is destructured out so it can never leave the Worker; the `_` prefix is
   // what marks the binding as deliberately unused (the harness treats an unprefixed unused
   // binding as a bug, which it is everywhere else in this file).
-  const safe = merged.map(({ api_key_hash: _api_key_hash, ...d }) => d);
+  const commands = await listCommands(env);
+  const safe = merged.map(({ api_key_hash: _api_key_hash, ...d }) => ({
+    ...d,
+    lock_state: lockStateFor(commands, d),
+  }));
   // D-222: a rollout asks "which devices are not on build X?". `unknown` is a distinct
   // query from any literal version — never-reported is not "on some other version".
   const url = new URL(request.url);
@@ -2133,7 +2183,8 @@ async function handleGetDevice(
   // `res.json(device)` shape (the dashboard expects devRes.data to be
   // the device, not a wrapper object).
   const { api_key_hash: _api_key_hash, ...safeDevice } = merged;
-  return jsonResponse(safeDevice);
+  const commands = await listCommands(env);
+  return jsonResponse({ ...safeDevice, lock_state: lockStateFor(commands, merged) });
 }
 
 /**
