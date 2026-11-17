@@ -636,7 +636,10 @@ class TestHpUefiLockdown:
         }
         mock_set.return_value = 0
 
-        result = hp_uefi_lockdown.remove_boot_lockdown("mypassword")
+        # The verdict is now "every restore verified", so the verification has to agree —
+        # otherwise this asserts True for a restore that changed nothing (S271).
+        with patch.object(hp_uefi_lockdown, "_verify_setting", return_value=True):
+            result = hp_uefi_lockdown.remove_boot_lockdown("mypassword")
 
         assert result is True
         # Last call should be clearing the Setup password (was set by agent)
@@ -893,14 +896,22 @@ class TestHpUefiLockdown:
     def test_d009_remove_uses_model_aware_resolution(self, _, __, ___, tmp_state_file):
         """D-009: remove_boot_lockdown uses _resolve_setting_names for restoration."""
         custom_settings = [("Custom PXE", "Disable"), ("Custom USB", "Disable")]
-        with patch.object(
-            hp_uefi_lockdown,
-            "_resolve_setting_names",
-            return_value=(custom_settings, []),
+        with (
+            patch.object(
+                hp_uefi_lockdown,
+                "_resolve_setting_names",
+                return_value=(custom_settings, []),
+            ),
+            patch("hp_uefi_lockdown.load_boot_state", return_value=None),
+            patch.object(hp_uefi_lockdown, "_set_setting", return_value=0) as mock_set,
+            patch.object(hp_uefi_lockdown, "_verify_setting", return_value=True),
         ):
-            with patch("hp_uefi_lockdown.load_boot_state", return_value=None):
-                result = hp_uefi_lockdown.remove_boot_lockdown(bios_password="testpw")
+            result = hp_uefi_lockdown.remove_boot_lockdown(bios_password="testpw")
+
         assert result is True
+        # D-009 is about WHICH names are used, so assert that rather than the verdict alone.
+        names = [c.args[0] for c in mock_set.call_args_list]
+        assert "Custom PXE" in names and "Custom USB" in names
 
     # --- D-010: HP Sure Admin / Sure Run / Sure Start awareness ---
 
@@ -1158,3 +1169,28 @@ class TestFailedRollbackKeepsTheBootState:
 
         assert ok is True
         assert not state_file.exists()
+
+
+class TestRemovalVerdict:
+    """`remove_boot_lockdown` must not claim a restore it did not verify.
+
+    Measured on MOLE (S271): with the boot state deleted by a failed rollback, the removal
+    logged "Restored 0 BIOS settings" and the caller then logged "BIOS restored to
+    pre-lockdown state" — while the four boot settings still held the lockdown values and every
+    restore write was refused (Return=4 Failed).
+    """
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown.load_boot_state", return_value=None)
+    @patch("hp_uefi_lockdown._set_setting", return_value=4)  # Failed: every write refused
+    def test_refused_writes_are_reported_as_failure(self, _set, _state, _hp, _admin):
+        assert hp_uefi_lockdown.remove_boot_lockdown(bios_password="pw") is False
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown.load_boot_state", return_value=None)
+    @patch("hp_uefi_lockdown._verify_setting", return_value=False)
+    @patch("hp_uefi_lockdown._set_setting", return_value=0)  # accepted, never verified
+    def test_accepted_but_unverified_is_not_a_restore(self, _set, _verify, _state, _hp, _admin):
+        assert hp_uefi_lockdown.remove_boot_lockdown(bios_password="pw") is False

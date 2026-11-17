@@ -2730,8 +2730,16 @@ def handle_unlock(cfg: dict, command: dict) -> None:
 
         if bios_password:
             try:
-                hp_uefi_lockdown.remove_boot_lockdown(bios_password, power_on_password)
-                log.info("UEFI boot lockdown removed — BIOS restored to pre-lockdown state")
+                restored = hp_uefi_lockdown.remove_boot_lockdown(bios_password, power_on_password)
+                if restored:
+                    log.info("UEFI boot lockdown removed — BIOS restored to pre-lockdown state")
+                else:
+                    # Never say "restored" when nothing was verified: on MOLE every restore write
+                    # was refused and the boot settings kept the lockdown values (S271).
+                    log.error(
+                        "UEFI boot lockdown removal did NOT restore the BIOS — the boot settings "
+                        "may still hold the lockdown values; restore them in BIOS Setup"
+                    )
                 if power_on_password:
                     log.info("T7: Power-On Password cleared — PBA removed")
                 del bios_password

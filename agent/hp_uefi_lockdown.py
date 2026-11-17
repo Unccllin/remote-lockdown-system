@@ -1869,6 +1869,7 @@ def remove_boot_lockdown(
             safe_defaults[setting_name] = "Disable"
 
     restored = 0
+    attempted = 0
     for setting_name, _ in resolved_settings:
         original = restore_settings.get(setting_name)
         if original is None:
@@ -1877,6 +1878,7 @@ def remove_boot_lockdown(
         if original is None:
             continue
 
+        attempted += 1
         rc = _set_setting(setting_name, original, bios_password)
         if rc == 0:
             # D-013: Verify restore actually took effect
@@ -1897,7 +1899,27 @@ def remove_boot_lockdown(
                 SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
             )
 
-    log.info("Restored %d BIOS settings to pre-lockdown state", restored)
+    # Say what actually happened. This line used to read "Restored 0 BIOS settings" followed by
+    # the caller claiming "BIOS restored to pre-lockdown state" — on MOLE the boot settings were
+    # still the lockdown values and every restore write had been refused (S271).
+    if attempted == 0:
+        log.warning(
+            "Nothing restorable: no boot state and no known defaults — the BIOS is unchanged and "
+            "may still hold the lockdown values"
+        )
+    elif restored == 0:
+        log.error(
+            "Restored 0 of %d BIOS settings — every write was refused; the boot settings may "
+            "still hold the lockdown values and must be restored in BIOS Setup",
+            attempted,
+        )
+    elif restored < attempted:
+        log.warning(
+            "Restored %d of %d BIOS settings — check the rest in BIOS Setup", restored, attempted
+        )
+    else:
+        log.info("Restored %d BIOS settings to pre-lockdown state", restored)
+    restore_ok = attempted > 0 and restored == attempted
 
     # T7: Clear Power-On Password if PBA was active (power_on_password provided).
     # This must be done BEFORE clearing the Setup Password, because clearing
@@ -1959,4 +1981,4 @@ def remove_boot_lockdown(
     # SAFETY: Delete the password backup file now that unlock is complete
     delete_password_backup()
 
-    return True
+    return restore_ok
