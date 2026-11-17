@@ -16520,3 +16520,26 @@ no `.enc` files, account enabled.
 terminal state (the Worker flips device status when a command is queued, so the first run
 asserted against `pending`); `stop-track` expects the account to stay held while a reason
 remains; the probe's `efs_paths` scan was restored after a rebuild lost it.
+
+### Correction — S271: `d8dc169` did not fix the decoy
+
+The addendum above says the decoy was "Fixed in `d8dc169` (`_run_net_user` takes optional
+stdin; the decoy answers Y)". That was wrong, and the next tracking cycle (`v3`, against the
+`d94293b` build) reported it: `decoy account exists: GuestUser=False`.
+
+Measured directly on MOLE:
+
+```text
+'Y' | net user GuestUser2 <24-char password> /add   ->  exit -1, exists=False
+New-LocalUser -Name GuestUser -Password <24-char>   ->  exists=True, no prompt
+```
+
+`net user` reads that prompt from the **console**, not stdin, so piping "Y" is inert. The
+test added with `d8dc169` passed because it asserted the stdin argument the fake received,
+not that the account existed — a test that measured the intention. The real fix is
+`54b216f`: create the account with `New-LocalUser`, pass the password in the child's
+environment (not argv), verify by reading the account back, and fall back to a ≤13-character
+`net user` command (under the prompt threshold) where the LocalAccounts module is absent.
+
+Rule worth keeping: when a fix's evidence is "the fake was called with the right arguments",
+it has not been verified. The verification is the account existing on the machine.
