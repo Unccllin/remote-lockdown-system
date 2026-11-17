@@ -1244,41 +1244,58 @@ def get_geolocation(cfg: dict) -> dict | None:
     if google_key:
         wifi = scan_wifi_networks()
         if wifi:
-            try:
-                wifi_points = []
-                for net in wifi[:20]:  # Max 20 access points
-                    point = {"macAddress": net["bssid"]}
-                    if "signal" in net:
-                        # Google expects signal strength in dBm (negative).
-                        # netsh gives percentage, convert approximately.
-                        pct = net["signal"]
-                        if pct > 0:
-                            point["signalStrength"] = -(100 - pct)
-                    if "frequency" in net:
-                        point["channel"] = int(float(net["frequency"]) * 1000)
-                    wifi_points.append(point)
-
-                resp = requests.post(
-                    f"https://www.googleapis.com/geolocation/v1/geolocate?key={google_key}",
-                    json={"wifiAccessPoints": wifi_points},
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                loc = data.get("location", {})
-                acc = data.get("accuracy", 0)
-                return {
-                    "latitude": loc.get("lat"),
-                    "longitude": loc.get("lng"),
-                    "accuracy_meters": acc,
-                    "source": "wifi",
-                    "wifi_count": len(wifi_points),
-                }
-            except (requests.RequestException, ValueError, TypeError, KeyError) as e:
-                log.warning("WiFi geolocation failed: %s", e)
+            location = _resolve_wifi_scan(google_key, _wifi_points(wifi))
+            if location:
+                return location
 
     # Fallback to IP-based geolocation
     return get_ip_geolocation()
+
+
+def _wifi_points(scan: list[dict]) -> list[dict]:
+    """Turn a netsh scan into the access-point list the geolocation API wants."""
+    points = []
+    for net in scan[:20]:  # Max 20 access points
+        point = {"macAddress": net.get("bssid")}
+        if net.get("signal"):
+            # Google expects signal strength in dBm (negative).
+            # netsh gives percentage, convert approximately.
+            pct = net["signal"]
+            if pct > 0:
+                point["signalStrength"] = -(100 - pct)
+        if net.get("frequency"):
+            point["channel"] = int(float(net["frequency"]) * 1000)
+        points.append(point)
+    return points
+
+
+def _resolve_wifi_scan(google_key: str, wifi_points: list[dict]) -> dict | None:
+    """Resolve access points to coordinates. None when the lookup cannot be made.
+
+    Split out of get_geolocation so a scan taken WHILE OFFLINE can be resolved later, when
+    connectivity returns — that is what turns "it was somewhere" into a usable trail (S271).
+    """
+    if not google_key or not wifi_points:
+        return None
+    try:
+        resp = requests.post(
+            f"https://www.googleapis.com/geolocation/v1/geolocate?key={google_key}",
+            json={"wifiAccessPoints": wifi_points},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        loc = data.get("location", {})
+        return {
+            "latitude": loc.get("lat"),
+            "longitude": loc.get("lng"),
+            "accuracy_meters": data.get("accuracy", 0),
+            "source": "wifi",
+            "wifi_count": len(wifi_points),
+        }
+    except (requests.RequestException, ValueError, TypeError, KeyError) as e:
+        log.warning("WiFi geolocation failed: %s", e)
+        return None
 
 
 def report_location(cfg: dict) -> dict | None:
@@ -1289,6 +1306,10 @@ def report_location(cfg: dict) -> dict | None:
     """
     location = get_geolocation(cfg)
     if not location:
+        # No fix. If we can SEE access points, keep them: the coordinates can be resolved as
+        # soon as connectivity returns, which is the difference between "we lost it" and "it
+        # was near these networks at 14:20, here is where they are" (S271).
+        _queue_wifi_scan_for_later()
         log.warning("Could not determine geolocation")
         return None
 
@@ -1621,6 +1642,11 @@ import sqlite3  # noqa: E402 -- imported after sys.path setup for offline queue 
 
 # Offline queue database (in _STATE_DIR)
 OFFLINE_QUEUE_DB = _STATE_DIR / ".offline_queue.db"
+# A scan taken while offline is queued under this sentinel endpoint instead of being thrown
+# away when the geolocation lookup cannot run: the access points are evidence of WHERE the
+# device was, and resolving them on reconnect is what gives the operator a trail (S271).
+WIFI_SCAN_QUEUE_ENDPOINT = "local://wifi-scan"
+WIFI_SCAN_QUEUE_MAX = 50
 
 
 def _get_queue_db() -> sqlite3.Connection:
@@ -1682,6 +1708,109 @@ def queue_offline(endpoint: str, payload: dict) -> None:
         _close_quietly(conn)
 
 
+def _queue_wifi_scan_for_later() -> None:
+    """Queue a raw access-point scan for resolution once connectivity returns."""
+    scan = scan_wifi_networks()
+    if not scan:
+        return
+    from datetime import UTC, datetime
+
+    queue_offline(
+        WIFI_SCAN_QUEUE_ENDPOINT,
+        {
+            "bssids": scan[:20],
+            "scanned_at": datetime.now(UTC).isoformat(),
+        },
+    )
+    _trim_wifi_scan_queue()
+
+
+def _trim_wifi_scan_queue(max_rows: int = WIFI_SCAN_QUEUE_MAX) -> None:
+    """Keep only the newest `max_rows` queued scans.
+
+    A weekend offline would otherwise queue a scan per location cycle and fill the disk with
+    evidence nobody will read.
+    """
+    conn = None
+    try:
+        conn = _get_queue_db()
+        conn.execute(
+            "DELETE FROM offline_queue WHERE endpoint = ? AND id NOT IN ("
+            "  SELECT id FROM offline_queue WHERE endpoint = ? ORDER BY created_at DESC LIMIT ?"
+            ")",
+            (WIFI_SCAN_QUEUE_ENDPOINT, WIFI_SCAN_QUEUE_ENDPOINT, max_rows),
+        )
+        conn.commit()
+    except (sqlite3.Error, OSError) as e:
+        log.warning("Could not trim queued WiFi scans: %s", e)
+    finally:
+        _close_quietly(conn)
+
+
+def resolve_pending_wifi_scans(cfg: dict) -> int:
+    """Resolve scans queued while offline and post them as location reports.
+
+    Returns how many were resolved. A scan that still cannot be resolved is left in the queue
+    (with its attempt count) rather than dropped: the device may be offline again, and the
+    evidence is only useful if it survives until it can be read.
+    """
+    google_key = os.environ.get("GOOGLE_API_KEY") or cfg.get("google_api_key")
+    if not google_key:
+        return 0
+
+    conn = None
+    resolved = 0
+    try:
+        conn = _get_queue_db()
+        rows = conn.execute(
+            "SELECT id, payload, attempts FROM offline_queue WHERE endpoint = ? "
+            "ORDER BY created_at ASC LIMIT 10",
+            (WIFI_SCAN_QUEUE_ENDPOINT,),
+        ).fetchall()
+        for row_id, payload_json, attempts in rows:
+            try:
+                queued = json.loads(payload_json)
+                location = _resolve_wifi_scan(google_key, _wifi_points(queued.get("bssids", [])))
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                location = None
+                queued = {}
+
+            if not location:
+                conn.execute(
+                    "UPDATE offline_queue SET attempts = attempts + 1 WHERE id = ?", (row_id,)
+                )
+                if attempts >= 10:
+                    log.warning("Dropping a queued WiFi scan after %d attempts", attempts)
+                    conn.execute("DELETE FROM offline_queue WHERE id = ?", (row_id,))
+                continue
+
+            payload = {
+                "hostname": cfg["hostname"],
+                "location": location,
+                # The time the scan was taken, not the time it could be reported: without this
+                # a backfilled trail reads as if the device were there when it reconnected.
+                "observed_at": queued.get("scanned_at"),
+            }
+            try:
+                resp = _post_with_fallback(
+                    "/api/agent/location", cfg, payload, timeout=15, verify=cfg["verify_tls"]
+                )
+                resp.raise_for_status()
+                conn.execute("DELETE FROM offline_queue WHERE id = ?", (row_id,))
+                resolved += 1
+                log.info("Resolved a queued WiFi scan taken at %s", queued.get("scanned_at") or "?")
+            except requests.RequestException as e:
+                log.debug("Could not post a resolved scan yet: %s", e)
+                break  # server is down again — leave the rest for the next cycle
+
+        conn.commit()
+    except (sqlite3.Error, OSError) as e:
+        log.warning("Could not resolve queued WiFi scans: %s", e)
+    finally:
+        _close_quietly(conn)
+    return resolved
+
+
 def _queue_size() -> int:
     """Return the number of items in the offline queue."""
     conn = None
@@ -1715,6 +1844,9 @@ def drain_offline_queue(cfg: dict) -> None:
 
         sent = 0
         for row_id, endpoint, payload_json, attempts in rows:
+            if endpoint == WIFI_SCAN_QUEUE_ENDPOINT:
+                # Handled by resolve_pending_wifi_scans(): it is not an HTTP endpoint.
+                continue
             try:
                 payload = json.loads(payload_json)
                 resp = _post_with_fallback(
@@ -4496,6 +4628,9 @@ def main() -> None:
             report_deadman_key(cfg)
 
             # Phase 5: Drain offline queue (location reports, etc.)
+            # Resolve any scans taken while offline BEFORE draining: they become location
+            # reports, which is the whole point of having kept them.
+            resolve_pending_wifi_scans(cfg)
             drain_offline_queue(cfg)
 
             # Update dead man's timer with current server-reported status;
