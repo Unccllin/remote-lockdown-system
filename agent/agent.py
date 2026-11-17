@@ -2448,6 +2448,17 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                     "— BIOS password retained for operator action"
                 )
                 boot_lock_failures += 1
+            elif hp_result.get("pending_reboot"):
+                # Accepted, not yet settled: HP commits many settings at the next boot, so a
+                # read-back in this session still shows the old value. This is neither a
+                # failure to retry nor a success to claim (S271 measured MOLE: five writes
+                # accepted, firmware holding the lockdown values, agent reporting "rolled back").
+                boot_lock_status = "pending_reboot"
+                log.warning(
+                    "UEFI lockdown accepted %d critical setting(s); verification waits for the "
+                    "next boot (boot-state file kept so the change can still be reversed)",
+                    hp_result.get("critical_pending", 0),
+                )
             elif hp_result.get("partial"):
                 log.warning("UEFI lockdown applied with some best-effort failures")
                 boot_lock_failures += 1
@@ -2566,7 +2577,10 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     # read null. A rolled-back boot lock means the device is encrypted but not
     # boot-locked — exactly the case that must not read as effective (S269).
     if cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available:
-        boot_lock_status = "partial" if boot_lock_failures else "success"
+        # `pending_reboot` is a settled answer from the HP layer, not something to overwrite
+        # with the aggregate: the writes were accepted and the next boot decides.
+        if boot_lock_status != "pending_reboot":
+            boot_lock_status = "partial" if boot_lock_failures else "success"
         if boot_lock_failures:
             log.error("Boot lockdown incomplete: %s layer(s) did not apply", boot_lock_failures)
     lockdown_effective = _lockdown_effective(

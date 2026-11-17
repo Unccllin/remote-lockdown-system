@@ -1169,10 +1169,18 @@ def _verify_setting(name: str, expected_value: str) -> bool:
     return True
 
 
-def _set_and_verify(name: str, value: str, password: str) -> bool:
-    """Set a BIOS setting and verify it took effect (Phase 4.5).
+def _set_and_verify(name: str, value: str, password: str) -> str:
+    """Set a BIOS setting and classify the outcome: applied | pending_reboot | failed.
 
-    Returns True if the setting was applied AND verified, False otherwise.
+    HP commits many BIOS settings at the NEXT boot, so a read-back in the same session can
+    still return the old value after a write the firmware accepted. Treating that as failure
+    made MOLE roll back writes that had landed — and the rollback's own writes were equally
+    unverifiable, so it reported "restored with errors" and the machine's firmware no longer
+    matched the record (S271). Measured: no write was refused (no `failed:` warning appears in
+    the log for the three "failed" settings) while the firmware read back the lockdown values.
+
+    Only a REFUSED write is a failure. An accepted write whose read-back still disagrees is
+    `pending_reboot`: the caller must not claim success, and must not undo it either.
     """
     rc = _set_setting(name, value, password)
     if rc != 0:
@@ -1182,8 +1190,16 @@ def _set_and_verify(name: str, value: str, password: str) -> bool:
             value,
             SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
         )
-        return False
-    return _verify_setting(name, value)
+        return "failed"
+    if _verify_setting(name, value):
+        return "applied"
+    log.info(
+        "BIOS setting '%s' accepted (-> '%s') but reads back '%s' — HP commits at the next boot",
+        name,
+        value,
+        _read_setting(name),
+    )
+    return "pending_reboot"
 
 
 def _is_setup_password_set() -> bool:
@@ -1691,6 +1707,7 @@ def apply_boot_lockdown(
     # --- Apply critical settings (with verification re-reads) ---
     critical_applied = 0
     critical_failed = 0
+    critical_pending = 0
     for setting_name, lockdown_value in critical_settings:
         current = _read_setting(setting_name)
         if current is None:
@@ -1701,8 +1718,11 @@ def apply_boot_lockdown(
             # Already in desired state — count as applied
             critical_applied += 1
             continue
-        if _set_and_verify(setting_name, lockdown_value, bios_password):
+        outcome = _set_and_verify(setting_name, lockdown_value, bios_password)
+        if outcome == "applied":
             critical_applied += 1
+        elif outcome == "pending_reboot":
+            critical_pending += 1
         else:
             critical_failed += 1
 
@@ -1736,15 +1756,18 @@ def apply_boot_lockdown(
         if current == lockdown_value:
             best_effort_applied += 1
             continue
-        if _set_and_verify(setting_name, lockdown_value, bios_password):
-            best_effort_applied += 1
-        else:
+        if _set_and_verify(setting_name, lockdown_value, bios_password) == "failed":
             best_effort_failed += 1
             log.warning("BEST-EFFORT: '%s' failed — continuing (not critical)", setting_name)
+        else:
+            # applied, or accepted and waiting for the boot that commits it
+            best_effort_applied += 1
 
     log.info(
-        "UEFI lockdown applied: %d critical, %d best-effort succeeded, %d best-effort failed",
+        "UEFI lockdown applied: %d critical (%d pending the next boot), "
+        "%d best-effort succeeded, %d best-effort failed",
         critical_applied,
+        critical_pending,
         best_effort_applied,
         best_effort_failed,
     )
@@ -1752,6 +1775,12 @@ def apply_boot_lockdown(
     result["success"] = True
     result["partial"] = best_effort_failed > 0
     result["critical_applied"] = critical_applied
+    result["critical_pending"] = critical_pending
+    # Accepted-but-unsettled is its own state: the caller reports `pending_reboot` instead of
+    # claiming the boot lock applied, and the boot-state file is deliberately KEPT (it is only
+    # cleared by a rollback or by remove_boot_lockdown), so the original values stay recoverable
+    # until a boot proves where the firmware landed.
+    result["pending_reboot"] = critical_pending > 0
     result["best_effort_applied"] = best_effort_applied
     result["best_effort_failed"] = best_effort_failed
     # T7: Re-enable Sure Start BSP (lock-then-seal step 2 — seal the lockdown)
