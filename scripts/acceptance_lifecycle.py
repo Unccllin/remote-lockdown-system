@@ -237,6 +237,18 @@ def evaluate_lock(device: dict | None, snap: dict, command: dict | None) -> Step
             f"{encrypted} encrypted file(s)",
         )
     )
+    # Sign-in is the half that was missing: the operator signed straight back in to a
+    # "locked" MOLE with their own password (S270). None = no interactive user was found,
+    # which is unobservable rather than a pass.
+    console_active = snap.get("real_user_active")
+    result.checks.append(
+        check(
+            "logon prevented (interactive account disabled)",
+            None if console_active is None else console_active is False,
+            f"{snap.get('real_user') or 'no interactive user'} active={console_active}",
+        )
+    )
+
     status = (device or {}).get("status")
     result.checks.append(
         check(
@@ -298,6 +310,16 @@ def evaluate_recover(
             f"{encrypted} still encrypted",
         )
     )
+    # Recovery must hand the account back even when decryption is what failed.
+    console_active = snap.get("real_user_active")
+    result.checks.append(
+        check(
+            "account re-enabled",
+            None if console_active is None else console_active is not False,
+            f"{snap.get('real_user') or 'no interactive user'} active={console_active}",
+        )
+    )
+
     status = (device or {}).get("status")
     result.checks.append(
         check(

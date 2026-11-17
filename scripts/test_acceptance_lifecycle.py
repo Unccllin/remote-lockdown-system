@@ -123,7 +123,7 @@ class TestUnobservableIsNotPass:
     def test_lock_skips_when_no_command_record_exists(self):
         result = mod.evaluate_lock(
             device(status="locked"),
-            snapshot(lock_sentinel=True, lockdown_encrypted=3),
+            snapshot(lock_sentinel=True, lockdown_encrypted=3, real_user_active=False),
             None,
         )
         assert by_name(result, "lockdown command executed").passed is None
@@ -163,7 +163,7 @@ class TestLock:
     def test_a_complete_lock_passes(self):
         result = mod.evaluate_lock(
             device(status="locked"),
-            snapshot(lock_sentinel=True, lockdown_encrypted=3),
+            snapshot(lock_sentinel=True, lockdown_encrypted=3, real_user_active=False),
             command(lockdown_effective=True),
         )
         assert result.status == "PASS", result.checks
@@ -411,7 +411,9 @@ class TestRendering:
             mod.evaluate_enroll(device(), snapshot(), NOW),
             mod.evaluate_lock(
                 device(status="locked"),
-                snapshot(lock_sentinel=True, lockdown_encrypted=3),
+                snapshot(
+                    lock_sentinel=True, lockdown_encrypted=3, real_user_active=False
+                ),
                 command(lockdown_effective=False, boot_lock_status="partial"),
             ),
         ]
@@ -427,7 +429,9 @@ class TestRendering:
         results = [
             mod.evaluate_lock(
                 device(status="locked"),
-                snapshot(lock_sentinel=True, lockdown_encrypted=3),
+                snapshot(
+                    lock_sentinel=True, lockdown_encrypted=3, real_user_active=False
+                ),
                 None,
             )
         ]
@@ -516,3 +520,60 @@ class TestTrackNeedsRelock:
     @pytest.mark.parametrize("step", ["lock", "recover", "stop-track", "enroll"])
     def test_other_steps_never_relock(self, step):
         assert mod.track_needs_relock(step, "active") is False
+
+
+class TestLogonPreventionCheck:
+    """`lock` is only a lock if the console cannot sign in (S270, reported by the operator).
+
+    The probe already reports the interactive user's account state, so the assertion is a
+    cross-check of device state against the claim, not a new observation.
+    """
+
+    def locked_snapshot(self, **overrides):
+        base = {
+            "lock_sentinel": True,
+            "lockdown_encrypted": 3,
+            "real_user": "newark user",
+            "real_user_active": False,
+        }
+        base.update(overrides)
+        return snapshot(**base)
+
+    def test_a_lock_that_leaves_the_account_enabled_fails(self):
+        result = mod.evaluate_lock(
+            device(status="locked"),
+            self.locked_snapshot(real_user_active=True),
+            command(),
+        )
+        check = by_name(result, "logon prevented")
+        assert check.passed is False
+        assert "active=True" in check.observed
+        assert result.status == "FAIL"
+
+    def test_a_lock_that_disables_the_account_passes_that_check(self):
+        result = mod.evaluate_lock(
+            device(status="locked"), self.locked_snapshot(), command()
+        )
+        assert by_name(result, "logon prevented").passed is True
+
+    def test_no_interactive_user_is_unobservable_not_a_pass(self):
+        # A machine with nobody logged in has no account to disable; claiming "prevented"
+        # would be an assertion about a user who was never there.
+        result = mod.evaluate_lock(
+            device(status="locked"),
+            self.locked_snapshot(real_user="", real_user_active=None),
+            command(),
+        )
+        assert by_name(result, "logon prevented").passed is None
+
+    def test_recovery_fails_if_the_account_is_still_disabled(self):
+        unlock = command(
+            command_type="unlock", lockdown_effective=None, boot_lock_status=None
+        )
+        result = mod.evaluate_recover(
+            device(),
+            snapshot(lock_sentinel=False, lockdown_encrypted=0, real_user_active=False),
+            unlock,
+        )
+        assert by_name(result, "account re-enabled").passed is False
+        assert result.status == "FAIL"
