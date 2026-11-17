@@ -1625,8 +1625,14 @@ def apply_boot_lockdown(
         bios_password = cast(str, existing_password)
         log.info("Using existing BIOS Setup password for lockdown changes")
 
-    # Always return the password, even on critical failure (CC18)
-    result["bios_password"] = bios_password
+    # CC18 is about a password THIS RUN generated: it must travel back even on critical
+    # failure, because the operator has no other copy. A pre-existing password is different —
+    # the operator supplied it, and echoing it back records it as an escrowed credential the
+    # server can serve up, whether or not it works. Measured on MOLE (S271): the operator's
+    # `1234` came back through GET /api/devices/:id/pba-credentials as this device's Setup
+    # password, while every BIOS write with it was refused.
+    if not password_already_set:
+        result["bios_password"] = bios_password
 
     # T7: Set Power-On Password for Tier 1 PBA (Q1=A — opt-in).
     # The Power-On Password must be set AFTER the Setup Password (HP BIOS

@@ -322,7 +322,9 @@ class TestHpUefiLockdown:
         result = hp_uefi_lockdown.apply_boot_lockdown(existing_password="existingpw")
 
         assert result["success"] is True
-        assert result["bios_password"] == "existingpw"
+        # A pre-existing password is NOT echoed back (S271): the operator supplied it, and
+        # reporting it made the backend serve an unverified credential as this device's own.
+        assert result.get("bios_password") is None
         # First call should NOT be setting the Setup password (password already set)
         first_call = mock_set.call_args_list[0]
         assert first_call.args[0] != "Setup Password"
@@ -1194,3 +1196,41 @@ class TestRemovalVerdict:
     @patch("hp_uefi_lockdown._set_setting", return_value=0)  # accepted, never verified
     def test_accepted_but_unverified_is_not_a_restore(self, _set, _verify, _state, _hp, _admin):
         assert hp_uefi_lockdown.remove_boot_lockdown(bios_password="pw") is False
+
+
+class TestOnlyAGeneratedPasswordIsReported:
+    """CC18 returns a password THIS RUN set. A pre-existing one is the operator's, not ours.
+
+    Measured on MOLE (S271): the caller's `uefi_password` value came back through the ACK and
+    was served by `GET /api/devices/:id/pba-credentials` as the device's Setup password, while
+    every BIOS write with it was refused — a credential the backend vouched for and the machine
+    did not accept.
+    """
+
+    def test_a_preexisting_password_is_not_reported_back(self, tmp_path, monkeypatch):
+        # Keep the boot-state file out of the working tree: this path writes one.
+        monkeypatch.setattr(hp_uefi_lockdown, "BOOT_STATE_FILE", tmp_path / ".boot_state")
+        with (
+            patch.object(hp_uefi_lockdown, "_is_admin", return_value=True),
+            patch.object(hp_uefi_lockdown, "is_hp_machine", return_value=True),
+            patch.object(hp_uefi_lockdown, "_is_setup_password_set", return_value=True),
+            patch.object(hp_uefi_lockdown, "_set_setting", return_value=6),  # writes refused
+            patch.object(hp_uefi_lockdown, "_read_setting", return_value="Enable"),
+            patch.object(
+                hp_uefi_lockdown,
+                "_check_secure_boot",
+                return_value={"enabled": False, "warning": None},
+            ),
+            patch.object(
+                hp_uefi_lockdown,
+                "_check_sure_admin",
+                return_value={
+                    "sure_admin_detected": False,
+                    "any_sure_feature": False,
+                    "warning": None,
+                },
+            ),
+        ):
+            result = hp_uefi_lockdown.apply_boot_lockdown(existing_password="1234")
+
+        assert result.get("bios_password") is None
