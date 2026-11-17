@@ -944,6 +944,78 @@ describe('POST /api/agent/location', () => {
 });
 
 // ---------------------------------------------------------------------------
+// observed_at — when the fix was taken, not when it arrived (S272)
+// ---------------------------------------------------------------------------
+
+describe('POST /api/agent/location observed_at', () => {
+  const app = createApp();
+
+  function insertParams() {
+    const insertCall = mockPool.query.mock.calls.find(
+      (c) => c[0].includes('INSERT INTO location_reports')
+    );
+    expect(insertCall).toBeDefined();
+    // Position 10 (0-based) is `observed_at`, between wifi_count and the encrypted block.
+    return insertCall[1][10];
+  }
+
+  test('stores the scan time the agent backfilled', async () => {
+    // A device that was offline in a bag resolves its scan on reconnect. Without this the trail
+    // reads as if it were in that building at reconnect time (S271).
+    const { apiKey } = provisionDevice({ hostname: 'DEV-001', status: 'tracking' });
+    const scannedAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+
+    const res = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', location: { latitude: 1, longitude: 2 }, observed_at: scannedAt });
+
+    expect(res.status).toBe(200);
+    expect(insertParams()).toBe(scannedAt);
+  });
+
+  test('stores NULL when no observation time is sent', async () => {
+    // The online path sends no observed_at at all, so receipt time stays the only timestamp.
+    const { apiKey } = provisionDevice({ hostname: 'DEV-001', status: 'tracking' });
+
+    const res = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', location: { latitude: 1, longitude: 2 } });
+
+    expect(res.status).toBe(200);
+    expect(insertParams()).toBeNull();
+  });
+
+  test('drops a claim from the future instead of storing it', async () => {
+    // A device clock is not trusted (MOLE's w32time had stopped, S271). A claim from tomorrow
+    // must not become a pin placed tomorrow; NULL lets the read side use receipt time.
+    const { apiKey } = provisionDevice({ hostname: 'DEV-001', status: 'tracking' });
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    const res = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', location: { latitude: 1, longitude: 2 }, observed_at: tomorrow });
+
+    expect(res.status).toBe(200);
+    expect(insertParams()).toBeNull();
+  });
+
+  test('drops an unparseable claim instead of failing the report', async () => {
+    const { apiKey } = provisionDevice({ hostname: 'DEV-001', status: 'tracking' });
+
+    const res = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', location: { latitude: 1, longitude: 2 }, observed_at: 'yesterday-ish' });
+
+    expect(res.status).toBe(200);
+    expect(insertParams()).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // FA3 / CC5 / CC6: Per-device API key authentication tests
 // ---------------------------------------------------------------------------
 

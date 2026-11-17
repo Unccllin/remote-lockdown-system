@@ -1,0 +1,22 @@
+-- 019: location_reports.observed_at — when the fix was TAKEN, not when it arrived.
+--
+-- A device that is offline in a bag cannot reach the server, but it can still scan the WiFi
+-- around it: `netsh wlan show networks mode=bssid` is local, and only resolving the BSSIDs to
+-- coordinates needs the internet. S271 made the agent keep that raw scan and resolve it on
+-- reconnect — and the row it then writes arrived hours late, so `reported_at` (the only
+-- timestamp this table had) put a device in a building at the moment it reconnected, not at
+-- the moment it was there.
+--
+-- So the agent now sends the scan time as `observed_at`, at the top level of the request body,
+-- and this column stores it. It is deliberately NULLABLE and deliberately separate from
+-- `reported_at`:
+--
+--   observed_at   when the agent says the reading was taken (a claim)
+--   reported_at   when the server received it (a fact)
+--
+-- The read side orders by `COALESCE(observed_at, reported_at)`, so every row written before
+-- this migration, and every online report (which sends no `observed_at`), keeps behaving
+-- exactly as before. Retention keeps purging on `reported_at`: how long we may keep a row is a
+-- property of when it arrived, and an agent-claimed time must not be able to extend it.
+
+ALTER TABLE location_reports ADD COLUMN IF NOT EXISTS observed_at TIMESTAMPTZ;

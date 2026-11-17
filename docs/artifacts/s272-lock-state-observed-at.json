@@ -1,0 +1,167 @@
+{
+  "session": "S272",
+  "started_at": "2026-11-17T11:51:23.496Z",
+  "steps": [
+    {
+      "step": "bootstrap",
+      "detail": {
+        "db": "lockdown-e2e-1316969-1794916283498-f5c3a62f-e692-46d9-8509-24e316895032.db"
+      }
+    },
+    {
+      "step": "enroll",
+      "detail": {
+        "deviceId": "d306f877c0aa4cf0d54d0d1781760998",
+        "hasApiKey": true
+      }
+    },
+    {
+      "step": "01-no-lockdown",
+      "detail": {
+        "status": 200,
+        "device_status": "active",
+        "lock_state": "none"
+      }
+    },
+    {
+      "step": "02-flagged",
+      "detail": {
+        "status": 200,
+        "commandId": "c471f66c9a8a2fb3f19797a9df827f6a"
+      }
+    },
+    {
+      "step": "03-command-row",
+      "detail": {
+        "command_type": "lockdown",
+        "status": "pending"
+      }
+    },
+    {
+      "step": "04-after-flag",
+      "detail": {
+        "status": 200,
+        "device_status": "stolen",
+        "lock_state": "armed"
+      }
+    },
+    {
+      "step": "05-checkin",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "step": "06-ranked-subquery-raw-sqlite",
+      "detail": {
+        "rows": [
+          {
+            "device_id": "d306f877c0aa4cf0d54d0d1781760998",
+            "command_type": "lockdown",
+            "status": "pending",
+            "created_at": "2026-11-17 11:51:25"
+          }
+        ]
+      }
+    },
+    {
+      "step": "07-after-checkin",
+      "detail": {
+        "status": 200,
+        "device_status": "stolen",
+        "lock_state": "applying"
+      }
+    },
+    {
+      "step": "08-ack",
+      "detail": {
+        "status": 200,
+        "body": true
+      }
+    },
+    {
+      "step": "09-after-ack",
+      "detail": {
+        "status": 200,
+        "device_status": "locked",
+        "lock_state": "applied"
+      }
+    },
+    {
+      "step": "10-recover",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "step": "11-after-recover",
+      "detail": {
+        "status": 200,
+        "device_status": "recovering",
+        "lock_state": "none"
+      }
+    },
+    {
+      "step": "12-backfill-post",
+      "detail": {
+        "status": 401
+      }
+    },
+    {
+      "step": "13-backfill-post-signed",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "step": "14-online-post",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "step": "15-history-order",
+      "detail": {
+        "status": 200,
+        "order": [
+          {
+            "city": "Newer",
+            "observed_at": null,
+            "reported_at": "2026-11-17 11:51:26"
+          },
+          {
+            "city": "Earlier",
+            "observed_at": "2026-11-17T06:51:26.021Z",
+            "reported_at": "2026-11-17 11:51:26"
+          }
+        ]
+      }
+    },
+    {
+      "step": "16-latest",
+      "detail": {
+        "status": 200,
+        "city": "Newer",
+        "observed_at": null
+      }
+    },
+    {
+      "step": "17-location-rows-raw",
+      "detail": {
+        "rows": [
+          {
+            "city": "Earlier",
+            "observed_at": "2026-11-17T06:51:26.021Z",
+            "reported_at": "2026-11-17 11:51:26"
+          },
+          {
+            "city": "Newer",
+            "observed_at": null,
+            "reported_at": "2026-11-17 11:51:26"
+          }
+        ]
+      }
+    }
+  ],
+  "finished_at": "2026-11-17T11:51:26.060Z"
+}

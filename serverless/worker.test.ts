@@ -5261,3 +5261,118 @@ describe('lock_state on the device payload', () => {
     expect(d.lock_state).toBe('none');
   });
 });
+
+/**
+ * `observed_at` — when the fix was taken, not when it arrived.
+ *
+ * A device offline in a bag cannot reach the server but can still scan the WiFi around it
+ * (`netsh wlan show networks mode=bssid` is local; only resolving BSSIDs needs the internet).
+ * S271 made the agent keep that raw scan and resolve it on reconnect. Without `observed_at` the
+ * row it writes then lands at receipt time, so a backfilled trail reads as if the device were in
+ * that building when it reconnected.
+ */
+describe('observed_at on location reports', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  async function report(
+    hostname: string,
+    apiKey: string,
+    body: Record<string, unknown>,
+  ): Promise<void> {
+    const raw = JSON.stringify({ hostname, ...body });
+    const resp = await worker.fetch(
+      makeRequest('POST', '/api/agent/location', raw, signRequest(raw, apiKey)),
+      env,
+    );
+    expect(resp.status).toBe(200);
+  }
+
+  async function listLocations(deviceId: string, query = ''): Promise<any[]> {
+    const resp = await worker.fetch(
+      makeRequest('GET', `/api/devices/${deviceId}/locations${query}`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      }),
+      env,
+    );
+    return (await parseResponse(resp)) as any[];
+  }
+
+  it('stores the scan time the agent backfilled', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'OBS-001');
+    const scannedAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    await report('OBS-001', apiKey, {
+      location: { latitude: 1, longitude: 2, source: 'wifi', city: 'A' },
+      observed_at: scannedAt,
+    });
+
+    const rows = await listLocations(device.id);
+    expect(rows[0].observed_at).toBe(scannedAt);
+    // Receipt time is still recorded, and still distinct from the observation.
+    expect(rows[0].reported_at).toBeDefined();
+  });
+
+  it('orders the trail by when each fix was taken, not by arrival', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'OBS-002');
+    const earlier = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+    // Backfilled FIRST but taken EARLIER — the case that used to appear last in the history.
+    await report('OBS-002', apiKey, {
+      location: { latitude: 1, longitude: 2, source: 'wifi', city: 'OLD' },
+      observed_at: earlier,
+    });
+    await report('OBS-002', apiKey, {
+      location: { latitude: 3, longitude: 4, source: 'ip', city: 'NEW' },
+    });
+
+    const rows = await listLocations(device.id);
+    expect(rows.map((r) => r.city)).toEqual(['NEW', 'OLD']);
+  });
+
+  it('the latest pin agrees with row 1 of the history', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'OBS-003');
+    const earlier = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+    await report('OBS-003', apiKey, {
+      location: { latitude: 1, longitude: 2, source: 'wifi', city: 'OLD' },
+      observed_at: earlier,
+    });
+    await report('OBS-003', apiKey, {
+      location: { latitude: 3, longitude: 4, source: 'ip', city: 'NEW' },
+    });
+
+    const resp = await worker.fetch(
+      makeRequest('GET', `/api/devices/${device.id}/location/latest`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      }),
+      env,
+    );
+    const latest = (await parseResponse(resp)) as any;
+    expect(latest.city).toBe('NEW');
+  });
+
+  it('drops a claim from the future rather than pinning the device there', async () => {
+    // A device clock is not trusted (MOLE's w32time had stopped, S271).
+    const { device, apiKey } = await enrollDevice(worker, env, 'OBS-004');
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await report('OBS-004', apiKey, {
+      location: { latitude: 1, longitude: 2, source: 'ip', city: 'A' },
+      observed_at: tomorrow,
+    });
+
+    const rows = await listLocations(device.id);
+    expect(rows[0].observed_at).toBeNull();
+  });
+
+  it('drops an unparseable claim instead of failing the report', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'OBS-005');
+    await report('OBS-005', apiKey, {
+      location: { latitude: 1, longitude: 2, source: 'ip', city: 'A' },
+      observed_at: 'yesterday-ish',
+    });
+
+    const rows = await listLocations(device.id);
+    expect(rows[0].observed_at).toBeNull();
+  });
+});

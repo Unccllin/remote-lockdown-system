@@ -182,6 +182,11 @@ interface LocationReport {
   country: string | null;
   ip_address: string | null;
   wifi_count: number | null;
+  /**
+   * When the agent says the reading was taken; absent on every row written before this
+   * existed, and on every online report (only the offline-scan backfill sends one).
+   */
+  observed_at?: string | null;
   created_at: string;
 }
 
@@ -1580,7 +1585,27 @@ async function handleDeadmanReport(request: Request, env: Env): Promise<Response
 
 /**
  * Agent-compatible location report — stores location data in KV.
+ *
+ * `observed_at` (top level of the body, not inside `location`) is the time the scan was taken,
+ * sent only when a device resolves a scan it took while offline. Mirrors the Express route: an
+ * unusable or future value is dropped rather than stored, so the read side falls back to receipt
+ * time instead of pinning the device somewhere it will be tomorrow.
  */
+const OBSERVED_AT_MAX_SKEW_MS = 5 * 60 * 1000;
+
+function normalizeObservedAt(value: unknown, now: number = Date.now()): string | null {
+  if (typeof value !== 'string') return null;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return null;
+  if (ms > now + OBSERVED_AT_MAX_SKEW_MS) return null;
+  return new Date(ms).toISOString();
+}
+
+/** The time a location row describes: the scan time when the agent sent one, else receipt. */
+function locationTime(l: LocationReport): string {
+  return l.observed_at || l.created_at;
+}
+
 async function handleAgentLocation(request: Request, env: Env): Promise<Response> {
   const body = await request.text();
   const device = await verifyAgentAuth(request, env, body);
@@ -1607,6 +1632,7 @@ async function handleAgentLocation(request: Request, env: Env): Promise<Response
     country: location.country ?? null,
     ip_address: location.ip ?? null,
     wifi_count: location.wifi_count ?? null,
+    observed_at: normalizeObservedAt(payload.observed_at),
     created_at: new Date().toISOString(),
   });
   await saveLocations(env, locations);
@@ -2589,6 +2615,10 @@ async function handleGetLocations(
   const locations = await listLocations(env);
   const deviceLocs = locations
     .filter((l) => l.device_id === deviceId)
+    // Order by when each fix was TAKEN, then slice: taking the last `limit` rows in insertion
+    // order (the old behaviour) drops the newest rows once a backfilled report arrives with an
+    // older scan time than what is already stored.
+    .sort((a, b) => locationTime(a).localeCompare(locationTime(b)))
     .slice(-limit)
     // Map created_at → reported_at for dashboard compatibility (the Express
     // server uses `reported_at`, the Worker uses `created_at` internally).
@@ -3940,7 +3970,9 @@ async function handleLatestLocation(
   const locations = await listLocations(env);
   const deviceLocs = locations
     .filter((l) => l.device_id === deviceId)
-    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+    // Same key as the history route, so "latest" and "first row of the history" cannot
+    // disagree about which fix is the newest.
+    .sort((a, b) => locationTime(a).localeCompare(locationTime(b)));
   const latest = deviceLocs[deviceLocs.length - 1];
 
   if (!latest) {
