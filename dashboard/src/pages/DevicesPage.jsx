@@ -59,6 +59,10 @@ export default function DevicesPage() {
           } catch {
             // ignore — no location data
           }
+          // An array-method callback must return consistently. It also keeps the fetches
+          // concurrent: turning this into a for/await loop would serialise 60 location
+          // requests on the fleet view.
+          return null;
         })
       );
       setDeviceLocations(locMap);
