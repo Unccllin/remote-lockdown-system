@@ -840,3 +840,39 @@ def test_install_files_without_a_service_binary_is_not_an_error(tmp_path, monkey
     monkeypatch.setattr(installer_gui, "INSTALL_DIR", tmp_path / "install")
 
     assert installer_gui.install_files(src / "lockdown-agent.exe").exists()
+
+
+def test_write_config_carries_the_uefi_password(tmp_path, monkeypatch):
+    """The one-liner's installer can supply the firmware password (S271).
+
+    Before this, the only way to set it was hand-editing a `config.json` that tamper
+    protection deliberately locks — takeown, icacls, then a JSON rewrite, which is the manual
+    step the repo's own rule forbids.
+    """
+    import installer_gui
+
+    monkeypatch.setattr(installer_gui, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer_gui, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(installer_gui, "LOCKDOWN_FOLDER", tmp_path / "lockdown_folder")
+
+    installer_gui.write_config(
+        "https://example.com",
+        "api-key",
+        "TEST-PC",
+        "dev-1",
+        uefi_password="firmware-pw",
+    )
+
+    import json
+
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written["uefi_password"] == "firmware-pw"
+
+
+def test_headless_installer_exposes_the_flag(monkeypatch, capsys):
+    """`lockdown-setup.exe --uefi-password` must be discoverable, not a hidden arg."""
+    import installer_gui
+
+    parser = installer_gui.build_parser()
+    args = parser.parse_args(["--server-url", "https://x", "--token", "t", "--uefi-password", "pw"])
+    assert args.uefi_password == "pw"

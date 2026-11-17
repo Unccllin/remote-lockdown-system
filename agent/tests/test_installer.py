@@ -961,3 +961,25 @@ class TestServiceBinaryIsInstalledWithTheAgent:
         assert attempts == [1, 1], "the agent copy must be retried after the service stops"
         assert stops == [1]
         assert dest.read_text(encoding="utf-8") == "new-agent"
+
+
+# ---------------------------------------------------------------------------
+# The firmware password the machine already has (S271)
+# ---------------------------------------------------------------------------
+
+
+def test_build_config_omits_uefi_password_by_default():
+    """Absent, not empty: the agent generates a password only when none is configured."""
+    cfg = installer.build_config("https://x", "k", "h", "d")
+    assert "uefi_password" not in cfg
+
+
+def test_build_config_carries_the_uefi_password_when_supplied():
+    """Without it the HP boot-lock layer cannot authenticate and the whole lock rolls back.
+
+    Measured on MOLE: the firmware has a Setup password, the config had none, so the layer
+    aborted, BCD rolled back, and `lockdown_effective` was false with no way to supply the
+    value — the installers had no flag for it (S271).
+    """
+    cfg = installer.build_config("https://x", "k", "h", "d", uefi_password="firmware-pw")
+    assert cfg["uefi_password"] == "firmware-pw"

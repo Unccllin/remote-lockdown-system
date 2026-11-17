@@ -293,6 +293,7 @@ def write_config(
     boot_lock_enabled: bool = True,
     update_public_key: str = "",
     verify_tls: bool = True,
+    uefi_password: str = "",
 ) -> Path:
     """Write the agent config file atomically.
 
@@ -320,6 +321,11 @@ def write_config(
     # path would make the agent refuse all future updates.
     if update_public_key:
         config["update_public_key"] = update_public_key
+    # The firmware password this machine already has, when the operator supplied it. Without
+    # it the HP boot-lock layer cannot authenticate and the whole boot lock rolls back (S271);
+    # omitted when empty so the agent generates one on a machine that has none.
+    if uefi_password:
+        config["uefi_password"] = uefi_password
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
 
     # config.json carries the same DENY/read-only ACEs as the binary once tamper
@@ -1006,6 +1012,7 @@ class SetupWizard:
                         self.install_result["device"]["id"],
                         boot_lock_enabled=self.boot_lock.get(),
                         update_public_key=pinned,
+                        uefi_password=getattr(self, "uefi_password", ""),
                     )
                     self.root.after(0, self._log, f"  Config: {CONFIG_FILE}")
                     self.root.after(
@@ -1293,6 +1300,15 @@ def build_parser():
     parser.add_argument(
         "--owner", default="Auto-enrolled", help="owner name recorded on the device"
     )
+    parser.add_argument(
+        "--uefi-password",
+        default="",
+        help=(
+            "The BIOS Setup password this machine already has. Without it the HP boot-lock "
+            "layer cannot authenticate, so it aborts and the boot lock rolls back. Omit on a "
+            "machine with no BIOS password: the agent generates one."
+        ),
+    )
     parser.add_argument("--no-boot-lock", action="store_true", help="do not enable boot lockdown")
     parser.add_argument(
         "--silent",
@@ -1315,6 +1331,7 @@ def run_headless(
     owner_name: str = "Auto-enrolled",
     boot_lock: bool = True,
     allow_insecure_http: bool = False,
+    uefi_password: str = "",
 ) -> int:
     """The wizard's install sequence without tkinter.
 
@@ -1370,6 +1387,7 @@ def run_headless(
             # future update (S241).
             update_public_key=install_update_public_key(),
             verify_tls=verify_tls,
+            uefi_password=uefi_password,
         )
 
         print("[3/6] Adding Defender exclusions ...")
@@ -1419,6 +1437,7 @@ def main(argv: list[str] | None = None):
                 args.owner,
                 boot_lock=not args.no_boot_lock,
                 allow_insecure_http=args.allow_insecure_http,
+                uefi_password=args.uefi_password,
             )
         )
 
