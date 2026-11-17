@@ -3212,3 +3212,22 @@ beliefs:
   dependents: []
   notes: 'Remaining cuts: /v1 PBL routes (~460 lines) and the agent handlers. Ship to MOLE still blocked
     on operator access.'
+- id: B-146
+  statement: The /v1 firmware route dispatcher lives in serverless/pbl/routes/index.ts (458 lines) and
+    the isolate signing-key cache in serverless/pbl/keys.ts, so the whole PBL surface imports nothing
+    from worker.ts except Env, errorResponse and requireRole; worker.ts is 3259 lines after the S277-S279
+    splits
+  domain: api/pbl
+  status: proposed
+  evidence_level: assumed
+  provenance: 'S279 commit f401164: 480 worker tests unchanged across a pure move, tsc clean, cross-surface
+    23 passed'
+  source: serverless/pbl/routes/index.ts; serverless/pbl/keys.ts; serverless/worker.ts
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'resetKeyCache is re-exported from worker.ts for the test harness. Remaining big blocks: agent
+    handlers, device admin handlers, uninstall auth, installer endpoints.'

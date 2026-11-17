@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-17 16:59:21 — 145 beliefs
+Generated: 2026-11-17 17:08:01 — 146 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -60,6 +60,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-060 | confirmed | code-read | Token enrolment now exists on the Express server with the same contract the Worker and clients already used: POST /api/enroll/token (operator auth) mints a 44-char token for 900s and stores only its SHA-256 (so a DB read cannot be replayed), and POST /api/enroll/claim (unauthenticated — the token is the credential, behind a 30/15min limiter) consumes it with a conditional UPDATE (single use; a concurrent claim updates 0 rows) and either creates the device or re-associates by hardware_uuid (200 + reassociated:true), attributing the audit row to the admin who minted the token. Migrations 015 (enrollment_tokens) and 016 (devices.serial_number) exist in both dialects; serial_number had never existed in the Express schema although the Worker stored it and the dashboard renders it. Separately: devices.hostname is NOT unique in the schema (only mac_address and hardware_uuid are), so devices.js's 23505 'Hostname already registered' branch cannot fire for a hostname collision — it can only fire for a MAC or hardware-UUID conflict. |
+
+## api/pbl
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-146 | proposed | assumed | The /v1 firmware route dispatcher lives in serverless/pbl/routes/index.ts (458 lines) and the isolate signing-key cache in serverless/pbl/keys.ts, so the whole PBL surface imports nothing from worker.ts except Env, errorResponse and requireRole; worker.ts is 3259 lines after the S277-S279 splits |
 
 ## api/routing
 

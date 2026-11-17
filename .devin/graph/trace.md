@@ -1160,3 +1160,89 @@ otherwise cut the `/v1` PBL routes into `pbl/routes.ts`, which is the next ~460 
 block that is not already behind a module boundary.
 
 ---
+
+---
+
+## Session 279 — 2026-11-18 (the firmware routes leave the Worker)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `serverless/worker.ts` (the `/v1` dispatcher block and every identifier it calls),
+`serverless/pbl/*` (signing, certs, devices, rateLimit, routes/verdict|policy|enroll|attest|
+override|signingKey|firmware), `serverless/worker.test.ts` (how it obtains `resetKeyCache`).
+
+**Findings**, measured before the change:
+
+- The dispatcher is **458 lines** and every handler it routes to already lives in `pbl/routes/`.
+  Of the twelve things it calls, **ten come from `pbl/*` and two — `getSigningKeys` /
+  `getPolicySigningKeys` — were worker-local**, purely because they memoise the signing key per
+  isolate. That pair was the only thing keeping the `/v1` surface tied to `worker.ts`.
+- `errorResponse` and `requireRole` are importable modules since S277, so the routes need nothing
+  from the Worker itself beyond `Env`.
+- `worker.test.ts` reads `resetKeyCache` **off the worker module** (`mod.resetKeyCache`), so moving
+  the cache state requires a re-export or the harness silently stops resetting between cases
+  (`if (resetKeyCache) resetKeyCache();` — a guard that hides the loss).
+
+### Fog cleared
+
+- **`worker.ts` is 3,259 lines** (from 3,751). `serverless/pbl/routes/index.ts` holds the 458-line
+  dispatcher; `serverless/pbl/keys.ts` (34 lines) holds the isolate signing-key cache.
+- **The `/v1` firmware surface no longer imports from the Worker at all** — `Env`, `errorResponse`
+  and `requireRole` are modules, and the key getters now live beside the routes that use them.
+- **Twenty-four imports that became unused in `worker.ts` were removed**, not left for the linter:
+  the module graph genuinely does not need them any more.
+- `resetKeyCache` is re-exported, so the harness contract is unchanged while the state moved.
+
+### Fog remaining
+
+- **`worker.ts` is 3,259 lines.** Remaining cohesive blocks: the agent handlers (check-in, ACK,
+  escrow, deadman — ~500 lines), the device admin handlers (~700), uninstall auth (~200), the
+  installer endpoints (~250). The `fetch` dispatch still measures complexity 145.
+- **`admins` and `hw_test_artifacts` remain whole-list writes** (small, not per-device volume).
+- **Ship to MOLE / Worker deploy: still blocked on operator access** (MOLE port proxy,
+  `wrangler login`) — unchanged and re-verified this session.
+- Index residuals unchanged.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+- **Ship to MOLE / deploy the Worker: BLOCKED, operator action.** Unchanged since S277.
+
+### Session artifacts
+
+- None beyond the verdicts: 480 tests / `tsc` / 23 contract tests / invariants, and the three file
+  sizes (`worker.ts` 3,259, `pbl/routes/index.ts` 484, `pbl/keys.ts` 34).
+
+### Failure attribution
+
+- **Layer 4, caught by a gate**: `tsc` found the one symbol the move broke — `resetKeyCache`, called
+  from the key-rotation route but defined in the block that moved. Worth naming because the test
+  harness reads it defensively (`if (resetKeyCache)`), so a missing re-export would have turned into
+  a silently-unreset cache between cases rather than a failure.
+- **My own instrumentation was wrong twice**: a print statement's escaping produced nonsense line
+  counts ("worker.ts: 3"), and an earlier attempt to prune imports by regex reported success while
+  matching nothing. Both were caught by `wc`/the linter rather than by trusting the script.
+
+### VERIFY
+
+- `serverless`: `npx vitest run` → **480 passed / 4 files** (unchanged — a pure move).
+- `serverless`: `npx tsc --noEmit -p .` → clean.
+- `scripts/test_cross_surface_contract.py` → **23 passed**.
+- `make graph-check` → all invariants pass.
+
+### Next session opening
+
+Ship S272–S279 to MOLE if access is restored; otherwise extract the agent handlers (check-in, ACK,
+escrow, deadman) — the last ~500-line cohesive block in `worker.ts`.
+
+---
