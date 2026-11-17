@@ -562,7 +562,12 @@ class Server:
 
     def device_by_hostname(self, hostname: str) -> dict | None:
         devices = self.get("/api/devices")
-        assert isinstance(devices, list)
+        if not isinstance(devices, list):
+            # Not an internal invariant: a wrong shape here is the server breaking the
+            # documented contract, and `assert` disappears under `python -O`.
+            raise ApiError(
+                f"GET /api/devices returned {type(devices).__name__}, expected a list"
+            )
         for device in devices:
             if str(device.get("hostname", "")).upper() == hostname.upper():
                 return device
@@ -570,7 +575,10 @@ class Server:
 
     def device(self, device_id: str) -> dict:
         found = self.get(f"/api/devices/{device_id}")
-        assert isinstance(found, dict)
+        if not isinstance(found, dict):
+            raise ApiError(
+                f"GET /api/devices/{device_id} returned {type(found).__name__}, expected an object"
+            )
         return found
 
     def commands(self, device_id: str, limit: int = 20) -> list[dict]:
@@ -728,7 +736,10 @@ def action_enroll(
 ) -> str:
     """Enrol the device with the dashboard's own one-liner, non-interactively."""
     token = server.post("/api/enroll/token", {})
-    assert isinstance(token, dict)
+    if not isinstance(token, dict):
+        raise ApiError(
+            f"POST /api/enroll/token returned {type(token).__name__}, expected an object"
+        )
     enroll_token = str(token["token"])
     script = (
         f"$env:LOCKDOWN_ENROLL_TOKEN='{enroll_token}'; " f"iex (irm '{one_liner_url}')"
