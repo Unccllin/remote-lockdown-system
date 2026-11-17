@@ -1,0 +1,90 @@
+{
+  "generated_at": "2026-11-17T06:47:08.796181+00:00",
+  "steps": [
+    {
+      "step": "lock",
+      "status": "FAIL",
+      "checks": [
+        {
+          "name": "lock sentinel present",
+          "passed": true,
+          "observed": "True"
+        },
+        {
+          "name": "lockdown folder encrypted",
+          "passed": false,
+          "observed": "0 encrypted file(s)"
+        },
+        {
+          "name": "logon refused by the OS",
+          "passed": false,
+          "observed": "ERROR_LOGON_FAILURE (account enabled) (win32=1326)"
+        },
+        {
+          "name": "logon prevented (interactive account disabled)",
+          "passed": true,
+          "observed": "Newark User active=False"
+        },
+        {
+          "name": "server reports a locked device",
+          "passed": true,
+          "observed": "locked"
+        },
+        {
+          "name": "lockdown command executed",
+          "passed": true,
+          "observed": "executed"
+        },
+        {
+          "name": "lockdown effective (not just applied)",
+          "passed": false,
+          "observed": "lockdown_effective=False boot_lock_status=partial"
+        },
+        {
+          "name": "no files left unencrypted",
+          "passed": null,
+          "observed": "not observable (None)"
+        }
+      ]
+    },
+    {
+      "step": "recover",
+      "status": "PASS",
+      "checks": [
+        {
+          "name": "lock sentinel gone",
+          "passed": true,
+          "observed": "False"
+        },
+        {
+          "name": "lockdown folder decrypted",
+          "passed": true,
+          "observed": "0 still encrypted"
+        },
+        {
+          "name": "logon possible again (not refused as disabled)",
+          "passed": true,
+          "observed": "ERROR_LOGON_FAILURE (account enabled) (win32=1326)"
+        },
+        {
+          "name": "account re-enabled",
+          "passed": true,
+          "observed": "Newark User active=True"
+        },
+        {
+          "name": "server reports the device usable",
+          "passed": true,
+          "observed": "active"
+        },
+        {
+          "name": "unlock command executed",
+          "passed": true,
+          "observed": "executed"
+        }
+      ]
+    }
+  ],
+  "snapshot": {},
+  "device": "MOLE",
+  "server_url": "http://192.168.1.43:8787"
+}

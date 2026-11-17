@@ -220,21 +220,54 @@ def evaluate_enroll(
     return result
 
 
-def logon_refusal(snap: dict) -> tuple[bool | None, str]:
-    """Did the OS actually refuse an interactive logon for the console user?
+def account_disabled(snap: dict) -> tuple[bool | None, str]:
+    """Is the interactive account's UF_ACCOUNTDISABLE bit set, per the OS account database?
 
-    The probe attempts one logon with a deliberately wrong password and reads the refusal
-    reason: ERROR_ACCOUNT_DISABLED (1331) means the account cannot sign in whatever the
-    password is; ERROR_LOGON_FAILURE (1326) means it is enabled and only the password was
-    wrong. That is the difference between "locked" as a claim and "locked" as an
-    observation (S271: the operator could sign in to a device the dashboard called locked).
+    This is the flag Windows consults to refuse a logon, read through ADSI. A LogonUserW
+    probe with a wrong password was tried first and cannot answer the question (measured on
+    MOLE, S271): a nonexistent user, an enabled user with a wrong password and a disabled
+    user with a wrong password all return 1326 ERROR_LOGON_FAILURE — 1331 only appears when
+    the credentials are otherwise valid, which this harness must not have.
     """
-    probe = snap.get("logon_probe") or {}
+    probe = snap.get("account_probe") or {}
     if not probe.get("attempted"):
-        return None, probe.get("meaning") or "not attempted"
-    refused = probe.get("refused")
-    detail = f"{probe.get('meaning')} (win32={probe.get('win32_error')})"
-    return (None if refused is None else bool(refused)), detail
+        return None, probe.get("meaning") or "UserFlags not readable"
+    disabled = probe.get("disabled")
+    detail = f"{probe.get('meaning')} (UserFlags={probe.get('user_flags')})"
+    return (None if disabled is None else bool(disabled)), detail
+
+
+def account_state(snap: dict) -> tuple[bool | None, str]:
+    """(disabled, detail) for the interactive account.
+
+    The OS flag is the authority. When it is unreadable the `net user` state is used as a
+    weaker fallback rather than dropping the check entirely — with its name in the report,
+    so a reader can tell which was used.
+    """
+    disabled, detail = account_disabled(snap)
+    if disabled is not None:
+        return (
+            disabled,
+            f"{detail}; net user says active={snap.get('real_user_active')}",
+        )
+    active = snap.get("real_user_active")
+    if active is None:
+        return None, f"{detail}; no interactive user detected"
+    return (active is False), f"net user says active={active} ({detail})"
+
+
+def lockdown_folder_state(snap: dict) -> tuple[int, int]:
+    """(encrypted, plaintext) file counts in the lockdown folder.
+
+    The lockdown encrypts CONTENT into `NAME.ext.enc` siblings (agent.py::encrypt_folder);
+    the EFS attribute stays clear, so counting it reported "0 encrypted" for a folder that
+    was genuinely encrypted (measured on MOLE, S271).
+    """
+    enc = snap.get("lockdown_enc_files")
+    plain = snap.get("lockdown_plain_files")
+    if enc is None:
+        return (1 if (snap.get("lockdown_encrypted") or 0) > 0 else 0), 0
+    return int(enc or 0), int(plain or 0)
 
 
 def evaluate_lock(device: dict | None, snap: dict, command: dict | None) -> StepResult:
@@ -246,26 +279,25 @@ def evaluate_lock(device: dict | None, snap: dict, command: dict | None) -> Step
             snap.get("lock_sentinel"),
         )
     )
-    encrypted = snap.get("lockdown_encrypted")
+
+    enc_files, plain_files = lockdown_folder_state(snap)
     result.checks.append(
         check(
             "lockdown folder encrypted",
-            (encrypted or 0) > 0,
-            f"{encrypted} encrypted file(s)",
+            enc_files > 0 and plain_files == 0,
+            f"{enc_files} .enc file(s), {plain_files} plaintext left",
         )
     )
-    # Sign-in is the half that was missing: the operator signed straight back in to a
-    # "locked" MOLE with their own password (S270). The OS refusal is the authority; the
-    # account's Enabled flag is corroboration.
-    refused, refusal_detail = logon_refusal(snap)
-    result.checks.append(check("logon refused by the OS", refused, refusal_detail))
 
-    console_active = snap.get("real_user_active")
+    # Sign-in is the half that was missing: the operator signed straight back in to a
+    # "locked" MOLE with their own password (S270). The account-disabled bit is the
+    # authority; the `net user` read is named in the observation as corroboration.
+    disabled, disabled_detail = account_state(snap)
     result.checks.append(
         check(
-            "logon prevented (interactive account disabled)",
-            None if console_active is None else console_active is False,
-            f"{snap.get('real_user') or 'no interactive user'} active={console_active}",
+            f"account disabled ({snap.get('real_user') or 'no interactive user'})",
+            disabled,
+            disabled_detail,
         )
     )
 
@@ -290,8 +322,6 @@ def evaluate_lock(device: dict | None, snap: dict, command: dict | None) -> Step
         )
     )
     # The pair that must never be conflated: the lock CAN be applied and be ineffective.
-    # `lockdown_effective is False` is an honest negative report, not a failed step — it
-    # is reported as its own check so a run that reads "locked" cannot hide it.
     effective = command.get("lockdown_effective")
     result.checks.append(
         check(
@@ -322,30 +352,23 @@ def evaluate_recover(
             snap.get("lock_sentinel"),
         )
     )
-    encrypted = snap.get("lockdown_encrypted")
+
+    enc_files, plain_files = lockdown_folder_state(snap)
     result.checks.append(
         check(
             "lockdown folder decrypted",
-            (encrypted or 0) == 0,
-            f"{encrypted} still encrypted",
-        )
-    )
-    # Recovery must hand the account back even when decryption is what failed.
-    refused, refusal_detail = logon_refusal(snap)
-    result.checks.append(
-        check(
-            "logon possible again (not refused as disabled)",
-            None if refused is None else refused is False,
-            refusal_detail,
+            enc_files == 0,
+            f"{enc_files} .enc file(s) left, {plain_files} plaintext",
         )
     )
 
-    console_active = snap.get("real_user_active")
+    # Recovery must hand the account back even when decryption is what failed.
+    disabled, disabled_detail = account_state(snap)
     result.checks.append(
         check(
-            "account re-enabled",
-            None if console_active is None else console_active is not False,
-            f"{snap.get('real_user') or 'no interactive user'} active={console_active}",
+            f"account re-enabled ({snap.get('real_user') or 'no interactive user'})",
+            None if disabled is None else disabled is False,
+            disabled_detail,
         )
     )
 

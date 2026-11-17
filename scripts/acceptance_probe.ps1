@@ -120,6 +120,16 @@ if (Test-Path -LiteralPath $lockdownFolder) {
     $lockdownFiles = @(Get-ChildItem -LiteralPath $lockdownFolder -Recurse -File -ErrorAction SilentlyContinue).Count
 }
 $lockdownEncrypted = Get-EncryptedFileCount $lockdownFolder
+# The lockdown encrypts CONTENT into `NAME.ext.enc` siblings (agent.py::encrypt_folder), so
+# counting the EFS attribute reports 0 for a folder that is genuinely encrypted — measured
+# as a false failure on MOLE (S271).
+$lockdownEncFiles = 0
+$lockdownPlainFiles = 0
+if (Test-Path -LiteralPath $lockdownFolder) {
+    Get-ChildItem -LiteralPath $lockdownFolder -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.Name -like '*.enc') { $lockdownEncFiles++ } else { $lockdownPlainFiles++ }
+    }
+}
 
 # --- tracking state (the file that lied) ---
 # Both locations: the agent's default is %ProgramData%\LockdownSystem\tracking_state.json
@@ -138,104 +148,30 @@ foreach ($candidate in @(
     }
 }
 
-# An ACTUAL interactive logon attempt for the console user, with a deliberately wrong
-# password. The point is not to authenticate — it is to read the OS's refusal reason, which
-# is the only evidence that "locked" really means "cannot sign in":
-#   ERROR_ACCOUNT_DISABLED (1331) -> refused, whatever the password
-#   ERROR_LOGON_FAILURE   (1326) -> the account is enabled; the password was simply wrong
-# One attempt cannot trip a lockout (the default threshold is 5+).
-$logonProbe = [pscustomobject]@{ attempted = $false; refused = $null; win32_error = $null; meaning = $null }
+# The account's enforcement bit, read through the same interface Windows uses to refuse a
+# logon: the local account's UserFlags carries UF_ACCOUNTDISABLE (0x2).
+#
+# A LogonUserW probe with a deliberately wrong password was tried first and is useless here
+# (measured on MOLE, S271): a NONEXISTENT user, an ENABLED user with a wrong password and a
+# DISABLED user with a wrong password all return 1326 ERROR_LOGON_FAILURE. Windows reports
+# 1331 ERROR_ACCOUNT_DISABLED only when the credentials are otherwise valid, which this
+# probe must not have. So the flag is what gets read, and it is corroborated by
+# `net user ... Account active`.
+$accountProbe = [pscustomobject]@{ attempted = $false; disabled = $null; user_flags = $null; meaning = $null }
 
 $realUser = Get-RealUserName
-$realProfile = if ($realUser) { Join-Path 'C:\Users' $realUser } else { $null }
-$efsPaths = @()
-if ($realProfile -and (Test-Path -LiteralPath $realProfile)) {
-    foreach ($sub in @('Documents', 'Downloads', 'Pictures', 'Desktop')) {
-        $p = Join-Path $realProfile $sub
-        if (Test-Path -LiteralPath $p) {
-            $efsPaths += [pscustomobject]@{
-                path      = $p
-                encrypted = Get-EncryptedFileCount $p
-            }
-        }
-    }
-}
-
-# --- evidence trail (agent.log tail, install.log ledger) ---
-$installRuns = @()
-if (Test-Path -LiteralPath (Join-Path $inst 'install.log')) {
-    try {
-        $lines = Get-Content -LiteralPath (Join-Path $inst 'install.log') -ErrorAction SilentlyContinue
-        for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '=== installer run started (.+) ===') {
-                $started = $Matches[1]
-                $code = $null
-                for ($j = $i + 1; $j -lt $lines.Count; $j++) {
-                    if ($lines[$j] -match '=== installer exited (-?\d+) ===') { $code = [int]$Matches[1] }
-                    if ($lines[$j] -match '=== installer run started') { break }
-                }
-                $installRuns += [pscustomobject]@{ started = $started; exit_code = $code }
-            }
-        }
-    } catch { }
-}
-
-# Computed before the object literal: Windows PowerShell 5.1 rejects `try {}` and `if`
-# as a hashtable VALUE (`IncompleteHashLiteral`), which is how this probe first failed on
-# MOLE — the parser, not the machine, was the problem.
-$configDeviceId = $null
-$configServerUrl = $null
-$configPollInterval = $null
-$configVerifyTls = $null
-if ($config) {
-    $configDeviceId = $config.device_id
-    $configServerUrl = $config.server_url
-    $configPollInterval = $config.poll_interval
-    $configVerifyTls = $config.verify_tls
-}
-
-$agentSha = $null
-try {
-    $exePath = Join-Path $inst 'lockdown-agent.exe'
-    if (Test-Path -LiteralPath $exePath) {
-        $agentSha = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-    }
-} catch { $agentSha = $null }
 
 if ($realUser) {
     try {
-        if (-not ('Win32.Native' -as [type])) {
-            Add-Type -Namespace Win32 -Name Native -MemberDefinition @'
-[System.Runtime.InteropServices.DllImport("advapi32.dll", SetLastError=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
-public static extern bool LogonUserW(string user, string domain, string password, int logonType, int provider, out System.IntPtr token);
-[System.Runtime.InteropServices.DllImport("kernel32.dll")]
-public static extern bool CloseHandle(System.IntPtr handle);
-'@
-        }
-        $token = [IntPtr]::Zero
-        # 2 = LOGON32_LOGON_INTERACTIVE, 0 = LOGON32_PROVIDER_DEFAULT
-        $ok = [Win32.Native]::LogonUserW($realUser, $env:COMPUTERNAME, 'wrong-password-probe-do-not-use', 2, 0, [ref]$token)
-        if ($ok) {
-            [Win32.Native]::CloseHandle($token) | Out-Null
-            $logonProbe.attempted = $true
-            $logonProbe.refused = $false
-            $logonProbe.win32_error = 0
-            $logonProbe.meaning = 'LOGGED ON — the account works (a wrong password cannot succeed, so this is unexpected)'
-        } else {
-            $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-            $logonProbe.attempted = $true
-            $logonProbe.win32_error = $err
-            switch ($err) {
-                1331 { $logonProbe.refused = $true;  $logonProbe.meaning = 'ERROR_ACCOUNT_DISABLED' }
-                1326 { $logonProbe.refused = $false; $logonProbe.meaning = 'ERROR_LOGON_FAILURE (account enabled)' }
-                1907 { $logonProbe.refused = $true;  $logonProbe.meaning = 'ERROR_PASSWORD_MUST_CHANGE' }
-                1909 { $logonProbe.refused = $true;  $logonProbe.meaning = 'ERROR_ACCOUNT_LOCKED_OUT' }
-                default { $logonProbe.refused = $null; $logonProbe.meaning = 'unclassified' }
-            }
-        }
+        $acct = [ADSI]"WinNT://$env:COMPUTERNAME/$realUser,user"
+        $flags = [int]$acct.UserFlags.Value
+        $accountProbe.attempted = $true
+        $accountProbe.user_flags = $flags
+        $accountProbe.disabled = (($flags -band 0x2) -eq 0x2)
+        $accountProbe.meaning = if ($accountProbe.disabled) { 'UF_ACCOUNTDISABLE set' } else { 'account enabled' }
     } catch {
-        $logonProbe.attempted = $false
-        $logonProbe.meaning = "probe failed: $($_.Exception.Message)"
+        $accountProbe.attempted = $false
+        $accountProbe.meaning = "UserFlags unreadable: $($_.Exception.Message)"
     }
 }
 
@@ -251,12 +187,14 @@ $snapshot = [pscustomobject]@{
     lockdown_folder     = $lockdownFolder
     lockdown_files      = $lockdownFiles
     lockdown_encrypted  = $lockdownEncrypted
+    lockdown_enc_files  = $lockdownEncFiles
+    lockdown_plain_files = $lockdownPlainFiles
     real_user           = $realUser
     real_user_active    = Get-AccountActive $realUser
     decoy_name          = $decoyName
     decoy_exists        = Get-AccountExists $decoyName
     decoy_active        = Get-AccountActive $decoyName
-    logon_probe         = $logonProbe
+    account_probe       = $accountProbe
     efs_paths           = $efsPaths
     tracking_state      = $trackingState
     agent_binary_sha256 = $agentSha

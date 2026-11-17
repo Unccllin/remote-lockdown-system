@@ -544,137 +544,152 @@ class TestTrackNeedsRelock:
         assert mod.track_needs_relock(step, "active") is False
 
 
-class TestLogonPreventionCheck:
-    """`lock` is only a lock if the console cannot sign in (S270, reported by the operator).
+class TestAccountDisabledEvidence:
+    """The account's UF_ACCOUNTDISABLE bit is the evidence, not a logon attempt.
 
-    The probe already reports the interactive user's account state, so the assertion is a
-    cross-check of device state against the claim, not a new observation.
-    """
-
-    def locked_snapshot(self, **overrides):
-        base = {
-            "lock_sentinel": True,
-            "lockdown_encrypted": 3,
-            "real_user": "newark user",
-            "real_user_active": False,
-        }
-        base.update(overrides)
-        return snapshot(**base)
-
-    def test_a_lock_that_leaves_the_account_enabled_fails(self):
-        result = mod.evaluate_lock(
-            device(status="locked"),
-            self.locked_snapshot(real_user_active=True),
-            command(),
-        )
-        check = by_name(result, "logon prevented")
-        assert check.passed is False
-        assert "active=True" in check.observed
-        assert result.status == "FAIL"
-
-    def test_a_lock_that_disables_the_account_passes_that_check(self):
-        result = mod.evaluate_lock(
-            device(status="locked"), self.locked_snapshot(), command()
-        )
-        assert by_name(result, "logon prevented").passed is True
-
-    def test_no_interactive_user_is_unobservable_not_a_pass(self):
-        # A machine with nobody logged in has no account to disable; claiming "prevented"
-        # would be an assertion about a user who was never there.
-        result = mod.evaluate_lock(
-            device(status="locked"),
-            self.locked_snapshot(real_user="", real_user_active=None),
-            command(),
-        )
-        assert by_name(result, "logon prevented").passed is None
-
-    def test_recovery_fails_if_the_account_is_still_disabled(self):
-        unlock = command(
-            command_type="unlock", lockdown_effective=None, boot_lock_status=None
-        )
-        result = mod.evaluate_recover(
-            device(),
-            snapshot(lock_sentinel=False, lockdown_encrypted=0, real_user_active=False),
-            unlock,
-        )
-        assert by_name(result, "account re-enabled").passed is False
-        assert result.status == "FAIL"
-
-
-class TestLogonRefusalEvidence:
-    """The OS's refusal reason is the evidence; the account's Enabled flag is corroboration.
-
-    One logon attempt with a wrong password distinguishes
-    ERROR_ACCOUNT_DISABLED (1331 -> cannot sign in) from
-    ERROR_LOGON_FAILURE (1326 -> enabled, password simply wrong).
+    A LogonUserW probe with a wrong password cannot distinguish "disabled" from "wrong
+    password": a nonexistent user, an enabled user and a disabled user all return 1326
+    ERROR_LOGON_FAILURE (calibrated on MOLE, S271). 1331 appears only when the credentials
+    are otherwise valid. So the harness reads the flag Windows itself refuses on.
     """
 
     def locked_snapshot(self, probe, **overrides):
         base = {
             "lock_sentinel": True,
-            "lockdown_encrypted": 3,
+            "lockdown_encrypted": 0,
+            "lockdown_enc_files": 1,
+            "lockdown_plain_files": 0,
             "real_user": "Newark User",
-            "real_user_active": probe.get("refused") is True,
-            "logon_probe": probe,
+            "real_user_active": probe.get("disabled") is True,
+            "account_probe": probe,
         }
         base.update(overrides)
         return snapshot(**base)
 
-    def test_a_disabled_account_is_reported_as_refused(self):
+    def test_a_disabled_account_passes_the_lock(self):
         probe = {
             "attempted": True,
-            "refused": True,
-            "win32_error": 1331,
-            "meaning": "ERROR_ACCOUNT_DISABLED",
+            "disabled": True,
+            "user_flags": 515,
+            "meaning": "UF_ACCOUNTDISABLE set",
         }
         result = mod.evaluate_lock(
             device(status="locked"), self.locked_snapshot(probe), command()
         )
-        check = by_name(result, "logon refused by the OS")
+        check = by_name(result, "account disabled")
         assert check.passed is True
-        assert "1331" in check.observed
+        assert "515" in check.observed
 
-    def test_an_enabled_account_fails_the_lock_even_with_a_wrong_password(self):
+    def test_an_enabled_account_fails_the_lock(self):
         probe = {
             "attempted": True,
-            "refused": False,
-            "win32_error": 1326,
-            "meaning": "ERROR_LOGON_FAILURE (account enabled)",
+            "disabled": False,
+            "user_flags": 513,
+            "meaning": "account enabled",
         }
         result = mod.evaluate_lock(
             device(status="locked"), self.locked_snapshot(probe), command()
         )
-        check = by_name(result, "logon refused by the OS")
-        assert check.passed is False
-        assert "1326" in check.observed
+        assert by_name(result, "account disabled").passed is False
         assert result.status == "FAIL"
 
-    def test_an_unattempted_probe_is_unobservable(self):
+    def test_no_interactive_user_is_unobservable(self):
+        # Neither the OS flag nor `net user` can say anything about an account nobody can
+        # name; claiming "disabled" would be an assertion, not an observation.
         result = mod.evaluate_lock(
             device(status="locked"),
-            self.locked_snapshot({"attempted": False, "refused": None}),
+            self.locked_snapshot(
+                {
+                    "attempted": False,
+                    "disabled": None,
+                    "meaning": "UserFlags unreadable",
+                },
+                real_user="",
+                real_user_active=None,
+            ),
             command(),
         )
-        assert by_name(result, "logon refused by the OS").passed is None
+        assert by_name(result, "account disabled").passed is None
 
-    def test_recovery_requires_logon_to_work_again(self):
+    def test_an_unreadable_flag_falls_back_to_the_net_read(self):
+        # Weaker evidence is still evidence, as long as the report says which was used.
+        result = mod.evaluate_lock(
+            device(status="locked"),
+            self.locked_snapshot(
+                {
+                    "attempted": False,
+                    "disabled": None,
+                    "meaning": "UserFlags unreadable",
+                },
+                real_user_active=False,
+            ),
+            command(),
+        )
+        check = by_name(result, "account disabled")
+        assert check.passed is True
+        assert "net user says active=False" in check.observed
+
+    def test_recovery_requires_the_flag_to_be_cleared(self):
         unlock = command(
             command_type="unlock", lockdown_effective=None, boot_lock_status=None
         )
-        still_disabled = {
-            "attempted": True,
-            "refused": True,
-            "win32_error": 1331,
-            "meaning": "ERROR_ACCOUNT_DISABLED",
-        }
         result = mod.evaluate_recover(
             device(),
             snapshot(
                 lock_sentinel=False,
-                lockdown_encrypted=0,
-                real_user_active=False,
-                logon_probe=still_disabled,
+                lockdown_enc_files=0,
+                lockdown_plain_files=1,
+                account_probe={
+                    "attempted": True,
+                    "disabled": True,
+                    "user_flags": 515,
+                    "meaning": "UF_ACCOUNTDISABLE set",
+                },
             ),
             unlock,
         )
-        assert by_name(result, "logon possible again").passed is False
+        assert by_name(result, "account re-enabled").passed is False
+
+
+class TestLockdownFolderEncryption:
+    """`encrypt_folder` writes `NAME.ext.enc` siblings; the EFS attribute stays clear."""
+
+    def test_a_fernet_encrypted_folder_counts_as_encrypted(self):
+        result = mod.evaluate_lock(
+            device(status="locked"),
+            snapshot(
+                lock_sentinel=True,
+                lockdown_encrypted=0,
+                lockdown_enc_files=1,
+                lockdown_plain_files=0,
+                real_user_active=False,
+            ),
+            command(),
+        )
+        check = by_name(result, "lockdown folder encrypted")
+        assert check.passed is True
+        assert "1 .enc" in check.observed
+
+    def test_plaintext_left_behind_fails(self):
+        result = mod.evaluate_lock(
+            device(status="locked"),
+            snapshot(
+                lock_sentinel=True,
+                lockdown_enc_files=1,
+                lockdown_plain_files=1,
+                real_user_active=False,
+            ),
+            command(),
+        )
+        assert by_name(result, "lockdown folder encrypted").passed is False
+
+    def test_recovery_counts_a_leftover_enc_file(self):
+        unlock = command(
+            command_type="unlock", lockdown_effective=None, boot_lock_status=None
+        )
+        result = mod.evaluate_recover(
+            device(),
+            snapshot(lock_sentinel=False, lockdown_enc_files=1, lockdown_plain_files=1),
+            unlock,
+        )
+        assert by_name(result, "lockdown folder decrypted").passed is False
