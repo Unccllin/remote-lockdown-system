@@ -953,33 +953,65 @@ class TestLogonPrevention:
         assert calls == ["re-enable", "ack"], calls
 
 
-class TestDecoyAccountPrompt:
-    """`net user <name> <24-char password> /add` asks a human question.
+class TestDecoyAccountCreation:
+    """`net user /add` asks a console question; `New-LocalUser` does not.
 
-    Measured on MOLE (S271): with no console and no stdin the prompt gets nothing, the
-    command exits -1 with "No valid response was provided", and the decoy is never created —
-    which is why `create_decoy` has been in `failed` since S269.
+    Measured on MOLE (S271): with a 24-character password, `net user GuestUser <pw> /add`
+    prints "… longer than 14 characters … continue? (Y/N) [Y]:" and reads the answer from the
+    CONSOLE — `'Y' | net user …` still exits -1 and creates nothing. `New-LocalUser` creates
+    the account with no prompt. That is why `create_decoy` never succeeded.
     """
 
-    def test_the_decoy_creation_answers_the_password_prompt(self, monkeypatch):
+    def test_the_account_is_created_with_the_scriptable_api(self, monkeypatch):
         calls = []
 
-        def fake_net(args, stdin=None):
-            calls.append((args, stdin))
-            return True
+        def fake_run(args, **kwargs):
+            calls.append((args, kwargs))
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = ""
+            result.stderr = ""
+            return result
 
-        monkeypatch.setattr(agent, "_run_net_user", fake_net)
-        monkeypatch.setattr(agent.platform, "system", lambda: "Windows")
-        monkeypatch.setattr(agent, "_get_real_username", lambda: "labuser")
-        monkeypatch.setattr(agent, "hold_logon", lambda reason, user=None: (user, True))
-        monkeypatch.setattr(agent, "_query_account_active", lambda user: False)
-        monkeypatch.setattr(agent, "_backup_efs_certificate", lambda user: None)
-        monkeypatch.setattr(agent, "_run_cipher", lambda mode, path: True)
-        monkeypatch.setattr(agent, "_count_encrypted_files", lambda path: 0)
-        monkeypatch.setattr(type(agent.log), "info", lambda *a, **k: None, raising=False)
+        monkeypatch.setattr(agent.subprocess, "run", fake_run)
+        monkeypatch.setattr(agent, "_query_account_exists", lambda name: True)
 
-        agent.apply_tracking_data_protection({})
+        assert agent._create_decoy_account("GuestUser", "A" * 24) is True
 
-        add_calls = [c for c in calls if "/add" in c[0]]
-        assert add_calls, "the decoy must be created"
-        assert add_calls[0][1] == "Y\n", "the >14-character password prompt must be answered"
+        argv = calls[0][0]
+        assert argv[0] == "powershell"
+        joined = " ".join(argv)
+        assert "New-LocalUser" in joined
+        # The password travels in the environment, not on a command line a process
+        # listing can read.
+        assert "A" * 24 not in joined
+        assert calls[0][1]["env"]["LOCKDOWN_DECOY_PW"] == "A" * 24
+
+    def test_a_host_without_the_module_falls_back_to_a_short_password(self, monkeypatch):
+        def fake_run(args, **kwargs):
+            result = MagicMock()
+            result.returncode = 1
+            result.stdout = ""
+            result.stderr = "New-LocalUser : not recognized"
+            return result
+
+        monkeypatch.setattr(agent.subprocess, "run", fake_run)
+        monkeypatch.setattr(agent, "_query_account_exists", lambda name: False)
+        net_calls = []
+        monkeypatch.setattr(
+            agent, "_run_net_user", lambda args, stdin=None: net_calls.append(args) or True
+        )
+
+        assert agent._create_decoy_account("GuestUser", "B" * 24) is True
+
+        assert net_calls == [
+            ["GuestUser", "B" * 13, "/add"]
+        ], "the fallback password must be under the 14-character prompt threshold"
+
+    def test_a_creation_that_did_not_take_effect_is_false(self, monkeypatch):
+        result = MagicMock(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr(agent.subprocess, "run", lambda *a, **k: result)
+        monkeypatch.setattr(agent, "_query_account_exists", lambda name: False)
+        monkeypatch.setattr(agent, "_run_net_user", lambda args, stdin=None: False)
+
+        assert agent._create_decoy_account("GuestUser", "C" * 24) is False

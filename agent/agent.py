@@ -3103,6 +3103,75 @@ def upload_efs_certificate(cfg: dict, cert_path: str, cert_password: str) -> boo
         return False
 
 
+def _create_decoy_account(name: str, password: str) -> bool:
+    """Create a local account WITHOUT a console prompt, and verify it exists.
+
+    `net user <name> <password> /add` asks "The password entered is longer than 14
+    characters ... continue? (Y/N)" and reads the answer from the CONSOLE, not stdin: piping
+    "Y" changes nothing (measured on MOLE, S271 — `'Y' | net user ... /add` still exits -1 and
+    creates no account). That is why `create_decoy` never succeeded, while the code looked
+    right.
+
+    `New-LocalUser` is the scriptable API and does not prompt. The password goes through the
+    child's environment rather than its command line, so it is not readable from a process
+    listing while the call runs. A ≤13-character `net user` fallback covers hosts without the
+    LocalAccounts module — that length is what keeps `net user` from asking.
+    """
+    script = (
+        "$pw = ConvertTo-SecureString $env:LOCKDOWN_DECOY_PW -AsPlainText -Force; "
+        "New-LocalUser -Name $env:LOCKDOWN_DECOY_NAME -Password $pw "
+        "-PasswordNeverExpires -ErrorAction Stop | Out-Null"
+    )
+    env = {
+        **os.environ,
+        "LOCKDOWN_DECOY_NAME": name,
+        "LOCKDOWN_DECOY_PW": password,
+    }
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+        if result.returncode == 0 and _query_account_exists(name):
+            return True
+        log.warning(
+            "New-LocalUser did not create '%s' (rc=%s): %s",
+            name,
+            result.returncode,
+            (result.stderr or result.stdout).strip()[:200],
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("New-LocalUser failed for '%s': %s", name, e)
+
+    # Fallback: 13 characters is under the threshold that triggers the net.exe prompt.
+    return _run_net_user([name, password[:13], "/add"])
+
+
+def _query_account_exists(name: str) -> bool:
+    """True when a local account with this name exists (read back, not inferred)."""
+    if platform.system() != "Windows":
+        return False
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                f"if (Get-LocalUser -Name '{name}' -ErrorAction SilentlyContinue) {{ 'yes' }} else {{ 'no' }}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return "yes" in (result.stdout or "").lower()
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _query_account_active(name: str) -> bool | None:
     """Return True/False for "Account active", or None when the account is unknown.
 
@@ -3211,9 +3280,7 @@ def apply_tracking_data_protection(cfg: dict) -> dict:
     # --- Layer 3: Create a decoy account, then verify it exists ---
     decoy_password = secrets.token_urlsafe(DECOY_ACCOUNT_PASSWORD_LENGTH)
     log.info("Creating decoy account: %s", DECOY_ACCOUNT_NAME)
-    # "Y" answers the >14-character password prompt (see _run_net_user); without it the
-    # account is never created and the layer silently fails.
-    created = _run_net_user([DECOY_ACCOUNT_NAME, decoy_password, "/add"], stdin="Y\n")
+    created = _create_decoy_account(DECOY_ACCOUNT_NAME, decoy_password)
     if not created:
         _run_net_user([DECOY_ACCOUNT_NAME, decoy_password])
     _run_net_user([DECOY_ACCOUNT_NAME, "/active:yes"])
