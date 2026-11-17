@@ -291,6 +291,52 @@ class TestDoubleLockGuard:
             assert detail["bcd"]["critical_applied"] == 2
             assert detail["hp_uefi"]["not_hp"] is True
 
+    def test_handle_lockdown_carries_the_boot_lock_reason(self, cfg, tmp_folder, tmp_sentinel):
+        """A layer that could not apply states why, in the record and not only the log.
+
+        Measured on MOLE (S271): `boot_lock_status=partial` with every layer at 0 and no
+        explanation, while the agent's log knew the cause (a firmware Setup password exists
+        and no `uefi_password` is configured). The dashboard can only act on what the ACK
+        carries, so the cause travels with the detail — per layer and hoisted for consumers
+        that should not have to know which layer produced it.
+        """
+        with (
+            patch.object(agent, "ack_command", return_value=True) as mock_ack,
+            patch.object(agent, "apply_lock_screen"),
+            patch.object(agent, "start_lock_guardian"),
+            patch.object(agent, "encrypt_folder"),
+            patch.object(agent, "write_pending_ack"),
+            patch.object(agent, "write_recovery_key"),
+            patch.object(agent, "bcd_lockdown") as mock_bcd,
+            patch.object(agent, "hp_uefi_lockdown") as mock_hp,
+        ):
+            mock_bcd.apply_bcd_lockdown.return_value = {
+                "success": False,
+                "partial": False,
+                "rolled_back": True,
+                "critical_applied": 0,
+                "best_effort_applied": 0,
+                "best_effort_failed": 0,
+            }
+            mock_hp.apply_boot_lockdown.return_value = {
+                "success": False,
+                "partial": False,
+                "rolled_back": False,
+                "not_hp": False,
+                "critical_applied": 0,
+                "best_effort_applied": 0,
+                "best_effort_failed": 0,
+                "reason": "existing_bios_password_without_uefi_password",
+                "next_action": "Set uefi_password in the agent config.",
+            }
+
+            agent.handle_lockdown(cfg, {"id": "cmd-1"})
+
+            detail = mock_ack.call_args[1].get("boot_lock_detail")
+            assert detail["hp_uefi"]["reason"] == "existing_bios_password_without_uefi_password"
+            assert detail["reason"] == "existing_bios_password_without_uefi_password"
+            assert "uefi_password" in detail["next_action"]
+
     def test_handle_lockdown_boot_lock_detail_zero_critical(self, cfg, tmp_folder, tmp_sentinel):
         """Phase 17: boot_lock_detail with critical_applied_total=0 (the dangerous case)."""
         with (

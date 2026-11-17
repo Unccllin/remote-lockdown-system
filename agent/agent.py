@@ -2515,11 +2515,26 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                 if hp_result
                 else None,
                 "pba_active": power_on_password is not None,
+                # A dead end carries its cause WITH the record, not only in the log (S271).
+                "reason": hp_result.get("reason") if hp_result else None,
+                "next_action": hp_result.get("next_action") if hp_result else None,
             },
             "critical_applied_total": bcd_crit + hp_crit,
             "best_effort_applied_total": bcd_be_ok + hp_be_ok,
             "best_effort_failed_total": bcd_be_fail + hp_be_fail,
         }
+        # Hoisted so a consumer does not have to know which layer produced the cause: the
+        # dashboard shows "boot lock partial" and can name the reason beneath it.
+        boot_lock_detail["reason"] = (
+            boot_lock_detail["hp_uefi"].get("reason")
+            or boot_lock_detail["bcd"].get("reason")
+            or None
+        )
+        boot_lock_detail["next_action"] = (
+            boot_lock_detail["hp_uefi"].get("next_action")
+            or boot_lock_detail["bcd"].get("next_action")
+            or None
+        )
 
     # T9: BitLocker TPM+PIN PBA (Tier 2 — Phase 3).
     # Only attempted when enable_pba=True. If BitLocker is not enabled,

@@ -104,6 +104,53 @@ describe('DeviceDetailPage', () => {
     expect(screen.getByText('AA:BB:CC:DD:EE:FF')).toBeInTheDocument();
   });
 
+  it('names the reason and the next step when a boot-lock layer could not apply (S271)', async () => {
+    // Measured on MOLE: the panel said "partial · total critical 0" and gave no next action,
+    // because the cause lived only in the agent log. The agent now puts it in the ACK.
+    const detail = {
+      lockdown_effective: false,
+      boot_lock_status: 'partial',
+      boot_lock_detail: {
+        boot_lock_attempted: true,
+        critical_applied_total: 0,
+        reason: 'existing_bios_password_without_uefi_password',
+        next_action: 'Set uefi_password in the agent config, then re-apply the lockdown.',
+        bcd: { rolled_back: true, critical_applied: 0 },
+        hp_uefi: { not_hp: false, critical_applied: 0 },
+      },
+    };
+
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [
+            {
+              id: 'audit-1',
+              action: 'agent_lockdown_confirmed',
+              detail: JSON.stringify(detail),
+              created_at: '2025-01-01T00:00:00Z',
+            },
+          ],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('Boot lock did not apply')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.getByText(/already has a BIOS Setup password/i)).toBeInTheDocument();
+    expect(screen.getByText(/Next step:/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Set uefi_password in the agent config/),
+    ).toBeInTheDocument();
+  });
+
   it('shows N/A for missing hardware identifiers', async () => {
     api.get.mockImplementation((url) => {
       if (url.startsWith('/devices/1') && !url.includes('location')) {

@@ -9,6 +9,7 @@ import api from '../api/client';
 import ConfirmModal from '../components/ConfirmModal';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { safeFromNow, safeFormat } from '../utils/time';
+import { describeBootLockReason } from '../utils/bootLockReason';
 
 const STATUS_BADGE = {
   active: 'badge-active',
@@ -283,6 +284,8 @@ export default function DeviceDetailPage() {
   const isLockedOrStolen = device.status === 'locked' || device.status === 'stolen';
   const lockdownEffective = lockdownDetail?.lockdown_effective;
   const bootLockDetail = lockdownDetail?.boot_lock_detail;
+  // S271: the agent states WHY a boot layer could not apply; show it with the next action.
+  const bootLockReasonText = describeBootLockReason(bootLockDetail?.reason);
   const showLockdownPanel = isLockedOrStolen && lockdownDetail && lockdownEffective !== null && lockdownEffective !== undefined;
 
   // D-008/D-010/D-011: Extract new status fields from the lockdown detail
@@ -490,6 +493,20 @@ export default function DeviceDetailPage() {
             {' · '}
             Total critical: <span className={`font-mono ${lockdownEffective ? 'text-green-400' : 'text-red-400'}`}>{bootLockDetail?.critical_applied_total ?? 0}</span>
           </div>
+        </div>
+      )}
+
+      {/* S271: a boot layer that could not apply states its cause and the operator's next
+          step. Without this the panel read "partial · total critical 0" — measured on MOLE,
+          and unactionable, because the cause lived only in the agent log. */}
+      {isLockedOrStolen && bootLockReasonText && (
+        <div className="card mb-6 border-l-4 border-l-orange-500">
+          <h3 className="text-sm font-semibold text-orange-400 mb-1">Boot lock did not apply</h3>
+          <p className="text-sm text-slate-300">{bootLockReasonText}</p>
+          {bootLockDetail?.next_action && (
+            <p className="text-sm text-slate-400 mt-1">Next step: {bootLockDetail.next_action}</p>
+          )}
+          <p className="text-xs text-slate-500 mt-1 font-mono">{bootLockDetail.reason}</p>
         </div>
       )}
 
