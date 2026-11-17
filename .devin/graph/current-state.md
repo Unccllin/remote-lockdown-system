@@ -58,46 +58,47 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 273 — 2026-11-18 (the last rollout blocker: devices stop being one KV value)
+## Latest session: 274 — 2026-11-18 (location reports leave the shared window)
 
 ### Fog cleared
 
-- **`devices` is per-entity (ADR-003).** `device:<id>` + `device_index` + `agent_key:<sha256>`,
-  lazy idempotent migration from the legacy `devices` key, and all 15 write sites converted.
-  `saveDevices` is deleted, so a whole-list write cannot come back without a compile error.
-- **Authentication is one read.** `verifyAgentAuth` and the `/v1` firmware auth path both use the
-  pointer; `rotate-key` deletes the stale mapping, so a re-keyed device fails closed with the old
-  key (asserted, not assumed).
-- **Two cost regressions avoided in the same commit**: the check-in path and `/api/ping` now use
-  the record `verifyAgentAuth` already loaded instead of re-reading the fleet.
-- **The storage change surfaced as 12 immediate test failures**, all of them tests reading the
-  KV layout. They were rewritten to go through the API (`deviceIdByHostname`) or through the
-  documented check-in metadata key — no test was weakened.
-- `serverless/README.md` gained a "Device storage (ADR-003)" section and no longer claims
-  `devices` is one value.
-- Four pre-existing style blockers in `worker.ts` (nested ternaries in the version filter and
-  `signature_alg`, two string-concatenation joins in the installer scripts) were cleared, since
-  the file is in this diff anyway and they blocked every edit.
+- **Location reports are per-entity (ADR-004)**: `location:<id>` records plus a **per-device**
+  `location_index:<deviceId>`. No two devices share a window any more, so one device's report
+  cannot evict another's.
+- **The per-device cap is a real retention policy** — `LOCATION_HISTORY_LIMIT` (default 500 ≈ 4 h
+  of continuous tracking), overridable as a `[vars]` entry the way `ACTIVE_POLL_SECONDS` is, so
+  the pruning path is reachable by a test rather than asserted by inspection.
+- **Pruning deletes the records**, not just the index: a command is rewritten in place, a report
+  never is, so an unindexed report would otherwise live forever. Verified on a real run.
+- **The legacy migration is idempotent under concurrency** because migrated rows get a
+  deterministic id derived from their content — `generateId()` would duplicate every report when
+  two isolates migrate at once.
+- **The response gained a stable id.** The two read routes used to synthesise
+  `loc-<deviceId>-<idx>`, which changed whenever the window shifted; the row now keeps its
+  identity across reads.
+- `listLocations`/`saveLocations` are deleted, and `serializeMutation`'s docstring plus the README
+  now name only the stores still whole-list: `audit_log`, `bios_passwords`, `encryption_keys`.
 
 ### Fog remaining
 
-- **Three stores are still whole lists**: `locations`, `audit_log`, `bios_passwords`,
-  `encryption_keys`. Named in ADR-003 and in the README rather than implied. The release cascade
-  still rewrites all four on every delete — visible in the artifact's final key snapshot.
-- **`device_index` is a whole-value write**, accepted for the same reason ADR-002 accepted
-  `command_index`: append-mostly, ids only, and `putDevice` re-appends a missing id on every
-  write so a lost append cannot hide a device from `listDevices` permanently.
-- **`worker.ts` is now 5056 lines**, past the harness LSP's 5000-line limit, so `lens_diagnostics`
-  reports "too_large" instead of a verdict. `tsc --noEmit` and the 464-test suite remain the
-  gates, as AGENTS.md already states for the serverless surface. Splitting the file is now a
-  concrete, named task rather than a style preference.
-- **MOLE has still not been shipped** `9e464ab` or this storage change. Operator action.
-- The 180 s `LOCK_STATE_FRESH_MS` vs 300 s adaptive poll mismatch (S272) is unchanged.
+- **Two stores plus one remain whole-list**: `audit_log`, `bios_passwords`, `encryption_keys`.
+  The release cascade still rewrites all three per delete (visible in the S273 artifact).
+- **The index writes per report are still whole-value writes**, bounded per device by the cap —
+  the residual ADR-002 accepted, now scoped to one device instead of the fleet.
+- **History reads load the device's whole retained window** (≤500 records) and sort it by
+  `locationTime` before slicing, to keep the S272 `observed_at` semantics exact. A device at the
+  cap therefore costs up to 500 gets per history request. If that proves slow, the fix is a
+  stored sort key, not a narrower fetch — narrowing the fetch would reintroduce the S272 defect
+  (a backfilled report with an older scan time dropping rows).
+- **`worker.ts` is 5,006+ lines**, past the harness LSP's 5000-line limit: diagnostics report
+  "too_large" and only `tsc` + the suite can see it. Splitting it is a named task.
+- **MOLE has not been shipped** `9e464ab`, the `lock_state` work, or either storage change.
+  Operator action.
 
 ### Debt items closed
 
-None formally. ADR-003 closes the rollout blocker recorded as a blocker line, not a ledger item,
-so no `commit_ref`/`artifact_ref` pair is claimed.
+None formally — ADR-004 closes a blocker line, not a ledger item, so no `commit_ref`/
+`artifact_ref` pair is claimed.
 
 ### Debt items still open
 
@@ -108,43 +109,36 @@ D-210 (PBL route integration), plus the store-by-store work named above.
 
 - MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
 - `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
-- **The 60-device rollout blocker narrowed from four stores to three** (`locations`, `audit_log`,
-  `bios_passwords`). Devices are done; the rest is the same change applied store by store.
+- **The 60-device rollout blocker is down to two stores plus one**: `audit_log`,
+  `bios_passwords`, `encryption_keys`. `devices` (S273) and `locations` (this session) are done.
 
 ### Session artifacts
 
-- `docs/artifacts/s272-device-per-entity-keys.json` — the real Worker (bundled from source,
-  driven through its own `fetch`) taken through enrol → flag-stolen → ACK → rotate-key →
-  release, with the full KV key layout at each step and **20 assertions**, including "B's record
-  was not rewritten by A's mutation" and "the whole fleet was not written".
+- `docs/artifacts/s274-location-per-entity-keys.json` — the real Worker with a 5-report cap,
+  driven through two interleaved devices, 8 reports on one of them (crossing the cap), and a
+  release: **11 assertions**, including "evicted reports were deleted, not just unindexed",
+  "B is untouched by A crossing its cap", and "no shared whole-list key exists".
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), and the harness worked this time**: 12 tests failed the
-  moment the storage shape changed because they read `devices` out of KV. That is the failure
-  mode this repo has already paid for once (tests pinning a layout instead of a contract), and
-  the fix was the one ADR-002 established — read through the API. Harness change: `deviceIdByHostname`
-  now goes through `GET /api/devices`, and the `lock_state` seed writes the documented
-  `device_checkin:<id>` key instead of patching a list.
-- **Layer 4, second signal**: the first artifact run for this change is what proved the write
-  set (`device:<A>`, `agent_key:<A>`, `command:<id>`, `command_index`, `audit_log` — no `devices`).
-  A passing suite would not have shown that.
+- **No failures this session.** The only adjustments were mine: the first version of the new
+  tests reached into `MockKV`'s private storage (`data.keys()`), which does not exist — the fix
+  was to assert through the KV interface (`list({prefix})`) the mock actually implements. That is
+  the same lesson as S272/S273 from the other direction: assert the contract, not the internals.
 
 ### VERIFY
 
-- `serverless`: `npx vitest run` → **464 passed / 4 files** (was 458; +6 ADR-003 tests).
+- `serverless`: `npx vitest run` → **470 passed / 4 files** (was 464; +6 ADR-004 tests).
 - `serverless`: `npx tsc --noEmit -p .` → clean.
 - `scripts/test_cross_surface_contract.py` → **23 passed**.
+- Artifact: 11/11 assertions on a real Worker run.
 - `make graph-check` → all invariants pass.
-- Agent suite (`scripts/run-agent-tests.sh -q`) → exit 0.
-- The only red anywhere on this host is `scripts/test_tls_floor.py`, the documented
-  unreadable-`/var/run/docker.sock` limitation (AGENTS.md), unrelated to this change.
 
 ### Next session opening
 
-Take `locations` off the whole-list write next — it is the highest-volume of the three remaining
-stores and the same ADR-003 shape applies — and ship the accumulated dashboard/storage work to
-MOLE so the lock → recover acceptance runs against something current.
+Take `audit_log` off the whole-list write — it is the highest-volume of the three remaining stores
+and every mutation in the Worker appends to it — and ship the accumulated work to MOLE so the
+lock → recover acceptance finally runs against something current.
 
 ---
 

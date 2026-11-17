@@ -641,3 +641,113 @@ stores and the same ADR-003 shape applies — and ship the accumulated dashboard
 MOLE so the lock → recover acceptance runs against something current.
 
 ---
+
+---
+
+## Session 274 — 2026-11-18 (location reports leave the shared window)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `docs/adr/ADR-002-per-entity-command-records.md` and
+`docs/adr/ADR-003-per-entity-device-records.md` (the shape being extended), `serverless/worker.ts`
+(`listLocations`, `saveLocations` and its 1000-row global cap, `handleAgentLocation`,
+`handleGetLocations`, `handleLatestLocation`, `handleReleaseDevice`, `locationTime`/`observed_at`
+from S272, `activePollSeconds` as the precedent for an env-overridable number, `ADAPTIVE_POLL`),
+`serverless/worker.test.ts` (the location tests and `MockKV`), `serverless/README.md`,
+`agent/agent.py` (`report_location` call sites).
+
+**Findings**, each measured before the change:
+
+- The cap was **global**: 1000 rows for the whole fleet. At 60 tracked devices that is 16
+  reports each — about 8 minutes at the 30 s tracking poll (`ADAPTIVE_POLL.tracking = 30`).
+  The last writer wins, so the chattiest device starves every other device's trail.
+- Every report was a read-modify-write of up to 1000 rows. One tracking device rewrites ~1000
+  rows every 30 s to append one fix.
+- Only **three** read sites and **two** write sites touched the store, so the conversion was
+  contained; `LOCATIONS_KEY` was referenced nowhere else (grep of `worker.ts`, `dashboard/src`,
+  `scripts`). That is why this store could be done in one session while `devices` needed 27.
+- `MockKV` stores keys in a plain object and **does** implement `list({prefix})`, so tests can
+  assert the key layout through the KV interface — but `worker.ts` itself never calls `list()`,
+  which is why the ADRs choose an explicit index over a prefix scan.
+
+### Fog cleared
+
+- **Location reports are per-entity (ADR-004)**: `location:<id>` records plus a **per-device**
+  `location_index:<deviceId>`. No two devices share a window any more, so one device's report
+  cannot evict another's.
+- **The per-device cap is a real retention policy** — `LOCATION_HISTORY_LIMIT` (default 500 ≈ 4 h
+  of continuous tracking), overridable as a `[vars]` entry the way `ACTIVE_POLL_SECONDS` is, so
+  the pruning path is reachable by a test rather than asserted by inspection.
+- **Pruning deletes the records**, not just the index: a command is rewritten in place, a report
+  never is, so an unindexed report would otherwise live forever. Verified on a real run.
+- **The legacy migration is idempotent under concurrency** because migrated rows get a
+  deterministic id derived from their content — `generateId()` would duplicate every report when
+  two isolates migrate at once.
+- **The response gained a stable id.** The two read routes used to synthesise
+  `loc-<deviceId>-<idx>`, which changed whenever the window shifted; the row now keeps its
+  identity across reads.
+- `listLocations`/`saveLocations` are deleted, and `serializeMutation`'s docstring plus the README
+  now name only the stores still whole-list: `audit_log`, `bios_passwords`, `encryption_keys`.
+
+### Fog remaining
+
+- **Two stores plus one remain whole-list**: `audit_log`, `bios_passwords`, `encryption_keys`.
+  The release cascade still rewrites all three per delete (visible in the S273 artifact).
+- **The index writes per report are still whole-value writes**, bounded per device by the cap —
+  the residual ADR-002 accepted, now scoped to one device instead of the fleet.
+- **History reads load the device's whole retained window** (≤500 records) and sort it by
+  `locationTime` before slicing, to keep the S272 `observed_at` semantics exact. A device at the
+  cap therefore costs up to 500 gets per history request. If that proves slow, the fix is a
+  stored sort key, not a narrower fetch — narrowing the fetch would reintroduce the S272 defect
+  (a backfilled report with an older scan time dropping rows).
+- **`worker.ts` is 5,006+ lines**, past the harness LSP's 5000-line limit: diagnostics report
+  "too_large" and only `tsc` + the suite can see it. Splitting it is a named task.
+- **MOLE has not been shipped** `9e464ab`, the `lock_state` work, or either storage change.
+  Operator action.
+
+### Debt items closed
+
+None formally — ADR-004 closes a blocker line, not a ledger item, so no `commit_ref`/
+`artifact_ref` pair is claimed.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration), plus the store-by-store work named above.
+
+### Blockers
+
+- MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+- **The 60-device rollout blocker is down to two stores plus one**: `audit_log`,
+  `bios_passwords`, `encryption_keys`. `devices` (S273) and `locations` (this session) are done.
+
+### Session artifacts
+
+- `docs/artifacts/s274-location-per-entity-keys.json` — the real Worker with a 5-report cap,
+  driven through two interleaved devices, 8 reports on one of them (crossing the cap), and a
+  release: **11 assertions**, including "evicted reports were deleted, not just unindexed",
+  "B is untouched by A crossing its cap", and "no shared whole-list key exists".
+
+### Failure attribution
+
+- **No failures this session.** The only adjustments were mine: the first version of the new
+  tests reached into `MockKV`'s private storage (`data.keys()`), which does not exist — the fix
+  was to assert through the KV interface (`list({prefix})`) the mock actually implements. That is
+  the same lesson as S272/S273 from the other direction: assert the contract, not the internals.
+
+### VERIFY
+
+- `serverless`: `npx vitest run` → **470 passed / 4 files** (was 464; +6 ADR-004 tests).
+- `serverless`: `npx tsc --noEmit -p .` → clean.
+- `scripts/test_cross_surface_contract.py` → **23 passed**.
+- Artifact: 11/11 assertions on a real Worker run.
+- `make graph-check` → all invariants pass.
+
+### Next session opening
+
+Take `audit_log` off the whole-list write — it is the highest-volume of the three remaining stores
+and every mutation in the Worker appends to it — and ship the accumulated work to MOLE so the
+lock → recover acceptance finally runs against something current.
+
+---

@@ -3125,3 +3125,20 @@ beliefs:
   dependents: []
   notes: locations/audit_log/bios_passwords/encryption_keys remain whole-list writes, named in the ADR
     and README.
+- id: B-141
+  statement: The Worker stores location reports as per-report records (location:<id>) indexed per device
+    (location_index:<deviceId>), capped per device by LOCATION_HISTORY_LIMIT (default 500, env-overridable),
+    and pruning deletes the evicted records as well as the index entries
+  domain: api/devices
+  status: proposed
+  evidence_level: assumed
+  provenance: S274 commit 30f44a1 + ADR-004; docs/artifacts/s274-location-per-entity-keys.json (11 assertions
+    on the real Worker, cap crossed)
+  source: serverless/worker.ts; docs/adr/ADR-004-per-entity-location-reports.md
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: audit_log, bios_passwords and encryption_keys remain whole-list writes.

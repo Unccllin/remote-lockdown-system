@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-17 09:39:10
-Active memories: 1247 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-17 15:50:03
+Active memories: 1277 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -80,6 +80,36 @@ Active memories: 1247 | Superseded: 0 | Decayed: 20
 | m-1265 | MISTAKE: mistake: added a trap for a condition I h |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
 | m-1266 | MISTAKE: mistake: ran the acceptance harness again |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
 | m-1267 | MISTAKE: mistake: the acceptance harness failed a  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1268 | cipher cannot encrypt another user's profile file  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1269 | Never echo a caller-supplied secret back in an ACK |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1270 | Express lock_state must NOT live in publicDevice:  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1271 | 'SELECT * FROM devices' is matched by 162 test fix |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1272 | SQLite stores reported_at as 'YYYY-MM-DD HH:MM:SS' |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1273 | A dialect switch must read pool.driver, not proces |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1274 | Worker location ordering sliced the last N rows BE |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1275 | MISTAKE: mistake: asserted the SQL TEXT contained  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1276 | MISTAKE: mistake: wrote the freshness switch again |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1277 | MISTAKE: mistake: two edits in one call where the  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1278 | Per-entity records need a keyed lookup or auth bec |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1279 | The migration blueprint is ADR-002 exactly: <entit |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1280 | Deleting saveDevices() at the end is what makes th |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1281 | Converting list-based storage to per-entity turns  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1282 | Tests that read KV keys directly break on any stor |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1283 | MockKV only implements get/put/delete, and the Wor |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1284 | MISTAKE: mistake: ran a multi-step python rewrite  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1285 | MISTAKE: mistake: assumed the check-in path's flee |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1286 | MISTAKE: mistake: the ADR's own 'Alternatives reje |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1287 | A global cap shared by N devices is a per-device c |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1288 | Pruning a per-entity store must delete the RECORDS |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1289 | Migration of rows that have no id needs DETERMINIS |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1290 | Assert key layout through the KV interface (list({ |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1291 | A retention limit that no test can cross is untest |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1292 | MISTAKE: mistake: first test version reached into  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1293 | MISTAKE: mistake: nearly bounded the history fetch |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1294 | Migrating rows that have no id needs DETERMINISTIC |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1295 | A retention limit no test can cross is untested: m |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1296 | MISTAKE: mistake: the first test version reached i |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
+| m-1297 | MISTAKE: mistake: passed backticks inside a shell  |  | 0.50 | 2026-11-17 | 0.250 | 0 |  |
 | m-541 | MISTAKE: mistake: assumed the reported crash was a |  | 0.55 | 2026-11-04 | 0.238 | 0 |  |
 | m-019 | DXE_DRIVER modules cannot use UefiRuntimeLib (it's |  | 0.65 | 2026-08-18 | 0.236 | 0 |  |
 | m-020 | When splitting a UEFI driver into multiple .c file |  | 0.65 | 2026-08-18 | 0.236 | 0 |  |
