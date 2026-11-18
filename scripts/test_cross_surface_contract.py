@@ -541,7 +541,15 @@ def test_both_surfaces_attach_lock_state_to_the_device_payload():
 def test_the_observation_time_contract_matches_on_both_surfaces():
     """`observed_at` is the scan time, and an unusable claim is dropped — on both."""
     express = (REPO / "server/src/routes/agent.js").read_text(encoding="utf-8")
-    worker = (REPO / "serverless/worker.ts").read_text(encoding="utf-8")
+    # The Worker half of this contract is split across two modules since S280: the write side
+    # (the skew clamp and the location route that applies it) moved to agent-routes.ts, while the
+    # read-side ordering helper went with it and worker.ts keeps the location read routes. Both
+    # files are the Worker surface, so both are read — pinned to one path, this test would go
+    # vacuous the next time a handler moves rather than fail.
+    worker = "\n".join(
+        (REPO / path).read_text(encoding="utf-8")
+        for path in ("serverless/worker.ts", "serverless/agent-routes.ts")
+    )
 
     for name, src in (("Express", express), ("the Worker", worker)):
         assert "OBSERVED_AT_MAX_SKEW_MS = 5 * 60 * 1000" in src, (
