@@ -53,40 +53,39 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 294 — 2026-11-18 (the installer is published: every download path serves today's build)
+## Latest session: 295 — 2026-11-18 (the update trust root is staged: signed, verified, not published)
 
 ### Fog cleared
 
-- **Every download path now serves today's build**, verified from the URL rather than from the upload
-  command: `installer` 41,203,591 B `e5f0f390…` (the NSIS wrapper, from R2), `agent` 16,852,161 B
-  `d9e45902…`, `agent-installer` 15,789,390 B `399ad9ba…`, `lockscreen` 9,146,350 B `6592fd87…`.
-- **Deployed with both bindings**: `env.LOCKDOWN_KV (84b24c0c…)` and `env.BINARIES
-  (lockdown-binaries)`, version `3cb8baf5-92cb-4469-8b4e-6618bd137b34`.
-- **The migration procedure is now known and written down**: publish to R2 with `--remote`, then
-  **delete the KV key**, because KV-first precedence shadows the new object. KV deletion propagates in
-  under a minute — the endpoint answered the old body for ~45 s after the delete, then switched.
-- **The two false alarms were both explainable and measured, not guessed**: a local-mode upload that
-  landed nowhere, and a shadowed R2 object. Cache-busted requests ruled out the edge cache instead of
-  assuming it.
+- **A signed release record exists and validates three independent ways.** `openssl pkeyutl -verify`
+  says `Signature Verified Successfully` over `v1:1.0.0:d9e45902…`; the agent's own
+  `verify_update_signature` returns True for it and False for a tampered hash or a tampered version,
+  reporting mode `signature`; and `make test-worker-e2e` passes 5/5 against local workerd.
+- **The failure modes are the right ones**: no pin → False; a pin pointing at a missing file →
+  `key-unreadable` (fails closed, which is what stops a configured-but-broken key from silently
+  accepting sha256-only updates).
+- **The keypair lives outside the repo** at `~/.lockdown-secrets/` with mode 600 on the private key,
+  which is the S242 lesson holding.
+- **Nothing is published**, so the fleet's behaviour is unchanged: `sha256-only`, no updates offered.
 
 ### Fog remaining
 
-- **`/api/download/*` answers `Cache-Control: public, max-age=3600`**, so a republished artifact can
-  be served stale by any cache for up to an hour and the URL carries no version to bust it. It did
-  not bite here, but after any republish a user's plain download may be the previous build. Three
-  options recorded (shorter max-age, sha-keyed URL, or `no-cache` + ETag); none applied.
-- **`agent_release` still does not exist**, so no agent is offered an update — D-130's trust root is
-  still an operator decision, and the NSIS wrapper was built without `update_signing.pub`
-  ("installed agents will accept SHA-256-only updates").
-- **The KV→R2 migration is manual per key.** If more artifacts outgrow KV, each needs the same
-  publish-then-delete dance; a publish script that does both, and verifies the served digest, would
-  remove the trap.
-- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py` rows,
-  the HP UEFI BIOS password.
+- **Publishing is one decision with two halves.** Metadata alone makes the endpoint offer a version;
+  a device only *verifies* it after its config names `update_public_key`, which means rebuilding the
+  wrapper with `update_signing.pub` staged (`agent/dist` or `STAGE=…`). Doing one half and not the
+  other leaves devices updating on a hash delivered by the same origin as the bytes — the exact
+  self-certifying weakness B-006 exists to close.
+- **Key custody is the irreversible part.** Losing `update_signing.key` forces re-provisioning every
+  pinned device; leaking it lets anyone sign an "update". It currently exists on one host only.
+- MOLE's config has no `update_public_key`, so it would accept a sha256-only update — testable, but
+  only after the decision.
+- Untouched: 12 stale `audit_test_teeth.py` rows, the ≈700-line device admin handlers in `worker.ts`,
+  the HP UEFI BIOS password, and the `max-age=3600` download-cache question from S294.
 
 ### Debt items closed
 
-None formally.
+None formally. (D-130 is now *unblocked in practice* — a keypair exists — but its close criteria call
+for signatures on releases, which publishing would begin.)
 
 ### Debt items still open
 
@@ -95,44 +94,43 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **`agent_release`: needs the update signing keypair** (D-130) — the last piece of a real release.
+- **Publishing `agent_release` + shipping the public key: one operator decision**, now with
+  everything validated behind it.
 - **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
-- **E-BCD: verification ceiling by decision** (a failed run rewrites boot config).
+- **E-BCD: verification ceiling by decision.**
 
 ### Session artifacts
 
-- `docs/artifacts/s294-installer-on-r2.txt` — the operator's action and the five commands, the two
-  false alarms with their exact causes (`Resource location: local`; KV-first shadowing plus ~45 s
-  propagation), the verified four-row download table with sizes and digests, the `max-age=3600`
-  caching risk and three options for it, and the release state per key.
+- `docs/artifacts/s295-update-trust-root-staged.txt` — the keypair and where it lives, the full
+  signed record with its signature, the three independent validations with their exact results
+  (including the four negative cases), why publishing and shipping the public key are one decision,
+  and the custody warning that is the only truly hard-to-undo part.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)**: the deploy reported success, the bucket reported `Upload
-  complete`, and the endpoint still served an 18 MB file. Only downloading the artifact and comparing
-  its digest exposed it — the same lesson as S286's silent copy, on a different surface. A publish is
-  not done until the endpoint's bytes are compared to the built artifact's hash.
-- **Layer 2 (context provision)**: nothing in the repo said that publishing to R2 requires deleting
-  the KV key, or that `r2 object put` defaults to local. Both are one-line facts that cost two
-  rounds of "it didn't work" — they are now in the artifact and in this block, but the durable place
-  for them is the release section of `serverless/README.md`.
+- **Layer 4 (verification feedback)**: the first verifier call returned False and the reason was my
+  own assumption — I passed PEM text where a path was expected. The agent's warning said "Update
+  public key not found: <the PEM>", which reads like a bug until the loader is read. Passing a
+  wrong-shaped input into a fail-closed verifier looks exactly like a broken signature, so the
+  lesson is to test the *positive* case first, and to read the loader before concluding.
+- **Layer 2 (context provision)**: the `update_public_key` shape (path vs PEM) is documented nowhere
+  the installer author would look. It is now in the artifact, but the durable home is the config
+  section of the deployment docs.
 
 ### VERIFY
 
-- `wrangler r2 bucket create` → `Created bucket 'lockdown-binaries'`; `r2 object put … --remote` →
-  `Upload complete`; `r2 object get … --remote` → 41,203,591 B `e5f0f390…` (matches the build).
-- `wrangler deploy` → version `3cb8baf5-92cb-4469-8b4e-6618bd137b34`, bindings `LOCKDOWN_KV` +
-  `BINARIES`.
-- Live: `installer` 41,203,591 B `e5f0f390…`; `agent` 16,852,161 B `d9e45902…`; `agent-installer`
-  15,789,390 B `399ad9ba…`; `lockscreen` 9,146,350 B `6592fd87…` — all HTTP 200, all equal to the
-  local artifacts.
+- `openssl pkeyutl -verify …` → **Signature Verified Successfully**.
+- `agent.verify_update_signature` → genuine **True**; tampered sha256 **False**; tampered version
+  **False**; no pin **False**; mode with a missing key file **key-unreadable**.
+- `make test-worker-e2e` → **5 passed in 31.36s**.
+- `ls -l ~/.lockdown-secrets` → `update_signing.key` mode 600, `update_signing.pub` readable.
 - `brain.py check` → 163 beliefs, integrity clean.
 
 ### Next session opening
 
-Write the release section of `serverless/README.md` (publish to R2 with `--remote`, delete the KV key,
-verify the served digest) and decide the download cache policy, then take the update trust root so
-`agent_release` can be signed and the release is complete in the sense the product means.
+Decide the two halves together: publish `agent_release` and rebuild the installer with
+`update_signing.pub` staged, then verify on MOLE that its check-in flips from `sha256-only` to
+`signature` — or stop here, where the fleet is unchanged and the key can still be discarded.
 
 ---
 

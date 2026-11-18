@@ -2873,3 +2873,108 @@ verify the served digest) and decide the download cache policy, then take the up
 `agent_release` can be signed and the release is complete in the sense the product means.
 
 ---
+
+---
+
+## Session 295 — 2026-11-18 (the update trust root is staged: signed, verified, not published)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `scripts/generate-update-keys.sh` — where the keypair lands (default `OUT_DIR` is
+  `$HOME/.lockdown-secrets`, moved outside the working copy in S242 after a private key was nearly
+  committed), and what each half is for.
+- **Read**: `scripts/sign-release-metadata.py` — the signed message is `v1:{version}:{sha256}`, a
+  signature is bound to one hash, and per-platform shapes exist because a single top-level signature
+  cannot cover two different builds.
+- **Read**: `agent/agent.py` — `verify_update_signature`, `_get_update_public_key`,
+  `_load_pem_public_key` (which takes a **path**), `update_verification_mode` (`signature` /
+  `sha256-only` / `key-unreadable`), and `download_update`'s fail-closed behaviour.
+- **Read**: `serverless/README.md` §update metadata and `docs/artifacts/s290-release-published.txt` —
+  what the Worker serves and from which key.
+
+**Findings**, measured before acting:
+
+- Nothing pinned a key and no `agent_release` existed, so every agent reported `sha256-only` and the
+  update path answered `no_release_published`.
+- `update_public_key` is a **path**, not PEM text: passing the PEM inline makes the loader log
+  "Update public key not found" and the verifier return False — a shape worth knowing before writing
+  installer config.
+
+### Fog cleared
+
+- **A signed release record exists and validates three independent ways.** `openssl pkeyutl -verify`
+  says `Signature Verified Successfully` over `v1:1.0.0:d9e45902…`; the agent's own
+  `verify_update_signature` returns True for it and False for a tampered hash or a tampered version,
+  reporting mode `signature`; and `make test-worker-e2e` passes 5/5 against local workerd.
+- **The failure modes are the right ones**: no pin → False; a pin pointing at a missing file →
+  `key-unreadable` (fails closed, which is what stops a configured-but-broken key from silently
+  accepting sha256-only updates).
+- **The keypair lives outside the repo** at `~/.lockdown-secrets/` with mode 600 on the private key,
+  which is the S242 lesson holding.
+- **Nothing is published**, so the fleet's behaviour is unchanged: `sha256-only`, no updates offered.
+
+### Fog remaining
+
+- **Publishing is one decision with two halves.** Metadata alone makes the endpoint offer a version;
+  a device only *verifies* it after its config names `update_public_key`, which means rebuilding the
+  wrapper with `update_signing.pub` staged (`agent/dist` or `STAGE=…`). Doing one half and not the
+  other leaves devices updating on a hash delivered by the same origin as the bytes — the exact
+  self-certifying weakness B-006 exists to close.
+- **Key custody is the irreversible part.** Losing `update_signing.key` forces re-provisioning every
+  pinned device; leaking it lets anyone sign an "update". It currently exists on one host only.
+- MOLE's config has no `update_public_key`, so it would accept a sha256-only update — testable, but
+  only after the decision.
+- Untouched: 12 stale `audit_test_teeth.py` rows, the ≈700-line device admin handlers in `worker.ts`,
+  the HP UEFI BIOS password, and the `max-age=3600` download-cache question from S294.
+
+### Debt items closed
+
+None formally. (D-130 is now *unblocked in practice* — a keypair exists — but its close criteria call
+for signatures on releases, which publishing would begin.)
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Publishing `agent_release` + shipping the public key: one operator decision**, now with
+  everything validated behind it.
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+- **E-BCD: verification ceiling by decision.**
+
+### Session artifacts
+
+- `docs/artifacts/s295-update-trust-root-staged.txt` — the keypair and where it lives, the full
+  signed record with its signature, the three independent validations with their exact results
+  (including the four negative cases), why publishing and shipping the public key are one decision,
+  and the custody warning that is the only truly hard-to-undo part.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback)**: the first verifier call returned False and the reason was my
+  own assumption — I passed PEM text where a path was expected. The agent's warning said "Update
+  public key not found: <the PEM>", which reads like a bug until the loader is read. Passing a
+  wrong-shaped input into a fail-closed verifier looks exactly like a broken signature, so the
+  lesson is to test the *positive* case first, and to read the loader before concluding.
+- **Layer 2 (context provision)**: the `update_public_key` shape (path vs PEM) is documented nowhere
+  the installer author would look. It is now in the artifact, but the durable home is the config
+  section of the deployment docs.
+
+### VERIFY
+
+- `openssl pkeyutl -verify …` → **Signature Verified Successfully**.
+- `agent.verify_update_signature` → genuine **True**; tampered sha256 **False**; tampered version
+  **False**; no pin **False**; mode with a missing key file **key-unreadable**.
+- `make test-worker-e2e` → **5 passed in 31.36s**.
+- `ls -l ~/.lockdown-secrets` → `update_signing.key` mode 600, `update_signing.pub` readable.
+- `brain.py check` → 163 beliefs, integrity clean.
+
+### Next session opening
+
+Decide the two halves together: publish `agent_release` and rebuild the installer with
+`update_signing.pub` staged, then verify on MOLE that its check-in flips from `sha256-only` to
+`signature` — or stop here, where the fleet is unchanged and the key can still be discarded.
+
+---

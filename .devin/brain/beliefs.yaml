@@ -3573,3 +3573,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-163
+  statement: 'The update trust root is staged but not published (S295): scripts/generate-update-keys.sh
+    wrote ~/.lockdown-secrets/update_signing.{key,pub} (private mode 600, outside the working copy), and
+    scripts/sign-release-metadata.py produced /tmp/agent-release.json for version 1.0.0 / win / sha256
+    d9e45902…, signed over ''v1:1.0.0:<sha256>''. Validation: openssl pkeyutl -verify says Signature Verified
+    Successfully; agent.verify_update_signature returns True genuine, False for tampered hash or version,
+    mode ''signature''; make test-worker-e2e 5 passed. update_public_key is a PATH to the .pub, not PEM
+    text (inline PEM yields ''Update public key not found''). Publishing agent_release and staging update_signing.pub
+    into the installer are ONE decision: metadata alone makes the endpoint offer a version, but a device
+    verifies it only after its config names the key. Nothing is published, so the fleet remains sha256-only.'
+  domain: agent/update
+  status: proposed
+  evidence_level: assumed
+  provenance: openssl verify, agent verifier positive/negative cases, worker e2e, all on 2026-11-18; docs/artifacts/s295-update-trust-root-staged.txt
+  source: scripts/generate-update-keys.sh, scripts/sign-release-metadata.py, agent/agent.py, serverless/README.md
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
