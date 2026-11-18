@@ -1818,6 +1818,27 @@ describe('Serverless Worker', () => {
       expect(list.status).toBe(200);
     });
 
+    it('the generated setup script is plain ASCII', async () => {
+      // PowerShell 5.1 decodes a BOM-less script as ANSI, so a UTF-8 em dash inside a
+      // string literal becomes 'â€"' — and that last byte terminates the string early.
+      // The whole script then fails to parse, which is what the dashboard's one-liner
+      // handed to the operator in S302: `iex (irm .../api/enroll/setup.ps1)` died with
+      // "The string is missing the terminator" before installing anything. The same
+      // failure was recorded once before for the Windows build script (B-083); this
+      // pins the generated script so it cannot come back through a copy-paste.
+      await seedAdmin(env, 'sa1', 'password123');
+      const { device } = await enrollDevice(worker, env, 'ASCII-001');
+      const resp = await worker.fetch(
+        makeRequest('GET', `/api/enroll/setup.ps1`, undefined, {}),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const script = await resp.text();
+      const offenders = [...script].filter((c) => c.charCodeAt(0) > 127);
+      expect(offenders, `non-ASCII characters in the generated PowerShell: ${[...new Set(offenders)].join(' ')}`).toEqual([]);
+      expect(device.hostname).toBeTruthy();
+    });
+
     it('serves the CLI installer the generated scripts run', async () => {
       const bytes = new Uint8Array([0x4d, 0x5a, 0x01, 0x02, 0x03]);
       await env.LOCKDOWN_KV.put('binary:agent-installer', bytes);

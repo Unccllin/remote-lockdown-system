@@ -53,35 +53,34 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 301 — 2026-11-18 (pushed to GitHub; the "cannot generate an enrollment token" 401)
+## Latest session: 302 — 2026-11-18 (the dashboard's enrolment one-liner was broken twice; both fixed and verified on PowerShell 5.1)
 
 ### Fog cleared
 
-- **The 40 unpushed commits are on GitHub**: `31524c4..0c13b19`, `master` in sync.
-- **`uncletom` has a known password again**, and the blocked action works: login → 200 with a JWT,
-  then `POST /api/enroll/token` → **200** with a token (`expires_in: 900`). The old `admins` KV value
-  was backed up first and the record's id/role/created_at were preserved — only the hash, salt and
-  iteration count changed.
-- **The Worker needs no `JWT_SECRET`**: `ADMIN_TOKEN` is the fallback signing key, so the missing
-  secret is not a defect (checked before changing anything, rather than adding a secret to "fix" it).
-- **GitHub reports 3 moderate advisories**, and locally `npm audit --audit-level=high` now exits 1 in
-  all four JS packages — one root advisory (picomatch ReDoS, GHSA-fc5q-39xc-vjpf, installed at 2.3.2
-  and 4.0.7) fanning out through glob/jest/vitest chains. `--omit=dev` is clean for dashboard,
-  electron and serverless; the server's 5 "high" trace to `sqlite3 → node-gyp → tinyglobby →
-  picomatch`, i.e. the native module's **build** toolchain. No dependency file changed in these 40
-  commits, so this is an advisory wave, not a regression — and it makes AGENTS.md's "`npm audit
-  --audit-level=high` must exit 0" factually stale.
+- **`binary:service` is published** (9,494,157 B, sha256 `130238f4…`, byte-identical to the service
+  MOLE runs) so all three downloads the script needs answer 200 with correct digests.
+- **The generated script is ASCII-only** (8 template em dashes replaced with `-`), pinned by a test in
+  `worker.test.ts` that composes the script and fails on any non-ASCII character. 485 worker tests
+  pass, `tsc` clean, deployed `6b635f9b-7c37-479d-bffc-cad066f0325d`.
+- **Verified on the target parser**: the re-fetched script parses with **0 errors** under Windows
+  PowerShell 5.1 on MOLE.
+- **MOLE is on the Worker now**: enrolled through the dashboard's own token flow (token minted,
+  `/api/enroll/claim` → 201), config repointed to the Worker, agent restarted — the Worker lists
+  `MOLE | 1.0.3 | active | signature`, alongside FRANKENSTEIN.
 
 ### Fog remaining
 
-- **The new password is known in exactly one place** (this conversation and a file under `/tmp`). It
-  needs to go into a password manager and then be rotated through the admins API.
-- **No admin can be listed or changed without a session** — `/api/admins` is 401 without one, so the
-  "who are the admins" question always needs a credential first. A documented break-glass path
-  (`ADMIN_TOKEN`) exists and is worth writing down.
-- **The picomatch advisory is unresolved** — either an `overrides` pin in the four packages (fix) or
-  an accepted-risk entry with the reachability argument (dev/build tooling only). Not decided here.
-- **The dashboard is still not pointed at the Worker**, and no device is enrolled there.
+- **The service binary is published from a local build**, not from CI: `binary:service` now depends on
+  a manual `wrangler kv key put`. The release section of `serverless/README.md` lists `binary:agent`
+  and `agent-installer` but not `binary:service`, which is exactly how it went missing.
+- **The script has never been executed end to end on a *fresh* machine.** It parses, its downloads
+  answer, and its claim step works — but the presentation should still be rehearsed once on a
+  throwaway box, because "parses" is not "installs".
+- **`installer-scripts.ts` still carries em dashes in its TS comments** (harmless — comments are not
+  emitted) while template strings are now ASCII; a future edit inside a template could reintroduce
+  one, which is why the test exists.
+- Unchanged: picomatch audit advisories, `make sast` unavailable, 12 stale `audit_test_teeth` rows,
+  offline key custody, HP UEFI BIOS password.
 
 ### Debt items closed
 
@@ -94,42 +93,43 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Rotating the new `uncletom` password** — the operator's custody step.
-- **Offline custody of `update_signing.key`**, **HP UEFI BIOS password**, **Worker-pointed dashboard**.
+- **Operator rehearsal of the one-liner on a clean machine** — the last unverified step of the
+  registration story.
+- **Offline custody of `update_signing.key`; HP UEFI BIOS password; picomatch decision.**
 
 ### Session artifacts
 
-- No file artifact: the evidence is the two HTTP responses (login 200 with a JWT; enroll/token 200 with
-  a 900-second token), quoted in VERIFY. The credential itself is deliberately not written into the
-  repository.
+- No file artifact: the evidence is the parse result (`parse errors: 0`, PS 5.1.26100.9818), the four
+  download responses with their digests, and the Worker device list showing MOLE. The served script
+  is reproducible with `curl https://…/api/enroll/setup.ps1`.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)**: the symptom "cannot generate a token" had three plausible
-  causes (missing route, broken session signing, absent admin). Two cheap probes settled it — the
-  route answered 401 rather than 404, and `wrangler secret list` showed the fallback key was present —
-  before any credential was touched. Measuring the failure mode first is what kept this from becoming
-  a "fix" to code that was working.
-- **Layer 3 (execution environment)**: Cloudflare's 1010 on a Python client is indistinguishable from
-  an auth failure unless the body is read. Any future scripted check against the Worker should send a
-  curl-like User-Agent or expect 403/1010 as its own case.
+- **Layer 4 (verification feedback), twice**: the 404 was invisible because the route *existed* and
+  only the KV key was missing; the parse failure was invisible because the script is generated and
+  nobody parses generated code. Both were found by executing the artefact rather than reading it, and
+  both would have failed in front of the audience instead of here.
+- **Layer 2 (context provision)**: B-083 already recorded the PS 5.1 / UTF-8 hazard for a *build*
+  script; nothing carried that lesson to the script served to customers. A rule learned in one artefact
+  needs to be stated where the next artefact is authored.
 
 ### VERIFY
 
-- `git push origin master` → `31524c4..0c13b19`, `## master...origin/master` (in sync).
-- `POST /api/auth/login` (`uncletom`) → **200**, JWT returned.
-- `POST /api/enroll/token` with that JWT → **200**
-  `{"token":"kLekRUyp…","expires_at":"2026-11-18T12:03:25.000Z","expires_in":900}`.
-- `wrangler secret list` → `ADMIN_TOKEN` only; `admins` KV record backed up before the change.
-- `npm audit --audit-level=high` → exit 1 in server (4 moderate/40 high), dashboard (13 high),
-  electron (9 moderate/37 high), serverless (6 high); `--omit=dev` clean except server (5 high,
-  sqlite3→node-gyp chain).
+- `curl /api/download/{installer,agent,service}` → 200 / 200 / **200** with digests
+  `f9633ecb…` / `902a1af3…` / `130238f4…`, each equal to the local build.
+- `wrangler deploy` → version `6b635f9b-7c37-479d-bffc-cad066f0325d`; served script 7,072 B, **0**
+  non-ASCII bytes, CRLF preserved.
+- MOLE, PowerShell 5.1.26100.9818: `[Parser]::ParseFile(script)` → **parse errors: 0**.
+  (Before the fix: 3 errors, "The string is missing the terminator".)
+- Worker device list → `MOLE | 1.0.3 | active | signature`, `FRANKENSTEIN | 1.0.0 | active | signature`.
+- `npx vitest run` → **485 passed**; `tsc --noEmit` clean.
+- `brain.py check` → integrity clean.
 
 ### Next session opening
 
-Rotate the `uncletom` password into the operator's vault, then decide the picomatch advisory (an
-`overrides` pin versus a documented accepted-risk entry) so the audit gate stops hiding its next
-finding.
+Rehearse the one-liner on a clean Windows box with a fresh token, then add `binary:service` (and the
+other `binary:*` keys the setup script downloads) to the release section of `serverless/README.md` so
+the next release cannot omit it the way this one did.
 
 ---
 

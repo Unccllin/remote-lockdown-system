@@ -3579,3 +3579,107 @@ Rotate the `uncletom` password into the operator's vault, then decide the picoma
 finding.
 
 ---
+
+---
+
+## Session 302 — 2026-11-18 (the dashboard's enrolment one-liner was broken twice; both fixed and verified on PowerShell 5.1)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `serverless/worker.ts` — `handleEnrollSetupPs1` / `handleEnrollSetupCmd` /
+  `handleEnrollSetupCommand` (the one-liner is `iex (irm '<origin>/api/enroll/setup.ps1')`), and the
+  `/api/download/*` route table including `service`.
+- **Read**: `serverless/installer-scripts.ts::composeEnrollSetupScript` — the here-string body, the
+  `__URL__`/`__TOKEN__`/`__INSECURE__` substitutions, and the `-Verb RunAs` elevation.
+- **Read**: the script as actually served (fetched from the Worker) and parsed it with the target's
+  own parser on MOLE (`[Parser]::ParseFile`), not by eye.
+- **Read**: B-083 in `.devin/brain/BELIEFS.md` — the recorded precedent that a BOM-less UTF-8
+  PowerShell script is decoded as ANSI by PS 5.1 and an em dash swallows a closing quote.
+
+**Findings**, measured before acting:
+
+- `/api/download/service` answered **404** while `installer` and `agent` were 200. The setup script
+  downloads all three with `$ErrorActionPreference = 'Stop'`, so it aborted before the installer ran.
+- The served script contained **13 UTF-8 em dashes**; on PowerShell **5.1.26100.9818** it parsed with
+  **3 errors** ("The string is missing the terminator: \"") because the ANSI decode turns `—` into
+  `â€"`, whose last byte closes the string early. `iex (irm …)` would have died at that line.
+- MOLE was enrolled on the local Express server, not the Worker, which is why the Worker dashboard
+  (`uncletom`) listed only FRANKENSTEIN.
+
+### Fog cleared
+
+- **`binary:service` is published** (9,494,157 B, sha256 `130238f4…`, byte-identical to the service
+  MOLE runs) so all three downloads the script needs answer 200 with correct digests.
+- **The generated script is ASCII-only** (8 template em dashes replaced with `-`), pinned by a test in
+  `worker.test.ts` that composes the script and fails on any non-ASCII character. 485 worker tests
+  pass, `tsc` clean, deployed `6b635f9b-7c37-479d-bffc-cad066f0325d`.
+- **Verified on the target parser**: the re-fetched script parses with **0 errors** under Windows
+  PowerShell 5.1 on MOLE.
+- **MOLE is on the Worker now**: enrolled through the dashboard's own token flow (token minted,
+  `/api/enroll/claim` → 201), config repointed to the Worker, agent restarted — the Worker lists
+  `MOLE | 1.0.3 | active | signature`, alongside FRANKENSTEIN.
+
+### Fog remaining
+
+- **The service binary is published from a local build**, not from CI: `binary:service` now depends on
+  a manual `wrangler kv key put`. The release section of `serverless/README.md` lists `binary:agent`
+  and `agent-installer` but not `binary:service`, which is exactly how it went missing.
+- **The script has never been executed end to end on a *fresh* machine.** It parses, its downloads
+  answer, and its claim step works — but the presentation should still be rehearsed once on a
+  throwaway box, because "parses" is not "installs".
+- **`installer-scripts.ts` still carries em dashes in its TS comments** (harmless — comments are not
+  emitted) while template strings are now ASCII; a future edit inside a template could reintroduce
+  one, which is why the test exists.
+- Unchanged: picomatch audit advisories, `make sast` unavailable, 12 stale `audit_test_teeth` rows,
+  offline key custody, HP UEFI BIOS password.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (PBL firmware signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Operator rehearsal of the one-liner on a clean machine** — the last unverified step of the
+  registration story.
+- **Offline custody of `update_signing.key`; HP UEFI BIOS password; picomatch decision.**
+
+### Session artifacts
+
+- No file artifact: the evidence is the parse result (`parse errors: 0`, PS 5.1.26100.9818), the four
+  download responses with their digests, and the Worker device list showing MOLE. The served script
+  is reproducible with `curl https://…/api/enroll/setup.ps1`.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), twice**: the 404 was invisible because the route *existed* and
+  only the KV key was missing; the parse failure was invisible because the script is generated and
+  nobody parses generated code. Both were found by executing the artefact rather than reading it, and
+  both would have failed in front of the audience instead of here.
+- **Layer 2 (context provision)**: B-083 already recorded the PS 5.1 / UTF-8 hazard for a *build*
+  script; nothing carried that lesson to the script served to customers. A rule learned in one artefact
+  needs to be stated where the next artefact is authored.
+
+### VERIFY
+
+- `curl /api/download/{installer,agent,service}` → 200 / 200 / **200** with digests
+  `f9633ecb…` / `902a1af3…` / `130238f4…`, each equal to the local build.
+- `wrangler deploy` → version `6b635f9b-7c37-479d-bffc-cad066f0325d`; served script 7,072 B, **0**
+  non-ASCII bytes, CRLF preserved.
+- MOLE, PowerShell 5.1.26100.9818: `[Parser]::ParseFile(script)` → **parse errors: 0**.
+  (Before the fix: 3 errors, "The string is missing the terminator".)
+- Worker device list → `MOLE | 1.0.3 | active | signature`, `FRANKENSTEIN | 1.0.0 | active | signature`.
+- `npx vitest run` → **485 passed**; `tsc --noEmit` clean.
+- `brain.py check` → integrity clean.
+
+### Next session opening
+
+Rehearse the one-liner on a clean Windows box with a fresh token, then add `binary:service` (and the
+other `binary:*` keys the setup script downloads) to the release section of `serverless/README.md` so
+the next release cannot omit it the way this one did.
+
+---

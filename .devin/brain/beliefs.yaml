@@ -3730,3 +3730,28 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-170
+  statement: 'The dashboard''s device-registration one-liner was broken twice and both are fixed (S302).
+    (1) It downloads /api/download/{installer,agent,service} with ErrorActionPreference=Stop, and binary:service
+    was missing (404), so it aborted before installing; published 9,494,157 B sha256 130238f4… (same binary
+    MOLE runs). (2) The generated script contained 13 UTF-8 em dashes, which PowerShell 5.1 decodes as
+    ANSI, turning — into ''â€"'' whose last byte closes the string early: [Parser]::ParseFile on PS 5.1.26100.9818
+    reported 3 errors, ''The string is missing the terminator''. Template strings in serverless/installer-scripts.ts
+    are now ASCII-only, pinned by a test that composes the script and rejects any non-ASCII char (485
+    worker tests pass), deployed 6b635f9b-7c37-479d-bffc-cad066f0325d; the re-fetched script parses with
+    0 errors on the target. The command is: iex (irm ''<origin>/api/enroll/setup.ps1''), which prompts
+    for a 15-minute single-use token or reads $env:LOCKDOWN_ENROLL_TOKEN, then self-elevates via -Verb
+    RunAs. MOLE is now enrolled on the Worker through that same token flow.'
+  domain: deployment/worker
+  status: proposed
+  evidence_level: assumed
+  provenance: live fetches + PowerShell 5.1 parser on MOLE, download digests matching local builds, Worker
+    device list, 485 vitest; docs/artifacts none (evidence in the S302 trace block)
+  source: serverless/installer-scripts.ts, serverless/worker.ts, .devin/brain/BELIEFS.md (B-083)
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
