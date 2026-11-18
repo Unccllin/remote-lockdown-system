@@ -3399,3 +3399,23 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-155
+  statement: 'A Windows agent rebuild is reproducible from this repo on MOLE itself: Python 3.14.8 (matching
+    the dev interpreter) installed silently to C:\Python314, deps from agent/requirements.txt, PyInstaller
+    6.22.3, then ''PyInstaller agent.spec''. The deployed exe sha256 becomes b17f390d6330d92bcf0e09490bc35b80c4c3cdbdde89221836ec421ba591984d.
+    Replacing it requires stopping the service AND killing any lingering lockdown-agent child first —
+    a copy over a running image fails silently while reporting ''copy ok'', leaving the old hash in place.'
+  domain: agent/build
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'MOLE build of the current tree: python 3.14.8 + PyInstaller 6.22.3 -> dist/lockdown-agent.exe
+    16.1 MB sha256 b17f390d…; ''../Data'' swap needed Stop-Service + Stop-Process of pid 10272 before
+    the hash changed; docs/artifacts/s286-current-tree-acceptance.txt'
+  source: ssh labadmin@192.168.1.249; agent/build.ps1; agent/agent.spec
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

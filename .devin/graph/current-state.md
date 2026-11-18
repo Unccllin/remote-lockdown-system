@@ -58,35 +58,45 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 285 — 2026-11-18 (why MOLE's HP UEFI layer refuses: a password it never set)
+## Latest session: 286 — 2026-11-18 (the current tree on hardware: WinRE fix confirmed, false success gone)
 
 ### Fog cleared
 
-- **The S283 "unexplained" item now has a cause that fits every measurement**: MOLE has a BIOS Setup
-  password the agent did not set, and the agent authenticates its writes with a 4-character value
-  from its own config. Three critical writes are refused, the layer rolls back, and the ACK reports
-  `boot_lock_status=partial` — exactly what was observed.
-- **It is an operator secret, not a code defect**: the layer can work on this unit only once the real
-  Setup password is supplied as `UEFI_PASSWORD` (or cleared in BIOS Setup).
-- **A smaller code question is now visible**: `apply_boot_lockdown` refuses when a Setup password
-  exists and *none* is configured, but never checks whether the configured one is right, so a wrong
-  password costs three red writes and a rollback instead of one clear sentence.
-- **The test-runner advisory from the harness is explained**: `python3 -m pytest` on this host fails
-  with `No module named pytest` — no summary, exit 1. `scripts/run-agent-tests.sh` is the only valid
-  runner (51 passed for the BCD file, 950 for the suite), which is exactly why that wrapper exists.
+- **"Current tree on hardware" is no longer blocked.** Python 3.14.8 → `C:\Python314` (silent,
+  `InstallAllUsers=1 PrependPath=1`), deps from `requirements.txt`, PyInstaller 6.22.3, then
+  `PyInstaller agent.spec` produced a 16,851,916-byte `dist\lockdown-agent.exe`
+  (`sha256 b17f390d…`). Source went over as a 315,946-byte tarball whose hash was verified on
+  arrival.
+- **The WinRE fix is confirmed on real hardware.** The device logged the line only the new code
+  emits — `WinRE already disabled (reagentc /disable returned 2) — the state is what lockdown wants,
+  so this is success, not a critical failure` — and the ACK detail moved from
+  `{bcd success:false, rolled_back:true, critical_applied:0}` to
+  `{bcd success:true, rolled_back:false, critical_applied:3, best_effort_applied:5}`.
+  `lockdown_effective` went `0 → 1` because the server's rule is `critical_applied_total > 0`, and it
+  is now 3.
+- **The S271-era BIOS-restore reporting is confirmed on hardware too** — its first deployment here.
+  Where the old binary printed `Restored 0 BIOS settings …` followed by `UEFI boot lockdown removed —
+  BIOS restored`, the current tree prints
+  `[ERROR] Restored 0 of 5 BIOS settings — every write was refused …` and
+  `[ERROR] UEFI boot lockdown removal did NOT restore the BIOS …`.
+- **The unlock path is untouched and still correct**: `Decrypted: README.txt`, lock screen removed,
+  `BCD lockdown removed: 5 restored, 0 failed`, `WinRE was disabled before lockdown — not
+  re-enabling`, sentinel absent, recovery key deleted, `Newark User` active, device `active`.
+- **A rebuild on MOLE is now a repeatable operation**, not a one-off: the toolchain is installed and
+  the source tree sits at `C:\ProgramData\LockdownAgent\build\agent`.
 
 ### Fog remaining
 
-- **The password hypothesis is not proven by a write.** The cheapest confirmation is a no-op
-  `SetBIOSSetting` (current value → current value), deliberately **not** attempted: a wrong password
-  on HP firmware can raise the failed-attempt count, and this unit's boot state is already the
-  fragile part of the lab.
-- **Hardware confirmation of the S284 WinRE fix still needs a Windows build host.** MOLE has no
-  Python; installing one there is an operator decision, not a tool call.
-- **`Sure Start BIOS Settings Protection` is `Disable`** on this unit, so it is *not* the blocker,
-  contrary to one plausible theory; the Setup-password reading is what fits.
-- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py`
-  rows, two thin PBL route modules, and the Worker deploy (`wrangler login`).
+- **HP UEFI layer still applies 0 of 3 critical writes.** That is S285's finding (a BIOS Setup
+  password the agent never set) and it needs an operator secret, not a build.
+- **`lockdown_effective=1` while the firmware layer is unapplied** is correct by the documented rule
+  (`critical_applied_total > 0`) but reads stronger than the device's real posture: USB/PXE boot are
+  still open. The detail and the dashboard's "why a boot lock did not apply" panel carry the rest;
+  whether the rule should weight firmware controls is a product question, not a bug.
+- **`agent_version` is `1.0.0` for both binaries.** Which build is on a device still cannot be read
+  from the dashboard — it took a sha256 to know. A build id in the version string remains unfixed.
+- The stray-process hazard is documented but not fixed in tooling: replacing the exe while an agent
+  child is alive copies "successfully" and changes nothing.
 
 ### Debt items closed
 
@@ -99,46 +109,47 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password in the agent config.** Operator
-  secret. Until then that layer cannot pass on this unit, by design or otherwise.
-- **Rebuilding the agent: needs a Python on a Windows host.** MOLE lacks one; installing it is an
-  operator action.
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`. Operator
+  secret, unchanged from S285.
 - **Worker deploy: `wrangler login`.**
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
 
 ### Session artifacts
 
-- `docs/artifacts/s285-mole-bios-write-refusal.txt` — the WMI firmware/password probe output, the
-  agent's log history for the layer, the return-code table excerpt that turns "Failed" into code 4,
-  the four facts that fit one cause, an explicit "what was not done and why" for the no-op write,
-  and the pre-flight-probe idea the code is now missing.
+- `docs/artifacts/s286-current-tree-acceptance.txt` — the exe swap (before/after size, date and
+  sha256, plus the backup name), the build provenance (interpreter, PyInstaller, verified tarball
+  hash), the one log line that proves the WinRE fix is the code that ran, the BCD layer's ACK detail
+  before and after, both BIOS-restore reporting strings side by side, the whole unlock sequence, and
+  the on-device and server state afterwards.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)**: the UEFI layer's rollback had been reported as `partial` on
-  hardware three times (S271, S283, and 2026-11-17) with no investigation of *why*, because the ACK
-  was already "honest" — it said partial. An honest status is not a diagnosis. The probe scripts
-  that answer it were already sitting on the unit from an earlier session and had never been run
-  against this question.
-- **Layer 3 (execution environment)**: `python3 -m pytest` failing with a bare exit 1 and no summary
-  is a documented trap in this repo (`run-agent-tests.sh` exists for it), and it still cost a
-  diagnostic step — evidence that a wrapper people can bypass will be bypassed.
+- **Layer 4 (verification feedback), one real trap**: the first exe swap copied onto a running image
+  and reported `copy ok`, while `Get-FileHash` still showed the old `bb32c3d2`. Nothing failed
+  loudly; only comparing the hash caught it. The agent's own keeper had left a child process alive
+  after `Stop-Service`, so the copy went to a file Windows would not replace. A deploy step that
+  prints success must verify the artifact it claims to have installed.
+- **Layer 2 (context provision)**: `agent_version` being `1.0.0` for two different binaries is the
+  same gap named in S283 — the build identity of what runs on hardware is not recorded anywhere a
+  person or a dashboard can read it.
 
 ### VERIFY
 
-- `probe-bios-state.ps1` on MOLE → Setup Password `IsSet=1`, Power-On Password `IsSet=0`,
-  Fast Boot / DMA Protection / Network (PXE) Boot / USB Storage Boot / Legacy Boot Options all
-  exposed and settable.
-- `probe-bsp.ps1` on MOLE → `Sure Start BIOS Settings Protection = Disable`,
-  `Sure Start Secure Boot Keys Protection = Disable`.
-- `agent.log` (2026-11-17 → 2026-11-18) → `Using existing BIOS Setup password`,
-  three `-> 'Disable' failed: Failed`, `UEFI lockdown critically failed and was rolled back`.
-- `python3 -m pytest` → `No module named pytest`; `scripts/run-agent-tests.sh` → 51 / 950 passed.
+- MOLE: `installed sha256 b17f390d6330d92bcf0e09490bc35b80c4c3cdbdde89221836ec421ba591984d`,
+  16,851,916 bytes, `lockdown-agent 1.0.0 (frozen=True)`, service `Running`.
+- Lockdown ACK: `boot_lock_status=partial`, `lockdown_effective=1`,
+  `bcd {success:true, critical_applied:3, best_effort_applied:5, rolled_back:false}`,
+  `hp_uefi {rolled_back:true, critical_applied:0}`.
+- Unlock ACK: `status=executed`; device `status=active`, `lock_state=none`; sentinel absent,
+  `README.txt` plaintext, recovery key absent, `Newark User` active.
+- `brain.py check` → 155 beliefs, integrity clean; B-153 re-confirmed at `hardware`, B-155 asserted
+  and confirmed at `hardware`.
 
 ### Next session opening
 
-Decide whether to install a Python on MOLE so the current-tree agent can be built and staged there,
-then re-run the lock → recover acceptance; or supply the real BIOS Setup password as `UEFI_PASSWORD`
-first, so the rebuild tests both changes at once.
+Supply the real BIOS Setup password as `UEFI_PASSWORD` (or clear it in BIOS Setup) and re-run the
+lock → recover acceptance once more, so all three boot-lock layers can be judged on this unit; the
+rebuild path is ready at `C:\ProgramData\LockdownAgent\build\agent`.
 
 ---
 
