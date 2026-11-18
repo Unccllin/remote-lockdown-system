@@ -53,37 +53,39 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 296 — 2026-11-18 (update signing is live: metadata published, MOLE now reports "signature")
+## Latest session: 297 — 2026-11-18 (a real self-update on hardware: 1.0.0 → 1.0.1, signature-verified)
 
 ### Fog cleared
 
-- **The trust root is live, verified on hardware.** `agent_release` is published; the installer was
-  rebuilt with `update_signing.pub` staged (41,203,003 B, `f9633ecb…`), republished to R2, and the
-  endpoint serves it **byte-identically**; and MOLE's check-in now reports
-  `update_verification: signature` where it said `sha256-only` an hour ago.
-- **The key has two copies** (`~/.lockdown-secrets/update_signing.key` and a timestamped backup),
-  with the same sha256 — though both are on this host, so offline media is still the operator's step.
-- **The release section of `serverless/README.md` now states the two halves** and the three traps
-  that cost time today: local-mode `r2 object put`, KV shadowing an R2 key, and a service restart that
-  leaves the old agent child alive.
+- **The security-critical path of auto-update is proven on hardware.** MOLE saw
+  `Update available: 1.0.0 -> 1.0.1`, downloaded from its own backend, and logged
+  `Update signature verified (ed25519, pinned key)` then
+  `Update downloaded and verified (16852626 bytes, SHA-256 OK)` — the detached signature checked
+  against the key pinned in its config, not against a hash from the same origin.
+- **The swapped binary runs and is what the server sees**: before `1.0.0 (build=20261118.4bfeda526b77)`
+  / `d9e45902…`, after `1.0.1 (build=20261118.fe295d19ad91)` / `63747758…`, and the device row now
+  reports `agent_version: 1.0.1`, `update_verification: signature`, status `active`.
+- **The version bump is in the tree** (`AGENT_VERSION = "1.0.1"`), with the earlier 1.0.0 kept as
+  `lockdown-agent.exe.bak-100` on the device.
 
 ### Fog remaining
 
-- **The pin arrived by hand on MOLE**, not by reinstalling with the new wrapper: I copied
-  `update_signing.pub` into `C:\ProgramData\LockdownAgent\` and added the config field, which is what
-  the installer would have written. The wrapper's own path is unexercised on hardware.
-- **No agent has actually self-updated.** The metadata offers 1.0.0 and the device is already 1.0.0,
-  so the download → verify → watchdog swap path has not run. Proving it needs a version bump and a
-  rebuilt agent, i.e. a deliberate two-release cycle.
-- **The private key is still single-host.** Offline custody is the one irreversible gap.
+- **The apply step has no automatic consumer on a service-based install.** `.update_pending` and
+  `.update_downloaded` sat there until I performed the swap by hand — exactly what the watchdog does.
+  So on this host auto-update is *download-and-verify*, never *apply*, and the log line
+  "watchdog will apply on next check" is a promise nothing keeps. Reconciling the two install modes
+  (service host consuming the signal, or installing the watchdog alongside the service) is the next
+  real piece of work.
+- **The Worker's own update path was not the one exercised** — MOLE talks to Express. The Worker
+  serves the same signed record from KV (published this session) and its unit+e2e suites pass, but a
+  device pointed at the Worker has not been through a real update.
+- **The private key is still single-host** (two copies on this disk).
 - Unchanged: HP UEFI (needs the BIOS Setup password), E-BCD's ceiling, the `max-age=3600` download
   cache question, 12 stale `audit_test_teeth.py` rows.
 
 ### Debt items closed
 
-- **D-130 (code signing not configured for PblApp.efi)** is *not* this item — that is firmware signing.
-  The update-key debt it resembles (B-006's gap) is now closed in practice for agent updates, though
-  the ledger entry itself lives in the PBL ledger and is untouched here.
+None formally.
 
 ### Debt items still open
 
@@ -92,44 +94,42 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Offline custody of `update_signing.key`** — operator, and the only thing that cannot be undone
-  from here.
-- **A real self-update has not been demonstrated** — needs a deliberate version bump.
+- **Auto-apply on a service install: needs a code decision**, not a credential.
+- **Offline custody of `update_signing.key`** — operator.
 - **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
 
 ### Session artifacts
 
-- No new artifact file: the evidence is three commands' output, all quoted in this block — the R2
-  object replaced and verified byte-identical (41,203,003 B `f9633ecb…`), and MOLE's check-in flipping
-  from `sha256-only` to `signature` at `last_checkin 2026-11-18 10:21:36` after a real agent restart.
+- `docs/artifacts/s297-self-update-proof.txt` — the release being offered (version, size, sha256,
+  stamped build id), the four log lines that constitute the verified download, the pending/downloaded
+  files that prove it landed, the before/after identity of the swapped binary, the server row
+  afterwards, and a verdict that separates "proven" from "open" in one line each.
 
 ### Failure attribution
 
-- **Layer 5 (state management), the S286 trap recurring**: `Restart-Service LockdownAgent` reported
-  `Running` while the old agent child kept running, so the first attempt to pick up the new config
-  changed nothing — the check-in still said `sha256-only` and looked like a code problem. The fix is
-  the same one written down in S286 and now in the README: stop, kill any lingering `lockdown-agent`
-  process, start, and confirm a fresh `Agent starting … build=…` line before believing anything.
-- **Layer 2 (context provision)**: the release instructions in `serverless/README.md` described how to
-  *publish* but not that publishing and pinning are two halves. A reader following them exactly would
-  have produced a fleet that offers updates it cannot verify.
+- **Layer 5 (state management), again the service-restart trap**: the first attempt to make MOLE pick
+  up the new config left the old agent child alive, so the check-in still said `sha256-only`. Killing
+  the lingering process is what made S295's pin observable — this is the third session it has cost
+  time, and it is now written into the README's release section.
+- **Layer 4 (verification feedback)**: the update log said "watchdog will apply on next check" and
+  nothing did. Without checking for `.update_pending` afterwards, this would have read as a successful
+  auto-update. A log line that describes a component's intent is not evidence that the component ran.
 
 ### VERIFY
 
-- `wrangler kv key put … agent_release` → written to `LOCKDOWN_KV`.
-- `wrangler r2 object put … --remote` → `Upload complete`; served `/api/download/installer` →
-  **41,203,003 B**, `sha256 f9633ecb90768c0386bc632bd5aacf86b7d7a3be9793d43096a7b3f4d960567c`,
-  equal to the local build.
-- MOLE: `update_public_key` on disk, pub key sha256 `207d7cc2…`; after a clean stop/kill/start the log
-  shows `Agent starting … build=20261118.4bfeda526b77` and the server reports
-  `update_verification: signature` at `last_checkin 2026-11-18 10:21:36`.
-- `brain.py check` → 164 beliefs, integrity clean.
+- MOLE log: `Update available: 1.0.0 -> 1.0.1 (16852626 bytes)`, `Update signature verified (ed25519,
+  pinned key)`, `Update downloaded and verified (16852626 bytes, SHA-256 OK)`.
+- `lockdown-agent.exe --version` before/after: `1.0.0 (build=20261118.4bfeda526b77)` →
+  `1.0.1 (build=20261118.fe295d19ad91)`; hashes `d9e45902…` → `63747758…`.
+- Server row: `agent_version 1.0.1`, `update_verification signature`, `last_checkin 2026-11-18
+  10:32:34`, `status active`.
+- `brain.py check` → 165 beliefs, integrity clean.
 
 ### Next session opening
 
-Demonstrate a real self-update: bump to 1.0.1, rebuild the agent with a stamped build id, publish the
-signed record for it, and watch MOLE download, verify the Ed25519 signature, and swap the binary —
-which is the only part of the update path still unproven on hardware.
+Make a service-based install apply the update it verified: either teach the service host to consume
+`.update_pending` (swap, restart, roll back on failure) or install the watchdog alongside the service,
+and then re-run this same 1.0.1 → 1.0.2 cycle with no manual step.
 
 ---
 

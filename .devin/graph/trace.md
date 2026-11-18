@@ -3078,3 +3078,108 @@ signed record for it, and watch MOLE download, verify the Ed25519 signature, and
 which is the only part of the update path still unproven on hardware.
 
 ---
+
+---
+
+## Session 297 — 2026-11-18 (a real self-update on hardware: 1.0.0 → 1.0.1, signature-verified)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `agent/agent.py` — `UPDATE_CHECK_INTERVAL` (an hourly check, not per check-in),
+  `download_update` (writes `.update_downloaded` then `.update_pending`), and
+  `verify_update_signature` (which needs a *pinned path*, not PEM text).
+- **Read**: `agent/watchdog.py` — the only consumer of `.update_pending`; it swaps the binary,
+  restarts the agent, and restores a backup on failure.
+- **Read**: `agent/installer.py` — that the installer's own step installs "the scheduled task
+  watchdog" (`service_installer.install`), i.e. the watchdog belongs to the other install mode.
+- **Read**: `server/src/routes/agent.js` (`GET /api/agent/update`) —
+  `AGENT_LATEST_VERSION`, `getAgentBinariesDir()`, and that the Express backend signs
+  `v1:{version}:{sha256}` in-process from `UPDATE_SIGNING_KEY`.
+- **Read**: `scripts/sast-exceptions.json` — the `logger-credential-leak` finding the linter raised on
+  `agent/agent.py:2889` is already dispositioned `false-positive` from 2026-08-27, so it is baseline.
+
+**Findings**, measured before acting:
+
+- MOLE's backend is the Express server, not the Worker, so the update offer has to come from
+  `AGENT_LATEST_VERSION` + `AGENT_BINARIES_DIR` + `UPDATE_SIGNING_KEY` on that process — publishing to
+  the Worker's KV changes nothing for this device.
+- Only `agent/watchdog.py` reads `.update_pending`, and this install is service-based with no
+  watchdog binary present.
+
+### Fog cleared
+
+- **The security-critical path of auto-update is proven on hardware.** MOLE saw
+  `Update available: 1.0.0 -> 1.0.1`, downloaded from its own backend, and logged
+  `Update signature verified (ed25519, pinned key)` then
+  `Update downloaded and verified (16852626 bytes, SHA-256 OK)` — the detached signature checked
+  against the key pinned in its config, not against a hash from the same origin.
+- **The swapped binary runs and is what the server sees**: before `1.0.0 (build=20261118.4bfeda526b77)`
+  / `d9e45902…`, after `1.0.1 (build=20261118.fe295d19ad91)` / `63747758…`, and the device row now
+  reports `agent_version: 1.0.1`, `update_verification: signature`, status `active`.
+- **The version bump is in the tree** (`AGENT_VERSION = "1.0.1"`), with the earlier 1.0.0 kept as
+  `lockdown-agent.exe.bak-100` on the device.
+
+### Fog remaining
+
+- **The apply step has no automatic consumer on a service-based install.** `.update_pending` and
+  `.update_downloaded` sat there until I performed the swap by hand — exactly what the watchdog does.
+  So on this host auto-update is *download-and-verify*, never *apply*, and the log line
+  "watchdog will apply on next check" is a promise nothing keeps. Reconciling the two install modes
+  (service host consuming the signal, or installing the watchdog alongside the service) is the next
+  real piece of work.
+- **The Worker's own update path was not the one exercised** — MOLE talks to Express. The Worker
+  serves the same signed record from KV (published this session) and its unit+e2e suites pass, but a
+  device pointed at the Worker has not been through a real update.
+- **The private key is still single-host** (two copies on this disk).
+- Unchanged: HP UEFI (needs the BIOS Setup password), E-BCD's ceiling, the `max-age=3600` download
+  cache question, 12 stale `audit_test_teeth.py` rows.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (PBL firmware signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Auto-apply on a service install: needs a code decision**, not a credential.
+- **Offline custody of `update_signing.key`** — operator.
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+
+### Session artifacts
+
+- `docs/artifacts/s297-self-update-proof.txt` — the release being offered (version, size, sha256,
+  stamped build id), the four log lines that constitute the verified download, the pending/downloaded
+  files that prove it landed, the before/after identity of the swapped binary, the server row
+  afterwards, and a verdict that separates "proven" from "open" in one line each.
+
+### Failure attribution
+
+- **Layer 5 (state management), again the service-restart trap**: the first attempt to make MOLE pick
+  up the new config left the old agent child alive, so the check-in still said `sha256-only`. Killing
+  the lingering process is what made S295's pin observable — this is the third session it has cost
+  time, and it is now written into the README's release section.
+- **Layer 4 (verification feedback)**: the update log said "watchdog will apply on next check" and
+  nothing did. Without checking for `.update_pending` afterwards, this would have read as a successful
+  auto-update. A log line that describes a component's intent is not evidence that the component ran.
+
+### VERIFY
+
+- MOLE log: `Update available: 1.0.0 -> 1.0.1 (16852626 bytes)`, `Update signature verified (ed25519,
+  pinned key)`, `Update downloaded and verified (16852626 bytes, SHA-256 OK)`.
+- `lockdown-agent.exe --version` before/after: `1.0.0 (build=20261118.4bfeda526b77)` →
+  `1.0.1 (build=20261118.fe295d19ad91)`; hashes `d9e45902…` → `63747758…`.
+- Server row: `agent_version 1.0.1`, `update_verification signature`, `last_checkin 2026-11-18
+  10:32:34`, `status active`.
+- `brain.py check` → 165 beliefs, integrity clean.
+
+### Next session opening
+
+Make a service-based install apply the update it verified: either teach the service host to consume
+`.update_pending` (swap, restart, roll back on failure) or install the watchdog alongside the service,
+and then re-run this same 1.0.1 → 1.0.2 cycle with no manual step.
+
+---

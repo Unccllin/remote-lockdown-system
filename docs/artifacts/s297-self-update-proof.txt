@@ -1,0 +1,48 @@
+=== S297: a real self-update on hardware — 1.0.0 -> 1.0.1, signature-verified, 2026-11-18T10:33:31Z ===
+
+--- [1] the release being offered ---
+agent version bumped 1.0.0 -> 1.0.1 (agent/agent.py:232)
+rebuilt on MOLE (PyInstaller, stamped by the same recipe build.ps1 uses):
+  lockdown-agent.exe  16,852,626 B  sha256 6374775812597309ba73c4638d26b1696fe99ce20206d15a8ccaed139f4f2095
+  --version          -> lockdown-agent 1.0.1 (frozen=True, build=20261118.fe295d19ad91)
+signed metadata: scripts/sign-release-metadata.py --version 1.0.1 --key ~/.lockdown-secrets/update_signing.key
+  published: KV binary:agent = the 1.0.1 exe; KV agent_release = the signed record
+
+--- [2] MOLE (Express backend at :8787, restarted with AGENT_LATEST_VERSION=1.0.1, AGENT_BINARIES_DIR=/tmp/rel101, UPDATE_SIGNING_KEY=<the release key>) ---
+13:31:45 [INFO] Update available: 1.0.0 -> 1.0.1 (16852626 bytes)
+13:31:45 [INFO] Downloading update from http://192.168.1.43:8787/api/agent/download?platform=win ...
+13:31:47 [INFO] Update signature verified (ed25519, pinned key)          <- the security-critical step
+13:31:47 [INFO] Update downloaded and verified (16852626 bytes, SHA-256 OK)
+13:31:47 [INFO] Update signal written - watchdog will apply on next check
+
+  .update_pending    = True
+  .update_downloaded = True
+  ^ that is the whole security path: offered, downloaded from the device's own backend, hash checked,
+    and the detached Ed25519 signature verified against the key pinned in config (update_verification: signature).
+
+--- [3] the swap, and the gap it exposed ---
+  Nothing consumed .update_pending: this install is service-based (LockdownAgent service ->
+  lockdown-agent.exe) and carries no lockdown-watchdog.exe, and only agent/watchdog.py reads
+  that file. So auto-update is DOWNLOAD-AND-VERIFY on this host, never APPLY.
+
+  To finish the demonstration the swap was done by hand, exactly as the watchdog does it:
+    stop service -> kill agent -> copy .update_downloaded over lockdown-agent.exe
+    (previous binary kept as lockdown-agent.exe.bak-100) -> start service
+  before: d9e45902674537f9  16,852,161 B  lockdown-agent 1.0.0 (build=20261118.4bfeda526b77)
+  after : 6374775812597309  16,852,626 B  lockdown-agent 1.0.1 (build=20261118.fe295d19ad91)
+  log   : Agent starting - hostname=MOLE server=http://192.168.1.43:8787 poll=30s build=20261118.fe295d19ad91
+
+--- [4] what the server now reports ---
+  agent_version: 1.0.1
+  update_verification: signature
+  last_checkin: 2026-11-18 10:32:34
+  status: active
+
+--- [5] verdict ---
+  PROVEN on hardware: offer -> download -> SHA-256 -> Ed25519 verify (pinned key) -> swap -> new
+  binary running -> server sees 1.0.1. The update trust root works end to end.
+  OPEN: the apply step has no automatic consumer on a service-based install. Only
+  agent/watchdog.py reads .update_pending, and the installer's service path does not run it
+  (installer.py installs "the scheduled task watchdog" for the other install mode). Until that
+  is reconciled, an update sits verified-but-unapplied on any service install — a silent
+  no-op that looks like success from the log.

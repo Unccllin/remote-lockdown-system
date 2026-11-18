@@ -3617,3 +3617,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-165
+  statement: 'Auto-update is proven on hardware through verification but not through application (S297).
+    MOLE (Express backend with AGENT_LATEST_VERSION=1.0.1, AGENT_BINARIES_DIR=/tmp/rel101, UPDATE_SIGNING_KEY=the
+    release key) logged ''Update available: 1.0.0 -> 1.0.1'', ''Update signature verified (ed25519, pinned
+    key)'' and ''Update downloaded and verified (16852626 bytes, SHA-256 OK)'', writing .update_pending
+    and .update_downloaded. Nothing consumed them: only agent/watchdog.py reads .update_pending and this
+    service-based install has no watchdog, so the swap had to be done by hand (stop, kill, copy .update_downloaded
+    over lockdown-agent.exe, start). After that the device reports agent_version 1.0.1 and build=20261118.fe295d19ad91
+    (sha 63747758...), update_verification signature. The log line ''watchdog will apply on next check''
+    is therefore a promise nothing keeps on a service install.'
+  domain: agent/update
+  status: proposed
+  evidence_level: assumed
+  provenance: MOLE agent.log sequence, before/after --version and hashes, server row after the swap; docs/artifacts/s297-self-update-proof.txt
+  source: agent/agent.py, agent/watchdog.py, agent/installer.py, server/src/routes/agent.js
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

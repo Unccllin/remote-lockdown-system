@@ -229,7 +229,7 @@ except ImportError:
 # Version
 # ---------------------------------------------------------------------------
 
-AGENT_VERSION = "1.0.0"
+AGENT_VERSION = "1.0.1"
 
 # Build identity. AGENT_VERSION stays numeric semver because the update path compares it
 # numerically (`compareVersions` splits on '.', server/src/routes/agent.js:1037), so build
