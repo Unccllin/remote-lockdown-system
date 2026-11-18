@@ -1,0 +1,79 @@
+=== S285: why MOLE's HP UEFI layer rolls back â€” measured, 2026-11-18T07:39:28Z ===
+
+--- [1] firmware state (read-only HP WMI probe, probe-bios-state.ps1) ---
+--- current firmware values ---
+  Network (PXE) Boot       = Disable,*Enable   [possible: System.Object[]]
+  USB Storage Boot         = Disable,*Enable   [possible: System.Object[]]
+  Legacy Boot Options      = Disable,*Enable   [possible: System.Object[]]
+  Fast Boot                = Disable,*Enable   [possible: System.Object[]]
+  DMA Protection           = *Disable,Enable   [possible: System.Object[]]
+  Secure Boot              = <not exposed>
+  Setup Password           =    [possible: ]
+  Power-On Password        =    [possible: ]
+--- password presence ---
+  Setup Password         IsSet=1
+  Power-On Password      IsSet=0
+--- and the write errors from the last lockdown ---
+  2026-11-17 11:34:48,274 [ERROR] BIOS Setup password is already set but no UEFI_PASSWORD configured. Cannot apply BIOS lockdown without the existing password. Set UEFI_PASSWORD in the agent config to the current BIOS password.
+  2026-11-17 11:34:48,275 [WARNING] UEFI boot lockdown skipped (not HP or password required)
+  2026-11-17 11:38:02,192 [INFO] Setup password was pre-existing ƒ?" not clearing (admin manages it)
+  2026-11-17 11:38:02,193 [INFO] BIOS password backup deleted (unlock successful)
+  2026-11-17 12:20:46,745 [INFO] Using existing BIOS Setup password for lockdown changes
+  2026-11-17 12:21:31,431 [ERROR] UEFI lockdown critically failed and was rolled back ƒ?" BIOS password retained for operator action
+  2026-11-17 12:23:58,592 [INFO] Setup password was pre-existing ƒ?" not clearing (admin manages it)
+  2026-11-17 12:23:58,592 [INFO] BIOS password backup deleted (unlock successful)
+  2026-11-18 10:21:22,585 [INFO] Using existing BIOS Setup password for lockdown changes
+  2026-11-18 10:21:47,661 [ERROR] UEFI lockdown critically failed and was rolled back ƒ?" BIOS password retained for operator action
+  2026-11-18 10:23:47,898 [INFO] Setup password was pre-existing ƒ?" not clearing (admin manages it)
+  2026-11-18 10:23:47,899 [INFO] BIOS password backup deleted (unlock successful)
+PROBE-END
+
+--- [2] the agent's own history of this layer, from agent.log ---
+2026-11-17 11:34:48 [ERROR] BIOS Setup password is already set but no UEFI_PASSWORD configured.
+                       Cannot apply BIOS lockdown without the existing password.
+2026-11-17 12:20:46 [INFO]  Using existing BIOS Setup password for lockdown changes
+2026-11-17 12:21:31 [ERROR] UEFI lockdown critically failed and was rolled back - BIOS password retained
+2026-11-18 10:21:22 [INFO]  Using existing BIOS Setup password for lockdown changes
+2026-11-18 10:21:43 [WARNING] BIOS setting 'Network (PXE) Boot' -> 'Disable' failed: Failed
+2026-11-18 10:21:44 [WARNING] BIOS setting 'USB Storage Boot' -> 'Disable' failed: Failed
+2026-11-18 10:21:45 [WARNING] BIOS setting 'Legacy Boot Options' -> 'Disable' failed: Failed
+2026-11-18 10:21:47 [ERROR] UEFI lockdown critically failed and was rolled back
+
+--- [3] what 'Failed' is, in the code ---
+466:SET_BIOS_RETURN_CODES = {
+467-    0: "Success",
+468-    1: "Not Supported",
+469-    2: "Unspecified Error",
+470-    3: "Timeout",
+471:    4: "Failed",
+472-    5: "Invalid Parameter",
+473-    6: "Access Denied",
+474-}
+475-
+476-
+477-# ---------------------------------------------------------------------------
+  -> return code 4 is HP's generic 'Failed'; 6 would be 'Access Denied'.
+
+--- [4] the reading that explains it ---
+  HP_BIOSPassword:  Setup Password     IsSet=1     <- a BIOS Setup password exists on this unit
+                    Power-On Password  IsSet=0     <- no PBA password (PBA was off, as intended)
+  agent config:     uefi_password      4 characters
+  agent.log:        "Setup password was pre-existing - not clearing (admin manages it)"
+  The agent never set this unit's Setup password (the log says so), yet it signs every
+  SetBIOSSetting call with the 4-character value in its config. HP returns 4 ('Failed') for
+  each critical write, the layer rolls back, and the ACK says boot_lock_status=partial.
+  -> the UEFI layer cannot succeed on MOLE until the REAL BIOS Setup password is in the agent
+     config (UEFI_PASSWORD) or is cleared in BIOS Setup. That is an operator secret, not a code bug.
+
+--- [5] what was NOT done, and why ---
+  No BIOS write was attempted to confirm the password hypothesis. The cheapest confirmation is a
+  no-op write (SetBIOSSetting with the setting's current value), but a wrong password on HP firmware
+  can raise the failed-attempt count, and this unit's boot state is already the fragile part of the
+  lab. The conclusion above rests on IsSet=1 + "password was pre-existing" + return code 4, each
+  measured, and is stated as the cause that fits all three rather than as a proven one.
+
+--- [6] a smaller code question this raises ---
+  apply_boot_lockdown already refuses when a Setup password exists and none is configured. It does
+  not check whether the configured password is the RIGHT one, so it proceeds, fails three critical
+  writes and rolls back. A pre-flight probe (one no-op write, reported honestly) would turn three
+  red lines and a rollback into one clear sentence before any state is touched.

@@ -3375,3 +3375,27 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-154
+  statement: 'MOLE''s HP UEFI lockdown layer cannot succeed because the unit has a BIOS Setup password
+    the agent never set (HP_BIOSPassword IsSet=1; agent.log: ''Setup password was pre-existing — not clearing'')
+    while the agent signs every SetBIOSSetting with a 4-character uefi_password from its config; HP returns
+    code 4 ''Failed'' for all three critical writes (Network (PXE) Boot, USB Storage Boot, Legacy Boot
+    Options), so the layer rolls back and the ACK reports boot_lock_status=partial. It is an operator
+    secret, not a code bug: the real Setup password must be supplied as UEFI_PASSWORD or cleared in BIOS
+    Setup. Sure Start BIOS Settings Protection is Disable, so it is not the blocker. apply_boot_lockdown
+    refuses when a Setup password exists and none is configured, but never validates that a configured
+    one is correct.'
+  domain: agent/uefi
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'MOLE read-only probes: HP_BIOSPassword Setup Password IsSet=1, Power-On Password IsSet=0,
+    Sure Start BSP Disable; agent.log shows ''Using existing BIOS Setup password'' followed by three ''failed:
+    Failed'' and a rollback on 2026-11-18, same shape on 2026-11-17. Transcript: docs/artifacts/s285-mole-bios-write-refusal.txt'
+  source: probe-bios-state.ps1, probe-bsp.ps1, agent/hp_uefi_lockdown.py
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: ca818ca
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

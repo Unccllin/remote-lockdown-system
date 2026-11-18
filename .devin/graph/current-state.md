@@ -58,34 +58,35 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 284 — 2026-11-18 (WinRE idempotency: an already-locked device can be locked again)
+## Latest session: 285 — 2026-11-18 (why MOLE's HP UEFI layer refuses: a password it never set)
 
 ### Fog cleared
 
-- **`_disable_winre()` now re-reads the state instead of believing the exit code**: success renders
-  `reagentc /disable` a no-op (`"WinRE already disabled … this is success, not a critical failure"`),
-  and a still-enabled or **unreadable** state stays a failure — a broken `reagentc` cannot look like
-  a lockdown.
-- **The mirror case is fixed too**: `_enable_winre()` treats an already-enabled WinRE as success, so
-  rollback and removal paths on an untouched machine stop reporting a verified no-op as an error.
-- **`_winre_status()` is the one reader**, returning `enabled` / `disabled` / `None`, where `None` is
-  "unreadable" and is deliberately not "disabled". `_is_winre_enabled()` is now a one-line
-  projection of it, keeping its old "unknown reads as not enabled" contract.
-- **The defect is pinned from both ends**: 6 WinRE unit tests (already-disabled → success,
-  still-enabled → failure, unreadable → failure, and the same three for enable) plus an
-  apply-level regression test asserting `rolled_back is False`, `winre_disabled is True` and the
-  sentinel written when `reagentc /disable` fails against an already-disabled WinRE.
+- **The S283 "unexplained" item now has a cause that fits every measurement**: MOLE has a BIOS Setup
+  password the agent did not set, and the agent authenticates its writes with a 4-character value
+  from its own config. Three critical writes are refused, the layer rolls back, and the ACK reports
+  `boot_lock_status=partial` — exactly what was observed.
+- **It is an operator secret, not a code defect**: the layer can work on this unit only once the real
+  Setup password is supplied as `UEFI_PASSWORD` (or cleared in BIOS Setup).
+- **A smaller code question is now visible**: `apply_boot_lockdown` refuses when a Setup password
+  exists and *none* is configured, but never checks whether the configured one is right, so a wrong
+  password costs three red writes and a rollback instead of one clear sentence.
+- **The test-runner advisory from the harness is explained**: `python3 -m pytest` on this host fails
+  with `No module named pytest` — no summary, exit 1. `scripts/run-agent-tests.sh` is the only valid
+  runner (51 passed for the BCD file, 950 for the suite), which is exactly why that wrapper exists.
 
 ### Fog remaining
 
-- **This is unit-tested only.** E-BCD keeps its `not hardware-verified by decision` ceiling, so no
-  graph status moved. Confirming on hardware needs a rebuilt `lockdown-agent.exe` staged to MOLE
-  (`agent/build.ps1`, PyInstaller on Windows), which this Linux host cannot produce.
-- **The HP UEFI layer's three refused critical writes are unexplained** (S283): the cause could be
-  Sure Start BSP `Disable`, a firmware policy, or the pre-existing Setup password. Not investigated.
-- MOLE still holds BCD lockdown values from an earlier run and `secure_boot: false`.
-- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py` rows,
-  two thin PBL route modules, and the Worker deploy (`wrangler login`).
+- **The password hypothesis is not proven by a write.** The cheapest confirmation is a no-op
+  `SetBIOSSetting` (current value → current value), deliberately **not** attempted: a wrong password
+  on HP firmware can raise the failed-attempt count, and this unit's boot state is already the
+  fragile part of the lab.
+- **Hardware confirmation of the S284 WinRE fix still needs a Windows build host.** MOLE has no
+  Python; installing one there is an operator decision, not a tool call.
+- **`Sure Start BIOS Settings Protection` is `Disable`** on this unit, so it is *not* the blocker,
+  contrary to one plausible theory; the Setup-password reading is what fits.
+- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py`
+  rows, two thin PBL route modules, and the Worker deploy (`wrangler login`).
 
 ### Debt items closed
 
@@ -98,39 +99,46 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Hardware confirmation of this fix: needs a Windows build host.** Unchanged in kind from S283.
-- **Worker deploy: `wrangler login`.** Operator action.
-- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password in the agent config.** Operator
+  secret. Until then that layer cannot pass on this unit, by design or otherwise.
+- **Rebuilding the agent: needs a Python on a Windows host.** MOLE lacks one; installing it is an
+  operator action.
+- **Worker deploy: `wrangler login`.**
 
 ### Session artifacts
 
-- `docs/artifacts/s284-winre-idempotency-fix.txt` — the defect as measured on hardware, the new
-  three-function contract, the eight added tests by name, and the runs: 51 passed in the BCD file,
-  **950 passed** across the agent suite, ruff check + format clean.
+- `docs/artifacts/s285-mole-bios-write-refusal.txt` — the WMI firmware/password probe output, the
+  agent's log history for the layer, the return-code table excerpt that turns "Failed" into code 4,
+  the four facts that fit one cause, an explicit "what was not done and why" for the no-op write,
+  and the pre-flight-probe idea the code is now missing.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), squarely**: the test suite contained a test named
-  `test_disable_winre_already_disabled` asserting the wrong outcome. A green suite over a pinned
-  wrong expectation is worse than no test — it converts a defect into a contract. What would have
-  prevented it: the test asserting *the state after* the call (re-read via `reagentc /info`) rather
-  than only the boolean return, which is exactly the shape the fix now pins.
-- **Layer 2 (context provision)**: the module docstring explains why each setting is critical but
-  never says what "already in that state" should mean, so the idempotency question had no answer to
-  read. The fix documents it at each function rather than in a distant table.
+- **Layer 4 (verification feedback)**: the UEFI layer's rollback had been reported as `partial` on
+  hardware three times (S271, S283, and 2026-11-17) with no investigation of *why*, because the ACK
+  was already "honest" — it said partial. An honest status is not a diagnosis. The probe scripts
+  that answer it were already sitting on the unit from an earlier session and had never been run
+  against this question.
+- **Layer 3 (execution environment)**: `python3 -m pytest` failing with a bare exit 1 and no summary
+  is a documented trap in this repo (`run-agent-tests.sh` exists for it), and it still cost a
+  diagnostic step — evidence that a wrapper people can bypass will be bypassed.
 
 ### VERIFY
 
-- `scripts/run-agent-tests.sh tests/test_boot_lockdown_bcd.py` → **51 passed**.
-- `scripts/run-agent-tests.sh` → **950 passed** in 54 s.
-- `scripts/lint-agent.sh` → `All checks passed!`, `64 files already formatted`.
-- `brain.py check` → 153 beliefs, integrity clean; B-152 refuted, B-153 confirmed at `code-read`.
+- `probe-bios-state.ps1` on MOLE → Setup Password `IsSet=1`, Power-On Password `IsSet=0`,
+  Fast Boot / DMA Protection / Network (PXE) Boot / USB Storage Boot / Legacy Boot Options all
+  exposed and settable.
+- `probe-bsp.ps1` on MOLE → `Sure Start BIOS Settings Protection = Disable`,
+  `Sure Start Secure Boot Keys Protection = Disable`.
+- `agent.log` (2026-11-17 → 2026-11-18) → `Using existing BIOS Setup password`,
+  three `-> 'Disable' failed: Failed`, `UEFI lockdown critically failed and was rolled back`.
+- `python3 -m pytest` → `No module named pytest`; `scripts/run-agent-tests.sh` → 51 / 950 passed.
 
 ### Next session opening
 
-Stage a rebuilt `lockdown-agent.exe` to MOLE and re-run the lock → recover acceptance, so the
-current tree's BCD layer (now idempotent) and its BIOS-restore reporting are exercised on hardware
-rather than inferred from unit tests.
+Decide whether to install a Python on MOLE so the current-tree agent can be built and staged there,
+then re-run the lock → recover acceptance; or supply the real BIOS Setup password as `UEFI_PASSWORD`
+first, so the rebuild tests both changes at once.
 
 ---
 

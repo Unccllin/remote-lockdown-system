@@ -1814,3 +1814,109 @@ current tree's BCD layer (now idempotent) and its BIOS-restore reporting are exe
 rather than inferred from unit tests.
 
 ---
+
+---
+
+## Session 285 — 2026-11-18 (why MOLE's HP UEFI layer refuses: a password it never set)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `agent/hp_uefi_lockdown.py` (`_set_setting` and the exact `SetBIOSSetting` PowerShell it
+builds, `SET_BIOS_RETURN_CODES`, `_verify_setting`, `apply_boot_lockdown`'s Setup-password guard,
+`remove_boot_lockdown`'s `state["setup_password_was_set"]` branch), the two read-only probes already
+on the unit (`probe-bios-state.ps1`, `probe-bsp.ps1`), MOLE's `agent.log` history for this layer,
+`docs/artifacts/s283-lock-recover-acceptance.txt`.
+
+**Findings**, measured before any claim:
+
+- `HP_BIOSPassword` on MOLE reports **Setup Password `IsSet=1`**, **Power-On Password `IsSet=0`**
+  (no PBA password — PBA was off, as intended).
+- The agent's own log says it did **not** set that password: `"Setup password was pre-existing — not
+  clearing (admin manages it)"`, and on 2026-11-17 it refused with `"BIOS Setup password is already
+  set but no UEFI_PASSWORD configured"` before later runs found a value to use.
+- The writes are signed with the **4-character `uefi_password` in the agent's config**, and HP
+  answers return code **4 = "Failed"** (`6` would be "Access Denied") for all three critical writes.
+- `agent/build` requires PyInstaller; MOLE has **no Python** (`Get-Command python/py/python3` return
+  nothing) and 112 GB free, so rebuilding the agent there needs an interpreter installed first.
+
+### Fog cleared
+
+- **The S283 "unexplained" item now has a cause that fits every measurement**: MOLE has a BIOS Setup
+  password the agent did not set, and the agent authenticates its writes with a 4-character value
+  from its own config. Three critical writes are refused, the layer rolls back, and the ACK reports
+  `boot_lock_status=partial` — exactly what was observed.
+- **It is an operator secret, not a code defect**: the layer can work on this unit only once the real
+  Setup password is supplied as `UEFI_PASSWORD` (or cleared in BIOS Setup).
+- **A smaller code question is now visible**: `apply_boot_lockdown` refuses when a Setup password
+  exists and *none* is configured, but never checks whether the configured one is right, so a wrong
+  password costs three red writes and a rollback instead of one clear sentence.
+- **The test-runner advisory from the harness is explained**: `python3 -m pytest` on this host fails
+  with `No module named pytest` — no summary, exit 1. `scripts/run-agent-tests.sh` is the only valid
+  runner (51 passed for the BCD file, 950 for the suite), which is exactly why that wrapper exists.
+
+### Fog remaining
+
+- **The password hypothesis is not proven by a write.** The cheapest confirmation is a no-op
+  `SetBIOSSetting` (current value → current value), deliberately **not** attempted: a wrong password
+  on HP firmware can raise the failed-attempt count, and this unit's boot state is already the
+  fragile part of the lab.
+- **Hardware confirmation of the S284 WinRE fix still needs a Windows build host.** MOLE has no
+  Python; installing one there is an operator decision, not a tool call.
+- **`Sure Start BIOS Settings Protection` is `Disable`** on this unit, so it is *not* the blocker,
+  contrary to one plausible theory; the Setup-password reading is what fits.
+- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py`
+  rows, two thin PBL route modules, and the Worker deploy (`wrangler login`).
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password in the agent config.** Operator
+  secret. Until then that layer cannot pass on this unit, by design or otherwise.
+- **Rebuilding the agent: needs a Python on a Windows host.** MOLE lacks one; installing it is an
+  operator action.
+- **Worker deploy: `wrangler login`.**
+
+### Session artifacts
+
+- `docs/artifacts/s285-mole-bios-write-refusal.txt` — the WMI firmware/password probe output, the
+  agent's log history for the layer, the return-code table excerpt that turns "Failed" into code 4,
+  the four facts that fit one cause, an explicit "what was not done and why" for the no-op write,
+  and the pre-flight-probe idea the code is now missing.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback)**: the UEFI layer's rollback had been reported as `partial` on
+  hardware three times (S271, S283, and 2026-11-17) with no investigation of *why*, because the ACK
+  was already "honest" — it said partial. An honest status is not a diagnosis. The probe scripts
+  that answer it were already sitting on the unit from an earlier session and had never been run
+  against this question.
+- **Layer 3 (execution environment)**: `python3 -m pytest` failing with a bare exit 1 and no summary
+  is a documented trap in this repo (`run-agent-tests.sh` exists for it), and it still cost a
+  diagnostic step — evidence that a wrapper people can bypass will be bypassed.
+
+### VERIFY
+
+- `probe-bios-state.ps1` on MOLE → Setup Password `IsSet=1`, Power-On Password `IsSet=0`,
+  Fast Boot / DMA Protection / Network (PXE) Boot / USB Storage Boot / Legacy Boot Options all
+  exposed and settable.
+- `probe-bsp.ps1` on MOLE → `Sure Start BIOS Settings Protection = Disable`,
+  `Sure Start Secure Boot Keys Protection = Disable`.
+- `agent.log` (2026-11-17 → 2026-11-18) → `Using existing BIOS Setup password`,
+  three `-> 'Disable' failed: Failed`, `UEFI lockdown critically failed and was rolled back`.
+- `python3 -m pytest` → `No module named pytest`; `scripts/run-agent-tests.sh` → 51 / 950 passed.
+
+### Next session opening
+
+Decide whether to install a Python on MOLE so the current-tree agent can be built and staged there,
+then re-run the lock → recover acceptance; or supply the real BIOS Setup password as `UEFI_PASSWORD`
+first, so the rebuild tests both changes at once.
+
+---
