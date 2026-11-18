@@ -2245,3 +2245,116 @@ that `/api/download/agent` serves a build whose `--version` carries a build id �
 `build=` check that would have caught this staleness a month earlier.
 
 ---
+
+---
+
+## Session 289 — 2026-11-18 (a console sign-in is refused: E-LOCK-SCREEN is back on hardware)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: the E-LOCK-SCREEN node and its S270 demotion note, which say the missing evidence was
+*not* that `tsdiscon` was issued but that a sign-in was shown REFUSED.
+
+- **Read**: `.devin/graph/GRAPH-SPEC.yaml` — the E-LOCK-SCREEN node, its demotion comment, and the
+  `verification_ceiling` / `risk_notes` fields the re-promotion has to satisfy.
+- **Read**: `agent/agent.py` — `hold_logon` / `release_logon`, `disable_console_account`'s read-back,
+  and `_lockdown_effective`'s `logon_prevented` term.
+- **Read**: `.devin/graph/graph_assert.py` — `artifact_supports_claim` and `_artifact_result_map`,
+  i.e. exactly which artifact shapes and fields I3 will accept as a claim.
+- **Read**: `docs/artifacts/s283-lock-recover-acceptance.txt` and
+  `docs/artifacts/s286-current-tree-acceptance.txt` — this unit's behaviour while locked, and the
+  agent build that produced it.
+
+**Findings**, measured before the run:
+
+- The graph's bar is a *refusal*, and Windows records refusals itself: Security event **4625** carries
+  `LogonType` (2 = interactive/console), `Status`, and `SubStatus`.
+- From S288's controlled experiment, `SubStatus 0xc0000072` (STATUS_ACCOUNT_DISABLED) is returned only
+  after the password validates, so its presence proves both that a real credential was offered and
+  that the state — not a wrong password — refused it.
+- `artifact_supports_claim` reads CTRF-shaped JSON, so the evidence could be cited per test id rather
+  than as an unparsed blob.
+
+### Fog cleared
+
+- **A console sign-in is REFUSED on hardware, recorded by Windows.** The operator typed their real
+  password at MOLE's logon screen while locked and got *"The account is currently disabled. Contact
+  your system administrator."* The device's own Security log holds **8 × 4625** with
+  `TargetUserName=Newark User`, `LogonType=2`, `Status=0xc000006e`, `SubStatus=0xc0000072`,
+  `WorkstationName=MOLE`, `ProcessName=svchost.exe` — five of them the operator's attempts between
+  11:40:07 and 11:43:22 local; the three earliest are the agent's own relock attempts.
+- **E-LOCK-SCREEN is re-promoted to `verified-on-hardware`**, cited as
+  `docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01`, and **all graph invariants
+  pass** — I3 accepts the citation because the artifact is a real result record, not a prose file.
+- **The S284 WinRE fix held on a re-lock**: BCD `success: true, critical_applied: 3,
+  best_effort_applied: 5`, one best-effort failure (`allowprereleasesignatures`), no rollback —
+  the third consecutive real run where a reused device could lock at all.
+- **Recovery returned the device to its pre-lock state**: account active, sentinel gone, recovery key
+  gone, `README.txt` plaintext, BCD restored 5/5, WinRE left as found, device `active`,
+  `lock_state none`. The BIOS layer again reported `Restored 0 of 5 … every write was refused` — the
+  S285 finding, unchanged and honestly stated.
+
+### Fog remaining
+
+- **The overlay is still not what refuses.** `CreateWindowEx failed: 2` continues in session 0, so on
+  this unit the enforcement is the disabled account plus the guardian's re-assertion. That is now
+  stated in the node's `risk_notes` rather than implied by the path's name.
+- **One unit only**: MOLE, HP EliteBook 830 G6, no usable TPM. A second machine would make the claim
+  fleet-level rather than unit-level.
+- **HP UEFI layer still applies 0 of 3 critical writes** — needs the real BIOS Setup password.
+- **Nothing in the harness captures this automatically.** The 4625 check is a manual capture; making
+  the hardware harness assert it (lock → wait for the operator → scan 4625 for 0xc0000072) would make
+  the evidence reproducible instead of remembered.
+- The Worker release is still unshipped: the deployed Worker serves a 2026-11-12 agent (S288).
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+- **Worker release**: binaries in KV are stale; publishing them plus signed `agent_release` is a
+  decision, not a credential problem (deploy access works since S288).
+
+### Session artifacts
+
+- `docs/artifacts/s289-lock-screen-signin-refused.json` — a CTRF-shaped result record
+  (`E-LOCK-SCREEN-01: passed`) carrying the eight 4625 events field by field, the operator's report
+  verbatim, the agent build (`20261118.4bfeda526b77`) and sha256 that produced it, the lockdown ACK's
+  layer detail, the post-recovery state, an explicit "why this meets the bar S270 set", and the
+  limitations (session-0 overlay, one unit, which events were the agent's own).
+
+### Failure attribution
+
+- **Layer 4 (verification feedback)**: this path sat at `verified-in-unit-test` for two days not
+  because the evidence was hard to get but because nobody had asked *which artifact field* would
+  settle it. The moment the question became "which event id, which field, which value", one sign-in
+  attempt answered it. The lesson is about the shape of a claim, not about hardware access.
+- **A drafting error worth naming**: the first version of the artifact JSON contained a
+  `normalized_payload` key describing a pipeline that never existed. It was caught by re-reading the
+  file before citing it — evidence files need the same review as code, because a citation is only as
+  good as the file it points at.
+
+### VERIFY
+
+- Graph: `make graph-check` → all invariants pass; E-LOCK-SCREEN `status: verified-on-hardware`,
+  `hardware_artifact_ref: docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01`.
+- `artifact_supports_claim("E-LOCK-SCREEN", …#E-LOCK-SCREEN-01)` → `(True, '')`.
+- Device: 8 × Security 4625 `SubStatus 0xc0000072`; lockdown ACK `lockdown_effective=1`,
+  `boot_lock_status=partial`; post-recovery account `Yes`, sentinel absent, BCD 5/5 restored,
+  device `active`.
+- `brain.py check` → 158 beliefs, integrity clean.
+
+### Next session opening
+
+Make the hardware harness capture the refusal itself (lock → operator attempt → assert a 4625 with
+`SubStatus 0xc0000072`), so E-LOCK-SCREEN's evidence is reproducible rather than a one-off capture;
+then decide the Worker release that still serves a 2026-11-12 agent.
+
+---

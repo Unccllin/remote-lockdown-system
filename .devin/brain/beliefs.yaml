@@ -3464,3 +3464,26 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-158
+  statement: 'E-LOCK-SCREEN is verified-on-hardware (S289): an interactive console sign-in on a locked
+    MOLE is REFUSED because the interactive account is disabled. Evidence is Windows'' own Security log:
+    8 x event 4625 with TargetUserName=''Newark User'', LogonType=2, Status=0xc000006e, SubStatus=0xc0000072
+    (STATUS_ACCOUNT_DISABLED), WorkstationName=MOLE, ProcessName=svchost.exe, from 11:38 to 11:43 local
+    on 2026-11-18 - the operator''s 5 attempts among them, refused with ''The account is currently disabled''.
+    The lock-screen overlay still cannot be created in session 0 (CreateWindowEx failed: 2), so the disabled
+    account plus the guardian, not the visual overlay, is the enforcement. Cited as docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01;
+    I3 accepts it.'
+  domain: enforcement/lock
+  status: confirmed
+  evidence_level: hardware
+  provenance: Windows Security 4625 x8 with SubStatus 0xc0000072 on MOLE, captured minutes after the operator's
+    refused sign-in; device recovered to active/lock_state=none; make graph-check all invariants pass
+    with E-LOCK-SCREEN verified-on-hardware
+  source: docs/artifacts/s289-lock-screen-signin-refused.json; .devin/graph/GRAPH-SPEC.yaml
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: ca818ca
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

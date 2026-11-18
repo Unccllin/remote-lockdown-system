@@ -25,9 +25,9 @@
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
 | Debt items | 60 | 64 | ✗ |
-| Enforcement paths (on hardware) | 10 | 13 | ✗ |
+| Enforcement paths (on hardware) | 11 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 60 of 64 debt items are closed, but **1 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 60 of 64 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
 
 **The 2 paths with a documented verification ceiling (a failed run damages state the test cannot undo):**
 
@@ -36,18 +36,13 @@
 | E-BCD | bcd-lockdown | NOT hardware-verified by decision (S264). A failed run rewrites this machine's boot con... |
 | E-HP-UEFI | hp-uefi-lockdown | NOT hardware-verified by decision (S264). The test sets a FIRMWARE Setup Password that ... |
 
-**The 1 enforcement paths that still need hardware verification:**
-
-| ID | Name | Status | Blocker |
-|----|------|--------|---------|
-| E-LOCK-SCREEN | workstation-lock | verified-in-unit-test | S270: lock no longer merely disconnects — it disables the interactive account... |
-
-**The 10 already verified on hardware:**
+**The 11 already verified on hardware:**
 
 | ID | Name | Artifact |
 |----|------|----------|
 | E-ENCRYPT | file-encryption | agent/hw_test_artifact_azure.json |
 | E-DECRYPT | file-decryption | agent/hw_test_artifact_frankenstein_win2.json#E-DECRYPT-01 |
+| E-LOCK-SCREEN | workstation-lock | docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01 |
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 | E-ACK | command-ack | agent/hw_test_artifact_frankenstein_win2.json#E-ACK-01 |
 | E-RECOVERY | unlock-recovery | agent/hw_test_artifact_frankenstein_win2.json#E-RECOVERY-01 |
@@ -58,37 +53,39 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 288 — 2026-11-18 (the Worker is deployed; what it hands out is 2026-11-12)
+## Latest session: 289 — 2026-11-18 (a console sign-in is refused: E-LOCK-SCREEN is back on hardware)
 
 ### Fog cleared
 
-- **The Worker is deployed** — `lockdown-serverless`, version `6a113a90-7707-4b32-a7f0-852e205ee812`,
-  218.42 KiB (44.82 gzip), KV `84b24c0c…` bound, and every checked route answers over HTTPS:
-  `setup/status` 200 (`1` admin), `devices` 401 unauthenticated, `health` 200 `serverless:true`,
-  `/v1/health` 200, junk `/v1/verdict` 400 `invalid CBOR request`, `/v1/policy/1` 200 (1471 B),
-  unknown 404. S272–S280's splits are now the code that serves production.
-- **Publishing needed only a device-flow approval** — no browser, no API token, no `--temporary`
-  flag (that flag does not exist in this wrangler).
-- **The binaries that Worker serves are stale, and now provably so.** `/api/download/agent` returns
-  16,370,993 bytes, `sha256 39a29b35…`, PE COFF `TimeDateStamp` **2026-11-12T15:16:16Z** — a build
-  none of this work produced. It predates the S271-era BIOS-restore reporting fixes, the S284 WinRE
-  idempotency fix, and the S287 build identity. Anyone installing from the dashboard today gets it.
+- **A console sign-in is REFUSED on hardware, recorded by Windows.** The operator typed their real
+  password at MOLE's logon screen while locked and got *"The account is currently disabled. Contact
+  your system administrator."* The device's own Security log holds **8 × 4625** with
+  `TargetUserName=Newark User`, `LogonType=2`, `Status=0xc000006e`, `SubStatus=0xc0000072`,
+  `WorkstationName=MOLE`, `ProcessName=svchost.exe` — five of them the operator's attempts between
+  11:40:07 and 11:43:22 local; the three earliest are the agent's own relock attempts.
+- **E-LOCK-SCREEN is re-promoted to `verified-on-hardware`**, cited as
+  `docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01`, and **all graph invariants
+  pass** — I3 accepts the citation because the artifact is a real result record, not a prose file.
+- **The S284 WinRE fix held on a re-lock**: BCD `success: true, critical_applied: 3,
+  best_effort_applied: 5`, one best-effort failure (`allowprereleasesignatures`), no rollback —
+  the third consecutive real run where a reused device could lock at all.
+- **Recovery returned the device to its pre-lock state**: account active, sentinel gone, recovery key
+  gone, `README.txt` plaintext, BCD restored 5/5, WinRE left as found, device `active`,
+  `lock_state none`. The BIOS layer again reported `Restored 0 of 5 … every write was refused` — the
+  S285 finding, unchanged and honestly stated.
 
 ### Fog remaining
 
-- **The release, not the deploy, is what remains**: `binary:agent` (+ `binary:installer`,
-  `binary:agent-installer`, `binary:lockscreen`) still hold 2026-11-12 artifacts, and
-  `agent_release` metadata is CI-signed by `scripts/sign-release-metadata.py` — the update path
-  refuses metadata whose hash it cannot verify, so this is a release decision, not a repair.
-- **E-LOCK-SCREEN still needs one human step**, but its evidence is now defined. A controlled
-  experiment on MOLE (temporary local account, created → disabled → deleted) showed Windows checks
-  the password *before* reporting the state: `disabled + correct password → 1331 (account
-  disabled)`, while a wrong password returns `1326` in every state. So a `LogonUser` attempt that
-  answers **1331** proves both "the right password was offered" and "sign-in was refused" — stronger
-  than a description of a lock screen, and it needs the account's real password, which only the
-  operator has.
-- Untouched: 12 stale `audit_test_teeth.py` rows, the ≈700-line device admin handlers in
-  `worker.ts`, two thin PBL route modules.
+- **The overlay is still not what refuses.** `CreateWindowEx failed: 2` continues in session 0, so on
+  this unit the enforcement is the disabled account plus the guardian's re-assertion. That is now
+  stated in the node's `risk_notes` rather than implied by the path's name.
+- **One unit only**: MOLE, HP EliteBook 830 G6, no usable TPM. A second machine would make the claim
+  fleet-level rather than unit-level.
+- **HP UEFI layer still applies 0 of 3 critical writes** — needs the real BIOS Setup password.
+- **Nothing in the harness captures this automatically.** The 4625 check is a manual capture; making
+  the hardware harness assert it (lock → wait for the operator → scan 4625 for 0xc0000072) would make
+  the evidence reproducible instead of remembered.
+- The Worker release is still unshipped: the deployed Worker serves a 2026-11-12 agent (S288).
 
 ### Debt items closed
 
@@ -101,47 +98,44 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Publishing a release** (binaries + signed `agent_release`) — a decision, not a credential
-  problem; deploy access is now working.
-- **E-LOCK-SCREEN: one human sign-in attempt** at MOLE while locked, or the account password handed
-  over for a single `LogonUser` call (never stored; only the error code is recorded).
 - **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+- **Worker release**: binaries in KV are stale; publishing them plus signed `agent_release` is a
+  decision, not a credential problem (deploy access works since S288).
 
 ### Session artifacts
 
-- `docs/artifacts/s288-worker-deployed.txt` — the login and account, the pre-deploy local
-  verification, the deploy output with version id, the HTTPS smoke table, the served agent's size /
-  sha256 / PE timestamp against the three known builds, the KV publishing commands from the README,
-  and a two-line verdict separating "deployed" from "released".
+- `docs/artifacts/s289-lock-screen-signin-refused.json` — a CTRF-shaped result record
+  (`E-LOCK-SCREEN-01: passed`) carrying the eight 4625 events field by field, the operator's report
+  verbatim, the agent build (`20261118.4bfeda526b77`) and sha256 that produced it, the lockdown ACK's
+  layer detail, the post-recovery state, an explicit "why this meets the bar S270 set", and the
+  limitations (session-0 overlay, one unit, which events were the agent's own).
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), with a good outcome**: `verify-worker.sh` already encoded the
-  distinction between *verifying* and *publishing*. Without it, "needs wrangler login" would have
-  looked like "cannot be tested", and the code would have stayed unverified while waiting for an
-  account. Reading the script's own header is what turned a blocker into a step.
-- **Layer 2 (context provision)**: nothing recorded that the KV binaries were months behind the
-  tree. The build identity added in S287 is what made the staleness measurable in one command
-  (`--version` on the served artifact would have answered it; the PE timestamp answered it here
-  because the artifact predates that feature — which is itself the proof).
+- **Layer 4 (verification feedback)**: this path sat at `verified-in-unit-test` for two days not
+  because the evidence was hard to get but because nobody had asked *which artifact field* would
+  settle it. The moment the question became "which event id, which field, which value", one sign-in
+  attempt answered it. The lesson is about the shape of a claim, not about hardware access.
+- **A drafting error worth naming**: the first version of the artifact JSON contained a
+  `normalized_payload` key describing a pipeline that never existed. It was caught by re-reading the
+  file before citing it — evidence files need the same review as code, because a citation is only as
+  good as the file it points at.
 
 ### VERIFY
 
-- `scripts/verify-worker.sh` → bundle 220K, workerd serving, every smoke check passed.
-- `npx wrangler deploy` → `Uploaded lockdown-serverless`, `Current Version ID:
-  6a113a90-7707-4b32-a7f0-852e205ee812`.
-- Live HTTPS: the eight responses listed above; `/api/download/agent` → 200, 16,370,993 bytes,
-  `sha256 39a29b35…`, PE timestamp `2026-11-12T15:16:16Z`.
-- Experiment on MOLE: temp account active+correct → SUCCESS, disabled+correct → **1331**,
-  wrong password → 1326 in every state; account removed afterwards.
-- `brain.py check` → 157 beliefs, integrity clean; B-157 confirmed at `real-media`.
+- Graph: `make graph-check` → all invariants pass; E-LOCK-SCREEN `status: verified-on-hardware`,
+  `hardware_artifact_ref: docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01`.
+- `artifact_supports_claim("E-LOCK-SCREEN", …#E-LOCK-SCREEN-01)` → `(True, '')`.
+- Device: 8 × Security 4625 `SubStatus 0xc0000072`; lockdown ACK `lockdown_effective=1`,
+  `boot_lock_status=partial`; post-recovery account `Yes`, sentinel absent, BCD 5/5 restored,
+  device `active`.
+- `brain.py check` → 158 beliefs, integrity clean.
 
 ### Next session opening
 
-Decide the release: sign `agent_release` metadata and publish the current agent and companions to
-KV (`binary:agent`, `binary:installer`, `binary:agent-installer`, `binary:lockscreen`), then re-check
-that `/api/download/agent` serves a build whose `--version` carries a build id — the same
-`build=` check that would have caught this staleness a month earlier.
+Make the hardware harness capture the refusal itself (lock → operator attempt → assert a 4625 with
+`SubStatus 0xc0000072`), so E-LOCK-SCREEN's evidence is reproducible rather than a one-off capture;
+then decide the Worker release that still serves a 2026-11-12 agent.
 
 ---
 
