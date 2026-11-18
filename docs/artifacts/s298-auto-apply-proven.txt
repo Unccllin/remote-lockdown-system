@@ -1,0 +1,63 @@
+=== S298: auto-update now applies itself — proven twice on hardware, 2026-11-18T11:04:42Z ===
+
+--- [1] the gap (S297) ---
+  The agent downloaded 1.0.1, verified its Ed25519 signature, wrote .update_pending … and nothing
+  consumed it, because only agent/watchdog.py reads that file and a service install has no watchdog.
+  The log line "watchdog will apply on next check" was a promise nothing kept.
+
+--- [2] the fix (agent/service_host.py) ---
+  apply_pending_update(root)   none|applied|corrupt|failed — re-checks the SHA-256 against the hash
+                               the signal names (the signature was the agent's job, the bytes are the
+                               supervisor's), backs up the old binary, swaps, clears the signal
+  restore_backup(root)         rolls the previous binary back
+  _apply_update_if_pending()   stops the agent (Windows holds the file open), applies, logs
+  run_supervisor               checks INSIDE the wait-for-child loop, not only at the top of the
+                               outer loop — the outer loop only comes round after the agent exits,
+                               which is why the first wiring never fired on a healthy device
+  7 unit tests: no signal, valid swap + backup, hash mismatch refused, unreadable signal,
+                missing download, restore, restore-without-backup
+
+--- [3] proven live, twice, with no manual step ---
+A. pending-at-startup path (1.0.1 -> 1.0.2):
+   13:57:18 [SERVICE] pending update: applied
+   13:57:19 [SERVICE] starting agent: ...lockdown-agent.exe --silent --config ...
+   13:57:21 [INFO]    Agent starting ... build=20261118.8badc4ccf5b9     (= 1.0.2)
+
+B. the real path — agent healthy, update discovered mid-flight, host kills and swaps it (1.0.2 -> 1.0.3):
+   14:01:31 [INFO]    Update available: 1.0.2 -> 1.0.3 (16852082 bytes)
+   14:01:33 [INFO]    Update signature verified (ed25519, pinned key)
+   14:01:33 [INFO]    Update downloaded and verified (16852082 bytes, SHA-256 OK)
+   14:01:35 [SERVICE] update pending - stopping the agent to apply it
+   14:01:39 [SERVICE] pending update: applied
+   14:01:39 [SERVICE] agent stopped to apply its update - starting the new binary
+   14:01:41 [INFO]    Agent starting ... build=20261118.5c31f3eaa364     (= 1.0.3)
+   after: lockdown-agent 1.0.3 (frozen=True, build=20261118.5c31f3eaa364), .update_pending gone
+
+--- [4] a packaging gap this exposed ---
+  The first rebuilt lockdown-service.exe would not start: SCM error 1053 ("did not respond to the
+  start or control request in a timely fashion"). Cause: pywin32 was not installed in the build
+  environment, so the frozen service lacked servicemanager/win32serviceutil — the module catches
+  ImportError and sets PYWIN32_AVAILABLE=False, which is graceful at import time and fatal as an
+  SCM host. agent/requirements.txt lists cryptography and requests only. Fixed locally with
+  `pip install pywin32` + `pyinstaller --clean` (a cached build kept the old hash and had to be
+  discarded: same hash 94c91a0e, no pywin32 — --clean produced 9,495,232 B / cbf3e8d3).
+
+--- [5] item 5 from the plan: cache lifetime ---
+  /api/download/* answered Cache-Control: public, max-age=3600 — an hour of a stale artifact after a
+  republish, with no version in the URL. Now max-age=300 (S298), pinned by a test (484 worker tests
+  pass, tsc clean), deployed as f2840f6a-441f-43fb-8bd0-b14df0601a1b and verified live:
+    cache-control: public, max-age=300
+    content-length: 16852082
+    x-content-sha256: 902a1af3137185d4c7e016ec84ee00bc68b4530409a48f9034abb2889a4ba249
+
+--- [6] what is still open from '1345' ---
+  3. point a device at the Worker — BLOCKED: enrolling on the Worker needs its ADMIN_TOKEN (or a
+     fresh setup), and that secret is not mine to overwrite. The Worker serves 1.0.3 and its update
+     path passes the local workerd e2e; no real device has used it.
+  4. offline custody of update_signing.key — NOT something a tool can do. Two copies exist on this
+     host: ~/.lockdown-secrets/update_signing.key (mode 600) and backup/update_signing.key.<ts>,
+     both sha256 5c88341f7b81fddd59a1f491baf01ba16279cb3755fe8501b9476822726501f5.
+     Public fingerprint 207d7cc2691ec123f61fd075e14b063899f310e23da5256944e32f360e116d47.
+  5a. make sast still cannot run here: no pip, no pipx for the system interpreter, no semgrep
+      binary — the gate fails loudly by design rather than passing silently.
+  5c. 12 stale audit_test_teeth.py rows (pre-ADR-002 anchors) remain; untouched this session.

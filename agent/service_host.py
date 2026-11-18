@@ -29,7 +29,10 @@ Usage (development / lab)::
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -189,8 +192,6 @@ def terminate_agent_processes() -> int:
 
 def _config() -> dict:
     """The agent's config.json, or {} when it cannot be read."""
-    import json
-
     try:
         return json.loads((install_dir() / "config.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -273,6 +274,106 @@ def _wait_or_stop(stop_event, seconds: float) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Applying a verified update (S298)
+# ---------------------------------------------------------------------------
+# The agent downloads a new binary, checks its SHA-256 and its detached Ed25519 signature,
+# then writes `.update_pending` + `.update_downloaded` for a supervisor to consume.
+# `agent/watchdog.py` is the other consumer, and installs that use THIS service host have
+# no watchdog — so on MOLE the update was downloaded and signature-verified and then sat
+# there, while the agent's log promised "watchdog will apply on next check" (S297). A
+# verified update that is never applied is worse than no update channel at all: it looks
+# like success from both ends.
+#
+# The signature was checked by the agent; this function re-checks the SHA-256 against the
+# hash recorded in the signal, because a supervisor's job is to refuse a swap whose bytes
+# are not the bytes that were signed.
+UPDATE_PENDING_FILE = ".update_pending"
+UPDATE_DOWNLOAD_FILE = ".update_downloaded"
+# A swapped-in binary that dies inside this window is treated as a bad update.
+UPDATE_ROLLBACK_SEC = 60
+
+
+def apply_pending_update(root: Path | None = None) -> str:
+    """Swap in the downloaded update. Returns ``none`` | ``applied`` | ``corrupt`` | ``failed``.
+
+    "corrupt" covers every case where the signal or the bytes cannot be trusted (unreadable
+    signal, missing download, hash mismatch): the signal is cleared so the supervisor does
+    not retry it forever, and the bad download is deleted rather than left to be swapped by
+    something less careful.
+    """
+    base = root or install_dir()
+    pending = base / UPDATE_PENDING_FILE
+    if not pending.exists():
+        return "none"
+
+    try:
+        signal = json.loads(pending.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pending.unlink(missing_ok=True)
+        return "corrupt"
+
+    download = Path(signal.get("download_path") or str(base / UPDATE_DOWNLOAD_FILE))
+    target = base / "lockdown-agent.exe"
+    if not download.exists():
+        pending.unlink(missing_ok=True)
+        return "corrupt"
+
+    expected = str(signal.get("sha256") or "").lower()
+    if expected:
+        try:
+            actual = hashlib.sha256(download.read_bytes()).hexdigest()
+        except OSError:
+            pending.unlink(missing_ok=True)
+            return "corrupt"
+        if actual != expected:
+            pending.unlink(missing_ok=True)
+            download.unlink(missing_ok=True)
+            return "corrupt"
+
+    try:
+        if target.exists():
+            shutil.copy2(str(target), str(target.with_suffix(".bak")))
+        shutil.move(str(download), str(target))
+        if sys.platform != "win32":
+            os.chmod(str(target), 0o755)  # noqa: S103 — an executable must be executable
+    except (OSError, PermissionError):
+        restore_backup(base)
+        pending.unlink(missing_ok=True)
+        return "failed"
+
+    pending.unlink(missing_ok=True)
+    return "applied"
+
+
+def restore_backup(root: Path | None = None) -> bool:
+    """Put the previous binary back if the swap left one. True when it was restored."""
+    base = root or install_dir()
+    target = base / "lockdown-agent.exe"
+    backup = target.with_suffix(".bak")
+    if not backup.exists():
+        return False
+    try:
+        shutil.move(str(backup), str(target))
+    except (OSError, PermissionError):
+        return False
+    return True
+
+
+def _apply_update_if_pending(stop_event) -> bool:
+    """Apply a pending update before supervision continues. True when one was applied."""
+    if not (install_dir() / UPDATE_PENDING_FILE).exists():
+        return False
+    if agent_is_running():
+        # On Windows the running image holds the file open.
+        log_line("update pending — stopping the agent to apply it")
+        terminate_agent_processes()
+        _wait_or_stop(stop_event, 3)
+    outcome = apply_pending_update()
+    log_line(f"pending update: {outcome}")
+    return outcome == "applied"
+
+
 def run_supervisor(stop_event=None) -> int:
     """Start the agent and restart it when it exits, until asked to stop.
 
@@ -282,10 +383,16 @@ def run_supervisor(stop_event=None) -> int:
     attempt = 0
     child: subprocess.Popen | None = None
     started_at: float | None = None
+    swapped_at: float | None = None
 
     while True:
         if stop_event is not None and stop_event.is_set():
             break
+
+        # A verified update waiting on disk outranks every other decision.
+        if _apply_update_if_pending(stop_event):
+            swapped_at = time.time()
+            started_at = None
 
         if agent_is_running():
             age = last_checkin_age()
@@ -337,6 +444,7 @@ def run_supervisor(stop_event=None) -> int:
             started_at = time.time()
 
         if child is not None:
+            intentional_swap = False
             while child.poll() is None:
                 if stop_event is not None and stop_event.is_set():
                     log_line("stop requested — terminating the agent")
@@ -346,8 +454,32 @@ def run_supervisor(stop_event=None) -> int:
                     except subprocess.TimeoutExpired:
                         child.kill()
                     return 0
+                # The update check belongs HERE, inside the wait for a live child: the outer
+                # loop only comes round when the agent has already exited, so a check placed
+                # there cannot see an update on a healthy device — which is exactly the case
+                # that matters (measured on MOLE, S298: .update_pending sat for 45 s with a
+                # healthy agent and a service host that never looked).
+                if _apply_update_if_pending(stop_event):
+                    swapped_at = time.time()
+                    intentional_swap = True
+                    break
                 time.sleep(2)
+
+            if intentional_swap:
+                log_line("agent stopped to apply its update — starting the new binary")
+                attempt = 0
+                continue
+
             log_line(f"agent exited with code {child.returncode}")
+            # A freshly swapped binary that dies quickly is a bad update, not a crash loop:
+            # roll back once, and the restart below brings the previous version up.
+            if swapped_at is not None and time.time() - swapped_at < UPDATE_ROLLBACK_SEC:
+                restored = restore_backup()
+                log_line(
+                    "new binary exited within the update grace window — "
+                    + ("restored the previous binary" if restored else "no backup to restore")
+                )
+                swapped_at = None
 
         delay = _RESTART_DELAYS[min(attempt, len(_RESTART_DELAYS) - 1)]
         attempt += 1

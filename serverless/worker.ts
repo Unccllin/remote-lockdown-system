@@ -2712,7 +2712,12 @@ async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
       // stored at publish time: a separately published digest can drift from
       // the artefact, a derived one cannot.
       'x-content-sha256': await sha256HexBytes(data),
-      'Cache-Control': 'public, max-age=3600',
+      // Five minutes, not an hour. These URLs carry no version, so a republished
+      // artifact is served stale by anything that cached the old body — and an
+      // installer a week old looks exactly like a fresh one to a user clicking
+      // "download". Bounded staleness keeps the bandwidth win without letting a
+      // release take an hour to reach a browser (S298).
+      'Cache-Control': 'public, max-age=300',
     },
   });
 }

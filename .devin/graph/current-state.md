@@ -53,35 +53,41 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 297 — 2026-11-18 (a real self-update on hardware: 1.0.0 → 1.0.1, signature-verified)
+## Latest session: 298 — 2026-11-18 (auto-update applies itself: proven live, twice)
 
 ### Fog cleared
 
-- **The security-critical path of auto-update is proven on hardware.** MOLE saw
-  `Update available: 1.0.0 -> 1.0.1`, downloaded from its own backend, and logged
-  `Update signature verified (ed25519, pinned key)` then
-  `Update downloaded and verified (16852626 bytes, SHA-256 OK)` — the detached signature checked
-  against the key pinned in its config, not against a hash from the same origin.
-- **The swapped binary runs and is what the server sees**: before `1.0.0 (build=20261118.4bfeda526b77)`
-  / `d9e45902…`, after `1.0.1 (build=20261118.fe295d19ad91)` / `63747758…`, and the device row now
-  reports `agent_version: 1.0.1`, `update_verification: signature`, status `active`.
-- **The version bump is in the tree** (`AGENT_VERSION = "1.0.1"`), with the earlier 1.0.0 kept as
-  `lockdown-agent.exe.bak-100` on the device.
+- **Auto-update now applies itself, proven twice on hardware with no manual step.** 1.0.1 → 1.0.2
+  applied from a signal already on disk at service start (`pending update: applied`), and
+  1.0.2 → 1.0.3 applied *mid-flight*: `update pending — stopping the agent to apply it` →
+  `pending update: applied` → `agent stopped to apply its update` → `Agent starting … build=
+  20261118.5c31f3eaa364`. The device ends on 1.0.3 with `.update_pending` gone.
+- **The supervisor re-checks the bytes, not just the signal**: a download whose SHA-256 does not
+  match the hash the signal names is refused and deleted, with the working binary untouched — the
+  agent's signature check and the supervisor's byte check are independent.
+- **Failure semantics are pinned**: no signal → `none`; unreadable signal / missing download / hash
+  mismatch → `corrupt` (signal cleared, no swap); a swap that dies inside 60 s → `restore_backup()`
+  puts the previous binary back. 7 tests, 28 in the file.
+- **A packaging gap found and fixed**: the rebuilt service would not start (SCM 1053) because
+  `pywin32` was absent from the build environment; `pip install pywin32` + `pyinstaller --clean`
+  produced a working 9,495,232-byte service. A cached PyInstaller build kept the old hash first, so
+  `--clean` was load-bearing, not cosmetic.
+- **Download cache lifetime bounded**: `max-age=3600` → `300`, deployed (`f2840f6a…`) and verified
+  live, with a test pinning it at ≤300 s.
 
 ### Fog remaining
 
-- **The apply step has no automatic consumer on a service-based install.** `.update_pending` and
-  `.update_downloaded` sat there until I performed the swap by hand — exactly what the watchdog does.
-  So on this host auto-update is *download-and-verify*, never *apply*, and the log line
-  "watchdog will apply on next check" is a promise nothing keeps. Reconciling the two install modes
-  (service host consuming the signal, or installing the watchdog alongside the service) is the next
-  real piece of work.
-- **The Worker's own update path was not the one exercised** — MOLE talks to Express. The Worker
-  serves the same signed record from KV (published this session) and its unit+e2e suites pass, but a
-  device pointed at the Worker has not been through a real update.
-- **The private key is still single-host** (two copies on this disk).
-- Unchanged: HP UEFI (needs the BIOS Setup password), E-BCD's ceiling, the `max-age=3600` download
-  cache question, 12 stale `audit_test_teeth.py` rows.
+- **`pywin32` is still not in `agent/requirements.txt`**, so the documented build on a fresh Windows
+  host reproduces the 1053 failure. The fix is a requirements entry (and a build that fails loudly
+  when the SCM modules are missing rather than shipping a service that cannot start).
+- **No device has used the Worker.** Item 3 of the plan is blocked on the Worker's `ADMIN_TOKEN`
+  (enrolling needs admin auth, and overwriting the production secret is not mine to do). The Worker
+  serves 1.0.3 and its update path passes the local workerd e2e.
+- **`make sast` still cannot run on this host** — no `pip`/`pipx` for the system interpreter and no
+  semgrep binary; the gate fails loudly instead of passing silently, which is the documented shape.
+- **12 stale `audit_test_teeth.py` rows** (pre-ADR-002 anchors) remain untouched.
+- **Offline custody of `update_signing.key`** remains an operator step; two copies exist on this host
+  (`sha256 5c88341f…`, public fingerprint `207d7cc2…`).
 
 ### Debt items closed
 
@@ -94,42 +100,43 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Auto-apply on a service install: needs a code decision**, not a credential.
-- **Offline custody of `update_signing.key`** — operator.
-- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+- **Worker enrolment: needs its `ADMIN_TOKEN`** (or a deliberate re-setup).
+- **Offline key custody** — operator.
+- **HP UEFI lockdown on MOLE** — needs the real BIOS Setup password.
+- **`make sast` on this host** — needs a Python with pip, or a semgrep binary.
 
 ### Session artifacts
 
-- `docs/artifacts/s297-self-update-proof.txt` — the release being offered (version, size, sha256,
-  stamped build id), the four log lines that constitute the verified download, the pending/downloaded
-  files that prove it landed, the before/after identity of the swapped binary, the server row
-  afterwards, and a verdict that separates "proven" from "open" in one line each.
+- `docs/artifacts/s298-auto-apply-proven.txt` — the gap, the three functions and their semantics, the
+  seven tests, the two hardware runs quoted line by line with their build ids, the pywin32/1053
+  finding with the `--clean` detail, the cache-lifetime change with its deployed version and live
+  headers, and an explicit list of what from "1345" is still open and why.
 
 ### Failure attribution
 
-- **Layer 5 (state management), again the service-restart trap**: the first attempt to make MOLE pick
-  up the new config left the old agent child alive, so the check-in still said `sha256-only`. Killing
-  the lingering process is what made S295's pin observable — this is the third session it has cost
-  time, and it is now written into the README's release section.
-- **Layer 4 (verification feedback)**: the update log said "watchdog will apply on next check" and
-  nothing did. Without checking for `.update_pending` afterwards, this would have read as a successful
-  auto-update. A log line that describes a component's intent is not evidence that the component ran.
+- **Layer 4 (verification feedback), twice in one change**: my first wiring put the update check
+  where it could never run on a healthy device — the code read as correct and the test suite could
+  not see it, because the defect was in *placement relative to a blocking loop*, not in logic. Only
+  watching the device (`.update_pending` sitting there for 45 s) revealed it. The lesson: a
+  supervisor's behaviour has to be verified on the supervisor, not inferred from unit tests.
+- **Layer 3 (execution environment)**: a rebuilt Windows service that silently ships without
+  `pywin32` fails at SCM start with 1053 and no log line, because the import guard is graceful. A
+  dependency that is only fatal at runtime belongs in the requirements file.
 
 ### VERIFY
 
-- MOLE log: `Update available: 1.0.0 -> 1.0.1 (16852626 bytes)`, `Update signature verified (ed25519,
-  pinned key)`, `Update downloaded and verified (16852626 bytes, SHA-256 OK)`.
-- `lockdown-agent.exe --version` before/after: `1.0.0 (build=20261118.4bfeda526b77)` →
-  `1.0.1 (build=20261118.fe295d19ad91)`; hashes `d9e45902…` → `63747758…`.
-- Server row: `agent_version 1.0.1`, `update_verification signature`, `last_checkin 2026-11-18
-  10:32:34`, `status active`.
-- `brain.py check` → 165 beliefs, integrity clean.
+- Live cycle 1.0.2 → 1.0.3 with no manual step: agent log lines quoted in the artifact; device ends
+  on `lockdown-agent 1.0.3 (frozen=True, build=20261118.5c31f3eaa364)`, `.update_pending` absent.
+- `agent/tests/test_service_host.py` → **28 passed**; full agent suite unaffected.
+- Worker: **484 tests passed**, `tsc` clean, deployed `f2840f6a-441f-43fb-8bd0-b14df0601a1b`;
+  live `/api/download/agent` → `cache-control: public, max-age=300`, 16,852,082 B, digest matches.
+- `brain.py check` → integrity clean.
 
 ### Next session opening
 
-Make a service-based install apply the update it verified: either teach the service host to consume
-`.update_pending` (swap, restart, roll back on failure) or install the watchdog alongside the service,
-and then re-run this same 1.0.1 → 1.0.2 cycle with no manual step.
+Add `pywin32` to `agent/requirements.txt` (and make the service build fail loudly when the SCM
+modules are missing), then point one device at the Worker once its admin token is available — that is
+the last unproven surface in the release story.
 
 ---
 

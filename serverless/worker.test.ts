@@ -1861,6 +1861,21 @@ describe('Serverless Worker', () => {
       }
     });
 
+    it('keeps a republished download from being cached for an hour', async () => {
+      // The URL has no version, so the only thing standing between a user and the
+      // previous release is the cache lifetime. An hour is long enough to hand someone
+      // last week's installer after a publish (S298).
+      await env.LOCKDOWN_KV.put('binary:agent', new Uint8Array([1, 2, 3]));
+
+      const resp = await worker.fetch(makeRequest('GET', '/api/download/agent'), env);
+      const cacheControl = resp.headers.get('Cache-Control') ?? '';
+      const maxAge = Number(/max-age=(\d+)/.exec(cacheControl)?.[1] ?? '0');
+
+      expect(cacheControl).toContain('public');
+      expect(maxAge).toBeGreaterThan(0);
+      expect(maxAge).toBeLessThanOrEqual(300);
+    });
+
     it('serves an artifact from R2 when KV cannot hold it', async () => {
       // S291: a KV value caps at 27 MiB and the NSIS installer passed that at 33 MB of
       // payload, so the installer has to be published somewhere else. R2 is that place; the

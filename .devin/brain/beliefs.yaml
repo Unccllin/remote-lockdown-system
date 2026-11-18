@@ -3639,3 +3639,26 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-166
+  statement: 'Auto-update applies itself on a service install (S298): agent/service_host.py gained apply_pending_update
+    (re-checks the SHA-256 named in the signal, backs up, swaps, clears the signal), restore_backup, and
+    _apply_update_if_pending, wired INSIDE the wait-for-child loop because the outer loop only runs after
+    the agent exits. Proven twice on MOLE with no manual step: 1.0.1->1.0.2 at service start, and 1.0.2->1.0.3
+    mid-flight (''update pending - stopping the agent to apply it'' -> ''pending update: applied'' ->
+    new agent build=20261118.5c31f3eaa364). Also: the frozen lockdown-service.exe needs pywin32, which
+    agent/requirements.txt omits - without it the SCM start fails with 1053 and no log; a cached PyInstaller
+    build kept the old hash until --clean. And /api/download/* now answers max-age=300 instead of 3600
+    (deployed f2840f6a...).'
+  domain: agent/update
+  status: proposed
+  evidence_level: assumed
+  provenance: two hardware cycles on MOLE with log lines and build ids, 7 new unit tests (28 in file),
+    484 worker tests, live header check; docs/artifacts/s298-auto-apply-proven.txt
+  source: agent/service_host.py, agent/watchdog.py, scripts/build-windows-artifacts.ps1, serverless/worker.ts
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
