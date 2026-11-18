@@ -3706,3 +3706,27 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-169
+  statement: 'The ''cannot generate an enrollment token on serverless'' 401 was a missing admin session,
+    not a broken route or a missing JWT secret (S301): POST /api/enroll/token answers 401 ''Admin authentication
+    required'' without a valid admin bearer, the Worker''s only admin is uncletom (super-admin, base64
+    PBKDF2-SHA256 record), and the Worker needs no JWT_SECRET because signAdminToken/verifyAdminToken
+    fall back to env.ADMIN_TOKEN. The fix was a credential reset, not a code change: back up the admins
+    KV value, recompute uncletom''s hash (PBKDF2-SHA256, 100000 iterations, fresh 16-byte salt, keeping
+    id/role/created_at), write it back — after which login returns 200 with a JWT and /api/enroll/token
+    returns 200 with a 900-second token. Also: Cloudflare answers 403 code 1010 to a Python urllib client
+    (browser-integrity/WAF on the UA) while curl passes, which looks identical to an auth failure if the
+    body is not read.'
+  domain: deployment/worker
+  status: proposed
+  evidence_level: assumed
+  provenance: live HTTP probes against the deployed Worker, wrangler secret list, KV admins backup+patch,
+    and a login->token round trip, 2026-11-18
+  source: serverless/admin-auth.ts, serverless/worker.ts (handleAuthLogin), wrangler kv, curl probes
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

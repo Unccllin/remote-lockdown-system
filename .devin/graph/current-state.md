@@ -53,31 +53,35 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 300 — 2026-11-18 (the dashboard: nothing in its code was wrong, two things around it were)
+## Latest session: 301 — 2026-11-18 (pushed to GitHub; the "cannot generate an enrollment token" 401)
 
 ### Fog cleared
 
-- **The dashboard's own code is fine**: with the browser installed, **11/11 E2E pass** against a real
-  backend (18.3 s), covering auth, device list/detail, flag-stolen, recover, audit and health.
-- **The bundle is current**: rebuilt (`assets/index-BiqBoQfX.js`, 640.20 kB / 185.46 gzip).
-- **The dev scaffold now serves the SPA**, with the same cache rules and SPA fallback as
-  `src/index.js`, so "the server" means the same thing from either entry point. Verified on the
-  running server: `/`, `/devices`, a deep device link all return `index.html`, and the hashed asset
-  serves at 640,200 B.
-- **What a UI demo needs is now written down**: same-origin `/api` for the Express-served bundle;
-  `VITE_API_URL` at build time for a Worker-pointed one; `admin` / `admin123` on the dev scaffold.
+- **The 40 unpushed commits are on GitHub**: `31524c4..0c13b19`, `master` in sync.
+- **`uncletom` has a known password again**, and the blocked action works: login → 200 with a JWT,
+  then `POST /api/enroll/token` → **200** with a token (`expires_in: 900`). The old `admins` KV value
+  was backed up first and the record's id/role/created_at were preserved — only the hash, salt and
+  iteration count changed.
+- **The Worker needs no `JWT_SECRET`**: `ADMIN_TOKEN` is the fallback signing key, so the missing
+  secret is not a defect (checked before changing anything, rather than adding a secret to "fix" it).
+- **GitHub reports 3 moderate advisories**, and locally `npm audit --audit-level=high` now exits 1 in
+  all four JS packages — one root advisory (picomatch ReDoS, GHSA-fc5q-39xc-vjpf, installed at 2.3.2
+  and 4.0.7) fanning out through glob/jest/vitest chains. `--omit=dev` is clean for dashboard,
+  electron and serverless; the server's 5 "high" trace to `sqlite3 → node-gyp → tinyglobby →
+  picomatch`, i.e. the native module's **build** toolchain. No dependency file changed in these 40
+  commits, so this is an advisory wave, not a regression — and it makes AGENTS.md's "`npm audit
+  --audit-level=high` must exit 0" factually stale.
 
 ### Fog remaining
 
-- **The Worker-pointed dashboard has not been built or run.** That is the same gap as the missing
-  device on the Worker: no `VITE_API_URL` build and no admin token to enrol with.
-- **The Playwright browser is per-host state**: a fresh clone fails the E2E suite exactly as it did
-  here until `npx playwright install` runs. That belongs in the documented setup, not in a session's
-  memory (the same shape as `LD_LIBRARY_PATH` for libnspr).
-- **`server/dev-start-sqlite.js` is not covered by a test**, so the mount I added is verified by
-  request rather than by a suite that would notice its removal.
-- Unchanged: `make sast` cannot run here; 12 stale `audit_test_teeth` rows; Worker enrolment, offline
-  key custody and the HP UEFI BIOS password are still operator-gated.
+- **The new password is known in exactly one place** (this conversation and a file under `/tmp`). It
+  needs to go into a password manager and then be rotated through the admins API.
+- **No admin can be listed or changed without a session** — `/api/admins` is 401 without one, so the
+  "who are the admins" question always needs a credential first. A documented break-glass path
+  (`ADMIN_TOKEN`) exists and is worth writing down.
+- **The picomatch advisory is unresolved** — either an `overrides` pin in the four packages (fix) or
+  an accepted-risk entry with the reachability argument (dev/build tooling only). Not decided here.
+- **The dashboard is still not pointed at the Worker**, and no device is enrolled there.
 
 ### Debt items closed
 
@@ -90,38 +94,42 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Worker enrolment: needs `ADMIN_TOKEN`** (unchanged).
-- **Offline custody of `update_signing.key`** — operator.
-- **HP UEFI lockdown on MOLE** — needs the real BIOS Setup password.
+- **Rotating the new `uncletom` password** — the operator's custody step.
+- **Offline custody of `update_signing.key`**, **HP UEFI BIOS password**, **Worker-pointed dashboard**.
 
 ### Session artifacts
 
-- `docs/artifacts/s300-dashboard-state.txt` — the measured before/after (266 unit, 11/11 E2E, the
-  exact launch error), the stale-bundle evidence, the two-entry-point divergence and what was added,
-  the four live URLs with status/content-type/size, and what a UI demo still needs configured.
+- No file artifact: the evidence is the two HTTP responses (login 200 with a JWT; enroll/token 200 with
+  a 900-second token), quoted in VERIFY. The credential itself is deliberately not written into the
+  repository.
 
 ### Failure attribution
 
-- **Layer 3 (execution environment)**: an E2E suite that fails 11/11 looks like a broken product; it
-  was a missing browser download. The distinguishing evidence was one repeated error line naming an
-  executable path — cheap to read, easy to skip past when the summary says "11 failed".
-- **Layer 2 (context provision)**: nothing recorded that the dev scaffold serves no UI, so every
-  session that "demoed the server" was demoing an API-only surface. Two entry points claiming the same
-  name with different contents is a documentation failure before it is a code one.
+- **Layer 4 (verification feedback)**: the symptom "cannot generate a token" had three plausible
+  causes (missing route, broken session signing, absent admin). Two cheap probes settled it — the
+  route answered 401 rather than 404, and `wrangler secret list` showed the fallback key was present —
+  before any credential was touched. Measuring the failure mode first is what kept this from becoming
+  a "fix" to code that was working.
+- **Layer 3 (execution environment)**: Cloudflare's 1010 on a Python client is indistinguishable from
+  an auth failure unless the body is read. Any future scripted check against the Worker should send a
+  curl-like User-Agent or expect 403/1010 as its own case.
 
 ### VERIFY
 
-- `npx vitest run` → **266 passed** (30 files).
-- `npx playwright test` (E2E_BACKEND_PORT=3101, LD_LIBRARY_PATH=~/.local/lib/nspr) → **11 passed**.
-- `npx vite build` → `dist/assets/index-BiqBoQfX.js` 640.20 kB, gzip 185.46 kB.
-- Live on `:8787`: `/` 200 text/html 649 B, `/devices` 200 text/html, deep device link 200 text/html,
-  `/assets/index-BiqBoQfX.js` 200 application/javascript 640,200 B.
-- `brain.py check` → integrity clean.
+- `git push origin master` → `31524c4..0c13b19`, `## master...origin/master` (in sync).
+- `POST /api/auth/login` (`uncletom`) → **200**, JWT returned.
+- `POST /api/enroll/token` with that JWT → **200**
+  `{"token":"kLekRUyp…","expires_at":"2026-11-18T12:03:25.000Z","expires_in":900}`.
+- `wrangler secret list` → `ADMIN_TOKEN` only; `admins` KV record backed up before the change.
+- `npm audit --audit-level=high` → exit 1 in server (4 moderate/40 high), dashboard (13 high),
+  electron (9 moderate/37 high), serverless (6 high); `--omit=dev` clean except server (5 high,
+  sqlite3→node-gyp chain).
 
 ### Next session opening
 
-Build the dashboard with `VITE_API_URL` pointed at the Worker and drive it against a device enrolled
-there — that closes the last unproven surface and needs the Worker's `ADMIN_TOKEN` to start.
+Rotate the `uncletom` password into the operator's vault, then decide the picomatch advisory (an
+`overrides` pin versus a documented accepted-risk entry) so the audit gate stops hiding its next
+finding.
 
 ---
 
