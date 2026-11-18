@@ -53,33 +53,34 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 293 — 2026-11-18 (the harness records the refusal, not the command)
+## Latest session: 294 — 2026-11-18 (the installer is published: every download path serves today's build)
 
 ### Fog cleared
 
-- **The harness can now record the refusal**, opt-in via `HW_LOCK_SIGNIN_WAIT=<seconds>`: it holds the
-  interactive account the way `lock` does, waits for a console attempt, and passes only on a Security
-  4625 with `SubStatus 0xc0000072`, quoting the user, logon type and timestamp it found.
-- **Not requested is not the same as not true**: without the variable the test still passes but says
-  `sign-in refusal NOT observed (set HW_LOCK_SIGNIN_WAIT=…)`, so the artifact can never be mistaken for
-  evidence it does not contain — the exact confusion that demoted the path.
-- **A failed run cannot lock the operator out**: `cleanup()` releases the logon hold, and a test pins
-  it.
-- **The classifier is narrow on purpose**: only `0xc0000072` counts, so a wrong-password event
-  (`0xc000006a`) or another account's refusal cannot satisfy the assertion.
-- **959 agent tests pass** (5 new: the not-observed branch, a refusal reported with its substatus, the
-  window closing without one, cleanup releasing the hold, and the filter), `ruff check` + `ruff format`
-  clean.
+- **Every download path now serves today's build**, verified from the URL rather than from the upload
+  command: `installer` 41,203,591 B `e5f0f390…` (the NSIS wrapper, from R2), `agent` 16,852,161 B
+  `d9e45902…`, `agent-installer` 15,789,390 B `399ad9ba…`, `lockscreen` 9,146,350 B `6592fd87…`.
+- **Deployed with both bindings**: `env.LOCKDOWN_KV (84b24c0c…)` and `env.BINARIES
+  (lockdown-binaries)`, version `3cb8baf5-92cb-4469-8b4e-6618bd137b34`.
+- **The migration procedure is now known and written down**: publish to R2 with `--remote`, then
+  **delete the KV key**, because KV-first precedence shadows the new object. KV deletion propagates in
+  under a minute — the endpoint answered the old body for ~45 s after the delete, then switched.
+- **The two false alarms were both explainable and measured, not guessed**: a local-mode upload that
+  landed nowhere, and a shadowed R2 object. Cache-busted requests ruled out the edge cache instead of
+  assuming it.
 
 ### Fog remaining
 
-- **The opt-in still needs a human.** That is inherent to the claim, but it means CI can never produce
-  this evidence; a run that matters must be a hardware window with someone at the keyboard.
-- **`--timeout` must exceed `HW_LOCK_SIGNIN_WAIT`** or the harness's own timeout wrapper returns first.
-  The failure message says so, but the coupling is a footgun worth removing (the test could raise its
-  own effective timeout).
-- **`binary:installer` still cannot be published** (R2 not enabled, `code: 10042`) and `agent_release`
-  still does not exist (D-130's trust root).
+- **`/api/download/*` answers `Cache-Control: public, max-age=3600`**, so a republished artifact can
+  be served stale by any cache for up to an hour and the URL carries no version to bust it. It did
+  not bite here, but after any republish a user's plain download may be the previous build. Three
+  options recorded (shorter max-age, sha-keyed URL, or `no-cache` + ETag); none applied.
+- **`agent_release` still does not exist**, so no agent is offered an update — D-130's trust root is
+  still an operator decision, and the NSIS wrapper was built without `update_signing.pub`
+  ("installed agents will accept SHA-256-only updates").
+- **The KV→R2 migration is manual per key.** If more artifacts outgrow KV, each needs the same
+  publish-then-delete dance; a publish script that does both, and verifies the served digest, would
+  remove the trap.
 - Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py` rows,
   the HP UEFI BIOS password.
 
@@ -94,39 +95,44 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Reproducing this evidence needs a person at the device** — by nature, not by omission.
-- **Enabling R2** — operator, dashboard. **`agent_release`** — needs the update signing keypair.
-- **HP UEFI lockdown on MOLE** — needs the real BIOS Setup password.
+- **`agent_release`: needs the update signing keypair** (D-130) — the last piece of a real release.
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+- **E-BCD: verification ceiling by decision** (a failed run rewrites boot config).
 
 ### Session artifacts
 
-- No new artifact file: the run itself was not executed (no hardware window this session). The change
-  is the harness capability plus its tests, and the evidence it will produce is specified by
-  `docs/artifacts/s289-lock-screen-signin-refused.json`'s `method` field.
+- `docs/artifacts/s294-installer-on-r2.txt` — the operator's action and the five commands, the two
+  false alarms with their exact causes (`Resource location: local`; KV-first shadowing plus ~45 s
+  propagation), the verified four-row download table with sizes and digests, the `max-age=3600`
+  caching risk and three options for it, and the release state per key.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), the root of the S270 demotion**: the harness asserted the thing it
-  could observe (a command was issued) rather than the thing the path claims (a sign-in is refused).
-  That is the general shape — an assertion adjacent to the claim passes forever without testing it —
-  and the fix is to make the unobserved part *say* it was unobserved instead of borrowing the pass.
-- **A drafting slip worth naming**: three of the new test lines exceeded the 100-column limit and were
-  caught only by the linter, not by me reading them. A 4-line helper fixed the shape rather than three
-  wrapped lines.
+- **Layer 4 (verification feedback)**: the deploy reported success, the bucket reported `Upload
+  complete`, and the endpoint still served an 18 MB file. Only downloading the artifact and comparing
+  its digest exposed it — the same lesson as S286's silent copy, on a different surface. A publish is
+  not done until the endpoint's bytes are compared to the built artifact's hash.
+- **Layer 2 (context provision)**: nothing in the repo said that publishing to R2 requires deleting
+  the KV key, or that `r2 object put` defaults to local. Both are one-line facts that cost two
+  rounds of "it didn't work" — they are now in the artifact and in this block, but the durable place
+  for them is the release section of `serverless/README.md`.
 
 ### VERIFY
 
-- `scripts/run-agent-tests.sh tests/test_hw_harness.py` → **55 passed**.
-- `scripts/run-agent-tests.sh` → **959 passed** in 50 s.
-- `scripts/lint-agent.sh` → `All checks passed!`, 66 files formatted.
-- `brain.py check` → 162 beliefs, integrity clean.
+- `wrangler r2 bucket create` → `Created bucket 'lockdown-binaries'`; `r2 object put … --remote` →
+  `Upload complete`; `r2 object get … --remote` → 41,203,591 B `e5f0f390…` (matches the build).
+- `wrangler deploy` → version `3cb8baf5-92cb-4469-8b4e-6618bd137b34`, bindings `LOCKDOWN_KV` +
+  `BINARIES`.
+- Live: `installer` 41,203,591 B `e5f0f390…`; `agent` 16,852,161 B `d9e45902…`; `agent-installer`
+  15,789,390 B `399ad9ba…`; `lockscreen` 9,146,350 B `6592fd87…` — all HTTP 200, all equal to the
+  local artifacts.
+- `brain.py check` → 163 beliefs, integrity clean.
 
 ### Next session opening
 
-Run the hardware window with `HW_LOCK_SIGNIN_WAIT=120 --timeout 180 --tag E-LOCK-SCREEN` on MOLE with
-someone at the console, so the harness — not a hand-written artifact — produces the refusal evidence,
-then pick up the two operator-gated items (R2 for `binary:installer`, the update keypair for
-`agent_release`).
+Write the release section of `serverless/README.md` (publish to R2 with `--remote`, delete the KV key,
+verify the served digest) and decide the download cache policy, then take the update trust root so
+`agent_release` can be signed and the release is complete in the sense the product means.
 
 ---
 

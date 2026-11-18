@@ -1,0 +1,49 @@
+=== S294: the installer is published — release complete, 2026-11-18T10:07:00Z ===
+
+--- [1] what the operator did, and what followed ---
+operator: enabled R2 in the dashboard (payment method on file; billing only past the free tier)
+then:
+  npx wrangler r2 bucket create lockdown-binaries
+    -> Created bucket 'lockdown-binaries' with default storage class of Standard
+  serverless/wrangler.toml: [[r2_buckets]] binding = "BINARIES" bucket_name = "lockdown-binaries"
+  npx wrangler r2 object put "lockdown-binaries/binary:installer" \
+       --file /tmp/release/nsis-wrapper-41mb.exe --remote
+  npx wrangler deploy
+    -> bindings: env.LOCKDOWN_KV (84b24c0c...) and env.BINARIES (lockdown-binaries)
+    -> Current Version ID: 3cb8baf5-92cb-4469-8b4e-6618bd137b34
+
+--- [2] two things that made it look broken, and were not ---
+a. `wrangler r2 object put` writes to the LOCAL simulator by default:
+     "Resource location: local — Use --remote if you want to access the remote instance."
+   The first upload landed nowhere that serves traffic. The R2 object only exists after --remote.
+
+b. KV-first precedence shadows a new R2 object. `readBinary()` reads KV first (deliberately: an
+   artifact that still fits stays where the existing tooling puts it), and KV still held the stale
+   18,628,686-byte `binary:installer`. So the deploy was correct, the object was correct, and the
+   endpoint kept serving the old bytes. Deleting the KV key migrated the key to R2:
+     npx wrangler kv key delete --binding=LOCKDOWN_KV --remote "binary:installer"
+   KV deletes propagate in under a minute — the endpoint kept answering the old body for ~45 s
+   after the delete, then switched. Verified by cache-busted requests (?x=<rand>) so the edge cache
+   was ruled out rather than assumed.
+
+--- [3] verified from the URL, not from the upload command ---
+  installer        HTTP 200  41203591 B  e5f0f390ae7d5729
+  agent            HTTP 200  16852161 B  d9e45902674537f9
+  agent-installer  HTTP 200  15789390 B  399ad9ba8e37465d
+  lockscreen       HTTP 200  9146350 B  6592fd87f726a4b7
+  built installer 41,203,591 B  e5f0f390ae7d5729  (sha256 equal, full: e5f0f390…b9680)
+
+--- [4] the risk this exposed, for the release process ---
+  /api/download/* answers with `Cache-Control: public, max-age=3600`. A republished artifact can
+  therefore be served stale by any cache — browser or edge — for up to an hour, and the URL has no
+  version component to bust it. It did not bite here (cache-busted and plain requests agreed once KV
+  settled), but after any republish a user's plain download may be the previous build. Options:
+  shorten max-age, key the URL on x-content-sha256, or serve with `no-cache` + ETag so a conditional
+  request revalidates. Not changed in this session; recorded as the next thing to decide.
+
+--- [5] release state ---
+  binary:agent            current (today's build, carries build=20261118.4bfeda526b77)
+  binary:agent-installer  current
+  binary:lockscreen       current
+  binary:installer        current — from R2, and the only artifact that needed it
+  agent_release           still absent: agents are not offered updates (D-130 trust root)

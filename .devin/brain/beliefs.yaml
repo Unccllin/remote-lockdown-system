@@ -3551,3 +3551,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-162
+  statement: 'The release is complete on the Worker (S294): every download path serves a build from 2026-11-18,
+    verified from the URL — binary:installer 41,203,591 B sha256 e5f0f390… (NSIS wrapper, served from
+    R2), binary:agent 16,852,161 B d9e45902…, binary:agent-installer 15,789,390 B 399ad9ba…, binary:lockscreen
+    9,146,350 B 6592fd87…. Worker version 3cb8baf5-92cb-4469-8b4e-6618bd137b34 with bindings LOCKDOWN_KV
+    + BINARIES (bucket lockdown-binaries). Migrating a key from KV to R2 needs BOTH steps: ''wrangler
+    r2 object put … --remote'' (without --remote it writes the local simulator) AND deleting the KV key,
+    because KV-first precedence shadows the R2 object; KV deletes propagate in under a minute. agent_release
+    still does not exist, so no agent is offered an update.'
+  domain: deployment/release
+  status: proposed
+  evidence_level: assumed
+  provenance: wrangler r2 bucket/object/deploy output, r2 object get comparison, and a live four-URL download
+    table with sizes+sha256; docs/artifacts/s294-installer-on-r2.txt
+  source: serverless/wrangler.toml, serverless/worker.ts (readBinary), live /api/download/* responses
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

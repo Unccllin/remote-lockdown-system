@@ -2769,3 +2769,107 @@ then pick up the two operator-gated items (R2 for `binary:installer`, the update
 `agent_release`).
 
 ---
+
+---
+
+## Session 294 — 2026-11-18 (the installer is published: every download path serves today's build)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `serverless/wrangler.toml` — the KV binding block, and where a second binding belongs.
+- **Read**: `serverless/worker.ts::readBinary` — the KV-first precedence that S292 deliberately
+  pinned, because it decides what a publish has to do.
+- **Read**: `docs/artifacts/s291-installer-exceeds-kv.txt` and `s292-r2-fallback.txt` — the measured
+  ceiling (27 MiB, code `10024`) and the code that made R2 reachable.
+- **Read**: `wrangler r2 object put --help` — which is where "Resource location: local … Use --remote"
+  appears.
+
+**Findings**, measured before acting:
+
+- R2 is now enabled on the account (operator), so bucket creation succeeds where S292 was refused
+  with `code: 10042`.
+- `wrangler r2 object put` defaults to the **local simulator**; the remote object only exists with
+  `--remote`.
+- KV still held `binary:installer` (18,628,686 B), and KV-first means it shadows any R2 object under
+  the same key.
+
+### Fog cleared
+
+- **Every download path now serves today's build**, verified from the URL rather than from the upload
+  command: `installer` 41,203,591 B `e5f0f390…` (the NSIS wrapper, from R2), `agent` 16,852,161 B
+  `d9e45902…`, `agent-installer` 15,789,390 B `399ad9ba…`, `lockscreen` 9,146,350 B `6592fd87…`.
+- **Deployed with both bindings**: `env.LOCKDOWN_KV (84b24c0c…)` and `env.BINARIES
+  (lockdown-binaries)`, version `3cb8baf5-92cb-4469-8b4e-6618bd137b34`.
+- **The migration procedure is now known and written down**: publish to R2 with `--remote`, then
+  **delete the KV key**, because KV-first precedence shadows the new object. KV deletion propagates in
+  under a minute — the endpoint answered the old body for ~45 s after the delete, then switched.
+- **The two false alarms were both explainable and measured, not guessed**: a local-mode upload that
+  landed nowhere, and a shadowed R2 object. Cache-busted requests ruled out the edge cache instead of
+  assuming it.
+
+### Fog remaining
+
+- **`/api/download/*` answers `Cache-Control: public, max-age=3600`**, so a republished artifact can
+  be served stale by any cache for up to an hour and the URL carries no version to bust it. It did
+  not bite here, but after any republish a user's plain download may be the previous build. Three
+  options recorded (shorter max-age, sha-keyed URL, or `no-cache` + ETag); none applied.
+- **`agent_release` still does not exist**, so no agent is offered an update — D-130's trust root is
+  still an operator decision, and the NSIS wrapper was built without `update_signing.pub`
+  ("installed agents will accept SHA-256-only updates").
+- **The KV→R2 migration is manual per key.** If more artifacts outgrow KV, each needs the same
+  publish-then-delete dance; a publish script that does both, and verifies the served digest, would
+  remove the trap.
+- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py` rows,
+  the HP UEFI BIOS password.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **`agent_release`: needs the update signing keypair** (D-130) — the last piece of a real release.
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+- **E-BCD: verification ceiling by decision** (a failed run rewrites boot config).
+
+### Session artifacts
+
+- `docs/artifacts/s294-installer-on-r2.txt` — the operator's action and the five commands, the two
+  false alarms with their exact causes (`Resource location: local`; KV-first shadowing plus ~45 s
+  propagation), the verified four-row download table with sizes and digests, the `max-age=3600`
+  caching risk and three options for it, and the release state per key.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback)**: the deploy reported success, the bucket reported `Upload
+  complete`, and the endpoint still served an 18 MB file. Only downloading the artifact and comparing
+  its digest exposed it — the same lesson as S286's silent copy, on a different surface. A publish is
+  not done until the endpoint's bytes are compared to the built artifact's hash.
+- **Layer 2 (context provision)**: nothing in the repo said that publishing to R2 requires deleting
+  the KV key, or that `r2 object put` defaults to local. Both are one-line facts that cost two
+  rounds of "it didn't work" — they are now in the artifact and in this block, but the durable place
+  for them is the release section of `serverless/README.md`.
+
+### VERIFY
+
+- `wrangler r2 bucket create` → `Created bucket 'lockdown-binaries'`; `r2 object put … --remote` →
+  `Upload complete`; `r2 object get … --remote` → 41,203,591 B `e5f0f390…` (matches the build).
+- `wrangler deploy` → version `3cb8baf5-92cb-4469-8b4e-6618bd137b34`, bindings `LOCKDOWN_KV` +
+  `BINARIES`.
+- Live: `installer` 41,203,591 B `e5f0f390…`; `agent` 16,852,161 B `d9e45902…`; `agent-installer`
+  15,789,390 B `399ad9ba…`; `lockscreen` 9,146,350 B `6592fd87…` — all HTTP 200, all equal to the
+  local artifacts.
+- `brain.py check` → 163 beliefs, integrity clean.
+
+### Next session opening
+
+Write the release section of `serverless/README.md` (publish to R2 with `--remote`, delete the KV key,
+verify the served digest) and decide the download cache policy, then take the update trust root so
+`agent_release` can be signed and the release is complete in the sense the product means.
+
+---

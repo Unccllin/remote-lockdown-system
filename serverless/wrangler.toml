@@ -10,6 +10,19 @@ compatibility_flags = ["nodejs_compat_v2"]
 binding = "LOCKDOWN_KV"
 id = "84b24c0c1b9e4896b6c6fa41548ac636"
 
+# R2 for artifacts too large for a KV value.
+#
+# Cloudflare caps a KV value at 27 MiB, and the generic NSIS installer — which embeds
+# lockdown-agent.exe plus lockdown-installer.exe — crossed it at 33 MB of payload (S291: "content
+# size of 41203591 bytes exceeds maximum allowed size of 27MiB", code 10024). Objects here use the
+# SAME key names as KV (binary:installer, …), so a download route reads KV first and falls back to
+# this bucket without knowing which store answered.
+#
+# Create with: wrangler r2 bucket create lockdown-binaries
+[[r2_buckets]]
+binding = "BINARIES"
+bucket_name = "lockdown-binaries"
+
 # Secrets (set with: wrangler secret put ADMIN_TOKEN)
 # [vars]
 # ADMIN_TOKEN is set via `wrangler secret put ADMIN_TOKEN`
