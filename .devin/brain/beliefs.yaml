@@ -3331,3 +3331,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-152
+  statement: 'agent/bcd_lockdown.py::_disable_winre returns False for any non-zero ''reagentc /disable'',
+    and apply_bcd_lockdown treats that as a CRITICAL failure that rolls back every BCD change — but reagentc
+    exits non-zero when WinRE is ALREADY disabled (the function''s own comment says so). Measured on MOLE
+    2026-11-18: ''reagentc /info'' reported ''Windows RE status: Disabled'', so the lockdown rolled back
+    and reported boot_lock_status=partial / lockdown_effective=0 on a device whose BCD was already at
+    the lockdown values. A device that has been locked once can therefore never report BCD lockdown success
+    again until ''already disabled'' counts as success.'
+  domain: agent/bcd
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'MOLE: ''CRITICAL: WinRE disable failed'' in agent.log at 10:21:11, then reagentc /info
+    returned ''Windows RE status: Disabled''; server recorded boot_lock_status=partial and lockdown_effective=0.
+    Transcript: docs/artifacts/s283-lock-recover-acceptance.txt'
+  source: agent/bcd_lockdown.py; MOLE over SSH
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

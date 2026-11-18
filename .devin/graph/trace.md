@@ -1595,3 +1595,122 @@ Decide whether to run the lock → recover acceptance on MOLE now that it is enr
 and deploy the Worker with `npx wrangler login` to exercise the S272–S280 changes on the real path.
 
 ---
+
+---
+
+## Session 283 — 2026-11-18 (lock → recover acceptance on MOLE: data passes, boot lock does not)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `agent/agent.py::handle_lockdown` (escrow-before-arm, sentinel, `pending_ack`, recovery key
+file), `handle_unlock` (account released first, decrypt, boot-lock removal), `_lockdown_effective`
+(three measured conditions), `disable_console_account`/`re_enable_console_account` →
+`hold_logon("lock")`, `agent/bcd_lockdown.py` (`_disable_winre`, `BCD_CRITICAL_COMMANDS`,
+`remove_bcd_lockdown`), `agent/hp_uefi_lockdown.py::remove_boot_lockdown` (the `restored`/`attempted`
+accounting and its return), `server/src/routes/devices.js` (`flag-stolen` with `enable_pba`,
+`recover`), MOLE's `config.json` and live service state.
+
+**Findings**, measured before the run:
+
+- PBA is opt-in and defaults off; the route's own comment says PBA "sacrifices remote
+  recoverability (a rebooted PBA device can't boot to receive unlock commands)". Ran with it off.
+- The interactive account held by `lock` is the **last console user**, not the account SSH uses —
+  so `labadmin` stayed reachable throughout and the run could be observed from both ends.
+- MOLE's BCD already held the lockdown values (`recoveryenabled No`, `displaybootmenu No`,
+  `timeout 0`) before this run: a previous lockdown was never restored on this unit.
+
+### Fog cleared
+
+- **Data path: PASS, on hardware, end to end.** The folder was encrypted with a fresh key
+  (`blocked_files=0`), the key was escrowed before arming, and `recover` decrypted it:
+  `Decrypted: README.txt`, sentinel removed, recovery-key file deleted, `README.txt` readable in
+  plaintext, server row back to `status=active / lock_state=none`.
+- **Logon hold: PASS.** Lockdown held `Newark User` (`logon_prevented=True`); unlock released the
+  account **first**, before the key was even inspected — `Newark User -> Account active Yes`.
+- **Boot lock: FAIL, and honestly reported.** Both layers rolled back: BCD because
+  `CRITICAL: WinRE disable failed`, HP UEFI because 3 of 3 critical writes were refused
+  (`Network (PXE) Boot`, `USB Storage Boot`, `Legacy Boot Options` → `Disable`). The command landed
+  as `boot_lock_status=partial`, `lockdown_effective=0` — the Phase 17 detector did exactly what it
+  exists for: it refused to call an encrypted-only device "locked".
+- **A repeatable defect, measured on the unit**: MOLE's `reagentc /info` says
+  `Windows RE status: Disabled`, and `_disable_winre()` returns False for any non-zero `reagentc`
+  exit — with a comment saying exactly why ("returns non-zero if WinRE is already disabled"). That
+  False is a **critical** failure in `apply_bcd_lockdown`, so a device that has been locked once can
+  never report BCD lockdown success again. This is why the layer rolls back on a machine whose BCD
+  state is already correct.
+- **The deployed binary predates the tree it ran against.** It logged
+  `Restored 0 BIOS settings to pre-lockdown state` and `UEFI boot lockdown removed - BIOS restored
+  to pre-lockdown state` — strings that do not exist in the current source, where the same path logs
+  `Restored 0 of %d … every write was refused` (ERROR) and the caller logs `did NOT restore`. MOLE's
+  `lockdown-agent.exe` is 16,377,410 bytes, built 2026-11-17 10:41:08
+  (`sha256 bb32c3d2…68de0`), i.e. before `9a43329 "never report a BIOS restore that was not
+  verified"`. So the false success observed on hardware is the defect S271 already fixed in code —
+  the fix has never been deployed here.
+
+### Fog remaining
+
+- **The current tree's boot-lock *reporting* is still untested on hardware.** Testing it needs a
+  rebuilt `lockdown-agent.exe` staged to MOLE (`agent/build.ps1`, PyInstaller on Windows), which
+  cannot be produced from this Linux host.
+- **`_disable_winre()` idempotency is unfixed.** Until "already disabled" counts as success,
+  E-BCD cannot pass on any device that has been locked once — including this one.
+- **Why the three HP BIOS writes are refused is unknown.** S271 recorded the same refusals with the
+  operator's own password; the cause may be Sure Start BSP (`Disable`), firmware policy, or the
+  pre-existing Setup password. Not investigated.
+- MOLE's boot settings still hold lockdown values from an earlier run, and Secure Boot is `false`
+  (`secure_boot_off`) — unchanged by this session.
+- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py`
+  rows, two thin PBL route modules, and the Worker deploy (`wrangler login`).
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **E-BCD cannot pass on a reused device** until `_disable_winre` treats "already disabled" as
+  success. Code decision, not hardware.
+- **Current-tree agent behaviour on hardware** is blocked on a Windows build host.
+- **Worker deploy: `wrangler login`.** Operator action, unchanged.
+
+### Session artifacts
+
+- `docs/artifacts/s283-lock-recover-acceptance.txt` — baseline BCD/account/folder state, the
+  lockdown command record with its full `boot_lock_detail`, MOLE's agent log for both directions,
+  post-recovery device state read over SSH, the `reagentc /info` result that explains the BCD
+  rollback, the deployed binary's size/date/hash with the log lines that prove it is older than the
+  tree, and a four-line verdict.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback)**: the acceptance was worth running precisely because two of its
+  claims had never been measured with a real device — and one of them (boot lock) turned out to be a
+  code-level idempotency defect rather than a hardware limit. No test would have found it: the unit
+  tests stub `reagentc` to succeed.
+- **Layer 2 (context provision)**: the deployed binary's vintage is not recorded anywhere on the
+  device or in the server's device row. `agent_version` reads `1.0.0` for both the stale binary and
+  the current tree, so "which agent is on that machine" cannot be answered from the dashboard. A
+  build id in the version string would have told me immediately what I had to infer from log strings.
+
+### VERIFY
+
+- Lockdown ACK: `boot_lock_status=partial`, `lockdown_effective=0`, `blocked_files=0`,
+  `logon_prevented=True (Newark User)`.
+- Unlock ACK: `status=executed`; device `status=active`, `lock_state=none`.
+- On-device after recovery: sentinel absent, `README.txt` plaintext, recovery-key file absent,
+  `Newark User` and `labadmin` both active, service `Running`.
+- `reagentc /info` on MOLE: `Windows RE status: Disabled` (the cause of the BCD rollback).
+- `brain.py check` → 152 beliefs, integrity clean.
+
+### Next session opening
+
+Fix `agent/bcd_lockdown.py::_disable_winre` so an already-disabled WinRE counts as success (and add
+the unit test that pins it), then re-run the lock → recover acceptance with a freshly built agent
+staged to MOLE to exercise the current tree's boot-lock reporting.
+
+---

@@ -1,0 +1,105 @@
+=== S283: lock -> recover acceptance on MOLE, 2026-11-18T07:25:58Z ===
+device d166e8f7a348d3543eefe1902dc6519c (MOLE), PBA off, agent version reported 1.0.0
+
+--- [1] BASELINE before anything (read over SSH) ---
+bcdedit {bootmgr}:  timeout 0      displaybootmenu No
+bcdedit {default}:  recoveryenabled No   bootmenupolicy Standard
+                    bootstatuspolicy IgnoreAllFailures   nointegritychecks No
+net user labadmin:  Account active Yes
+lockdown_folder:    README.txt (172 bytes, plaintext)
+sentinel:           absent
+  ^ the BCD values were ALREADY the lockdown values: a previous lockdown was never
+    restored on this unit (the S271 finding), so this run started from locked BCD state.
+
+--- [2] the lockdown command, as the server recorded it ---
+  id=93b9189b38ad2531e8d376215b5d7b61 status=executed executed_at=2026-11-18 07:21:48
+  boot_lock_status=partial  lockdown_effective=0
+  boot_lock_detail: {"boot_lock_attempted":true,"bcd":{"success":false,"partial":false,"rolled_back":true,"critical_applied":0,"best_effort_applied":0,"best_effort_failed":0,"bitlocker_status":{"enabled":false,"suspended":false,"percentage":"0%","error":null}},"hp_uefi":{"not_hp":false,"success":false,"partial":false,"rolled_back":true,"bios_lockdown_blocked":false,"critical_applied":0,"best_effort_applied":0,"best_effort_failed":0,"sure_admin_status":{"sure_admin_detected":false,"sure_run_detected":false,"sure_start_detected":false,"any_sure_feature":false,"warning":null},"sure_start_bsp_status":{"enabled":false,"setting_name":"Sure Start BIOS Settings Protection","warning":null},"pba_active":false},"critical_applied_total":0,"best_effort_applied_total":0,"best_effort_failed_total":0}
+
+--- [3] what MOLE's agent did (its own log) ---
+10:21:11 [INFO] BCD state saved to C:\WINDOWS\TEMP\_MEI000040802\.bcd_state
+10:21:11 [ERROR] CRITICAL: WinRE disable failed
+10:21:11 [INFO] BCD: recoveryenabled = No (verified)
+10:21:11 [ERROR] BCD lockdown: 1 critical setting(s) failed - rolling back all changes
+10:21:11 [INFO] Rollback: recoveryenabled -> No (restored)      <- "restored" to the value it already had
+10:21:12 [ERROR] BCD lockdown critically failed and was rolled back
+10:21:22 [WARNING] T2: Secure Boot is disabled (setting 'Configure Legacy Support and Secure Boot' = 'Legacy Support Enable and Secure Boot Disable')
+10:21:22 [INFO] Using existing BIOS Setup password for lockdown changes
+10:21:43 [WARNING] BIOS setting 'Network (PXE) Boot' -> 'Disable' failed: Failed
+10:21:44 [WARNING] BIOS setting 'USB Storage Boot' -> 'Disable' failed: Failed
+10:21:45 [WARNING] BIOS setting 'Legacy Boot Options' -> 'Disable' failed: Failed
+10:21:45 [ERROR] UEFI lockdown: 3 critical setting(s) failed - rolling back BIOS changes
+10:21:47 [ERROR] UEFI lockdown critically failed and was rolled back - BIOS password retained for operator action
+10:21:47 [INFO] Lockdown effectiveness: False (blocked_files=0, boot_lock=partial, logon_prevented=True, user=Newark User)
+10:21:48 [INFO] ACK sent: command=93b9189b... status=executed uuid=e286ef13
+  ^ note: encryption succeeded (blocked_files=0) and the console account WAS held
+    ('Newark User', not labadmin — which is why the SSH session survived).
+
+--- [4] the recover command ---
+  id=acd4b220d7ea1e16cc45beda5347f04a status=executed executed_at=2026-11-18 07:23:48
+
+--- [5] what MOLE's agent did on recover ---
+10:23:26 [WARNING] Server reports 'recovering' but a lock sentinel exists - clearing the stale lockdown
+10:23:29 [INFO] UNLOCK command received
+10:23:29 [INFO] Decrypted: README.txt
+10:23:30 [INFO] Lock screen removed - normal login restored
+10:23:30 [INFO] No BCD lockdown sentinel - nothing to restore
+10:23:46 [WARNING] No saved boot state - restoring BIOS settings to safe defaults
+10:23:46 [WARNING] Failed to restore 'Network (PXE) Boot' to 'Enable': Failed
+10:23:46 [WARNING] Failed to restore 'USB Storage Boot' to 'Enable': Failed
+10:23:47 [WARNING] Failed to restore 'Legacy Boot Options' to 'Enable': Failed
+10:23:47 [WARNING] Failed to restore 'Fast Boot' to 'Disable': Failed
+10:23:47 [WARNING] Failed to restore 'DMA Protection' to 'Disable': Failed
+10:23:47 [INFO] Restored 0 BIOS settings to pre-lockdown state
+10:23:47 [INFO] Setup password was pre-existing - not clearing (admin manages it)
+10:23:47 [INFO] BIOS password backup deleted (unlock successful)
+10:23:47 [INFO] UEFI boot lockdown removed - BIOS restored to pre-lockdown state   <-- FALSE CLAIM
+10:23:48 [INFO] ACK sent: command=acd4b220... status=executed uuid=8d8fe665
+
+--- [6] post-recovery state, verified on the device ---
+sentinel:              absent
+lockdown_folder:       README.txt 172 bytes, readable in plaintext ("This device is protected by Remote Lockdown System.")
+recovery_key file:     absent (deleted on successful unlock)
+Newark User:           Account active Yes   <- released by the unlock
+labadmin:              Account active Yes
+LockdownAgent service: Running
+
+--- [7] the server's own view after recovery ---
+  status: active | lock_state: none | last_checkin: 2026-11-18 07:24:20
+
+--- [8] why BCD could never succeed on this unit (measured now) ---
+reagentc /info on MOLE:
+    Windows RE status:         Disabled
+agent/bcd_lockdown.py::_disable_winre():
+    rc, _, err_text = _run(["reagentc", "/disable"])
+    if rc == 0: ... return True
+    # reagentc returns non-zero if WinRE is already disabled or not installed
+    return False
+  -> WinRE is already Disabled, so 'reagentc /disable' returns non-zero, which
+     apply_bcd_lockdown treats as a CRITICAL failure and rolls everything back.
+     A device that has been locked once can therefore never report BCD lockdown
+     success again — the code knows /disable is non-zero when already disabled.
+
+--- [9] the deployed binary is OLDER than the tree it ran against ---
+MOLE  C:\ProgramData\LockdownAgent\lockdown-agent.exe
+      16,377,410 bytes, modified 2026-11-17 10:41:08
+      sha256 bb32c3d22eb9e2a5e456221b04a92c58ee0e4b461212770af65e0f791e168de0
+      AGENT_VERSION reported: 1.0.0
+Log lines it printed that do not exist in the current source:
+      "Restored 0 BIOS settings to pre-lockdown state"      (current: ERROR "Restored 0 of %d ... every write was refused")
+      "UEFI boot lockdown removed - BIOS restored ..."      (current: em dash, and only when every restore verified)
+      "BIOS password backup deleted (unlock successful)"    (current: no such log line)
+  -> the acceptance exercised an agent built BEFORE the S271-era fixes
+     (9a43329 'never report a BIOS restore that was not verified', dc9ba13, d44b931).
+
+--- [10] verdict ---
+PASS  data path      : escrow-before-arm held; the folder was encrypted, escrowed, and decrypted on
+                       recover from the server-supplied key; sentinel and recovery-key file cleaned up.
+PASS  logon hold     : the interactive account (Newark User) was held by lockdown and released first
+                       on recover, before the key was even looked at.
+FAIL  boot lock      : BCD rolled back (WinRE disable refused, critical) and the HP UEFI layer rolled
+                       back (3 of 3 critical BIOS writes refused). Reported honestly as
+                       boot_lock_status=partial with lockdown_effective=0 — the Phase 17 detector
+                       behaved exactly as designed. The device is encrypted-only, not boot-locked.
+OPEN  idempotency    : BCD lockdown cannot succeed on a unit whose WinRE is already disabled.
+OPEN  stale binary   : the BIOS-restore reporting fixes are in the tree but not on this device.
