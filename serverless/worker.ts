@@ -2641,10 +2641,9 @@ async function handleAgentBinaryDownload(request: Request, env: Env): Promise<Re
   }
 
   const platform = requestUrl(request).searchParams.get('platform') || 'linux';
-  const perPlatform = await env.LOCKDOWN_KV.get(`binary:agent:${platform}`, {
-    type: 'arrayBuffer',
-  });
-  const data = perPlatform ?? (await env.LOCKDOWN_KV.get('binary:agent', { type: 'arrayBuffer' }));
+  const data =
+    (await readBinary(env, `binary:agent:${platform}`)) ??
+    (await readBinary(env, 'binary:agent'));
   if (!data) {
     return errorResponse(
       'Agent binary not available — publish it with `wrangler kv key put ... binary:agent`',
@@ -2671,8 +2670,26 @@ async function handleAgentBinaryDownload(request: Request, env: Env): Promise<Re
  * Serves a binary file stored in KV (key: binary:installer or binary:agent).
  * Returns the raw bytes with appropriate Content-Type and Content-Disposition.
  */
+/**
+ * Bytes for a `binary:*` key: KV first, then R2 under the same key name.
+ *
+ * Cloudflare caps a KV value at 27 MiB, and the generic NSIS installer — which embeds
+ * `lockdown-agent.exe` plus `lockdown-installer.exe` — crossed it at 33 MB of payload (S291:
+ * "content size of 41203591 bytes exceeds maximum allowed size of 27MiB"). R2 has no such
+ * ceiling, so anything too large for KV is published there under the identical key and served
+ * by the same route. KV stays first so a deployment with no R2 binding behaves exactly as
+ * before, and so an artifact that still fits stays where the existing tooling puts it.
+ */
+async function readBinary(env: Env, key: string): Promise<ArrayBuffer | null> {
+  const fromKv = await env.LOCKDOWN_KV.get(key, { type: 'arrayBuffer' });
+  if (fromKv) return fromKv;
+  if (!env.BINARIES) return null;
+  const object = await env.BINARIES.get(key);
+  return object ? object.arrayBuffer() : null;
+}
+
 async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
-  const data = await env.LOCKDOWN_KV.get(`binary:${name}`, { type: 'arrayBuffer' });
+  const data = await readBinary(env, `binary:${name}`);
   if (!data) {
     return errorResponse(`${name} binary not available — upload via wrangler kv:key put`, 404);
   }

@@ -3530,3 +3530,24 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-161
+  statement: 'The Worker can serve oversized binaries from R2 when it is enabled: serverless/pbl/env.ts
+    declares optional Env.BINARIES (R2Bucket) and serverless/worker.ts''s readBinary() tries KV first
+    then R2 under the same key name, used by both handleDownloadBinary and the agent-authenticated /api/agent/download.
+    KV precedence is pinned by tests so nothing that fits moves. R2 itself is NOT enabled on this account
+    (wrangler r2 bucket list/create both answer ''Please enable R2 through the Cloudflare Dashboard.''
+    code 10042), so binary:installer (41,203,591 B, sha256 e5f0f390…) still cannot be published and remains
+    the 2026-11-12 wrapper. Deployed as version 07690cdd-3291-4e32-8036-a5af9b430199 with only the KV
+    binding, and all four downloads still serve from KV with unchanged digests.'
+  domain: deployment/worker
+  status: proposed
+  evidence_level: assumed
+  provenance: wrangler r2 refusals, 483/483 vitest, clean tsc, live download table after deploy; docs/artifacts/s292-r2-fallback.txt
+  source: serverless/worker.ts, serverless/pbl/env.ts, serverless/worker.test.ts, wrangler r2 output
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

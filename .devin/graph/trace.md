@@ -2562,3 +2562,108 @@ implement it, because `binary:installer` is now the only download path that can 
 2026-11-12 agent on a machine.
 
 ---
+
+---
+
+## Session 292 — 2026-11-18 (the R2 route is coded; enabling R2 is a dashboard action)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `serverless/worker.ts` — `handleDownloadBinary` and `handleAgentBinaryDownload`, the two
+  places that read a `binary:*` key, plus the `x-content-sha256` header each computes from the bytes
+  it actually serves.
+- **Read**: `serverless/pbl/env.ts` — the binding contract, and that optional entries carry a comment
+  explaining why they are optional rather than being reached for with casts.
+- **Read**: `docs/artifacts/s291-installer-exceeds-kv.txt` — the measured ceiling
+  (`content size of 41203591 bytes exceeds maximum allowed size of 27MiB`, code `10024`).
+- **Read**: `serverless/worker.test.ts` — the download tests' harness (`env` is a plain object, so an
+  optional binding can be supplied per test) and the digest assertions they already make.
+
+**Findings**, measured before acting:
+
+- R2 is **not enabled** on this Cloudflare account: `wrangler r2 bucket list` and `... create` both
+  answer `Please enable R2 through the Cloudflare Dashboard. [code: 10042]`.
+- Nothing in the Worker can read an R2 object: there is no `BINARIES` binding in `Env` or in
+  `wrangler.toml`, and both binary handlers read KV only.
+
+### Fog cleared
+
+- **The code path for oversized artifacts exists now.** `readBinary()` tries KV first and then R2
+  under the *same key name*, and both download handlers go through it — so when R2 is enabled, the
+  installer is published as `binary:installer` in the bucket and the existing route serves it with no
+  further change. `Env.BINARIES?: R2Bucket` is optional precisely so a deployment without R2 behaves
+  exactly as it did before.
+- **Precedence is deliberate and pinned**: KV wins when both stores hold the key, so nothing that
+  fits moves, and an R2-only artifact cannot shadow a KV one.
+- **483 worker tests pass** (3 new: R2 fallback serves the bytes and the digest; KV wins over R2; 404
+  with no binding and an empty KV) and `tsc --noEmit` is clean.
+- **Deployed without behaviour change**: version `07690cdd-3291-4e32-8036-a5af9b430199`, bindings show
+  `LOCKDOWN_KV` only, and all four downloads still answer from KV with the same sizes and digests
+  (`installer` 18,628,686 B, `agent` 16,852,161 B, `agent-installer` 15,789,390 B, `lockscreen`
+  9,146,350 B).
+
+### Fog remaining
+
+- **R2 enablement is an operator action in the dashboard** (it is a separate product with its own
+  activation and billing setup), so the 41 MB installer still cannot be published. The exact five
+  commands that finish it are recorded in the artifact.
+- **`binary:installer` remains the 2026-11-12 wrapper** and still installs the old agent until that
+  happens — the only download path with that property.
+- **`agent_release` still does not exist**, so no agent is offered an update (D-130's trust root is
+  still a decision).
+- The NSIS wrapper was built without `update_signing.pub`, which the build reported as "installed
+  agents will accept SHA-256-only updates" — consistent with the above, and worth revisiting together.
+- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py` rows,
+  two thin PBL route modules, the HP UEFI BIOS password.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Enabling R2** — operator, dashboard. Everything downstream of it is scripted.
+- **`agent_release`: needs the update signing keypair** (D-130).
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+
+### Session artifacts
+
+- `docs/artifacts/s292-r2-fallback.txt` — the `10042` refusal from both R2 commands, the two files
+  changed and what each does, the three new tests, the 483/483 + clean `tsc` runs, the deploy with its
+  version id and unchanged binding list, the live download table proving nothing regressed, and the
+  five-command finish-line with the artifact's sha256 (`e5f0f390…`).
+
+### Failure attribution
+
+- **Layer 3 (execution environment)**: the previous session's three-way choice assumed all three were
+  reachable from here. One of them (R2) needs an account-level activation that no CLI call can
+  perform, and that only surfaced when the bucket command was attempted. Enumerating a plan is not
+  the same as checking each branch is executable — the check costs one command per branch.
+- **A near-miss worth recording**: the first edit to `worker.test.ts` deleted a line from an
+  unrelated test (`seedAdmin` in the installer-verification test) because the anchor was too small to
+  be unique in context. It was caught by reading the replacement back before running, and the line
+  restored in the next edit — which is why the suite reports 483 rather than 482 plus a silent
+  behaviour change.
+
+### VERIFY
+
+- `wrangler r2 bucket list` / `create` → `code: 10042`, "Please enable R2 through the Cloudflare
+  Dashboard."
+- `npx vitest run` → **483 passed** (4 files); `npx tsc --noEmit -p .` → clean.
+- `npx wrangler deploy` → version `07690cdd-3291-4e32-8036-a5af9b430199`, bindings: `LOCKDOWN_KV` only.
+- Live: `/api/download/installer` 18,628,686 B `4b1be636…`; `/api/download/agent` 16,852,161 B
+  `d9e45902…`; `/api/download/agent-installer` 15,789,390 B `399ad9ba…`; `/api/download/lockscreen`
+  9,146,350 B `6592fd87…`; `/api/health` 200.
+- `brain.py check` → 161 beliefs, integrity clean.
+
+### Next session opening
+
+Enable R2 in the Cloudflare dashboard, then run the five recorded commands (bucket, binding, object
+put, deploy, verify) so `binary:installer` stops being the one path that installs a 2026-11-12 agent.
+
+---

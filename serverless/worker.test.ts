@@ -1861,6 +1861,52 @@ describe('Serverless Worker', () => {
       }
     });
 
+    it('serves an artifact from R2 when KV cannot hold it', async () => {
+      // S291: a KV value caps at 27 MiB and the NSIS installer passed that at 33 MB of
+      // payload, so the installer has to be published somewhere else. R2 is that place; the
+      // route and the key name do not change, so nothing downstream has to know which store
+      // answered.
+      const bytes = new Uint8Array([0x4d, 0x5a, 0x99, 0x10, 0x20]);
+      const envWithR2 = {
+        ...env,
+        BINARIES: {
+          get: async (key: string) =>
+            key === 'binary:installer'
+              ? { arrayBuffer: async () => bytes.buffer.slice(0) }
+              : null,
+        },
+      };
+
+      const resp = await worker.fetch(makeRequest('GET', '/api/download/installer'), envWithR2);
+
+      expect(resp.status).toBe(200);
+      expect(new Uint8Array(await resp.arrayBuffer())).toEqual(bytes);
+      // The digest must describe the bytes actually served, whichever store produced them.
+      expect(resp.headers.get('x-content-sha256')).toMatch(/^[0-9a-f]{64}$/);
+      expect(resp.headers.get('Content-Disposition')).toContain('lockdown-setup.exe');
+    });
+
+    it('prefers KV over R2 for the same key', async () => {
+      // KV first keeps a deployment without R2 behaving exactly as before, and keeps an
+      // artifact that fits where the existing publish tooling puts it.
+      const fromKv = new Uint8Array([0xaa, 0xbb]);
+      const fromR2 = new Uint8Array([0xcc, 0xdd]);
+      await env.LOCKDOWN_KV.put('binary:installer', fromKv);
+      const envWithR2 = {
+        ...env,
+        BINARIES: { get: async () => ({ arrayBuffer: async () => fromR2.buffer.slice(0) }) },
+      };
+
+      const resp = await worker.fetch(makeRequest('GET', '/api/download/installer'), envWithR2);
+      expect(new Uint8Array(await resp.arrayBuffer())).toEqual(fromKv);
+    });
+
+    it('still answers 404 with no R2 binding and an empty KV', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/api/download/installer'), env);
+      expect(resp.status).toBe(404);
+      expect(await resp.json()).toHaveProperty('error');
+    });
+
     it('the generated installer verifies both downloads before running them', async () => {
       await seedAdmin(env, 'sa1', 'password123');
       const { device } = await enrollDevice(worker, env, 'INTEG-001');

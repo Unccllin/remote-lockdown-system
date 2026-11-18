@@ -49,4 +49,14 @@ export interface Env {
    * Same reasoning as the location cap: retention is only exercised by crossing it.
    */
   AUDIT_HISTORY_LIMIT?: string;
+  /**
+   * R2 bucket for artifacts that do not fit a KV value.
+   *
+   * Cloudflare caps a KV value at 27 MiB, and the generic NSIS installer — which embeds
+   * `lockdown-agent.exe` plus `lockdown-installer.exe` — crossed it at 33 MB of payload (S291:
+   * "content size of 41203591 bytes exceeds maximum allowed size of 27MiB"). Optional on
+   * purpose: with no binding, `readBinary()` behaves exactly as the KV-only code did, so a
+   * deployment that has not enabled R2 keeps working unchanged.
+   */
+  BINARIES?: R2Bucket;
 }

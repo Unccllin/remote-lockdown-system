@@ -53,36 +53,37 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 291 — 2026-11-18 (the installer builds here; KV cannot carry it)
+## Latest session: 292 — 2026-11-18 (the R2 route is coded; enabling R2 is a dashboard action)
 
 ### Fog cleared
 
-- **The NSIS installer builds on this host without root**: `ar x` + `tar -xf` on the two .debs,
-  `NSISDIR=/tmp/nsis-root/usr/share/nsis`, `makensis v3.12-1`, and
-  `scripts/build-generic-installer.sh` produced a 41,203,591-byte wrapper
-  (`sha256 e5f0f390…`) with the repo's own default server URL.
-- **It cannot be published.** Cloudflare answered the write directly:
-  `content size of 41203591 bytes exceeds maximum allowed size of 27MiB [code: 10024]`.
-  The two mandatory files alone (32,641,551 B) already exceed 27 MiB, so this is not a packaging
-  detail — no arrangement of the current binaries fits a KV value.
-- **Nothing was written**: the probe key was rejected before any bytes landed, so `binary:installer`
-  still holds the 2026-11-12 wrapper and the S290 findings stand unchanged.
+- **The code path for oversized artifacts exists now.** `readBinary()` tries KV first and then R2
+  under the *same key name*, and both download handlers go through it — so when R2 is enabled, the
+  installer is published as `binary:installer` in the bucket and the existing route serves it with no
+  further change. `Env.BINARIES?: R2Bucket` is optional precisely so a deployment without R2 behaves
+  exactly as it did before.
+- **Precedence is deliberate and pinned**: KV wins when both stores hold the key, so nothing that
+  fits moves, and an R2-only artifact cannot shadow a KV one.
+- **483 worker tests pass** (3 new: R2 fallback serves the bytes and the digest; KV wins over R2; 404
+  with no binding and an empty KV) and `tsc --noEmit` is clean.
+- **Deployed without behaviour change**: version `07690cdd-3291-4e32-8036-a5af9b430199`, bindings show
+  `LOCKDOWN_KV` only, and all four downloads still answer from KV with the same sizes and digests
+  (`installer` 18,628,686 B, `agent` 16,852,161 B, `agent-installer` 15,789,390 B, `lockscreen`
+  9,146,350 B).
 
 ### Fog remaining
 
-- **`binary:installer` remains stale, now for a structural reason**: the download path is KV-backed
-  and the artifact outgrew KV. Three routes out, none of them a tool call:
-  (a) an **R2** binding + Worker route (no KV size limit; needs a bucket and a binding),
-  (b) **one binary** — fold `installer.py`'s enrol/install modes into `lockdown-agent.exe` so the
-  wrapper embeds ~17 MB instead of 33 MB,
-  (c) **host it elsewhere** (GitHub release or the self-hosted server) and point the dashboard there.
-- **`agent_release` still does not exist**, so no agent is offered an update; and the wrapper was
-  built without `update_signing.pub`, which it reported as "installed agents will accept SHA-256-only
-  updates" — consistent, but it means the update trust root (D-130) is still unset.
-- The `--out` and `--stage` flags both pointed at the same directory, so the build's `mv` replaced the
-  staged CLI installer with the wrapper. KV still holds the correct CLI installer (published and
-  verified in S290), but a future build should use distinct directories — noted as a fingerprint of
-  the script's interface rather than a defect.
+- **R2 enablement is an operator action in the dashboard** (it is a separate product with its own
+  activation and billing setup), so the 41 MB installer still cannot be published. The exact five
+  commands that finish it are recorded in the artifact.
+- **`binary:installer` remains the 2026-11-12 wrapper** and still installs the old agent until that
+  happens — the only download path with that property.
+- **`agent_release` still does not exist**, so no agent is offered an update (D-130's trust root is
+  still a decision).
+- The NSIS wrapper was built without `update_signing.pub`, which the build reported as "installed
+  agents will accept SHA-256-only updates" — consistent with the above, and worth revisiting together.
+- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py` rows,
+  two thin PBL route modules, the HP UEFI BIOS password.
 
 ### Debt items closed
 
@@ -95,40 +96,44 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **`binary:installer` needs a hosting decision** (R2, one-binary, or external), not a build.
-- **`agent_release` needs the update signing keypair** (D-130).
+- **Enabling R2** — operator, dashboard. Everything downstream of it is scripted.
+- **`agent_release`: needs the update signing keypair** (D-130).
 - **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
 
 ### Session artifacts
 
-- `docs/artifacts/s291-installer-exceeds-kv.txt` — how NSIS was obtained without root (and why
-  `nsis-common` is mandatory), the build's version/server-url/warnings/sha256, the exact Cloudflare
-  rejection with its code, the payload arithmetic that shows even the two mandatory files cannot fit,
-  the three ways out, and the statement that nothing was published.
+- `docs/artifacts/s292-r2-fallback.txt` — the `10042` refusal from both R2 commands, the two files
+  changed and what each does, the three new tests, the 483/483 + clean `tsc` runs, the deploy with its
+  version id and unchanged binding list, the live download table proving nothing regressed, and the
+  five-command finish-line with the artifact's sha256 (`e5f0f390…`).
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)**: S290 concluded "`binary:installer` needs `makensis`". It needed
-  `makensis` *and* a hosting path; the second half was invisible until the build existed and the
-  upload was attempted. The lesson is the same one S288 learned about verification vs publishing —
-  a build artifact is not a release until something serves it.
-- **Layer 2 (context provision)**: the install path's size ceiling lives in Cloudflare's docs, not in
-  this repo, and nothing warned that the payload had grown past it. A release check that compares the
-  artifact size against the target's limit would have failed in a message instead of a ledger note.
+- **Layer 3 (execution environment)**: the previous session's three-way choice assumed all three were
+  reachable from here. One of them (R2) needs an account-level activation that no CLI call can
+  perform, and that only surfaced when the bucket command was attempted. Enumerating a plan is not
+  the same as checking each branch is executable — the check costs one command per branch.
+- **A near-miss worth recording**: the first edit to `worker.test.ts` deleted a line from an
+  unrelated test (`seedAdmin` in the installer-verification test) because the anchor was too small to
+  be unique in context. It was caught by reading the replacement back before running, and the line
+  restored in the next edit — which is why the suite reports 483 rather than 482 plus a silent
+  behaviour change.
 
 ### VERIFY
 
-- `makensis -VERSION` → `v3.12-1` with `NSISDIR` set; the script built
-  `lockdown-installer.exe` 41,203,591 B, `sha256 e5f0f390ae7d5729376fe7bdc0713c998d3d741d67059cf34c159b0af52b9680`.
-- `wrangler kv key put … binary:installer:probe` → rejected, `exceeds maximum allowed size of 27MiB`,
-  code `10024`; no key written.
-- `brain.py check` → 160 beliefs, integrity clean.
+- `wrangler r2 bucket list` / `create` → `code: 10042`, "Please enable R2 through the Cloudflare
+  Dashboard."
+- `npx vitest run` → **483 passed** (4 files); `npx tsc --noEmit -p .` → clean.
+- `npx wrangler deploy` → version `07690cdd-3291-4e32-8036-a5af9b430199`, bindings: `LOCKDOWN_KV` only.
+- Live: `/api/download/installer` 18,628,686 B `4b1be636…`; `/api/download/agent` 16,852,161 B
+  `d9e45902…`; `/api/download/agent-installer` 15,789,390 B `399ad9ba…`; `/api/download/lockscreen`
+  9,146,350 B `6592fd87…`; `/api/health` 200.
+- `brain.py check` → 161 beliefs, integrity clean.
 
 ### Next session opening
 
-Choose how the installer is hosted — R2 binding, one merged binary, or an external host — and
-implement it, because `binary:installer` is now the only download path that can still put a
-2026-11-12 agent on a machine.
+Enable R2 in the Cloudflare dashboard, then run the five recorded commands (bucket, binding, object
+put, deploy, verify) so `binary:installer` stops being the one path that installs a 2026-11-12 agent.
 
 ---
 
