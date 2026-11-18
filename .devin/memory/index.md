@@ -1,12 +1,13 @@
 # Memory Index
 
-Last rebuilt: 2026-11-18 11:49:46
-Active memories: 1367 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-18 12:49:37
+Active memories: 1395 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
 | ID | Title | Tags | Conf | Last Seen | Score | Rel | Impact |
 |----|-------|------|------|-----------|-------|-----|--------|
+| m-1162 | MISTAKE: mistake: my first attempt to append the D |  | 0.55 | 2026-11-18 | 0.275 | 0 |  |
 | m-1142 | MISTAKE: mistake: first version of the ruling used |  | 0.55 | 2026-11-17 | 0.272 | 0 |  |
 | m-1281 | Converting list-based storage to per-entity turns  |  | 0.55 | 2026-11-17 | 0.272 | 0 |  |
 | m-002 | FMP capsule payload has a 16-byte FMP_PAYLOAD_HEAD |  | 0.70 | 2026-08-18 | 0.252 | 0 |  |
@@ -73,6 +74,34 @@ Active memories: 1367 | Superseded: 0 | Decayed: 20
 | m-1385 | E-LOCK-SCREEN evidence bar: Windows checks the pas |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
 | m-1386 | MISTAKE: mistake: nearly treated 'needs wrangler l |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
 | m-1387 | MISTAKE: mistake: a temp account via 'net user <na |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1388 | Windows writes the refusal itself: Security 4625 w |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1389 | SubStatus 0xc0000072 only appears after the passwo |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1390 | graph_assert.artifact_supports_claim reads CTRF-sh |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1391 | The S284 WinRE fix held on this third real lockdow |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1392 | I5 rule_zero_quality requires at least 2 RULE-ZERO |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1393 | MISTAKE: mistake: the S289 session block's RULE-ZE |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1394 | MISTAKE: mistake: the first artifact JSON containe |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1395 | Publishing is 'wrangler kv key put --binding=LOCKD |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1396 | binary:installer is an NSIS wrapper that EMBEDS lo |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1397 | agent_release has never been published, so the upd |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1398 | Watchdog/offline_recovery specs exist but no downl |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1399 | makensis installs without root by unpacking two Ub |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1400 | scripts/build-generic-installer.sh accepts an unpa |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1401 | The wrapper embeds agent + CLI installer (mandator |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1402 | Cloudflare KV rejects >27 MiB with code 10024, so  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1403 | MISTAKE: mistake: passed --stage and --out as the  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1404 | R2 is not enabled on this Cloudflare account: 'wra |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1405 | The Worker now has readBinary(env,key) = KV first, |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1406 | Deployed version 07690cdd-3291-4e32-8036-a5af9b430 |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1407 | The 41,203,591-byte NSIS wrapper (sha256 e5f0f390. |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1408 | MISTAKE: mistake: an edit anchored on a too-small  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1409 | MISTAKE: mistake: assumed all three routes out of  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1410 | TestLockScreen now holds the interactive account ( |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1411 | Without the env var the test passes but says 'sign |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1412 | cleanup() releases the logon hold so a failed run  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1413 | The classifier only accepts 0xc0000072, so a wrong |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1414 | timeout must exceed HW_LOCK_SIGNIN_WAIT or the har |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1415 | MISTAKE: mistake: three new test lines exceeded th |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
 | m-1201 | is_destructive in the harness gated nothing: no pr |  | 0.50 | 2026-11-17 | 0.247 | 0 |  |
 | m-1202 | E-BCD rewrites boot config and disables WinRE (the |  | 0.50 | 2026-11-17 | 0.247 | 0 |  |
 | m-1203 | The before-state must be written to disk before th |  | 0.50 | 2026-11-17 | 0.247 | 0 |  |
@@ -265,7 +294,6 @@ Active memories: 1367 | Superseded: 0 | Decayed: 20
 | m-1159 | tamper_protection.py's docstring documented verify |  | 0.50 | 2026-11-06 | 0.219 | 0 |  |
 | m-1160 | A plausible inference written into the trace's nex |  | 0.50 | 2026-11-06 | 0.219 | 0 |  |
 | m-1161 | MISTAKE: mistake: S255 recorded 'every device must |  | 0.50 | 2026-11-06 | 0.219 | 0 |  |
-| m-1162 | MISTAKE: mistake: my first attempt to append the D |  | 0.50 | 2026-11-06 | 0.219 | 0 |  |
 | m-1163 | Both surfaces already had the exact pattern needed |  | 0.50 | 2026-11-06 | 0.219 | 0 |  |
 | m-1164 | GET /api/devices is SELECT * through publicDevice( |  | 0.50 | 2026-11-06 | 0.219 | 0 |  |
 | m-1165 | SQLite has no ADD COLUMN IF NOT EXISTS, but migrat |  | 0.50 | 2026-11-06 | 0.219 | 0 |  |
