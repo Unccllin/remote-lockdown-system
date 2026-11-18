@@ -3288,3 +3288,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-150
+  statement: 'MOLE (192.168.1.249; OpenSSH as labadmin, key ~/.ssh/lockdown_lab_ed25519, hostname MOLE,
+    Win10.0.26300) can ping this host but cannot open TCP 3001, and the gate is THIS host''s ufw — not
+    a proxy on MOLE and not WSL. This host is a native Arch/Omarchy install holding 192.168.1.43 on wlp0s20f3
+    (kernel 7.2.15-1-omarchy, no Windows interop); the server listens on *:3001; MOLE''s ''netsh interface
+    portproxy show v4tov4'' is empty and none is needed. ufw is ENABLED with DEFAULT_INPUT_POLICY=DROP
+    and allows tcp 53317/8000/8787 only, so 3001 is dropped. Fix needs root: sudo ufw allow 3001/tcp.'
+  domain: deployment/lab
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'Probes run on both machines this session: SSH as labadmin@192.168.1.249 (hostname MOLE),
+    ping 2ms/TTL64, curl HTTP 000, Test-NetConnection False; local curl 200 with ss confirming *:3001;
+    netsh portproxy empty on MOLE; /etc/ufw/ufw.conf ENABLED=yes, /etc/default/ufw DROP, user.rules allow
+    53317/8000/8787 only. Full transcript: docs/artifacts/s281-mole-reachability.txt'
+  source: ssh labadmin@192.168.1.249; curl/Test-NetConnection; ss -ltn; /etc/ufw/user.rules
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

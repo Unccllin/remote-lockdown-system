@@ -1373,3 +1373,113 @@ commands / locations / efs-cert / pba-credentials / release) into `serverless/de
 unless MOLE access is restored, in which case ship S272–S280 and run the lock → recover acceptance.
 
 ---
+
+---
+
+## Session 281 — 2026-11-18 (the ship blocker was misattributed for five sessions)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: the trace's blocker text across S277–S280 (`trace.md` lines 1009-1030, 1060, 1127, 1158,
+1202), `AGENTS.md` (the "the debt ledger can be stale — verify the actual codebase state" rule, and
+the hardware-window notes about the port proxy), `server/package.json` + `server/dev-start-sqlite.js`
++ `server/src/config/env.js` (how a server can legally start on this host),
+`server/src/index.js` (`app.listen(PORT)`, `PORT || 3001`), `~/.ssh/` (which key the lab box
+accepts), `/etc/ufw/ufw.conf`, `/etc/default/ufw`, `/etc/ufw/user.rules`.
+
+**Findings**, measured before any claim:
+
+- **The SSH route to MOLE is `labadmin@192.168.1.249` with `~/.ssh/lockdown_lab_ed25519`.** The
+  default `~/.ssh/id_ed25519` is rejected (`Permission denied (publickey)`), there is no
+  `~/.ssh/config` entry, and nothing in the repo recorded either fact — the route existed only in a
+  trace addendum ("OpenSSH + `administrators_authorized_keys` on `192.168.1.249`, run as
+  `labadmin`") that does not name the key.
+- **This host is not WSL.** `uname -r` = `7.2.15-1-omarchy`, `/etc/os-release` = Omarchy, LAN address
+  `192.168.1.43` on `wlp0s20f3`, no Windows interop binaries. The S277–S280 blocker text ("MOLE's
+  port proxy does not survive a WSL restart") describes a topology that does not exist here.
+- **MOLE has no port proxy at all**: `netsh interface portproxy show v4tov4` prints nothing. None is
+  needed — this host holds `192.168.1.43` directly and `ping` from MOLE answers in 2 ms at TTL 64.
+- **`node src/index.js` cannot start here**: config validation refuses non-production NODE_ENV
+  without `ALLOW_NON_PROD=1` and rejects placeholder secrets. The supported dev entry is
+  `server/dev-start-sqlite.js`, which supplies SQLite + dev secrets and listens on `PORT` (3001).
+
+### Fog cleared
+
+- **The web route and the failure are now separate, measured facts**: from this host
+  `curl http://192.168.1.43:3001/api/health` → **200** with the server listening on `*:3001`; from
+  MOLE the same request → **000**, and `Test-NetConnection -Port 3001` → **False**, while ICMP
+  still answers.
+- **The gate is this host's own firewall.** `ufw` is `ENABLED=yes`, `DEFAULT_INPUT_POLICY="DROP"`,
+  and `user.rules` allows TCP **53317, 8000, 8787** only — `3001` has no rule, so MOLE's SYN is
+  dropped. That is the whole blocker, and it is one command away from resolution:
+  `sudo ufw allow 3001/tcp`.
+- **The two sessions of "operator access is blocked" were two different problems.** The Worker
+  deploy needs `wrangler login` (still true, still operator-only); reaching MOLE's API needed one
+  ufw rule on this host and nothing on MOLE.
+- **The server is running** for the next step (SQLite, `server/.sqlite-data/lockdown-dev.db`,
+  `PORT=3001`), verified by a local 200.
+
+### Fog remaining
+
+- **`sudo ufw allow 3001/tcp` was NOT applied**: passwordless sudo is unavailable in this session
+  (`sudo -n` → "a password is required"). This is an operator action, now named precisely.
+- **The fresh SQLite database holds zero devices**, so MOLE's `LockdownAgent` service (state
+  `RUNNING`, verified over SSH) will keep getting `401` at check-in until the device is re-enrolled
+  or the previous DB is restored. A 200 on `/api/health` proves the route, not the enrolment.
+- **`npx wrangler whoami` → not authenticated.** Unchanged; the Worker deploy still cannot run.
+- Untouched and still open from earlier blocks: the ~700-line device admin handlers in `worker.ts`,
+  the 12 stale `audit_test_teeth.py` rows, the two thin PBL route modules.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Reaching the lab server from MOLE: one ufw rule, needs root.** Not an operator-on-MOLE action —
+  MOLE is reachable and correct; this host refuses the SYN.
+- **Deploying the Worker: `wrangler login`.** Operator action, unchanged since S277.
+- MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+
+### Session artifacts
+
+- `docs/artifacts/s281-mole-reachability.txt` — every probe above captured from the two machines
+  that produced it: the working SSH command and the rejected key, MOLE's empty portproxy table,
+  ping TTL 64 vs TCP `False`, local `200` vs MOLE `000`, the OS identity that rules out WSL, the
+  ufw policy and its allowed port list, and the exact command not yet run.
+
+### Failure attribution
+
+- **Layer 5 (state management), and the most expensive kind**: the same blocker sentence was copied
+  forward through five session blocks (S277→S280) without re-measurement. Each session recorded
+  honest evidence *for its own re-check* ("HTTP 000") but inherited the *explanation* from the
+  session before, and the explanation was wrong from the start — there is no WSL and no proxy in the
+  path. AGENTS.md already demands this discipline for the debt ledger ("the ledger can be stale —
+  verify the actual codebase state"); the rule was never applied to blockers. The fix that would
+  have prevented it: a blocker that names a mechanism must cite the command that showed the
+  mechanism, not just the symptom, which is what this session's artifact does.
+- **Layer 4 (verification feedback)**: the first server start used `node src/index.js` and died on
+  config validation. The failure was loud and correct; the documented dev entry
+  (`dev-start-sqlite.js`) was one `grep` away, not one guess.
+
+### VERIFY
+
+- This host: `curl http://192.168.1.43:3001/api/health` → **200**
+  `{"status":"ok","timestamp":"2026-11-18T05:57:18.752Z"}`; `ss -ltnp` → `LISTEN *:3001`.
+- MOLE, over SSH: `curl` → **000**; `Test-NetConnection -Port 3001` → **False**; `ping` → 2 ms.
+- `ufw`: `ENABLED=yes`, `DEFAULT_INPUT_POLICY="DROP"`, allowed tcp = 53317/8000/8787.
+- `brain.py check` → 150 beliefs, integrity clean; B-150 confirmed at level `hardware`.
+
+### Next session opening
+
+Run `sudo ufw allow 3001/tcp` on this host (or `from 192.168.1.0/24 to any port 3001 proto tcp`),
+then re-verify `curl http://192.168.1.43:3001/api/health` from MOLE over
+`ssh -i ~/.ssh/lockdown_lab_ed25519 labadmin@192.168.1.249` and run the lock → recover acceptance.
+
+---

@@ -58,49 +58,34 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 280 — 2026-11-18 (the agent protocol leaves the Worker)
+## Latest session: 281 — 2026-11-18 (the ship blocker was misattributed for five sessions)
 
 ### Fog cleared
 
-- **`worker.ts` is 2,727 lines** (from 3,259); `serverless/agent-routes.ts` is 541 and holds the
-  agent protocol: `verifyAgentAuth` plus check-in, deadman report, location report, command ACK and
-  key escrow.
-- **The moved text is byte-identical.** Verified programmatically against
-  `git show HEAD:serverless/worker.ts`: the 513 lines reassemble to exactly the three source ranges,
-  equal modulo the seven added `export ` keywords — a move, not a rewrite.
-- **The agent credential has one home again.** `verifyAgentAuth` moved with the handlers and is
-  exported for the four agent-authenticated handlers that stayed behind.
-- **The coverage gate had been narrowing silently.** `include: ['worker.ts']` meant every module
-  extracted since S277 (`http.ts`, `admin-auth.ts`, `kv-store.ts`, `installer-scripts.ts`, `pbl/*`)
-  and now `agent-routes.ts` was outside the denominator — `worker.ts`'s own score had *risen* to
-  90.54/85.87/95.45/92.94 precisely because 17% of the code left the measurement. Widened to every
-  source module; the honest whole-tree figure is **86.36 / 82.99 / 95.04 / 88.52** and **every
-  existing floor still passes**, so no threshold was lowered to accommodate it.
-- Dead section markers left by the earlier splits (two empty `Types` blocks, one `Helpers` block in
-  the first 62 lines of `worker.ts`) removed, since the auth section that followed them moved.
-- **Harness rows repointed rather than left to skip**: 8 mutation-table rows now name
-  `agent-routes.ts`, and both source-text assertions read *both* modules, so a future move cannot
-  turn them vacuous.
+- **The web route and the failure are now separate, measured facts**: from this host
+  `curl http://192.168.1.43:3001/api/health` → **200** with the server listening on `*:3001`; from
+  MOLE the same request → **000**, and `Test-NetConnection -Port 3001` → **False**, while ICMP
+  still answers.
+- **The gate is this host's own firewall.** `ufw` is `ENABLED=yes`, `DEFAULT_INPUT_POLICY="DROP"`,
+  and `user.rules` allows TCP **53317, 8000, 8787** only — `3001` has no rule, so MOLE's SYN is
+  dropped. That is the whole blocker, and it is one command away from resolution:
+  `sudo ufw allow 3001/tcp`.
+- **The two sessions of "operator access is blocked" were two different problems.** The Worker
+  deploy needs `wrangler login` (still true, still operator-only); reaching MOLE's API needed one
+  ufw rule on this host and nothing on MOLE.
+- **The server is running** for the next step (SQLite, `server/.sqlite-data/lockdown-dev.db`,
+  `PORT=3001`), verified by a local 200.
 
 ### Fog remaining
 
-- **`worker.ts` is 2,727 lines.** Remaining cohesive blocks: the device admin handlers (~700), the
-  installer endpoints (~200), uninstall auth (~120), admin handling and hardware artifacts. The
-  `fetch` dispatch's complexity is unchanged.
-- **12 mutation rows in `scripts/audit_test_teeth.py` anchor on pre-ADR-002 code and match 0 times**,
-  so the script prints `SKIPPED` for them: `WRK/ack-ownership`, `ack-terminal`, `ack-uuid`,
-  `ack-blocked-files`, `ack-session-context`, `ack-track-status`, `ack-audit-detail`,
-  `effectiveness-persist`, `recover-unlock`, `uninstall-authz`, `uninstall-verify`,
-  `hw-artifact-list-blob`. This is **pre-existing** — they matched 0 times in `HEAD` before this
-  session — and is not fixed here; re-anchoring them means authoring new mutations against code this
-  session did not change.
-- **`pbl/routes/signingKey.ts` 0% and `pbl/routes/firmware.ts` 16.66% coverage** — visible only now
-  that the include widened; both are reached solely through the `/v1` URL download path the unit
-  suite never takes.
-- `B-146` still says the `/v1` dispatcher is 458 lines; S279 recorded 484 after the file grew. Not
-  re-verified.
-- **Ship to MOLE / Worker deploy: still blocked on operator access** — re-verified this session.
-- **`brain.py` has no file locking**: two concurrent invocations lose one write (observed).
+- **`sudo ufw allow 3001/tcp` was NOT applied**: passwordless sudo is unavailable in this session
+  (`sudo -n` → "a password is required"). This is an operator action, now named precisely.
+- **The fresh SQLite database holds zero devices**, so MOLE's `LockdownAgent` service (state
+  `RUNNING`, verified over SSH) will keep getting `401` at check-in until the device is re-enrolled
+  or the previous DB is restored. A 200 on `/api/health` proves the route, not the enrolment.
+- **`npx wrangler whoami` → not authenticated.** Unchanged; the Worker deploy still cannot run.
+- Untouched and still open from earlier blocks: the ~700-line device admin handlers in `worker.ts`,
+  the 12 stale `audit_test_teeth.py` rows, the two thin PBL route modules.
 
 ### Debt items closed
 
@@ -113,46 +98,46 @@ D-210 (PBL route integration).
 
 ### Blockers
 
+- **Reaching the lab server from MOLE: one ufw rule, needs root.** Not an operator-on-MOLE action —
+  MOLE is reachable and correct; this host refuses the SYN.
+- **Deploying the Worker: `wrangler login`.** Operator action, unchanged since S277.
 - MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
 - `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
-- **Ship to MOLE / deploy the Worker: BLOCKED, operator action.** Re-measured this session:
-  `curl http://192.168.1.43:3001/api/health` → **HTTP 000** (curl exit 7), and
-  `npx wrangler whoami` → **not authenticated**. Both requirements unchanged since S277.
 
 ### Session artifacts
 
-- `docs/artifacts/s280-agent-routes-split.txt` — the sweep in one file: 480 worker tests, `tsc`
-  clean, coverage 86.36 / 82.99 / 95.04 / 88.52 over the widened include, 23 contract tests, all
-  graph invariants, and both file sizes (2,727 / 541).
+- `docs/artifacts/s281-mole-reachability.txt` — every probe above captured from the two machines
+  that produced it: the working SSH command and the rejected key, MOLE's empty portproxy table,
+  ping TTL 64 vs TCP `False`, local `200` vs MOLE `000`, the OS identity that rules out WSL, the
+  ufw policy and its allowed port list, and the exact command not yet run.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), caught by gates**: `tsc` found the seven missing `export`
-  keywords — the module compiled as a set of private functions, and `worker.ts`'s import would have
-  failed at build. And `enroll-setup.test.ts` caught the more interesting class: an assertion that
-  reads one file *by path* passes when the line it pins has moved out of that file, so it goes
-  vacuous instead of red. Both assertion sites now name every module that can hold the line.
-- **Layer 5 (state management)**: two `brain.py` invocations issued in parallel lost one write —
-  both allocated `B-147`, and the refutation of `B-144` vanished until it was re-run serially. The
-  store has no lock; the tool fix belongs in `brain.py`, the operating rule until then is one write
-  at a time.
-- **A harness gap I was not looking for**: the coverage include had been shrinking since S277 and
-  nothing reported it, because a shrinking denominator only makes the number go up. Found by
-  measuring, not by any gate.
+- **Layer 5 (state management), and the most expensive kind**: the same blocker sentence was copied
+  forward through five session blocks (S277→S280) without re-measurement. Each session recorded
+  honest evidence *for its own re-check* ("HTTP 000") but inherited the *explanation* from the
+  session before, and the explanation was wrong from the start — there is no WSL and no proxy in the
+  path. AGENTS.md already demands this discipline for the debt ledger ("the ledger can be stale —
+  verify the actual codebase state"); the rule was never applied to blockers. The fix that would
+  have prevented it: a blocker that names a mechanism must cite the command that showed the
+  mechanism, not just the symptom, which is what this session's artifact does.
+- **Layer 4 (verification feedback)**: the first server start used `node src/index.js` and died on
+  config validation. The failure was loud and correct; the documented dev entry
+  (`dev-start-sqlite.js`) was one `grep` away, not one guess.
 
 ### VERIFY
 
-- `serverless`: `npx vitest run` → **480 passed / 4 files**.
-- `serverless`: `npx tsc --noEmit -p .` → clean.
-- `serverless`: `npx vitest run --coverage` → **86.36 / 82.99 / 95.04 / 88.52**, all floors pass.
-- `scripts/test_cross_surface_contract.py` → **23 passed**.
-- `make graph-check` → all invariants pass.
+- This host: `curl http://192.168.1.43:3001/api/health` → **200**
+  `{"status":"ok","timestamp":"2026-11-18T05:57:18.752Z"}`; `ss -ltnp` → `LISTEN *:3001`.
+- MOLE, over SSH: `curl` → **000**; `Test-NetConnection -Port 3001` → **False**; `ping` → 2 ms.
+- `ufw`: `ENABLED=yes`, `DEFAULT_INPUT_POLICY="DROP"`, allowed tcp = 53317/8000/8787.
+- `brain.py check` → 150 beliefs, integrity clean; B-150 confirmed at level `hardware`.
 
 ### Next session opening
 
-Extract the device admin handlers (~700 lines: list / get / flag / recover / track / rearm /
-commands / locations / efs-cert / pba-credentials / release) into `serverless/device-routes.ts` —
-unless MOLE access is restored, in which case ship S272–S280 and run the lock → recover acceptance.
+Run `sudo ufw allow 3001/tcp` on this host (or `from 192.168.1.0/24 to any port 3001 proto tcp`),
+then re-verify `curl http://192.168.1.43:3001/api/health` from MOLE over
+`ssh -i ~/.ssh/lockdown_lab_ed25519 labadmin@192.168.1.249` and run the lock → recover acceptance.
 
 ---
 
