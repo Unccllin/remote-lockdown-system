@@ -3683,3 +3683,26 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-168
+  statement: 'The dashboard has no code defect from this work; its two failures were environmental and
+    structural (S300). Measured: 266 unit tests passed, but E2E failed 11/11 with ''browserType.launch:
+    Executable doesn''t exist ... chromium_headless_shell-1234''; after ''npx playwright install chromium-headless-shell''
+    the suite is 11/11 green. dashboard/dist was stale by three source files and was rebuilt (assets/index-BiqBoQfX.js,
+    640.20 kB). And server/dev-start-sqlite.js — the entry every hardware session used — never served
+    dashboard/dist, while server/src/index.js has since the prod-stack bug; the scaffold now mounts it
+    with the same cache rules and SPA fallback, verified live (/ 200, /devices 200, deep device link 200,
+    hashed asset 640,200 B). The client defaults to baseURL ''/api'' (same-origin); a Worker-pointed dashboard
+    needs VITE_API_URL at build time and there is no dashboard/.env.'
+  domain: dashboard
+  status: proposed
+  evidence_level: assumed
+  provenance: vitest 266, playwright 11/11 after installing the browser, vite build output, four live
+    URLs on :8787; docs/artifacts/s300-dashboard-state.txt
+  source: dashboard/src/api/client.js, server/src/index.js, server/dev-start-sqlite.js, dashboard/playwright.config.js
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

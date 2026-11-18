@@ -132,6 +132,8 @@ async function main() {
 
   // Now start the server
   const express = require('express');
+  const fs = require('fs');
+  const path = require('path');
   const helmet = require('helmet');
   const cors = require('cors');
   const rateLimit = require('express-rate-limit');
@@ -159,6 +161,32 @@ async function main() {
   app.use('/api/admins', require('./src/routes/admins'));
   app.use('/api/health', require('./src/routes/health'));
   app.use('/metrics', require('./src/routes/metrics'));
+
+  // Serve the built dashboard when it exists. The production entry (src/index.js) has done
+  // this since the prod-stack bug where the image built dashboard/dist and served none of it;
+  // this scaffold did not, so `npm run dev`-style demos could exercise the API but never the
+  // UI, and the two entries disagreed about what "the server" serves (S300). Same cache rules
+  // as src/index.js: hashed assets immutable, index.html never cached.
+  const dashboardDistPath = path.join(__dirname, '..', 'dashboard', 'dist');
+  if (fs.existsSync(dashboardDistPath)) {
+    const indexPath = path.resolve(dashboardDistPath, 'index.html');
+    app.use(express.static(dashboardDistPath, {
+      index: false,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('index.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      },
+    }));
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api/') || req.path === '/metrics') return next();
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.sendFile(indexPath);
+    });
+    console.log('  Dashboard: served from dashboard/dist');
+  }
 
   app.use((err, req, res, _next) => {
     console.error(err);

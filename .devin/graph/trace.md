@@ -3385,3 +3385,97 @@ release story; the remaining local items are the 12 `audit_test_teeth` rows and 
 can actually run.
 
 ---
+
+---
+
+## Session 300 — 2026-11-18 (the dashboard: nothing in its code was wrong, two things around it were)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `dashboard/src/api/client.js` — `baseURL = electronApiUrl || import.meta.env.VITE_API_URL
+  || '/api'`, i.e. a same-origin build talks to whatever serves it, and a Worker-pointed build needs
+  the URL baked at build time.
+- **Read**: `server/src/index.js` (the `express.static` + SPA fallback block, including its cache
+  rules) and **`server/dev-start-sqlite.js`** (which mounts `/api/*` and `/metrics` and nothing else).
+- **Read**: `dashboard/package.json` + `playwright.config.js` — the E2E command, `E2E_BACKEND_PORT`,
+  and that the suite spawns its own backend.
+- **Read**: `dashboard/dist/index.html`'s mtime against `src` mtimes — the bundle was older than three
+  source files.
+
+**Findings**, measured before acting:
+
+- 266 dashboard unit tests passed; the E2E suite failed **11/11** with one identical error:
+  `browserType.launch: Executable doesn't exist … chromium_headless_shell-1234`.
+- `dashboard/dist` was stale by three source files.
+- The dev scaffold (the entry every hardware session has used, including the one MOLE polls today)
+  never served `dashboard/dist`, while the production entry has since the prod-stack bug.
+
+### Fog cleared
+
+- **The dashboard's own code is fine**: with the browser installed, **11/11 E2E pass** against a real
+  backend (18.3 s), covering auth, device list/detail, flag-stolen, recover, audit and health.
+- **The bundle is current**: rebuilt (`assets/index-BiqBoQfX.js`, 640.20 kB / 185.46 gzip).
+- **The dev scaffold now serves the SPA**, with the same cache rules and SPA fallback as
+  `src/index.js`, so "the server" means the same thing from either entry point. Verified on the
+  running server: `/`, `/devices`, a deep device link all return `index.html`, and the hashed asset
+  serves at 640,200 B.
+- **What a UI demo needs is now written down**: same-origin `/api` for the Express-served bundle;
+  `VITE_API_URL` at build time for a Worker-pointed one; `admin` / `admin123` on the dev scaffold.
+
+### Fog remaining
+
+- **The Worker-pointed dashboard has not been built or run.** That is the same gap as the missing
+  device on the Worker: no `VITE_API_URL` build and no admin token to enrol with.
+- **The Playwright browser is per-host state**: a fresh clone fails the E2E suite exactly as it did
+  here until `npx playwright install` runs. That belongs in the documented setup, not in a session's
+  memory (the same shape as `LD_LIBRARY_PATH` for libnspr).
+- **`server/dev-start-sqlite.js` is not covered by a test**, so the mount I added is verified by
+  request rather than by a suite that would notice its removal.
+- Unchanged: `make sast` cannot run here; 12 stale `audit_test_teeth` rows; Worker enrolment, offline
+  key custody and the HP UEFI BIOS password are still operator-gated.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (PBL firmware signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Worker enrolment: needs `ADMIN_TOKEN`** (unchanged).
+- **Offline custody of `update_signing.key`** — operator.
+- **HP UEFI lockdown on MOLE** — needs the real BIOS Setup password.
+
+### Session artifacts
+
+- `docs/artifacts/s300-dashboard-state.txt` — the measured before/after (266 unit, 11/11 E2E, the
+  exact launch error), the stale-bundle evidence, the two-entry-point divergence and what was added,
+  the four live URLs with status/content-type/size, and what a UI demo still needs configured.
+
+### Failure attribution
+
+- **Layer 3 (execution environment)**: an E2E suite that fails 11/11 looks like a broken product; it
+  was a missing browser download. The distinguishing evidence was one repeated error line naming an
+  executable path — cheap to read, easy to skip past when the summary says "11 failed".
+- **Layer 2 (context provision)**: nothing recorded that the dev scaffold serves no UI, so every
+  session that "demoed the server" was demoing an API-only surface. Two entry points claiming the same
+  name with different contents is a documentation failure before it is a code one.
+
+### VERIFY
+
+- `npx vitest run` → **266 passed** (30 files).
+- `npx playwright test` (E2E_BACKEND_PORT=3101, LD_LIBRARY_PATH=~/.local/lib/nspr) → **11 passed**.
+- `npx vite build` → `dist/assets/index-BiqBoQfX.js` 640.20 kB, gzip 185.46 kB.
+- Live on `:8787`: `/` 200 text/html 649 B, `/devices` 200 text/html, deep device link 200 text/html,
+  `/assets/index-BiqBoQfX.js` 200 application/javascript 640,200 B.
+- `brain.py check` → integrity clean.
+
+### Next session opening
+
+Build the dashboard with `VITE_API_URL` pointed at the Worker and drive it against a device enrolled
+there — that closes the last unproven surface and needs the Worker's `ADMIN_TOKEN` to start.
+
+---

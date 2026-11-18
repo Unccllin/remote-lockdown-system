@@ -53,29 +53,31 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 299 — 2026-11-18 (the service build now refuses to produce an unstartable artefact)
+## Latest session: 300 — 2026-11-18 (the dashboard: nothing in its code was wrong, two things around it were)
 
 ### Fog cleared
 
-- **`pywin32==312; sys_platform == "win32"` is in `agent/requirements.txt`**, with the reason
-  recorded next to it, and the marker keeps Linux installs byte-identical.
-- **The build fails before it can ship an unstartable service**: the script checks
-  `python -c "import servicemanager, win32serviceutil"` when `service` is selected, and prints the
-  fix (`pip install -r agent/requirements.txt`) instead of producing an exe that answers SCM 1053
-  with an empty log.
-- **Two tests pin it**: one that the check exists and runs *before* PyInstaller, one that the
-  dependency carries a Windows-only marker. 8 pass in that suite (was 6), and the PowerShell script
-  is still ASCII-only, which is that suite's own rule.
+- **The dashboard's own code is fine**: with the browser installed, **11/11 E2E pass** against a real
+  backend (18.3 s), covering auth, device list/detail, flag-stolen, recover, audit and health.
+- **The bundle is current**: rebuilt (`assets/index-BiqBoQfX.js`, 640.20 kB / 185.46 gzip).
+- **The dev scaffold now serves the SPA**, with the same cache rules and SPA fallback as
+  `src/index.js`, so "the server" means the same thing from either entry point. Verified on the
+  running server: `/`, `/devices`, a deep device link all return `index.html`, and the hashed asset
+  serves at 640,200 B.
+- **What a UI demo needs is now written down**: same-origin `/api` for the Express-served bundle;
+  `VITE_API_URL` at build time for a Worker-pointed one; `admin` / `admin123` on the dev scaffold.
 
 ### Fog remaining
 
-- **The guard is verified at source level only** — there is no PowerShell on this host, and the
-  build needs Windows, so the failure path itself has not been executed. The test asserts ordering
-  and presence, which is the strongest claim available from here.
-- **`make sast` still cannot run on this host** (no pip/pipx, no semgrep binary); the 12 stale
-  `audit_test_teeth.py` rows are still stale.
-- **Worker enrolment** still needs its `ADMIN_TOKEN`; **offline key custody** is still an operator
-  step; **HP UEFI** still needs the BIOS Setup password.
+- **The Worker-pointed dashboard has not been built or run.** That is the same gap as the missing
+  device on the Worker: no `VITE_API_URL` build and no admin token to enrol with.
+- **The Playwright browser is per-host state**: a fresh clone fails the E2E suite exactly as it did
+  here until `npx playwright install` runs. That belongs in the documented setup, not in a session's
+  memory (the same shape as `LD_LIBRARY_PATH` for libnspr).
+- **`server/dev-start-sqlite.js` is not covered by a test**, so the mount I added is verified by
+  request rather than by a suite that would notice its removal.
+- Unchanged: `make sast` cannot run here; 12 stale `audit_test_teeth` rows; Worker enrolment, offline
+  key custody and the HP UEFI BIOS password are still operator-gated.
 
 ### Debt items closed
 
@@ -88,40 +90,38 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Worker enrolment: needs `ADMIN_TOKEN`** (or a deliberate re-setup).
+- **Worker enrolment: needs `ADMIN_TOKEN`** (unchanged).
 - **Offline custody of `update_signing.key`** — operator.
 - **HP UEFI lockdown on MOLE** — needs the real BIOS Setup password.
-- **PowerShell on this host** — absent, so the new guard's failure path is source-pinned only.
 
 ### Session artifacts
 
-- No artifact file: the change is a dependency pin, a pre-build check and two tests, and the runs are
-  quoted in VERIFY. The finding it encodes is already evidenced in
-  `docs/artifacts/s298-auto-apply-proven.txt` §4 (SCM 1053, `pywin32` absent, `--clean` required).
+- `docs/artifacts/s300-dashboard-state.txt` — the measured before/after (266 unit, 11/11 E2E, the
+  exact launch error), the stale-bundle evidence, the two-entry-point divergence and what was added,
+  the four live URLs with status/content-type/size, and what a UI demo still needs configured.
 
 ### Failure attribution
 
-- **Layer 3 (execution environment) closing on itself**: S298 found the missing dependency by hitting
-  it, and this session moved it from *knowledge* into the build path. The general lesson the repo has
-  earned repeatedly: a dependency that is only fatal at runtime must be enforced where the artefact is
-  produced, not remembered.
-- **Layer 4 (verification feedback), partially**: the build verified existence, size and `MZ` — three
-  properties a service that cannot start still satisfies. Checks that cannot fail on this defect are
-  decoration; the new check asserts the capability instead of the file.
+- **Layer 3 (execution environment)**: an E2E suite that fails 11/11 looks like a broken product; it
+  was a missing browser download. The distinguishing evidence was one repeated error line naming an
+  executable path — cheap to read, easy to skip past when the summary says "11 failed".
+- **Layer 2 (context provision)**: nothing recorded that the dev scaffold serves no UI, so every
+  session that "demoed the server" was demoing an API-only surface. Two entry points claiming the same
+  name with different contents is a documentation failure before it is a code one.
 
 ### VERIFY
 
-- `agent/.venv/bin/python scripts/test_build_windows_artifacts.py` → **8 passed** (6 before).
-- `scripts/build-windows-artifacts.ps1` remains ASCII-only (`raw.isascii()` → True), which that suite
-  enforces because PowerShell 5.1 misparses BOM-less UTF-8.
-- `agent/requirements.txt` → `pywin32==312; sys_platform == "win32"` with an inline reason.
+- `npx vitest run` → **266 passed** (30 files).
+- `npx playwright test` (E2E_BACKEND_PORT=3101, LD_LIBRARY_PATH=~/.local/lib/nspr) → **11 passed**.
+- `npx vite build` → `dist/assets/index-BiqBoQfX.js` 640.20 kB, gzip 185.46 kB.
+- Live on `:8787`: `/` 200 text/html 649 B, `/devices` 200 text/html, deep device link 200 text/html,
+  `/assets/index-BiqBoQfX.js` 200 application/javascript 640,200 B.
 - `brain.py check` → integrity clean.
 
 ### Next session opening
 
-Point one device at the Worker (needs its `ADMIN_TOKEN`), which is the last unproven surface in the
-release story; the remaining local items are the 12 `audit_test_teeth` rows and a semgrep the host
-can actually run.
+Build the dashboard with `VITE_API_URL` pointed at the Worker and drive it against a device enrolled
+there — that closes the last unproven surface and needs the Worker's `ADMIN_TOKEN` to start.
 
 ---
 
