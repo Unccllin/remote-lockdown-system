@@ -1,0 +1,49 @@
+=== S284: WinRE idempotency fix — 2026-11-18T07:35:01Z ===
+
+--- [1] the defect (S283, on hardware) ---
+MOLE agent.log:  [ERROR] CRITICAL: WinRE disable failed
+                 [ERROR] BCD lockdown: 1 critical setting(s) failed - rolling back all changes
+MOLE reagentc /info:  Windows RE status:  Disabled
+agent/bcd_lockdown.py before the fix:
+    rc, _, err_text = _run(["reagentc", "/disable"])
+    if rc == 0: ... return True
+    # reagentc returns non-zero if WinRE is already disabled or not installed
+    return False        <- already-disabled read as a CRITICAL failure
+
+--- [2] the fix ---
+_winre_status() -> "enabled" | "disabled" | None      (None = unreadable, NOT "disabled")
+_disable_winre(): rc != 0 -> re-read state; "disabled" => True (idempotent), else False
+_enable_winre():  rc != 0 -> re-read state; "enabled"  => True (idempotent), else False
+_is_winre_enabled(): _winre_status() == "enabled"     (unknown still reads as not-enabled)
+
+--- [3] tests added (agent/tests/test_boot_lockdown_bcd.py) ---
+  166:    def test_apply_bcd_lockdown_winre_already_disabled_is_not_a_rollback(
+  348:    def test_disable_winre_success(self, mock_run):
+  354:    def test_disable_winre_already_disabled_is_success(self, mock_run):
+  374:    def test_disable_winre_still_enabled_is_failure(self, mock_run):
+  383:    def test_disable_winre_unreadable_state_is_failure(self, mock_run):
+  389:    def test_enable_winre_success(self, mock_run):
+  395:    def test_enable_winre_already_enabled_is_success(self, mock_run):
+  404:    def test_enable_winre_still_disabled_is_failure(self, mock_run):
+  412:    def test_is_winre_enabled_true(self, mock_run):
+  417:    def test_is_winre_enabled_false(self, mock_run):
+  435:    def test_bcd_state_save_and_restore_round_trip(self, mock_read, mock_winre, tmp_bcd_state_file):
+  489:    def test_rollback_non_fatal(self, mock_run, mock_winre):
+
+--- [4] targeted run ---
+...................................................                      [100%]
+51 passed in 0.19s
+
+--- [5] whole agent suite ---
+..............                                                           [100%]
+950 passed in 54.05s
+
+--- [6] lint ---
+All checks passed!
+64 files already formatted
+[OK] ruff check + format clean
+
+--- [7] scope note ---
+  Unit-tested only. E-BCD stays 'not hardware-verified by decision', so no graph status
+  changes. Confirming on hardware needs a rebuilt lockdown-agent.exe staged to MOLE
+  (agent/build.ps1, PyInstaller on Windows), which this Linux host cannot produce.

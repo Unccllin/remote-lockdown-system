@@ -3340,7 +3340,7 @@ beliefs:
     the lockdown values. A device that has been locked once can therefore never report BCD lockdown success
     again until ''already disabled'' counts as success.'
   domain: agent/bcd
-  status: confirmed
+  status: refuted
   evidence_level: hardware
   provenance: 'MOLE: ''CRITICAL: WinRE disable failed'' in agent.log at 10:21:11, then reagentc /info
     returned ''Windows RE status: Disabled''; server recorded boot_lock_status=partial and lockdown_effective=0.
@@ -3350,6 +3350,28 @@ beliefs:
   last_verified: '2026-11-18'
   commit_ref: null
   supersedes: null
+  superseded_by: B-153
+  dependents: []
+  notes: ''
+  refuted_on: '2026-11-18'
+  refute_evidence: scripts/run-agent-tests.sh -> 950 passed; bcd file 51 passed; ruff clean; docs/artifacts/s284-winre-idempotency-fix.txt
+- id: B-153
+  statement: 'agent/bcd_lockdown.py fixes the WinRE idempotency defect (S284): _winre_status() maps ''reagentc
+    /info'' to enabled/disabled/None, _disable_winre treats an already-disabled WinRE as success and _enable_winre
+    an already-enabled one, and an unreadable state (None) is still a failure so a broken reagentc cannot
+    look like a lockdown. Pinned by 6 unit tests plus an apply-level regression test asserting no rollback
+    and a sentinel when WinRE is already off. Unit-tested only: E-BCD stays not-hardware-verified until
+    a rebuilt agent runs on MOLE.'
+  domain: agent/bcd
+  status: confirmed
+  evidence_level: code-read
+  provenance: agent/bcd_lockdown.py::_winre_status/_disable_winre/_enable_winre + agent/tests/test_boot_lockdown_bcd.py;
+    51 targeted and 950 suite tests pass, ruff clean; docs/artifacts/s284-winre-idempotency-fix.txt
+  source: refutes B-152
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: B-152
   superseded_by: null
   dependents: []
   notes: ''

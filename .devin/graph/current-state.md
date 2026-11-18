@@ -58,50 +58,34 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 283 — 2026-11-18 (lock → recover acceptance on MOLE: data passes, boot lock does not)
+## Latest session: 284 — 2026-11-18 (WinRE idempotency: an already-locked device can be locked again)
 
 ### Fog cleared
 
-- **Data path: PASS, on hardware, end to end.** The folder was encrypted with a fresh key
-  (`blocked_files=0`), the key was escrowed before arming, and `recover` decrypted it:
-  `Decrypted: README.txt`, sentinel removed, recovery-key file deleted, `README.txt` readable in
-  plaintext, server row back to `status=active / lock_state=none`.
-- **Logon hold: PASS.** Lockdown held `Newark User` (`logon_prevented=True`); unlock released the
-  account **first**, before the key was even inspected — `Newark User -> Account active Yes`.
-- **Boot lock: FAIL, and honestly reported.** Both layers rolled back: BCD because
-  `CRITICAL: WinRE disable failed`, HP UEFI because 3 of 3 critical writes were refused
-  (`Network (PXE) Boot`, `USB Storage Boot`, `Legacy Boot Options` → `Disable`). The command landed
-  as `boot_lock_status=partial`, `lockdown_effective=0` — the Phase 17 detector did exactly what it
-  exists for: it refused to call an encrypted-only device "locked".
-- **A repeatable defect, measured on the unit**: MOLE's `reagentc /info` says
-  `Windows RE status: Disabled`, and `_disable_winre()` returns False for any non-zero `reagentc`
-  exit — with a comment saying exactly why ("returns non-zero if WinRE is already disabled"). That
-  False is a **critical** failure in `apply_bcd_lockdown`, so a device that has been locked once can
-  never report BCD lockdown success again. This is why the layer rolls back on a machine whose BCD
-  state is already correct.
-- **The deployed binary predates the tree it ran against.** It logged
-  `Restored 0 BIOS settings to pre-lockdown state` and `UEFI boot lockdown removed - BIOS restored
-  to pre-lockdown state` — strings that do not exist in the current source, where the same path logs
-  `Restored 0 of %d … every write was refused` (ERROR) and the caller logs `did NOT restore`. MOLE's
-  `lockdown-agent.exe` is 16,377,410 bytes, built 2026-11-17 10:41:08
-  (`sha256 bb32c3d2…68de0`), i.e. before `9a43329 "never report a BIOS restore that was not
-  verified"`. So the false success observed on hardware is the defect S271 already fixed in code —
-  the fix has never been deployed here.
+- **`_disable_winre()` now re-reads the state instead of believing the exit code**: success renders
+  `reagentc /disable` a no-op (`"WinRE already disabled … this is success, not a critical failure"`),
+  and a still-enabled or **unreadable** state stays a failure — a broken `reagentc` cannot look like
+  a lockdown.
+- **The mirror case is fixed too**: `_enable_winre()` treats an already-enabled WinRE as success, so
+  rollback and removal paths on an untouched machine stop reporting a verified no-op as an error.
+- **`_winre_status()` is the one reader**, returning `enabled` / `disabled` / `None`, where `None` is
+  "unreadable" and is deliberately not "disabled". `_is_winre_enabled()` is now a one-line
+  projection of it, keeping its old "unknown reads as not enabled" contract.
+- **The defect is pinned from both ends**: 6 WinRE unit tests (already-disabled → success,
+  still-enabled → failure, unreadable → failure, and the same three for enable) plus an
+  apply-level regression test asserting `rolled_back is False`, `winre_disabled is True` and the
+  sentinel written when `reagentc /disable` fails against an already-disabled WinRE.
 
 ### Fog remaining
 
-- **The current tree's boot-lock *reporting* is still untested on hardware.** Testing it needs a
-  rebuilt `lockdown-agent.exe` staged to MOLE (`agent/build.ps1`, PyInstaller on Windows), which
-  cannot be produced from this Linux host.
-- **`_disable_winre()` idempotency is unfixed.** Until "already disabled" counts as success,
-  E-BCD cannot pass on any device that has been locked once — including this one.
-- **Why the three HP BIOS writes are refused is unknown.** S271 recorded the same refusals with the
-  operator's own password; the cause may be Sure Start BSP (`Disable`), firmware policy, or the
-  pre-existing Setup password. Not investigated.
-- MOLE's boot settings still hold lockdown values from an earlier run, and Secure Boot is `false`
-  (`secure_boot_off`) — unchanged by this session.
-- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py`
-  rows, two thin PBL route modules, and the Worker deploy (`wrangler login`).
+- **This is unit-tested only.** E-BCD keeps its `not hardware-verified by decision` ceiling, so no
+  graph status moved. Confirming on hardware needs a rebuilt `lockdown-agent.exe` staged to MOLE
+  (`agent/build.ps1`, PyInstaller on Windows), which this Linux host cannot produce.
+- **The HP UEFI layer's three refused critical writes are unexplained** (S283): the cause could be
+  Sure Start BSP `Disable`, a firmware policy, or the pre-existing Setup password. Not investigated.
+- MOLE still holds BCD lockdown values from an earlier run and `secure_boot: false`.
+- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py` rows,
+  two thin PBL route modules, and the Worker deploy (`wrangler login`).
 
 ### Debt items closed
 
@@ -114,45 +98,39 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **E-BCD cannot pass on a reused device** until `_disable_winre` treats "already disabled" as
-  success. Code decision, not hardware.
-- **Current-tree agent behaviour on hardware** is blocked on a Windows build host.
-- **Worker deploy: `wrangler login`.** Operator action, unchanged.
+- **Hardware confirmation of this fix: needs a Windows build host.** Unchanged in kind from S283.
+- **Worker deploy: `wrangler login`.** Operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
 
 ### Session artifacts
 
-- `docs/artifacts/s283-lock-recover-acceptance.txt` — baseline BCD/account/folder state, the
-  lockdown command record with its full `boot_lock_detail`, MOLE's agent log for both directions,
-  post-recovery device state read over SSH, the `reagentc /info` result that explains the BCD
-  rollback, the deployed binary's size/date/hash with the log lines that prove it is older than the
-  tree, and a four-line verdict.
+- `docs/artifacts/s284-winre-idempotency-fix.txt` — the defect as measured on hardware, the new
+  three-function contract, the eight added tests by name, and the runs: 51 passed in the BCD file,
+  **950 passed** across the agent suite, ruff check + format clean.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)**: the acceptance was worth running precisely because two of its
-  claims had never been measured with a real device — and one of them (boot lock) turned out to be a
-  code-level idempotency defect rather than a hardware limit. No test would have found it: the unit
-  tests stub `reagentc` to succeed.
-- **Layer 2 (context provision)**: the deployed binary's vintage is not recorded anywhere on the
-  device or in the server's device row. `agent_version` reads `1.0.0` for both the stale binary and
-  the current tree, so "which agent is on that machine" cannot be answered from the dashboard. A
-  build id in the version string would have told me immediately what I had to infer from log strings.
+- **Layer 4 (verification feedback), squarely**: the test suite contained a test named
+  `test_disable_winre_already_disabled` asserting the wrong outcome. A green suite over a pinned
+  wrong expectation is worse than no test — it converts a defect into a contract. What would have
+  prevented it: the test asserting *the state after* the call (re-read via `reagentc /info`) rather
+  than only the boolean return, which is exactly the shape the fix now pins.
+- **Layer 2 (context provision)**: the module docstring explains why each setting is critical but
+  never says what "already in that state" should mean, so the idempotency question had no answer to
+  read. The fix documents it at each function rather than in a distant table.
 
 ### VERIFY
 
-- Lockdown ACK: `boot_lock_status=partial`, `lockdown_effective=0`, `blocked_files=0`,
-  `logon_prevented=True (Newark User)`.
-- Unlock ACK: `status=executed`; device `status=active`, `lock_state=none`.
-- On-device after recovery: sentinel absent, `README.txt` plaintext, recovery-key file absent,
-  `Newark User` and `labadmin` both active, service `Running`.
-- `reagentc /info` on MOLE: `Windows RE status: Disabled` (the cause of the BCD rollback).
-- `brain.py check` → 152 beliefs, integrity clean.
+- `scripts/run-agent-tests.sh tests/test_boot_lockdown_bcd.py` → **51 passed**.
+- `scripts/run-agent-tests.sh` → **950 passed** in 54 s.
+- `scripts/lint-agent.sh` → `All checks passed!`, `64 files already formatted`.
+- `brain.py check` → 153 beliefs, integrity clean; B-152 refuted, B-153 confirmed at `code-read`.
 
 ### Next session opening
 
-Fix `agent/bcd_lockdown.py::_disable_winre` so an already-disabled WinRE counts as success (and add
-the unit test that pins it), then re-run the lock → recover acceptance with a freshly built agent
-staged to MOLE to exercise the current tree's boot-lock reporting.
+Stage a rebuilt `lockdown-agent.exe` to MOLE and re-run the lock → recover acceptance, so the
+current tree's BCD layer (now idempotent) and its BIOS-restore reporting are exercised on hardware
+rather than inferred from unit tests.
 
 ---
 

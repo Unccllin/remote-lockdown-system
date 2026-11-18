@@ -380,34 +380,80 @@ BCD_BOOTMGR_RESTORE_COMMANDS = [
 # ---------------------------------------------------------------------------
 
 
+def _winre_status() -> str | None:
+    """What `reagentc /info` reports: ``"enabled"``, ``"disabled"``, or ``None``.
+
+    ``None`` means "could not be read", and it is deliberately distinct from
+    ``"disabled"``: treating an unreadable state as "WinRE is off" would let a
+    missing or broken reagentc look exactly like a successful lockdown.
+    """
+    rc, stdout, _ = _run(["reagentc", "/info"])
+    if rc != 0:
+        return None
+    marker = "Windows RE status:"
+    if marker not in stdout:
+        return None
+    remainder = stdout.split(marker, 1)[1].strip()
+    value = remainder.splitlines()[0].strip().lower() if remainder else ""
+    if value.startswith("enabled"):
+        return "enabled"
+    if value.startswith("disabled"):
+        return "disabled"
+    return None
+
+
 def _disable_winre() -> bool:
-    """Disable Windows Recovery Environment."""
+    """Disable Windows Recovery Environment, treating "already disabled" as success.
+
+    `reagentc /disable` exits non-zero when WinRE is already disabled — which is the
+    state every device reaches after its first lockdown, because nothing here ever
+    re-enables it. Returning False on that path made it a CRITICAL failure, so
+    `apply_bcd_lockdown` rolled the whole layer back and a device that had been
+    locked once could never report BCD success again. Measured on MOLE (S283):
+    `reagentc /info` → `Windows RE status: Disabled`, then every lockdown logged
+    `CRITICAL: WinRE disable failed` and the ACK carried `boot_lock_status=partial`.
+
+    The desired state is what matters, so a failed call is re-checked rather than
+    believed: already-disabled is success, still-enabled (or unreadable) is failure.
+    """
     rc, _, err_text = _run(["reagentc", "/disable"])
     if rc == 0:
         log.info("WinRE disabled (reagentc /disable)")
         return True
-    # reagentc returns non-zero if WinRE is already disabled or not installed
-    log.debug("reagentc /disable returned %d: %s", rc, err_text)
+    status = _winre_status()
+    if status == "disabled":
+        log.info(
+            "WinRE already disabled (reagentc /disable returned %d) — the state is "
+            "what lockdown wants, so this is success, not a critical failure",
+            rc,
+        )
+        return True
+    log.debug("reagentc /disable returned %d: %s (state=%s)", rc, err_text, status)
     return False
 
 
 def _enable_winre() -> bool:
-    """Re-enable Windows Recovery Environment."""
+    """Re-enable Windows Recovery Environment, treating "already enabled" as success.
+
+    The mirror of `_disable_winre`: on rollback and removal paths `reagentc /enable`
+    also exits non-zero when WinRE is already on, and reporting that as a failure has
+    the same defect shape — a verified-no-op read as an error.
+    """
     rc, _, err_text = _run(["reagentc", "/enable"])
     if rc == 0:
         log.info("WinRE enabled (reagentc /enable)")
         return True
-    log.debug("reagentc /enable returned %d: %s", rc, err_text)
+    status = _winre_status()
+    if status == "enabled":
+        log.info("WinRE already enabled (reagentc /enable returned %d) — nothing to do", rc)
+        return True
+    log.debug("reagentc /enable returned %d: %s (state=%s)", rc, err_text, status)
     return False
 
 
 def _is_winre_enabled() -> bool:
-    """Check if WinRE is currently enabled."""
-    rc, stdout, _ = _run(["reagentc", "/info"])
-    if rc != 0:
-        return False
-    # Output contains "Windows RE status: Enabled" or "Disabled"
-    return "Enabled" in stdout
+    """Check if WinRE is currently enabled. Unknown reads as "not enabled"."""
+    return _winre_status() == "enabled"
 
 
 # ---------------------------------------------------------------------------

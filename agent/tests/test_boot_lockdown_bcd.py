@@ -163,6 +163,52 @@ class TestBcdLockdown:
     @patch("bcd_lockdown.platform.system", return_value="Windows")
     @patch("bcd_lockdown._run")
     @patch("bcd_lockdown._read_bcd_setting")
+    def test_apply_bcd_lockdown_winre_already_disabled_is_not_a_rollback(
+        self, mock_read, mock_run, _, __, tmp_bcd_files
+    ):
+        """S283 regression: a reused device must still be able to apply BCD lockdown.
+
+        `reagentc /disable` exits non-zero when WinRE is already off, which is what a
+        second lockdown on the same device looks like. That used to count as a CRITICAL
+        failure, so the layer rolled back and the ACK said boot_lock_status=partial —
+        measured on MOLE, whose `reagentc /info` reports `Windows RE status: Disabled`.
+        The state the layer wants is already reached, so no rollback may happen.
+        """
+
+        def run_side_effect(cmd, timeout=15):
+            if cmd[:2] == ["reagentc", "/disable"]:
+                return (1, "", "The Windows RE image was not found.")
+            if cmd[:2] == ["reagentc", "/info"]:
+                return (0, "Windows RE status:         Disabled", "")
+            return (0, "", "")
+
+        mock_run.side_effect = run_side_effect
+
+        def read_side_effect(setting):
+            tables = (
+                bcd_lockdown.BCD_CRITICAL_COMMANDS,
+                bcd_lockdown.BCD_BEST_EFFORT_COMMANDS,
+                bcd_lockdown.BCD_BOOTMGR_COMMANDS,
+            )
+            for table in tables:
+                for sname, sval, _ in table:
+                    if setting == sname:
+                        return sval
+            return None
+
+        mock_read.side_effect = read_side_effect
+
+        result = bcd_lockdown.apply_bcd_lockdown()
+
+        assert result["winre_disabled"] is True
+        assert result["rolled_back"] is False
+        assert result["success"] is True
+        assert tmp_bcd_files["sentinel"].exists()
+
+    @patch("bcd_lockdown._is_admin", return_value=True)
+    @patch("bcd_lockdown.platform.system", return_value="Windows")
+    @patch("bcd_lockdown._run")
+    @patch("bcd_lockdown._read_bcd_setting")
     def test_apply_bcd_lockdown_all_critical_fail(self, mock_read, mock_run, _, __, tmp_bcd_files):
         """All critical settings fail → rollback, no sentinel."""
         # reagentc /disable fails, bcdedit /set fails
@@ -305,8 +351,38 @@ class TestBcdLockdown:
         assert mock_run.call_args.args[0] == ["reagentc", "/disable"]
 
     @patch("bcd_lockdown._run")
-    def test_disable_winre_already_disabled(self, mock_run):
-        mock_run.return_value = (1, "", "already disabled")
+    def test_disable_winre_already_disabled_is_success(self, mock_run):
+        """S283: reagentc exits non-zero when WinRE is ALREADY disabled.
+
+        That is the state every device reaches after its first lockdown, so reading it as a
+        critical failure made apply_bcd_lockdown roll back the whole layer — and a device that
+        had been locked once could never report BCD success again (measured on MOLE: `reagentc
+        /info` said `Windows RE status: Disabled`, and every lockdown afterwards ACKed
+        boot_lock_status=partial).
+        """
+        mock_run.side_effect = [
+            (1, "", "The Windows RE image was not found."),
+            (0, "Windows RE status:         Disabled\nWindows RE location:", ""),
+        ]
+        assert bcd_lockdown._disable_winre() is True
+        assert [call.args[0] for call in mock_run.call_args_list] == [
+            ["reagentc", "/disable"],
+            ["reagentc", "/info"],
+        ]
+
+    @patch("bcd_lockdown._run")
+    def test_disable_winre_still_enabled_is_failure(self, mock_run):
+        """A real failure must stay a failure: the state is re-read, not assumed."""
+        mock_run.side_effect = [
+            (1, "", "Access is denied."),
+            (0, "Windows RE status:         Enabled", ""),
+        ]
+        assert bcd_lockdown._disable_winre() is False
+
+    @patch("bcd_lockdown._run")
+    def test_disable_winre_unreadable_state_is_failure(self, mock_run):
+        """An unreadable state is not 'disabled' — a broken reagentc is not a lockdown."""
+        mock_run.side_effect = [(1, "", "denied"), (1, "", "denied")]
         assert bcd_lockdown._disable_winre() is False
 
     @patch("bcd_lockdown._run")
@@ -314,6 +390,23 @@ class TestBcdLockdown:
         mock_run.return_value = (0, "", "")
         assert bcd_lockdown._enable_winre() is True
         assert mock_run.call_args.args[0] == ["reagentc", "/enable"]
+
+    @patch("bcd_lockdown._run")
+    def test_enable_winre_already_enabled_is_success(self, mock_run):
+        """The mirror case, hit by rollback and removal on an untouched machine."""
+        mock_run.side_effect = [
+            (1, "", "already enabled"),
+            (0, "Windows RE status:         Enabled", ""),
+        ]
+        assert bcd_lockdown._enable_winre() is True
+
+    @patch("bcd_lockdown._run")
+    def test_enable_winre_still_disabled_is_failure(self, mock_run):
+        mock_run.side_effect = [
+            (1, "", "failed"),
+            (0, "Windows RE status:         Disabled", ""),
+        ]
+        assert bcd_lockdown._enable_winre() is False
 
     @patch("bcd_lockdown._run")
     def test_is_winre_enabled_true(self, mock_run):
