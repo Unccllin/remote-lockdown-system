@@ -821,6 +821,69 @@ class TestEncrypt(HardwareTest):
         return False, detail
 
 
+# ---------------------------------------------------------------------------
+# E-LOCK-SCREEN: the refusal, not the command
+# ---------------------------------------------------------------------------
+# The path's claim is that a sign-in is REFUSED, and Windows records that itself: Security event
+# 4625 carries LogonType (2 = interactive/console) and SubStatus 0xc0000072 =
+# STATUS_ACCOUNT_DISABLED, which the OS returns only after the password validates (measured on
+# MOLE, S288). S270 demoted this path because the artifact it cited recorded that tsdiscon was
+# ISSUED at session 0 — not that anyone was refused — and the operator then signed straight back
+# in. Producing a refusal needs a human at the console, so observing it is opt-in: set
+# HW_LOCK_SIGNIN_WAIT=<seconds>, keep the device locked, and attempt a sign-in during the window.
+# Unset means the refusal was NOT observed, and the result says so rather than passing on the
+# weaker evidence the path was demoted for.
+LOCK_SIGNIN_WAIT_ENV = "HW_LOCK_SIGNIN_WAIT"
+ACCOUNT_DISABLED_SUBSTATUS = "0xc0000072"
+
+
+def _account_disabled_refusals(since: datetime, target_user: str | None = None) -> list[dict]:
+    """Interactive sign-ins refused because the account is disabled, since ``since``.
+
+    Windows-only; an empty list on any other platform, because there is no event log to ask.
+    Goal-derived rather than synthetic: each entry is a Security 4625 the OS wrote itself, so the
+    artifact records a refusal the machine produced rather than a report of one.
+    """
+    if platform.system() != "Windows":
+        return []
+    since_iso = since.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    script = (
+        f"$since = [datetime]::Parse('{since_iso}'); "
+        "Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4625; StartTime=$since} "
+        "-ErrorAction SilentlyContinue | ForEach-Object { "
+        "$x = [xml]$_.ToXml(); "
+        "$h = @{ TimeCreated = $_.TimeCreated.ToString('o') }; "
+        "$x.Event.EventData.Data | ForEach-Object { $h[$_.Name] = $_.'#text' }; "
+        "$h | ConvertTo-Json -Compress }"
+    )
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    refusals = []
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if str(event.get("SubStatus", "")).lower() != ACCOUNT_DISABLED_SUBSTATUS:
+            continue
+        if target_user and str(event.get("TargetUserName", "")).lower() != target_user.lower():
+            continue
+        refusals.append(event)
+    return refusals
+
+
 class TestLockScreen(HardwareTest):
     """E-LOCK-SCREEN: Workstation lock with sentinel verification."""
 
@@ -833,6 +896,16 @@ class TestLockScreen(HardwareTest):
 
     def action(self, env: dict, mode: str) -> str:
         import agent
+
+        # When a sign-in attempt is expected, hold the interactive account the way `lock` does —
+        # a disconnected console alone refuses nothing (S270), so without the hold there is
+        # nothing for the attempt to hit.
+        self._held_user = None
+        if self._signin_wait():
+            user, held = agent.disable_console_account()
+            if held:
+                self._held_user = user
+        self._lock_started_at = datetime.now(UTC)
 
         # Create a sentinel file that should survive the lock
         sentinel = Path(tempfile.gettempdir()) / "hw_lock_sentinel.txt"
@@ -852,12 +925,60 @@ class TestLockScreen(HardwareTest):
             return f"Sentinel file missing after lock via {method}"
 
         sentinel.unlink()
-        return f"Lock issued via {method} (session_id={ctx.get('session_id')})"
+        held_note = f", account held: {self._held_user}" if self._held_user else ""
+        return f"Lock issued via {method} (session_id={ctx.get('session_id')}{held_note})"
+
+    @staticmethod
+    def _signin_wait() -> int:
+        """Seconds to wait for a human sign-in attempt; 0 = not requested."""
+        try:
+            return max(0, int(os.environ.get(LOCK_SIGNIN_WAIT_ENV, "0") or 0))
+        except ValueError:
+            return 0
 
     def verify(self, env: dict, mode: str, action_detail: str = "") -> tuple[bool, str]:
-        if "Lock issued" in action_detail:
-            return True, "Sentinel verified — lock command issued, files intact"
-        return False, action_detail
+        if "Lock issued" not in action_detail:
+            return False, action_detail
+
+        wait = self._signin_wait()
+        if not wait:
+            return True, (
+                "Sentinel verified — lock command issued, files intact; sign-in refusal NOT "
+                f"observed (set {LOCK_SIGNIN_WAIT_ENV}=<seconds>, keep the device locked and "
+                "attempt a console sign-in to include it)"
+            )
+
+        # The attempt happens while we wait, so poll instead of querying once. The caller must give
+        # this test a --timeout larger than the wait; the message says which knob to turn.
+        started = getattr(self, "_lock_started_at", None) or datetime.now(UTC)
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            refusals = _account_disabled_refusals(started, getattr(self, "_held_user", None))
+            if refusals:
+                first = refusals[0]
+                return True, (
+                    f"Sign-in REFUSED — {len(refusals)} x Security 4625 with SubStatus "
+                    f"{ACCOUNT_DISABLED_SUBSTATUS}: user={first.get('TargetUserName')} "
+                    f"logon_type={first.get('LogonType')} at {first.get('TimeCreated')}"
+                )
+            time.sleep(2)
+
+        return False, (
+            f"No Security 4625 with SubStatus {ACCOUNT_DISABLED_SUBSTATUS} appeared within "
+            f"{wait}s — either no sign-in was attempted, or the account was not disabled. "
+            f"Re-run with a larger {LOCK_SIGNIN_WAIT_ENV} and a --timeout above it."
+        )
+
+    def cleanup(self, env: dict, mode: str) -> None:
+        """Release the logon hold, so a failed run never leaves the operator locked out."""
+        if getattr(self, "_held_user", None):
+            try:
+                import agent
+
+                agent.re_enable_console_account()
+            except Exception as exc:  # noqa: BLE001 — cleanup must not mask the test's own result
+                print(f"    WARNING: could not release the logon hold: {exc}")
+            self._held_user = None
 
 
 class TestGuardian(HardwareTest):

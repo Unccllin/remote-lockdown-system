@@ -2667,3 +2667,105 @@ Enable R2 in the Cloudflare dashboard, then run the five recorded commands (buck
 put, deploy, verify) so `binary:installer` stops being the one path that installs a 2026-11-12 agent.
 
 ---
+
+---
+
+## Session 293 — 2026-11-18 (the harness records the refusal, not the command)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `agent/hw_test_harness.py` — `TestLockScreen` (its `action` issued a lock and checked a
+  sentinel), the base `HardwareTest.run` lifecycle (where `verify` and `cleanup` are called, and that
+  the action runs inside a timeout thread), and `detect_environment`'s use of env vars.
+- **Read**: `agent/agent.py` — `disable_console_account` / `re_enable_console_account` (the
+  `hold_logon` / `release_logon` pair `lock` and `recover` use), so a harness run that disables an
+  account must release it in `cleanup`.
+- **Read**: `docs/artifacts/s289-lock-screen-signin-refused.json` — the evidence that re-promoted the
+  path, and `s288`'s experiment establishing that `SubStatus 0xc0000072` is returned only after the
+  password validates.
+- **Read**: `agent/tests/test_hw_harness.py` — the harness's own test conventions (patch-object style,
+  `STUB_ROLLBACKS` shrink-only baseline).
+
+**Findings**, measured before the change:
+
+- `TestLockScreen` asserted that a lock was *issued* and a sentinel survived — precisely the weaker
+  evidence S270 demoted the path for. The refusal itself was never observed by the harness.
+- The refusal exists only as a Security 4625 with `SubStatus 0xc0000072`, and producing one needs a
+  human at the console, so it cannot be asserted unconditionally.
+- `_lock_workstation()` alone refuses nothing (S270): without `disable_console_account()` there is no
+  disabled account for an attempt to hit.
+
+### Fog cleared
+
+- **The harness can now record the refusal**, opt-in via `HW_LOCK_SIGNIN_WAIT=<seconds>`: it holds the
+  interactive account the way `lock` does, waits for a console attempt, and passes only on a Security
+  4625 with `SubStatus 0xc0000072`, quoting the user, logon type and timestamp it found.
+- **Not requested is not the same as not true**: without the variable the test still passes but says
+  `sign-in refusal NOT observed (set HW_LOCK_SIGNIN_WAIT=…)`, so the artifact can never be mistaken for
+  evidence it does not contain — the exact confusion that demoted the path.
+- **A failed run cannot lock the operator out**: `cleanup()` releases the logon hold, and a test pins
+  it.
+- **The classifier is narrow on purpose**: only `0xc0000072` counts, so a wrong-password event
+  (`0xc000006a`) or another account's refusal cannot satisfy the assertion.
+- **959 agent tests pass** (5 new: the not-observed branch, a refusal reported with its substatus, the
+  window closing without one, cleanup releasing the hold, and the filter), `ruff check` + `ruff format`
+  clean.
+
+### Fog remaining
+
+- **The opt-in still needs a human.** That is inherent to the claim, but it means CI can never produce
+  this evidence; a run that matters must be a hardware window with someone at the keyboard.
+- **`--timeout` must exceed `HW_LOCK_SIGNIN_WAIT`** or the harness's own timeout wrapper returns first.
+  The failure message says so, but the coupling is a footgun worth removing (the test could raise its
+  own effective timeout).
+- **`binary:installer` still cannot be published** (R2 not enabled, `code: 10042`) and `agent_release`
+  still does not exist (D-130's trust root).
+- Untouched: the ≈700-line device admin handlers in `worker.ts`, 12 stale `audit_test_teeth.py` rows,
+  the HP UEFI BIOS password.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Reproducing this evidence needs a person at the device** — by nature, not by omission.
+- **Enabling R2** — operator, dashboard. **`agent_release`** — needs the update signing keypair.
+- **HP UEFI lockdown on MOLE** — needs the real BIOS Setup password.
+
+### Session artifacts
+
+- No new artifact file: the run itself was not executed (no hardware window this session). The change
+  is the harness capability plus its tests, and the evidence it will produce is specified by
+  `docs/artifacts/s289-lock-screen-signin-refused.json`'s `method` field.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), the root of the S270 demotion**: the harness asserted the thing it
+  could observe (a command was issued) rather than the thing the path claims (a sign-in is refused).
+  That is the general shape — an assertion adjacent to the claim passes forever without testing it —
+  and the fix is to make the unobserved part *say* it was unobserved instead of borrowing the pass.
+- **A drafting slip worth naming**: three of the new test lines exceeded the 100-column limit and were
+  caught only by the linter, not by me reading them. A 4-line helper fixed the shape rather than three
+  wrapped lines.
+
+### VERIFY
+
+- `scripts/run-agent-tests.sh tests/test_hw_harness.py` → **55 passed**.
+- `scripts/run-agent-tests.sh` → **959 passed** in 50 s.
+- `scripts/lint-agent.sh` → `All checks passed!`, 66 files formatted.
+- `brain.py check` → 162 beliefs, integrity clean.
+
+### Next session opening
+
+Run the hardware window with `HW_LOCK_SIGNIN_WAIT=120 --timeout 180 --tag E-LOCK-SCREEN` on MOLE with
+someone at the console, so the harness — not a hand-written artifact — produces the refusal evidence,
+then pick up the two operator-gated items (R2 for `binary:installer`, the update keypair for
+`agent_release`).
+
+---
