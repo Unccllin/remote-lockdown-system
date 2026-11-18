@@ -3419,3 +3419,26 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-156
+  statement: 'The agent now carries a build identity separate from AGENT_VERSION: AGENT_BUILD = ''<UTC
+    build date>.<12-hex source hash>'' comes from the tracked agent/_buildinfo.py (committed defaults
+    ''unknown''), build.ps1 stamps it before PyInstaller (hash over agent/*.py, so a host without git
+    still works), and version_string() prints it in --version, the startup log and the crash log. AGENT_VERSION
+    stays numeric because server/src/routes/agent.js compareVersions maps each dot-segment through Number(),
+    where a suffix becomes NaN and would silently disable update comparisons. A test fails if a stamped
+    _buildinfo.py is committed. Proven on MOLE: build=20261118.4bfeda526b77 in both --version and ''Agent
+    starting''.'
+  domain: agent/build
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'MOLE stamped build: BUILD_DATE=20261118 BUILD_COMMIT=4bfeda526b77; ''lockdown-agent 1.0.0
+    (frozen=True, build=20261118.4bfeda526b77)''; log ''Agent starting ... build=20261118.4bfeda526b77'';
+    installed sha256 d9e45902... equal to the built artifact. Tests: 4 new, 954 total, ruff clean. docs/artifacts/s287-build-identity.txt'
+  source: agent/agent.py, agent/_buildinfo.py, agent/build.ps1, agent/tests/test_version_identity.py
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

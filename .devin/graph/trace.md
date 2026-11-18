@@ -2034,3 +2034,109 @@ lock → recover acceptance once more, so all three boot-lock layers can be judg
 rebuild path is ready at `C:\ProgramData\LockdownAgent\build\agent`.
 
 ---
+
+---
+
+## Session 287 — 2026-11-18 (a build identity, so two binaries stop both being "1.0.0")
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `agent/agent.py` (`AGENT_VERSION` and every one of its five uses: check-in payload,
+`X-Agent-Version` header, update comparison, `--version`, crash log), `server/src/routes/agent.js`
+(`compareVersions` — `Number()` per dot-segment, which is why build metadata must not ride on the
+version), `agent/build.ps1` (param block, dependency install, spec loop), `agent/agent.spec`
+(`hiddenimports` — a static import is what makes PyInstaller bundle a module), and the S283/S286
+artifacts that recorded the gap twice.
+
+**Findings**, measured before the change:
+
+- Both the stale `bb32c3d2…` binary and the freshly built `b17f390d…` binary reported
+  `agent_version 1.0.0`. Nothing on the device, in the dashboard, or in the server row distinguished
+  them.
+- `compareVersions(a, b)` maps `.split('.')` through `Number()`, so a suffix such as
+  `1.0.0+build.abc` becomes `NaN` and every comparison would silently read as "equal" — i.e. the
+  update path would stop offering updates. Putting the build id in `AGENT_VERSION` was not an option.
+- MOLE has no git, so a build id has to be computable from the source tree itself.
+
+### Fog cleared
+
+- **A device can now say which build it runs** — in the three places a person looks:
+  `--version`, the startup log line, and the crash log. One formatter (`version_string()`) produces
+  the first, so the two cannot drift.
+- **`AGENT_VERSION` is untouched** and a test pins it as numeric, with the reason: `Number()` on a
+  suffix becomes `NaN` and would quietly disable update comparisons.
+- **A source checkout reports itself as a source checkout**: the tracked `agent/_buildinfo.py` says
+  `unknown`, and a test fails if a *stamped* build gets committed — a release cannot claim an
+  identity it did not build.
+- **`build.ps1` stamps it** (`-BuildCommit` overrides, otherwise SHA-256 over `agent/*.py`) — which
+  works on a build host with no git, as MOLE is.
+- **Proven on hardware**: a stamped build (`20261118.4bfeda526b77`) is installed on MOLE and reports
+  `lockdown-agent 1.0.0 (frozen=True, build=20261118.4bfeda526b77)`, with the same id in
+  `Agent starting — hostname=MOLE server=http://192.168.1.43:8787 poll=30s build=20261118.4bfeda526b77`.
+
+### Fog remaining
+
+- **The build id is not on the dashboard.** It is a local/log fact only; surfacing it needs a
+  cross-surface change (server column + Worker check-in field + dashboard cell + a migration). The
+  cheap half is done; the visible half is a separate decision.
+- **`_buildinfo.py` is a tracked file that a build rewrites**, so a build host's working tree goes
+  dirty. The test guard makes committing it a failure rather than a silent lie, but a build script
+  that never touches a tracked file would be cleaner.
+- **HP UEFI layer still applies 0 of 3 critical writes** — unchanged; needs the real BIOS Setup
+  password as `UEFI_PASSWORD`.
+- **Worker deploy still needs `wrangler login`.**
+- Pre-existing and untouched: 12 stale `audit_test_teeth.py` rows, the ≈700-line device admin
+  handlers in `worker.ts`, two thin PBL route modules.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password.** Operator secret.
+- **Worker deploy: `wrangler login`.**
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+
+### Session artifacts
+
+- `docs/artifacts/s287-build-identity.txt` — the gap as measured twice, the `compareVersions` excerpt
+  that rules out putting the id on `AGENT_VERSION`, what was added to which file, the four tests by
+  name, the runs (4 new / **954 total** / ruff clean), the source tree reporting `unknown.unknown`,
+  and the hardware proof: stamped values, dist sha256, the hash-verified deploy, and both
+  `--version` and the startup log carrying `build=20261118.4bfeda526b77`.
+
+### Failure attribution
+
+- **Layer 2 (context provision), the same gap for the third time.** S283 said "which agent is on that
+  machine cannot be answered"; S286 proved it by needing a sha256; this session closes it. The cost
+  was never the fix — it was that the identity question had no owner until two sessions had already
+  paid for it.
+- **Layer 4 (verification feedback), narrowly avoided**: adding build metadata to `AGENT_VERSION`
+  would have passed every test in the repo (nothing asserts `compareVersions` handles NaN) while
+  silently disabling update comparisons. Reading the consumer's parser before choosing the format is
+  what caught it, not a test.
+
+### VERIFY
+
+- `scripts/run-agent-tests.sh tests/test_version_identity.py` → **4 passed**.
+- `scripts/run-agent-tests.sh` → **954 passed** in 56 s.
+- `scripts/lint-agent.sh` → `All checks passed!`, 66 files formatted.
+- `tests/test_hw_harness.py` → 50 passed; `hw_test_harness` and `simulate_lockdown` import clean.
+- MOLE: `--version` → `lockdown-agent 1.0.0 (frozen=True, build=20261118.4bfeda526b77)`;
+  `agent.log` → `Agent starting … build=20261118.4bfeda526b77`; installed sha256 `d9e45902…` equal to
+  the built artifact's; device `active`, `last_checkin` 20 s later.
+- `brain.py check` → 156 beliefs, integrity clean.
+
+### Next session opening
+
+Supply the real BIOS Setup password as `UEFI_PASSWORD` and re-run the lock → recover acceptance so
+all three boot-lock layers can be judged on MOLE; the build identity now makes it unambiguous which
+agent produced the result.
+
+---

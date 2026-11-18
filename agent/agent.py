@@ -231,6 +231,39 @@ except ImportError:
 
 AGENT_VERSION = "1.0.0"
 
+# Build identity. AGENT_VERSION stays numeric semver because the update path compares it
+# numerically (`compareVersions` splits on '.', server/src/routes/agent.js:1037), so build
+# metadata must not ride on it. The build id is stamped by agent/build.ps1 into a generated
+# `_buildinfo.py` immediately before PyInstaller runs; a source checkout has no such module
+# and honestly reports itself as a dev build.
+#
+# Why this exists: two different binaries both called themselves `1.0.0`, and telling the stale
+# one from the current one cost a session and a hand-run sha256 against the device (S286). A
+# version that cannot distinguish two builds is not an identity.
+#
+# The two pragmas below are for the checker, not for the runtime: `_buildinfo` is a tracked
+# sibling module (agent/_buildinfo.py) that ships with the source and is bundled by PyInstaller
+# through this very static import, but a checker analysing agent.py as a standalone script looks
+# only at its configured search paths and cannot see it. The import stays static on purpose — a
+# dynamic one would need a hiddenimports entry in agent.spec to be packaged at all.
+try:
+    from _buildinfo import BUILD_COMMIT as _BUILD_COMMIT  # pyright: ignore[reportMissingImports]
+    from _buildinfo import BUILD_DATE as _BUILD_DATE  # pyright: ignore[reportMissingImports]
+except ImportError:  # a build tree that lost the module: degrade, never fail to start
+    _BUILD_COMMIT, _BUILD_DATE = "unknown", "unknown"
+
+# `<UTC build date>.<source-tree hash>` — stable for a given tree, different across trees.
+AGENT_BUILD = f"{_BUILD_DATE}.{_BUILD_COMMIT}"
+
+
+def version_string() -> str:
+    """What `--version` prints and what the startup log carries.
+
+    One formatter, so the two places a person looks for a build identity cannot drift.
+    """
+    return f"lockdown-agent {AGENT_VERSION} (frozen={_is_frozen()}, build={AGENT_BUILD})"
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -4476,7 +4509,7 @@ def main() -> None:
     if args.version:
         # Use sys.stdout if available (console=True build), otherwise
         # write to stderr or a file so --version always works.
-        version_msg = f"lockdown-agent {AGENT_VERSION} (frozen={_is_frozen()})"
+        version_msg = version_string()
         try:
             print(version_msg)
         except (AttributeError, OSError):
@@ -4518,10 +4551,11 @@ def main() -> None:
             # In dry-run mode, be lenient — log but don't exit
             log.warning("DRY RUN: Config validation warning: %s", e)
         log.info(
-            "Agent starting (DRY RUN) — hostname=%s server=%s poll=%ss",
+            "Agent starting (DRY RUN) — hostname=%s server=%s poll=%ss build=%s",
             cfg["hostname"],
             cfg["server_url"],
             cfg["poll_interval"],
+            AGENT_BUILD,
         )
         # Migrate any plaintext state files to encrypted format (one-time)
         migrate_deadman_to_encrypted()
@@ -4551,10 +4585,11 @@ def main() -> None:
         log.info("Running in silent mode — stdout logging suppressed (file logging continues)")
 
     log.info(
-        "Agent starting — hostname=%s server=%s poll=%ss",
+        "Agent starting — hostname=%s server=%s poll=%ss build=%s",
         cfg["hostname"],
         cfg["server_url"],
         cfg["poll_interval"],
+        AGENT_BUILD,
     )
     if cfg.get("serverless_url"):
         log.info("Serverless fallback configured: %s", cfg["serverless_url"])
@@ -4708,6 +4743,7 @@ if __name__ == "__main__":
                 f.write(f"\n{'=' * 60}\n")
                 f.write(f"CRASH at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Version: {AGENT_VERSION}\n")
+                f.write(f"Build: {AGENT_BUILD}\n")
                 f.write(f"Python: {sys.version}\n")
                 f.write(f"Platform: {platform.platform()}\n")
                 f.write(f"Frozen: {_is_frozen()}\n")
