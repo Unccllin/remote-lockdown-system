@@ -1483,3 +1483,115 @@ then re-verify `curl http://192.168.1.43:3001/api/health` from MOLE over
 `ssh -i ~/.ssh/lockdown_lab_ed25519 labadmin@192.168.1.249` and run the lock → recover acceptance.
 
 ---
+
+---
+
+## Session 282 — 2026-11-18 (MOLE is live: the agent never wanted port 3001)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `docs/artifacts/s281-mole-reachability.txt` (the probes from the previous block),
+MOLE's `C:\ProgramData\LockdownAgent\config.json` (read over SSH, secrets counted not printed),
+`server/dev-start-sqlite.js` (which routes the dev scaffold actually mounts),
+`server/src/routes/devices.js` (`POST /` — per-device key generation and what it returns),
+`server/src/db/apiKey.js` (HMAC-SHA256 + pepper key hashing), `server/src/routes/enroll.js`
+(the token/claim flow and the note that the dev scaffold does not mount it),
+`server/src/db/migrations/001_base.sql` + the live SQLite `devices` schema,
+`agent/installer.py` (`INSTALL_DIR`), `agent/agent.py` (`agent.log` location).
+
+**Findings**, measured before any change:
+
+- **MOLE's agent targets `http://192.168.1.43:8787`, not `:3001`.** `8787` is one of the three TCP
+  ports ufw already allows, so the previous block's ufw finding, while true, was never the agent's
+  path: the agent has not been trying to reach 3001 at all.
+- **`dev-start-sqlite.js` is a reduced scaffold**: it mounts auth / devices / agent / audit / setup /
+  installer / admins / health / metrics — **not `/api/enroll`**, so token enrolment 404s there.
+  `POST /api/devices` is the mount that exists, and it returns the plaintext per-device key once.
+- The device the agent believed it was (`49d2…`, key `6/ql9…`) is in no database here: the SQLite
+  file was created fresh in the previous block. Nothing in MOLE's config was wrong — the server side
+  simply had never heard of the device.
+- MOLE's service supervisor had been logging `agent stalled - no answered check-in for 73557s`
+  (~20.4 h), which is the same interval, from the agent's side, that the trace had spent blaming a
+  port proxy.
+
+### Fog cleared
+
+- **The link is live and proven from both ends.** `GET /api/health` returns `200` locally and
+  `200` from MOLE; after enrolment and a service restart the server holds
+  `MOLE / last_checkin 2026-11-18 06:39:50 / agent_version 1.0.0 / update_verification sha256-only /
+  lock_state none`, with `firmware_audit` = HP EliteBook 830 G6, BIOS `R70 Ver. 01.36.00`,
+  `secure_boot: false` (`secure_boot_off`).
+- **The enrolment path that works here** is `POST /api/devices` → 201 with the plaintext key, then
+  patch `api_key` + `device_id` in `config.json` and restart the service. Reversible on both sides:
+  the row is one DELETE, and MOLE keeps `config.json.bak-s282`.
+- **MOLE has no usable TPM**: `TPM key creation failed` → `falling back to DPAPI/plaintext`. Same
+  class of limitation as FRANKENSTEIN, now measured on this unit too.
+- **The agent's polling is adaptive and healthy**: `30s -> 300s (status=active)` after the check-in.
+
+### Fog remaining
+
+- **The Worker path was not exercised.** MOLE's `server_url` points at the Express server, so
+  S272–S280's Worker changes are still only unit-tested; shipping them needs `wrangler login`.
+- **No command was queued**, so no enforcement path ran. `boot_lock_enabled: true` is sitting in
+  MOLE's config, and MOLE's boot settings are still `Disable` — a lockdown there is a real risk, not
+  a routine test.
+- **`:3001` still has no ufw rule** on this host. Nothing needs it (the agent uses 8787), but the
+  trace and `current-state.md` have named 3001 as "the lab server" for many sessions, so the
+  distinction must be stated wherever the address appears.
+- `serial_number` is `null` on the server-side row (the check-in does not report it), and MOLE
+  reports the MAC of a different adapter (`DC:71:96:20:4D:4B`) than the first "Up" adapter.
+- Untouched and still open: the ~700-line device admin handlers in `worker.ts`, 12 stale
+  `audit_test_teeth.py` rows, two thin PBL route modules.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Running the lock → recover acceptance on MOLE: needs an explicit decision, not a tool call.**
+  The device has `boot_lock_enabled: true` and MOLE's boot settings are `Disable`, so a lockdown
+  changes boot configuration on hardware that a failed run cannot undo by itself.
+- **Deploying the Worker: `wrangler login`.** Operator action, unchanged since S277.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+
+### Session artifacts
+
+- `docs/artifacts/s282-mole-link-live.txt` — the target port and its ufw status, health from both
+  ends, the server's own view of the MOLE row, MOLE's agent log verbatim (including the 73,557 s
+  stall and the TPM fallback), the three reversible steps that produced the check-in, and a
+  "what this does and does not prove" block.
+
+### Failure attribution
+
+- **Layer 2 (context provision)**: nothing in the repo recorded which port the agent targets, so
+  two sessions investigated `:3001` because the *trace* said that was the lab server. One line in a
+  runbook — "the agent's `server_url` is `:8787`; `:3001` is the dashboard/API address" — would have
+  saved the whole detour. The belief layer now holds it (B-151).
+- **Layer 4 (verification feedback)**, mild: the enrolment route I first reached for
+  (`/api/enroll/token`) is not mounted on the dev scaffold, and the 404 only arrives as HTML. The
+  scaffold's route list is readable in one grep; the docstring in `enroll.js` describes the full
+  server, which is what misled the first attempt.
+
+### VERIFY
+
+- `curl http://192.168.1.43:8787/api/health` → **200** locally and **200** from MOLE over SSH.
+- `ss -ltnp | grep 8787` → `LISTEN *:8787`.
+- `GET /api/devices` → the MOLE row with `last_checkin 2026-11-18 06:39:50`, `agent_version 1.0.0`,
+  `hardware_uuid BE10009B-5867-337C-5024-E390E760DA74`, `lock_state none`.
+- MOLE `agent.log` → `Agent starting - hostname=MOLE server=http://192.168.1.43:8787 poll=30s`,
+  then `Adaptive polling: 30s -> 300s (status=active)`.
+- `brain.py check` → 151 beliefs, integrity clean; B-151 confirmed at level `hardware`.
+
+### Next session opening
+
+Decide whether to run the lock → recover acceptance on MOLE now that it is enrolled and checking in
+(the risk is the device's own `boot_lock_enabled: true` against boot settings stuck on `Disable`),
+and deploy the Worker with `npx wrangler login` to exercise the S272–S280 changes on the real path.
+
+---

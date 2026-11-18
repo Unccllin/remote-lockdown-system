@@ -3310,3 +3310,24 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-151
+  statement: 'The lab link to MOLE never needed port 3001: MOLE''s agent config targets http://192.168.1.43:8787,
+    which ufw already allows (53317/8000/8787). On 2026-11-18 the device was enrolled through POST /api/devices
+    (id d166e8f7a348d3543eefe1902dc6519c), config.json was patched on MOLE (backup config.json.bak-s282)
+    and Restart-Service LockdownAgent produced a check-in within 8s: last_checkin set, hardware_uuid BE10009B-5867-337C-5024-E390E760DA74,
+    agent_version 1.0.0, firmware_audit HP EliteBook 830 G6 / R70 Ver 01.36.00 / secure_boot=false, lock_state
+    none. B-150''s finding that 3001 is ufw-blocked remains true but was never the agent''s path. MOLE
+    has no usable TPM (seal key creation fails -> DPAPI fallback).'
+  domain: deployment/lab
+  status: confirmed
+  evidence_level: hardware
+  provenance: MOLE agent.log + config.json read over SSH; server-side GET /api/devices returning the MOLE
+    row with last_checkin; docs/artifacts/s282-mole-link-live.txt
+  source: MOLE config.json + agent.log over SSH; GET /api/devices on 192.168.1.43:8787
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
