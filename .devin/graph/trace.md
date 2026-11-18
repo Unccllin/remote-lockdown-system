@@ -2978,3 +2978,103 @@ Decide the two halves together: publish `agent_release` and rebuild the installe
 `signature` — or stop here, where the fleet is unchanged and the key can still be discarded.
 
 ---
+
+---
+
+## Session 296 — 2026-11-18 (update signing is live: metadata published, MOLE now reports "signature")
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `installer/generic/lockdown-installer.nsi` — that `update_signing.pub` is staged with
+  `/nonfatal` (line 246), so the wrapper can include it without being mandatory.
+- **Read**: `agent/installer.py` — `staged_update_public_key()` / `install_update_public_key()` and
+  the `config["update_public_key"]` write (line 522), i.e. exactly what an install does with the key.
+- **Read**: `agent/agent.py::load_config` — that `update_public_key` is one of the JSON keys mapped
+  into the config (line 421) and read from `section` (line 529), so a hand-written field works.
+- **Read**: `serverless/README.md` §"Building the record by hand" — the release instructions that were
+  missing the two halves.
+- **Read**: `docs/artifacts/s295-update-trust-root-staged.txt` — the validated record and the
+  decision framing this session executes.
+
+**Findings**, measured before acting:
+
+- The private key existed on exactly one disk, and publishing makes it load-bearing.
+- `update_public_key` must be a path; the installer stages the file and writes the path.
+
+### Fog cleared
+
+- **The trust root is live, verified on hardware.** `agent_release` is published; the installer was
+  rebuilt with `update_signing.pub` staged (41,203,003 B, `f9633ecb…`), republished to R2, and the
+  endpoint serves it **byte-identically**; and MOLE's check-in now reports
+  `update_verification: signature` where it said `sha256-only` an hour ago.
+- **The key has two copies** (`~/.lockdown-secrets/update_signing.key` and a timestamped backup),
+  with the same sha256 — though both are on this host, so offline media is still the operator's step.
+- **The release section of `serverless/README.md` now states the two halves** and the three traps
+  that cost time today: local-mode `r2 object put`, KV shadowing an R2 key, and a service restart that
+  leaves the old agent child alive.
+
+### Fog remaining
+
+- **The pin arrived by hand on MOLE**, not by reinstalling with the new wrapper: I copied
+  `update_signing.pub` into `C:\ProgramData\LockdownAgent\` and added the config field, which is what
+  the installer would have written. The wrapper's own path is unexercised on hardware.
+- **No agent has actually self-updated.** The metadata offers 1.0.0 and the device is already 1.0.0,
+  so the download → verify → watchdog swap path has not run. Proving it needs a version bump and a
+  rebuilt agent, i.e. a deliberate two-release cycle.
+- **The private key is still single-host.** Offline custody is the one irreversible gap.
+- Unchanged: HP UEFI (needs the BIOS Setup password), E-BCD's ceiling, the `max-age=3600` download
+  cache question, 12 stale `audit_test_teeth.py` rows.
+
+### Debt items closed
+
+- **D-130 (code signing not configured for PblApp.efi)** is *not* this item — that is firmware signing.
+  The update-key debt it resembles (B-006's gap) is now closed in practice for agent updates, though
+  the ledger entry itself lives in the PBL ledger and is untouched here.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (PBL firmware signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Offline custody of `update_signing.key`** — operator, and the only thing that cannot be undone
+  from here.
+- **A real self-update has not been demonstrated** — needs a deliberate version bump.
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+
+### Session artifacts
+
+- No new artifact file: the evidence is three commands' output, all quoted in this block — the R2
+  object replaced and verified byte-identical (41,203,003 B `f9633ecb…`), and MOLE's check-in flipping
+  from `sha256-only` to `signature` at `last_checkin 2026-11-18 10:21:36` after a real agent restart.
+
+### Failure attribution
+
+- **Layer 5 (state management), the S286 trap recurring**: `Restart-Service LockdownAgent` reported
+  `Running` while the old agent child kept running, so the first attempt to pick up the new config
+  changed nothing — the check-in still said `sha256-only` and looked like a code problem. The fix is
+  the same one written down in S286 and now in the README: stop, kill any lingering `lockdown-agent`
+  process, start, and confirm a fresh `Agent starting … build=…` line before believing anything.
+- **Layer 2 (context provision)**: the release instructions in `serverless/README.md` described how to
+  *publish* but not that publishing and pinning are two halves. A reader following them exactly would
+  have produced a fleet that offers updates it cannot verify.
+
+### VERIFY
+
+- `wrangler kv key put … agent_release` → written to `LOCKDOWN_KV`.
+- `wrangler r2 object put … --remote` → `Upload complete`; served `/api/download/installer` →
+  **41,203,003 B**, `sha256 f9633ecb90768c0386bc632bd5aacf86b7d7a3be9793d43096a7b3f4d960567c`,
+  equal to the local build.
+- MOLE: `update_public_key` on disk, pub key sha256 `207d7cc2…`; after a clean stop/kill/start the log
+  shows `Agent starting … build=20261118.4bfeda526b77` and the server reports
+  `update_verification: signature` at `last_checkin 2026-11-18 10:21:36`.
+- `brain.py check` → 164 beliefs, integrity clean.
+
+### Next session opening
+
+Demonstrate a real self-update: bump to 1.0.1, rebuild the agent with a stamped build id, publish the
+signed record for it, and watch MOLE download, verify the Ed25519 signature, and swap the binary —
+which is the only part of the update path still unproven on hardware.
+
+---

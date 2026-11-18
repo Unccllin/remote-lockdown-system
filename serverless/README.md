@@ -195,6 +195,38 @@ scripts/sign-release-metadata.py \
   --out agent-release.json
 ```
 
+### Publishing is two halves, and they only work together
+
+Publishing `agent_release` makes `/api/agent/update` *offer* a version. It does not
+make any device *verify* it: a device only pins the key if its own config names
+`update_public_key`, which is a **path to `update_signing.pub`** (not PEM text — an
+inline PEM logs `Update public key not found` and the verifier refuses everything).
+So a release that publishes metadata but ships an installer without the public key
+leaves the fleet updating on `sha256-only` evidence: a digest delivered by the same
+origin as the bytes (see B-006).
+
+```bash
+# 1. sign the record (scripts/sign-release-metadata.py)
+# 2. publish it
+npx wrangler kv key put --binding=LOCKDOWN_KV agent_release --path agent-release.json
+# 3. stage the public key next to the binaries and rebuild the installer, so every
+#    install writes update_public_key into config.json
+cp update_signing.pub agent/dist/            # or STAGE=<dir> for build-generic-installer.sh
+# 4. verify on a device that its check-in flips to update_verification: signature
+npx wrangler deploy                           # only if Worker code changed
+```
+
+Two traps worth knowing, both measured:
+
+- `wrangler r2 object put` writes to the **local simulator** unless `--remote` is
+  passed, so an upload can "succeed" where nothing serves traffic.
+- A key published to R2 is **shadowed by KV** until the KV copy is deleted: the
+download route reads KV first, and KV deletes take up to a minute to propagate.
+Publish to R2, then `wrangler kv key delete … <key>`, then verify the served digest.
+- Restarting the service is not enough to pick up a config change if the old agent
+  child is still alive: stop the service, kill any lingering `lockdown-agent`
+  process, then start it, and confirm a fresh `Agent starting … build=…` line.
+
 `--artifact` takes `PLATFORM=PATH` with the platform names the agent sends in
 `X-Agent-Platform` (`win`, `linux`, `darwin`). Without `--key` the tool refuses
 unless `--unsigned` is passed explicitly, and an unsigned record is one a pinned

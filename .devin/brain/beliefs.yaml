@@ -3595,3 +3595,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-164
+  statement: 'Update signing is live (S296): agent_release is published to KV and the installer was rebuilt
+    with update_signing.pub staged (41,203,003 B, sha256 f9633ecb…), republished to R2 and served byte-identically
+    by /api/download/installer. MOLE now reports update_verification ''signature'' instead of ''sha256-only''
+    at last_checkin 2026-11-18 10:21:36, after the pub key (sha256 207d7cc2…) was placed at C:\ProgramData\LockdownAgent\update_signing.pub
+    and config.json''s update_public_key was set to that path. The pin was applied by hand (what the installer
+    writes), not by reinstalling with the new wrapper. No agent has performed a real self-update yet:
+    metadata offers 1.0.0 and the device is already 1.0.0. Private key custody is still single-host (two
+    copies, same disk).'
+  domain: agent/update
+  status: proposed
+  evidence_level: assumed
+  provenance: KV put + R2 put + served-digest comparison + MOLE check-in flip after a clean stop/kill/start;
+    serverless/README.md release section updated
+  source: serverless/README.md, agent/installer.py, agent/agent.py, live MOLE check-in
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
