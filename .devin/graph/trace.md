@@ -1246,3 +1246,130 @@ Ship S272–S279 to MOLE if access is restored; otherwise extract the agent hand
 escrow, deadman) — the last ~500-line cohesive block in `worker.ts`.
 
 ---
+
+---
+
+## Session 280 — 2026-11-18 (the agent protocol leaves the Worker)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `serverless/worker.ts` (the agent-auth section, the five agent handlers, the `fetch`
+dispatch, and the import block that sits at the bottom of the file), `serverless/http.ts` /
+`kv-store.ts` headers (the extraction convention and its acyclicity rule),
+`serverless/pbl/routes/index.ts` + `pbl/keys.ts` (S279's precedent),
+`serverless/vitest.config.mts`, `serverless/enroll-setup.test.ts` (a source-text assertion pinned
+to a file path), `scripts/test_cross_surface_contract.py` (the `observed_at` contract),
+`scripts/audit_test_teeth.py` (the mutation table), `docs/adr/PBL-SERVERLESS-COMPAT.md` (the agent
+auth contract, §91-105), `.devin/skills/codebase-navigation/SKILL.md`.
+
+**Findings**, measured before the change:
+
+- `worker.ts` was **3,259 lines**. The agent block is three ranges — the auth section (63-107) and
+  the two handler ranges (391-641, 670-886) — **513 lines total**, and it is the only remaining
+  cohesive block that is entirely agent protocol.
+- `verifyAgentAuth` is called in **seven** places, and **four of them are not agent-protocol
+  handlers** (`handlePing`, `handleUploadEfsCert`, `handleAgentUpdate`, `handleAgentBinaryDownload`).
+  It therefore had to move out and be *exported*, not travel as a private helper.
+- `serializeMutation` sits inside the same range but is used by the dispatch for **admin**
+  mutations (flag / recover / track), so moving it would have inverted the dependency. It stays.
+- Two harness pieces pin source text to `worker.ts` **by path** and would rot silently:
+  `enroll-setup.test.ts:273` (newest-key selection) and `test_cross_surface_contract.py:544`
+  (`OBSERVED_AT_MAX_SKEW_MS`, `l.observed_at || l.created_at`). `audit_test_teeth.py`'s table names
+  `serverless/worker.ts` for 35 rows, **8 of which anchor inside the moving block**.
+- The coverage gate covered `worker.ts` **only** (`include: ['worker.ts']`).
+
+### Fog cleared
+
+- **`worker.ts` is 2,727 lines** (from 3,259); `serverless/agent-routes.ts` is 541 and holds the
+  agent protocol: `verifyAgentAuth` plus check-in, deadman report, location report, command ACK and
+  key escrow.
+- **The moved text is byte-identical.** Verified programmatically against
+  `git show HEAD:serverless/worker.ts`: the 513 lines reassemble to exactly the three source ranges,
+  equal modulo the seven added `export ` keywords — a move, not a rewrite.
+- **The agent credential has one home again.** `verifyAgentAuth` moved with the handlers and is
+  exported for the four agent-authenticated handlers that stayed behind.
+- **The coverage gate had been narrowing silently.** `include: ['worker.ts']` meant every module
+  extracted since S277 (`http.ts`, `admin-auth.ts`, `kv-store.ts`, `installer-scripts.ts`, `pbl/*`)
+  and now `agent-routes.ts` was outside the denominator — `worker.ts`'s own score had *risen* to
+  90.54/85.87/95.45/92.94 precisely because 17% of the code left the measurement. Widened to every
+  source module; the honest whole-tree figure is **86.36 / 82.99 / 95.04 / 88.52** and **every
+  existing floor still passes**, so no threshold was lowered to accommodate it.
+- Dead section markers left by the earlier splits (two empty `Types` blocks, one `Helpers` block in
+  the first 62 lines of `worker.ts`) removed, since the auth section that followed them moved.
+- **Harness rows repointed rather than left to skip**: 8 mutation-table rows now name
+  `agent-routes.ts`, and both source-text assertions read *both* modules, so a future move cannot
+  turn them vacuous.
+
+### Fog remaining
+
+- **`worker.ts` is 2,727 lines.** Remaining cohesive blocks: the device admin handlers (~700), the
+  installer endpoints (~200), uninstall auth (~120), admin handling and hardware artifacts. The
+  `fetch` dispatch's complexity is unchanged.
+- **12 mutation rows in `scripts/audit_test_teeth.py` anchor on pre-ADR-002 code and match 0 times**,
+  so the script prints `SKIPPED` for them: `WRK/ack-ownership`, `ack-terminal`, `ack-uuid`,
+  `ack-blocked-files`, `ack-session-context`, `ack-track-status`, `ack-audit-detail`,
+  `effectiveness-persist`, `recover-unlock`, `uninstall-authz`, `uninstall-verify`,
+  `hw-artifact-list-blob`. This is **pre-existing** — they matched 0 times in `HEAD` before this
+  session — and is not fixed here; re-anchoring them means authoring new mutations against code this
+  session did not change.
+- **`pbl/routes/signingKey.ts` 0% and `pbl/routes/firmware.ts` 16.66% coverage** — visible only now
+  that the include widened; both are reached solely through the `/v1` URL download path the unit
+  suite never takes.
+- `B-146` still says the `/v1` dispatcher is 458 lines; S279 recorded 484 after the file grew. Not
+  re-verified.
+- **Ship to MOLE / Worker deploy: still blocked on operator access** — re-verified this session.
+- **`brain.py` has no file locking**: two concurrent invocations lose one write (observed).
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- MOLE's boot settings remain `Disable`; needs the HP reset or a BIOS visit. OPEN, operator action.
+- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+- **Ship to MOLE / deploy the Worker: BLOCKED, operator action.** Re-measured this session:
+  `curl http://192.168.1.43:3001/api/health` → **HTTP 000** (curl exit 7), and
+  `npx wrangler whoami` → **not authenticated**. Both requirements unchanged since S277.
+
+### Session artifacts
+
+- `docs/artifacts/s280-agent-routes-split.txt` — the sweep in one file: 480 worker tests, `tsc`
+  clean, coverage 86.36 / 82.99 / 95.04 / 88.52 over the widened include, 23 contract tests, all
+  graph invariants, and both file sizes (2,727 / 541).
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), caught by gates**: `tsc` found the seven missing `export`
+  keywords — the module compiled as a set of private functions, and `worker.ts`'s import would have
+  failed at build. And `enroll-setup.test.ts` caught the more interesting class: an assertion that
+  reads one file *by path* passes when the line it pins has moved out of that file, so it goes
+  vacuous instead of red. Both assertion sites now name every module that can hold the line.
+- **Layer 5 (state management)**: two `brain.py` invocations issued in parallel lost one write —
+  both allocated `B-147`, and the refutation of `B-144` vanished until it was re-run serially. The
+  store has no lock; the tool fix belongs in `brain.py`, the operating rule until then is one write
+  at a time.
+- **A harness gap I was not looking for**: the coverage include had been shrinking since S277 and
+  nothing reported it, because a shrinking denominator only makes the number go up. Found by
+  measuring, not by any gate.
+
+### VERIFY
+
+- `serverless`: `npx vitest run` → **480 passed / 4 files**.
+- `serverless`: `npx tsc --noEmit -p .` → clean.
+- `serverless`: `npx vitest run --coverage` → **86.36 / 82.99 / 95.04 / 88.52**, all floors pass.
+- `scripts/test_cross_surface_contract.py` → **23 passed**.
+- `make graph-check` → all invariants pass.
+
+### Next session opening
+
+Extract the device admin handlers (~700 lines: list / get / flag / recover / track / rearm /
+commands / locations / efs-cert / pba-credentials / release) into `serverless/device-routes.ts` —
+unless MOLE access is restored, in which case ship S272–S280 and run the lock → recover acceptance.
+
+---

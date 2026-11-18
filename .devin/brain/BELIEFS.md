@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-17 17:08:01 — 146 beliefs
+Generated: 2026-11-18 08:42:43 — 149 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -52,8 +52,10 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-140 | confirmed | code-read | The Worker stores devices as per-entity records (device:<id>), indexed by device_index, with an agent_key:<sha256> -> device-id pointer; saveDevices no longer exists, so a whole-list devices write is a compile error |
 | B-141 | proposed | assumed | The Worker stores location reports as per-report records (location:<id>) indexed per device (location_index:<deviceId>), capped per device by LOCATION_HISTORY_LIMIT (default 500, env-overridable), and pruning deletes the evicted records as well as the index entries |
 | B-143 | proposed | assumed | Every fleet-scale KV store in the Worker is per-entity now: commands (ADR-002), devices (device:<id> + index + agent_key pointer, ADR-003), locations (per-report + per-device index, ADR-004), audit (per-entry + one index carrying device_id, ADR-005), encryption keys and BIOS credentials (one key per device, no index, no cap, ADR-006). The only remaining single-value lists are admins and hw_test_artifacts |
-| B-144 | proposed | assumed | serverless/worker.ts is 4925 lines after extracting http.ts, admin-auth.ts and installer-scripts.ts in dependency order, so the harness LSP analyses it again (too_large=0); the remaining big cohesive blocks are the storage layer (ADR-002..006, ~900 lines) and the /v1 PBL routes (~460) |
-| B-145 | proposed | assumed | The Worker's per-entity storage (ADR-002 devices/commands, ADR-003 devices, ADR-004 locations, ADR-005 audit, ADR-006 secrets) and the ten types they speak live in serverless/kv-store.ts (1203 lines), which imports only pbl/env and http.ts; worker.ts is 3751 lines after the S277/S278 splits |
+| B-144 | refuted | assumed | serverless/worker.ts is 4925 lines after extracting http.ts, admin-auth.ts and installer-scripts.ts in dependency order, so the harness LSP analyses it again (too_large=0); the remaining big cohesive blocks are the storage layer (ADR-002..006, ~900 lines) and the /v1 PBL routes (~460) → see B-148 |
+| B-145 | refuted | assumed | The Worker's per-entity storage (ADR-002 devices/commands, ADR-003 devices, ADR-004 locations, ADR-005 audit, ADR-006 secrets) and the ten types they speak live in serverless/kv-store.ts (1203 lines), which imports only pbl/env and http.ts; worker.ts is 3751 lines after the S277/S278 splits → see B-149 |
+| B-148 | proposed | assumed | serverless/worker.ts is 2,727 lines after the S277-S280 splits; the agent protocol (verifyAgentAuth plus the check-in, deadman, location, command-ACK and escrow handlers) lives in serverless/agent-routes.ts (541 lines), and the storage layer in kv-store.ts (1,203). The remaining big cohesive blocks are the device admin handlers (~700) and uninstall auth (~200). |
+| B-149 | proposed | assumed | The Worker's per-entity storage (ADR-002 devices/commands, ADR-003 devices, ADR-004 locations, ADR-005 audit, ADR-006 secrets) and the ten types they speak live in serverless/kv-store.ts (1,203 lines), which imports only pbl/env and http.ts. serverless/worker.ts is 2,727 lines after the S277-S280 splits (not 3,751). |
 
 ## api/enrolment
 
@@ -309,6 +311,12 @@ mkfs.fat 4.2 (2021-01-31)
 | B-119 | confirmed | code-read | The hardware harness read only Defender's ExclusionProcess list while agent/installer.py added no exclusion at all and installer_gui.py/deploy.ps1 add ExclusionPath — so the two 'defender_exclusion: null' hardware readings meant 'wrong metric + missing step', not 'Defender is excluding nothing'. |
 | B-128 | confirmed | code-read | A database pool whose end() closes the handle without waiting for in-flight queries can crash the process uncatchably: sqlite3 raises SQLITE_MISUSE from its native error callback, which is an uncaught throw rather than a promise rejection, so the test runner dies with exit 2 and no test-level failure. The fix belongs at the pool layer — the pg.Pool.end() contract: refuse new work with a catchable error and drain in-flight statements before closing — not a per-suite teardown drain, because suites built on supertest have no listening server to drain. |
 | B-129 | confirmed | code-read | A documented verification count is not evidence that the gate passes. In S267 the AGENTS.md sweep list claimed nine numbers no recent run had produced, including 'API+agent E2E 10/10 green' for a suite that actually contains 14 tests and was dying intermittently with exit 2. Every quoted count must be re-measured by running the owning command, and a gate that can exit non-zero without failing a test needs a mutation-checked regression test. |
+
+## harness/coverage
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-147 | proposed | assumed | The serverless coverage gate (serverless/vitest.config.mts) measures every source module ('*.ts' + 'pbl/**/*.ts'), not just worker.ts: the include was widened in S280 after S277-S279's extractions silently escaped it, and the then-current floors (82/75/86/83) still passed on the honest 86.36/82.99/95.04/88.52 measured over the whole module set. |
 
 ## integrations/ui
 

@@ -3182,7 +3182,7 @@ beliefs:
     in dependency order, so the harness LSP analyses it again (too_large=0); the remaining big cohesive
     blocks are the storage layer (ADR-002..006, ~900 lines) and the /v1 PBL routes (~460)
   domain: api/devices
-  status: proposed
+  status: refuted
   evidence_level: assumed
   provenance: S277 commit 9212930; lens_diagnostics full probe reports too_large=0 and no errors across
     the four modules
@@ -3191,15 +3191,18 @@ beliefs:
   last_verified: null
   commit_ref: null
   supersedes: null
-  superseded_by: null
+  superseded_by: B-148
   dependents: []
   notes: 'Ship to MOLE is still blocked: lab server HTTP 000 and wrangler not authenticated.'
+  refuted_on: '2026-11-18'
+  refute_evidence: wc -l serverless/worker.ts serverless/agent-routes.ts serverless/kv-store.ts = 2727
+    / 541 / 1203; 480 worker tests, tsc clean, 2026-11-18
 - id: B-145
   statement: The Worker's per-entity storage (ADR-002 devices/commands, ADR-003 devices, ADR-004 locations,
     ADR-005 audit, ADR-006 secrets) and the ten types they speak live in serverless/kv-store.ts (1203
     lines), which imports only pbl/env and http.ts; worker.ts is 3751 lines after the S277/S278 splits
   domain: api/devices
-  status: proposed
+  status: refuted
   evidence_level: assumed
   provenance: S278 commit 8881171; 480 worker tests unchanged across a pure move, tsc clean, cross-surface
     23 passed
@@ -3208,10 +3211,12 @@ beliefs:
   last_verified: null
   commit_ref: null
   supersedes: null
-  superseded_by: null
+  superseded_by: B-149
   dependents: []
   notes: 'Remaining cuts: /v1 PBL routes (~460 lines) and the agent handlers. Ship to MOLE still blocked
     on operator access.'
+  refuted_on: '2026-11-18'
+  refute_evidence: wc -l serverless/kv-store.ts serverless/worker.ts = 1203 / 2727, 2026-11-18
 - id: B-146
   statement: The /v1 firmware route dispatcher lives in serverless/pbl/routes/index.ts (458 lines) and
     the isolate signing-key cache in serverless/pbl/keys.ts, so the whole PBL surface imports nothing
@@ -3231,3 +3236,55 @@ beliefs:
   dependents: []
   notes: 'resetKeyCache is re-exported from worker.ts for the test harness. Remaining big blocks: agent
     handlers, device admin handlers, uninstall auth, installer endpoints.'
+- id: B-147
+  statement: 'The serverless coverage gate (serverless/vitest.config.mts) measures every source module
+    (''*.ts'' + ''pbl/**/*.ts''), not just worker.ts: the include was widened in S280 after S277-S279''s
+    extractions silently escaped it, and the then-current floors (82/75/86/83) still passed on the honest
+    86.36/82.99/95.04/88.52 measured over the whole module set.'
+  domain: harness/coverage
+  status: proposed
+  evidence_level: assumed
+  provenance: code-read
+  source: serverless/vitest.config.mts + npx vitest run --coverage, 2026-11-18
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Named weak spots: pbl/routes/signingKey.ts 0%, pbl/routes/firmware.ts 16.66%.'
+- id: B-148
+  statement: serverless/worker.ts is 2,727 lines after the S277-S280 splits; the agent protocol (verifyAgentAuth
+    plus the check-in, deadman, location, command-ACK and escrow handlers) lives in serverless/agent-routes.ts
+    (541 lines), and the storage layer in kv-store.ts (1,203). The remaining big cohesive blocks are the
+    device admin handlers (~700) and uninstall auth (~200).
+  domain: api/devices
+  status: proposed
+  evidence_level: assumed
+  provenance: wc -l serverless/worker.ts serverless/agent-routes.ts serverless/kv-store.ts = 2727 / 541
+    / 1203; 480 worker tests, tsc clean, 2026-11-18
+  source: refutes B-144
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: B-144
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-149
+  statement: The Worker's per-entity storage (ADR-002 devices/commands, ADR-003 devices, ADR-004 locations,
+    ADR-005 audit, ADR-006 secrets) and the ten types they speak live in serverless/kv-store.ts (1,203
+    lines), which imports only pbl/env and http.ts. serverless/worker.ts is 2,727 lines after the S277-S280
+    splits (not 3,751).
+  domain: api/devices
+  status: proposed
+  evidence_level: assumed
+  provenance: wc -l serverless/kv-store.ts serverless/worker.ts = 1203 / 2727, 2026-11-18
+  source: refutes B-145
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: B-145
+  superseded_by: null
+  dependents: []
+  notes: ''
