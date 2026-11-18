@@ -2358,3 +2358,105 @@ Make the hardware harness capture the refusal itself (lock → operator attempt 
 then decide the Worker release that still serves a 2026-11-12 agent.
 
 ---
+
+---
+
+## Session 290 — 2026-11-18 (release: the Worker now serves the current agent)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `serverless/README.md` §"Publishing" — the `binary:*` key names, the per-platform
+  precedence over the shared key, and the rule that `agent_release` metadata must carry a hash the
+  update path can verify.
+- **Read**: `serverless/worker.ts` (`handleAgentBinaryDownload` / `handleDownloadBinary`, and the
+  `x-content-sha256` header the agent checks) — what a published key actually has to satisfy.
+- **Read**: `scripts/build-generic-installer.sh` (header) — the NSIS wrapper *embeds*
+  `lockdown-agent.exe` and `lockdown-installer.exe`, so a stale wrapper carries a stale agent
+  regardless of what `binary:agent` says.
+- **Read**: `agent/build.ps1` (spec list) and `agent/*.spec` (`name=` fields) — which artifacts exist
+  and which the default build produces.
+
+**Findings**, measured before acting:
+
+- KV held `binary:agent`, `binary:agent-installer`, `binary:installer`, `binary:lockscreen` — and no
+  `agent_release`, so the update path has always answered "no release published".
+- `binary:agent` served a 2026-11-12 build (S288), i.e. one that predates the S271/S284/S287 fixes.
+- `makensis` is absent on this host (no root to install it) and on MOLE (no winget/choco), so the
+  NSIS wrapper cannot be rebuilt here.
+
+### Fog cleared
+
+- **Three of the four published artifacts are now the current build**, rebuilt on MOLE from the S287
+  tree and verified by downloading them back byte-for-byte: `binary:agent` 16,852,161 B
+  (`d9e45902…`), `binary:agent-installer` 15,789,390 B (`399ad9ba…`), `binary:lockscreen`
+  9,146,350 B (`6592fd87…`).
+- **The Worker's own integrity header agrees with the bytes it serves**:
+  `x-content-sha256: d9e45902…` equals the local artifact's full sha256 — so an agent's verification
+  will pass against a body that the same response declares.
+- **What is still stale is now precisely named, not vaguely "the release"**: `binary:installer` (the
+  NSIS wrapper, 18,628,686 B) embeds the agent at build time and needs `makensis`; `agent_release`
+  has never existed and needs a signed record, i.e. an update signing keypair.
+
+### Fog remaining
+
+- **`binary:installer` still ships the 2026-11-12 agent.** The other three download paths are
+  current, which makes this the one remaining place the old build can still reach a machine. Fixing
+  it needs `makensis` (a build dependency, not a decision).
+- **Auto-update remains off by design-omission**: with no `agent_release`, the update path answers
+  "no release published" and no agent is ever offered an update. Publishing metadata means creating
+  the update trust root (`scripts/generate-update-keys.sh`), which is an operator decision — and
+  every future release then has to be signed with the same key.
+- **`watchdog` / `offline_recovery` were not built or published** — no download path serves them
+  today, so they were not fetched from the build tree.
+- Unchanged: HP UEFI 0 of 3 critical writes (needs the BIOS Setup password); E-BCD's verification
+  ceiling; 12 stale `audit_test_teeth.py` rows; the ≈700-line device admin handlers in `worker.ts`.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **`binary:installer`: needs `makensis`.** Environment, not a decision.
+- **`agent_release`: needs an update signing keypair** (D-130's territory). Operator decision.
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+
+### Session artifacts
+
+- `docs/artifacts/s290-release-published.txt` — the before/after for `/api/download/agent`, what was
+  built on MOLE with sizes and hashes, the three KV publishes, the byte-for-byte verify-by-download
+  table, the `x-content-sha256` comparison against the local artifact, and an explicit "what was NOT
+  published and why" for the NSIS wrapper and the metadata.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback)**: S288 proved the *served* binary was stale by parsing a PE
+  timestamp; this session closed it by comparing what the Worker returns against what was built,
+  which is a check anyone can re-run without trusting either number. The habit worth keeping is
+  "download the artifact back and compare", because the publish command's success says nothing about
+  what the endpoint serves.
+- **Layer 2 (context provision)**: the NSIS wrapper's embedding behaviour was only discoverable from
+  `build-generic-installer.sh`'s header. Had it said nothing, publishing three keys would have looked
+  like a complete release while one download path still handed out a month-old agent.
+
+### VERIFY
+
+- `npx wrangler kv key put --remote` × 3 → written to `LOCKDOWN_KV` (84b24c0c…).
+- Re-downloaded each: `agent` 16,852,161 B `d9e45902…`; `agent-installer` 15,789,390 B `399ad9ba…`;
+  `lockscreen` 9,146,350 B `6592fd87…` — each equal to the local artifact.
+- `x-content-sha256: d9e45902674537f91e23858126fe564c19a8519f20eed9ca6e9020a24cf66bd3` = local sha256.
+- `binary:installer` still 18,628,686 B (unchanged, named as stale).
+- `brain.py check` → 159 beliefs, integrity clean.
+
+### Next session opening
+
+Rebuild `binary:installer` with `makensis` (the one download path still serving the 2026-11-12
+agent), then decide whether to establish the update trust root so `agent_release` can be published
+and agents stop depending on reinstall to get a new build.
+
+---

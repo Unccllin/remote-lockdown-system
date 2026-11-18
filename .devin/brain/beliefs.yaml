@@ -3487,3 +3487,24 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-159
+  statement: 'The Worker''s published artifacts were refreshed in S290: binary:agent (16,852,161 B, sha256
+    d9e45902…, build=20261118.4bfeda526b77), binary:agent-installer (15,789,390 B, 399ad9ba…) and binary:lockscreen
+    (9,146,350 B, 6592fd87…) are current, verified by downloading each back and comparing to the local
+    build, and the response''s x-content-sha256 equals the local artifact hash. Two gaps remain by kind:
+    binary:installer (18,628,686 B) is still the 2026-11-12 NSIS wrapper because it embeds the agent at
+    build time and makensis is absent on both hosts; agent_release has never been published, so the update
+    path answers ''no release published'' and agents only get new builds by reinstall.'
+  domain: deployment/release
+  status: proposed
+  evidence_level: assumed
+  provenance: wrangler kv key put --remote ×3 + byte-for-byte re-download verification against the MOLE
+    build; docs/artifacts/s290-release-published.txt
+  source: serverless/README.md, serverless/worker.ts, scripts/build-generic-installer.sh
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

@@ -53,39 +53,34 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 289 — 2026-11-18 (a console sign-in is refused: E-LOCK-SCREEN is back on hardware)
+## Latest session: 290 — 2026-11-18 (release: the Worker now serves the current agent)
 
 ### Fog cleared
 
-- **A console sign-in is REFUSED on hardware, recorded by Windows.** The operator typed their real
-  password at MOLE's logon screen while locked and got *"The account is currently disabled. Contact
-  your system administrator."* The device's own Security log holds **8 × 4625** with
-  `TargetUserName=Newark User`, `LogonType=2`, `Status=0xc000006e`, `SubStatus=0xc0000072`,
-  `WorkstationName=MOLE`, `ProcessName=svchost.exe` — five of them the operator's attempts between
-  11:40:07 and 11:43:22 local; the three earliest are the agent's own relock attempts.
-- **E-LOCK-SCREEN is re-promoted to `verified-on-hardware`**, cited as
-  `docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01`, and **all graph invariants
-  pass** — I3 accepts the citation because the artifact is a real result record, not a prose file.
-- **The S284 WinRE fix held on a re-lock**: BCD `success: true, critical_applied: 3,
-  best_effort_applied: 5`, one best-effort failure (`allowprereleasesignatures`), no rollback —
-  the third consecutive real run where a reused device could lock at all.
-- **Recovery returned the device to its pre-lock state**: account active, sentinel gone, recovery key
-  gone, `README.txt` plaintext, BCD restored 5/5, WinRE left as found, device `active`,
-  `lock_state none`. The BIOS layer again reported `Restored 0 of 5 … every write was refused` — the
-  S285 finding, unchanged and honestly stated.
+- **Three of the four published artifacts are now the current build**, rebuilt on MOLE from the S287
+  tree and verified by downloading them back byte-for-byte: `binary:agent` 16,852,161 B
+  (`d9e45902…`), `binary:agent-installer` 15,789,390 B (`399ad9ba…`), `binary:lockscreen`
+  9,146,350 B (`6592fd87…`).
+- **The Worker's own integrity header agrees with the bytes it serves**:
+  `x-content-sha256: d9e45902…` equals the local artifact's full sha256 — so an agent's verification
+  will pass against a body that the same response declares.
+- **What is still stale is now precisely named, not vaguely "the release"**: `binary:installer` (the
+  NSIS wrapper, 18,628,686 B) embeds the agent at build time and needs `makensis`; `agent_release`
+  has never existed and needs a signed record, i.e. an update signing keypair.
 
 ### Fog remaining
 
-- **The overlay is still not what refuses.** `CreateWindowEx failed: 2` continues in session 0, so on
-  this unit the enforcement is the disabled account plus the guardian's re-assertion. That is now
-  stated in the node's `risk_notes` rather than implied by the path's name.
-- **One unit only**: MOLE, HP EliteBook 830 G6, no usable TPM. A second machine would make the claim
-  fleet-level rather than unit-level.
-- **HP UEFI layer still applies 0 of 3 critical writes** — needs the real BIOS Setup password.
-- **Nothing in the harness captures this automatically.** The 4625 check is a manual capture; making
-  the hardware harness assert it (lock → wait for the operator → scan 4625 for 0xc0000072) would make
-  the evidence reproducible instead of remembered.
-- The Worker release is still unshipped: the deployed Worker serves a 2026-11-12 agent (S288).
+- **`binary:installer` still ships the 2026-11-12 agent.** The other three download paths are
+  current, which makes this the one remaining place the old build can still reach a machine. Fixing
+  it needs `makensis` (a build dependency, not a decision).
+- **Auto-update remains off by design-omission**: with no `agent_release`, the update path answers
+  "no release published" and no agent is ever offered an update. Publishing metadata means creating
+  the update trust root (`scripts/generate-update-keys.sh`), which is an operator decision — and
+  every future release then has to be signed with the same key.
+- **`watchdog` / `offline_recovery` were not built or published** — no download path serves them
+  today, so they were not fetched from the build tree.
+- Unchanged: HP UEFI 0 of 3 critical writes (needs the BIOS Setup password); E-BCD's verification
+  ceiling; 12 stale `audit_test_teeth.py` rows; the ≈700-line device admin handlers in `worker.ts`.
 
 ### Debt items closed
 
@@ -98,44 +93,42 @@ D-210 (PBL route integration).
 
 ### Blockers
 
+- **`binary:installer`: needs `makensis`.** Environment, not a decision.
+- **`agent_release`: needs an update signing keypair** (D-130's territory). Operator decision.
 - **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
-- **Worker release**: binaries in KV are stale; publishing them plus signed `agent_release` is a
-  decision, not a credential problem (deploy access works since S288).
 
 ### Session artifacts
 
-- `docs/artifacts/s289-lock-screen-signin-refused.json` — a CTRF-shaped result record
-  (`E-LOCK-SCREEN-01: passed`) carrying the eight 4625 events field by field, the operator's report
-  verbatim, the agent build (`20261118.4bfeda526b77`) and sha256 that produced it, the lockdown ACK's
-  layer detail, the post-recovery state, an explicit "why this meets the bar S270 set", and the
-  limitations (session-0 overlay, one unit, which events were the agent's own).
+- `docs/artifacts/s290-release-published.txt` — the before/after for `/api/download/agent`, what was
+  built on MOLE with sizes and hashes, the three KV publishes, the byte-for-byte verify-by-download
+  table, the `x-content-sha256` comparison against the local artifact, and an explicit "what was NOT
+  published and why" for the NSIS wrapper and the metadata.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)**: this path sat at `verified-in-unit-test` for two days not
-  because the evidence was hard to get but because nobody had asked *which artifact field* would
-  settle it. The moment the question became "which event id, which field, which value", one sign-in
-  attempt answered it. The lesson is about the shape of a claim, not about hardware access.
-- **A drafting error worth naming**: the first version of the artifact JSON contained a
-  `normalized_payload` key describing a pipeline that never existed. It was caught by re-reading the
-  file before citing it — evidence files need the same review as code, because a citation is only as
-  good as the file it points at.
+- **Layer 4 (verification feedback)**: S288 proved the *served* binary was stale by parsing a PE
+  timestamp; this session closed it by comparing what the Worker returns against what was built,
+  which is a check anyone can re-run without trusting either number. The habit worth keeping is
+  "download the artifact back and compare", because the publish command's success says nothing about
+  what the endpoint serves.
+- **Layer 2 (context provision)**: the NSIS wrapper's embedding behaviour was only discoverable from
+  `build-generic-installer.sh`'s header. Had it said nothing, publishing three keys would have looked
+  like a complete release while one download path still handed out a month-old agent.
 
 ### VERIFY
 
-- Graph: `make graph-check` → all invariants pass; E-LOCK-SCREEN `status: verified-on-hardware`,
-  `hardware_artifact_ref: docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01`.
-- `artifact_supports_claim("E-LOCK-SCREEN", …#E-LOCK-SCREEN-01)` → `(True, '')`.
-- Device: 8 × Security 4625 `SubStatus 0xc0000072`; lockdown ACK `lockdown_effective=1`,
-  `boot_lock_status=partial`; post-recovery account `Yes`, sentinel absent, BCD 5/5 restored,
-  device `active`.
-- `brain.py check` → 158 beliefs, integrity clean.
+- `npx wrangler kv key put --remote` × 3 → written to `LOCKDOWN_KV` (84b24c0c…).
+- Re-downloaded each: `agent` 16,852,161 B `d9e45902…`; `agent-installer` 15,789,390 B `399ad9ba…`;
+  `lockscreen` 9,146,350 B `6592fd87…` — each equal to the local artifact.
+- `x-content-sha256: d9e45902674537f91e23858126fe564c19a8519f20eed9ca6e9020a24cf66bd3` = local sha256.
+- `binary:installer` still 18,628,686 B (unchanged, named as stale).
+- `brain.py check` → 159 beliefs, integrity clean.
 
 ### Next session opening
 
-Make the hardware harness capture the refusal itself (lock → operator attempt → assert a 4625 with
-`SubStatus 0xc0000072`), so E-LOCK-SCREEN's evidence is reproducible rather than a one-off capture;
-then decide the Worker release that still serves a 2026-11-12 agent.
+Rebuild `binary:installer` with `makensis` (the one download path still serving the 2026-11-12
+agent), then decide whether to establish the update trust root so `agent_release` can be published
+and agents stop depending on reinstall to get a new build.
 
 ---
 
