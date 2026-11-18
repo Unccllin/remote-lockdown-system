@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-18 12:49:37
-Active memories: 1395 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-18 15:21:37
+Active memories: 1421 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -102,6 +102,32 @@ Active memories: 1395 | Superseded: 0 | Decayed: 20
 | m-1413 | The classifier only accepts 0xc0000072, so a wrong |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
 | m-1414 | timeout must exceed HW_LOCK_SIGNIN_WAIT or the har |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
 | m-1415 | MISTAKE: mistake: three new test lines exceeded th |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1416 | agent/service_host.py now consumes .update_pending |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1417 | Proven twice on MOLE with no manual step: 1.0.1->1 |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1418 | The frozen lockdown-service.exe needs pywin32; age |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1419 | /api/download/* now answers max-age=300 (was 3600) |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1420 | Enrolling a device on the Worker needs its ADMIN_T |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1421 | MISTAKE: mistake: put the supervisor's update chec |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1422 | MISTAKE: mistake: rebuilt the service without pywi |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1423 | agent/requirements.txt now pins pywin32==312 with; |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1424 | scripts/build-windows-artifacts.ps1 checks 'import |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1425 | Two source-level tests pin ordering (check before  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1426 | MISTAKE: mistake: none of consequence this session |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1427 | dashboard E2E failures were a missing Playwright b |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1428 | dashboard/dist was 3 source files stale; vite buil |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1429 | server/dev-start-sqlite.js never served the SPA (o |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1430 | Client base URL is electronApiUrl || VITE_API_URL  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1431 | MISTAKE: mistake: the 11/11 E2E failure reads like |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1432 | The blocked token endpoint was healthy: 401 'Admin |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1433 | The Worker needs no JWT_SECRET: signAdminToken/ver |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1434 | Cloudflare returns 403 code 1010 to a Python urlli |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1435 | Pushed 40 commits (31524c4..0c13b19). GitHub repor |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1436 | MISTAKE: mistake: a python urllib login attempt re |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1437 | The registration one-liner is: iex (irm '<origin>/ |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1438 | binary:service was 404 (KV key never published) an |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1439 | The generated script had UTF-8 em dashes; PowerShe |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1440 | Always parse-check generated PowerShell with the T |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1441 | MISTAKE: mistake: assumed the setup script was fin |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
 | m-1201 | is_destructive in the harness gated nothing: no pr |  | 0.50 | 2026-11-17 | 0.247 | 0 |  |
 | m-1202 | E-BCD rewrites boot config and disables WinRE (the |  | 0.50 | 2026-11-17 | 0.247 | 0 |  |
 | m-1203 | The before-state must be written to disk before th |  | 0.50 | 2026-11-17 | 0.247 | 0 |  |

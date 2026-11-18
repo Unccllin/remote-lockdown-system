@@ -3755,3 +3755,28 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-171
+  statement: 'The wrong map position is not a plumbing bug (S303): MOLE''s location rows are source ''ip''
+    with identical coordinates -0.4840639/37.1266157 for every report, and ipwho.is returns exactly that
+    for the egress IP 41.90.239.213 (Kenya/Nyeri/Karatina, Safaricom ASN 37061). The dashboard plots [lat,
+    lon] faithfully for Leaflet; what is coarse is the source. WiFi triangulation is unavailable to a
+    service install: netsh wlan show networks mode=bssid on Windows 11 answers ''Network shell commands
+    need location permission to access WLAN information ... Access is denied'' (0 SSIDs, 0 BSSIDs) even
+    after HKLM and HKCU consent Allow plus an lfsvc restart, because the scan needs a location-capable
+    interactive session and the agent runs as LocalSystem in session 0. Separately, the Worker has no
+    google_api_key provisioning (only server/src/routes/installer.js:562 does it), so a Worker-enrolled
+    fleet cannot be given a triangulation key at all. The dashboard also drops the source/accuracy/age
+    fields that would tell an operator the fix is city-level.'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: live Worker location rows, ipwho.is query for the egress IP, netsh refusal on MOLE with
+    four settings attempts, and a grep of both backends' key provisioning; docs/artifacts/s303-location-diagnosis.txt
+  source: agent/agent.py, dashboard/src/pages/DeviceDetailPage.jsx, server/src/routes/installer.js, serverless/*.ts
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

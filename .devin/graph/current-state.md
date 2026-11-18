@@ -53,34 +53,33 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 302 — 2026-11-18 (the dashboard's enrolment one-liner was broken twice; both fixed and verified on PowerShell 5.1)
+## Latest session: 303 — 2026-11-18 ("the location doesn't map correctly" — it is IP-level, and WiFi is
 
 ### Fog cleared
 
-- **`binary:service` is published** (9,494,157 B, sha256 `130238f4…`, byte-identical to the service
-  MOLE runs) so all three downloads the script needs answer 200 with correct digests.
-- **The generated script is ASCII-only** (8 template em dashes replaced with `-`), pinned by a test in
-  `worker.test.ts` that composes the script and fails on any non-ASCII character. 485 worker tests
-  pass, `tsc` clean, deployed `6b635f9b-7c37-479d-bffc-cad066f0325d`.
-- **Verified on the target parser**: the re-fetched script parses with **0 errors** under Windows
-  PowerShell 5.1 on MOLE.
-- **MOLE is on the Worker now**: enrolled through the dashboard's own token flow (token minted,
-  `/api/enroll/claim` → 201), config repointed to the Worker, agent restarted — the Worker lists
-  `MOLE | 1.0.3 | active | signature`, alongside FRANKENSTEIN.
+- **The plumbing is faithful and the map is not lying about the numbers** — it renders the exact
+  coordinates it is given, in the right order. What is wrong is the *source*: IP geolocation reports
+  the ISP's booked location, and on this egress that is Karatina, Kenya.
+- **WiFi triangulation is unavailable to a service install**, not merely unconfigured: the WLAN scan
+  needs a location-capable *interactive* session on this Windows build, and the agent runs as
+  LocalSystem in session 0. Even with a Google key there would be nothing to triangulate.
+- **The serverless path cannot be given a key today**: `server/src/routes/installer.js:562` injects
+  `google_api_key` into Express-generated installers, and `serverless/` has no such support — so a
+  Worker-enrolled fleet is permanently IP-only, by omission rather than decision.
+- **The UI implies a precision it does not have**: no source, no accuracy, no age; three identical
+  points read as a movement trail.
 
 ### Fog remaining
 
-- **The service binary is published from a local build**, not from CI: `binary:service` now depends on
-  a manual `wrangler kv key put`. The release section of `serverless/README.md` lists `binary:agent`
-  and `agent-installer` but not `binary:service`, which is exactly how it went missing.
-- **The script has never been executed end to end on a *fresh* machine.** It parses, its downloads
-  answer, and its claim step works — but the presentation should still be rehearsed once on a
-  throwaway box, because "parses" is not "installs".
-- **`installer-scripts.ts` still carries em dashes in its TS comments** (harmless — comments are not
-  emitted) while template strings are now ASCII; a future edit inside a template could reintroduce
-  one, which is why the test exists.
-- Unchanged: picomatch audit advisories, `make sast` unavailable, 12 stale `audit_test_teeth` rows,
-  offline key custody, HP UEFI BIOS password.
+- **Which fix to implement is a product decision** (see the artifact's four options): UI honesty;
+  Worker-side key provisioning; an in-session BSSID helper; or accepting IP-level for service
+  installs and saying so.
+- **The registry changes made while testing** (`HKLM …\ConsentStore\location\Value = Allow`,
+  `lfsvc Status = 1`, an HKCU Allow on MOLE) are left in place — they are benign and plausibly
+  necessary on machines where an interactive session *can* scan, but they did not change this box's
+  behaviour and are not a fix on their own.
+- Unchanged: picomatch advisories, `make sast` unavailable, 12 stale `audit_test_teeth` rows, offline
+  key custody, HP UEFI BIOS password.
 
 ### Debt items closed
 
@@ -93,43 +92,39 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Operator rehearsal of the one-liner on a clean machine** — the last unverified step of the
-  registration story.
-- **Offline custody of `update_signing.key`; HP UEFI BIOS password; picomatch decision.**
+- **A Google Geolocation API key** is needed for any real fix, and it is an operator credential.
+- **An architectural decision** on how a session-0 service can obtain BSSIDs, if at all.
 
 ### Session artifacts
 
-- No file artifact: the evidence is the parse result (`parse errors: 0`, PS 5.1.26100.9818), the four
-  download responses with their digests, and the Worker device list showing MOLE. The served script
-  is reproducible with `curl https://…/api/enroll/setup.ps1`.
+- `docs/artifacts/s303-location-diagnosis.txt` — the three identical rows, the provider's own answer
+  for the egress IP, the exact `netsh` refusal, the four settings attempts in the order they were
+  made with their outcomes, and four options ordered by cost.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), twice**: the 404 was invisible because the route *existed* and
-  only the KV key was missing; the parse failure was invisible because the script is generated and
-  nobody parses generated code. Both were found by executing the artefact rather than reading it, and
-  both would have failed in front of the audience instead of here.
-- **Layer 2 (context provision)**: B-083 already recorded the PS 5.1 / UTF-8 hazard for a *build*
-  script; nothing carried that lesson to the script served to customers. A rule learned in one artefact
-  needs to be stated where the next artefact is authored.
+- **Layer 4 (verification feedback)**: the product reported "location" with a source field of `ip`
+  and an accuracy of `city`, and the dashboard dropped both. A field that exists to describe the
+  confidence of a measurement is worth surfacing *where the measurement is displayed* — otherwise the
+  UI silently upgrades a city-level guess into a pointer.
+- **Layer 3 (execution environment)**: the WLAN-permission ceiling is a platform fact nobody had
+  measured on a service install; the repo's own hardware notes recorded that the WiFi-scan branch was
+  unit-tested only, which was the hint that it had never worked in the deployed context.
 
 ### VERIFY
 
-- `curl /api/download/{installer,agent,service}` → 200 / 200 / **200** with digests
-  `f9633ecb…` / `902a1af3…` / `130238f4…`, each equal to the local build.
-- `wrangler deploy` → version `6b635f9b-7c37-479d-bffc-cad066f0325d`; served script 7,072 B, **0**
-  non-ASCII bytes, CRLF preserved.
-- MOLE, PowerShell 5.1.26100.9818: `[Parser]::ParseFile(script)` → **parse errors: 0**.
-  (Before the fix: 3 errors, "The string is missing the terminator".)
-- Worker device list → `MOLE | 1.0.3 | active | signature`, `FRANKENSTEIN | 1.0.0 | active | signature`.
-- `npx vitest run` → **485 passed**; `tsc --noEmit` clean.
+- Worker `GET /api/devices/14e7dafb…/locations` → three rows, `source: ip`, identical coordinates.
+- `curl https://ipwho.is/41.90.239.213` → `Kenya / Nyeri / Karatina`, `Safaricom Limited`,
+  `-0.4840639 / 37.1266157`.
+- MOLE `netsh wlan show networks mode=bssid` → `networks: 0`, `BSSIDs: 0`, "Access is denied".
+- After HKLM/HKCU Allow + `lfsvc` restart → unchanged (0 / 0, same message).
 - `brain.py check` → integrity clean.
 
 ### Next session opening
 
-Rehearse the one-liner on a clean Windows box with a fresh token, then add `binary:service` (and the
-other `binary:*` keys the setup script downloads) to the release section of `serverless/README.md` so
-the next release cannot omit it the way this one did.
+Pick one of the four location options — the cheapest being to surface source/accuracy/age in the
+dashboard so a city-level IP fix stops looking like a position — then provision `google_api_key` on
+the serverless path for the installs that can actually scan.
 
 ---
 

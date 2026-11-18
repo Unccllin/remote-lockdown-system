@@ -3683,3 +3683,105 @@ other `binary:*` keys the setup script downloads) to the release section of `ser
 the next release cannot omit it the way this one did.
 
 ---
+
+---
+
+## Session 303 — 2026-11-18 ("the location doesn't map correctly" — it is IP-level, and WiFi is
+unavailable to a service)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: the Worker's location read APIs for MOLE (`/api/devices/:id/locations`,
+  `/location/latest`) — the rows the dashboard actually receives.
+- **Read**: `agent/agent.py` — `report_location`, `get_ip_geolocation`, `_normalise_ip_geolocation`
+  (ipwho.is defaults, the HTTPS-only guard), and the Google path (`geolocation/v1/geolocate` when
+  `cfg.google_api_key` is set).
+- **Read**: `dashboard/src/pages/DeviceDetailPage.jsx` and `MapPage.jsx` — `[latitude, longitude]`
+  order into Leaflet, the polyline, and what the popup shows.
+- **Read**: `server/src/routes/installer.js` (it injects `google_api_key` into generated installers)
+  and `serverless/*.ts` (nothing provisions a key at all).
+
+**Findings**, measured before acting:
+
+- Three location reports for MOLE, **identical** coordinates: `-0.4840639 / 37.1266157`,
+  `source: ip`, `city Karatina, Nyeri, KE`, `ip 41.90.239.213`.
+- `ipwho.is` answers the same thing for that IP — including `Safaricom Limited (ASN 37061)` — and it
+  is also *this host's* egress IP. The agent reported exactly what the provider said.
+- `netsh wlan show networks mode=bssid` on MOLE answers **"Network shell commands need location
+  permission to access WLAN information … Access is denied"** — zero SSIDs, zero BSSIDs.
+- Setting HKLM consent to Allow, creating the HKCU value, and restarting `lfsvc` changed nothing; a
+  SYSTEM scheduled task (to rule out the SSH user) never ran, because MOLE's Task Scheduler is the
+  broken one already documented in `service_host.py`.
+
+### Fog cleared
+
+- **The plumbing is faithful and the map is not lying about the numbers** — it renders the exact
+  coordinates it is given, in the right order. What is wrong is the *source*: IP geolocation reports
+  the ISP's booked location, and on this egress that is Karatina, Kenya.
+- **WiFi triangulation is unavailable to a service install**, not merely unconfigured: the WLAN scan
+  needs a location-capable *interactive* session on this Windows build, and the agent runs as
+  LocalSystem in session 0. Even with a Google key there would be nothing to triangulate.
+- **The serverless path cannot be given a key today**: `server/src/routes/installer.js:562` injects
+  `google_api_key` into Express-generated installers, and `serverless/` has no such support — so a
+  Worker-enrolled fleet is permanently IP-only, by omission rather than decision.
+- **The UI implies a precision it does not have**: no source, no accuracy, no age; three identical
+  points read as a movement trail.
+
+### Fog remaining
+
+- **Which fix to implement is a product decision** (see the artifact's four options): UI honesty;
+  Worker-side key provisioning; an in-session BSSID helper; or accepting IP-level for service
+  installs and saying so.
+- **The registry changes made while testing** (`HKLM …\ConsentStore\location\Value = Allow`,
+  `lfsvc Status = 1`, an HKCU Allow on MOLE) are left in place — they are benign and plausibly
+  necessary on machines where an interactive session *can* scan, but they did not change this box's
+  behaviour and are not a fix on their own.
+- Unchanged: picomatch advisories, `make sast` unavailable, 12 stale `audit_test_teeth` rows, offline
+  key custody, HP UEFI BIOS password.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (PBL firmware signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **A Google Geolocation API key** is needed for any real fix, and it is an operator credential.
+- **An architectural decision** on how a session-0 service can obtain BSSIDs, if at all.
+
+### Session artifacts
+
+- `docs/artifacts/s303-location-diagnosis.txt` — the three identical rows, the provider's own answer
+  for the egress IP, the exact `netsh` refusal, the four settings attempts in the order they were
+  made with their outcomes, and four options ordered by cost.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback)**: the product reported "location" with a source field of `ip`
+  and an accuracy of `city`, and the dashboard dropped both. A field that exists to describe the
+  confidence of a measurement is worth surfacing *where the measurement is displayed* — otherwise the
+  UI silently upgrades a city-level guess into a pointer.
+- **Layer 3 (execution environment)**: the WLAN-permission ceiling is a platform fact nobody had
+  measured on a service install; the repo's own hardware notes recorded that the WiFi-scan branch was
+  unit-tested only, which was the hint that it had never worked in the deployed context.
+
+### VERIFY
+
+- Worker `GET /api/devices/14e7dafb…/locations` → three rows, `source: ip`, identical coordinates.
+- `curl https://ipwho.is/41.90.239.213` → `Kenya / Nyeri / Karatina`, `Safaricom Limited`,
+  `-0.4840639 / 37.1266157`.
+- MOLE `netsh wlan show networks mode=bssid` → `networks: 0`, `BSSIDs: 0`, "Access is denied".
+- After HKLM/HKCU Allow + `lfsvc` restart → unchanged (0 / 0, same message).
+- `brain.py check` → integrity clean.
+
+### Next session opening
+
+Pick one of the four location options — the cheapest being to surface source/accuracy/age in the
+dashboard so a city-level IP fix stops looking like a position — then provision `google_api_key` on
+the serverless path for the installs that can actually scan.
+
+---
