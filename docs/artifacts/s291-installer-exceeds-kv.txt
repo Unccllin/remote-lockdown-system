@@ -1,0 +1,49 @@
+=== S291: the NSIS installer can be built here, and cannot be published to KV, 2026-11-18T09:25:52Z ===
+
+--- [1] getting makensis without root (the repo already expected this) ---
+scripts/build-generic-installer.sh's own header: "Requires: makensis (system, ~/.local/nsis, or
+NSISDIR pointing at one)" — i.e. an unpacked tree was the anticipated fallback.
+Done here: fetched nsis_3.12-1_amd64.deb + nsis-common_3.12-1_all.deb from the Ubuntu pool,
+unpacked with ar + tar (no dpkg, no root), NSISDIR=/tmp/nsis-root/usr/share/nsis
+  $ makensis -VERSION -> v3.12-1
+The stubs live in nsis-common, not in nsis: without it makensis errors
+  'reading stub .../Stubs/zlib-x86-unicode'
+
+--- [2] the build ---
+scripts/build-generic-installer.sh --stage /tmp/release \
+  --server-url https://lockdown-serverless.mainacollins196.workers.dev
+  version 1.0.0 · server-url taken from lockdown-installer.nsi's own !define (line 66)
+  warnings: lockdown-watchdog.exe not staged (optional), update_signing.pub not staged
+            (so installed agents accept SHA-256-only updates)
+  built /tmp/release/lockdown-installer.exe  41,203,591 bytes
+  sha256 e5f0f390ae7d5729376fe7bdc0713c998d3d741d67059cf34c159b0af52b9680
+
+--- [3] the wall it hits ---
+$ npx wrangler kv key put --binding=LOCKDOWN_KV --remote binary:installer:probe --path <41 MB file>
+  ERROR  content size of 41203591 bytes exceeds maximum allowed size of 27MiB  [code: 10024]
+  payload of the two mandatory files: agent 16,852,161 B + CLI installer 15,789,390 B
+  what the wrapper embeds (installer/generic/lockdown-installer.nsi:232-246):
+      lockdown-agent.exe        16,852,161 B
+      lockdown-installer.exe    15,789,390 B   (mandatory: enrolment/config/persistence run here)
+      lockdown-lockscreen.exe    9,146,350 B   (optional)
+      lockdown-watchdog.exe                      (optional, not staged)
+      update_signing.pub                         (optional, not staged)
+  32,641,551 B for the two mandatory files alone — already above 27 MiB (28,311,552 B) —
+  so no packaging choice short of merging those two binaries fits KV.
+  The published installer from 2026-11-12 was 18,628,686 B, i.e. it fit when it was built.
+
+--- [4] consequences, stated plainly ---
+  binary:installer cannot be refreshed on this platform at current payload sizes. It remains the
+  2026-11-12 wrapper, and because the wrapper embeds the agent it still installs the old build.
+  The three keys that could be refreshed were: binary:agent, binary:agent-installer,
+  binary:lockscreen (all verified by download in S290).
+
+  Three ways out, none of which is a tool call:
+    a. R2 binding: put the installer in a bucket and serve it from the Worker (no KV size limit).
+       Needs a Worker route + wrangler.toml binding + a bucket.
+    b. One binary: fold installer.py's enrol/install modes into lockdown-agent.exe, so the wrapper
+       embeds ~17 MB instead of 33 MB. A code consolidation, and the largest change of the three.
+    c. Host it elsewhere (GitHub release or the self-hosted server) and point the dashboard there.
+
+--- [5] nothing was published by this session ---
+  the probe key was rejected before any write, so binary:installer still holds the old artifact.

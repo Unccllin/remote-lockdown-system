@@ -2460,3 +2460,105 @@ agent), then decide whether to establish the update trust root so `agent_release
 and agents stop depending on reinstall to get a new build.
 
 ---
+
+---
+
+## Session 291 — 2026-11-18 (the installer builds here; KV cannot carry it)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `scripts/build-generic-installer.sh` — its header already anticipates an unpacked NSIS
+  ("system, `~/.local/nsis`, or `NSISDIR`"), its `--server-url` requirement and the S213 comment about
+  an empty default, and the `mv` that writes the result into `--out`.
+- **Read**: `installer/generic/lockdown-installer.nsi` — the `File` list (agent, CLI installer,
+  lockscreen, watchdog, update key), `SetCompressor /SOLID lzma`, and the `!define DEFAULT_SERVER_URL`
+  that pins the generic installer to the Worker URL.
+- **Read**: `.github/workflows/ci.yml` (`apt-get install -y nsis`) — the project's own build host
+  installs NSIS from a distro package, which is what made the no-root unpack a faithful substitute.
+- **Read**: `docs/artifacts/s290-release-published.txt` — which keys were refreshed and which were
+  left stale, so this session only had one open item.
+
+**Findings**, measured before acting:
+
+- `makensis` was absent and no Arch package was reachable through `pacman`; Ubuntu's pool carries
+  `nsis_3.12-1_amd64.deb` **plus** a separate `nsis-common_3.12-1_all.deb` that holds the stubs.
+  Without `nsis-common`, `makensis` fails with `reading stub ".../Stubs/zlib-x86-unicode"`.
+- The wrapper embeds **both** mandatory binaries, so its size is the sum of them — 32.6 MB before the
+  optional lockscreen.
+
+### Fog cleared
+
+- **The NSIS installer builds on this host without root**: `ar x` + `tar -xf` on the two .debs,
+  `NSISDIR=/tmp/nsis-root/usr/share/nsis`, `makensis v3.12-1`, and
+  `scripts/build-generic-installer.sh` produced a 41,203,591-byte wrapper
+  (`sha256 e5f0f390…`) with the repo's own default server URL.
+- **It cannot be published.** Cloudflare answered the write directly:
+  `content size of 41203591 bytes exceeds maximum allowed size of 27MiB [code: 10024]`.
+  The two mandatory files alone (32,641,551 B) already exceed 27 MiB, so this is not a packaging
+  detail — no arrangement of the current binaries fits a KV value.
+- **Nothing was written**: the probe key was rejected before any bytes landed, so `binary:installer`
+  still holds the 2026-11-12 wrapper and the S290 findings stand unchanged.
+
+### Fog remaining
+
+- **`binary:installer` remains stale, now for a structural reason**: the download path is KV-backed
+  and the artifact outgrew KV. Three routes out, none of them a tool call:
+  (a) an **R2** binding + Worker route (no KV size limit; needs a bucket and a binding),
+  (b) **one binary** — fold `installer.py`'s enrol/install modes into `lockdown-agent.exe` so the
+  wrapper embeds ~17 MB instead of 33 MB,
+  (c) **host it elsewhere** (GitHub release or the self-hosted server) and point the dashboard there.
+- **`agent_release` still does not exist**, so no agent is offered an update; and the wrapper was
+  built without `update_signing.pub`, which it reported as "installed agents will accept SHA-256-only
+  updates" — consistent, but it means the update trust root (D-130) is still unset.
+- The `--out` and `--stage` flags both pointed at the same directory, so the build's `mv` replaced the
+  staged CLI installer with the wrapper. KV still holds the correct CLI installer (published and
+  verified in S290), but a future build should use distinct directories — noted as a fingerprint of
+  the script's interface rather than a defect.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **`binary:installer` needs a hosting decision** (R2, one-binary, or external), not a build.
+- **`agent_release` needs the update signing keypair** (D-130).
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+
+### Session artifacts
+
+- `docs/artifacts/s291-installer-exceeds-kv.txt` — how NSIS was obtained without root (and why
+  `nsis-common` is mandatory), the build's version/server-url/warnings/sha256, the exact Cloudflare
+  rejection with its code, the payload arithmetic that shows even the two mandatory files cannot fit,
+  the three ways out, and the statement that nothing was published.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback)**: S290 concluded "`binary:installer` needs `makensis`". It needed
+  `makensis` *and* a hosting path; the second half was invisible until the build existed and the
+  upload was attempted. The lesson is the same one S288 learned about verification vs publishing —
+  a build artifact is not a release until something serves it.
+- **Layer 2 (context provision)**: the install path's size ceiling lives in Cloudflare's docs, not in
+  this repo, and nothing warned that the payload had grown past it. A release check that compares the
+  artifact size against the target's limit would have failed in a message instead of a ledger note.
+
+### VERIFY
+
+- `makensis -VERSION` → `v3.12-1` with `NSISDIR` set; the script built
+  `lockdown-installer.exe` 41,203,591 B, `sha256 e5f0f390ae7d5729376fe7bdc0713c998d3d741d67059cf34c159b0af52b9680`.
+- `wrangler kv key put … binary:installer:probe` → rejected, `exceeds maximum allowed size of 27MiB`,
+  code `10024`; no key written.
+- `brain.py check` → 160 beliefs, integrity clean.
+
+### Next session opening
+
+Choose how the installer is hosted — R2 binding, one merged binary, or an external host — and
+implement it, because `binary:installer` is now the only download path that can still put a
+2026-11-12 agent on a machine.
+
+---

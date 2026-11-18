@@ -53,34 +53,36 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 290 — 2026-11-18 (release: the Worker now serves the current agent)
+## Latest session: 291 — 2026-11-18 (the installer builds here; KV cannot carry it)
 
 ### Fog cleared
 
-- **Three of the four published artifacts are now the current build**, rebuilt on MOLE from the S287
-  tree and verified by downloading them back byte-for-byte: `binary:agent` 16,852,161 B
-  (`d9e45902…`), `binary:agent-installer` 15,789,390 B (`399ad9ba…`), `binary:lockscreen`
-  9,146,350 B (`6592fd87…`).
-- **The Worker's own integrity header agrees with the bytes it serves**:
-  `x-content-sha256: d9e45902…` equals the local artifact's full sha256 — so an agent's verification
-  will pass against a body that the same response declares.
-- **What is still stale is now precisely named, not vaguely "the release"**: `binary:installer` (the
-  NSIS wrapper, 18,628,686 B) embeds the agent at build time and needs `makensis`; `agent_release`
-  has never existed and needs a signed record, i.e. an update signing keypair.
+- **The NSIS installer builds on this host without root**: `ar x` + `tar -xf` on the two .debs,
+  `NSISDIR=/tmp/nsis-root/usr/share/nsis`, `makensis v3.12-1`, and
+  `scripts/build-generic-installer.sh` produced a 41,203,591-byte wrapper
+  (`sha256 e5f0f390…`) with the repo's own default server URL.
+- **It cannot be published.** Cloudflare answered the write directly:
+  `content size of 41203591 bytes exceeds maximum allowed size of 27MiB [code: 10024]`.
+  The two mandatory files alone (32,641,551 B) already exceed 27 MiB, so this is not a packaging
+  detail — no arrangement of the current binaries fits a KV value.
+- **Nothing was written**: the probe key was rejected before any bytes landed, so `binary:installer`
+  still holds the 2026-11-12 wrapper and the S290 findings stand unchanged.
 
 ### Fog remaining
 
-- **`binary:installer` still ships the 2026-11-12 agent.** The other three download paths are
-  current, which makes this the one remaining place the old build can still reach a machine. Fixing
-  it needs `makensis` (a build dependency, not a decision).
-- **Auto-update remains off by design-omission**: with no `agent_release`, the update path answers
-  "no release published" and no agent is ever offered an update. Publishing metadata means creating
-  the update trust root (`scripts/generate-update-keys.sh`), which is an operator decision — and
-  every future release then has to be signed with the same key.
-- **`watchdog` / `offline_recovery` were not built or published** — no download path serves them
-  today, so they were not fetched from the build tree.
-- Unchanged: HP UEFI 0 of 3 critical writes (needs the BIOS Setup password); E-BCD's verification
-  ceiling; 12 stale `audit_test_teeth.py` rows; the ≈700-line device admin handlers in `worker.ts`.
+- **`binary:installer` remains stale, now for a structural reason**: the download path is KV-backed
+  and the artifact outgrew KV. Three routes out, none of them a tool call:
+  (a) an **R2** binding + Worker route (no KV size limit; needs a bucket and a binding),
+  (b) **one binary** — fold `installer.py`'s enrol/install modes into `lockdown-agent.exe` so the
+  wrapper embeds ~17 MB instead of 33 MB,
+  (c) **host it elsewhere** (GitHub release or the self-hosted server) and point the dashboard there.
+- **`agent_release` still does not exist**, so no agent is offered an update; and the wrapper was
+  built without `update_signing.pub`, which it reported as "installed agents will accept SHA-256-only
+  updates" — consistent, but it means the update trust root (D-130) is still unset.
+- The `--out` and `--stage` flags both pointed at the same directory, so the build's `mv` replaced the
+  staged CLI installer with the wrapper. KV still holds the correct CLI installer (published and
+  verified in S290), but a future build should use distinct directories — noted as a fingerprint of
+  the script's interface rather than a defect.
 
 ### Debt items closed
 
@@ -93,42 +95,40 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **`binary:installer`: needs `makensis`.** Environment, not a decision.
-- **`agent_release`: needs an update signing keypair** (D-130's territory). Operator decision.
+- **`binary:installer` needs a hosting decision** (R2, one-binary, or external), not a build.
+- **`agent_release` needs the update signing keypair** (D-130).
 - **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
 
 ### Session artifacts
 
-- `docs/artifacts/s290-release-published.txt` — the before/after for `/api/download/agent`, what was
-  built on MOLE with sizes and hashes, the three KV publishes, the byte-for-byte verify-by-download
-  table, the `x-content-sha256` comparison against the local artifact, and an explicit "what was NOT
-  published and why" for the NSIS wrapper and the metadata.
+- `docs/artifacts/s291-installer-exceeds-kv.txt` — how NSIS was obtained without root (and why
+  `nsis-common` is mandatory), the build's version/server-url/warnings/sha256, the exact Cloudflare
+  rejection with its code, the payload arithmetic that shows even the two mandatory files cannot fit,
+  the three ways out, and the statement that nothing was published.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)**: S288 proved the *served* binary was stale by parsing a PE
-  timestamp; this session closed it by comparing what the Worker returns against what was built,
-  which is a check anyone can re-run without trusting either number. The habit worth keeping is
-  "download the artifact back and compare", because the publish command's success says nothing about
-  what the endpoint serves.
-- **Layer 2 (context provision)**: the NSIS wrapper's embedding behaviour was only discoverable from
-  `build-generic-installer.sh`'s header. Had it said nothing, publishing three keys would have looked
-  like a complete release while one download path still handed out a month-old agent.
+- **Layer 4 (verification feedback)**: S290 concluded "`binary:installer` needs `makensis`". It needed
+  `makensis` *and* a hosting path; the second half was invisible until the build existed and the
+  upload was attempted. The lesson is the same one S288 learned about verification vs publishing —
+  a build artifact is not a release until something serves it.
+- **Layer 2 (context provision)**: the install path's size ceiling lives in Cloudflare's docs, not in
+  this repo, and nothing warned that the payload had grown past it. A release check that compares the
+  artifact size against the target's limit would have failed in a message instead of a ledger note.
 
 ### VERIFY
 
-- `npx wrangler kv key put --remote` × 3 → written to `LOCKDOWN_KV` (84b24c0c…).
-- Re-downloaded each: `agent` 16,852,161 B `d9e45902…`; `agent-installer` 15,789,390 B `399ad9ba…`;
-  `lockscreen` 9,146,350 B `6592fd87…` — each equal to the local artifact.
-- `x-content-sha256: d9e45902674537f91e23858126fe564c19a8519f20eed9ca6e9020a24cf66bd3` = local sha256.
-- `binary:installer` still 18,628,686 B (unchanged, named as stale).
-- `brain.py check` → 159 beliefs, integrity clean.
+- `makensis -VERSION` → `v3.12-1` with `NSISDIR` set; the script built
+  `lockdown-installer.exe` 41,203,591 B, `sha256 e5f0f390ae7d5729376fe7bdc0713c998d3d741d67059cf34c159b0af52b9680`.
+- `wrangler kv key put … binary:installer:probe` → rejected, `exceeds maximum allowed size of 27MiB`,
+  code `10024`; no key written.
+- `brain.py check` → 160 beliefs, integrity clean.
 
 ### Next session opening
 
-Rebuild `binary:installer` with `makensis` (the one download path still serving the 2026-11-12
-agent), then decide whether to establish the update trust root so `agent_release` can be published
-and agents stop depending on reinstall to get a new build.
+Choose how the installer is hosted — R2 binding, one merged binary, or an external host — and
+implement it, because `binary:installer` is now the only download path that can still put a
+2026-11-12 agent on a machine.
 
 ---
 

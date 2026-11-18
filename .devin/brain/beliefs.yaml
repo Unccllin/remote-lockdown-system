@@ -3508,3 +3508,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-160
+  statement: 'The generic NSIS installer builds without root on this Arch host (unpack nsis_3.12-1_amd64.deb
+    + nsis-common_3.12-1_all.deb with ar+tar, NSISDIR=/tmp/nsis-root/usr/share/nsis — nsis-common is mandatory
+    for the stubs), producing a 41,203,591-byte wrapper. It cannot be published to the Worker''s KV: Cloudflare
+    rejects anything over 27 MiB (code 10024), and the wrapper''s two mandatory payloads (agent 16,852,161
+    B + CLI installer 15,789,390 B = 32,641,551 B) already exceed that. So binary:installer stays the
+    2026-11-12 wrapper until the installer is hosted on R2, merged into one binary, or moved to an external
+    host.'
+  domain: deployment/release
+  status: proposed
+  evidence_level: assumed
+  provenance: 'build + upload attempt on 2026-11-18: makensis v3.12-1 build succeeded, KV put rejected
+    with ''content size of 41203591 bytes exceeds maximum allowed size of 27MiB [code: 10024]''; docs/artifacts/s291-installer-exceeds-kv.txt'
+  source: scripts/build-generic-installer.sh, installer/generic/lockdown-installer.nsi, wrangler kv key
+    put output
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
