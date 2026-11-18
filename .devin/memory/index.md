@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-18 10:36:42
-Active memories: 1338 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-18 11:32:13
+Active memories: 1367 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -44,6 +44,35 @@ Active memories: 1338 | Superseded: 0 | Decayed: 20
 | m-1356 | MOLE's deployed lockdown-agent.exe (built 2026-11- |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
 | m-1357 | MISTAKE: mistake: first assumed the deployed agent |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
 | m-1358 | MISTAKE: mistake: peeked at the exe for new string |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1359 | _disable_winre/_enable_winre now re-read state via |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1360 | The old test pinned the defect as expected behavio |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1361 | Regression pinned at two levels: 6 WinRE unit test |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1362 | MISTAKE: mistake: initially considered using _is_w |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1363 | MOLE has a BIOS Setup password the agent never set |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1364 | Sure Start BIOS Settings Protection is Disable on  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1365 | apply_boot_lockdown refuses when a Setup password  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1366 | MOLE has no Python installed, so a PyInstaller reb |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1367 | MISTAKE: mistake: py-lens reported 'Pytest: test r |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1368 | MOLE's SSH session (labadmin) is already elevated, |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1369 | Rebuild path on MOLE: deps from agent/requirements |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1370 | Hardware proof of the WinRE fix: log line 'WinRE a |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1371 | Hardware proof of the S271 BIOS-restore reporting: |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1372 | Unlock restores BCD 5/5 and explicitly does not re |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1373 | MISTAKE: mistake: first exe swap copied while the  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1374 | MISTAKE: mistake: assumed a service restart had re |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1375 | Build metadata must not ride on AGENT_VERSION: ser |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1376 | Identity lives in a tracked agent/_buildinfo.py (c |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1377 | version_string() is the single formatter for --ver |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1378 | A test fails if a STAMPED _buildinfo.py is committ |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1379 | Proven on hardware: build=20261118.4bfeda526b77 in |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1380 | MISTAKE: mistake: the first version of the import  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1381 | Device-flow login works headless: npx wrangler log |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1382 | scripts/verify-worker.sh proves bundle + serve wit |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1383 | Deployed lockdown-serverless version 6a113a90-7707 |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1384 | The binaries in KV are stale: /api/download/agent  |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1385 | E-LOCK-SCREEN evidence bar: Windows checks the pas |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1386 | MISTAKE: mistake: nearly treated 'needs wrangler l |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
+| m-1387 | MISTAKE: mistake: a temp account via 'net user <na |  | 0.50 | 2026-11-18 | 0.250 | 0 |  |
 | m-1201 | is_destructive in the harness gated nothing: no pr |  | 0.50 | 2026-11-17 | 0.247 | 0 |  |
 | m-1202 | E-BCD rewrites boot config and disables WinRE (the |  | 0.50 | 2026-11-17 | 0.247 | 0 |  |
 | m-1203 | The before-state must be written to disk before th |  | 0.50 | 2026-11-17 | 0.247 | 0 |  |

@@ -58,37 +58,37 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 287 — 2026-11-18 (a build identity, so two binaries stop both being "1.0.0")
+## Latest session: 288 — 2026-11-18 (the Worker is deployed; what it hands out is 2026-11-12)
 
 ### Fog cleared
 
-- **A device can now say which build it runs** — in the three places a person looks:
-  `--version`, the startup log line, and the crash log. One formatter (`version_string()`) produces
-  the first, so the two cannot drift.
-- **`AGENT_VERSION` is untouched** and a test pins it as numeric, with the reason: `Number()` on a
-  suffix becomes `NaN` and would quietly disable update comparisons.
-- **A source checkout reports itself as a source checkout**: the tracked `agent/_buildinfo.py` says
-  `unknown`, and a test fails if a *stamped* build gets committed — a release cannot claim an
-  identity it did not build.
-- **`build.ps1` stamps it** (`-BuildCommit` overrides, otherwise SHA-256 over `agent/*.py`) — which
-  works on a build host with no git, as MOLE is.
-- **Proven on hardware**: a stamped build (`20261118.4bfeda526b77`) is installed on MOLE and reports
-  `lockdown-agent 1.0.0 (frozen=True, build=20261118.4bfeda526b77)`, with the same id in
-  `Agent starting — hostname=MOLE server=http://192.168.1.43:8787 poll=30s build=20261118.4bfeda526b77`.
+- **The Worker is deployed** — `lockdown-serverless`, version `6a113a90-7707-4b32-a7f0-852e205ee812`,
+  218.42 KiB (44.82 gzip), KV `84b24c0c…` bound, and every checked route answers over HTTPS:
+  `setup/status` 200 (`1` admin), `devices` 401 unauthenticated, `health` 200 `serverless:true`,
+  `/v1/health` 200, junk `/v1/verdict` 400 `invalid CBOR request`, `/v1/policy/1` 200 (1471 B),
+  unknown 404. S272–S280's splits are now the code that serves production.
+- **Publishing needed only a device-flow approval** — no browser, no API token, no `--temporary`
+  flag (that flag does not exist in this wrangler).
+- **The binaries that Worker serves are stale, and now provably so.** `/api/download/agent` returns
+  16,370,993 bytes, `sha256 39a29b35…`, PE COFF `TimeDateStamp` **2026-11-12T15:16:16Z** — a build
+  none of this work produced. It predates the S271-era BIOS-restore reporting fixes, the S284 WinRE
+  idempotency fix, and the S287 build identity. Anyone installing from the dashboard today gets it.
 
 ### Fog remaining
 
-- **The build id is not on the dashboard.** It is a local/log fact only; surfacing it needs a
-  cross-surface change (server column + Worker check-in field + dashboard cell + a migration). The
-  cheap half is done; the visible half is a separate decision.
-- **`_buildinfo.py` is a tracked file that a build rewrites**, so a build host's working tree goes
-  dirty. The test guard makes committing it a failure rather than a silent lie, but a build script
-  that never touches a tracked file would be cleaner.
-- **HP UEFI layer still applies 0 of 3 critical writes** — unchanged; needs the real BIOS Setup
-  password as `UEFI_PASSWORD`.
-- **Worker deploy still needs `wrangler login`.**
-- Pre-existing and untouched: 12 stale `audit_test_teeth.py` rows, the ≈700-line device admin
-  handlers in `worker.ts`, two thin PBL route modules.
+- **The release, not the deploy, is what remains**: `binary:agent` (+ `binary:installer`,
+  `binary:agent-installer`, `binary:lockscreen`) still hold 2026-11-12 artifacts, and
+  `agent_release` metadata is CI-signed by `scripts/sign-release-metadata.py` — the update path
+  refuses metadata whose hash it cannot verify, so this is a release decision, not a repair.
+- **E-LOCK-SCREEN still needs one human step**, but its evidence is now defined. A controlled
+  experiment on MOLE (temporary local account, created → disabled → deleted) showed Windows checks
+  the password *before* reporting the state: `disabled + correct password → 1331 (account
+  disabled)`, while a wrong password returns `1326` in every state. So a `LogonUser` attempt that
+  answers **1331** proves both "the right password was offered" and "sign-in was refused" — stronger
+  than a description of a lock screen, and it needs the account's real password, which only the
+  operator has.
+- Untouched: 12 stale `audit_test_teeth.py` rows, the ≈700-line device admin handlers in
+  `worker.ts`, two thin PBL route modules.
 
 ### Debt items closed
 
@@ -101,45 +101,47 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password.** Operator secret.
-- **Worker deploy: `wrangler login`.**
-- `E-LOCK-SCREEN` stays `verified-in-unit-test`. OPEN, needs a human sign-in attempt.
+- **Publishing a release** (binaries + signed `agent_release`) — a decision, not a credential
+  problem; deploy access is now working.
+- **E-LOCK-SCREEN: one human sign-in attempt** at MOLE while locked, or the account password handed
+  over for a single `LogonUser` call (never stored; only the error code is recorded).
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
 
 ### Session artifacts
 
-- `docs/artifacts/s287-build-identity.txt` — the gap as measured twice, the `compareVersions` excerpt
-  that rules out putting the id on `AGENT_VERSION`, what was added to which file, the four tests by
-  name, the runs (4 new / **954 total** / ruff clean), the source tree reporting `unknown.unknown`,
-  and the hardware proof: stamped values, dist sha256, the hash-verified deploy, and both
-  `--version` and the startup log carrying `build=20261118.4bfeda526b77`.
+- `docs/artifacts/s288-worker-deployed.txt` — the login and account, the pre-deploy local
+  verification, the deploy output with version id, the HTTPS smoke table, the served agent's size /
+  sha256 / PE timestamp against the three known builds, the KV publishing commands from the README,
+  and a two-line verdict separating "deployed" from "released".
 
 ### Failure attribution
 
-- **Layer 2 (context provision), the same gap for the third time.** S283 said "which agent is on that
-  machine cannot be answered"; S286 proved it by needing a sha256; this session closes it. The cost
-  was never the fix — it was that the identity question had no owner until two sessions had already
-  paid for it.
-- **Layer 4 (verification feedback), narrowly avoided**: adding build metadata to `AGENT_VERSION`
-  would have passed every test in the repo (nothing asserts `compareVersions` handles NaN) while
-  silently disabling update comparisons. Reading the consumer's parser before choosing the format is
-  what caught it, not a test.
+- **Layer 4 (verification feedback), with a good outcome**: `verify-worker.sh` already encoded the
+  distinction between *verifying* and *publishing*. Without it, "needs wrangler login" would have
+  looked like "cannot be tested", and the code would have stayed unverified while waiting for an
+  account. Reading the script's own header is what turned a blocker into a step.
+- **Layer 2 (context provision)**: nothing recorded that the KV binaries were months behind the
+  tree. The build identity added in S287 is what made the staleness measurable in one command
+  (`--version` on the served artifact would have answered it; the PE timestamp answered it here
+  because the artifact predates that feature — which is itself the proof).
 
 ### VERIFY
 
-- `scripts/run-agent-tests.sh tests/test_version_identity.py` → **4 passed**.
-- `scripts/run-agent-tests.sh` → **954 passed** in 56 s.
-- `scripts/lint-agent.sh` → `All checks passed!`, 66 files formatted.
-- `tests/test_hw_harness.py` → 50 passed; `hw_test_harness` and `simulate_lockdown` import clean.
-- MOLE: `--version` → `lockdown-agent 1.0.0 (frozen=True, build=20261118.4bfeda526b77)`;
-  `agent.log` → `Agent starting … build=20261118.4bfeda526b77`; installed sha256 `d9e45902…` equal to
-  the built artifact's; device `active`, `last_checkin` 20 s later.
-- `brain.py check` → 156 beliefs, integrity clean.
+- `scripts/verify-worker.sh` → bundle 220K, workerd serving, every smoke check passed.
+- `npx wrangler deploy` → `Uploaded lockdown-serverless`, `Current Version ID:
+  6a113a90-7707-4b32-a7f0-852e205ee812`.
+- Live HTTPS: the eight responses listed above; `/api/download/agent` → 200, 16,370,993 bytes,
+  `sha256 39a29b35…`, PE timestamp `2026-11-12T15:16:16Z`.
+- Experiment on MOLE: temp account active+correct → SUCCESS, disabled+correct → **1331**,
+  wrong password → 1326 in every state; account removed afterwards.
+- `brain.py check` → 157 beliefs, integrity clean; B-157 confirmed at `real-media`.
 
 ### Next session opening
 
-Supply the real BIOS Setup password as `UEFI_PASSWORD` and re-run the lock → recover acceptance so
-all three boot-lock layers can be judged on MOLE; the build identity now makes it unambiguous which
-agent produced the result.
+Decide the release: sign `agent_release` metadata and publish the current agent and companions to
+KV (`binary:agent`, `binary:installer`, `binary:agent-installer`, `binary:lockscreen`), then re-check
+that `/api/download/agent` serves a build whose `--version` carries a build id — the same
+`build=` check that would have caught this staleness a month earlier.
 
 ---
 

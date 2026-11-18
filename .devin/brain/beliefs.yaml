@@ -3442,3 +3442,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-157
+  statement: 'The Worker is deployed: lockdown-serverless at https://lockdown-serverless.mainacollins196.workers.dev,
+    version 6a113a90-7707-4b32-a7f0-852e205ee812, uploaded 218.42 KiB (gzip 44.82), KV 84b24c0c1b9e4896b6c6fa41548ac636,
+    OAuth login as mainacollins196@gmail.com via the DEVICE flow (this wrangler has no deploy --temporary).
+    Live over HTTPS: /api/setup/status 200 (1 admin), /api/devices 401 without a token, /api/health 200
+    serverless:true, /v1/health 200, junk /v1/verdict 400 ''invalid CBOR request'', /v1/policy/1 200 1471
+    B, unknown route 404. But the binaries in KV are stale: /api/download/agent serves a 16,370,993-byte
+    PE with COFF TimeDateStamp 2026-11-12T15:16:16Z (sha256 39a29b35…), which predates the S271, S284
+    and S287 agent fixes.'
+  domain: deployment/worker
+  status: confirmed
+  evidence_level: real-media
+  provenance: wrangler deploy output (version 6a113a90…), live HTTPS smoke against https://lockdown-serverless.mainacollins196.workers.dev,
+    and a PE header parse of the served agent giving TimeDateStamp 2026-11-12T15:16:16Z. docs/artifacts/s288-worker-deployed.txt
+  source: serverless/wrangler.toml, wrangler deploy output, curl against the deployed URL
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

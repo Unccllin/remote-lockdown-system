@@ -2140,3 +2140,108 @@ all three boot-lock layers can be judged on MOLE; the build identity now makes i
 agent produced the result.
 
 ---
+
+---
+
+## Session 288 — 2026-11-18 (the Worker is deployed; what it hands out is 2026-11-12)
+
+### RULE-ZERO — understanding logged before each change
+
+**Read**: `serverless/wrangler.toml` (worker name, `main`, compatibility date/flags, KV id),
+`scripts/verify-worker.sh` (its own header states the split: bundle + serve need no account,
+*publishing* needs `wrangler login`), `serverless/README.md` (§publishing: the `binary:*` KV keys,
+per-platform precedence, `agent_release` metadata, and why unsigned metadata is refused),
+`serverless/worker.ts` (`AGENT_RELEASE_KEY`, the `binary:agent` → `binary:agent:<platform>`
+resolution), `deploy --help` (no `--temporary` in wrangler 4.162.0) and `login --help` (`--device`).
+
+**Findings**, measured before acting:
+
+- The deployed Worker's freshness can be proved **without an account**: `verify-worker.sh` bundles
+  with `wrangler deploy --dry-run` and serves with local workerd + local KV. That is what ran first.
+- `wrangler login --device` exists, so authentication does not require a browser on this host.
+- `/api/download/agent` answers from KV, so the *binaries* are a separate question from the code.
+
+### Fog cleared
+
+- **The Worker is deployed** — `lockdown-serverless`, version `6a113a90-7707-4b32-a7f0-852e205ee812`,
+  218.42 KiB (44.82 gzip), KV `84b24c0c…` bound, and every checked route answers over HTTPS:
+  `setup/status` 200 (`1` admin), `devices` 401 unauthenticated, `health` 200 `serverless:true`,
+  `/v1/health` 200, junk `/v1/verdict` 400 `invalid CBOR request`, `/v1/policy/1` 200 (1471 B),
+  unknown 404. S272–S280's splits are now the code that serves production.
+- **Publishing needed only a device-flow approval** — no browser, no API token, no `--temporary`
+  flag (that flag does not exist in this wrangler).
+- **The binaries that Worker serves are stale, and now provably so.** `/api/download/agent` returns
+  16,370,993 bytes, `sha256 39a29b35…`, PE COFF `TimeDateStamp` **2026-11-12T15:16:16Z** — a build
+  none of this work produced. It predates the S271-era BIOS-restore reporting fixes, the S284 WinRE
+  idempotency fix, and the S287 build identity. Anyone installing from the dashboard today gets it.
+
+### Fog remaining
+
+- **The release, not the deploy, is what remains**: `binary:agent` (+ `binary:installer`,
+  `binary:agent-installer`, `binary:lockscreen`) still hold 2026-11-12 artifacts, and
+  `agent_release` metadata is CI-signed by `scripts/sign-release-metadata.py` — the update path
+  refuses metadata whose hash it cannot verify, so this is a release decision, not a repair.
+- **E-LOCK-SCREEN still needs one human step**, but its evidence is now defined. A controlled
+  experiment on MOLE (temporary local account, created → disabled → deleted) showed Windows checks
+  the password *before* reporting the state: `disabled + correct password → 1331 (account
+  disabled)`, while a wrong password returns `1326` in every state. So a `LogonUser` attempt that
+  answers **1331** proves both "the right password was offered" and "sign-in was refused" — stronger
+  than a description of a lock screen, and it needs the account's real password, which only the
+  operator has.
+- Untouched: 12 stale `audit_test_teeth.py` rows, the ≈700-line device admin handlers in
+  `worker.ts`, two thin PBL route modules.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (update signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Publishing a release** (binaries + signed `agent_release`) — a decision, not a credential
+  problem; deploy access is now working.
+- **E-LOCK-SCREEN: one human sign-in attempt** at MOLE while locked, or the account password handed
+  over for a single `LogonUser` call (never stored; only the error code is recorded).
+- **HP UEFI lockdown on MOLE: needs the real BIOS Setup password** as `UEFI_PASSWORD`.
+
+### Session artifacts
+
+- `docs/artifacts/s288-worker-deployed.txt` — the login and account, the pre-deploy local
+  verification, the deploy output with version id, the HTTPS smoke table, the served agent's size /
+  sha256 / PE timestamp against the three known builds, the KV publishing commands from the README,
+  and a two-line verdict separating "deployed" from "released".
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), with a good outcome**: `verify-worker.sh` already encoded the
+  distinction between *verifying* and *publishing*. Without it, "needs wrangler login" would have
+  looked like "cannot be tested", and the code would have stayed unverified while waiting for an
+  account. Reading the script's own header is what turned a blocker into a step.
+- **Layer 2 (context provision)**: nothing recorded that the KV binaries were months behind the
+  tree. The build identity added in S287 is what made the staleness measurable in one command
+  (`--version` on the served artifact would have answered it; the PE timestamp answered it here
+  because the artifact predates that feature — which is itself the proof).
+
+### VERIFY
+
+- `scripts/verify-worker.sh` → bundle 220K, workerd serving, every smoke check passed.
+- `npx wrangler deploy` → `Uploaded lockdown-serverless`, `Current Version ID:
+  6a113a90-7707-4b32-a7f0-852e205ee812`.
+- Live HTTPS: the eight responses listed above; `/api/download/agent` → 200, 16,370,993 bytes,
+  `sha256 39a29b35…`, PE timestamp `2026-11-12T15:16:16Z`.
+- Experiment on MOLE: temp account active+correct → SUCCESS, disabled+correct → **1331**,
+  wrong password → 1326 in every state; account removed afterwards.
+- `brain.py check` → 157 beliefs, integrity clean; B-157 confirmed at `real-media`.
+
+### Next session opening
+
+Decide the release: sign `agent_release` metadata and publish the current agent and companions to
+KV (`binary:agent`, `binary:installer`, `binary:agent-installer`, `binary:lockscreen`), then re-check
+that `/api/download/agent` serves a build whose `--version` carries a build id — the same
+`build=` check that would have caught this staleness a month earlier.
+
+---
