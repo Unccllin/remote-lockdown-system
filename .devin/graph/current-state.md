@@ -53,41 +53,29 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 298 — 2026-11-18 (auto-update applies itself: proven live, twice)
+## Latest session: 299 — 2026-11-18 (the service build now refuses to produce an unstartable artefact)
 
 ### Fog cleared
 
-- **Auto-update now applies itself, proven twice on hardware with no manual step.** 1.0.1 → 1.0.2
-  applied from a signal already on disk at service start (`pending update: applied`), and
-  1.0.2 → 1.0.3 applied *mid-flight*: `update pending — stopping the agent to apply it` →
-  `pending update: applied` → `agent stopped to apply its update` → `Agent starting … build=
-  20261118.5c31f3eaa364`. The device ends on 1.0.3 with `.update_pending` gone.
-- **The supervisor re-checks the bytes, not just the signal**: a download whose SHA-256 does not
-  match the hash the signal names is refused and deleted, with the working binary untouched — the
-  agent's signature check and the supervisor's byte check are independent.
-- **Failure semantics are pinned**: no signal → `none`; unreadable signal / missing download / hash
-  mismatch → `corrupt` (signal cleared, no swap); a swap that dies inside 60 s → `restore_backup()`
-  puts the previous binary back. 7 tests, 28 in the file.
-- **A packaging gap found and fixed**: the rebuilt service would not start (SCM 1053) because
-  `pywin32` was absent from the build environment; `pip install pywin32` + `pyinstaller --clean`
-  produced a working 9,495,232-byte service. A cached PyInstaller build kept the old hash first, so
-  `--clean` was load-bearing, not cosmetic.
-- **Download cache lifetime bounded**: `max-age=3600` → `300`, deployed (`f2840f6a…`) and verified
-  live, with a test pinning it at ≤300 s.
+- **`pywin32==312; sys_platform == "win32"` is in `agent/requirements.txt`**, with the reason
+  recorded next to it, and the marker keeps Linux installs byte-identical.
+- **The build fails before it can ship an unstartable service**: the script checks
+  `python -c "import servicemanager, win32serviceutil"` when `service` is selected, and prints the
+  fix (`pip install -r agent/requirements.txt`) instead of producing an exe that answers SCM 1053
+  with an empty log.
+- **Two tests pin it**: one that the check exists and runs *before* PyInstaller, one that the
+  dependency carries a Windows-only marker. 8 pass in that suite (was 6), and the PowerShell script
+  is still ASCII-only, which is that suite's own rule.
 
 ### Fog remaining
 
-- **`pywin32` is still not in `agent/requirements.txt`**, so the documented build on a fresh Windows
-  host reproduces the 1053 failure. The fix is a requirements entry (and a build that fails loudly
-  when the SCM modules are missing rather than shipping a service that cannot start).
-- **No device has used the Worker.** Item 3 of the plan is blocked on the Worker's `ADMIN_TOKEN`
-  (enrolling needs admin auth, and overwriting the production secret is not mine to do). The Worker
-  serves 1.0.3 and its update path passes the local workerd e2e.
-- **`make sast` still cannot run on this host** — no `pip`/`pipx` for the system interpreter and no
-  semgrep binary; the gate fails loudly instead of passing silently, which is the documented shape.
-- **12 stale `audit_test_teeth.py` rows** (pre-ADR-002 anchors) remain untouched.
-- **Offline custody of `update_signing.key`** remains an operator step; two copies exist on this host
-  (`sha256 5c88341f…`, public fingerprint `207d7cc2…`).
+- **The guard is verified at source level only** — there is no PowerShell on this host, and the
+  build needs Windows, so the failure path itself has not been executed. The test asserts ordering
+  and presence, which is the strongest claim available from here.
+- **`make sast` still cannot run on this host** (no pip/pipx, no semgrep binary); the 12 stale
+  `audit_test_teeth.py` rows are still stale.
+- **Worker enrolment** still needs its `ADMIN_TOKEN`; **offline key custody** is still an operator
+  step; **HP UEFI** still needs the BIOS Setup password.
 
 ### Debt items closed
 
@@ -100,43 +88,40 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Worker enrolment: needs its `ADMIN_TOKEN`** (or a deliberate re-setup).
-- **Offline key custody** — operator.
+- **Worker enrolment: needs `ADMIN_TOKEN`** (or a deliberate re-setup).
+- **Offline custody of `update_signing.key`** — operator.
 - **HP UEFI lockdown on MOLE** — needs the real BIOS Setup password.
-- **`make sast` on this host** — needs a Python with pip, or a semgrep binary.
+- **PowerShell on this host** — absent, so the new guard's failure path is source-pinned only.
 
 ### Session artifacts
 
-- `docs/artifacts/s298-auto-apply-proven.txt` — the gap, the three functions and their semantics, the
-  seven tests, the two hardware runs quoted line by line with their build ids, the pywin32/1053
-  finding with the `--clean` detail, the cache-lifetime change with its deployed version and live
-  headers, and an explicit list of what from "1345" is still open and why.
+- No artifact file: the change is a dependency pin, a pre-build check and two tests, and the runs are
+  quoted in VERIFY. The finding it encodes is already evidenced in
+  `docs/artifacts/s298-auto-apply-proven.txt` §4 (SCM 1053, `pywin32` absent, `--clean` required).
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), twice in one change**: my first wiring put the update check
-  where it could never run on a healthy device — the code read as correct and the test suite could
-  not see it, because the defect was in *placement relative to a blocking loop*, not in logic. Only
-  watching the device (`.update_pending` sitting there for 45 s) revealed it. The lesson: a
-  supervisor's behaviour has to be verified on the supervisor, not inferred from unit tests.
-- **Layer 3 (execution environment)**: a rebuilt Windows service that silently ships without
-  `pywin32` fails at SCM start with 1053 and no log line, because the import guard is graceful. A
-  dependency that is only fatal at runtime belongs in the requirements file.
+- **Layer 3 (execution environment) closing on itself**: S298 found the missing dependency by hitting
+  it, and this session moved it from *knowledge* into the build path. The general lesson the repo has
+  earned repeatedly: a dependency that is only fatal at runtime must be enforced where the artefact is
+  produced, not remembered.
+- **Layer 4 (verification feedback), partially**: the build verified existence, size and `MZ` — three
+  properties a service that cannot start still satisfies. Checks that cannot fail on this defect are
+  decoration; the new check asserts the capability instead of the file.
 
 ### VERIFY
 
-- Live cycle 1.0.2 → 1.0.3 with no manual step: agent log lines quoted in the artifact; device ends
-  on `lockdown-agent 1.0.3 (frozen=True, build=20261118.5c31f3eaa364)`, `.update_pending` absent.
-- `agent/tests/test_service_host.py` → **28 passed**; full agent suite unaffected.
-- Worker: **484 tests passed**, `tsc` clean, deployed `f2840f6a-441f-43fb-8bd0-b14df0601a1b`;
-  live `/api/download/agent` → `cache-control: public, max-age=300`, 16,852,082 B, digest matches.
+- `agent/.venv/bin/python scripts/test_build_windows_artifacts.py` → **8 passed** (6 before).
+- `scripts/build-windows-artifacts.ps1` remains ASCII-only (`raw.isascii()` → True), which that suite
+  enforces because PowerShell 5.1 misparses BOM-less UTF-8.
+- `agent/requirements.txt` → `pywin32==312; sys_platform == "win32"` with an inline reason.
 - `brain.py check` → integrity clean.
 
 ### Next session opening
 
-Add `pywin32` to `agent/requirements.txt` (and make the service build fail loudly when the SCM
-modules are missing), then point one device at the Worker once its admin token is available — that is
-the last unproven surface in the release story.
+Point one device at the Worker (needs its `ADMIN_TOKEN`), which is the last unproven surface in the
+release story; the remaining local items are the 12 `audit_test_teeth` rows and a semgrep the host
+can actually run.
 
 ---
 

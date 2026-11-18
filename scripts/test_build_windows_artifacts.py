@@ -73,3 +73,32 @@ if __name__ == "__main__":
     from script_test_runner import run
 
     raise SystemExit(run(__file__))
+
+
+def test_the_service_build_refuses_an_environment_without_pywin32():
+    """A service built without pywin32 starts and then fails with SCM 1053, logging nothing.
+
+    Measured on MOLE (S298): the frozen exe built fine, `Start-Service` answered 1053, and
+    the log had no line at all -- because service_host.py guards the pywin32 imports and
+    sets PYWIN32_AVAILABLE=False rather than raising. A build that produces a service which
+    cannot start is worse than a build that fails, so the script checks first.
+    """
+    text = SCRIPT.read_text(encoding="ascii")
+    assert "servicemanager" in text, (
+        "the build script must verify the SCM modules are importable before building the "
+        "service; without pywin32 the result cannot start and says nothing"
+    )
+    # The check has to run before PyInstaller, not after the artefact exists.
+    assert text.index("servicemanager") < text.index("-m PyInstaller"), (
+        "the pywin32 check must run before the build, not after it"
+    )
+
+
+def test_windows_only_dependency_is_pinned_with_a_platform_marker():
+    """pywin32 must be in requirements.txt AND marked Windows-only."""
+    reqs = (REPO / "agent" / "requirements.txt").read_text(encoding="utf-8")
+    line = next((ln for ln in reqs.splitlines() if ln.startswith("pywin32")), "")
+    assert line, "pywin32 is missing from agent/requirements.txt (the service needs it)"
+    assert "sys_platform" in line and "win32" in line, (
+        f"pywin32 must carry a win32 marker so Linux installs are unaffected, got: {line!r}"
+    )

@@ -3293,3 +3293,95 @@ modules are missing), then point one device at the Worker once its admin token i
 the last unproven surface in the release story.
 
 ---
+
+---
+
+## Session 299 — 2026-11-18 (the service build now refuses to produce an unstartable artefact)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `agent/requirements.txt` — two pins (`cryptography`, `requests`) and no Windows-only
+  dependency, despite `service_host.py` importing `servicemanager` / `win32serviceutil`.
+- **Read**: `agent/service_host.py` — the `try: import servicemanager …` guard that sets
+  `PYWIN32_AVAILABLE = False` instead of raising, which is why the failure is silent at runtime.
+- **Read**: `scripts/build-windows-artifacts.ps1` — the `$targets` table (`service` is built with
+  flags, no spec) and `Write-Fail`, so the guard could sit before the build loop.
+- **Read**: `scripts/test_build_windows_artifacts.py` — the suite's convention (source-level
+  assertions over the build script, ASCII-only rule) and its `REPO`/`SCRIPT` constants.
+
+**Findings**, measured before acting:
+
+- The installed `pywin32` on the build host is **312**, so the pin is a known-good version rather
+  than a guess.
+- The build script verified artefacts by existence, size and `MZ` header — none of which can see a
+  missing SCM host, because the exe is a perfectly valid PE either way.
+
+### Fog cleared
+
+- **`pywin32==312; sys_platform == "win32"` is in `agent/requirements.txt`**, with the reason
+  recorded next to it, and the marker keeps Linux installs byte-identical.
+- **The build fails before it can ship an unstartable service**: the script checks
+  `python -c "import servicemanager, win32serviceutil"` when `service` is selected, and prints the
+  fix (`pip install -r agent/requirements.txt`) instead of producing an exe that answers SCM 1053
+  with an empty log.
+- **Two tests pin it**: one that the check exists and runs *before* PyInstaller, one that the
+  dependency carries a Windows-only marker. 8 pass in that suite (was 6), and the PowerShell script
+  is still ASCII-only, which is that suite's own rule.
+
+### Fog remaining
+
+- **The guard is verified at source level only** — there is no PowerShell on this host, and the
+  build needs Windows, so the failure path itself has not been executed. The test asserts ordering
+  and presence, which is the strongest claim available from here.
+- **`make sast` still cannot run on this host** (no pip/pipx, no semgrep binary); the 12 stale
+  `audit_test_teeth.py` rows are still stale.
+- **Worker enrolment** still needs its `ADMIN_TOKEN`; **offline key custody** is still an operator
+  step; **HP UEFI** still needs the BIOS Setup password.
+
+### Debt items closed
+
+None formally.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (PBL firmware signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Worker enrolment: needs `ADMIN_TOKEN`** (or a deliberate re-setup).
+- **Offline custody of `update_signing.key`** — operator.
+- **HP UEFI lockdown on MOLE** — needs the real BIOS Setup password.
+- **PowerShell on this host** — absent, so the new guard's failure path is source-pinned only.
+
+### Session artifacts
+
+- No artifact file: the change is a dependency pin, a pre-build check and two tests, and the runs are
+  quoted in VERIFY. The finding it encodes is already evidenced in
+  `docs/artifacts/s298-auto-apply-proven.txt` §4 (SCM 1053, `pywin32` absent, `--clean` required).
+
+### Failure attribution
+
+- **Layer 3 (execution environment) closing on itself**: S298 found the missing dependency by hitting
+  it, and this session moved it from *knowledge* into the build path. The general lesson the repo has
+  earned repeatedly: a dependency that is only fatal at runtime must be enforced where the artefact is
+  produced, not remembered.
+- **Layer 4 (verification feedback), partially**: the build verified existence, size and `MZ` — three
+  properties a service that cannot start still satisfies. Checks that cannot fail on this defect are
+  decoration; the new check asserts the capability instead of the file.
+
+### VERIFY
+
+- `agent/.venv/bin/python scripts/test_build_windows_artifacts.py` → **8 passed** (6 before).
+- `scripts/build-windows-artifacts.ps1` remains ASCII-only (`raw.isascii()` → True), which that suite
+  enforces because PowerShell 5.1 misparses BOM-less UTF-8.
+- `agent/requirements.txt` → `pywin32==312; sys_platform == "win32"` with an inline reason.
+- `brain.py check` → integrity clean.
+
+### Next session opening
+
+Point one device at the Worker (needs its `ADMIN_TOKEN`), which is the last unproven surface in the
+release story; the remaining local items are the 12 `audit_test_teeth` rows and a semgrep the host
+can actually run.
+
+---

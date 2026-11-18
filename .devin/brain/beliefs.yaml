@@ -3662,3 +3662,24 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-167
+  statement: 'The Windows service build can no longer produce an unstartable artefact (S299): agent/requirements.txt
+    pins pywin32==312 with a sys_platform==''win32'' marker, and scripts/build-windows-artifacts.ps1 checks
+    ''python -c "import servicemanager, win32serviceutil"'' when the service target is selected, failing
+    with the fix before PyInstaller runs. Two tests pin it (the check exists and runs before PyInstaller;
+    the dependency carries a Windows-only marker), the suite is 8 passed, and the PowerShell script stays
+    ASCII-only. The guard is verified at source level only: there is no PowerShell on this host and the
+    build needs Windows, so the failure path itself has not been executed.'
+  domain: agent/build
+  status: proposed
+  evidence_level: assumed
+  provenance: source-level tests 8 passed, requirements pin with marker, ASCII-only check; S298's hardware
+    evidence for the underlying SCM 1053 failure
+  source: agent/requirements.txt, scripts/build-windows-artifacts.ps1, scripts/test_build_windows_artifacts.py
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
