@@ -284,6 +284,13 @@ cd dashboard && ../scripts/audit-with-exceptions.sh
 # Static analysis (Semgrep p/default). Every finding must be fixed or listed in
 # scripts/sast-exceptions.json with a disposition + reason; ERROR is never
 # exceptionable, and an entry that no longer matches the code fails the gate.
+#   Measured 2026-11-19 (S312) with semgrep 1.182.1: 48 findings, 0 ERROR, all
+#   dispositioned — the first local run in weeks, because `semgrep` was not on PATH and
+#   the gate is a no-op without it (make sast exits 2). Install it before believing a
+#   green story about this repo: python3 -m venv /tmp/sgvenv && /tmp/sgvenv/bin/pip
+#   install semgrep==1.182.1, then PATH=/tmp/sgvenv/bin:$PATH make sast. CI runs it on
+#   every push, which is how the 3 unclassified findings and 1 stale exception were found
+#   sitting red since 2026-11-18.
 make sast
 
 # Docker: both images run as the unprivileged `node` user. SQLite mode needs a
@@ -489,9 +496,9 @@ never reaches `test-e2e`, `verify-env` or `check-artifacts`. Those three were ru
 in S307 and passed (14/14, 56 PASS / 0 FAIL / 5 SKIP, all artifacts present).
 
 **Not re-measured in S307 — the older figures still stand, with their dates:** `make pg-smoke`
-65/65 (needs real PostgreSQL 16), `make sast` 45 findings / 0 ERROR (semgrep is absent on this
-host), `make firmware-host-tests` 195 checks / 35 cases, and `make test-coverage` across all
-five components — only the dashboard floor was re-run, at 70.62 / 66.59 / 62.59 / 71.40
+65/65 (needs real PostgreSQL 16), `make firmware-host-tests` 195 checks / 35 cases, and
+`make test-coverage` across all five components — only the dashboard floor was re-run, at
+70.62 / 66.59 / 62.59 / 71.40
 against 68 / 61 / 62 / 70.
 
 **`make test-e2e` was intermittently fatal until 2026-11-13; it is fixed and proven.** The
