@@ -53,33 +53,33 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 319 — 2026-11-19 (sweeping the "empty input ⇒ pass" class through the script suites)
+## Latest session: 320 — 2026-11-19 (the last two gates that answered "pass" to empty input)
 
 ### Fog cleared
 
-- **Both hand-rolled suites now refuse to report success on zero discovery** (`2dcd211`):
-  `test_graph_session.py` and `test_prepush_secrets.py` print
-  `NO TESTS DISCOVERED — discovery is broken; refusing to report success` and exit 1.
-- **Proven by breaking discovery on purpose**: each suite was copied with `def test_` renamed to
-  `def _disabled_`; both copies exit **1** with that message, and both originals still report normally
-  (40 passed / all checks passed).
-- **The rule is enforced, not remembered**: `test_every_hand_rolled_suite_refuses_a_zero_discovery_run`
-  enumerates every suite that uses neither the shared runner nor `pytest.main` and asserts each carries
-  the guard — so a future hand-rolled suite cannot land without it. 31 firmware-TODO tests pass (30 before).
-- **Classification first, patch second**: twelve suites needed nothing because pytest's `NO_TESTS_COLLECTED`
-  already covers them. That is the difference between a sweep and a rewrite.
+- **`check-artifacts.sh` refuses an empty expectation list** (`5493d44`): both `verify()` and
+  `check_structure()` exit **3** with "No artifacts are declared to verify — refusing to report
+  success." Proven by running a copy with the three dirs and four files removed from the arrays.
+- **`verify-environment.sh` refuses an all-SKIP run**: `print_summary` now fails when `PASS` is 0, with
+  "No check ran successfully (N skipped)". Proven by a copy whose `pass()` recounts everything as SKIP —
+  it printed `PASS: 0 FAIL: 0 SKIP: 61` and exited **1**.
+- **All four guards are pinned in one place**: `scripts/test_gate_guards.py` (4 cases) covers S318's
+  unresolvable base, S319's zero-discovery suites, and this session's two gates. Each test is labelled
+  **BEHAVIOURAL** (it re-runs a scope-emptied copy of the real script) or **SOURCE** (a grep, used only
+  where running the real thing costs minutes) so a weak assertion cannot masquerade as a strong one.
+- **`make test-scripts` is green apart from the known docker red**: every suite passes including the new
+  4 cases; `test_tls_floor.py` still fails for the missing docker socket.
 
 ### Fog remaining
 
-- **`check-artifacts` and `verify-env` were not swept for the same shape** — this session stopped at the
-  script suites, which is where the documented precedent was. Both report counts ("all artifacts
-  present", "56 PASS / 0 FAIL / 5 SKIP") without asserting the count is non-zero.
-- **The ast-grep runner reported a blocking finding for `test_graph_session.py` while its output was
-  deferred**, and the LSP probe reported the same file clean. Unresolved, but no finding was ever shown,
-  so nothing can be fixed on that basis — recorded rather than chased.
+- **The all-SKIP case for `verify-environment.sh` is behaviourally proven once, by hand, and guarded
+  from then on by grep.** Re-proving it automatically would mean running the whole toolchain twice in CI.
+- **Other gates were not swept**: `make graph-check` (invariants over an empty spec would pass),
+  `scripts/graph_session.py`'s generators, and the dashboard/serverless coverage floors are unexamined
+  for the same shape. The class is now visible; the sweep is not exhaustive.
 - Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
   HP UEFI password, per-executable consent keying (unverified), `RequestAccessAsync` (untested), the
-  pre-push hook being per-clone state.
+  pre-push hook being per-clone state, and the documented docker-socket red.
 
 ### Debt items closed
 
@@ -95,34 +95,36 @@ D-120, D-129, D-130, D-134, D-210.
 
 ### Session artifacts
 
-- `scripts/test_graph_session.py`, `scripts/test_prepush_secrets.py` (guards),
-  `scripts/test_check_firmware_todos.py` (the rule) — `2dcd211`.
+- `scripts/check-artifacts.sh`, `scripts/verify-environment.sh` (guards) and
+  `scripts/test_gate_guards.py` (pins) — `5493d44`.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), in its purest form**: a suite whose only exit condition is "no
-  failures" cannot distinguish "everything passed" from "nothing ran". The fix is the same sentence as
-  S318's — a check must assert what it examined, not only what it found — and it now has a meta-test so
-  the assertion is not a convention.
-- **A near-miss worth naming**: I first assumed the whole suite set was affected. Classifying by runner
-  type first turned a twelve-file rewrite into a two-file fix.
+- **Layer 4 (verification feedback), three sessions running.** S318: a scanner whose empty range was a
+  pass. S319: two suites whose "0 failed" was a pass. S320: two gates whose empty scope was a pass. The
+  common defect is that each reported on *what it found* and never on *what it examined*; every fix in
+  this arc is the same sentence, applied at a different layer.
+- **A weakness I am not hiding**: one of the two new tests is a grep rather than an execution, because
+  `verify-environment.sh` costs minutes. It is labelled SOURCE in its docstring with the manual proof
+  recorded, so nobody mistakes it for behaviour.
 
 ### VERIFY
 
-- `python3 scripts/test_graph_session.py` → `40 passed, 0 failed`.
-- `python3 scripts/test_prepush_secrets.py` → `all checks passed`.
-- Copies with `def test_` renamed → both exit **1** and print the guard message (the proof the guard
-  works, not merely that it exists).
-- `agent/.venv/bin/python scripts/test_check_firmware_todos.py` → **31 passed** (30 before the rule).
-- Push of `2dcd211` → pre-push hook ran: `publish range: origin/master..HEAD`, `fast-forward`,
-  `no credential-shaped content`.
-- `python3 scripts/brain.py check` → 185 beliefs, integrity clean (B-185).
+- Empty expectation lists → `bash <emptied-copy> --verify` → exit **3**, "No artifacts are declared to
+  verify — refusing to report success."
+- All checks recounted as SKIP → `PASS: 0  FAIL: 0  SKIP: 61` then "No check ran successfully (61
+  skipped)", exit **1**.
+- `agent/.venv/bin/python scripts/test_gate_guards.py` → **4 passed**.
+- `make test-scripts` → every suite passes (graph 40, memory 45, prepush all checks, sast 24, sign 18,
+  hw-preflight 21, generic-installer 18, gate-guards 4); the only failure is `test_tls_floor.py`.
+- LSP on the new suite → 0 diagnostics.
+- Push of `5493d44` → pre-push hook ran and passed.
 
 ### Next session opening
 
-Finish the sweep in the two gates it did not reach: `scripts/check-artifacts.py --verify` and
-`scripts/verify-environment.sh` both print counts without asserting the count is non-zero, so an empty
-artifact manifest or a zero-check run would read as PASS.
+Continue the sweep into `make graph-check` — `graph_assert.py` validates invariants over whatever the
+spec declares, and an empty `nodes` list would satisfy every invariant vacuously; assert a non-zero node
+count and a non-zero count of checked invariants before it can report "All invariants pass".
 
 ---
 
