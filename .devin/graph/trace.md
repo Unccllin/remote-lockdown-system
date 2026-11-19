@@ -5711,3 +5711,93 @@ hardware and no operator credential, and they have now been listed as "unchanged
 session blocks.
 
 ---
+
+---
+
+## Session 322 — 2026-11-19 (the mutation audit counted table rows as kills)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `scripts/audit_test_teeth.py`'s docstring — KILLED/SURVIVED/SKIPPED, and the promise that a
+  row answers "would this suite notice a regression?".
+- **Read**: `main()` — skipped rows `continue` without being collected, and the closing line prints
+  `len(table)` as "killed".
+- **Read**: `.devin/graph/trace.md:1300-1312` — the twelve rows named there as stale, last triaged at
+  S182 and carried as "unchanged" through eleven session blocks.
+- **Read**: `serverless/worker.ts` and `serverless/agent-routes.ts` — the ACK path moved in S280, and
+  `artifact_json` is now `_artifact_json`, which is why twelve anchors matched nothing.
+
+**Findings**: this is the fifth instance of the arc's one defect — a check reporting on what it found
+and never on what it examined — but here it was worse than vacuous: the arithmetic was wrong. Twelve
+rows had not run for over a hundred sessions while the summary claimed every audited suite has teeth.
+
+### Fog cleared
+
+- **The accounting is fixed** (`14b5c26`): skipped rows print `UNVERIFIED`, are collected, are listed
+  with the behaviour they stand for, and make the audit **exit 1**. The closing line counts kills, not
+  table rows.
+- **All twelve rows are re-anchored to current code** and the audit is back to a real 55/55:
+  `all 55 mutations killed — every audited suite has teeth`, exit 0, 0 unverified, 0 survived.
+- **Two re-anchors were findings, not chores**: `uninstall-authz`'s anchor matched **twice** (both
+  uninstall handlers) so it could never have been a single mutation — it now includes the function
+  signature; and my first `recover-unlock` mutation ("never mark the key released") **SURVIVED**, which
+  means the suite does not assert that, so it now mutates the escrowed key itself and is killed by
+  "releases encryption key for unlock commands".
+- **AGENTS.md records the semantics**: a row that cannot run is `UNVERIFIED` and fails the audit.
+
+### Fog remaining
+
+- **The audit is not in any gate.** `make full-verify` does not run it (it takes minutes and mutates
+  source in a `finally`-restored way), so nothing prevents the same drift from accumulating again. A
+  periodic or pre-release run is the obvious answer and is not wired up.
+- **`recover-unlock`'s first mutation surviving is itself information**: the suite does not assert that
+  a released key is recorded as released. Not a mutation to add — a test gap to consider, left recorded.
+- Unchanged: D-120, D-129/D-130/D-134, D-210, offline key custody, HP UEFI password, per-executable
+  consent keying (unverified), `RequestAccessAsync` (untested), the pre-push hook being per-clone state,
+  the docker-socket red for `test_tls_floor.py`.
+- **Removed from this list** after eleven sessions: "12 stale `audit_test_teeth` rows".
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- None.
+
+### Session artifacts
+
+- `scripts/audit_test_teeth.py` (accounting + 12 re-anchors), `AGENTS.md` (the rule) — `14b5c26`.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), fifth in the arc and the most misleading yet.** The gap was not
+  merely unexamined — it was double-counted in the summary's own arithmetic, so the report was not just
+  silent about twelve behaviours, it asserted a number that could not have been true. The fix is the
+  same sentence again ("report what you examined"), and this time the audit now does it for itself.
+- **Layer 2 (context provision)**: nothing tied the mutation rows to the file moves they depend on, so a
+  refactor could silently orphan anchors. The re-anchor table names the move in a comment, which is
+  the closest thing to a durable link this file can carry.
+
+### VERIFY
+
+- Before: `all 55 mutations killed`, exit **0**, with 12 rows `SKIPPED`.
+- After the accounting fix: `43 of 55 mutations killed; 12 unverified`, exit **1**.
+- After the re-anchors: `all 55 mutations killed — every audited suite has teeth`, exit **0**,
+  `UNVERIFIED —` count **0**, `SURVIVED` count **0**.
+- Two intermediate single-row runs proved the difficult cases: `worker/uninstall-authz` KILLED by
+  "rejects a request with no credentials"; `worker/recover-unlock` KILLED by "releases encryption key for
+  unlock commands".
+- `git push` of `14b5c26` → pre-push hook ran and passed.
+
+### Next session opening
+
+Wire `scripts/audit_test_teeth.py` into a gate — a `make audit-teeth` target plus a weekly CI job — so
+the anchors cannot drift for a hundred sessions again, and so the SURVIVED/SURVIVED-none distinction is
+checked by something other than a session that happens to open the file.
+
+---

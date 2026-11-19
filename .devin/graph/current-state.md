@@ -53,40 +53,33 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 321 — 2026-11-19 (graph-check could pass by examining nothing)
+## Latest session: 322 — 2026-11-19 (the mutation audit counted table rows as kills)
 
 ### Fog cleared
 
-- **The counts are asserted before any invariant runs** (`183c2b1`), and the loops reuse those counted
-  lists so a future invariant cannot forget to look. Three messages, one per node family: phase nodes
-  (I1), debt items (I2), enforcement paths (I3).
-- **Verified in both directions, which is the only way this guard is worth anything**:
-  `assert_all_invariants({"nodes": [], "enforcement_paths": []})` now returns exactly **3 vacuity
-  violations** instead of a pass, while the real spec still reports `✓ All invariants pass` (17 phases,
-  64 debt items, 13 enforcement paths).
-- **Pinned by two tests, not one**: `agent/tests/test_graph_assertions.py` gains a case asserting the
-  three messages on an empty graph **and** a case asserting the guard does *not* fire on the
-  repository's own spec — a guard that fires on everything is as useless as one that fires on nothing.
-  50 tests pass (48 before).
-- **AGENTS.md records it** beside the existing sentence about invariant coverage, so the next session
-  reads a rule rather than discovering the hole.
+- **The accounting is fixed** (`14b5c26`): skipped rows print `UNVERIFIED`, are collected, are listed
+  with the behaviour they stand for, and make the audit **exit 1**. The closing line counts kills, not
+  table rows.
+- **All twelve rows are re-anchored to current code** and the audit is back to a real 55/55:
+  `all 55 mutations killed — every audited suite has teeth`, exit 0, 0 unverified, 0 survived.
+- **Two re-anchors were findings, not chores**: `uninstall-authz`'s anchor matched **twice** (both
+  uninstall handlers) so it could never have been a single mutation — it now includes the function
+  signature; and my first `recover-unlock` mutation ("never mark the key released") **SURVIVED**, which
+  means the suite does not assert that, so it now mutates the escrowed key itself and is killed by
+  "releases encryption key for unlock commands".
+- **AGENTS.md records the semantics**: a row that cannot run is `UNVERIFIED` and fails the audit.
 
 ### Fog remaining
 
-- **Vacuity was not swept exhaustively.** `scripts/graph_session.py`'s generators, the dashboard and
-  worker coverage floors, and `make load-smoke` were not examined for the same shape. The class is now
-  visible and has a vocabulary; the sweep is three files deep, not repo-deep.
-- **The ast-grep runner reported "blocking findings" three times this session with nothing attributable**
-  (an `MD024 ×45` on a file with five unique headings; a finding on `test_graph_session.py`; four on this
-  session's test file) while the LSP probe called those same files clean. A count without a finding is
-  not evidence, and it is recorded here as a tooling observation rather than a dismissal.
-- **Pyright cannot resolve `graph_assert`** in `agent/tests/test_graph_assertions.py` (two
-  `reportMissingImports`, both predating this session's edit) because the module is reached through a
-  runtime `sys.path.insert`. The runtime resolves it — 50 tests pass — and this is the documented
-  advisory class, so it was not "fixed" by adding a pragma to code I did not otherwise change.
-- Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
-  HP UEFI password, per-executable consent keying (unverified), `RequestAccessAsync` (untested), the
-  pre-push hook being per-clone state, the docker-socket red for `test_tls_floor.py`.
+- **The audit is not in any gate.** `make full-verify` does not run it (it takes minutes and mutates
+  source in a `finally`-restored way), so nothing prevents the same drift from accumulating again. A
+  periodic or pre-release run is the obvious answer and is not wired up.
+- **`recover-unlock`'s first mutation surviving is itself information**: the suite does not assert that
+  a released key is recorded as released. Not a mutation to add — a test gap to consider, left recorded.
+- Unchanged: D-120, D-129/D-130/D-134, D-210, offline key custody, HP UEFI password, per-executable
+  consent keying (unverified), `RequestAccessAsync` (untested), the pre-push hook being per-clone state,
+  the docker-socket red for `test_tls_floor.py`.
+- **Removed from this list** after eleven sessions: "12 stale `audit_test_teeth` rows".
 
 ### Debt items closed
 
@@ -102,31 +95,34 @@ D-120, D-129, D-130, D-134, D-210.
 
 ### Session artifacts
 
-- `.devin/graph/graph_assert.py` (the guard), `agent/tests/test_graph_assertions.py` (both directions),
-  `AGENTS.md` (the rule) — `183c2b1`.
+- `scripts/audit_test_teeth.py` (accounting + 12 re-anchors), `AGENTS.md` (the rule) — `14b5c26`.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), fourth session in this arc.** S318 empty scan range → S319 zero
-  discovered tests → S320 empty gate scope → S321 empty graph. Every one reported on *what it found*
-  and never on *what it examined*, and every fix is the same sentence at a different layer. The reusable
-  part is not the four patches; it is the habit of asking "what did this examine?" before believing a
-  pass — which is now recorded in AGENTS.md for the two gates most likely to recur.
+- **Layer 4 (verification feedback), fifth in the arc and the most misleading yet.** The gap was not
+  merely unexamined — it was double-counted in the summary's own arithmetic, so the report was not just
+  silent about twelve behaviours, it asserted a number that could not have been true. The fix is the
+  same sentence again ("report what you examined"), and this time the audit now does it for itself.
+- **Layer 2 (context provision)**: nothing tied the mutation rows to the file moves they depend on, so a
+  refactor could silently orphan anchors. The re-anchor table names the move in a comment, which is
+  the closest thing to a durable link this file can carry.
 
 ### VERIFY
 
-- `python3 .devin/graph/graph_assert.py` → `✓ All invariants pass` (real spec).
-- `assert_all_invariants({"nodes": [], "enforcement_paths": []})` → **3** violations, all naming
-  vacuity ("…satisfied vacuously — an empty graph is not a passing graph", "…examines nothing").
-- `agent/.venv/bin/python -m pytest agent/tests/test_graph_assertions.py -q` → **50 passed** (48 before).
-- `make graph-check` → all invariants pass; `make gen-state` unaffected.
-- `git push` of `183c2b1` → pre-push hook ran and passed.
+- Before: `all 55 mutations killed`, exit **0**, with 12 rows `SKIPPED`.
+- After the accounting fix: `43 of 55 mutations killed; 12 unverified`, exit **1**.
+- After the re-anchors: `all 55 mutations killed — every audited suite has teeth`, exit **0**,
+  `UNVERIFIED —` count **0**, `SURVIVED` count **0**.
+- Two intermediate single-row runs proved the difficult cases: `worker/uninstall-authz` KILLED by
+  "rejects a request with no credentials"; `worker/recover-unlock` KILLED by "releases encryption key for
+  unlock commands".
+- `git push` of `14b5c26` → pre-push hook ran and passed.
 
 ### Next session opening
 
-Clear the 12 stale `audit_test_teeth` rows that `current-state.md` has carried since S303 — they need no
-hardware and no operator credential, and they have now been listed as "unchanged" in eleven consecutive
-session blocks.
+Wire `scripts/audit_test_teeth.py` into a gate — a `make audit-teeth` target plus a weekly CI job — so
+the anchors cannot drift for a hundred sessions again, and so the SURVIVED/SURVIVED-none distinction is
+checked by something other than a session that happens to open the file.
 
 ---
 
