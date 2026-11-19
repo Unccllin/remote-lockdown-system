@@ -4289,3 +4289,123 @@ settle how a session-0 service could obtain BSSIDs at all, because S303 measured
 build refuses the WLAN scan without a location-capable interactive session.
 
 ---
+
+---
+
+## Session 308 — 2026-11-19 (can a session-0 service get BSSIDs? no — and that is now written down)
+
+### RULE-ZERO — understanding logged before each change
+
+Ruling first, code never: this session answered a platform question and changed documentation only.
+
+- **Read**: `docs/artifacts/s303-location-diagnosis.txt` §3 and §5 — the measured refusals on MOLE
+  (`netsh wlan … mode=bssid` → "need location permission … Access is denied", 0 SSIDs, 0 BSSIDs;
+  HKLM `ConsentStore\location\Allow` → still denied; HKCU Allow → still denied; `lfsvc` restart →
+  still denied; the SYSTEM-context control never ran because MOLE's Task Scheduler is broken, B-073).
+- **Read**: `agent/agent.py:1100-1180, 1289-1300` — `scan_wifi_networks()` shells out to
+  `netsh wlan show networks mode=bssid`, parses BSSID blocks, and already falls back to IP when the
+  call raises; `_wifi_points()` turns the scan into the API's `wifiAccessPoints`.
+- **Read**: Microsoft, *Changes to API behavior for Wi-Fi access and location* (Win32/nativewifi,
+  ms.date 2025-05-30, fetched 2026-11-19) — the consent rule, the four affected calls, the prompt
+  condition, and Microsoft's own recommendation to use Geolocation instead of Wi-Fi scans.
+- **Read**: `docs/PRIVACY_POLICY.md` §1.2 and `serverless/README.md`'s `GOOGLE_API_KEY` row — both
+  described Wi-Fi access-point collection without qualification.
+
+**Findings**: the question "can a session-0 service obtain BSSIDs?" is **not** answered by "services
+cannot"; the platform says consent *can* be device-level, which is a genuine foothold. What the
+platform does settle is that the prompt only appears "within the user's context and outside of
+`C:\Windows\System32`" — a `LocalSystem` service is neither — and that the only route left
+(device-level consent) was measured on MOLE and still refused. So option (c) as specified is not a
+matter of design; it is unproven, and the repo had never measured it in either direction. That went
+to the user as a ruling rather than becoming code on my say-so.
+
+### Fog cleared
+
+- **The platform rule is now cited, not folklore**: the four BSSID-returning calls
+  (`WlanGetAvailableNetworkList`, `WlanGetNetworkBssList`, `WlanScan`, `WlanQueryInterface` with
+  `wlan_intf_opcode_current_connection`) return `ERROR_ACCESS_DENIED` without precise-location
+  consent; consent can be device-, user- or app-level; the prompt requires a user context outside
+  `System32`. `docs/artifacts/s308-session0-bssid-feasibility.txt` §1 quotes it.
+- **The ruling is (d)**, recorded in `docs/adr/ADR-009-location-precision-by-install-type.md`: a
+  Windows service install reports `source: 'ip'` by platform design, and the product says so.
+- **The claim now appears where an operator and a data subject will meet it**: a new
+  **Location Reporting** section in `README.md` (install type → source → precision, the rule, the
+  citation), `docs/PRIVACY_POLICY.md` §1.2 rewritten, `serverless/README.md` pointing at ADR-009, and
+  a paragraph in `AGENTS.md` beside the FRANKENSTEIN notes.
+- **A privacy policy was over-claiming collection**, which is the kind of false statement that reads
+  as harmless and is not: it listed "Wi-Fi access points — nearby SSIDs/signal strengths" as
+  collected data when a service install collects none. It now says "only where the operating system
+  permits a scan", and that an `ip` fix carries no accuracy radius.
+- **Two paths are recorded as unproven, not as rejected**: an in-session helper (a per-user process at
+  logon writing a file the service reads) and `Geolocator` called from the service (Microsoft's own
+  recommended replacement, and it would need no Google key). Neither has ever been measured here; the
+  evidence ladder puts both at `spec-checked`, and §5 of the artifact is the three-call probe that
+  would settle them (interactive admin, `LocalSystem`-via-service, `LocalSystem` `Geolocator`;
+  consent on and off).
+
+### Fog remaining
+
+- **Session-0 `LocalSystem` + device-level consent has still never been measured.** The probe needs
+  hardware time and a way to run as `LocalSystem` that does not use Task Scheduler (broken on MOLE,
+  B-073) — `psexec -s` or a temporary service. Until it runs, ADR-009's sentence is `spec-checked`
+  plus S303's user-context refusals, not a hardware result.
+- **The map stays city-level for service installs.** That is now product state rather than a defect,
+  but it does not put a stolen laptop on a street.
+- **The ADR-008 rotation follow-up is still open** (a shared key baked into each config; rotation
+  needs reinstall).
+- Unchanged: `installer.py`/`installer_gui.py` config duplication, picomatch advisories, 12 stale
+  `audit_test_teeth` rows, offline key custody, HP UEFI BIOS password, D-120/D-129/D-130/D-134/D-210.
+
+### Debt items closed
+
+None. This closes no ledger item.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (PBL firmware signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **The probe needs a hardware window and a non-scheduler path to `LocalSystem`.** Nothing else in
+  this decision is blocked; the documentation half is done.
+
+### Session artifacts
+
+- `docs/artifacts/s308-session0-bssid-feasibility.txt` — the quoted platform rule, what this repo has
+  measured, the three surviving routes with costs, and the probe procedure.
+- `docs/adr/ADR-009-location-precision-by-install-type.md` — the decision of record.
+
+### Failure attribution
+
+- **Layer 2 (context provision)**: the repo knew "WiFi triangulation is unavailable to a service
+  install" but carried no citation and no boundary, so the question was re-openable by reasoning from
+  the docs ("consent can be device-level") without anyone measuring. A decision recorded with its
+  source and its measured/unmeasured boundary cannot be re-litigated by mood.
+- **Layer 4 (verification feedback)**: `docs/PRIVACY_POLICY.md` asserted collection of Wi-Fi access
+  points that no service install can perform, and nothing checked policy against capability. The
+  product now states in three places what the platform will and will not deliver.
+- **A note on process**: this session wrote no code at all, by design — the ruling gate was open, so
+  "proceed" meant research and a decision request, not an implementation. The ruling section was
+  deleted from `.devin/PENDING-RULING.md` once ADR-009 existed, per that file's own charter (live
+  state, not a log).
+
+### VERIFY
+
+- `scripts/check-ruling.sh` → `[OK] No open ruling items — task mode.` (blocked while Q1 was open, as
+  designed; reopened after the answer was recorded in ADR-009)
+- `git diff --stat` before commit → docs only: `AGENTS.md`, `README.md`, `docs/PRIVACY_POLICY.md`,
+  `serverless/README.md`, plus `docs/adr/ADR-009-…md` and `docs/artifacts/s308-…txt` (new). **No
+  source file changed**, so no suite was run and no suite result is claimed for this session.
+- Microsoft page fetched and quoted verbatim in artifact §1 (URL, `ms.date`, three sentences).
+- `.devin/PENDING-RULING.md` returned to 494 lines, 0 unchecked items.
+- `python3 scripts/brain.py check` → 176 beliefs, integrity clean.
+
+### Next session opening
+
+Decide whether to spend a hardware window on the §5 probe — it is the only thing that can change
+ADR-009 — and if not, take the ADR-008 rotation follow-up, which needs no hardware: an authenticated
+settings endpoint on both surfaces plus an agent cache, so the geolocation key can rotate without
+reinstalling the fleet.
+
+---

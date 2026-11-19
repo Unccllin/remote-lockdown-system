@@ -3862,3 +3862,28 @@ beliefs:
   dependents: []
   notes: 'Measured S307: ps showed vite --port 5173 started Wed Nov 18 14:29 (S303). After kill: 11 passed.
     Dummy listener on 5173 -> ''http://localhost:5173 is already used'' exit 1 in ~1s.'
+- id: B-176
+  statement: 'A Windows service install reports location source ''ip'' by platform design, not by bug
+    (S308, ADR-009): Windows returns ERROR_ACCESS_DENIED from the BSSID-returning WLAN calls without precise-location
+    consent, and shows the consent prompt only to processes ''within the user''s context and outside of
+    C:\Windows\System32'' — a LocalSystem service in session 0 is neither, so it can never prompt and
+    holds no app-level consent. Device-level consent is the only foothold and S303 measured the scan still
+    refused with HKLM ConsentStore location = Allow. The documented product behaviour is therefore IP-level
+    for service installs; an in-session helper and Geolocator-from-the-service remain UNPROVEN (spec-checked,
+    never measured), with the three-call probe in docs/artifacts/s308-session0-bssid-feasibility.txt §5
+    as the way to settle them.'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/adr/ADR-009-location-precision-by-install-type.md; docs/artifacts/s308-session0-bssid-feasibility.txt;
+    learn.microsoft.com/windows/win32/nativewifi/wi-fi-access-location-changes (fetched 2026-11-19); docs/artifacts/s303-location-diagnosis.txt
+    §3
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Evidence level: spec-checked for the platform rule, hardware for the S303 refusals. No source
+    file changed in S308.'

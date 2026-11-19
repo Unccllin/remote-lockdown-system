@@ -53,53 +53,48 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 307 — 2026-11-19 (`make full-verify` end to end, and a red that was my environment, not the code)
+## Latest session: 308 — 2026-11-19 (can a session-0 service get BSSIDs? no — and that is now written down)
 
 ### Fog cleared
 
-- **Every component suite is green on today's HEAD**: server **882** (52 suites), agent **976**,
-  dashboard **272** (30 files), worker **490** (4 files), electron **30** (3 suites), API/agent E2E
-  **14** (4 suites), verify-env **56 PASS / 0 FAIL / 5 SKIP**, check-artifacts all present. The
-  numbers AGENTS.md carried (843/866/429/447) were three sessions stale; it now says these, dated.
-- **The one red is the documented one and cannot be fixed from this session**: `test_tls_floor.py`
-  fails at `docker run` with `permission denied … //var/run/docker.sock`; the socket is
-  `root:docker 0660`, `id -nG` contains zero docker groups, and `sudo -n` needs a password. Measured,
-  not assumed. It stays a **failure**, not a SKIP — the repo's rule, and this block does not call it
-  green.
-- **`full-verify`'s abort hides three steps**: `test-e2e`, `verify-env` and `check-artifacts` never
-  ran. Run by hand: **14/14 E2E**, **56/0/5 env**, artifacts all present.
-- **The Playwright red was a stale server, and my first conclusion was wrong.** 7 failed / 4 passed
-  looked like dead login. `ps -o lstart` dated the squatter precisely:
-  `npm exec vite --port 5173` started **Wed Nov 18 14:29** — S303. `reuseExistingServer: !CI` made
-  Playwright drive that day-old server, whose `/api` proxy had been resolved **without** this run's
-  `E2E_BACKEND_PORT` (so the browser talked to an unrelated backend on 3001) while the fixture's own
-  axios login reached the right one on 3101. That is why `bootBackend()` never threw "login failed"
-  and the failures appeared as missing elements. Same commit, port freed: **11 passed, 15.4 s**.
-- **Reuse is now opt-in** (`PLAYWRIGHT_REUSE_DEV_SERVER=1`) instead of the default, so the failure
-  mode is one loud line rather than seven misleading ones — proven by putting a dummy listener on
-  5173 and watching it exit 1 in about a second with `http://localhost:5173 is already used`, and by
-  a clean run afterwards (11 passed, no listeners left behind).
+- **The platform rule is now cited, not folklore**: the four BSSID-returning calls
+  (`WlanGetAvailableNetworkList`, `WlanGetNetworkBssList`, `WlanScan`, `WlanQueryInterface` with
+  `wlan_intf_opcode_current_connection`) return `ERROR_ACCESS_DENIED` without precise-location
+  consent; consent can be device-, user- or app-level; the prompt requires a user context outside
+  `System32`. `docs/artifacts/s308-session0-bssid-feasibility.txt` §1 quotes it.
+- **The ruling is (d)**, recorded in `docs/adr/ADR-009-location-precision-by-install-type.md`: a
+  Windows service install reports `source: 'ip'` by platform design, and the product says so.
+- **The claim now appears where an operator and a data subject will meet it**: a new
+  **Location Reporting** section in `README.md` (install type → source → precision, the rule, the
+  citation), `docs/PRIVACY_POLICY.md` §1.2 rewritten, `serverless/README.md` pointing at ADR-009, and
+  a paragraph in `AGENTS.md` beside the FRANKENSTEIN notes.
+- **A privacy policy was over-claiming collection**, which is the kind of false statement that reads
+  as harmless and is not: it listed "Wi-Fi access points — nearby SSIDs/signal strengths" as
+  collected data when a service install collects none. It now says "only where the operating system
+  permits a scan", and that an `ip` fix carries no accuracy radius.
+- **Two paths are recorded as unproven, not as rejected**: an in-session helper (a per-user process at
+  logon writing a file the service reads) and `Geolocator` called from the service (Microsoft's own
+  recommended replacement, and it would need no Google key). Neither has ever been measured here; the
+  evidence ladder puts both at `spec-checked`, and §5 of the artifact is the three-call probe that
+  would settle them (interactive admin, `LocalSystem`-via-service, `LocalSystem` `Geolocator`;
+  consent on and off).
 
 ### Fog remaining
 
-- **Four gates were not re-measured today** and keep their older dates in AGENTS.md: `make pg-smoke`
-  (real PostgreSQL 16), `make sast` (semgrep absent on this host), `make firmware-host-tests`, and
-  `make test-coverage` across all five components (only the dashboard floor was re-run).
-- **`make full-verify` still cannot be green on this host** until the login session belongs to the
-  `docker` group — an operator action (add the group, start a new login session), not a code change.
-- **The sweep's own coverage gap is unclosed**: `test-e2e-dashboard` is not in the chain, so
-  "full-verify passed" would still never have exercised the dashboard E2E suite. Adding it is a
-  Makefile change with a 5173 precondition — worth doing, not done here.
-- **S303 left a dev server running for a day** and nothing noticed. Process hygiene across sessions
-  has no owner; the Playwright reuse defect made that invisible, and it is now at least loud for
-  that one port.
-- Unchanged: the rotation follow-up from ADR-008, S303 options (c)/(d), the `installer.py` /
-  `installer_gui.py` config duplication, picomatch advisories, 12 stale `audit_test_teeth` rows,
-  offline key custody, HP UEFI BIOS password.
+- **Session-0 `LocalSystem` + device-level consent has still never been measured.** The probe needs
+  hardware time and a way to run as `LocalSystem` that does not use Task Scheduler (broken on MOLE,
+  B-073) — `psexec -s` or a temporary service. Until it runs, ADR-009's sentence is `spec-checked`
+  plus S303's user-context refusals, not a hardware result.
+- **The map stays city-level for service installs.** That is now product state rather than a defect,
+  but it does not put a stolen laptop on a street.
+- **The ADR-008 rotation follow-up is still open** (a shared key baked into each config; rotation
+  needs reinstall).
+- Unchanged: `installer.py`/`installer_gui.py` config duplication, picomatch advisories, 12 stale
+  `audit_test_teeth` rows, offline key custody, HP UEFI BIOS password, D-120/D-129/D-130/D-134/D-210.
 
 ### Debt items closed
 
-None.
+None. This closes no ledger item.
 
 ### Debt items still open
 
@@ -108,57 +103,46 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **`/var/run/docker.sock` is unreadable from this login session** (root:docker 0660, no docker
-  group, `sudo -n` needs a password). This is the only reason `make full-verify` cannot be green
-  here, and it is not a code defect.
+- **The probe needs a hardware window and a non-scheduler path to `LocalSystem`.** Nothing else in
+  this decision is blocked; the documentation half is done.
 
 ### Session artifacts
 
-- `docs/artifacts/s307-full-verify.txt` — every target's result, the tls-floor evidence chain
-  (socket mode, group membership, `sudo -n`, `docker ps`), the three hand-run steps, the stale-server
-  attribution with its `lstart` timestamp, and the before/after proof of the reuse fix.
-- `dashboard/playwright.config.js` — reuse is opt-in, with the date and mechanism in the comment.
-- `AGENTS.md` — sweep results re-dated and split into *re-measured today*, *cannot pass here (and
-  what the abort skipped)*, and *not re-measured* with their older dates.
+- `docs/artifacts/s308-session0-bssid-feasibility.txt` — the quoted platform rule, what this repo has
+  measured, the three surviving routes with costs, and the probe procedure.
+- `docs/adr/ADR-009-location-precision-by-install-type.md` — the decision of record.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), and it was mine.** I reported "a genuine red, not a flake" from
-  the test output alone, without checking the environment the suite ran in — the exact shortcut the
-  repo's own AGENTS.md warns about for this suite ("presenting as 'login is broken', not as
-  misconfiguration"). Harness change this argues for: **any red must be attributed to a cause before
-  it is reported**, and for a browser suite that means `ss`/`ps` on the port the harness claims to own.
-- **Layer 3 (execution environment)**: the docker socket is the one gate the host cannot run. It was
-  documented, and this session confirmed *why* rather than repeating the claim.
-- **Layer 5 (state management)**: S303's leftover dev server survived a full session boundary and
-  silently changed the meaning of another session's test run. Nothing in the harness required it to
-  be cleaned up.
-- **My own tooling**: `bg_run` reported exit 0 for a suite that failed, because the command ended in
-  an `echo` that masked `PIPESTATUS`. The log's `make: *** Error 1` was the truth. Fixed in the
-  follow-up runs by ending with `exit $rc`.
+- **Layer 2 (context provision)**: the repo knew "WiFi triangulation is unavailable to a service
+  install" but carried no citation and no boundary, so the question was re-openable by reasoning from
+  the docs ("consent can be device-level") without anyone measuring. A decision recorded with its
+  source and its measured/unmeasured boundary cannot be re-litigated by mood.
+- **Layer 4 (verification feedback)**: `docs/PRIVACY_POLICY.md` asserted collection of Wi-Fi access
+  points that no service install can perform, and nothing checked policy against capability. The
+  product now states in three places what the platform will and will not deliver.
+- **A note on process**: this session wrote no code at all, by design — the ruling gate was open, so
+  "proceed" meant research and a decision request, not an implementation. The ruling section was
+  deleted from `.devin/PENDING-RULING.md` once ADR-009 existed, per that file's own charter (live
+  state, not a log).
 
 ### VERIFY
 
-- `make full-verify` → **exit 1**, and the single failure is
-  `scripts/test_tls_floor.py::test_the_terminator_refuses_tls1_0_and_1_1_at_the_protocol_layer`
-  (`1 failed, 1 passed`); every target before `test-scripts` passed.
-- `cd server && npm test` → 882 passed / 52 suites · `cd serverless && npm test` → 490 / 4 ·
-  `cd dashboard && npx vitest run` → 272 / 30 · `cd electron && npm test` → 30 / 3 ·
-  `scripts/run-agent-tests.sh -q` → exit 0, 976 collected
-- `make test-e2e` → **14 passed, 4 suites**, `RESULT: PASS (all E2E tests succeeded)`
-- `make verify-env` → **56 PASS / 0 FAIL / 5 SKIP** · `make check-artifacts` → all artifacts present
-- `docker ps` → exit 1 · `ls -l /var/run/docker.sock` → `srw-rw---- root docker` ·
-  `id -nG | grep -c docker` → 0 · `sudo -n true` → "a password is required"
-- Playwright: **7 failed / 4 passed** with S303's server on 5173, **11 passed (15.4 s)** after
-  killing it, **11 passed (16.2 s)** with the new config, and with a dummy listener on 5173 the run
-  exits 1 in ~1 s with `http://localhost:5173 is already used`.
+- `scripts/check-ruling.sh` → `[OK] No open ruling items — task mode.` (blocked while Q1 was open, as
+  designed; reopened after the answer was recorded in ADR-009)
+- `git diff --stat` before commit → docs only: `AGENTS.md`, `README.md`, `docs/PRIVACY_POLICY.md`,
+  `serverless/README.md`, plus `docs/adr/ADR-009-…md` and `docs/artifacts/s308-…txt` (new). **No
+  source file changed**, so no suite was run and no suite result is claimed for this session.
+- Microsoft page fetched and quoted verbatim in artifact §1 (URL, `ms.date`, three sentences).
+- `.devin/PENDING-RULING.md` returned to 494 lines, 0 unchecked items.
+- `python3 scripts/brain.py check` → 176 beliefs, integrity clean.
 
 ### Next session opening
 
-Pick option (c) or (d) of `docs/artifacts/s303-location-diagnosis.txt` §5 — the fleet's map
-precision is the last open product question in this line of work — and before writing code for (c),
-settle how a session-0 service could obtain BSSIDs at all, because S303 measured that this Windows
-build refuses the WLAN scan without a location-capable interactive session.
+Decide whether to spend a hardware window on the §5 probe — it is the only thing that can change
+ADR-009 — and if not, take the ADR-008 rotation follow-up, which needs no hardware: an authenticated
+settings endpoint on both surfaces plus an agent cache, so the geolocation key can rotate without
+reinstalling the fleet.
 
 ---
 
