@@ -181,6 +181,30 @@ Admin Dashboard (React SPA)
 2. Agent decrypts folder, removes lock screen, ACKs
 3. `device.status` → `active`
 
+## Location Reporting
+
+A location report carries `latitude`, `longitude`, `source` (`ip` / `wifi` / `gps`),
+`accuracy_meters`, `city`/`region`/`country` and `reported_at`. The dashboard shows the source and
+the accuracy, and labels an IP-based fix **"Approximate — IP-based fix: resolves the ISP's
+city-level location, not the device."** — so a marker is never mistaken for a position.
+
+**What precision you get depends on how the agent was installed, and that is a platform rule rather
+than a setting:**
+
+| install | `source` | precision |
+|---|---|---|
+| interactive (agent in a signed-in user's session), `GOOGLE_API_KEY` provisioned | `wifi` | tens of metres in a dense area, when the OS allows the Wi-Fi scan |
+| interactive, no key | `ip` | city-level |
+| Windows **service** (LocalSystem, session 0) | `ip` | city-level, always |
+
+Windows restricts the calls that return BSSIDs (`WlanGetNetworkBssList`, `WlanScan`,
+`WlanGetAvailableNetworkList`, …) to processes holding precise-location consent, and the consent
+prompt is only shown to processes running "within the user's context and outside of
+`C:\Windows\System32`" — which a service never is. Measured here with device-level consent set, the
+scan is still refused with *Access is denied*. So for a service install the accurate statement is:
+the fix is the internet provider's booked location, devices behind one egress plot at the same point,
+and the UI says so. See [docs/adr/ADR-009-location-precision-by-install-type.md](docs/adr/ADR-009-location-precision-by-install-type.md).
+
 ---
 
 ## Safety Rules

@@ -739,6 +739,16 @@ build always shows a parent bootloader plus its child, so `tasklist` reporting t
 11332), not a duplicate-instance bug. The agent is reachable only over the LAN through a Windows port-proxy
 (`0.0.0.0:3001 → <WSL address>:3001`), which must be re-created after a WSL restart.
 
+**A Windows service install reports `source: 'ip'` by platform design, not by bug (ADR-009).**
+Windows restricts the BSSID-returning calls (`WlanGetNetworkBssList`, `WlanScan`,
+`WlanGetAvailableNetworkList`) to processes holding precise-location consent, and shows the consent
+prompt only to processes "within the user's context and outside of `C:\Windows\System32`" — a
+`LocalSystem` service in session 0 is neither, so it can never prompt. Measured on MOLE with the
+device-level consent value set to `Allow`, the scan is still refused (*Access is denied*). Do not
+re-open the BSSID question by reasoning from the docs alone: run the three-call probe in
+`docs/artifacts/s308-session0-bssid-feasibility.txt` §5 (interactive admin, LocalSystem-via-service,
+LocalSystem `Geolocator`; consent on and off) and decide from measurements.
+
 ### Hardware testing status — 2026-11-05 (window: 4 enforcement paths moved)
 
 Ran on FRANKENSTEIN (HP EliteBook 830 G8, Windows, admin, TPM present, BitLocker off) via the

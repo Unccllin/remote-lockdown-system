@@ -24,13 +24,22 @@ When a device is enrolled, we collect:
 ### 1.2 Location Data
 When a device is in "tracking" mode (flagged as stolen), we collect:
 - **GPS coordinates** (latitude/longitude) — if available
-- **IP-based geolocation** — approximate location derived from IP address
-- **Wi-Fi access points** — nearby SSIDs/signal strengths for WiFi-based positioning
-- **Accuracy radius** — estimated accuracy of the location reading
+- **IP-based geolocation** — approximate location derived from the IP address. On a Windows **service**
+  install this is the only source available, and it resolves the internet provider's booked location
+  rather than the device's, so it is city-level at best and several devices behind one connection can
+  report the same point.
+- **Wi-Fi access points** — nearby SSIDs/BSSIDs and signal strengths for Wi-Fi-based positioning,
+  collected **only where the operating system permits a scan**. Windows restricts these calls to
+  processes that hold precise-location consent, which a background service cannot hold, so a service
+  install reports no access points at all.
+- **Accuracy radius** — the estimated accuracy of the reading, when the source reports one. An
+  IP-based reading reports none, and the dashboard shows "not reported" rather than implying a radius.
 - **City/region/country** — derived from the location data
 
 Location data is only collected when the device is flagged as stolen or
-explicitly placed in tracking mode by an authorized administrator.
+explicitly placed in tracking mode by an authorized administrator. The source of every reading
+(`ip` / `wifi` / `gps`) is stored with it and displayed alongside it; see
+[docs/adr/ADR-009-location-precision-by-install-type.md](adr/ADR-009-location-precision-by-install-type.md).
 
 ### 1.3 Security Data
 - **Encryption keys** — generated on the device during lockdown, stored encrypted
