@@ -53,41 +53,28 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 312 — 2026-11-19 (23 commits meet CI: one finding mine, two older than my work, and a gate that never ran locally)
+## Latest session: 313 — 2026-11-19 (a generated index that shifted every row, and the test that failed on its own fix)
 
 ### Fog cleared
 
-- **Master is green** (`f96f7ef`): Lint run 44505246648 — all eight jobs success, including
-  `SAST (Semgrep)` and `Secret scan (publish range)`; plus `CI` (full suite) success and `CodeQL`
-  success. First fully green run since 2026-11-18.
-- **The dashboard lint gate now works in the machine that counts**: the CI `Lint Dashboard (ESLint)`
-  job runs `--ext .js,.jsx --max-warnings=0`, so the 51 `.jsx` files that were silently skipped before
-  S305 are linted on every push.
-- **The secret-scan finding was real and is fixed forward**: S301's block quoted a token response body
-  (`{"token":"kLekRUyp…"}`); the token was single-use with a 900 s TTL minted 2026-11-18T12:03:25Z, so
-  dead 16 hours before publication. Redacted to `<redacted — S311>` with the shape and TTL preserved.
-  `Secret scan` → success on `c330b3f`.
-- **The SAST baseline is triaged, not suppressed**: three findings carry dispositions that cite the
-  guard in the code (two scheme checks a few lines above the call; one intentional `chmod 0o755` on an
-  executable), and the stale `hw_test_harness.py` entry was **deleted** because its `match` text still
-  exists at line 2772 while Semgrep no longer raises the finding — the gate's own definition of stale.
-  Verified locally with semgrep 1.182.1: 48 findings, 0 ERROR, exit 0.
-- **AGENTS.md's `make sast 45 findings` claim was corrected** to 48 / 0 ERROR / all dispositioned
-  (S312), and the section now carries the venv recipe so the gate can actually be run here.
+- **`_md_cell()` escapes `|` and flattens newlines**, and the three row builders use it (`3bec4a7`).
+- **The index is regenerated and measured**: 1457 active / 20 decayed, and an independent delimiter
+  count over the whole file finds **0 ragged rows** (it was 6).
+- **The escaping is pinned by a test** that asserts *delimiters*, not raw pipes — the first draft of my
+  own test failed on the fix itself (`count("|") == 11`), because an escaped `\|` is still a `|`
+  character. Corrected to a negative-lookbehind count; 45 memory tests pass.
+- **The advisory was worth reading.** "0 actionable warnings" described severity, not table integrity;
+  the item was sitting in the "quality issues" tail. This is the third time in two sessions that a
+  dismissed-looking advisory held a real defect.
 
 ### Fog remaining
 
-- **One CI red remains unattributed.** `CI` failed on `0c13b19` (master before the push) with Server
-  Tests and Dashboard Tests failing, and passes on `c330b3f` without any reproduction. Recorded as
-  pre-existing / not reproduced / attribution unknown — the two documented flaky classes in that area
-  (SQLite teardown race S267, dev server squatting 5173 S307) are candidate causes, not conclusions.
-- **Semgrep is still not installed on this host**; it was run from a throwaway `/tmp/sgvenv`. Until it
-  is installed persistingly (pipx), the local gate remains a no-op between CI runs.
-- **S312 caught me repeating the mistake it documents**: the AGENTS.md guardrail example reproduced the
-  token fragment and the scanner flagged it (`WARN assigned-secret in fixture/example`). Fixed by
-  amending the unpushed commit; the rule now shows the shape only.
-- Unchanged: the §5 BSSID probe (now cheap, because MOLE is reachable over SSH), D-120,
-  D-129/D-130/D-134, D-210, `installer.py`/`installer_gui.py` config duplication, 12 stale
+- **`MASTER-INDEX`/`STUDY-INDEX` and the ADR tables were not checked for the same class.** The fix is in
+  the generator that produced this one; any hand-authored table with a `|` in a cell has the same
+  failure and no test.
+- **Pyright still resolves `pytest` against the system interpreter** in `scripts/*.py`
+  (`reportMissingImports`), which is the documented advisory class, not a defect.
+- Unchanged: the §5 BSSID probe on MOLE (now cheap), D-120, D-129/D-130/D-134, D-210, 12 stale
   `audit_test_teeth` rows, offline key custody, HP UEFI password.
 
 ### Debt items closed
@@ -100,45 +87,34 @@ D-120, D-129, D-130, D-134, D-210.
 
 ### Blockers
 
-- **None.** Two of the four SAST items were false positives, one was intentional, one was stale.
+- None.
 
 ### Session artifacts
 
-- `docs/artifacts/s312-ci-green.txt` — the push, the secret finding with its TTL and redaction, the
-  four SAST dispositions with their code evidence, the local and CI verification, and the one
-  unattributed red.
-- `scripts/sast-exceptions.json` — 46 → 48 entries, `reviewed: S312`.
+- `.devin/memory/index.md` (regenerated), `scripts/memory.py`, `scripts/test_memory.py` — commit
+  `3bec4a7`. No separate artifact file: the evidence is the delimiter count (6 → 0) and the test.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), and it is structural.** A gate whose tool is absent on the
-  developer host does not fail loudly — `make sast` exits 2, nobody reads it, and the documentation
-  keeps asserting a number it can no longer produce. CI was the only measurement for a day, and CI's
-  red was invisible because nothing was being pushed. The actual fix is the one applied: install the
-  binary in a venv, run the real gate, and write the recipe into AGENTS.md.
-- **Layer 2 (context provision)**: the publish-range secret scan exists precisely because session
-  blocks quote API responses; there was no rule against pasting a token *value*, so S301 pasted one.
-  There is now, in the same paragraph that describes the session-end block.
-- **A near-miss worth naming**: the first draft of that new rule contained the very fragment it
-  forbade, and the scanner caught it before the push. That is the guard working one layer earlier
-  than usual.
+- **Layer 4 (verification feedback)**: the index had tests but none on its *shape*, so a generator bug
+  that displaced every column survived 1400+ entries. A table test that asserts content and not
+  column count is half a test.
+- **Layer 2 (context provision)**: nothing told memory authors that `|` is table-significant when the
+  index renders their text, so the input that broke it (shell pipelines in titles) is the normal case.
 
 ### VERIFY
 
-- `PATH=/tmp/sgvenv/bin:$PATH make sast` → `Semgrep findings: 48`, `[OK] every finding is either
-  fixed or carries a reviewed reason`, exit 0.
-- CI on `f96f7ef` — Lint run 44505246648: Agent ruff · Secret scan · tsc · Server ESLint · Dashboard
-  ESLint · actionlint · OpenAPI · SAST → **all success**; `CI` success; `CodeQL` success.
-- `python3 scripts/prepush_secrets.py --base 9ff542c --head c330b3f` → no findings.
-- `python3 scripts/brain.py check` → 181 beliefs, integrity clean (B-181 asserted at code-read).
-- Pushed: `272b7fa` → `c330b3f` → `f96f7ef`; working tree clean.
+- `agent/.venv/bin/python scripts/test_memory.py` → **45 passed** (was 44; the new case is the 45th).
+- Independent check over `.devin/memory/index.md`: every row's unescaped-pipe count equals its table
+  header's → **0 ragged rows** (was 6).
+- `grep m-1430 .devin/memory/index.md` → `electronApiUrl \|\| VITE_API_URL`, escaped and inside one cell.
+- `python3 scripts/memory.py index` → `Index rebuilt: 1457 active, 0 superseded, 20 decayed`.
 
 ### Next session opening
 
-Run the §5 BSSID probe on MOLE — three calls now that SSH is known and the device is on 1.0.4: an
-interactive `WlanGetNetworkBssList`, the same call from `LocalSystem` via a temporary service, and
-`LocalSystem` `Geolocator`, with device-level location consent on and off. It is the only measurement
-that can change ADR-009, and until today it looked like it needed someone at a keyboard.
+Run the §5 BSSID probe on MOLE over SSH — interactive `WlanGetNetworkBssList`, the same call from
+`LocalSystem` via a temporary service, and `LocalSystem` `Geolocator`, consent on and off — because it
+is the only measurement that can change ADR-009 and it no longer needs a human at the keyboard.
 
 ---
 

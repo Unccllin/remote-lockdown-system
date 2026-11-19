@@ -4866,3 +4866,86 @@ interactive `WlanGetNetworkBssList`, the same call from `LocalSystem` via a temp
 that can change ADR-009, and until today it looked like it needed someone at a keyboard.
 
 ---
+
+---
+
+## Session 313 — 2026-11-19 (a generated index that shifted every row, and the test that failed on its own fix)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `scripts/memory.py:1040-1160` (`stage_index`) — three row builders interpolate `title`,
+  `tags`, `impact`, `reason` and `superseded_by` straight into markdown table cells.
+- **Read**: `scripts/test_memory.py` index tests — they assert content (`"m-001" in index_text`,
+  `"| 0 |" in index_text`) but never the row's shape, which is why nothing caught this.
+- **Read**: the pi-lens advisory that raised it — "0 actionable warnings · 50 quality issues" with
+  `MD056 table-column-count [Expected: 8; Actual: 10]` inside the list, on `.devin/memory/index.md`.
+- **Read**: the offending row (`m-1430`, title `Client base URL is electronApiUrl || VITE_API_URL`) and
+  counted its pipes — 11 where the table wants 9.
+
+**Findings**: not a markdown style complaint. An unescaped `|` in generated content adds table cells,
+so every column after the title is displaced — the index was quietly lying about which confidence,
+date and score belonged to which memory. Six rows were affected, and the cause was my own captures:
+`||` in a shell command, and `|` in `git diff | grep` style text.
+
+### Fog cleared
+
+- **`_md_cell()` escapes `|` and flattens newlines**, and the three row builders use it (`3bec4a7`).
+- **The index is regenerated and measured**: 1457 active / 20 decayed, and an independent delimiter
+  count over the whole file finds **0 ragged rows** (it was 6).
+- **The escaping is pinned by a test** that asserts *delimiters*, not raw pipes — the first draft of my
+  own test failed on the fix itself (`count("|") == 11`), because an escaped `\|` is still a `|`
+  character. Corrected to a negative-lookbehind count; 45 memory tests pass.
+- **The advisory was worth reading.** "0 actionable warnings" described severity, not table integrity;
+  the item was sitting in the "quality issues" tail. This is the third time in two sessions that a
+  dismissed-looking advisory held a real defect.
+
+### Fog remaining
+
+- **`MASTER-INDEX`/`STUDY-INDEX` and the ADR tables were not checked for the same class.** The fix is in
+  the generator that produced this one; any hand-authored table with a `|` in a cell has the same
+  failure and no test.
+- **Pyright still resolves `pytest` against the system interpreter** in `scripts/*.py`
+  (`reportMissingImports`), which is the documented advisory class, not a defect.
+- Unchanged: the §5 BSSID probe on MOLE (now cheap), D-120, D-129/D-130/D-134, D-210, 12 stale
+  `audit_test_teeth` rows, offline key custody, HP UEFI password.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- None.
+
+### Session artifacts
+
+- `.devin/memory/index.md` (regenerated), `scripts/memory.py`, `scripts/test_memory.py` — commit
+  `3bec4a7`. No separate artifact file: the evidence is the delimiter count (6 → 0) and the test.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback)**: the index had tests but none on its *shape*, so a generator bug
+  that displaced every column survived 1400+ entries. A table test that asserts content and not
+  column count is half a test.
+- **Layer 2 (context provision)**: nothing told memory authors that `|` is table-significant when the
+  index renders their text, so the input that broke it (shell pipelines in titles) is the normal case.
+
+### VERIFY
+
+- `agent/.venv/bin/python scripts/test_memory.py` → **45 passed** (was 44; the new case is the 45th).
+- Independent check over `.devin/memory/index.md`: every row's unescaped-pipe count equals its table
+  header's → **0 ragged rows** (was 6).
+- `grep m-1430 .devin/memory/index.md` → `electronApiUrl \|\| VITE_API_URL`, escaped and inside one cell.
+- `python3 scripts/memory.py index` → `Index rebuilt: 1457 active, 0 superseded, 20 decayed`.
+
+### Next session opening
+
+Run the §5 BSSID probe on MOLE over SSH — interactive `WlanGetNetworkBssList`, the same call from
+`LocalSystem` via a temporary service, and `LocalSystem` `Geolocator`, consent on and off — because it
+is the only measurement that can change ADR-009 and it no longer needs a human at the keyboard.
+
+---
