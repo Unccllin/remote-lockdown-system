@@ -306,6 +306,71 @@ describe('DeviceDetailPage', () => {
     }, { timeout: 3000 });
   });
 
+  it('labels an ip fix as approximate and reports accuracy as not reported', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: baseDevice });
+      }
+      if (url.includes('/locations')) {
+        return Promise.resolve({
+          data: [{
+            id: 'loc-1',
+            latitude: 37.7749,
+            longitude: -122.4194,
+            source: 'ip',
+            accuracy_meters: null,
+            city: 'Karatina',
+            region: 'KE',
+            country: 'KE',
+            reported_at: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/not reported/).length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
+    expect(screen.getAllByText(/Approximate/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/ISP/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/ip/).length).toBeGreaterThan(0);
+  });
+
+  it('shows metre accuracy and no approximate label for a wifi fix', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: baseDevice });
+      }
+      if (url.includes('/locations')) {
+        return Promise.resolve({
+          data: [{
+            id: 'loc-1',
+            latitude: 37.7749,
+            longitude: -122.4194,
+            source: 'wifi',
+            accuracy_meters: 25,
+            city: 'San Francisco',
+            region: 'CA',
+            country: 'US',
+            reported_at: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/~25m/).length).toBeGreaterThanOrEqual(2);
+    }, { timeout: 3000 });
+    expect(screen.queryByText(/Approximate/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText('Accuracy').length).toBeGreaterThan(0);
+  });
+
   // Phase 17: Lockdown-effectiveness panel tests
 
   it('shows BOOT LOCKDOWN INEFFECTIVE warning when lockdown_effective=false', async () => {

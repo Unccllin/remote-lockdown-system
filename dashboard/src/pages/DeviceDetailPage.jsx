@@ -11,6 +11,13 @@ import { useCurrentUser } from '../hooks/useCurrentUser';
 import { safeFromNow, safeFormat } from '../utils/time';
 import { describeBootLockReason } from '../utils/bootLockReason';
 
+const formatAccuracy = (m) =>
+  typeof m === 'number' && !Number.isNaN(m) ? `~${Math.round(m)}m` : 'not reported';
+
+const isIpFix = (loc) => loc?.source === 'ip';
+
+const APPROX_NOTE = 'Approximate — IP-based fix: resolves the ISP\'s city-level location, not the device.';
+
 const STATUS_BADGE = {
   active: 'badge-active',
   stolen: 'badge-stolen',
@@ -936,6 +943,17 @@ export default function DeviceDetailPage() {
                             {[loc.city, loc.region, loc.country].filter(Boolean).join(', ')}
                           </div>
                         )}
+                        <div style={{ fontSize: 11, color: '#475569', marginBottom: 2 }}>
+                          Source: {loc.source || 'unknown'}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#475569', marginBottom: 2 }}>
+                          Accuracy: {formatAccuracy(loc.accuracy_meters)}
+                        </div>
+                        {isIpFix(loc) && (
+                          <div style={{ fontSize: 10, color: '#b45309', marginBottom: 2 }}>
+                            {APPROX_NOTE}
+                          </div>
+                        )}
                         <div style={{ fontSize: 11, color: '#475569' }}>
                           {loc.reported_at
                             ? safeFromNow(loc.reported_at)
@@ -980,12 +998,15 @@ export default function DeviceDetailPage() {
                   <span className="text-xs text-slate-400">Source</span>
                   <span className="text-sm text-slate-200">{latestLocation.source}</span>
                 </div>
-                {latestLocation.accuracy_meters && (
-                  <div className="flex justify-between">
-                    <span className="text-xs text-slate-400">Accuracy</span>
-                    <span className="text-sm font-mono text-slate-200">
-                      ~{Math.round(latestLocation.accuracy_meters)}m
-                    </span>
+                <div className="flex justify-between">
+                  <span className="text-xs text-slate-400">Accuracy</span>
+                  <span className="text-sm font-mono text-slate-200">
+                    {formatAccuracy(latestLocation.accuracy_meters)}
+                  </span>
+                </div>
+                {isIpFix(latestLocation) && (
+                  <div className="text-xs text-amber-400/80 pt-2 border-t border-slate-800/50">
+                    {APPROX_NOTE}
                   </div>
                 )}
                 <div className="flex justify-between">
