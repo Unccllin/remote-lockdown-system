@@ -53,29 +53,30 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 313 — 2026-11-19 (a generated index that shifted every row, and the test that failed on its own fix)
+## Latest session: 314 — 2026-11-19 (I pushed a range my own scanner had failed, and the rule that was missing)
 
 ### Fog cleared
 
-- **`_md_cell()` escapes `|` and flattens newlines**, and the three row builders use it (`3bec4a7`).
-- **The index is regenerated and measured**: 1457 active / 20 decayed, and an independent delimiter
-  count over the whole file finds **0 ragged rows** (it was 6).
-- **The escaping is pinned by a test** that asserts *delimiters*, not raw pipes — the first draft of my
-  own test failed on the fix itself (`count("|") == 11`), because an escaped `\|` is still a `|`
-  character. Corrected to a negative-lookbehind count; 45 memory tests pass.
-- **The advisory was worth reading.** "0 actionable warnings" described severity, not table integrity;
-  the item was sitting in the "quality issues" tail. This is the third time in two sessions that a
-  dismissed-looking advisory held a real defect.
+- **Both live occurrences are redacted** (`d93fb32`): `trace.md` (my S312 block) and the S312 artifact.
+  `grep -r kLekRUyp .devin/graph/trace.md docs/artifacts/` → 0.
+- **AGENTS.md gained the mechanical half**: "gate the push on the scan, not next to it" — `… && git push`,
+  because "a verification whose failure does not stop the action is a log line, not a check".
+- **CI is green on the corrected push**: `d93fb32` → Lint run 44506991536 with **all eight jobs
+  success**, including `Secret scan (publish range)` and `SAST (Semgrep)`; plus `CI` and `CodeQL`.
+- **The bad push is recorded as red, not hidden**: on `91a17ea` the only failing job was
+  `Secret scan (publish range)`. The gate worked; the operator did not.
 
 ### Fog remaining
 
-- **`MASTER-INDEX`/`STUDY-INDEX` and the ADR tables were not checked for the same class.** The fix is in
-  the generator that produced this one; any hand-authored table with a `|` in a cell has the same
-  failure and no test.
-- **Pyright still resolves `pytest` against the system interpreter** in `scripts/*.py`
-  (`reportMissingImports`), which is the documented advisory class, not a defect.
-- Unchanged: the §5 BSSID probe on MOLE (now cheap), D-120, D-129/D-130/D-134, D-210, 12 stale
-  `audit_test_teeth` rows, offline key custody, HP UEFI password.
+- **`ca6d953` remains on the remote containing the fragment's first eight characters.** The token is
+  single-use, had a 900 s TTL and expired 2026-11-18T12:03Z+15m — rewriting published history for that
+  is disproportionate, and this file says so rather than implying the exposure is zero.
+- **The pattern behind three separate incidents is not yet a test.** S305's lint gate that linted no
+  `.jsx`, S307's Playwright reuse of a stale dev server, and now a scan chained with `;` are all
+  "checks that watch without blocking". Two were fixed at their own layer; the general shape has no
+  guard.
+- Unchanged: the §5 BSSID probe on MOLE (still the cheapest next measurement), D-120,
+  D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody, HP UEFI password.
 
 ### Debt items closed
 
@@ -91,30 +92,32 @@ D-120, D-129, D-130, D-134, D-210.
 
 ### Session artifacts
 
-- `.devin/memory/index.md` (regenerated), `scripts/memory.py`, `scripts/test_memory.py` — commit
-  `3bec4a7`. No separate artifact file: the evidence is the delimiter count (6 → 0) and the test.
+- `AGENTS.md` (the gating rule), `.devin/graph/trace.md`, `docs/artifacts/s312-ci-green.txt` — `d93fb32`.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)**: the index had tests but none on its *shape*, so a generator bug
-  that displaced every column survived 1400+ entries. A table test that asserts content and not
-  column count is half a test.
-- **Layer 2 (context provision)**: nothing told memory authors that `|` is table-significant when the
-  index renders their text, so the input that broke it (shell pipelines in titles) is the normal case.
+- **Layer 4 (verification feedback), and self-inflicted twice over.** The check ran, printed `[FAIL]`,
+  and the push proceeded because of `;`; then I asserted cleanliness in the same breath as reading the
+  failure. A check that cannot block is decorative — the same defect class this repo fixed for lint
+  (S305) and for test-environment setup (S307), which is presumably why it keeps recurring in new forms.
+- **Layer 5 (state management)**: publishing is irreversible, and the irreversible action was placed
+  after a reversible check without a fail-fast link. `&&` is the whole fix, and it is now written down.
 
 ### VERIFY
 
-- `agent/.venv/bin/python scripts/test_memory.py` → **45 passed** (was 44; the new case is the 45th).
-- Independent check over `.devin/memory/index.md`: every row's unescaped-pipe count equals its table
-  header's → **0 ragged rows** (was 6).
-- `grep m-1430 .devin/memory/index.md` → `electronApiUrl \|\| VITE_API_URL`, escaped and inside one cell.
-- `python3 scripts/memory.py index` → `Index rebuilt: 1457 active, 0 superseded, 20 decayed`.
+- `python3 scripts/prepush_secrets.py --base 91a17ea --head HEAD` → clean, then `&& git push` published
+  `d93fb32`.
+- CI `d93fb32` — Lint 44506991536: ruff · Secret scan · tsc · Server ESLint · Dashboard ESLint ·
+  actionlint · OpenAPI · SAST → **all success**; `CI` success; `CodeQL` success.
+- CI `91a17ea` — failing job: `Secret scan (publish range)`, and nothing else.
+- `grep -r kLekRUyp .devin/graph/trace.md docs/artifacts/` → **0**.
+- `python3 scripts/brain.py check` → 182 beliefs, integrity clean (B-182 asserted).
 
 ### Next session opening
 
 Run the §5 BSSID probe on MOLE over SSH — interactive `WlanGetNetworkBssList`, the same call from
-`LocalSystem` via a temporary service, and `LocalSystem` `Geolocator`, consent on and off — because it
-is the only measurement that can change ADR-009 and it no longer needs a human at the keyboard.
+`LocalSystem` via a temporary service, and `LocalSystem` `Geolocator`, consent on and off — since it is
+the only measurement that can change ADR-009 and it needs nobody at a keyboard.
 
 ---
 

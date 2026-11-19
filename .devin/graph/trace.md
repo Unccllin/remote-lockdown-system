@@ -4949,3 +4949,86 @@ Run the §5 BSSID probe on MOLE over SSH — interactive `WlanGetNetworkBssList`
 is the only measurement that can change ADR-009 and it no longer needs a human at the keyboard.
 
 ---
+
+---
+
+## Session 314 — 2026-11-19 (I pushed a range my own scanner had failed, and the rule that was missing)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `scripts/prepush_secrets.py`'s CLI contract (`--base`/`--head`, exit 1 on findings) — it was
+  already correct; the defect was in how I invoked it.
+- **Read**: the CI job list for `91a17ea` after the fact — *only* `Secret scan (publish range)` failed,
+  which located the failure precisely rather than as "CI is red".
+- **Read**: `.devin/graph/trace.md` and `docs/artifacts/s312-ci-green.txt` to find every live occurrence
+  of the fragment (two), rather than trusting the scanner's file list alone.
+
+**Findings**: the guardrail I wrote in S312 forbade pasting a credential value, and I pasted it twice
+more while writing about the rule. The missing half was not advice but mechanism: the scan and the push
+were chained with `;`, so the check could not stop the action it existed to protect.
+
+### Fog cleared
+
+- **Both live occurrences are redacted** (`d93fb32`): `trace.md` (my S312 block) and the S312 artifact.
+  `grep -r kLekRUyp .devin/graph/trace.md docs/artifacts/` → 0.
+- **AGENTS.md gained the mechanical half**: "gate the push on the scan, not next to it" — `… && git push`,
+  because "a verification whose failure does not stop the action is a log line, not a check".
+- **CI is green on the corrected push**: `d93fb32` → Lint run 44506991536 with **all eight jobs
+  success**, including `Secret scan (publish range)` and `SAST (Semgrep)`; plus `CI` and `CodeQL`.
+- **The bad push is recorded as red, not hidden**: on `91a17ea` the only failing job was
+  `Secret scan (publish range)`. The gate worked; the operator did not.
+
+### Fog remaining
+
+- **`ca6d953` remains on the remote containing the fragment's first eight characters.** The token is
+  single-use, had a 900 s TTL and expired 2026-11-18T12:03Z+15m — rewriting published history for that
+  is disproportionate, and this file says so rather than implying the exposure is zero.
+- **The pattern behind three separate incidents is not yet a test.** S305's lint gate that linted no
+  `.jsx`, S307's Playwright reuse of a stale dev server, and now a scan chained with `;` are all
+  "checks that watch without blocking". Two were fixed at their own layer; the general shape has no
+  guard.
+- Unchanged: the §5 BSSID probe on MOLE (still the cheapest next measurement), D-120,
+  D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody, HP UEFI password.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- None.
+
+### Session artifacts
+
+- `AGENTS.md` (the gating rule), `.devin/graph/trace.md`, `docs/artifacts/s312-ci-green.txt` — `d93fb32`.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), and self-inflicted twice over.** The check ran, printed `[FAIL]`,
+  and the push proceeded because of `;`; then I asserted cleanliness in the same breath as reading the
+  failure. A check that cannot block is decorative — the same defect class this repo fixed for lint
+  (S305) and for test-environment setup (S307), which is presumably why it keeps recurring in new forms.
+- **Layer 5 (state management)**: publishing is irreversible, and the irreversible action was placed
+  after a reversible check without a fail-fast link. `&&` is the whole fix, and it is now written down.
+
+### VERIFY
+
+- `python3 scripts/prepush_secrets.py --base 91a17ea --head HEAD` → clean, then `&& git push` published
+  `d93fb32`.
+- CI `d93fb32` — Lint 44506991536: ruff · Secret scan · tsc · Server ESLint · Dashboard ESLint ·
+  actionlint · OpenAPI · SAST → **all success**; `CI` success; `CodeQL` success.
+- CI `91a17ea` — failing job: `Secret scan (publish range)`, and nothing else.
+- `grep -r kLekRUyp .devin/graph/trace.md docs/artifacts/` → **0**.
+- `python3 scripts/brain.py check` → 182 beliefs, integrity clean (B-182 asserted).
+
+### Next session opening
+
+Run the §5 BSSID probe on MOLE over SSH — interactive `WlanGetNetworkBssList`, the same call from
+`LocalSystem` via a temporary service, and `LocalSystem` `Geolocator`, consent on and off — since it is
+the only measurement that can change ADR-009 and it needs nobody at a keyboard.
+
+---

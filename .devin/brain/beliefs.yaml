@@ -4000,3 +4000,24 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: 'CI evidence: lint run 44505246648 (all 8 jobs success), 2026-11-19.'
+- id: B-182
+  statement: A verification that does not gate the action it protects is a log line, not a check. S313
+    pushed a commit whose publish-range secret scan had already FAILED on it, because the scan and `git
+    push` were chained with `;` instead of `&&` and the FAIL output was then read as clean; the two files
+    it named (trace.md and the s312 artifact, both quoting the first eight characters of a dead single-use
+    token) reached the remote. Redacted forward in d93fb32 with the scan gating the push, and the same
+    shape recurred twice before in this arc — the S305 lint gate that linted no .jsx, and the S307 Playwright
+    reuse of a stale dev server. All three are checks that watched without blocking.
+  domain: verification/tooling
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: AGENTS.md (session-end block paragraph); .github/workflows/lint.yml Secret scan job; docs/artifacts/s312-ci-green.txt
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'CI evidence: lint run 44506991536 all 8 jobs success on d93fb32; lint run for 91a17ea failed
+    only Secret scan.'
