@@ -20,12 +20,12 @@ sys.path.insert(0, str(_GRAPH_DIR))
 from graph_assert import (  # noqa: E402
     GraphViolationError,
     artifact_supports_claim,
+    assert_all_invariants,
     assert_artifact_quality,
     assert_debt_close_has_evidence,
     assert_enforcement_path_status,
     assert_orchestrator_knows_all_phases,
     assert_phase_deps_met,
-    assert_all_invariants,
     assert_rule_zero_quality,
     assert_session_end_quality,
 )
@@ -672,9 +672,9 @@ class TestI6OrchestratorPhases:
 class TestVacuityGuard:
     """S321: an empty graph satisfies every invariant by examining nothing.
 
-    The guard exists because the same defect appeared three times in one arc — S318's empty scan
-    range, S319's zero discovered tests, S320's empty gate scope. Each gate reported on what it found
-    and never on what it examined; this one asserts the counts before the invariants run.
+    The guard exists because the same defect appeared three times in one arc — S318's empty
+    scan range, S319's zero discovered tests, S320's empty gate scope. Each gate reported on
+    what it found and never on what it examined; this one asserts the counts first.
     """
 
     def test_an_empty_graph_is_reported_not_passed(self):
