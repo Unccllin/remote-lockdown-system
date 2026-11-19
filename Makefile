@@ -57,6 +57,7 @@ help:
 	@echo "  make check-structure      check dist dirs exist (non-fatal)"
 	@echo "  make verify-env           verify all environment items (agent, NSIS, Docker, signing, etc.)"
 	@echo "  make graph-check          run graph invariant sweep (I1-I7)"
+	@echo "  make audit-teeth          would each verified-in-unit-test suite notice a regression?"
 	@echo "  make graph-status         print convergence report (phases, debt, enforcement gaps)"
 	@echo "  make gen-state            regenerate current-state.md from trace.md (compact, auto-derived)"
 	@echo "  make archive-trace        rotate old sessions from trace.md to archive files"
@@ -425,6 +426,15 @@ verify-env:
 
 graph-check:
 	@python3 .devin/graph/graph_assert.py
+
+# Mutation audit — reintroduces one semantic defect per row and asks whether the suite notices.
+# Slow (55 rows, each running a component suite) and it mutates source in a finally-restored way, so
+# it is not in full-verify; the weekly `audit-teeth.yml` workflow runs it so its anchors cannot drift
+# unnoticed the way they did between S280 and S322.
+.PHONY: audit-teeth
+
+audit-teeth:
+	@python3 scripts/audit_test_teeth.py
 
 # Graph convergence report — surfaces the real remaining work (phases, debt,
 # enforcement paths). Unlike graph-check (which asserts invariants), this
