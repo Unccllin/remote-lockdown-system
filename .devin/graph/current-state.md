@@ -53,33 +53,42 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 322 — 2026-11-19 (the mutation audit counted table rows as kills)
+## Latest session: 323 — 2026-11-19 (the audit gets a gate, and the gate takes five runs to trust)
 
 ### Fog cleared
 
-- **The accounting is fixed** (`14b5c26`): skipped rows print `UNVERIFIED`, are collected, are listed
-  with the behaviour they stand for, and make the audit **exit 1**. The closing line counts kills, not
-  table rows.
-- **All twelve rows are re-anchored to current code** and the audit is back to a real 55/55:
-  `all 55 mutations killed — every audited suite has teeth`, exit 0, 0 unverified, 0 survived.
-- **Two re-anchors were findings, not chores**: `uninstall-authz`'s anchor matched **twice** (both
-  uninstall handlers) so it could never have been a single mutation — it now includes the function
-  signature; and my first `recover-unlock` mutation ("never mark the key released") **SURVIVED**, which
-  means the suite does not assert that, so it now mutates the escrowed key itself and is killed by
-  "releases encryption key for unlock commands".
-- **AGENTS.md records the semantics**: a row that cannot run is `UNVERIFIED` and fails the audit.
+- **The audit has a gate** (`dd24599`): `make audit-teeth`, plus `.github/workflows/audit-teeth.yml` —
+  Mondays 06:00 UTC and manual dispatch, installing serverless + server + agent dependencies, and a
+  final step that fails if any **tracked** file still differs afterwards (a mutation left applied is the
+  worst outcome a safety mechanism can have). Validated with the repo's own bar: `make lint-workflows`
+  exit 0, YAML parses, `make audit-teeth` 55/55 locally.
+- **CI is green on the gate** (`697ea9b` → `f89d0e9` → …): run 44537671873 reports
+  `all 55 mutations killed — every audited suite has teeth` and the restore check passes.
+- **Two real defects in the audit's own runner were found by running it in CI**, and both were needed:
+  - **piped capture truncated the suite**: `capture_output=True` produced 72 lines with **no tally**
+    where a shell redirect produced 107 lines including `Test Files 4 passed`. Output now goes to a
+    temp file (`_run_captured`).
+  - **ANSI escapes made the tally unparseable**: vitest writes
+    `\x1b[2m      Tests \x1b[22m … 495 passed`, so `strip().startswith("Tests")` was false. Verified on
+    those exact bytes (`False` before `_strip_ansi`, `True` after).
+- **Its diagnostics were made honest on the way**: an INVALID verdict now carries the exit code, dumps
+  the run's head and tail, and never quotes a single line as if it were a verdict. That change is what
+  turned a 10-minute guessing loop into a readable diagnosis.
 
 ### Fog remaining
 
-- **The audit is not in any gate.** `make full-verify` does not run it (it takes minutes and mutates
-  source in a `finally`-restored way), so nothing prevents the same drift from accumulating again. A
-  periodic or pre-release run is the obvious answer and is not wired up.
-- **`recover-unlock`'s first mutation surviving is itself information**: the suite does not assert that
-  a released key is recorded as released. Not a mutation to add — a test gap to consider, left recorded.
+- **The scheduled path is unexercised.** Every run so far was `workflow_dispatch`; the Monday `cron:`
+  entry has never fired. Worth one glance after the first scheduled run rather than assuming.
+- **The diagnostic step should now be retired.** `Diagnostic — the exact vitest command the audit runs`
+  served its purpose (it produced the pipe/file evidence) and costs ~3 minutes per run; it should go
+  once the scheduled run is seen.
+- **Five CI runs to reach green, and three of the four theories were mine to discard**: a broken commit
+  (excluded — 495/495 locally and in `ci.yml`), a CI reporter change (excluded — `CI=true` locally
+  green), and ANSI (true, but "disproved" by a test that piped vitest through `grep`, which disables
+  colour and removed the evidence).
 - Unchanged: D-120, D-129/D-130/D-134, D-210, offline key custody, HP UEFI password, per-executable
   consent keying (unverified), `RequestAccessAsync` (untested), the pre-push hook being per-clone state,
   the docker-socket red for `test_tls_floor.py`.
-- **Removed from this list** after eleven sessions: "12 stale `audit_test_teeth` rows".
 
 ### Debt items closed
 
@@ -95,34 +104,36 @@ D-120, D-129, D-130, D-134, D-210.
 
 ### Session artifacts
 
-- `scripts/audit_test_teeth.py` (accounting + 12 re-anchors), `AGENTS.md` (the rule) — `14b5c26`.
+- `.github/workflows/audit-teeth.yml`, `Makefile` (`audit-teeth`), `scripts/audit_test_teeth.py`
+  (`_run_captured`, `_strip_ansi`, `_dump_invalid`, exit codes in verdicts) — through `f89d0e9`.
+- CI evidence: run 44537671873, conclusion **success**.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), fifth in the arc and the most misleading yet.** The gap was not
-  merely unexamined — it was double-counted in the summary's own arithmetic, so the report was not just
-  silent about twelve behaviours, it asserted a number that could not have been true. The fix is the
-  same sentence again ("report what you examined"), and this time the audit now does it for itself.
-- **Layer 2 (context provision)**: nothing tied the mutation rows to the file moves they depend on, so a
-  refactor could silently orphan anchors. The re-anchor table names the move in a comment, which is
-  the closest thing to a durable link this file can carry.
+- **Layer 4 (verification feedback), and the sharpest case in this arc because the bad check was mine.**
+  I tested "does ANSI hide the tally?" with a command that disabled colour, then relied on the negative
+  result for two further CI rounds. A verification whose apparatus changes the thing under test is worse
+  than no verification — it produces confidence with the same shape as evidence. The fix is procedural:
+  when a test says "not present", check that the test could have seen it present.
+- **Layer 3 (execution environment)**: the pipe-versus-file difference is real and was invisible until
+  the audit's own command was run two ways in the same job. That diagnostic step should exist from the
+  start for any gate whose verdict depends on parsing another tool's human-readable output.
 
 ### VERIFY
 
-- Before: `all 55 mutations killed`, exit **0**, with 12 rows `SKIPPED`.
-- After the accounting fix: `43 of 55 mutations killed; 12 unverified`, exit **1**.
-- After the re-anchors: `all 55 mutations killed — every audited suite has teeth`, exit **0**,
-  `UNVERIFIED —` count **0**, `SURVIVED` count **0**.
-- Two intermediate single-row runs proved the difficult cases: `worker/uninstall-authz` KILLED by
-  "rejects a request with no credentials"; `worker/recover-unlock` KILLED by "releases encryption key for
-  unlock commands".
-- `git push` of `14b5c26` → pre-push hook ran and passed.
+- `make audit-teeth` → `all 55 mutations killed`, exit 0, 0 unverified, 0 survived.
+- `make lint-workflows` → exit 0 (actionlint 1.7.12 + shellcheck); workflow YAML parses.
+- CI run 44537671873 → **success**: `all 55 mutations killed — every audited suite has teeth`, then
+  `no tracked file differs — every mutation was restored`.
+- `_strip_ansi` on the exact CI byte sequence → `False` before, `True` after (the parse is proven on the
+  bytes that failed, not on a paraphrase).
+- `git push` of each commit → pre-push hook ran and passed.
 
 ### Next session opening
 
-Wire `scripts/audit_test_teeth.py` into a gate — a `make audit-teeth` target plus a weekly CI job — so
-the anchors cannot drift for a hundred sessions again, and so the SURVIVED/SURVIVED-none distinction is
-checked by something other than a session that happens to open the file.
+Retire the diagnostic step from `audit-teeth.yml` now that it has produced its evidence, and confirm the
+first scheduled Monday run — then take D-210 (PBL route integration) from the ledger, which needs no
+hardware and no operator credential.
 
 ---
 

@@ -5801,3 +5801,103 @@ the anchors cannot drift for a hundred sessions again, and so the SURVIVED/SURVI
 checked by something other than a session that happens to open the file.
 
 ---
+
+---
+
+## Session 323 — 2026-11-19 (the audit gets a gate, and the gate takes five runs to trust)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `scripts/audit_test_teeth.py` `run_suite()` — how each of the three runners is invoked, and
+  what each returns; `main()`'s baseline loop, which aborts when a baseline cannot be judged.
+- **Read**: `.github/workflows/ci.yml` and `windows-artifacts.yml` — pinned action SHAs, cache blocks and
+  the dependency-install steps to reuse, so the new job matches the repo's CI conventions rather than
+  inventing them.
+- **Read**: `serverless/vitest.config.mts` — no `passWithNoTests`, so a zero-test run cannot masquerade
+  as success there; and `Makefile:426` for where a target belongs.
+
+**Findings**: the audit needs all three runners (vitest 39 rows, pytest 13, jest 3), so a gate for it must
+install three dependency sets. Nothing was running it, which is how 12 anchors stayed orphaned for a
+hundred sessions.
+
+### Fog cleared
+
+- **The audit has a gate** (`dd24599`): `make audit-teeth`, plus `.github/workflows/audit-teeth.yml` —
+  Mondays 06:00 UTC and manual dispatch, installing serverless + server + agent dependencies, and a
+  final step that fails if any **tracked** file still differs afterwards (a mutation left applied is the
+  worst outcome a safety mechanism can have). Validated with the repo's own bar: `make lint-workflows`
+  exit 0, YAML parses, `make audit-teeth` 55/55 locally.
+- **CI is green on the gate** (`697ea9b` → `f89d0e9` → …): run 44537671873 reports
+  `all 55 mutations killed — every audited suite has teeth` and the restore check passes.
+- **Two real defects in the audit's own runner were found by running it in CI**, and both were needed:
+  - **piped capture truncated the suite**: `capture_output=True` produced 72 lines with **no tally**
+    where a shell redirect produced 107 lines including `Test Files 4 passed`. Output now goes to a
+    temp file (`_run_captured`).
+  - **ANSI escapes made the tally unparseable**: vitest writes
+    `\x1b[2m      Tests \x1b[22m … 495 passed`, so `strip().startswith("Tests")` was false. Verified on
+    those exact bytes (`False` before `_strip_ansi`, `True` after).
+- **Its diagnostics were made honest on the way**: an INVALID verdict now carries the exit code, dumps
+  the run's head and tail, and never quotes a single line as if it were a verdict. That change is what
+  turned a 10-minute guessing loop into a readable diagnosis.
+
+### Fog remaining
+
+- **The scheduled path is unexercised.** Every run so far was `workflow_dispatch`; the Monday `cron:`
+  entry has never fired. Worth one glance after the first scheduled run rather than assuming.
+- **The diagnostic step should now be retired.** `Diagnostic — the exact vitest command the audit runs`
+  served its purpose (it produced the pipe/file evidence) and costs ~3 minutes per run; it should go
+  once the scheduled run is seen.
+- **Five CI runs to reach green, and three of the four theories were mine to discard**: a broken commit
+  (excluded — 495/495 locally and in `ci.yml`), a CI reporter change (excluded — `CI=true` locally
+  green), and ANSI (true, but "disproved" by a test that piped vitest through `grep`, which disables
+  colour and removed the evidence).
+- Unchanged: D-120, D-129/D-130/D-134, D-210, offline key custody, HP UEFI password, per-executable
+  consent keying (unverified), `RequestAccessAsync` (untested), the pre-push hook being per-clone state,
+  the docker-socket red for `test_tls_floor.py`.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- None.
+
+### Session artifacts
+
+- `.github/workflows/audit-teeth.yml`, `Makefile` (`audit-teeth`), `scripts/audit_test_teeth.py`
+  (`_run_captured`, `_strip_ansi`, `_dump_invalid`, exit codes in verdicts) — through `f89d0e9`.
+- CI evidence: run 44537671873, conclusion **success**.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), and the sharpest case in this arc because the bad check was mine.**
+  I tested "does ANSI hide the tally?" with a command that disabled colour, then relied on the negative
+  result for two further CI rounds. A verification whose apparatus changes the thing under test is worse
+  than no verification — it produces confidence with the same shape as evidence. The fix is procedural:
+  when a test says "not present", check that the test could have seen it present.
+- **Layer 3 (execution environment)**: the pipe-versus-file difference is real and was invisible until
+  the audit's own command was run two ways in the same job. That diagnostic step should exist from the
+  start for any gate whose verdict depends on parsing another tool's human-readable output.
+
+### VERIFY
+
+- `make audit-teeth` → `all 55 mutations killed`, exit 0, 0 unverified, 0 survived.
+- `make lint-workflows` → exit 0 (actionlint 1.7.12 + shellcheck); workflow YAML parses.
+- CI run 44537671873 → **success**: `all 55 mutations killed — every audited suite has teeth`, then
+  `no tracked file differs — every mutation was restored`.
+- `_strip_ansi` on the exact CI byte sequence → `False` before, `True` after (the parse is proven on the
+  bytes that failed, not on a paraphrase).
+- `git push` of each commit → pre-push hook ran and passed.
+
+### Next session opening
+
+Retire the diagnostic step from `audit-teeth.yml` now that it has produced its evidence, and confirm the
+first scheduled Monday run — then take D-210 (PBL route integration) from the ledger, which needs no
+hardware and no operator credential.
+
+---
