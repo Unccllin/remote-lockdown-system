@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-19 09:19:09 — 173 beliefs
+Generated: 2026-11-19 10:36:08 — 174 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -31,6 +31,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-171 | proposed | assumed | The wrong map position is not a plumbing bug (S303): MOLE's location rows are source 'ip' with identical coordinates -0.4840639/37.1266157 for every report, and ipwho.is returns exactly that for the egress IP 41.90.239.213 (Kenya/Nyeri/Karatina, Safaricom ASN 37061). The dashboard plots [lat, lon] faithfully for Leaflet; what is coarse is the source. WiFi triangulation is unavailable to a service install: netsh wlan show networks mode=bssid on Windows 11 answers 'Network shell commands need location permission to access WLAN information ... Access is denied' (0 SSIDs, 0 BSSIDs) even after HKLM and HKCU consent Allow plus an lfsvc restart, because the scan needs a location-capable interactive session and the agent runs as LocalSystem in session 0. Separately, the Worker has no google_api_key provisioning (only server/src/routes/installer.js:562 does it), so a Worker-enrolled fleet cannot be given a triangulation key at all. The dashboard also drops the source/accuracy/age fields that would tell an operator the fix is city-level. |
+| B-174 | confirmed | code-read | The Google geolocation key now reaches a token-flow install on BOTH surfaces (S306, ruling C, ADR-008): Express POST /api/devices and POST /api/enroll/claim, and the Worker handleEnroll/handleEnrollClaim, add a top-level google_api_key only when process.env.GOOGLE_API_KEY / env.GOOGLE_API_KEY is non-empty; agent/installer.py::build_config and installer_gui.py::write_config write it only when non-empty, and installer-scripts.ts never mentions it (B-070). It is a shared operator credential baked into each device config, so rotation requires reinstalling the fleet — check-in refresh is the recorded follow-up, deliberately not a debt-ledger item because the ledger feeds the graph convergence count. |
 
 ## agent/tpm
 

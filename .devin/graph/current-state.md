@@ -53,44 +53,49 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 305 — 2026-11-19 (the dashboard lint gate lints the dashboard, and the 30 errors it found are gone)
+## Latest session: 306 — 2026-11-19 (the geolocation key reaches a token install — on both surfaces, not just the Worker)
 
 ### Fog cleared
 
-- **The dashboard gate is real and green on real files**: `npx eslint src/ tests/ --ext .js,.jsx
-  --max-warnings=0` → **72 files, 51 of them `.jsx`, 0 errors, 0 warnings, exit 0** (`Makefile:290`,
-  `lint.yml:75`, `release.yml:69`, and the AGENTS.md command all carry the fix; the three server
-  lines are untouched).
-- **All 30 findings are resolved per finding, none silenced**: 22 unused vars removed (dead `React`
-  default imports under the automatic JSX runtime, dead named specifiers, two dead test consts),
-  7 raw apostrophes/quotes became `&apos;`/`&quot;` in JSX text — character-identical on render,
-  which is why the existing assertions pass unchanged — and the single `no-undef` was fixed in
-  config, because `afterEach` is a real vitest global (`overrides` for `tests/**/*.{js,jsx}`, nine
-  readonly globals, no plugin, no repo-wide globals).
-- **The one warning got the real fix, not a disable**: `loadPolicyVersions` and `loadData` became
-  `useCallback` hoisted above the effect, the effect depends on the stable `loadData`, so the fetch
-  still happens once on mount. `grep -c eslint-disable` over the diff = 0.
-- **A dated claim in AGENTS.md was repaired**: three paragraphs dated 2026-11-13/17 stated the
-  dashboard test count; the figure now says re-measured 2026-11-19 (S305). The 260 that had been
-  there was itself stale — 266 was the real HEAD baseline before S304's six cases.
-- **Belief B-172 was refuted with a replacement (B-173)** rather than left standing as a true
-  statement about a state that no longer exists.
+- **The key now reaches a token-flow install on both surfaces** (`e844fd5`): `POST /api/devices` and
+  `POST /api/enroll/claim` on Express and `handleEnroll`/`handleEnrollClaim` on the Worker add a
+  top-level `google_api_key` **only when** the operator configured the key — omitted entirely
+  otherwise, never `null` and never `""`. `installer.py::build_config`/`write_config` and
+  `installer_gui.py::write_config` accept it and set it only when non-empty; both agent call sites
+  thread it from the enrolment response; the `--config-file` baked path adds nothing.
+- **`installer-scripts.ts` is untouched, and a test pins that it stays that way**: the served
+  `setup.ps1` output contains neither the configured key value nor the string `google_api_key`
+  (B-070).
+- **The no-key path is provably unchanged**: every addition is a conditional spread, and each suite
+  asserts property **absence** (`'google_api_key' in body === false`, `assert not in config`), not
+  falsiness — so an install with no key configured is byte-identical to yesterday's.
+- **The decision is durable in an ADR, not only in a chat**: `docs/adr/ADR-008-geolocation-key-delivery.md`
+  records ruling C, the shared-credential consequence ("rotation requires reinstall"), the rejected
+  served-script channel, and check-in refresh as the tracked follow-up.
+- **The gate that used to be decorative now guards a real contract**: a new parity test in
+  `scripts/test_cross_surface_contract.py` pins that Express and the Worker read the same env name,
+  that `installer.py` carries the field, and that `installer-scripts.ts` never mentions it.
 
 ### Fog remaining
 
-- **Option (b) of the S303 artifact is still untouched**: `serverless/` provisions no
-  `google_api_key` (`server/src/routes/installer.js:562` does), so a Worker-enrolled fleet stays
-  IP-only by omission. It needs an operator-issued key to be worth exercising.
-- **`make full-verify` has not been re-run end to end since the lint gate changed.** The dashboard
-  gates were measured individually (eslint/vitest/coverage/build) and `lint-dashboard`,
-  `lint-server`, `lint-workflows` all exit 0, but the whole-tree sweep's own numbers (843/866/272/
-  429/30, E2E 14, verify-env) are from earlier sessions.
+- **The key cannot be rotated without reinstalling the fleet** (ADR-008 §Consequences). Check-in
+  refresh is recorded in the ADR but in **no debt ledger** — deliberately, because the ledger feeds
+  the graph's convergence count (60/64) and a new OPEN item there is a graph change to decide, not a
+  byproduct of this feature.
+- **`make full-verify` has not been swept end to end since S305 changed the lint gate.** Its own
+  numbers (843/866/272/429/30, E2E 14, verify-env 56) are older than three sessions' changes.
+  Individual component gates are green (below), which is not the same claim.
+- **Options (c) and (d) of the S303 artifact are still open**: an in-session BSSID helper (an
+  architectural decision about how a session-0 service could ever obtain BSSIDs) and "accept
+  IP-level and say so in the README". Nothing has been chosen.
+- The `installer.py` / `installer_gui.py` config-builder duplication is now duplicated in two more
+  parameters. That is pre-existing debt, worsened in surface area, and still untracked.
 - Unchanged: the registry changes left on MOLE (benign), picomatch advisories, `make sast`
   unavailable, 12 stale `audit_test_teeth` rows, offline key custody, HP UEFI BIOS password.
 
 ### Debt items closed
 
-None. This closes no ledger item — it makes a documented gate honest.
+None. This closes no ledger item.
 
 ### Debt items still open
 
@@ -99,47 +104,56 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Not blocked.** The remaining location work (option b) needs an operator Google Geolocation key,
-  and the remaining ledger items need hardware time or a signing decision.
+- **Not blocked.** Option (c) needs a design decision; option (d) needs a product decision; the
+  rotation follow-up needs an authenticated settings endpoint on two surfaces.
 
 ### Session artifacts
 
-- `docs/artifacts/s305-dashboard-lint-gate.txt` — before/after file counts and error counts from the
-  same binary, the four gate surfaces, the 30-finding resolution table, the ten gate outputs measured
-  by the parent session, and the workflow's own mistake (dropped Makefile TAB) with how it was caught.
+- `docs/artifacts/s306-geolocation-key-delivery.txt` — what the read changed about the requested
+  mechanism, the three ruling options and the one chosen, the 15-file change map, the nine gate
+  outputs measured by the parent, and both oracle blocks with what they caught.
+- `docs/adr/ADR-008-geolocation-key-delivery.md` — the decision of record.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), twice, and the second time the harness held.** The worker's first
-  pass dropped the recipe TAB on `Makefile:290`, breaking `make` for *every* target, and its report
-  said "make lint-workflows not re-run here but YAML valid" — it substituted a check for a different
-  failure mode than the one the change could cause. The oracle blocked on the actual command, a fix
-  round restored the TAB, and re-review approved. Harness change this argues for: an acceptance check
-  must name the command *and* the failure it would catch; "not run, but X is valid" is a skipped
-  check, not a passed one.
-- **Layer 2 (context provision)** — the root cause was never a wrong command, it was documentation
-  that presented a green exit code as proof. The AGENTS.md line now carries the reason (`--ext`), so
-  the next session cannot reproduce the blind spot by copying it faithfully.
+- **Layer 4 (verification feedback)** — the workflow's first pass had every acceptance gate green
+  while most of the plan's required tests were unwritten, and the shipped ADR **listed those
+  non-existent tests as verification**. A green suite cannot detect a missing test; only a reviewer
+  diffing plan-against-diff can. The oracle did, twice (round 1: missing tests + false ADR claim;
+  round 2: the new `docs/API.md` sentence had been inserted *between* the 201 row and the 400/409
+  rows, splitting the markdown table). Harness change: an ADR's Verification section must be diffed
+  against the test names that actually exist before commit — a shipped false claim is worse than an
+  empty section.
+- **Layer 5 (state management)** — the parent's uncommitted `PENDING-RULING.md` edit was **reverted**
+  during the workflow: after the children ran, the file was back at HEAD (494 lines, no geolocation
+  section, `git status` clean for it) even though `check-ruling.sh` had read the open item minutes
+  earlier. Nothing else in the working tree was lost (all 15 changed files and both new documents
+  survived), so this was not a blanket reset. Harness change: a ruling must be committed — or
+  written into the artifact/trace — **before** children are launched, because a child's toolset can
+  rewrite `.devin/` files the parent is holding in memory. The ruling text is therefore reproduced
+  in this block and in the artifact's §2, and ADR-008 now cites those instead of the live ruling
+  file.
 
 ### VERIFY
 
-- `cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0` → exit 0
-- `cd dashboard && npx eslint . --ext .js,.jsx -f json` → **72 files, 51 `.jsx`, 0 errors, 0 warnings**
-- `cd dashboard && npm run test` → **272 passed (272)**, 30 files, exit 0
-- `cd dashboard && npx vite build` → `✓ built in 5.06s`, exit 0
-- `cd dashboard && npm run test:coverage` → 70.62 / 66.59 / 62.59 / 71.40 vs floors 68 / 61 / 62 / 70
-- `make lint-dashboard` exit 0 · `make lint-server` exit 0 · `make lint-workflows` exit 0
-  (actionlint 1.7.12 + shellcheck present) · both edited workflows parse as YAML
-- `sed -n 290p Makefile | cat -A` → `^I@cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0$`
-- `git diff | grep -c eslint-disable` → 0 · `git diff --name-only | grep -c package` → 0
-- `python3 scripts/brain.py check` → 173 beliefs, integrity clean
+- `cd server && npm test` → **882 passed, 52 suites**, exit 0 (876 + 6 new cases)
+- `cd server && npx eslint .` → exit 0
+- `cd serverless && npm test` → **490 passed, 4 files**, exit 0 (485 + 5 new cases)
+- `cd serverless && npx tsc --noEmit -p .` → exit 0
+- `scripts/run-agent-tests.sh -q` → exit 0, **976 collected** (10 new test functions in this diff)
+- `scripts/lint-agent.sh` → ruff check + format clean
+- `agent/.venv/bin/python scripts/test_cross_surface_contract.py` → **24 passed**, exit 0
+- `node --check server/src/routes/devices.js` and `enroll.js` → exit 0
+- Property absence, not falsiness, is what the new tests assert: `'google_api_key' in body === false`
+  (Worker + Express) and `"google_api_key" not in config` (both agent builders)
+- `scripts/check-ruling.sh` → `[OK] No open ruling items — task mode.`
 
 ### Next session opening
 
-Take option (b) of the S303 artifact now that the gate is honest: provision `google_api_key` through
-`serverless/installer-scripts.ts` so a Worker-enrolled fleet can triangulate where BSSIDs are
-obtainable, pin it with `serverless/worker.test.ts`, and be explicit in the README that a session-0
-service install still cannot scan and stays IP-level.
+Sweep `make full-verify` end to end before anything else — three sessions have changed the lint gate
+and two surfaces since its recorded numbers were taken, and component-green is not sweep-green —
+then decide option (c) versus (d) of `docs/artifacts/s303-location-diagnosis.txt` §5 with that
+result in hand.
 
 ---
 

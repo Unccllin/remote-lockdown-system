@@ -4020,3 +4020,138 @@ obtainable, pin it with `serverless/worker.test.ts`, and be explicit in the READ
 service install still cannot scan and stays IP-level.
 
 ---
+
+---
+
+## Session 306 — 2026-11-19 (the geolocation key reaches a token install — on both surfaces, not just the Worker)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `serverless/installer-scripts.ts` in full — the served `setup.ps1` is a token-free
+  PowerShell template that carries **no config**: it checks reachability, downloads
+  `lockdown-setup.exe`, and passes `--server-url/--token/--silent`. A key placed here would live in
+  a cacheable text artifact the Worker serves (B-070 forbids exactly that).
+- **Read**: `server/src/routes/installer.js:515-575` — `buildDeviceConfig` is the *only* path that
+  puts `google_api_key` into an agent config today, and it omits the property when
+  `process.env.GOOGLE_API_KEY` is unset.
+- **Read**: `agent/installer.py:375-420, 489-560, 1170-1260` — the token flow enrols via
+  `POST /api/enroll/claim`, then `build_config`/`write_config` write 12 keys and **no
+  `google_api_key`**; `build_config`'s own docstring calls itself "the single definition of a
+  provisioned config.json".
+- **Read**: `agent/installer_gui.py:288-340, 1003-1020, 1370-1395` — a **duplicated** config builder
+  and two call sites (`SetupWizard`, `run_headless`), both fed by the enrolment response.
+- **Read**: all six enrolment success responses — `devices.js:369` (Express admin enrol; `enroll.js`
+  has no admin enrol route at all), `enroll.js:271` + `:304` (claim 200/201), `worker.ts:397`,
+  `:432`, `:581`, `:616` (handleEnroll and handleEnrollClaim, 200 and 201 each).
+- **Read**: `serverless/pbl/env.ts` (the Worker `Env` type), `docs/API.md:228-236` (documented enrol
+  response), `serverless/README.md:13-36` (bindings/secrets), `docs/adr/ADR-006` (ADR format).
+
+**Findings**: the instruction "provision `google_api_key` on the serverless path" named the wrong
+file and understated the gap. The token flow installs **without a key on both surfaces** — the
+Worker is not uniquely guilty — and the only correct channel is the per-device enrolment response,
+which already carries `api_key` over TLS. S303 also bounds the payoff: a session-0 service install
+cannot scan BSSIDs at all, so the key only helps interactive installs. That is a delivery-channel
+decision with a security consequence (a shared operator credential baked into every device config),
+so it went to the user as a ruling instead of being implemented on my own description.
+
+### Fog cleared
+
+- **The key now reaches a token-flow install on both surfaces** (`e844fd5`): `POST /api/devices` and
+  `POST /api/enroll/claim` on Express and `handleEnroll`/`handleEnrollClaim` on the Worker add a
+  top-level `google_api_key` **only when** the operator configured the key — omitted entirely
+  otherwise, never `null` and never `""`. `installer.py::build_config`/`write_config` and
+  `installer_gui.py::write_config` accept it and set it only when non-empty; both agent call sites
+  thread it from the enrolment response; the `--config-file` baked path adds nothing.
+- **`installer-scripts.ts` is untouched, and a test pins that it stays that way**: the served
+  `setup.ps1` output contains neither the configured key value nor the string `google_api_key`
+  (B-070).
+- **The no-key path is provably unchanged**: every addition is a conditional spread, and each suite
+  asserts property **absence** (`'google_api_key' in body === false`, `assert not in config`), not
+  falsiness — so an install with no key configured is byte-identical to yesterday's.
+- **The decision is durable in an ADR, not only in a chat**: `docs/adr/ADR-008-geolocation-key-delivery.md`
+  records ruling C, the shared-credential consequence ("rotation requires reinstall"), the rejected
+  served-script channel, and check-in refresh as the tracked follow-up.
+- **The gate that used to be decorative now guards a real contract**: a new parity test in
+  `scripts/test_cross_surface_contract.py` pins that Express and the Worker read the same env name,
+  that `installer.py` carries the field, and that `installer-scripts.ts` never mentions it.
+
+### Fog remaining
+
+- **The key cannot be rotated without reinstalling the fleet** (ADR-008 §Consequences). Check-in
+  refresh is recorded in the ADR but in **no debt ledger** — deliberately, because the ledger feeds
+  the graph's convergence count (60/64) and a new OPEN item there is a graph change to decide, not a
+  byproduct of this feature.
+- **`make full-verify` has not been swept end to end since S305 changed the lint gate.** Its own
+  numbers (843/866/272/429/30, E2E 14, verify-env 56) are older than three sessions' changes.
+  Individual component gates are green (below), which is not the same claim.
+- **Options (c) and (d) of the S303 artifact are still open**: an in-session BSSID helper (an
+  architectural decision about how a session-0 service could ever obtain BSSIDs) and "accept
+  IP-level and say so in the README". Nothing has been chosen.
+- The `installer.py` / `installer_gui.py` config-builder duplication is now duplicated in two more
+  parameters. That is pre-existing debt, worsened in surface area, and still untracked.
+- Unchanged: the registry changes left on MOLE (benign), picomatch advisories, `make sast`
+  unavailable, 12 stale `audit_test_teeth` rows, offline key custody, HP UEFI BIOS password.
+
+### Debt items closed
+
+None. This closes no ledger item.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (PBL firmware signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Not blocked.** Option (c) needs a design decision; option (d) needs a product decision; the
+  rotation follow-up needs an authenticated settings endpoint on two surfaces.
+
+### Session artifacts
+
+- `docs/artifacts/s306-geolocation-key-delivery.txt` — what the read changed about the requested
+  mechanism, the three ruling options and the one chosen, the 15-file change map, the nine gate
+  outputs measured by the parent, and both oracle blocks with what they caught.
+- `docs/adr/ADR-008-geolocation-key-delivery.md` — the decision of record.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback)** — the workflow's first pass had every acceptance gate green
+  while most of the plan's required tests were unwritten, and the shipped ADR **listed those
+  non-existent tests as verification**. A green suite cannot detect a missing test; only a reviewer
+  diffing plan-against-diff can. The oracle did, twice (round 1: missing tests + false ADR claim;
+  round 2: the new `docs/API.md` sentence had been inserted *between* the 201 row and the 400/409
+  rows, splitting the markdown table). Harness change: an ADR's Verification section must be diffed
+  against the test names that actually exist before commit — a shipped false claim is worse than an
+  empty section.
+- **Layer 5 (state management)** — the parent's uncommitted `PENDING-RULING.md` edit was **reverted**
+  during the workflow: after the children ran, the file was back at HEAD (494 lines, no geolocation
+  section, `git status` clean for it) even though `check-ruling.sh` had read the open item minutes
+  earlier. Nothing else in the working tree was lost (all 15 changed files and both new documents
+  survived), so this was not a blanket reset. Harness change: a ruling must be committed — or
+  written into the artifact/trace — **before** children are launched, because a child's toolset can
+  rewrite `.devin/` files the parent is holding in memory. The ruling text is therefore reproduced
+  in this block and in the artifact's §2, and ADR-008 now cites those instead of the live ruling
+  file.
+
+### VERIFY
+
+- `cd server && npm test` → **882 passed, 52 suites**, exit 0 (876 + 6 new cases)
+- `cd server && npx eslint .` → exit 0
+- `cd serverless && npm test` → **490 passed, 4 files**, exit 0 (485 + 5 new cases)
+- `cd serverless && npx tsc --noEmit -p .` → exit 0
+- `scripts/run-agent-tests.sh -q` → exit 0, **976 collected** (10 new test functions in this diff)
+- `scripts/lint-agent.sh` → ruff check + format clean
+- `agent/.venv/bin/python scripts/test_cross_surface_contract.py` → **24 passed**, exit 0
+- `node --check server/src/routes/devices.js` and `enroll.js` → exit 0
+- Property absence, not falsiness, is what the new tests assert: `'google_api_key' in body === false`
+  (Worker + Express) and `"google_api_key" not in config` (both agent builders)
+- `scripts/check-ruling.sh` → `[OK] No open ruling items — task mode.`
+
+### Next session opening
+
+Sweep `make full-verify` end to end before anything else — three sessions have changed the lint gate
+and two surfaces since its recorded numbers were taken, and component-green is not sweep-green —
+then decide option (c) versus (d) of `docs/artifacts/s303-location-diagnosis.txt` §5 with that
+result in hand.
+
+---

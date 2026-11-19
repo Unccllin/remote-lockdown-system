@@ -3818,3 +3818,26 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-174
+  statement: 'The Google geolocation key now reaches a token-flow install on BOTH surfaces (S306, ruling
+    C, ADR-008): Express POST /api/devices and POST /api/enroll/claim, and the Worker handleEnroll/handleEnrollClaim,
+    add a top-level google_api_key only when process.env.GOOGLE_API_KEY / env.GOOGLE_API_KEY is non-empty;
+    agent/installer.py::build_config and installer_gui.py::write_config write it only when non-empty,
+    and installer-scripts.ts never mentions it (B-070). It is a shared operator credential baked into
+    each device config, so rotation requires reinstalling the fleet — check-in refresh is the recorded
+    follow-up, deliberately not a debt-ledger item because the ledger feeds the graph convergence count.'
+  domain: agent/location
+  status: confirmed
+  evidence_level: code-read
+  provenance: docs/artifacts/s306-geolocation-key-delivery.txt; server 882/52, worker 490/4, agent 976,
+    cross-surface 24
+  source: docs/adr/ADR-008-geolocation-key-delivery.md; docs/artifacts/s306-geolocation-key-delivery.txt;
+    serverless/worker.ts; server/src/routes/devices.js; server/src/routes/enroll.js; agent/installer.py
+  asserted: '2026-11-19'
+  last_verified: '2026-11-19'
+  commit_ref: e844fd5
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Measured S306: server 882/52, worker 490/4, agent 976, cross-surface contract 24, eslint/ruff/tsc
+    clean. No-key path byte-identical, asserted by property-absence tests.'
