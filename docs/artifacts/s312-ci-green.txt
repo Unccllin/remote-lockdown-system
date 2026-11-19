@@ -15,7 +15,7 @@ ever been checked on this host, and CI found three things — one of them mine, 
   [FAIL] assigned-secret: .devin/graph/current-state.md  (4c43b58 docs(state): close S301)
   [FAIL] assigned-secret: .devin/graph/trace.md          (4c43b58 docs(state): close S301)
 
-  S301's session block quoted a whole token response body — {"token":"kLekRUyp…"} — and because
+  S301's session block quoted a whole token response body — {"token":"<redacted>"} — and because
   'close-session' copies the latest block into current-state.md, one pasted value landed in two files.
   The token was minted 2026-11-18T12:03:25Z with a 900-second TTL: expired at 12:18 that day, and
   single-use. Disproportionate to rewrite history for it; redacted forward to <redacted — S311> with

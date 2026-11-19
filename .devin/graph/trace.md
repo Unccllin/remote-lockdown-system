@@ -4789,7 +4789,7 @@ them were caused by S304→S311.
   job runs `--ext .js,.jsx --max-warnings=0`, so the 51 `.jsx` files that were silently skipped before
   S305 are linted on every push.
 - **The secret-scan finding was real and is fixed forward**: S301's block quoted a token response body
-  (`{"token":"kLekRUyp…"}`); the token was single-use with a 900 s TTL minted 2026-11-18T12:03:25Z, so
+  (`{"token":"<redacted>"}`); the token was single-use with a 900 s TTL minted 2026-11-18T12:03:25Z, so
   dead 16 hours before publication. Redacted to `<redacted — S311>` with the shape and TTL preserved.
   `Secret scan` → success on `c330b3f`.
 - **The SAST baseline is triaged, not suppressed**: three findings carry dispositions that cite the

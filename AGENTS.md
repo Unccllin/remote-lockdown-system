@@ -123,6 +123,12 @@ but a scanner cannot tell, and neither could a reader. Quote the *shape* (`{"tok
 and the TTL, never the value's first characters. The forbid-list escape hatch
 (`scripts/prepush_secrets.py`) exists for genuine false positives, not for this.
 
+**And gate the push on the scan, not next to it.** S313 repeated that mistake *and* pushed anyway:
+`python3 scripts/prepush_secrets.py … ; git push` chains with `;`, so a FAIL was printed and the push
+ran regardless — the two files it named were already on the remote by the time anyone read the output.
+Write it as `… && git push`. A verification whose failure does not stop the action is a log line, not
+a check.
+
 `current-state.md` is a GENERATED artifact — do NOT edit it by hand. It is
 derived from `trace.md` + `GRAPH-SPEC.yaml` by `scripts/graph_session.py`.
 
