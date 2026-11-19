@@ -229,6 +229,50 @@ _mole_prompt() {
 
 banner "Rotate the geolocation key on real hardware"
 
+# The template's banner says "it remembers values already saved" — true for wizards that write
+# .env, false for this one: no key material is ever written to disk, so a re-run asks for the key
+# again. What IS remembered is where you stopped, and whether the Worker was left rotated.
+STATE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/lockdown-key-rotation.state"
+mkdir -p "$(dirname "$STATE_FILE")"
+
+_state_set() {  # _state_set KEY VALUE — upsert into the state file (0600, revisions only)
+  local k="$1" v="$2" tmp
+  touch "$STATE_FILE"; chmod 600 "$STATE_FILE"
+  tmp=$(mktemp)
+  grep -vE "^${k}=" "$STATE_FILE" > "$tmp" || true
+  printf '%s=%s\n' "$k" "$v" >> "$tmp"
+  mv "$tmp" "$STATE_FILE"
+}
+_state_get() {  # _state_get KEY — last stored value, or empty
+  if [[ -f "$STATE_FILE" ]]; then
+    grep -E "^${1}=" "$STATE_FILE" | tail -n1 | cut -d= -f2- || true
+  fi
+}
+
+_stage_reached=$(_state_get stage)
+_stage_reached=${_stage_reached:-0}
+if [[ "$_stage_reached" -gt 0 ]]; then
+  _clear
+  printf '\n  %sA previous run stopped after stage %s.%s\n' "$BOLD" "$_stage_reached" "$RESET"
+  note "state: $STATE_FILE  (stage + revision digests only — no key was ever written)"
+  if [[ "$_stage_reached" -ge 4 && "$(_state_get restored)" != "yes" ]]; then
+    warn "The Worker may still hold the throwaway value from stage 4, so the fleet"
+    warn "cannot triangulate until the real key is back. Put it back BEFORE anything else."
+    if confirm "Restore the real key now?"; then
+      ask_secret KEY_KEEP "Paste the real geolocation key again:"
+      if [[ -n "${KEY_KEEP:-}" ]]; then
+        _put_secret "$KEY_KEEP" | sed 's/^/    /'
+        _state_set restored yes
+        _state_set stage 5
+        _pass "real key restored after an interrupted run"
+        pause "Press Enter to continue with the remaining stages"
+      fi
+    fi
+  else
+    pause "Press Enter to start again from stage 1 (every stage is idempotent)"
+  fi
+fi
+
 # ── 1 ─────────────────────────────────────────────────────────────────────
 stage "The key you intend to keep"
 for tool in npx python3; do
@@ -256,6 +300,8 @@ _out=$(_put_secret "$KEY_KEEP" || true)
 printf '%s\n' "$_out" | sed 's/^/    /'
 if printf '%s' "$_out" | grep -qiE "success|uploaded|created the secret"; then
   _pass "Worker secret ${SECRET_NAME} set (${#KEY_KEEP} chars)"
+  _state_set key_len "${#KEY_KEEP}"
+  _state_set stage 2
 else
   _fail "Worker secret not confirmed — read the output above before continuing"
   if ! confirm "Continue anyway?"; then exit 1; fi
@@ -277,6 +323,8 @@ if [[ "$REV1" =~ ^[0-9a-f]{16}$ ]]; then
 else
   _fail "revision missing or not a 16-char hex digest: '${REV1}'"
 fi
+_state_set rev1 "$REV1"
+_state_set stage 3
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
 stage "Rotate — the decisive step"
@@ -305,6 +353,10 @@ if [[ -n "$REV2" && "$REV2" != "$REV1" ]]; then
 else
   _fail "revision did not change (still '${REV2}')"
 fi
+_state_set rev2 "$REV2"
+_state_set temp "$KEY_TEMP"
+_state_set restored no
+_state_set stage 4
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
 stage "Put the real key back"
@@ -326,6 +378,9 @@ if [[ -n "$REV3" && "$REV3" != "$REV2" ]]; then
 else
   _fail "revision did not change after the restore (still '${REV3}')"
 fi
+_state_set rev3 "$REV3"
+_state_set restored yes
+_state_set stage 5
 
 # ── 6 ─────────────────────────────────────────────────────────────────────
 stage "Record the evidence"
@@ -352,5 +407,7 @@ if (( FAILURES == 0 )); then
 else
   printf '\n  %s%s assertion(s) failed — see %s%s\n' "$RED" "$FAILURES" "$ARTIFACT" "$RESET"
 fi
+_state_set stage 6
+_state_set failures "$FAILURES"
 
 finish
