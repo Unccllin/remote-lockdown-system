@@ -390,9 +390,10 @@ bash -n scripts/*.sh && bash -n .devin/orchestration/orchestrator.sh
 # On this host its only red is scripts/test_tls_floor.py, which needs a readable
 # /var/run/docker.sock (this login session is not in the `docker` group; `sudo -n` is
 # unavailable). That test is deliberately not softened to a SKIP — a gate that cannot run
-# has not passed. Measured 2026-11-17 (S271): server 848 (51 suites), agent 925,
-# dashboard 272 (re-measured 2026-11-19, S305), worker 447, electron 30, API E2E 14,
-# verify-env 56 PASS / 0 FAIL / 5 SKIP.
+# has not passed. Measured 2026-11-19 (S307): server 882 (52 suites), agent 976,
+# dashboard 272 (30 files), worker 490, electron 30, API E2E 14, verify-env 56 PASS /
+# 0 FAIL / 5 SKIP. The chain stops at test-scripts on the tls-floor red, so test-e2e
+# (14/14), verify-env and check-artifacts were run separately by hand and passed.
 make full-verify
 
 # Full environment + artifact verification (63 checks)
@@ -458,22 +459,31 @@ make build
   check. The convention prepares for future failures without backfilling a
   failure log with no data.
 
-## Diagnostic Sweep Results (2026-08-04, updated 2026-11-13)
+## Diagnostic Sweep Results (2026-08-04, re-measured 2026-11-19 in S307)
 
-All green, re-measured 2026-11-13 (every number below was produced by running the
-command that owns it — the count is cheaper to re-take than to trust): 843 server
-tests (51 suites), 866 agent tests, 272 dashboard tests (30 files, re-measured
-2026-11-19 in S305), 30 electron
-tests, 429 serverless tests, 14 API E2E tests, 255 script-harness checks (236
-pytest tests across 14 suites + 19 checks in the hand-rolled secret-scanner suite;
-5 worker-update cases skip without a built worker), eslint clean on server +
-dashboard, ruff clean + formatted on agent, vite build OK, all shell scripts
-`bash -n` OK, all YAML configs valid, all local imports resolve, git tree clean.
-Also green: `make pg-smoke` 65/65 on real PostgreSQL 16, `actionlint` 1.7.12 clean
-on all 5 workflows, Playwright dashboard E2E 11/11, `make graph-check` all
-invariants pass, `make test-coverage` all 5 components above floor, `make sast`
-45 findings / 0 ERROR all dispositioned, `make firmware-host-tests` 195 checks /
-35 cases, `make verify-env` 63 PASS / 0 FAIL / 2 SKIP.
+Re-measured 2026-11-19 (every number below was produced by running the command that
+owns it — the count is cheaper to re-take than to trust): 882 server tests (52
+suites), 976 agent tests, 272 dashboard tests (30 files), 30 electron tests, 490
+serverless tests, 14 API E2E tests, 308 script-harness pytest tests across 13 suites
+plus the hand-rolled secret scanner (all checks passed), and the 5 worker-update
+cases skip without a built worker. eslint clean on server + dashboard (the dashboard
+now with `--ext .js,.jsx`), ruff clean + formatted on agent, `tsc --noEmit` clean on the
+worker, vite build OK, all shell scripts `bash -n` OK, all YAML configs valid,
+`make graph-check` all invariants pass, Playwright dashboard E2E 11/11, `make verify-env`
+56 PASS / 0 FAIL / 5 SKIP.
+
+**One gate cannot pass on this host, and it is not softened to a SKIP.**
+`scripts/test_tls_floor.py` needs a readable `/var/run/docker.sock`; the socket is
+`root:docker 0660`, this login session is in zero `docker` groups, and `sudo -n` needs a
+password — so `make full-verify` stops at `test-scripts` with **1 failed / 1 passed** and
+never reaches `test-e2e`, `verify-env` or `check-artifacts`. Those three were run by hand
+in S307 and passed (14/14, 56 PASS / 0 FAIL / 5 SKIP, all artifacts present).
+
+**Not re-measured in S307 — the older figures still stand, with their dates:** `make pg-smoke`
+65/65 (needs real PostgreSQL 16), `make sast` 45 findings / 0 ERROR (semgrep is absent on this
+host), `make firmware-host-tests` 195 checks / 35 cases, and `make test-coverage` across all
+five components — only the dashboard floor was re-run, at 70.62 / 66.59 / 62.59 / 71.40
+against 68 / 61 / 62 / 70.
 
 **`make test-e2e` was intermittently fatal until 2026-11-13; it is fixed and proven.** The
 suite holds 14 tests (not the 10 long claimed here) and passes on its own, but it twice died
@@ -513,7 +523,13 @@ Run the suite:
 
 ```bash
 cd dashboard && E2E_BACKEND_PORT=3101 LD_LIBRARY_PATH="$HOME/.local/lib/nspr" npx playwright test
-# 11 passed — measured 2026-11-11
+# 11 passed — re-measured 2026-11-19 (S307), 15-16 s
+# Port 5173 must be free. `reuseExistingServer` used to be `!CI`, so a dev server left running
+# by an earlier session was silently reused: the browser then drove a server whose /api proxy had
+# been resolved WITHOUT this run's E2E_BACKEND_PORT, and the suite reported 7 test failures that
+# read as "login is broken" (S307: S303's server, a day old, with nothing in the output naming the
+# reuse). It is now opt-in only (`PLAYWRIGHT_REUSE_DEV_SERVER=1`), so a busy 5173 fails once,
+# loudly, in about a second.
 ```
 
 Electron runs too (`npx electron .` from `electron/`, same `LD_LIBRARY_PATH`); `electron@42`'s

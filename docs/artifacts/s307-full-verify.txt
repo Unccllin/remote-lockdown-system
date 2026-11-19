@@ -1,0 +1,87 @@
+=== S307: make full-verify, end to end, for the first time since S304 (2026-11-19) ===
+
+Three sessions changed the dashboard lint gate and two server surfaces after the sweep's recorded
+numbers were taken. This is the re-measurement. It did not pass as a single command, and the two
+reasons are both environment, not code — but they are recorded as measured, not as excused.
+
+--- [1] what `make full-verify` actually did ---
+  graph-check        ✓ all invariants pass
+  lint               green (server, dashboard --ext .js,.jsx, agent ruff, actionlint+shellcheck,
+                     firmware-TODOs, debt ledger, worker tsc --noEmit, openapi)
+  test-server        882 passed, 52 suites
+  test-agent         exit 0, 976 tests collected
+  test-dashboard     272 passed, 30 files
+  test-worker        490 passed, 4 files
+  test-electron      30 passed, 3 suites
+  test-scripts       FAILED -> make aborted with Error 1
+  test-e2e           never ran (chain stopped)
+  verify-env         never ran (chain stopped)
+  check-artifacts    never ran (chain stopped)
+
+--- [2] the one red, and it cannot be fixed on this host ---
+  scripts/test_tls_floor.py::test_the_terminator_refuses_tls1_0_and_1_1_at_the_protocol_layer
+    AssertionError: caddy did not start: permission denied while trying to connect to the docker
+    API at unix:///var/run/docker.sock
+    1 failed, 1 passed in 0.16s
+
+  Verified rather than assumed, in this session:
+    docker ps                      -> exit 1
+    ls -l /var/run/docker.sock     -> srw-rw---- root docker
+    id -nG | grep -c docker        -> 0          (this login session is in no docker group)
+    sudo -n true                   -> "sudo: a password is required"
+  So the gate cannot run, which per this repo means it has not passed. It is NOT softened to a
+  SKIP and this session does not report it as green.
+
+  Every other script suite passed alongside it (the failure was one file, not a cascade):
+    test_acceptance_lifecycle 55 · test_build_windows_artifacts 8 · test_check_debt_ledger 8
+    test_check_firmware_todos 30 · test_ci_annotate 18 · test_cross_surface_contract 24
+    test_generic_installer 18 · test_graph_session 40 (0 failed) · test_hw_window_preflight 21
+    test_memory 44 · test_prepush_secrets all checks passed · test_sast_gate 24
+    test_sign_release_metadata 18 · test_worker_update_e2e 5 skipped (no built worker)
+    = 308 pytest tests green across 13 suites, plus the hand-rolled secret scanner.
+
+--- [3] the three steps the chain never reached, run by hand ---
+  make test-e2e          -> 14 passed, 4 suites, "RESULT: PASS (all E2E tests succeeded)"
+  make verify-env        -> 56 PASS / 0 FAIL / 5 SKIP
+  make check-artifacts   -> all artifacts present and non-empty
+
+--- [4] make full-verify does not include Playwright, and Playwright was red ---
+  The chain runs test-e2e (scripts/run-e2e.sh --agent-integration) but not test-e2e-dashboard.
+  Running it: 7 failed, 4 passed. All seven were auth-dependent; the login page rendered, the
+  invalid-credential path worked, so the backend was up and the API answered.
+
+  FIRST CONCLUSION WAS WRONG. I reported "a genuine red, not a flake". Then:
+    ps -o pid,lstart -p 665976,665992 ->
+      665976  npm exec vite --port 5173 --strictPort     started Wed Nov 18 14:29  (= S303)
+      665992  node .../vite --port 5173 --strictPort
+  A Vite dev server S303 had left running for a day was still on 5173. `playwright.config.js` had
+  `reuseExistingServer: !process.env.CI`, so Playwright REUSED it instead of starting a server
+  bound to this run's E2E_BACKEND_PORT=3101. That server's `/api` proxy was resolved when it
+  started (no E2E_BACKEND_PORT -> 3001, which on this box belongs to another project), so the
+  browser's login POST went to a foreign backend while the fixture's own axios login went to 3101
+  — which is exactly why bootBackend() did not throw "E2E bootstrap: login failed" and why the
+  failures surfaced as "element(s) not found" on the device pages.
+  The pre-S304 worktree run I launched to attribute the failure was therefore worthless (it reused
+  the same wrong server) and was killed rather than counted.
+
+  After killing the stale server, the same suite on the same commit: 11 passed (15.4 s). No
+  regression; the code was never broken.
+
+--- [5] the harness defect that caused it, and the fix ---
+  dashboard/playwright.config.js: `reuseExistingServer: !process.env.CI`
+    -> `reuseExistingServer: process.env.PLAYWRIGHT_REUSE_DEV_SERVER === '1'`
+  with the date, the mechanism and the opt-in named in the comment, so the next person reads why
+  rather than re-learning it.
+
+  Proof it now fails loudly instead of testing the wrong app: with a dummy listener on 5173,
+    npx playwright test e2e/auth.spec.js --grep "login page renders"
+    Error: http://localhost:5173 is already used, make sure that nothing is running on the
+           port/url or set reuseExistingServer:true in config.webServer.        exit 1, ~1 s
+  And the suite still passes with the port free: 11 passed (16.2 s), no listeners left behind.
+
+--- [6] documentation repaired with these measurements ---
+  AGENTS.md "Diagnostic Sweep Results" re-dated to 2026-11-19 (S307) with the numbers above, and
+  split into three honest buckets: re-measured today; the one gate that cannot pass here plus what
+  the abort skipped; and NOT re-measured today (pg-smoke, sast, firmware-host-tests, five-component
+  coverage) which keep their older dates. The full-verify comment block carries the same day's
+  numbers. The Playwright section gained the 5173 rule and the reuse defect.
