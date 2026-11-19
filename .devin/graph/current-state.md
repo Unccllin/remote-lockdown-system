@@ -53,49 +53,53 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 306 — 2026-11-19 (the geolocation key reaches a token install — on both surfaces, not just the Worker)
+## Latest session: 307 — 2026-11-19 (`make full-verify` end to end, and a red that was my environment, not the code)
 
 ### Fog cleared
 
-- **The key now reaches a token-flow install on both surfaces** (`e844fd5`): `POST /api/devices` and
-  `POST /api/enroll/claim` on Express and `handleEnroll`/`handleEnrollClaim` on the Worker add a
-  top-level `google_api_key` **only when** the operator configured the key — omitted entirely
-  otherwise, never `null` and never `""`. `installer.py::build_config`/`write_config` and
-  `installer_gui.py::write_config` accept it and set it only when non-empty; both agent call sites
-  thread it from the enrolment response; the `--config-file` baked path adds nothing.
-- **`installer-scripts.ts` is untouched, and a test pins that it stays that way**: the served
-  `setup.ps1` output contains neither the configured key value nor the string `google_api_key`
-  (B-070).
-- **The no-key path is provably unchanged**: every addition is a conditional spread, and each suite
-  asserts property **absence** (`'google_api_key' in body === false`, `assert not in config`), not
-  falsiness — so an install with no key configured is byte-identical to yesterday's.
-- **The decision is durable in an ADR, not only in a chat**: `docs/adr/ADR-008-geolocation-key-delivery.md`
-  records ruling C, the shared-credential consequence ("rotation requires reinstall"), the rejected
-  served-script channel, and check-in refresh as the tracked follow-up.
-- **The gate that used to be decorative now guards a real contract**: a new parity test in
-  `scripts/test_cross_surface_contract.py` pins that Express and the Worker read the same env name,
-  that `installer.py` carries the field, and that `installer-scripts.ts` never mentions it.
+- **Every component suite is green on today's HEAD**: server **882** (52 suites), agent **976**,
+  dashboard **272** (30 files), worker **490** (4 files), electron **30** (3 suites), API/agent E2E
+  **14** (4 suites), verify-env **56 PASS / 0 FAIL / 5 SKIP**, check-artifacts all present. The
+  numbers AGENTS.md carried (843/866/429/447) were three sessions stale; it now says these, dated.
+- **The one red is the documented one and cannot be fixed from this session**: `test_tls_floor.py`
+  fails at `docker run` with `permission denied … //var/run/docker.sock`; the socket is
+  `root:docker 0660`, `id -nG` contains zero docker groups, and `sudo -n` needs a password. Measured,
+  not assumed. It stays a **failure**, not a SKIP — the repo's rule, and this block does not call it
+  green.
+- **`full-verify`'s abort hides three steps**: `test-e2e`, `verify-env` and `check-artifacts` never
+  ran. Run by hand: **14/14 E2E**, **56/0/5 env**, artifacts all present.
+- **The Playwright red was a stale server, and my first conclusion was wrong.** 7 failed / 4 passed
+  looked like dead login. `ps -o lstart` dated the squatter precisely:
+  `npm exec vite --port 5173` started **Wed Nov 18 14:29** — S303. `reuseExistingServer: !CI` made
+  Playwright drive that day-old server, whose `/api` proxy had been resolved **without** this run's
+  `E2E_BACKEND_PORT` (so the browser talked to an unrelated backend on 3001) while the fixture's own
+  axios login reached the right one on 3101. That is why `bootBackend()` never threw "login failed"
+  and the failures appeared as missing elements. Same commit, port freed: **11 passed, 15.4 s**.
+- **Reuse is now opt-in** (`PLAYWRIGHT_REUSE_DEV_SERVER=1`) instead of the default, so the failure
+  mode is one loud line rather than seven misleading ones — proven by putting a dummy listener on
+  5173 and watching it exit 1 in about a second with `http://localhost:5173 is already used`, and by
+  a clean run afterwards (11 passed, no listeners left behind).
 
 ### Fog remaining
 
-- **The key cannot be rotated without reinstalling the fleet** (ADR-008 §Consequences). Check-in
-  refresh is recorded in the ADR but in **no debt ledger** — deliberately, because the ledger feeds
-  the graph's convergence count (60/64) and a new OPEN item there is a graph change to decide, not a
-  byproduct of this feature.
-- **`make full-verify` has not been swept end to end since S305 changed the lint gate.** Its own
-  numbers (843/866/272/429/30, E2E 14, verify-env 56) are older than three sessions' changes.
-  Individual component gates are green (below), which is not the same claim.
-- **Options (c) and (d) of the S303 artifact are still open**: an in-session BSSID helper (an
-  architectural decision about how a session-0 service could ever obtain BSSIDs) and "accept
-  IP-level and say so in the README". Nothing has been chosen.
-- The `installer.py` / `installer_gui.py` config-builder duplication is now duplicated in two more
-  parameters. That is pre-existing debt, worsened in surface area, and still untracked.
-- Unchanged: the registry changes left on MOLE (benign), picomatch advisories, `make sast`
-  unavailable, 12 stale `audit_test_teeth` rows, offline key custody, HP UEFI BIOS password.
+- **Four gates were not re-measured today** and keep their older dates in AGENTS.md: `make pg-smoke`
+  (real PostgreSQL 16), `make sast` (semgrep absent on this host), `make firmware-host-tests`, and
+  `make test-coverage` across all five components (only the dashboard floor was re-run).
+- **`make full-verify` still cannot be green on this host** until the login session belongs to the
+  `docker` group — an operator action (add the group, start a new login session), not a code change.
+- **The sweep's own coverage gap is unclosed**: `test-e2e-dashboard` is not in the chain, so
+  "full-verify passed" would still never have exercised the dashboard E2E suite. Adding it is a
+  Makefile change with a 5173 precondition — worth doing, not done here.
+- **S303 left a dev server running for a day** and nothing noticed. Process hygiene across sessions
+  has no owner; the Playwright reuse defect made that invisible, and it is now at least loud for
+  that one port.
+- Unchanged: the rotation follow-up from ADR-008, S303 options (c)/(d), the `installer.py` /
+  `installer_gui.py` config duplication, picomatch advisories, 12 stale `audit_test_teeth` rows,
+  offline key custody, HP UEFI BIOS password.
 
 ### Debt items closed
 
-None. This closes no ledger item.
+None.
 
 ### Debt items still open
 
@@ -104,56 +108,57 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **Not blocked.** Option (c) needs a design decision; option (d) needs a product decision; the
-  rotation follow-up needs an authenticated settings endpoint on two surfaces.
+- **`/var/run/docker.sock` is unreadable from this login session** (root:docker 0660, no docker
+  group, `sudo -n` needs a password). This is the only reason `make full-verify` cannot be green
+  here, and it is not a code defect.
 
 ### Session artifacts
 
-- `docs/artifacts/s306-geolocation-key-delivery.txt` — what the read changed about the requested
-  mechanism, the three ruling options and the one chosen, the 15-file change map, the nine gate
-  outputs measured by the parent, and both oracle blocks with what they caught.
-- `docs/adr/ADR-008-geolocation-key-delivery.md` — the decision of record.
+- `docs/artifacts/s307-full-verify.txt` — every target's result, the tls-floor evidence chain
+  (socket mode, group membership, `sudo -n`, `docker ps`), the three hand-run steps, the stale-server
+  attribution with its `lstart` timestamp, and the before/after proof of the reuse fix.
+- `dashboard/playwright.config.js` — reuse is opt-in, with the date and mechanism in the comment.
+- `AGENTS.md` — sweep results re-dated and split into *re-measured today*, *cannot pass here (and
+  what the abort skipped)*, and *not re-measured* with their older dates.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)** — the workflow's first pass had every acceptance gate green
-  while most of the plan's required tests were unwritten, and the shipped ADR **listed those
-  non-existent tests as verification**. A green suite cannot detect a missing test; only a reviewer
-  diffing plan-against-diff can. The oracle did, twice (round 1: missing tests + false ADR claim;
-  round 2: the new `docs/API.md` sentence had been inserted *between* the 201 row and the 400/409
-  rows, splitting the markdown table). Harness change: an ADR's Verification section must be diffed
-  against the test names that actually exist before commit — a shipped false claim is worse than an
-  empty section.
-- **Layer 5 (state management)** — the parent's uncommitted `PENDING-RULING.md` edit was **reverted**
-  during the workflow: after the children ran, the file was back at HEAD (494 lines, no geolocation
-  section, `git status` clean for it) even though `check-ruling.sh` had read the open item minutes
-  earlier. Nothing else in the working tree was lost (all 15 changed files and both new documents
-  survived), so this was not a blanket reset. Harness change: a ruling must be committed — or
-  written into the artifact/trace — **before** children are launched, because a child's toolset can
-  rewrite `.devin/` files the parent is holding in memory. The ruling text is therefore reproduced
-  in this block and in the artifact's §2, and ADR-008 now cites those instead of the live ruling
-  file.
+- **Layer 4 (verification feedback), and it was mine.** I reported "a genuine red, not a flake" from
+  the test output alone, without checking the environment the suite ran in — the exact shortcut the
+  repo's own AGENTS.md warns about for this suite ("presenting as 'login is broken', not as
+  misconfiguration"). Harness change this argues for: **any red must be attributed to a cause before
+  it is reported**, and for a browser suite that means `ss`/`ps` on the port the harness claims to own.
+- **Layer 3 (execution environment)**: the docker socket is the one gate the host cannot run. It was
+  documented, and this session confirmed *why* rather than repeating the claim.
+- **Layer 5 (state management)**: S303's leftover dev server survived a full session boundary and
+  silently changed the meaning of another session's test run. Nothing in the harness required it to
+  be cleaned up.
+- **My own tooling**: `bg_run` reported exit 0 for a suite that failed, because the command ended in
+  an `echo` that masked `PIPESTATUS`. The log's `make: *** Error 1` was the truth. Fixed in the
+  follow-up runs by ending with `exit $rc`.
 
 ### VERIFY
 
-- `cd server && npm test` → **882 passed, 52 suites**, exit 0 (876 + 6 new cases)
-- `cd server && npx eslint .` → exit 0
-- `cd serverless && npm test` → **490 passed, 4 files**, exit 0 (485 + 5 new cases)
-- `cd serverless && npx tsc --noEmit -p .` → exit 0
-- `scripts/run-agent-tests.sh -q` → exit 0, **976 collected** (10 new test functions in this diff)
-- `scripts/lint-agent.sh` → ruff check + format clean
-- `agent/.venv/bin/python scripts/test_cross_surface_contract.py` → **24 passed**, exit 0
-- `node --check server/src/routes/devices.js` and `enroll.js` → exit 0
-- Property absence, not falsiness, is what the new tests assert: `'google_api_key' in body === false`
-  (Worker + Express) and `"google_api_key" not in config` (both agent builders)
-- `scripts/check-ruling.sh` → `[OK] No open ruling items — task mode.`
+- `make full-verify` → **exit 1**, and the single failure is
+  `scripts/test_tls_floor.py::test_the_terminator_refuses_tls1_0_and_1_1_at_the_protocol_layer`
+  (`1 failed, 1 passed`); every target before `test-scripts` passed.
+- `cd server && npm test` → 882 passed / 52 suites · `cd serverless && npm test` → 490 / 4 ·
+  `cd dashboard && npx vitest run` → 272 / 30 · `cd electron && npm test` → 30 / 3 ·
+  `scripts/run-agent-tests.sh -q` → exit 0, 976 collected
+- `make test-e2e` → **14 passed, 4 suites**, `RESULT: PASS (all E2E tests succeeded)`
+- `make verify-env` → **56 PASS / 0 FAIL / 5 SKIP** · `make check-artifacts` → all artifacts present
+- `docker ps` → exit 1 · `ls -l /var/run/docker.sock` → `srw-rw---- root docker` ·
+  `id -nG | grep -c docker` → 0 · `sudo -n true` → "a password is required"
+- Playwright: **7 failed / 4 passed** with S303's server on 5173, **11 passed (15.4 s)** after
+  killing it, **11 passed (16.2 s)** with the new config, and with a dummy listener on 5173 the run
+  exits 1 in ~1 s with `http://localhost:5173 is already used`.
 
 ### Next session opening
 
-Sweep `make full-verify` end to end before anything else — three sessions have changed the lint gate
-and two surfaces since its recorded numbers were taken, and component-green is not sweep-green —
-then decide option (c) versus (d) of `docs/artifacts/s303-location-diagnosis.txt` §5 with that
-result in hand.
+Pick option (c) or (d) of `docs/artifacts/s303-location-diagnosis.txt` §5 — the fleet's map
+precision is the last open product question in this line of work — and before writing code for (c),
+settle how a session-0 service could obtain BSSIDs at all, because S303 measured that this Windows
+build refuses the WLAN scan without a location-capable interactive session.
 
 ---
 

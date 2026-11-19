@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-19 10:36:08 — 174 beliefs
+Generated: 2026-11-19 10:49:16 — 175 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -477,6 +477,12 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-135 | confirmed | hardware | A LogonUserW probe with a deliberately wrong password CANNOT detect a disabled account: on MOLE a nonexistent user, an enabled user and a disabled user all returned 1326 ERROR_LOGON_FAILURE. Windows reports 1331 ERROR_ACCOUNT_DISABLED only when the credentials are otherwise valid, which a test harness must not have. To prove that sign-in is refused, read the account's UF_ACCOUNTDISABLE bit (ADSI WinNT://<computer>/<user>,user → UserFlags & 0x2): measured 513 when enabled and 515 when disabled. General rule: a probe that maps a Win32 error code to a state must first be calibrated against known states of that state machine. |
+
+## verification/e2e
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-175 | proposed | assumed | Playwright dashboard E2E is green only when port 5173 is free (S307): 11 passed in 15-16 s on 36defcb. Its 7-failure red was a dev server S303 left running since the day before being silently reused by playwright.config.js's reuseExistingServer: !CI, so the browser drove a server whose /api proxy had been resolved without this run's E2E_BACKEND_PORT (a foreign backend on 3001) while the fixture's own axios login reached 3101 — surfacing as 'login is broken', never as 'reused a server'. Reuse is now opt-in via PLAYWRIGHT_REUSE_DEV_SERVER=1 and a busy 5173 fails once, loudly, in about a second (measured). |
 
 ## windows
 

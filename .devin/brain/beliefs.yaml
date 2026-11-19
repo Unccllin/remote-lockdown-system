@@ -3841,3 +3841,24 @@ beliefs:
   dependents: []
   notes: 'Measured S306: server 882/52, worker 490/4, agent 976, cross-surface contract 24, eslint/ruff/tsc
     clean. No-key path byte-identical, asserted by property-absence tests.'
+- id: B-175
+  statement: 'Playwright dashboard E2E is green only when port 5173 is free (S307): 11 passed in 15-16
+    s on 36defcb. Its 7-failure red was a dev server S303 left running since the day before being silently
+    reused by playwright.config.js''s reuseExistingServer: !CI, so the browser drove a server whose /api
+    proxy had been resolved without this run''s E2E_BACKEND_PORT (a foreign backend on 3001) while the
+    fixture''s own axios login reached 3101 — surfacing as ''login is broken'', never as ''reused a server''.
+    Reuse is now opt-in via PLAYWRIGHT_REUSE_DEV_SERVER=1 and a busy 5173 fails once, loudly, in about
+    a second (measured).'
+  domain: verification/e2e
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/artifacts/s307-full-verify.txt; dashboard/playwright.config.js; AGENTS.md
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Measured S307: ps showed vite --port 5173 started Wed Nov 18 14:29 (S303). After kill: 11 passed.
+    Dummy listener on 5173 -> ''http://localhost:5173 is already used'' exit 1 in ~1s.'

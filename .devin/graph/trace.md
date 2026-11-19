@@ -4155,3 +4155,137 @@ then decide option (c) versus (d) of `docs/artifacts/s303-location-diagnosis.txt
 result in hand.
 
 ---
+
+---
+
+## Session 307 — 2026-11-19 (`make full-verify` end to end, and a red that was my environment, not the code)
+
+### RULE-ZERO — understanding logged before each change
+
+This was a verification session; the only code change came out of what it found, and it was made
+after the measurement, not before it.
+
+- **Read**: `Makefile:338` — `full-verify: graph-check lint test test-e2e verify-env check-artifacts`,
+  and each sub-target (`test` = six suites, `lint` = eight checks, `test-e2e` =
+  `scripts/run-e2e.sh --agent-integration`). Read so a failure could be attributed to a target
+  instead of to "the sweep".
+- **Read**: `AGENTS.md`'s own known-red note — `scripts/test_tls_floor.py` needs a readable
+  `/var/run/docker.sock` — so that a red of exactly that shape would be judged against the record
+  rather than "fixed" by softening it.
+- **Read**: `dashboard/playwright.config.js` and `e2e/fixtures.js` — `webServer.command = npm run dev`,
+  `url = localhost:5173`, `reuseExistingServer: !process.env.CI`, `env: { VITE_API_URL: '' }`; and
+  `fixtures.js` booting the API on `E2E_BACKEND_PORT` and logging in itself before the tests run.
+- **Read**: `vite.config.js:8-11` — the `/api` proxy target is
+  `http://localhost:${process.env.E2E_BACKEND_PORT ?? 3001}`, resolved **when the dev server
+  starts**, which is the fact that decides everything below.
+
+**Findings** before acting: `make full-verify` does not include the Playwright dashboard suite at
+all, and any single failure aborts the chain, so "the sweep passed" and "every suite passed" are
+different claims even when the first is true.
+
+### Fog cleared
+
+- **Every component suite is green on today's HEAD**: server **882** (52 suites), agent **976**,
+  dashboard **272** (30 files), worker **490** (4 files), electron **30** (3 suites), API/agent E2E
+  **14** (4 suites), verify-env **56 PASS / 0 FAIL / 5 SKIP**, check-artifacts all present. The
+  numbers AGENTS.md carried (843/866/429/447) were three sessions stale; it now says these, dated.
+- **The one red is the documented one and cannot be fixed from this session**: `test_tls_floor.py`
+  fails at `docker run` with `permission denied … //var/run/docker.sock`; the socket is
+  `root:docker 0660`, `id -nG` contains zero docker groups, and `sudo -n` needs a password. Measured,
+  not assumed. It stays a **failure**, not a SKIP — the repo's rule, and this block does not call it
+  green.
+- **`full-verify`'s abort hides three steps**: `test-e2e`, `verify-env` and `check-artifacts` never
+  ran. Run by hand: **14/14 E2E**, **56/0/5 env**, artifacts all present.
+- **The Playwright red was a stale server, and my first conclusion was wrong.** 7 failed / 4 passed
+  looked like dead login. `ps -o lstart` dated the squatter precisely:
+  `npm exec vite --port 5173` started **Wed Nov 18 14:29** — S303. `reuseExistingServer: !CI` made
+  Playwright drive that day-old server, whose `/api` proxy had been resolved **without** this run's
+  `E2E_BACKEND_PORT` (so the browser talked to an unrelated backend on 3001) while the fixture's own
+  axios login reached the right one on 3101. That is why `bootBackend()` never threw "login failed"
+  and the failures appeared as missing elements. Same commit, port freed: **11 passed, 15.4 s**.
+- **Reuse is now opt-in** (`PLAYWRIGHT_REUSE_DEV_SERVER=1`) instead of the default, so the failure
+  mode is one loud line rather than seven misleading ones — proven by putting a dummy listener on
+  5173 and watching it exit 1 in about a second with `http://localhost:5173 is already used`, and by
+  a clean run afterwards (11 passed, no listeners left behind).
+
+### Fog remaining
+
+- **Four gates were not re-measured today** and keep their older dates in AGENTS.md: `make pg-smoke`
+  (real PostgreSQL 16), `make sast` (semgrep absent on this host), `make firmware-host-tests`, and
+  `make test-coverage` across all five components (only the dashboard floor was re-run).
+- **`make full-verify` still cannot be green on this host** until the login session belongs to the
+  `docker` group — an operator action (add the group, start a new login session), not a code change.
+- **The sweep's own coverage gap is unclosed**: `test-e2e-dashboard` is not in the chain, so
+  "full-verify passed" would still never have exercised the dashboard E2E suite. Adding it is a
+  Makefile change with a 5173 precondition — worth doing, not done here.
+- **S303 left a dev server running for a day** and nothing noticed. Process hygiene across sessions
+  has no owner; the Playwright reuse defect made that invisible, and it is now at least loud for
+  that one port.
+- Unchanged: the rotation follow-up from ADR-008, S303 options (c)/(d), the `installer.py` /
+  `installer_gui.py` config duplication, picomatch advisories, 12 stale `audit_test_teeth` rows,
+  offline key custody, HP UEFI BIOS password.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (PBL firmware signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **`/var/run/docker.sock` is unreadable from this login session** (root:docker 0660, no docker
+  group, `sudo -n` needs a password). This is the only reason `make full-verify` cannot be green
+  here, and it is not a code defect.
+
+### Session artifacts
+
+- `docs/artifacts/s307-full-verify.txt` — every target's result, the tls-floor evidence chain
+  (socket mode, group membership, `sudo -n`, `docker ps`), the three hand-run steps, the stale-server
+  attribution with its `lstart` timestamp, and the before/after proof of the reuse fix.
+- `dashboard/playwright.config.js` — reuse is opt-in, with the date and mechanism in the comment.
+- `AGENTS.md` — sweep results re-dated and split into *re-measured today*, *cannot pass here (and
+  what the abort skipped)*, and *not re-measured* with their older dates.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), and it was mine.** I reported "a genuine red, not a flake" from
+  the test output alone, without checking the environment the suite ran in — the exact shortcut the
+  repo's own AGENTS.md warns about for this suite ("presenting as 'login is broken', not as
+  misconfiguration"). Harness change this argues for: **any red must be attributed to a cause before
+  it is reported**, and for a browser suite that means `ss`/`ps` on the port the harness claims to own.
+- **Layer 3 (execution environment)**: the docker socket is the one gate the host cannot run. It was
+  documented, and this session confirmed *why* rather than repeating the claim.
+- **Layer 5 (state management)**: S303's leftover dev server survived a full session boundary and
+  silently changed the meaning of another session's test run. Nothing in the harness required it to
+  be cleaned up.
+- **My own tooling**: `bg_run` reported exit 0 for a suite that failed, because the command ended in
+  an `echo` that masked `PIPESTATUS`. The log's `make: *** Error 1` was the truth. Fixed in the
+  follow-up runs by ending with `exit $rc`.
+
+### VERIFY
+
+- `make full-verify` → **exit 1**, and the single failure is
+  `scripts/test_tls_floor.py::test_the_terminator_refuses_tls1_0_and_1_1_at_the_protocol_layer`
+  (`1 failed, 1 passed`); every target before `test-scripts` passed.
+- `cd server && npm test` → 882 passed / 52 suites · `cd serverless && npm test` → 490 / 4 ·
+  `cd dashboard && npx vitest run` → 272 / 30 · `cd electron && npm test` → 30 / 3 ·
+  `scripts/run-agent-tests.sh -q` → exit 0, 976 collected
+- `make test-e2e` → **14 passed, 4 suites**, `RESULT: PASS (all E2E tests succeeded)`
+- `make verify-env` → **56 PASS / 0 FAIL / 5 SKIP** · `make check-artifacts` → all artifacts present
+- `docker ps` → exit 1 · `ls -l /var/run/docker.sock` → `srw-rw---- root docker` ·
+  `id -nG | grep -c docker` → 0 · `sudo -n true` → "a password is required"
+- Playwright: **7 failed / 4 passed** with S303's server on 5173, **11 passed (15.4 s)** after
+  killing it, **11 passed (16.2 s)** with the new config, and with a dummy listener on 5173 the run
+  exits 1 in ~1 s with `http://localhost:5173 is already used`.
+
+### Next session opening
+
+Pick option (c) or (d) of `docs/artifacts/s303-location-diagnosis.txt` §5 — the fleet's map
+precision is the last open product question in this line of work — and before writing code for (c),
+settle how a session-0 service could obtain BSSIDs at all, because S303 measured that this Windows
+build refuses the WLAN scan without a location-capable interactive session.
+
+---
