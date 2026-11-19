@@ -5901,3 +5901,96 @@ first scheduled Monday run — then take D-210 (PBL route integration) from the 
 hardware and no operator credential.
 
 ---
+
+---
+
+## Session 324 — 2026-11-19 (D-210 is closed, and I had been saying it was open for twenty sessions)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `docs/adr/PBL-DEBT-LEDGER.md:2034-2100` — the D-210 entry I was about to take as work:
+  `**Status**: CLOSED (commit 9612fbb, artifact: 579 server tests + 305 serverless tests pass)`, with the
+  full route inventory and its tests listed underneath.
+- **Read**: `.devin/graph/orphaned-commit-refs.txt:29` — `9612fbb` **is** in the baseline of refs orphaned
+  by S149's history rewrite, so the unresolvable hash is grandfathered, not a live I2 violation.
+- **Read**: `.devin/graph/current-state.md`'s convergence table — `Debt items 60 / 64`, whose open four
+  are D-120, D-129, D-130, D-134.
+- **Read**: the ledger's own status lines — D-120 OPEN, D-129 OPEN, D-134 OPEN, D-210 CLOSED.
+
+**Findings**: the next opening I had written into S323 ("take D-210") was wrong, and the error was mine
+and old: every session block since S303 has listed `D-210 (PBL route integration)` under open debt. It
+was closed long before that, with its commit grandfathered by the S149 rewrite. I repeated an inherited
+line twenty times without once checking the ledger it came from — in a repo whose AGENTS.md warns in the
+first screen that the debt ledger goes stale.
+
+### Fog cleared
+
+- **D-210 is CLOSED and always was**: 14 `/v1/*` routes, CORS, per-device and IP rate limiting, the
+  Express equivalent with WAF guards, and 52 server-side PBL tests. Nothing to take.
+- **The open set is measured, not copied**: D-120 (OPEN), D-129 (OPEN), D-134 (OPEN), and D-130 by the
+  convergence table's count of 60/64 — **all four need hardware or an operator credential**, which is why
+  they have stayed open through this arc.
+- **The advisory situation is measured too**: 19 moderate, **0 high, 0 critical**, all in the jest/babel
+  toolchain; `npm audit --audit-level=high` exits 0, so the CI gate is honestly green rather than being
+  ignored. The "picomatch advisories" phrase carried in this record refers to part of that set.
+
+### Fog remaining
+
+- **The debt list in my session blocks was wrong for ~20 sessions.** Corrected here; the earlier blocks
+  are history and stay as they are, but `current-state.md` now carries the measured set.
+- **Nothing in the open four is actionable on this host**: D-120 needs real BitLocker media, D-129/D-134
+  need firmware hardware time, D-130 needs the owner's signing PFX. Recording that is more useful than
+  proposing work that cannot be done.
+- **The weekly audit's `cron` path is still unexercised** (every run was dispatch), and its diagnostic
+  step is retired as of this session.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, the docker-socket red for
+  `test_tls_floor.py`.
+
+### Debt items closed
+
+None — D-210 was already closed before this session, which is the finding.
+
+### Debt items still open
+
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
+
+### Blockers
+
+- **All four open items are blocked on hardware or an operator credential**, not on code.
+
+### Session artifacts
+
+- No code change. The artifact is the correction itself: this block and the regenerated
+  `current-state.md`, plus the retired diagnostic step committed at the start of the session.
+
+### Failure attribution
+
+- **Layer 5 (state management), and it is the clean case.** A stale line was copied forward from block to
+  block, so twenty sessions inherited an open item that had been closed before the first of them. Nothing
+  failed loudly because nothing checked: the block format asks for "debt items still open" and any string
+  satisfies it. The harness change is the same one this arc keeps landing — a list that must be *derived*
+  from the ledger rather than retyped: `graph_assert.py` already knows the count (60/64), so a future
+  block could be checked against it.
+- **Layer 4 (verification feedback)**: the next-opening sentence inherited the same error, so the session
+  started work on an item that did not exist. Reading the ledger entry took one command.
+
+### VERIFY
+
+- `docs/adr/PBL-DEBT-LEDGER.md:2035` → `**Status**: CLOSED (commit 9612fbb, …)`.
+- `git rev-parse --verify 9612fbb` → no such commit; `grep -n 9612fbb .devin/graph/orphaned-commit-refs.txt`
+  → line **29**, i.e. grandfathered by the S149 rewrite baseline.
+- Ledger status lines → D-120 OPEN · D-129 OPEN · D-134 OPEN · D-210 CLOSED; convergence table `60/64`.
+- `cd server && npm audit --audit-level=high` → exit **0**; `npm audit --json` → 19 moderate, 0 high,
+  0 critical, all in the jest/babel chain.
+- `make lint-workflows` → exit 0 after retiring the diagnostic step; workflow YAML parses (8 steps).
+
+### Next session opening
+
+Clear the 19 moderate dev-dependency advisories by bumping the jest/babel chain, and prove it with
+`cd server && npm test` (885 tests), `npm audit --audit-level=high` still exit 0, and the dashboard's
+`audit-with-exceptions.sh` — a dependency change needs no hardware and no credential, which is the only
+kind of work left in this repo's ledger.
+
+---

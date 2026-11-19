@@ -53,87 +53,77 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 323 — 2026-11-19 (the audit gets a gate, and the gate takes five runs to trust)
+## Latest session: 324 — 2026-11-19 (D-210 is closed, and I had been saying it was open for twenty sessions)
 
 ### Fog cleared
 
-- **The audit has a gate** (`dd24599`): `make audit-teeth`, plus `.github/workflows/audit-teeth.yml` —
-  Mondays 06:00 UTC and manual dispatch, installing serverless + server + agent dependencies, and a
-  final step that fails if any **tracked** file still differs afterwards (a mutation left applied is the
-  worst outcome a safety mechanism can have). Validated with the repo's own bar: `make lint-workflows`
-  exit 0, YAML parses, `make audit-teeth` 55/55 locally.
-- **CI is green on the gate** (`697ea9b` → `f89d0e9` → …): run 44537671873 reports
-  `all 55 mutations killed — every audited suite has teeth` and the restore check passes.
-- **Two real defects in the audit's own runner were found by running it in CI**, and both were needed:
-  - **piped capture truncated the suite**: `capture_output=True` produced 72 lines with **no tally**
-    where a shell redirect produced 107 lines including `Test Files 4 passed`. Output now goes to a
-    temp file (`_run_captured`).
-  - **ANSI escapes made the tally unparseable**: vitest writes
-    `\x1b[2m      Tests \x1b[22m … 495 passed`, so `strip().startswith("Tests")` was false. Verified on
-    those exact bytes (`False` before `_strip_ansi`, `True` after).
-- **Its diagnostics were made honest on the way**: an INVALID verdict now carries the exit code, dumps
-  the run's head and tail, and never quotes a single line as if it were a verdict. That change is what
-  turned a 10-minute guessing loop into a readable diagnosis.
+- **D-210 is CLOSED and always was**: 14 `/v1/*` routes, CORS, per-device and IP rate limiting, the
+  Express equivalent with WAF guards, and 52 server-side PBL tests. Nothing to take.
+- **The open set is measured, not copied**: D-120 (OPEN), D-129 (OPEN), D-134 (OPEN), and D-130 by the
+  convergence table's count of 60/64 — **all four need hardware or an operator credential**, which is why
+  they have stayed open through this arc.
+- **The advisory situation is measured too**: 19 moderate, **0 high, 0 critical**, all in the jest/babel
+  toolchain; `npm audit --audit-level=high` exits 0, so the CI gate is honestly green rather than being
+  ignored. The "picomatch advisories" phrase carried in this record refers to part of that set.
 
 ### Fog remaining
 
-- **The scheduled path is unexercised.** Every run so far was `workflow_dispatch`; the Monday `cron:`
-  entry has never fired. Worth one glance after the first scheduled run rather than assuming.
-- **The diagnostic step should now be retired.** `Diagnostic — the exact vitest command the audit runs`
-  served its purpose (it produced the pipe/file evidence) and costs ~3 minutes per run; it should go
-  once the scheduled run is seen.
-- **Five CI runs to reach green, and three of the four theories were mine to discard**: a broken commit
-  (excluded — 495/495 locally and in `ci.yml`), a CI reporter change (excluded — `CI=true` locally
-  green), and ANSI (true, but "disproved" by a test that piped vitest through `grep`, which disables
-  colour and removed the evidence).
-- Unchanged: D-120, D-129/D-130/D-134, D-210, offline key custody, HP UEFI password, per-executable
-  consent keying (unverified), `RequestAccessAsync` (untested), the pre-push hook being per-clone state,
-  the docker-socket red for `test_tls_floor.py`.
+- **The debt list in my session blocks was wrong for ~20 sessions.** Corrected here; the earlier blocks
+  are history and stay as they are, but `current-state.md` now carries the measured set.
+- **Nothing in the open four is actionable on this host**: D-120 needs real BitLocker media, D-129/D-134
+  need firmware hardware time, D-130 needs the owner's signing PFX. Recording that is more useful than
+  proposing work that cannot be done.
+- **The weekly audit's `cron` path is still unexercised** (every run was dispatch), and its diagnostic
+  step is retired as of this session.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, the docker-socket red for
+  `test_tls_floor.py`.
 
 ### Debt items closed
 
-None.
+None — D-210 was already closed before this session, which is the finding.
 
 ### Debt items still open
 
-D-120, D-129, D-130, D-134, D-210.
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
 
 ### Blockers
 
-- None.
+- **All four open items are blocked on hardware or an operator credential**, not on code.
 
 ### Session artifacts
 
-- `.github/workflows/audit-teeth.yml`, `Makefile` (`audit-teeth`), `scripts/audit_test_teeth.py`
-  (`_run_captured`, `_strip_ansi`, `_dump_invalid`, exit codes in verdicts) — through `f89d0e9`.
-- CI evidence: run 44537671873, conclusion **success**.
+- No code change. The artifact is the correction itself: this block and the regenerated
+  `current-state.md`, plus the retired diagnostic step committed at the start of the session.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), and the sharpest case in this arc because the bad check was mine.**
-  I tested "does ANSI hide the tally?" with a command that disabled colour, then relied on the negative
-  result for two further CI rounds. A verification whose apparatus changes the thing under test is worse
-  than no verification — it produces confidence with the same shape as evidence. The fix is procedural:
-  when a test says "not present", check that the test could have seen it present.
-- **Layer 3 (execution environment)**: the pipe-versus-file difference is real and was invisible until
-  the audit's own command was run two ways in the same job. That diagnostic step should exist from the
-  start for any gate whose verdict depends on parsing another tool's human-readable output.
+- **Layer 5 (state management), and it is the clean case.** A stale line was copied forward from block to
+  block, so twenty sessions inherited an open item that had been closed before the first of them. Nothing
+  failed loudly because nothing checked: the block format asks for "debt items still open" and any string
+  satisfies it. The harness change is the same one this arc keeps landing — a list that must be *derived*
+  from the ledger rather than retyped: `graph_assert.py` already knows the count (60/64), so a future
+  block could be checked against it.
+- **Layer 4 (verification feedback)**: the next-opening sentence inherited the same error, so the session
+  started work on an item that did not exist. Reading the ledger entry took one command.
 
 ### VERIFY
 
-- `make audit-teeth` → `all 55 mutations killed`, exit 0, 0 unverified, 0 survived.
-- `make lint-workflows` → exit 0 (actionlint 1.7.12 + shellcheck); workflow YAML parses.
-- CI run 44537671873 → **success**: `all 55 mutations killed — every audited suite has teeth`, then
-  `no tracked file differs — every mutation was restored`.
-- `_strip_ansi` on the exact CI byte sequence → `False` before, `True` after (the parse is proven on the
-  bytes that failed, not on a paraphrase).
-- `git push` of each commit → pre-push hook ran and passed.
+- `docs/adr/PBL-DEBT-LEDGER.md:2035` → `**Status**: CLOSED (commit 9612fbb, …)`.
+- `git rev-parse --verify 9612fbb` → no such commit; `grep -n 9612fbb .devin/graph/orphaned-commit-refs.txt`
+  → line **29**, i.e. grandfathered by the S149 rewrite baseline.
+- Ledger status lines → D-120 OPEN · D-129 OPEN · D-134 OPEN · D-210 CLOSED; convergence table `60/64`.
+- `cd server && npm audit --audit-level=high` → exit **0**; `npm audit --json` → 19 moderate, 0 high,
+  0 critical, all in the jest/babel chain.
+- `make lint-workflows` → exit 0 after retiring the diagnostic step; workflow YAML parses (8 steps).
 
 ### Next session opening
 
-Retire the diagnostic step from `audit-teeth.yml` now that it has produced its evidence, and confirm the
-first scheduled Monday run — then take D-210 (PBL route integration) from the ledger, which needs no
-hardware and no operator credential.
+Clear the 19 moderate dev-dependency advisories by bumping the jest/babel chain, and prove it with
+`cd server && npm test` (885 tests), `npm audit --audit-level=high` still exit 0, and the dashboard's
+`audit-with-exceptions.sh` — a dependency change needs no hardware and no credential, which is the only
+kind of work left in this repo's ledger.
 
 ---
 
