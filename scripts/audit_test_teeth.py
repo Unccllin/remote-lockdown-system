@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -650,7 +651,7 @@ def _dump_invalid(runner: str, out: str, limit: int = 40) -> None:
     print(f"--- end {runner} output ---", file=sys.stderr)
 
 
-def _invalid_summary(proc, out: str, why: str) -> str:
+def _invalid_summary(rc: int, out: str, why: str) -> str:
     """S323: an INVALID verdict has to say enough to diagnose it.
 
     The first CI run of this audit reported only the LAST line of the vitest output — which happened
@@ -659,12 +660,32 @@ def _invalid_summary(proc, out: str, why: str) -> str:
     """
     lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
     tail = " / ".join(lines[-3:])[:300]
-    return f"{why} [rc={proc.returncode}] :: {tail}"
+    return f"{why} [rc={rc}] :: {tail}"
 
-def _invalid(proc, out: str, why: str, runner: str) -> tuple[None, str, set[str]]:
+def _invalid(rc: int, out: str, why: str, runner: str) -> tuple[None, str, set[str]]:
     """`_invalid_summary` plus the evidence, printed once per failing baseline."""
     _dump_invalid(runner, out)
-    return None, _invalid_summary(proc, out, why), set()
+    return None, _invalid_summary(rc, out, why), set()
+
+
+def _run_captured(cmd: list[str], cwd: Path, timeout: int = 900) -> tuple[int, str]:
+    """Run a suite with its output going to a FILE, not a pipe.
+
+    S323: the same vitest command, run from a shell with `> file`, produced 107 lines including the
+    "Test Files 4 passed" tally; run through `capture_output=True` it produced 72 lines, no tally, and
+    still exited 0 — so the audit declared a passing run "could not run". A pipe changes how the child's
+    stdio is flushed and buffered, and vitest's reporter is sensitive to it. The diagnostic step in
+    `.github/workflows/audit-teeth.yml` is what caught the difference; every runner now writes to a
+    temporary file and reads it back, so the audit sees what a human would see in a terminal.
+    """
+    with tempfile.NamedTemporaryFile("w+", suffix=".log", delete=False) as fh:
+        path = Path(fh.name)
+    try:
+        with open(path, "w", encoding="utf-8", errors="replace") as out:
+            proc = subprocess.run(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, timeout=timeout)
+        return proc.returncode, path.read_text(encoding="utf-8", errors="replace")
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
@@ -683,11 +704,9 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
     """
     if runner == "vitest":
         node = str(NODE) if NODE.exists() else "node"
-        proc = subprocess.run(
-            [node, "node_modules/vitest/vitest.mjs", "run"],
-            cwd=REPO / "serverless", capture_output=True, text=True, timeout=900,
+        rc, out = _run_captured(
+            [node, "node_modules/vitest/vitest.mjs", "run"], REPO / "serverless"
         )
-        out = proc.stdout + proc.stderr
         lines = [ln for ln in out.strip().splitlines() if ln.strip()]
         summary = lines[-1][:90] if lines else "(no output)"
         # vitest prints a "Tests  N passed" tally; without it the run did not
@@ -695,9 +714,9 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
         finished = any(ln.strip().startswith("Tests") for ln in lines)
         if not finished or "Error: Cannot find module" in out:
             why = "vitest printed no 'Tests' tally" if not finished else "vitest could not load a module"
-            return _invalid(proc, out, why, "vitest")
-        if proc.returncode in (0, 1):
-            return proc.returncode == 0, summary, _vitest_failures(lines)
+            return _invalid(rc, out, why, "vitest")
+        if rc in (0, 1):
+            return rc == 0, summary, _vitest_failures(lines)
         return None, summary, set()
 
     if runner == "jest":
@@ -721,9 +740,9 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
         crashed = "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG" in out or "Node.js v" in out
         if not finished or crashed:
             why = "jest crashed" if crashed else "jest printed no tally"
-            return _invalid(proc, out, why, "jest")
+            return _invalid(proc.returncode, out, why, "jest")
         if any(m in out for m in ("No tests found", "Cannot find module")):
-            return _invalid(proc, out, "jest ran no tests", "jest")
+            return _invalid(proc.returncode, out, "jest ran no tests", "jest")
         if proc.returncode in (0, 1):
             return proc.returncode == 0, summary, _jest_failures(lines)
         return None, summary, set()
