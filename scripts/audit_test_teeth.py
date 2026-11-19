@@ -632,6 +632,18 @@ def _pytest_failures(lines: list[str]) -> set[str]:
     return out
 
 
+def _invalid_summary(proc, out: str, why: str) -> str:
+    """S323: an INVALID verdict has to say enough to diagnose it.
+
+    The first CI run of this audit reported only the LAST line of the vitest output — which happened
+    to be a Worker log line, so the message read like a failing assertion when the run had actually
+    died early. Exit code plus the tail of the output is the minimum that distinguishes the two.
+    """
+    lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
+    tail = " / ".join(lines[-3:])[:300]
+    return f"{why} [rc={proc.returncode}] :: {tail}"
+
+
 def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
     """Run a component suite. Returns (passed, summary); None means invalid.
 
@@ -659,7 +671,8 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
         # finish (same validity rule as jest).
         finished = any(ln.strip().startswith("Tests") for ln in lines)
         if not finished or "Error: Cannot find module" in out:
-            return None, summary, set()
+            why = "vitest printed no 'Tests' tally" if not finished else "vitest could not load a module"
+            return None, _invalid_summary(proc, out, why), set()
         if proc.returncode in (0, 1):
             return proc.returncode == 0, summary, _vitest_failures(lines)
         return None, summary, set()
@@ -684,9 +697,10 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
         finished = any(ln.startswith(("Tests:", "Test Suites:")) for ln in lines)
         crashed = "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG" in out or "Node.js v" in out
         if not finished or crashed:
-            return None, summary, set()
+            why = "jest crashed" if crashed else "jest printed no tally"
+            return None, _invalid_summary(proc, out, why), set()
         if any(m in out for m in ("No tests found", "Cannot find module")):
-            return None, summary, set()
+            return None, _invalid_summary(proc, out, "jest ran no tests"), set()
         if proc.returncode in (0, 1):
             return proc.returncode == 0, summary, _jest_failures(lines)
         return None, summary, set()
