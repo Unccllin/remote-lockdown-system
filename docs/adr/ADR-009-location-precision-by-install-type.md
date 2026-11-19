@@ -45,9 +45,12 @@ S304's UI already labels the result approximate.
 
 ## Consequences
 
-- **The map is honest but not precise on service installs.** Operators who need precision must run an
-  interactive install with `GOOGLE_API_KEY` provisioned (ADR-008) on a platform whose consent is
-  available to that session. This is documented rather than promised.
+- **The map is honest but not precise on service installs, and now on interactive ones too** unless a
+  user has granted precise-location consent to the scanning binary — which this installer does not
+  request (S316). Provisioning `GOOGLE_API_KEY` (ADR-008) is necessary but not sufficient: without that
+  consent the key encrypts nothing, because there are no BSSIDs to send. Requesting consent would mean
+  a modal dialog per device, for a capability only some installs can use — a product decision, not a
+  fix.
 - **The alternative paths stay unproven, not disproven.** Neither "session-0 `LocalSystem` with
   device-level consent" nor "`Geolocator` called from the service" has ever been measured in this
   repo; the evidence ladder puts both at `spec-checked`. They are recorded as future options, with
@@ -85,9 +88,26 @@ console session (1) and the probe running from session 0:
 BSSIDs are not. Because consent was at its most permissive and a location-capable session existed,
 these results are about the caller, not about configuration.
 
-The only route this does not test is (c1), an in-session helper running in session 1; it is neither
-confirmed nor excluded here, and it needs code execution inside a user session (Task Scheduler is
-broken on MOLE, B-073).
+### The in-session helper (c1), measured in S316
+
+`docs/artifacts/s316-in-session-helper-probe.txt` — a SYSTEM launcher created the child in the active
+console session with `WTSQueryUserToken` + `DuplicateTokenEx` + `CreateProcessAsUser` on
+`winsta0\default` (MOLE's Task Scheduler is broken, B-073), and the child reported `session: 1`,
+`interactive: True`:
+
+| child | result |
+|---|---|
+| `System32\WindowsPowerShell\...\powershell.exe` | `WlanGetNetworkBssList` **rc=5** |
+| `C:\Python314\python.exe` (outside System32 — the doc's prompt condition) | **rc=5** |
+
+So an in-session helper that simply scans is denied as well. The missing precondition is not the
+session and not the binary path: it is **per-app precise-location consent**, which Windows grants only
+through an explicit `RequestAccessAsync` prompt that a human accepts. Nothing in this product calls it,
+so no agent process holds that consent today.
+
+Untested and deliberately so: `RequestAccessAsync` itself raises a modal prompt on the console desktop
+and blocks until someone answers — it needs a person at the machine, which is the very precondition it
+would establish.
 
 ## Verification
 

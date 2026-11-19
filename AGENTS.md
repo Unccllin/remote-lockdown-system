@@ -771,9 +771,12 @@ elevated admin in session 0 → `WlanGetNetworkBssList` **rc=5**; `LocalSystem` 
 → **rc=5**; and `LocalSystem` `Geolocator` → **0x80070005**. `WlanOpenHandle` and
 `WlanEnumInterfaces` return 0 in every case, so the interface is visible and the BSSIDs are not.
 Microsoft's recommended replacement is therefore dead on Windows services too — do not re-propose
-it. The only unmeasured route is an in-session helper running in the console session (which needs
-`CreateProcessAsUser` + `WTSQueryUserToken`, since MOLE's Task Scheduler is broken, B-073), and it
-only helps while a user is logged on.
+it. **The in-session helper was measured in S316 and is denied too** (`docs/artifacts/s316-in-session-helper-probe.txt`):
+a child launched into the active console session via `CreateProcessAsUser` reported `session: 1`,
+`interactive: True`, and still got **rc=5** — from PowerShell inside System32 *and* from
+`C:\Python314\python.exe` outside it. The missing precondition is per-app precise-location consent,
+granted only through an explicit `RequestAccessAsync` prompt that a human accepts; nothing in this
+product calls it. Do not describe an interactive install as precise without that consent.
 
 ### Hardware testing status — 2026-11-05 (window: 4 enforcement paths moved)
 

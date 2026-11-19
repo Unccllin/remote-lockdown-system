@@ -1,0 +1,59 @@
+=== S316: option (c1), the in-session helper, measured — and it is denied too (2026-11-19) ===
+
+S315 settled that a *service* cannot obtain BSSIDs. ADR-009 left exactly one route unmeasured: a
+helper running inside the interactive session. This runs it, on MOLE, over SSH.
+
+--- [1] how the in-session process was created ---
+  MOLE's Task Scheduler is broken (B-073), so the helper path was exercised the way a real helper would
+  have to work: a SYSTEM process calls WTSQueryUserToken(active console session) → DuplicateTokenEx →
+  CreateProcessAsUser with `winsta0\default`, so the child runs on the interactive desktop in session 1.
+  Launcher result: `launched session 1 pid=20760 (waited)` — the mechanism works.
+
+--- [2] the child's own answer, first attempt (PowerShell) ---
+  caller: MOLE\Newark User      session: 1      interactive: True
+  WLAN: WlanOpenHandle rc=0 | WlanEnumInterfaces rc=0 interfaces=1 | if[0] WlanGetNetworkBssList rc=5
+
+  rc=5 is ERROR_ACCESS_DENIED — the same value as the SYSTEM service and the session-0 admin. But this
+  child was `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`, and Microsoft's rule says the
+  consent prompt is only shown to a process "within the user's context AND OUTSIDE of the
+  C:\Windows\System32 folder". So this result is confounded by the binary's own path.
+
+--- [3] the unconfounded child (a non-System32 binary) ---
+  Same launcher, child = `C:\Python314\python.exe C:\Users\Public\session1-wlan.py` (ctypes P/Invoke,
+  64-bit, outside System32):
+    caller: Newark User (python 3.14.8)    exe path: C:\Python314\python.exe    is 32-bit: False
+    WlanOpenHandle rc=0    WlanEnumInterfaces rc=0    interfaces=1
+    if[0] WlanGetNetworkBssList rc=5
+  Still ERROR_ACCESS_DENIED, with device-level consent at Allow and a genuine interactive session.
+
+--- [4] what that means ---
+  The missing precondition is not the session and not the binary's location: it is **per-app precise
+  location consent**, and Windows grants it only through an explicit consent flow
+  (`WiFiAdapter.RequestAccessAsync` / `Geolocator.RequestAccessAsync`), which raises a system prompt for
+  a human to accept. Nothing in this product ever calls it, so no LockdownAgent process — in any
+  session, from any path — holds that consent today.
+
+  So the honest product statement is stronger than ADR-009 originally wrote:
+    "A service install is IP-level because the platform denies BSSIDs to processes without
+     precise-location consent; an interactive install is IP-level for the same reason until a user
+     grants that consent to the scanning binary, which this installer does not request."
+
+  Requesting it would mean a modal consent dialog at install or first run, on every device, for a
+  capability only some install types can use. That is a product decision, not a bug fix.
+
+--- [5] what is still untested, and why it was not tested here ---
+  `RequestAccessAsync` itself: calling it raises a prompt on the console desktop and blocks until a
+  human answers. Whether "Newark User" was even present at that console is unknown, so a probe would
+  hang or silently time out and prove nothing. It needs a person at the machine — which is exactly the
+  precondition it exists to satisfy.
+
+--- [6] method notes ---
+  - `powershell.exe` as a service binPath never started a process (S315); `cmd.exe /c powershell -File`
+    starts reliably. Reused here.
+  - A service `binPath` containing `>` redirection is rejected before the process starts — the launcher
+    writes its own log instead.
+  - The child must read its script from a world-readable path: the first attempt pointed at
+    `C:\Users\labadmin\…` while the console user is "Newark User", and produced no report at all.
+    `C:\Users\Public\` fixed it.
+  - Cleanup: temporary service `PblSession1Probe` deleted; scripts left in C:\Users\Public and
+    C:\Users\labadmin as evidence.

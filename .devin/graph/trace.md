@@ -5134,3 +5134,105 @@ works the honest product statement becomes "IP-level for service installs, wifi 
 rather than "IP-level, always".
 
 ---
+
+---
+
+## Session 316 — 2026-11-19 (option (c1) measured: an in-session helper is denied too, and why)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `docs/artifacts/s308-session0-bssid-feasibility.txt` §1 — the sentence I had quoted twice
+  without testing its second half: the consent prompt appears only when the process is "within the
+  user's context **and outside of the C:\Windows\System32 folder**".
+- **Read**: `docs/adr/ADR-009` §Verified on hardware — the one route S315 left unmeasured, and the
+  exact claim ("only helps while a user is logged on") this session could now test.
+- **Read**: `qwinsta` on MOLE — session 1 Active, user "Newark User" — and the Win32 sequence a helper
+  must use when Task Scheduler is unavailable (B-073): `WTSGetActiveConsoleSessionId` →
+  `WTSQueryUserToken` → `DuplicateTokenEx` → `CreateProcessAsUser` with `winsta0\default`.
+
+**Findings**: the probe had to satisfy two conditions to mean anything — a real interactive session,
+and a child binary outside `System32`. The first attempt satisfied only the first, which is exactly the
+shape of a confounded measurement.
+
+### Fog cleared
+
+- **A real in-session helper was created and it is denied too** (`docs/artifacts/s316-in-session-helper-probe.txt`):
+  a SYSTEM launcher created the child on the interactive desktop of session 1
+  (`launched session 1 pid=… (waited)`), and the child reported `caller: MOLE\Newark User`,
+  `session: 1`, `interactive: True` — then `WlanGetNetworkBssList` returned **rc=5**.
+- **Re-run from a non-System32 binary to remove the documented confounder**: same launcher, child
+  `C:\Python314\python.exe` running a ctypes P/Invoke — **rc=5** again. So the "outside System32"
+  condition was not the blocker.
+- **The real precondition is per-app precise-location consent**, which Windows grants only through an
+  explicit `RequestAccessAsync` prompt a human accepts. Nothing in this product calls it, so **no
+  install type obtains BSSIDs today** — not the service (S315), not an interactive session (S316).
+- **ADR-009's product statement is now sharper**: an interactive install is IP-level too unless that
+  consent has been granted; `GOOGLE_API_KEY` is necessary but not sufficient, because without consent
+  there are no BSSIDs to send. Requesting consent means a modal dialog per device for a capability only
+  some installs can use — a product decision, recorded as such.
+- **AGENTS.md carries the result**, so the BSSID question is now closed on measurements from three
+  contexts rather than two.
+
+### Fog remaining
+
+- **`RequestAccessAsync` itself is untested, deliberately**: it raises a modal prompt on the console
+  desktop and blocks until a human answers. It needs a person at the machine — which is the very
+  precondition it establishes. Anyone testing it must plan for a human, not a timeout.
+- **Whether "Newark User" was actually present at that console is unknown.** The session was Active and
+  the child was interactive, so the measurement stands, but nobody confirmed a human was watching.
+- **The product has not decided** whether to request consent at install time. That is now an explicit
+  open question rather than an implied one.
+- Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
+  HP UEFI password, the `installer.py`/`installer_gui.py` config duplication.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- **Consent needs a human at the console**, and this repo has no mechanism to ask for it — that is the
+  product decision named above, not a technical blocker.
+
+### Session artifacts
+
+- `docs/artifacts/s316-in-session-helper-probe.txt` — the launcher mechanism, both children's results,
+  the per-app-consent conclusion, what remains untested, and three method traps.
+- `docs/adr/ADR-009-location-precision-by-install-type.md` — (c1) measured, §Consequences sharpened.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), and it nearly produced a wrong answer.** My first child was
+  `System32\...\powershell.exe`, which Microsoft's own rule disqualifies from the consent prompt. Had I
+  stopped there I would have written "in-session helpers are denied" for the wrong reason — the session
+  would have been blamed instead of per-app consent. Re-running from `C:\Python314\python.exe` is what
+  turned a confounded result into a conclusion.
+- **Layer 3 (execution environment)**: two silent failures cost a cycle each — a `binPath` containing
+  `>` is rejected before the process starts, and a child script in `C:\Users\labadmin` is unreadable to
+  the console user ("Newark User"), which produced no report at all rather than an error.
+
+### VERIFY
+
+- Launcher (SYSTEM, session 0): `launched session 1 pid=20760 (waited)`, later `pid=16888`, `pid=21172`.
+- Child #1 (`System32\WindowsPowerShell\v1.0\powershell.exe`): `caller: MOLE\Newark User`,
+  `session: 1`, `interactive: True`, `WlanOpenHandle rc=0 | WlanEnumInterfaces rc=0 interfaces=1 |
+  WlanGetNetworkBssList rc=5`.
+- Child #2 (`C:\Python314\python.exe`, ctypes, outside System32): `exe path: C:\Python314\python.exe`,
+  `is 32-bit: False`, `WlanOpenHandle rc=0`, `WlanEnumInterfaces rc=0`, `interfaces=1`,
+  `WlanGetNetworkBssList rc=5`.
+- Cleanup: temporary service `PblSession1Probe` deleted; probe scripts left in `C:\Users\Public` and
+  `C:\Users\labadmin` as evidence.
+- `python3 scripts/brain.py check` → 184 beliefs, integrity clean (B-184 asserted at hardware level).
+
+### Next session opening
+
+Decide the product question the measurements created: does the installer request precise-location
+consent (`RequestAccessAsync`) at first run so an interactive install can actually triangulate, or does
+the documentation state that no install type is precise without a manual consent step? Either answer is
+one ADR line; guessing is what ADR-009 now forbids.
+
+---

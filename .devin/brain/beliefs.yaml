@@ -4043,3 +4043,26 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: Hardware evidence, 2026-11-19, over SSH to labadmin@192.168.1.249.
+- id: B-184
+  statement: 'Option (c1) of ADR-009 is measured and denied (S316, MOLE): a child process created in the
+    active console session by WTSQueryUserToken + DuplicateTokenEx + CreateProcessAsUser on winsta0\default
+    reported session 1, interactive True, and WlanGetNetworkBssList still returned rc=5 (ERROR_ACCESS_DENIED)
+    — both from powershell.exe inside C:\Windows\System32 and from C:\Python314\python.exe outside it,
+    with device-level location consent set to Allow. The missing precondition is per-app precise-location
+    consent, which Windows grants only through an explicit RequestAccessAsync prompt a human accepts;
+    no LockdownAgent process calls it, so no install type obtains BSSIDs today. The prompt itself is untested
+    because it needs a person at the machine.'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/artifacts/s316-in-session-helper-probe.txt; docs/adr/ADR-009-location-precision-by-install-type.md;
+    AGENTS.md
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Hardware evidence 2026-11-19 over SSH; launcher ran as SYSTEM, child ran as Newark User in session
+    1.

@@ -53,36 +53,36 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 315 — 2026-11-19 (the BSSID probe, run on MOLE: services cannot, and neither can Geolocator)
+## Latest session: 316 — 2026-11-19 (option (c1) measured: an in-session helper is denied too, and why)
 
 ### Fog cleared
 
-- **A LocalSystem service cannot obtain BSSIDs, measured** (`docs/artifacts/s315-bssid-probe-hardware.txt`):
-  from a temporary service running as `NT AUTHORITY\SYSTEM` in session 0 with consent `Allow`,
-  `WlanOpenHandle` and `WlanEnumInterfaces` return **0** (one interface) and
-  `WlanGetNetworkBssList` returns **5 = ERROR_ACCESS_DENIED** — identical to the elevated-admin control.
-- **Geolocator fails from a service too**, which kills the hope ADR-009 had left open: the WinRT types
-  load and instantiate under SYSTEM, and `GetGeopositionAsync` faults with **0x80070005 E_ACCESSDENIED**.
-  Option (c2) is now rejected on hardware evidence, not on reasoning.
-- **ADR-009's sentence is now measured**: "a service install reports `source: 'ip'` by platform design"
-  is a hardware result with the strongest possible consent setting, not a reading of documentation.
-- **AGENTS.md now carries the result** so the BSSID question is not re-opened by argument: the three
-  refusals, the two return codes, and the one route that remains unmeasured.
-- **Method facts worth keeping**: `powershell.exe` as a service `binPath` never produced a process
-  (8 polls over 40 s) while `cmd.exe /c powershell -File …` started every time; and under SCM a batch's
-  `whoami`/`netsh` output vanished while the file was written — which is why the evidence is an API
-  return code and not a `netsh` exit status.
+- **A real in-session helper was created and it is denied too** (`docs/artifacts/s316-in-session-helper-probe.txt`):
+  a SYSTEM launcher created the child on the interactive desktop of session 1
+  (`launched session 1 pid=… (waited)`), and the child reported `caller: MOLE\Newark User`,
+  `session: 1`, `interactive: True` — then `WlanGetNetworkBssList` returned **rc=5**.
+- **Re-run from a non-System32 binary to remove the documented confounder**: same launcher, child
+  `C:\Python314\python.exe` running a ctypes P/Invoke — **rc=5** again. So the "outside System32"
+  condition was not the blocker.
+- **The real precondition is per-app precise-location consent**, which Windows grants only through an
+  explicit `RequestAccessAsync` prompt a human accepts. Nothing in this product calls it, so **no
+  install type obtains BSSIDs today** — not the service (S315), not an interactive session (S316).
+- **ADR-009's product statement is now sharper**: an interactive install is IP-level too unless that
+  consent has been granted; `GOOGLE_API_KEY` is necessary but not sufficient, because without consent
+  there are no BSSIDs to send. Requesting consent means a modal dialog per device for a capability only
+  some installs can use — a product decision, recorded as such.
+- **AGENTS.md carries the result**, so the BSSID question is now closed on measurements from three
+  contexts rather than two.
 
 ### Fog remaining
 
-- **(c1), the in-session helper, is still untested** — neither confirmed nor excluded. Running it means
-  code execution inside session 1, and MOLE's Task Scheduler is broken (B-073), so it needs
-  `CreateProcessAsUser` + `WTSQueryUserToken`. It would also only help while a user is logged on,
-  which is why it was never the recommended path.
-- **MOLE remains IP-level in practice**, and now nobody can claim the key or the platform might change
-  that: `google_api_key` is provisioned (S311) and inert for this device by design.
-- **Consent-off was not run** — deliberately: consent-on already denied the call, so the stricter state
-  could only add nothing.
+- **`RequestAccessAsync` itself is untested, deliberately**: it raises a modal prompt on the console
+  desktop and blocks until a human answers. It needs a person at the machine — which is the very
+  precondition it establishes. Anyone testing it must plan for a human, not a timeout.
+- **Whether "Newark User" was actually present at that console is unknown.** The session was Active and
+  the child was interactive, so the measurement stands, but nobody confirmed a human was watching.
+- **The product has not decided** whether to request consent at install time. That is now an explicit
+  open question rather than an implied one.
 - Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
   HP UEFI password, the `installer.py`/`installer_gui.py` config duplication.
 
@@ -96,45 +96,45 @@ D-120, D-129, D-130, D-134, D-210.
 
 ### Blockers
 
-- **(c1) needs a session-1 execution mechanism**, which is a small piece of engineering rather than a
-  measurement anyone can take with a shell.
+- **Consent needs a human at the console**, and this repo has no mechanism to ask for it — that is the
+  product decision named above, not a technical blocker.
 
 ### Session artifacts
 
-- `docs/artifacts/s315-bssid-probe-hardware.txt` — the environment, the three refusals with numeric
-  codes, what is settled, and the two method traps.
-- `docs/adr/ADR-009-location-precision-by-install-type.md` — hardware results table, and (c2) rejected
-  on evidence.
+- `docs/artifacts/s316-in-session-helper-probe.txt` — the launcher mechanism, both children's results,
+  the per-app-consent conclusion, what remains untested, and three method traps.
+- `docs/adr/ADR-009-location-precision-by-install-type.md` — (c1) measured, §Consequences sharpened.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), in the probe's own plumbing.** Three attempts produced
-  "no output", "exit 1" and "One or more errors occurred" — each of which *looks* like a denial and
-  none of which distinguishes denial from a broken harness. The fix was to stop reading `netsh` prose
-  and SCM redirection and switch to P/Invoke return codes: 5 and 0x80070005 are unambiguous. A probe
-  that cannot separate "denied" from "did not run" is not a measurement.
-- **Layer 3 (execution environment)**: `powershell.exe` as a service binary silently never started;
-  the `cmd.exe /c` wrapper did. Recorded so the next probe does not repeat the 40 seconds.
+- **Layer 4 (verification feedback), and it nearly produced a wrong answer.** My first child was
+  `System32\...\powershell.exe`, which Microsoft's own rule disqualifies from the consent prompt. Had I
+  stopped there I would have written "in-session helpers are denied" for the wrong reason — the session
+  would have been blamed instead of per-app consent. Re-running from `C:\Python314\python.exe` is what
+  turned a confounded result into a conclusion.
+- **Layer 3 (execution environment)**: two silent failures cost a cycle each — a `binPath` containing
+  `>` is rejected before the process starts, and a child script in `C:\Users\labadmin` is unreadable to
+  the console user ("Newark User"), which produced no report at all rather than an error.
 
 ### VERIFY
 
-- **Environment**: `qwinsta` → session 1 Active ("Newark User"); HKLM consent → `Allow`; probe session 0,
-  elevated True.
-- **(a) control**, elevated admin session 0: `netsh` → "need location permission"; API →
-  `WlanOpenHandle rc=0 | WlanEnumInterfaces rc=0 interfaces=1 | WlanGetNetworkBssList rc=5`.
-- **(b) SYSTEM** via `sc create … cmd.exe /c powershell -File …`: caller `NT AUTHORITY\SYSTEM`,
-  session 0, consent Allow, same three return codes — **rc=5** on the BSS list.
-- **(c) SYSTEM Geolocator**: types resolved (`Geolocator`, `Geoposition`), then
-  "Your App does not have permission to access location data." with **hresult = 0x80070005**.
-- Cleanup: all temporary services deleted (`PblBssidProbe`, `PblWlanProbe`, `PblGeoProbe`).
-- `python3 scripts/brain.py check` → 183 beliefs, integrity clean (B-183 asserted at hardware level).
+- Launcher (SYSTEM, session 0): `launched session 1 pid=20760 (waited)`, later `pid=16888`, `pid=21172`.
+- Child #1 (`System32\WindowsPowerShell\v1.0\powershell.exe`): `caller: MOLE\Newark User`,
+  `session: 1`, `interactive: True`, `WlanOpenHandle rc=0 | WlanEnumInterfaces rc=0 interfaces=1 |
+  WlanGetNetworkBssList rc=5`.
+- Child #2 (`C:\Python314\python.exe`, ctypes, outside System32): `exe path: C:\Python314\python.exe`,
+  `is 32-bit: False`, `WlanOpenHandle rc=0`, `WlanEnumInterfaces rc=0`, `interfaces=1`,
+  `WlanGetNetworkBssList rc=5`.
+- Cleanup: temporary service `PblSession1Probe` deleted; probe scripts left in `C:\Users\Public` and
+  `C:\Users\labadmin` as evidence.
+- `python3 scripts/brain.py check` → 184 beliefs, integrity clean (B-184 asserted at hardware level).
 
 ### Next session opening
 
-Build the (c1) in-session helper probe — `CreateProcessAsUser` with `WTSQueryUserToken` to run the same
-`WlanGetNetworkBssList` inside session 1 — because it is the only BSSID route left untested, and if it
-works the honest product statement becomes "IP-level for service installs, wifi for logged-on ones"
-rather than "IP-level, always".
+Decide the product question the measurements created: does the installer request precise-location
+consent (`RequestAccessAsync`) at first run so an interactive install can actually triangulate, or does
+the documentation state that no install type is precise without a manual consent step? Either answer is
+one ADR line; guessing is what ADR-009 now forbids.
 
 ---
 
