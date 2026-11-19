@@ -5236,3 +5236,114 @@ the documentation state that no install type is precise without a manual consent
 one ADR line; guessing is what ADR-009 now forbids.
 
 ---
+
+---
+
+## Session 317 — 2026-11-19 (ruling A: document the truth, and the guard that already existed was never installed)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `docs/adr/ADR-009` (as S316 left it) and the user-facing claims it constrains —
+  `README.md` §Location Reporting, `docs/PRIVACY_POLICY.md` §1.2, `serverless/README.md` — to find every
+  place the product still implied an interactive install gets wifi fixes.
+- **Read**: MOLE's consent store —
+  `HKLM\…\CapabilityAccessManager\ConsentStore\location` and its `NonPackaged` subtree — which returns
+  **no subkeys at all**: no desktop app on the machine holds a location-consent record. That is the
+  state every probe in S315/S316 was denied under.
+- **Ran** a `source_check` for "consent is keyed per executable path": result **missing-evidence**
+  (confidence 0.20, no passages retrieved). Recorded as unverified rather than asserted, because it
+  decides whether asking consent from the installer would help the agent.
+- **Read**: `scripts/pre-push-check.sh` and its usage — `--install` writes `.git/hooks/pre-push`, and
+  `ls .git/hooks` showed **no pre-push hook was installed**.
+
+**Findings**: two things were true at once — the docs over-claimed what an interactive install can do,
+and the mechanical guard for "checks that do not block" (B-182) already existed but had never been
+switched on in this clone.
+
+### Fog cleared
+
+- **Ruling A is recorded**: the product does **not** request precise-location consent. ADR-009 gains a
+  "Decision on consent" section with the reasoning and the two rejected options — (B) asking from the
+  agent (real scope, needs a human click, value depends on unverified keying) and (C) asking from the
+  installer (a different binary from the scanner, so under the likely per-executable keying it would
+  grant consent to itself and leave the agent denied — worse than not asking, because it looks like a
+  capability).
+- **The README's over-claim is gone**: the table now says what was measured — city-level for every
+  install type, with `wifi` only when consent has *already* been granted to the agent's own executable,
+  and a row naming the case this installer actually produces. `GOOGLE_API_KEY` is described as
+  necessary but not sufficient, because without consent there are no BSSIDs to send.
+- **`docs/PRIVACY_POLICY.md` §1.2 now matches reality**: no access points are collected in practice,
+  because the application does not request the consent that scanning requires; location derives from
+  the IP address.
+- **`serverless/README.md`** no longer implies the key changes anything on its own.
+- **The missing guard is installed**: `scripts/pre-push-check.sh --install` → `.git/hooks/pre-push`
+  (497 B, executable), which runs the publish-range secret scan and the fast-forward check on every
+  push. It is **per clone** — a hook lives in `.git/` and is never committed — which is precisely how
+  S314's `;`-chained push got through. AGENTS.md now says to install it once per clone.
+- **A render defect I introduced was caught and fixed**: the first version of the new README row wrapped
+  across two lines, which ends the row in markdown and turns the continuation into a stray paragraph.
+  Every row now carries 4 pipes (3 columns).
+
+### Fog remaining
+
+- **Whether consent is keyed per executable is still unverified.** The `source_check` returned
+  missing-evidence and MOLE has no records to inspect. It is recorded as unverified in the ADR, not
+  resolved by argument — and it is the one fact that would make option (C) evaluable.
+- **`RequestAccessAsync` remains untested** (a modal prompt needs a person at the console).
+- **The hook is per-clone state, not repository state.** A fresh clone still has no pre-push hook; CI
+  covers the published range, but a developer's local push is only gated if they ran `--install`.
+- Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
+  HP UEFI password, the `installer.py`/`installer_gui.py` config duplication.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- **Consent keying needs a human click** to observe; nothing on this host can settle it.
+
+### Session artifacts
+
+- `docs/adr/ADR-009-location-precision-by-install-type.md` — the consent decision and the rejected
+  options.
+- `README.md`, `docs/PRIVACY_POLICY.md`, `serverless/README.md`, `AGENTS.md` — claims aligned to the
+  measurements.
+- `.git/hooks/pre-push` — installed from `scripts/pre-push-check.sh` (per-clone, not committed).
+
+### Failure attribution
+
+- **Layer 2 (context provision), and it was mine.** S308 wrote "interactive + `GOOGLE_API_KEY` → `wifi`,
+  tens of metres" into the README before anything had measured consent. That is the exact over-claim
+  this repo keeps finding in documentation, authored this time by the session that was documenting
+  honesty. The guard is now the measured table plus the artifact citations.
+- **Layer 4 (verification feedback)**: `source_check` returned missing-evidence, and the temptation was
+  to write the plausible sentence about per-executable keying anyway. It is recorded as unverified
+  instead, with the specific consequence ("this decides whether option C helps the agent").
+- **Layer 5 (state management)**: the pre-push guard existed since S140 and was never installed on this
+  clone, so three separate "check that does not block" incidents had no mechanical backstop. Fixed for
+  this clone, documented for the next.
+
+### VERIFY
+
+- MOLE consent store: `Get-ChildItem …\ConsentStore\location` → **no subkeys**; `NonPackaged` has none.
+- `scripts/pre-push-check.sh` → `[OK] no credential-shaped content in origin/master..HEAD`.
+- `scripts/pre-push-check.sh --install` → `[OK] installed .git/hooks/pre-push`; `ls -la` → 497 B,
+  executable; the wrapper passes `--base <upstream>` and deliberately does not forward git's own
+  positional args (a previous form blocked every tag push).
+- README table: every row reports **4 pipes** (3 columns) — no wrapped rows.
+- `scripts/check-ruling.sh` → `[OK] No open ruling items — task mode`; the answered section was deleted
+  from `PENDING-RULING.md` (494 lines, decision lives in ADR-009).
+- `python3 scripts/brain.py check` → integrity clean.
+
+### Next session opening
+
+Ask a person at MOLE's console to approve the location prompt once for the installer binary and once for
+`lockdown-agent.exe` — that settles per-executable keying, the only fact ADR-009 still marks unverified;
+if nobody is available, take D-210 (PBL route integration) from the ledger instead.
+
+---

@@ -18,7 +18,7 @@ CBOR/COSE (`pbl/`).
 | `ADMIN_TOKEN` | secret | break-glass super-admin. Maps to a synthetic admin, so treat it as a root credential |
 | `JWT_SECRET` | secret | signs admin JWTs (falls back to `ADMIN_TOKEN`, then a dev string — do not rely on the fallback in production) |
 | `PBL_SIGNING_KEY` / `PBL_POLICY_SIGNING_KEY` | secret | keys for the firmware-facing `/v1/*` COSE signatures |
-| `GOOGLE_API_KEY` | secret (optional) | Google Geolocation key, provisioned into the enrolment response at install time (ADR-008); omitted when unset. A session-0 service install cannot scan BSSIDs, so the key only helps interactive installs — see [ADR-009](../docs/adr/ADR-009-location-precision-by-install-type.md). |
+| `GOOGLE_API_KEY` | secret (optional) | Google Geolocation key, provisioned into the enrolment response at install time (ADR-008); omitted when unset. A session-0 service install cannot scan BSSIDs, and an interactive one needs precise-location consent this product does not request (S316), so in practice the key changes nothing until that consent exists — see [ADR-009](../docs/adr/ADR-009-location-precision-by-install-type.md). |
 
 The KV id lives in `wrangler.toml`. Create the namespace once:
 

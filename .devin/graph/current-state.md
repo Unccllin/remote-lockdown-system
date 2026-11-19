@@ -53,36 +53,40 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 316 — 2026-11-19 (option (c1) measured: an in-session helper is denied too, and why)
+## Latest session: 317 — 2026-11-19 (ruling A: document the truth, and the guard that already existed was never installed)
 
 ### Fog cleared
 
-- **A real in-session helper was created and it is denied too** (`docs/artifacts/s316-in-session-helper-probe.txt`):
-  a SYSTEM launcher created the child on the interactive desktop of session 1
-  (`launched session 1 pid=… (waited)`), and the child reported `caller: MOLE\Newark User`,
-  `session: 1`, `interactive: True` — then `WlanGetNetworkBssList` returned **rc=5**.
-- **Re-run from a non-System32 binary to remove the documented confounder**: same launcher, child
-  `C:\Python314\python.exe` running a ctypes P/Invoke — **rc=5** again. So the "outside System32"
-  condition was not the blocker.
-- **The real precondition is per-app precise-location consent**, which Windows grants only through an
-  explicit `RequestAccessAsync` prompt a human accepts. Nothing in this product calls it, so **no
-  install type obtains BSSIDs today** — not the service (S315), not an interactive session (S316).
-- **ADR-009's product statement is now sharper**: an interactive install is IP-level too unless that
-  consent has been granted; `GOOGLE_API_KEY` is necessary but not sufficient, because without consent
-  there are no BSSIDs to send. Requesting consent means a modal dialog per device for a capability only
-  some installs can use — a product decision, recorded as such.
-- **AGENTS.md carries the result**, so the BSSID question is now closed on measurements from three
-  contexts rather than two.
+- **Ruling A is recorded**: the product does **not** request precise-location consent. ADR-009 gains a
+  "Decision on consent" section with the reasoning and the two rejected options — (B) asking from the
+  agent (real scope, needs a human click, value depends on unverified keying) and (C) asking from the
+  installer (a different binary from the scanner, so under the likely per-executable keying it would
+  grant consent to itself and leave the agent denied — worse than not asking, because it looks like a
+  capability).
+- **The README's over-claim is gone**: the table now says what was measured — city-level for every
+  install type, with `wifi` only when consent has *already* been granted to the agent's own executable,
+  and a row naming the case this installer actually produces. `GOOGLE_API_KEY` is described as
+  necessary but not sufficient, because without consent there are no BSSIDs to send.
+- **`docs/PRIVACY_POLICY.md` §1.2 now matches reality**: no access points are collected in practice,
+  because the application does not request the consent that scanning requires; location derives from
+  the IP address.
+- **`serverless/README.md`** no longer implies the key changes anything on its own.
+- **The missing guard is installed**: `scripts/pre-push-check.sh --install` → `.git/hooks/pre-push`
+  (497 B, executable), which runs the publish-range secret scan and the fast-forward check on every
+  push. It is **per clone** — a hook lives in `.git/` and is never committed — which is precisely how
+  S314's `;`-chained push got through. AGENTS.md now says to install it once per clone.
+- **A render defect I introduced was caught and fixed**: the first version of the new README row wrapped
+  across two lines, which ends the row in markdown and turns the continuation into a stray paragraph.
+  Every row now carries 4 pipes (3 columns).
 
 ### Fog remaining
 
-- **`RequestAccessAsync` itself is untested, deliberately**: it raises a modal prompt on the console
-  desktop and blocks until a human answers. It needs a person at the machine — which is the very
-  precondition it establishes. Anyone testing it must plan for a human, not a timeout.
-- **Whether "Newark User" was actually present at that console is unknown.** The session was Active and
-  the child was interactive, so the measurement stands, but nobody confirmed a human was watching.
-- **The product has not decided** whether to request consent at install time. That is now an explicit
-  open question rather than an implied one.
+- **Whether consent is keyed per executable is still unverified.** The `source_check` returned
+  missing-evidence and MOLE has no records to inspect. It is recorded as unverified in the ADR, not
+  resolved by argument — and it is the one fact that would make option (C) evaluable.
+- **`RequestAccessAsync` remains untested** (a modal prompt needs a person at the console).
+- **The hook is per-clone state, not repository state.** A fresh clone still has no pre-push hook; CI
+  covers the published range, but a developer's local push is only gated if they ran `--install`.
 - Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
   HP UEFI password, the `installer.py`/`installer_gui.py` config duplication.
 
@@ -96,45 +100,46 @@ D-120, D-129, D-130, D-134, D-210.
 
 ### Blockers
 
-- **Consent needs a human at the console**, and this repo has no mechanism to ask for it — that is the
-  product decision named above, not a technical blocker.
+- **Consent keying needs a human click** to observe; nothing on this host can settle it.
 
 ### Session artifacts
 
-- `docs/artifacts/s316-in-session-helper-probe.txt` — the launcher mechanism, both children's results,
-  the per-app-consent conclusion, what remains untested, and three method traps.
-- `docs/adr/ADR-009-location-precision-by-install-type.md` — (c1) measured, §Consequences sharpened.
+- `docs/adr/ADR-009-location-precision-by-install-type.md` — the consent decision and the rejected
+  options.
+- `README.md`, `docs/PRIVACY_POLICY.md`, `serverless/README.md`, `AGENTS.md` — claims aligned to the
+  measurements.
+- `.git/hooks/pre-push` — installed from `scripts/pre-push-check.sh` (per-clone, not committed).
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), and it nearly produced a wrong answer.** My first child was
-  `System32\...\powershell.exe`, which Microsoft's own rule disqualifies from the consent prompt. Had I
-  stopped there I would have written "in-session helpers are denied" for the wrong reason — the session
-  would have been blamed instead of per-app consent. Re-running from `C:\Python314\python.exe` is what
-  turned a confounded result into a conclusion.
-- **Layer 3 (execution environment)**: two silent failures cost a cycle each — a `binPath` containing
-  `>` is rejected before the process starts, and a child script in `C:\Users\labadmin` is unreadable to
-  the console user ("Newark User"), which produced no report at all rather than an error.
+- **Layer 2 (context provision), and it was mine.** S308 wrote "interactive + `GOOGLE_API_KEY` → `wifi`,
+  tens of metres" into the README before anything had measured consent. That is the exact over-claim
+  this repo keeps finding in documentation, authored this time by the session that was documenting
+  honesty. The guard is now the measured table plus the artifact citations.
+- **Layer 4 (verification feedback)**: `source_check` returned missing-evidence, and the temptation was
+  to write the plausible sentence about per-executable keying anyway. It is recorded as unverified
+  instead, with the specific consequence ("this decides whether option C helps the agent").
+- **Layer 5 (state management)**: the pre-push guard existed since S140 and was never installed on this
+  clone, so three separate "check that does not block" incidents had no mechanical backstop. Fixed for
+  this clone, documented for the next.
 
 ### VERIFY
 
-- Launcher (SYSTEM, session 0): `launched session 1 pid=20760 (waited)`, later `pid=16888`, `pid=21172`.
-- Child #1 (`System32\WindowsPowerShell\v1.0\powershell.exe`): `caller: MOLE\Newark User`,
-  `session: 1`, `interactive: True`, `WlanOpenHandle rc=0 | WlanEnumInterfaces rc=0 interfaces=1 |
-  WlanGetNetworkBssList rc=5`.
-- Child #2 (`C:\Python314\python.exe`, ctypes, outside System32): `exe path: C:\Python314\python.exe`,
-  `is 32-bit: False`, `WlanOpenHandle rc=0`, `WlanEnumInterfaces rc=0`, `interfaces=1`,
-  `WlanGetNetworkBssList rc=5`.
-- Cleanup: temporary service `PblSession1Probe` deleted; probe scripts left in `C:\Users\Public` and
-  `C:\Users\labadmin` as evidence.
-- `python3 scripts/brain.py check` → 184 beliefs, integrity clean (B-184 asserted at hardware level).
+- MOLE consent store: `Get-ChildItem …\ConsentStore\location` → **no subkeys**; `NonPackaged` has none.
+- `scripts/pre-push-check.sh` → `[OK] no credential-shaped content in origin/master..HEAD`.
+- `scripts/pre-push-check.sh --install` → `[OK] installed .git/hooks/pre-push`; `ls -la` → 497 B,
+  executable; the wrapper passes `--base <upstream>` and deliberately does not forward git's own
+  positional args (a previous form blocked every tag push).
+- README table: every row reports **4 pipes** (3 columns) — no wrapped rows.
+- `scripts/check-ruling.sh` → `[OK] No open ruling items — task mode`; the answered section was deleted
+  from `PENDING-RULING.md` (494 lines, decision lives in ADR-009).
+- `python3 scripts/brain.py check` → integrity clean.
 
 ### Next session opening
 
-Decide the product question the measurements created: does the installer request precise-location
-consent (`RequestAccessAsync`) at first run so an interactive install can actually triangulate, or does
-the documentation state that no install type is precise without a manual consent step? Either answer is
-one ADR line; guessing is what ADR-009 now forbids.
+Ask a person at MOLE's console to approve the location prompt once for the installer binary and once for
+`lockdown-agent.exe` — that settles per-executable keying, the only fact ADR-009 still marks unverified;
+if nobody is available, take D-210 (PBL route integration) from the ledger instead.
 
 ---
 

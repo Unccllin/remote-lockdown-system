@@ -188,22 +188,27 @@ A location report carries `latitude`, `longitude`, `source` (`ip` / `wifi` / `gp
 the accuracy, and labels an IP-based fix **"Approximate — IP-based fix: resolves the ISP's
 city-level location, not the device."** — so a marker is never mistaken for a position.
 
-**What precision you get depends on how the agent was installed, and that is a platform rule rather
-than a setting:**
+**What precision you get depends on the platform, not on a setting — and today it is city-level for
+every install type:**
 
 | install | `source` | precision |
 |---|---|---|
-| interactive (agent in a signed-in user's session), `GOOGLE_API_KEY` provisioned | `wifi` | tens of metres in a dense area, when the OS allows the Wi-Fi scan |
-| interactive, no key | `ip` | city-level |
 | Windows **service** (LocalSystem, session 0) | `ip` | city-level, always |
+| interactive agent in a signed-in user's session, no key | `ip` | city-level |
+| interactive agent with `GOOGLE_API_KEY` **and** consent already granted to its own executable | `wifi` | tens of metres in a dense area |
+| interactive agent with `GOOGLE_API_KEY` but no such consent (**the case this installer produces**) | `ip` | city-level |
 
 Windows restricts the calls that return BSSIDs (`WlanGetNetworkBssList`, `WlanScan`,
-`WlanGetAvailableNetworkList`, …) to processes holding precise-location consent, and the consent
-prompt is only shown to processes running "within the user's context and outside of
-`C:\Windows\System32`" — which a service never is. Measured here with device-level consent set, the
-scan is still refused with *Access is denied*. So for a service install the accurate statement is:
-the fix is the internet provider's booked location, devices behind one egress plot at the same point,
-and the UI says so. See [docs/adr/ADR-009-location-precision-by-install-type.md](docs/adr/ADR-009-location-precision-by-install-type.md).
+`WlanGetAvailableNetworkList`, …) to processes that hold **precise-location consent**, and grants that
+consent only through an explicit prompt a person accepts. Measured on lab hardware, with device-level
+location switched **on** and a user logged in at the console: a service is refused
+(`ERROR_ACCESS_DENIED`, rc=5), and so is a process created inside that user's session (rc=5, from both
+`C:\Windows\System32` and outside it). **This product never requests that consent**, so no install type
+obtains BSSIDs today, and `GOOGLE_API_KEY` alone changes nothing — without consent there are no
+BSSIDs to send. The accurate statement is: the fix is the internet provider's booked location, devices
+behind one egress plot at the same point, and the UI labels it approximate. See
+[docs/adr/ADR-009-location-precision-by-install-type.md](docs/adr/ADR-009-location-precision-by-install-type.md)
+and [docs/artifacts/s316-in-session-helper-probe.txt](docs/artifacts/s316-in-session-helper-probe.txt).
 
 ---
 

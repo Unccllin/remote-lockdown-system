@@ -30,8 +30,9 @@ When a device is in "tracking" mode (flagged as stolen), we collect:
   report the same point.
 - **Wi-Fi access points** — nearby SSIDs/BSSIDs and signal strengths for Wi-Fi-based positioning,
   collected **only where the operating system permits a scan**. Windows restricts these calls to
-  processes that hold precise-location consent, which a background service cannot hold, so a service
-  install reports no access points at all.
+  processes that hold precise-location consent, and this application does not request that consent, so
+  in practice no access points are collected: a service install can never hold it, and an interactive
+  one does not ask. Location is therefore derived from the IP address.
 - **Accuracy radius** — the estimated accuracy of the reading, when the source reports one. An
   IP-based reading reports none, and the dashboard shows "not reported" rather than implying a radius.
 - **City/region/country** — derived from the location data

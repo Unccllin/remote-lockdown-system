@@ -43,6 +43,22 @@ a defect to work around. Documentation, not code, carries this from here on:
 No agent behaviour changes: `scan_wifi_networks()` already falls back to IP when the OS refuses, and
 S304's UI already labels the result approximate.
 
+## Decision on consent (S316 ruling, option A — document only)
+
+The product does **not** request precise-location consent. The measurements above show that a grant is
+required per app and can only be obtained through a prompt a person accepts; it would therefore mean a
+modal dialog on every device, for a capability only interactive installs could use, and its value
+depends on whether consent is keyed per executable path — a detail that is **unverified** here (no
+authoritative source retrieved, and MOLE holds no consent records to observe).
+
+So the documentation states the measured truth instead of promising a consent flow: **no install type
+obtains BSSIDs without a manual consent step**, and `GOOGLE_API_KEY` is necessary but not sufficient.
+
+Rejected: asking from the agent at first interactive run (option B — real scope, needs a human click,
+value unverifiable); asking from the installer wizard (option C — a different binary from the scanner,
+so under the likely per-executable keying it would grant consent to itself and leave the agent denied,
+which is worse than not asking because it looks like a capability).
+
 ## Consequences
 
 - **The map is honest but not precise on service installs, and now on interactive ones too** unless a

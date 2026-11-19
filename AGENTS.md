@@ -129,6 +129,11 @@ ran regardless — the two files it named were already on the remote by the time
 Write it as `… && git push`. A verification whose failure does not stop the action is a log line, not
 a check.
 
+**Install the hook, once per clone.** `scripts/pre-push-check.sh --install` writes `.git/hooks/pre-push`,
+which runs the publish-range scan and the fast-forward check on every push; a hook lives in `.git/` and
+is never committed, so a fresh clone has none — which is exactly how S314's `;`-chained push got through.
+S317 installed it on this clone.
+
 `current-state.md` is a GENERATED artifact — do NOT edit it by hand. It is
 derived from `trace.md` + `GRAPH-SPEC.yaml` by `scripts/graph_session.py`.
 
@@ -777,6 +782,9 @@ a child launched into the active console session via `CreateProcessAsUser` repor
 `C:\Python314\python.exe` outside it. The missing precondition is per-app precise-location consent,
 granted only through an explicit `RequestAccessAsync` prompt that a human accepts; nothing in this
 product calls it. Do not describe an interactive install as precise without that consent.
+**The product does not request it (ruling A, S316)** — asking would mean a modal dialog per device for a
+capability only interactive installs use, and its value depends on unverified per-executable keying. The
+docs state the measured truth instead; do not re-open this without first verifying that keying.
 
 ### Hardware testing status — 2026-11-05 (window: 4 enforcement paths moved)
 
