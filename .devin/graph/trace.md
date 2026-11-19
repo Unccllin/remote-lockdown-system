@@ -3905,3 +3905,118 @@ then show the gate red before the fix and green after — and only then take opt
 `google_api_key` on the serverless path.
 
 ---
+
+---
+
+## Session 305 — 2026-11-19 (the dashboard lint gate lints the dashboard, and the 30 errors it found are gone)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `.github/workflows/lint.yml:46`/`:75` and `release.yml:69` — two of those lines are the
+  *server* job (`src/ tests/`, all `.js`) and two are the dashboard job; only the dashboard ones
+  needed `--ext`.
+- **Read**: `Makefile:258`/`:290` — the same split, server vs dashboard.
+- **Read**: measured the server: 102 eslint-visible files, all `.js`, **0 `.cjs`, 0 `.jsx`**, 0 errors
+  with or without `--ext`, so its gate already reads everything it owns and must not be touched.
+- **Read**: `dashboard/.eslintrc.json` — eslintrc format (`root`, `env`, `extends`, `ignorePatterns`),
+  no `overrides`, no vitest env; and `vitest.config.js` — `globals: true`, which is why `afterEach`
+  resolved at runtime but not to eslint.
+- **Read**: `dashboard/src/pages/PblPolicyPage.jsx:65-110` — a mount-once `useEffect(() => loadData(),
+  [])` over a function declared below it; the warning is `react-hooks/exhaustive-deps`.
+- **Read**: `dashboard/tests/EnrollPage.test.jsx:25-32` — `mockClick` and `originalCreateElement`
+  defined and never referenced.
+- **Read**: the 30 findings live with `npx eslint . --ext .js,.jsx -f json` (72 files, 51 `.jsx`):
+  22 `no-unused-vars`, 7 `react/no-unescaped-entities`, 1 `no-undef`, 1 warning.
+
+**Findings**: the blind spot is structural, not a mistake in one command — eslint v8 resolves file
+extensions from `--ext` only (eslintrc cannot declare them), so every directory-taking invocation in
+this repo linted `.js` only. The gate and the cleanup therefore have to land in one change: adding
+`--ext` alone takes the tree from "0 files, green" to "72 files, 30 red".
+
+### Fog cleared
+
+- **The dashboard gate is real and green on real files**: `npx eslint src/ tests/ --ext .js,.jsx
+  --max-warnings=0` → **72 files, 51 of them `.jsx`, 0 errors, 0 warnings, exit 0** (`Makefile:290`,
+  `lint.yml:75`, `release.yml:69`, and the AGENTS.md command all carry the fix; the three server
+  lines are untouched).
+- **All 30 findings are resolved per finding, none silenced**: 22 unused vars removed (dead `React`
+  default imports under the automatic JSX runtime, dead named specifiers, two dead test consts),
+  7 raw apostrophes/quotes became `&apos;`/`&quot;` in JSX text — character-identical on render,
+  which is why the existing assertions pass unchanged — and the single `no-undef` was fixed in
+  config, because `afterEach` is a real vitest global (`overrides` for `tests/**/*.{js,jsx}`, nine
+  readonly globals, no plugin, no repo-wide globals).
+- **The one warning got the real fix, not a disable**: `loadPolicyVersions` and `loadData` became
+  `useCallback` hoisted above the effect, the effect depends on the stable `loadData`, so the fetch
+  still happens once on mount. `grep -c eslint-disable` over the diff = 0.
+- **A dated claim in AGENTS.md was repaired**: three paragraphs dated 2026-11-13/17 stated the
+  dashboard test count; the figure now says re-measured 2026-11-19 (S305). The 260 that had been
+  there was itself stale — 266 was the real HEAD baseline before S304's six cases.
+- **Belief B-172 was refuted with a replacement (B-173)** rather than left standing as a true
+  statement about a state that no longer exists.
+
+### Fog remaining
+
+- **Option (b) of the S303 artifact is still untouched**: `serverless/` provisions no
+  `google_api_key` (`server/src/routes/installer.js:562` does), so a Worker-enrolled fleet stays
+  IP-only by omission. It needs an operator-issued key to be worth exercising.
+- **`make full-verify` has not been re-run end to end since the lint gate changed.** The dashboard
+  gates were measured individually (eslint/vitest/coverage/build) and `lint-dashboard`,
+  `lint-server`, `lint-workflows` all exit 0, but the whole-tree sweep's own numbers (843/866/272/
+  429/30, E2E 14, verify-env) are from earlier sessions.
+- Unchanged: the registry changes left on MOLE (benign), picomatch advisories, `make sast`
+  unavailable, 12 stale `audit_test_teeth` rows, offline key custody, HP UEFI BIOS password.
+
+### Debt items closed
+
+None. This closes no ledger item — it makes a documented gate honest.
+
+### Debt items still open
+
+D-120 (BitLocker real media), D-129/D-134 (firmware hardware time), D-130 (PBL firmware signing),
+D-210 (PBL route integration).
+
+### Blockers
+
+- **Not blocked.** The remaining location work (option b) needs an operator Google Geolocation key,
+  and the remaining ledger items need hardware time or a signing decision.
+
+### Session artifacts
+
+- `docs/artifacts/s305-dashboard-lint-gate.txt` — before/after file counts and error counts from the
+  same binary, the four gate surfaces, the 30-finding resolution table, the ten gate outputs measured
+  by the parent session, and the workflow's own mistake (dropped Makefile TAB) with how it was caught.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), twice, and the second time the harness held.** The worker's first
+  pass dropped the recipe TAB on `Makefile:290`, breaking `make` for *every* target, and its report
+  said "make lint-workflows not re-run here but YAML valid" — it substituted a check for a different
+  failure mode than the one the change could cause. The oracle blocked on the actual command, a fix
+  round restored the TAB, and re-review approved. Harness change this argues for: an acceptance check
+  must name the command *and* the failure it would catch; "not run, but X is valid" is a skipped
+  check, not a passed one.
+- **Layer 2 (context provision)** — the root cause was never a wrong command, it was documentation
+  that presented a green exit code as proof. The AGENTS.md line now carries the reason (`--ext`), so
+  the next session cannot reproduce the blind spot by copying it faithfully.
+
+### VERIFY
+
+- `cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0` → exit 0
+- `cd dashboard && npx eslint . --ext .js,.jsx -f json` → **72 files, 51 `.jsx`, 0 errors, 0 warnings**
+- `cd dashboard && npm run test` → **272 passed (272)**, 30 files, exit 0
+- `cd dashboard && npx vite build` → `✓ built in 5.06s`, exit 0
+- `cd dashboard && npm run test:coverage` → 70.62 / 66.59 / 62.59 / 71.40 vs floors 68 / 61 / 62 / 70
+- `make lint-dashboard` exit 0 · `make lint-server` exit 0 · `make lint-workflows` exit 0
+  (actionlint 1.7.12 + shellcheck present) · both edited workflows parse as YAML
+- `sed -n 290p Makefile | cat -A` → `^I@cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0$`
+- `git diff | grep -c eslint-disable` → 0 · `git diff --name-only | grep -c package` → 0
+- `python3 scripts/brain.py check` → 173 beliefs, integrity clean
+
+### Next session opening
+
+Take option (b) of the S303 artifact now that the gate is honest: provision `google_api_key` through
+`serverless/installer-scripts.ts` so a Worker-enrolled fleet can triangulate where BSSIDs are
+obtainable, pin it with `serverless/worker.test.ts`, and be explicit in the README that a session-0
+service install still cannot scan and stays IP-level.
+
+---

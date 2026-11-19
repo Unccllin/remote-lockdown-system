@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-19 08:58:33 — 172 beliefs
+Generated: 2026-11-19 09:19:09 — 173 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -141,7 +141,8 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
-| B-172 | proposed | assumed | The dashboard lint gate measures nothing: eslint v8 with .eslintrc.json lints 0 of 72 .jsx files unless --ext .js,.jsx is passed, so npx eslint . (and the Makefile:290 / lint.yml:46,75 / release.yml:69 form 'src/ tests/ --max-warnings=0') exits 0 while 30 errors sit in 16 .jsx files — 22 no-unused-vars, 7 react/no-unescaped-entities, 1 no-undef (the global afterEach in tests/EnrollDevicePage.test.jsx:42, a config gap because vitest.config.js sets globals:true). |
+| B-172 | refuted | assumed | The dashboard lint gate measures nothing: eslint v8 with .eslintrc.json lints 0 of 72 .jsx files unless --ext .js,.jsx is passed, so npx eslint . (and the Makefile:290 / lint.yml:46,75 / release.yml:69 form 'src/ tests/ --max-warnings=0') exits 0 while 30 errors sit in 16 .jsx files — 22 no-unused-vars, 7 react/no-unescaped-entities, 1 no-undef (the global afterEach in tests/EnrollDevicePage.test.jsx:42, a config gap because vitest.config.js sets globals:true). → see B-173 |
+| B-173 | proposed | assumed | The dashboard lint gate is real as of S305: Makefile:290, lint.yml:75 and release.yml:69 pass --ext .js,.jsx, dashboard/.eslintrc.json declares the nine vitest globals for tests/**, and the gate now reads 72 files of which 51 are .jsx at 0 errors / 0 warnings. The same command before S305 read 21 files, none of them .jsx, so it exited 0 while 30 errors sat in 16 .jsx files. |
 
 ## db/sqlite
 

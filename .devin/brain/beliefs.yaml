@@ -3787,7 +3787,7 @@ beliefs:
     7 react/no-unescaped-entities, 1 no-undef (the global afterEach in tests/EnrollDevicePage.test.jsx:42,
     a config gap because vitest.config.js sets globals:true).'
   domain: dashboard/tooling
-  status: proposed
+  status: refuted
   evidence_level: assumed
   provenance: scripts/brain.py
   source: .github/workflows/lint.yml:46,75; .github/workflows/release.yml:69; Makefile:290; docs/artifacts/s304-dashboard-location-honesty.txt
@@ -3795,7 +3795,26 @@ beliefs:
   last_verified: null
   commit_ref: null
   supersedes: null
-  superseded_by: null
+  superseded_by: B-173
   dependents: []
   notes: 'Measured S304 with eslint v8.57.1: ''npx eslint .'' -> 21 files/0 jsx; ''npx eslint src/ tests/
     --max-warnings=0'' -> 13 files/0 jsx; ''npx eslint . --ext .js,.jsx'' -> 72 files/30 errors.'
+  refuted_on: '2026-11-19'
+  refute_evidence: 'code-read: measured 2026-11-19, docs/artifacts/s305-dashboard-lint-gate.txt'
+- id: B-173
+  statement: 'The dashboard lint gate is real as of S305: Makefile:290, lint.yml:75 and release.yml:69
+    pass --ext .js,.jsx, dashboard/.eslintrc.json declares the nine vitest globals for tests/**, and the
+    gate now reads 72 files of which 51 are .jsx at 0 errors / 0 warnings. The same command before S305
+    read 21 files, none of them .jsx, so it exited 0 while 30 errors sat in 16 .jsx files.'
+  domain: dashboard/tooling
+  status: proposed
+  evidence_level: assumed
+  provenance: 'code-read: measured 2026-11-19, docs/artifacts/s305-dashboard-lint-gate.txt'
+  source: refutes B-172
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: B-172
+  superseded_by: null
+  dependents: []
+  notes: ''
