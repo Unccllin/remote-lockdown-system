@@ -5616,3 +5616,98 @@ spec declares, and an empty `nodes` list would satisfy every invariant vacuously
 count and a non-zero count of checked invariants before it can report "All invariants pass".
 
 ---
+
+---
+
+## Session 321 — 2026-11-19 (graph-check could pass by examining nothing)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `.devin/graph/graph_assert.py:806-895` — `assert_all_invariants()` loops over
+  `get_phase_nodes(graph)` and `get_debt_items(graph)`, and I3-I7 each run only if the file they read
+  exists. Nothing asserts that any list is non-empty.
+- **Read**: `Makefile:426` — `graph-check` is just `python3 .devin/graph/graph_assert.py`, the gate the
+  whole session lifecycle hangs off.
+- **Read**: `agent/tests/test_graph_assertions.py` — the established home for invariant tests, which
+  imports the module through a `sys.path.insert` of `.devin/graph`.
+- **Read**: the three prior fixes in this class (S318 empty scan range, S319 zero discovered tests,
+  S320 empty gate scope) so the wording and the shape match.
+
+**Findings**: an empty spec satisfies all seven invariants by examining nothing — I1 and I2 iterate over
+empty lists, and I3-I7 are file-conditional. The quietest instance of the defect in the whole arc,
+because this is the gate every session close depends on.
+
+### Fog cleared
+
+- **The counts are asserted before any invariant runs** (`183c2b1`), and the loops reuse those counted
+  lists so a future invariant cannot forget to look. Three messages, one per node family: phase nodes
+  (I1), debt items (I2), enforcement paths (I3).
+- **Verified in both directions, which is the only way this guard is worth anything**:
+  `assert_all_invariants({"nodes": [], "enforcement_paths": []})` now returns exactly **3 vacuity
+  violations** instead of a pass, while the real spec still reports `✓ All invariants pass` (17 phases,
+  64 debt items, 13 enforcement paths).
+- **Pinned by two tests, not one**: `agent/tests/test_graph_assertions.py` gains a case asserting the
+  three messages on an empty graph **and** a case asserting the guard does *not* fire on the
+  repository's own spec — a guard that fires on everything is as useless as one that fires on nothing.
+  50 tests pass (48 before).
+- **AGENTS.md records it** beside the existing sentence about invariant coverage, so the next session
+  reads a rule rather than discovering the hole.
+
+### Fog remaining
+
+- **Vacuity was not swept exhaustively.** `scripts/graph_session.py`'s generators, the dashboard and
+  worker coverage floors, and `make load-smoke` were not examined for the same shape. The class is now
+  visible and has a vocabulary; the sweep is three files deep, not repo-deep.
+- **The ast-grep runner reported "blocking findings" three times this session with nothing attributable**
+  (an `MD024 ×45` on a file with five unique headings; a finding on `test_graph_session.py`; four on this
+  session's test file) while the LSP probe called those same files clean. A count without a finding is
+  not evidence, and it is recorded here as a tooling observation rather than a dismissal.
+- **Pyright cannot resolve `graph_assert`** in `agent/tests/test_graph_assertions.py` (two
+  `reportMissingImports`, both predating this session's edit) because the module is reached through a
+  runtime `sys.path.insert`. The runtime resolves it — 50 tests pass — and this is the documented
+  advisory class, so it was not "fixed" by adding a pragma to code I did not otherwise change.
+- Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
+  HP UEFI password, per-executable consent keying (unverified), `RequestAccessAsync` (untested), the
+  pre-push hook being per-clone state, the docker-socket red for `test_tls_floor.py`.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- None.
+
+### Session artifacts
+
+- `.devin/graph/graph_assert.py` (the guard), `agent/tests/test_graph_assertions.py` (both directions),
+  `AGENTS.md` (the rule) — `183c2b1`.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), fourth session in this arc.** S318 empty scan range → S319 zero
+  discovered tests → S320 empty gate scope → S321 empty graph. Every one reported on *what it found*
+  and never on *what it examined*, and every fix is the same sentence at a different layer. The reusable
+  part is not the four patches; it is the habit of asking "what did this examine?" before believing a
+  pass — which is now recorded in AGENTS.md for the two gates most likely to recur.
+
+### VERIFY
+
+- `python3 .devin/graph/graph_assert.py` → `✓ All invariants pass` (real spec).
+- `assert_all_invariants({"nodes": [], "enforcement_paths": []})` → **3** violations, all naming
+  vacuity ("…satisfied vacuously — an empty graph is not a passing graph", "…examines nothing").
+- `agent/.venv/bin/python -m pytest agent/tests/test_graph_assertions.py -q` → **50 passed** (48 before).
+- `make graph-check` → all invariants pass; `make gen-state` unaffected.
+- `git push` of `183c2b1` → pre-push hook ran and passed.
+
+### Next session opening
+
+Clear the 12 stale `audit_test_teeth` rows that `current-state.md` has carried since S303 — they need no
+hardware and no operator credential, and they have now been listed as "unchanged" in eleven consecutive
+session blocks.
+
+---
