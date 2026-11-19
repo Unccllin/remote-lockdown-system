@@ -5347,3 +5347,92 @@ Ask a person at MOLE's console to approve the location prompt once for the insta
 if nobody is available, take D-210 (PBL route integration) from the ledger instead.
 
 ---
+
+---
+
+## Session 318 — 2026-11-19 (installing the guard found the hole inside the guard)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `.git/hooks/pre-push` (the wrapper S317 installed) and `scripts/prepush_secrets.py` — the
+  wrapper passes `--base <upstream>`, and the CLI turns `--base` into `<base>..<head>` without checking
+  the base exists.
+- **Read**: `.github/workflows/lint.yml`'s own handling of the same problem — it falls back to the full
+  history when the base is unreachable ("No usable base commit — scanning the full history"), which is
+  the behaviour the CLI lacked.
+- **Read**: `scripts/test_prepush_secrets.py` — a hand-rolled `check()` suite with a `make_repo` helper
+  and a `scan()` subprocess wrapper, which is where the regression belongs.
+
+**Findings**: the guard S317 installed had a silent no-op for the exact push it exists to protect — a
+first push, where the upstream ref does not exist yet.
+
+### Fog cleared
+
+- **The hole is real and was observed, not theorised**: on a scratch repo whose first push created
+  `origin/master`, the hook's range was empty, so the scanner printed `[OK] no credential-shaped
+  content` while a credential-shaped commit went to the remote.
+- **Fixed** (`a069eb6`): the CLI now resolves the base with `git rev-parse --verify`; if it does not
+  resolve it warns on stderr and scans `--all`, matching CI instead of being weaker than it.
+- **Pinned by a test**: `test_an_unresolvable_base_scans_everything_instead_of_nothing` — a repo with no
+  remotes and a planted AWS-shaped key now exits 1 with the finding named; before the fix it exited 0.
+  The whole `test_prepush_secrets.py` suite passes.
+- **The guard now runs visibly**: the push of `a069eb6` printed `publish range: origin/master..HEAD`,
+  `fast-forward (1 commit(s) to publish)`, `no credential-shaped content` — the hook doing its job inside
+  a real push rather than in theory.
+
+### Fog remaining
+
+- **The hook is per-clone state.** It lives in `.git/hooks/`, is never committed, and a fresh clone has
+  none until someone runs `scripts/pre-push-check.sh --install`. AGENTS.md now says so, but nothing
+  enforces it.
+- **The "empty input ⇒ pass" pattern deserves a sweep of its own.** This session found it inside a
+  scanner; the repo has other gates where zero items scanned could look like success — the script test
+  suites are the known example (AGENTS.md records a suite that imported its tests, ran none, and exited
+  0 for months).
+- Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
+  HP UEFI password, per-executable consent keying (unverified), `RequestAccessAsync` (untested).
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- None.
+
+### Session artifacts
+
+- `scripts/prepush_secrets.py` (base resolution), `scripts/test_prepush_secrets.py` (new case) — `a069eb6`.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), twice in one session.** First: the guard I installed in S317 passed
+  on a repo with an empty range — a check whose scope was zero. Second: my own attempt to verify the fix
+  was invalid, because the scratch repo had already been pushed so the base resolved and the empty range
+  was legitimate; caught by reading the output rather than the exit code, and redone against a repo with
+  no remote at all.
+- **Layer 5 (state management)**: the hook is per-clone and therefore not part of the repository's
+  state — a property worth remembering whenever a guard is described as "installed".
+
+### VERIFY
+
+- Before: `python3 scripts/prepush_secrets.py --base origin/master --head HEAD` in a repo with no
+  remotes and a planted key → exit **0**, no finding (the defect).
+- After: same command → `[WARN] base 'origin/master' does not resolve — scanning the full history
+  instead of an empty range`, **1 finding**, exit **1**.
+- `python3 scripts/test_prepush_secrets.py` → all checks passed, including the new case.
+- `git push` of `a069eb6` → hook output present: `publish range: origin/master..HEAD`,
+  `fast-forward (1 commit(s) to publish)`, `no credential-shaped content in origin/master..HEAD`.
+
+### Next session opening
+
+Sweep the repo's own gates for the same shape this session found — a check whose input is empty and
+therefore passes — starting with the `scripts/test_*.py` suites (assert a non-zero count of executed
+checks per file) and `check-artifacts`, since AGENTS.md already records one suite that ran zero tests
+and exited 0 for months.
+
+---

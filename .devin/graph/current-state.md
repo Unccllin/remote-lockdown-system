@@ -53,42 +53,33 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 317 — 2026-11-19 (ruling A: document the truth, and the guard that already existed was never installed)
+## Latest session: 318 — 2026-11-19 (installing the guard found the hole inside the guard)
 
 ### Fog cleared
 
-- **Ruling A is recorded**: the product does **not** request precise-location consent. ADR-009 gains a
-  "Decision on consent" section with the reasoning and the two rejected options — (B) asking from the
-  agent (real scope, needs a human click, value depends on unverified keying) and (C) asking from the
-  installer (a different binary from the scanner, so under the likely per-executable keying it would
-  grant consent to itself and leave the agent denied — worse than not asking, because it looks like a
-  capability).
-- **The README's over-claim is gone**: the table now says what was measured — city-level for every
-  install type, with `wifi` only when consent has *already* been granted to the agent's own executable,
-  and a row naming the case this installer actually produces. `GOOGLE_API_KEY` is described as
-  necessary but not sufficient, because without consent there are no BSSIDs to send.
-- **`docs/PRIVACY_POLICY.md` §1.2 now matches reality**: no access points are collected in practice,
-  because the application does not request the consent that scanning requires; location derives from
-  the IP address.
-- **`serverless/README.md`** no longer implies the key changes anything on its own.
-- **The missing guard is installed**: `scripts/pre-push-check.sh --install` → `.git/hooks/pre-push`
-  (497 B, executable), which runs the publish-range secret scan and the fast-forward check on every
-  push. It is **per clone** — a hook lives in `.git/` and is never committed — which is precisely how
-  S314's `;`-chained push got through. AGENTS.md now says to install it once per clone.
-- **A render defect I introduced was caught and fixed**: the first version of the new README row wrapped
-  across two lines, which ends the row in markdown and turns the continuation into a stray paragraph.
-  Every row now carries 4 pipes (3 columns).
+- **The hole is real and was observed, not theorised**: on a scratch repo whose first push created
+  `origin/master`, the hook's range was empty, so the scanner printed `[OK] no credential-shaped
+  content` while a credential-shaped commit went to the remote.
+- **Fixed** (`a069eb6`): the CLI now resolves the base with `git rev-parse --verify`; if it does not
+  resolve it warns on stderr and scans `--all`, matching CI instead of being weaker than it.
+- **Pinned by a test**: `test_an_unresolvable_base_scans_everything_instead_of_nothing` — a repo with no
+  remotes and a planted AWS-shaped key now exits 1 with the finding named; before the fix it exited 0.
+  The whole `test_prepush_secrets.py` suite passes.
+- **The guard now runs visibly**: the push of `a069eb6` printed `publish range: origin/master..HEAD`,
+  `fast-forward (1 commit(s) to publish)`, `no credential-shaped content` — the hook doing its job inside
+  a real push rather than in theory.
 
 ### Fog remaining
 
-- **Whether consent is keyed per executable is still unverified.** The `source_check` returned
-  missing-evidence and MOLE has no records to inspect. It is recorded as unverified in the ADR, not
-  resolved by argument — and it is the one fact that would make option (C) evaluable.
-- **`RequestAccessAsync` remains untested** (a modal prompt needs a person at the console).
-- **The hook is per-clone state, not repository state.** A fresh clone still has no pre-push hook; CI
-  covers the published range, but a developer's local push is only gated if they ran `--install`.
+- **The hook is per-clone state.** It lives in `.git/hooks/`, is never committed, and a fresh clone has
+  none until someone runs `scripts/pre-push-check.sh --install`. AGENTS.md now says so, but nothing
+  enforces it.
+- **The "empty input ⇒ pass" pattern deserves a sweep of its own.** This session found it inside a
+  scanner; the repo has other gates where zero items scanned could look like success — the script test
+  suites are the known example (AGENTS.md records a suite that imported its tests, ran none, and exited
+  0 for months).
 - Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
-  HP UEFI password, the `installer.py`/`installer_gui.py` config duplication.
+  HP UEFI password, per-executable consent keying (unverified), `RequestAccessAsync` (untested).
 
 ### Debt items closed
 
@@ -100,46 +91,38 @@ D-120, D-129, D-130, D-134, D-210.
 
 ### Blockers
 
-- **Consent keying needs a human click** to observe; nothing on this host can settle it.
+- None.
 
 ### Session artifacts
 
-- `docs/adr/ADR-009-location-precision-by-install-type.md` — the consent decision and the rejected
-  options.
-- `README.md`, `docs/PRIVACY_POLICY.md`, `serverless/README.md`, `AGENTS.md` — claims aligned to the
-  measurements.
-- `.git/hooks/pre-push` — installed from `scripts/pre-push-check.sh` (per-clone, not committed).
+- `scripts/prepush_secrets.py` (base resolution), `scripts/test_prepush_secrets.py` (new case) — `a069eb6`.
 
 ### Failure attribution
 
-- **Layer 2 (context provision), and it was mine.** S308 wrote "interactive + `GOOGLE_API_KEY` → `wifi`,
-  tens of metres" into the README before anything had measured consent. That is the exact over-claim
-  this repo keeps finding in documentation, authored this time by the session that was documenting
-  honesty. The guard is now the measured table plus the artifact citations.
-- **Layer 4 (verification feedback)**: `source_check` returned missing-evidence, and the temptation was
-  to write the plausible sentence about per-executable keying anyway. It is recorded as unverified
-  instead, with the specific consequence ("this decides whether option C helps the agent").
-- **Layer 5 (state management)**: the pre-push guard existed since S140 and was never installed on this
-  clone, so three separate "check that does not block" incidents had no mechanical backstop. Fixed for
-  this clone, documented for the next.
+- **Layer 4 (verification feedback), twice in one session.** First: the guard I installed in S317 passed
+  on a repo with an empty range — a check whose scope was zero. Second: my own attempt to verify the fix
+  was invalid, because the scratch repo had already been pushed so the base resolved and the empty range
+  was legitimate; caught by reading the output rather than the exit code, and redone against a repo with
+  no remote at all.
+- **Layer 5 (state management)**: the hook is per-clone and therefore not part of the repository's
+  state — a property worth remembering whenever a guard is described as "installed".
 
 ### VERIFY
 
-- MOLE consent store: `Get-ChildItem …\ConsentStore\location` → **no subkeys**; `NonPackaged` has none.
-- `scripts/pre-push-check.sh` → `[OK] no credential-shaped content in origin/master..HEAD`.
-- `scripts/pre-push-check.sh --install` → `[OK] installed .git/hooks/pre-push`; `ls -la` → 497 B,
-  executable; the wrapper passes `--base <upstream>` and deliberately does not forward git's own
-  positional args (a previous form blocked every tag push).
-- README table: every row reports **4 pipes** (3 columns) — no wrapped rows.
-- `scripts/check-ruling.sh` → `[OK] No open ruling items — task mode`; the answered section was deleted
-  from `PENDING-RULING.md` (494 lines, decision lives in ADR-009).
-- `python3 scripts/brain.py check` → integrity clean.
+- Before: `python3 scripts/prepush_secrets.py --base origin/master --head HEAD` in a repo with no
+  remotes and a planted key → exit **0**, no finding (the defect).
+- After: same command → `[WARN] base 'origin/master' does not resolve — scanning the full history
+  instead of an empty range`, **1 finding**, exit **1**.
+- `python3 scripts/test_prepush_secrets.py` → all checks passed, including the new case.
+- `git push` of `a069eb6` → hook output present: `publish range: origin/master..HEAD`,
+  `fast-forward (1 commit(s) to publish)`, `no credential-shaped content in origin/master..HEAD`.
 
 ### Next session opening
 
-Ask a person at MOLE's console to approve the location prompt once for the installer binary and once for
-`lockdown-agent.exe` — that settles per-executable keying, the only fact ADR-009 still marks unverified;
-if nobody is available, take D-210 (PBL route integration) from the ledger instead.
+Sweep the repo's own gates for the same shape this session found — a check whose input is empty and
+therefore passes — starting with the `scripts/test_*.py` suites (assert a non-zero count of executed
+checks per file) and `check-artifacts`, since AGENTS.md already records one suite that ran zero tests
+and exited 0 for months.
 
 ---
 
