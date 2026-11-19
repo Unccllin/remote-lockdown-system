@@ -1,0 +1,66 @@
+=== S311: ADR-010 rotation verified on real hardware (MOLE), 2026-11-19 ===
+
+The last unproven link in the S303 → S304 → S306 → S309 chain. Everything below was measured on
+MOLE through OpenSSH (`labadmin@192.168.1.249`, key `~/.ssh/lockdown_lab_ed25519`), not inferred.
+
+--- [1] what MOLE was running before ---
+  $ ssh … 'C:\ProgramData\LockdownAgent\lockdown-agent.exe --version'
+  lockdown-agent 1.0.3 (frozen=True, build=20261118.5c31f3eaa364)
+  → build dated 2026-11-18, i.e. BEFORE the rotation code (23e70f8, 2026-11-19), and AGENT_VERSION had
+    not been bumped by that commit, so nothing in the fleet could have said which devices had it.
+    Fixed in f00a980 (1.0.4) — that is why the build date in this file moves.
+
+--- [2] why the Worker had to be redeployed (the real blocker) ---
+  $ npx wrangler deployments list
+    … 2026-11-19T09:36:17Z   Source: Secret Change      ← the secret the operator set
+  The newest *code* deploy predated 23e70f8, so the live Worker had no `settings` field to send:
+  MOLE checked in successfully and received nothing. Both halves were therefore stale, and only one
+  of them was fixable with a version bump.
+  Deployed HEAD: version 0ad0ff6a-345c-48a1-9df1-8a6eb5b57e06 (rollback target recorded).
+
+--- [3] the Windows build, made on MOLE itself ---
+  Source tar (`agent/`, no .venv/dist/build/tests) → C:\Users\labadmin\agentbuild
+  $ powershell -File build.ps1 -AgentOnly -Install
+    … Building EXE from EXE-00.toc completed successfully.
+    OK   dist\lockdown-agent.exe (16.1 MB)
+  $ …\dist\lockdown-agent.exe --version
+    lockdown-agent 1.0.4 (frozen=True, build=20261119.32849efe4235)
+  build.ps1 stamps its identity by hashing the source files, so it needs no git on the device.
+
+--- [4] why the first install attempt failed, and what that says about the service ---
+  $ sc query LockdownAgent → STATE: RUNNING (STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN)
+  Stop-Service reported "Stopped", but pid 5868 (started the day before) kept running and held the
+  image: "The process cannot access the file … being used by another process".
+  So the service IGNORES_SHUTDOWN: SCM marks it stopped while the process lives. Replacing the
+  binary therefore needs an explicit Stop-Process, not Stop-Service — worth knowing for any future
+  upgrade path, and the reason installer.py's "stop the service to replace an image it holds" step
+  cannot be assumed to be enough on this build.
+
+--- [5] the measurements ---
+  after 1.0.4 install + Worker deploy (first check-in):
+    .runtime_settings  key_len 39   revision 3f11ee4980d2a049   written 12:57:41
+    .last_checkin_ok                                    12:57:41   (same second)
+  rotate — secret set to ROT-TEST-… :
+    .runtime_settings  key_len 19   revision d8bf5ae6ff123fc3   written 13:00:06
+    agent process start time                                  12:53:53
+    → the file changed 6 minutes into the process's life, with NO restart: the decisive assertion.
+  restore — `wrangler rollback 0ad0ff6a…` (version holds the real key):
+    .runtime_settings  key_len 39   revision 3f11ee4980d2a049   written 13:01:18
+    → the revision returned to the identical digest, which is a second assertion in itself: revision
+      is a hash of the value, so the same key must produce the same revision.
+
+  Key material never left the device: this file records LENGTHS and revision digests only.
+
+--- [6] what this now proves, and the one thing it still does not ---
+  PROVEN on hardware: a Windows service install receives the key through the authenticated check-in,
+  writes it where it can write (the ACL'd state dir, not config.json), and rotates it while running;
+  clearing/restoring is symmetric; the additive contract meant MOLE, while on 1.0.3, received the
+  field and ignored it without error.
+  NOT PROVEN: that a *restarted* agent reads the override back from disk. The process that wrote it
+  never restarted. The read path is exercised (each use re-reads the file), but survivability across
+  a service restart is a separate assertion — one `Restart-Service`, one check-in, one read.
+
+--- [7] what was left behind on MOLE ---
+  C:\ProgramData\LockdownAgent\lockdown-agent.exe.bak-1.0.3   (the previous image, for rollback)
+  C:\Users\labadmin\agentbuild\                               (source + dist, ~PyInstaller tree)
+  Worker secret GOOGLE_API_KEY restored to the operator's real key via version rollback.

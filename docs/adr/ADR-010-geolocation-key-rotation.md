@@ -56,3 +56,24 @@ what this change avoids.
 - `serverless/worker.test.ts` (new cases in 'POST /api/agent/checkin (agent-compatible)'): settings present on both branches (with and without pending command), absent when unset, revision stability, empty-string → null.
 - `agent/tests/test_runtime_settings.py` (7 cases): reconcile present/absent/null/unchanged/write-failure and precedence helper.
 - `scripts/test_cross_surface_contract.py::test_the_checkin_settings_contract_matches_on_both_surfaces`: both surfaces emit the same field names and omit the object when unset; installer keeps install-time delivery.
+
+### Verified on real hardware (S311)
+
+MOLE, Windows service install, 2026-11-19 — `docs/artifacts/s311-rotation-hardware.txt`:
+
+- first check-in after installing 1.0.4 → `C:\ProgramData\LockdownAgent\.runtime_settings` written
+  with the Worker's key (`key_len 39`, `revision 3f11ee4980d2a049`) in the same second as
+  `.last_checkin_ok`;
+- secret rotated to a throwaway value → `key_len 19`, `revision d8bf5ae6ff123fc3`, written six
+  minutes into the *same* agent process's life, so the rotation happened with **no restart**;
+- `wrangler rollback` to the version holding the real key → `key_len 39`,
+  `revision 3f11ee4980d2a049` again — the identical digest, which also demonstrates revision
+  stability for an unchanged value.
+
+Two environment facts this run established, both recorded in the artifact: the service is configured
+`IGNORES_SHUTDOWN`, so replacing the binary needs an explicit process kill rather than
+`Stop-Service`; and a `wrangler secret put` deploys a new *version* whose source is "Secret Change",
+so a secret change is not a code deploy and the rotation code had to be deployed separately.
+
+Still unproven: that a **restarted** agent reads the override back from disk — the process that
+wrote it never restarted. One `Restart-Service`, one check-in and one read would close it.
