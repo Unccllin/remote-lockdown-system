@@ -4755,3 +4755,114 @@ Push the 22 local commits — the Windows-artifacts and lint workflows have neve
 then decide whether the wizard still earns its place now that the hardware path is automated over SSH.
 
 ---
+
+---
+
+## Session 312 — 2026-11-19 (23 commits meet CI: one finding mine, two older than my work, and a gate that never ran locally)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `.github/workflows/lint.yml` job list and `Makefile:205-212` — eight lint jobs, of which
+  `SAST (Semgrep)` shells out to a binary that is not installed on this host; `make sast` exits 2
+  rather than reporting anything, which is how a red gate stayed invisible.
+- **Read**: `scripts/sast-gate.py` and `scripts/sast-exceptions.json` — the exception key is
+  `(rule, path, the flagged source line, occurrence)` read from disk, so a near-miss in `match`
+  converts "unclassified finding" into "stale exception". That decided the order of work: verify with
+  the real binary before pushing.
+- **Read**: each flagged site in full before writing its disposition — `agent/service_host.py:210-232`
+  and `:330-345`, `scripts/acceptance_lifecycle.py:640-660`, `agent/hw_test_harness.py:2772`.
+- **Read**: `scripts/prepush_secrets.py` behaviour and the CI log for the failing job, then
+  `git show 4c43b58` to find which pasted value tripped it.
+- **Read**: `agent/agent.py`'s version block — the S286 note that "a version that cannot distinguish
+  two builds is not an identity", which is the argument S311 used to justify the 1.0.4 bump.
+
+**Findings**: the first push in twelve sessions ran seven workflows over code history had never
+exposed. Two failures were pre-existing and one was a real credential-shaped value from S301. None of
+them were caused by S304→S311.
+
+### Fog cleared
+
+- **Master is green** (`f96f7ef`): Lint run 44505246648 — all eight jobs success, including
+  `SAST (Semgrep)` and `Secret scan (publish range)`; plus `CI` (full suite) success and `CodeQL`
+  success. First fully green run since 2026-11-18.
+- **The dashboard lint gate now works in the machine that counts**: the CI `Lint Dashboard (ESLint)`
+  job runs `--ext .js,.jsx --max-warnings=0`, so the 51 `.jsx` files that were silently skipped before
+  S305 are linted on every push.
+- **The secret-scan finding was real and is fixed forward**: S301's block quoted a token response body
+  (`{"token":"kLekRUyp…"}`); the token was single-use with a 900 s TTL minted 2026-11-18T12:03:25Z, so
+  dead 16 hours before publication. Redacted to `<redacted — S311>` with the shape and TTL preserved.
+  `Secret scan` → success on `c330b3f`.
+- **The SAST baseline is triaged, not suppressed**: three findings carry dispositions that cite the
+  guard in the code (two scheme checks a few lines above the call; one intentional `chmod 0o755` on an
+  executable), and the stale `hw_test_harness.py` entry was **deleted** because its `match` text still
+  exists at line 2772 while Semgrep no longer raises the finding — the gate's own definition of stale.
+  Verified locally with semgrep 1.182.1: 48 findings, 0 ERROR, exit 0.
+- **AGENTS.md's `make sast 45 findings` claim was corrected** to 48 / 0 ERROR / all dispositioned
+  (S312), and the section now carries the venv recipe so the gate can actually be run here.
+
+### Fog remaining
+
+- **One CI red remains unattributed.** `CI` failed on `0c13b19` (master before the push) with Server
+  Tests and Dashboard Tests failing, and passes on `c330b3f` without any reproduction. Recorded as
+  pre-existing / not reproduced / attribution unknown — the two documented flaky classes in that area
+  (SQLite teardown race S267, dev server squatting 5173 S307) are candidate causes, not conclusions.
+- **Semgrep is still not installed on this host**; it was run from a throwaway `/tmp/sgvenv`. Until it
+  is installed persistingly (pipx), the local gate remains a no-op between CI runs.
+- **S312 caught me repeating the mistake it documents**: the AGENTS.md guardrail example reproduced the
+  token fragment and the scanner flagged it (`WARN assigned-secret in fixture/example`). Fixed by
+  amending the unpushed commit; the rule now shows the shape only.
+- Unchanged: the §5 BSSID probe (now cheap, because MOLE is reachable over SSH), D-120,
+  D-129/D-130/D-134, D-210, `installer.py`/`installer_gui.py` config duplication, 12 stale
+  `audit_test_teeth` rows, offline key custody, HP UEFI password.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- **None.** Two of the four SAST items were false positives, one was intentional, one was stale.
+
+### Session artifacts
+
+- `docs/artifacts/s312-ci-green.txt` — the push, the secret finding with its TTL and redaction, the
+  four SAST dispositions with their code evidence, the local and CI verification, and the one
+  unattributed red.
+- `scripts/sast-exceptions.json` — 46 → 48 entries, `reviewed: S312`.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), and it is structural.** A gate whose tool is absent on the
+  developer host does not fail loudly — `make sast` exits 2, nobody reads it, and the documentation
+  keeps asserting a number it can no longer produce. CI was the only measurement for a day, and CI's
+  red was invisible because nothing was being pushed. The actual fix is the one applied: install the
+  binary in a venv, run the real gate, and write the recipe into AGENTS.md.
+- **Layer 2 (context provision)**: the publish-range secret scan exists precisely because session
+  blocks quote API responses; there was no rule against pasting a token *value*, so S301 pasted one.
+  There is now, in the same paragraph that describes the session-end block.
+- **A near-miss worth naming**: the first draft of that new rule contained the very fragment it
+  forbade, and the scanner caught it before the push. That is the guard working one layer earlier
+  than usual.
+
+### VERIFY
+
+- `PATH=/tmp/sgvenv/bin:$PATH make sast` → `Semgrep findings: 48`, `[OK] every finding is either
+  fixed or carries a reviewed reason`, exit 0.
+- CI on `f96f7ef` — Lint run 44505246648: Agent ruff · Secret scan · tsc · Server ESLint · Dashboard
+  ESLint · actionlint · OpenAPI · SAST → **all success**; `CI` success; `CodeQL` success.
+- `python3 scripts/prepush_secrets.py --base 9ff542c --head c330b3f` → no findings.
+- `python3 scripts/brain.py check` → 181 beliefs, integrity clean (B-181 asserted at code-read).
+- Pushed: `272b7fa` → `c330b3f` → `f96f7ef`; working tree clean.
+
+### Next session opening
+
+Run the §5 BSSID probe on MOLE — three calls now that SSH is known and the device is on 1.0.4: an
+interactive `WlanGetNetworkBssList`, the same call from `LocalSystem` via a temporary service, and
+`LocalSystem` `Geolocator`, with device-level location consent on and off. It is the only measurement
+that can change ADR-009, and until today it looked like it needed someone at a keyboard.
+
+---

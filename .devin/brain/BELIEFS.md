@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-19 13:06:50 — 180 beliefs
+Generated: 2026-11-19 13:27:16 — 181 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -488,6 +488,12 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-175 | proposed | assumed | Playwright dashboard E2E is green only when port 5173 is free (S307): 11 passed in 15-16 s on 36defcb. Its 7-failure red was a dev server S303 left running since the day before being silently reused by playwright.config.js's reuseExistingServer: !CI, so the browser drove a server whose /api proxy had been resolved without this run's E2E_BACKEND_PORT (a foreign backend on 3001) while the fixture's own axios login reached 3101 — surfacing as 'login is broken', never as 'reused a server'. Reuse is now opt-in via PLAYWRIGHT_REUSE_DEV_SERVER=1 and a busy 5173 fails once, loudly, in about a second (measured). |
+
+## verification/tooling
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-181 | proposed | assumed | A static-analysis gate that cannot run on the developer's host is not a gate: AGENTS.md claimed 'make sast 45 findings / 0 ERROR' while the Lint workflow had been failing on master since 2026-11-18 with 3 unclassified findings (agent/service_host.py:223, :339, scripts/acceptance_lifecycle.py:650) and 1 stale exception (agent/hw_test_harness.py). `make sast` exits 2 when semgrep is absent, so the local claim was never a measurement. Verified in S312 by installing semgrep 1.182.1 in a throwaway venv and running the real gate: 48 findings, 0 ERROR, all dispositioned, and the same push turned CI's Lint workflow green (f96f7ef). |
 
 ## windows
 

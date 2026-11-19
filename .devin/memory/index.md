@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-19 10:49:14
-Active memories: 1441 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-19 13:28:01
+Active memories: 1457 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -30,6 +30,22 @@ Active memories: 1441 | Superseded: 0 | Decayed: 20
 | m-1459 | when a make chain aborts, list the steps it never  |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
 | m-1460 | capture the real exit status in bg_run (exit ) or  |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
 | m-1461 | MISTAKE: mistake: reported 'genuine red, not a fla |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1462 | a privacy policy is a specification of collection: |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1463 | record unproven options as unproven with a probe,  |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1464 | MISTAKE: mistake: earlier framed option (c) as 'ar |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1465 | when a required test group is missing, the suite c |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1466 | a worker's report can reclassify a required item a |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1467 | MISTAKE: mistake: accepted the workflow's '5 of 7  |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1468 | a health 200 does not mean the database the caller |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1469 | when wrapping a CLI in a probe, kill by captured P |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1470 | MISTAKE: mistake: assumed SQLITE_PATH selects SQLi |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1471 | check known_hosts/memory for access before declari |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1472 | wrangler secret put deploys a Source: Secret Chang |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1473 | version rollback restores the secret that version  |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1474 | MISTAKE: mistake: concluded 'no SSH to MOLE' from  |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1475 | a gate whose tool is absent locally exits nonzero  |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1476 | match-keyed exception files need byte-exact lines, |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1477 | MISTAKE: mistake: wrote a 'never paste credentials |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
 | m-002 | FMP capsule payload has a 16-byte FMP_PAYLOAD_HEAD |  | 0.70 | 2026-08-18 | 0.249 | 0 |  |
 | m-003 | Signed FMP capsules have EFI_FIRMWARE_IMAGE_AUTHEN |  | 0.70 | 2026-08-18 | 0.249 | 0 |  |
 | m-004 | OVMF does not support FMP capsule updates — QueryC |  | 0.70 | 2026-08-18 | 0.249 | 0 |  |

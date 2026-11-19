@@ -3980,3 +3980,23 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-181
+  statement: 'A static-analysis gate that cannot run on the developer''s host is not a gate: AGENTS.md
+    claimed ''make sast 45 findings / 0 ERROR'' while the Lint workflow had been failing on master since
+    2026-11-18 with 3 unclassified findings (agent/service_host.py:223, :339, scripts/acceptance_lifecycle.py:650)
+    and 1 stale exception (agent/hw_test_harness.py). `make sast` exits 2 when semgrep is absent, so the
+    local claim was never a measurement. Verified in S312 by installing semgrep 1.182.1 in a throwaway
+    venv and running the real gate: 48 findings, 0 ERROR, all dispositioned, and the same push turned
+    CI''s Lint workflow green (f96f7ef).'
+  domain: verification/tooling
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/artifacts/s312-ci-green.txt; .github/workflows/lint.yml; scripts/sast-gate.py; AGENTS.md
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'CI evidence: lint run 44505246648 (all 8 jobs success), 2026-11-19.'
