@@ -58,23 +58,11 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      # The audit judges a mutation only against a green baseline, and its first two runs aborted
-      # because the vitest baseline exited 0 with no "Tests" tally in ~30 s — a partial run. Local
-      # reproduction (including CI=true) is green, so this step runs the audit's OWN command verbatim
-      # and prints its exit code: that separates "the command is fine and the audit mishandles it"
-      # from "the command itself stops early on this runner".
-      - name: Diagnostic — the exact vitest command the audit runs
-        working-directory: serverless
-        run: |
-          set +e
-          node node_modules/vitest/vitest.mjs run > /tmp/vitest-direct.log 2>&1
-          rc=$?
-          echo "direct vitest exit code: $rc"
-          echo "output lines: $(wc -l < /tmp/vitest-direct.log)"
-          grep -aE "Tests +[0-9]+ (passed|failed)|Test Files" /tmp/vitest-direct.log || echo "NO TALLY LINE"
-          tail -5 /tmp/vitest-direct.log
-          exit 0
-
+      # The audit parses each runner's human-readable output, so two environment differences cost five
+      # runs to find (S323): a piped capture truncated vitest's output entirely, and ANSI escapes made
+      # its tally unparseable. Both are fixed inside the audit (`_run_captured` writes to a file,
+      # `_strip_ansi` parses it). A "Diagnostic — run the command verbatim" step lived here while that
+      # was being established and was retired once it had produced the evidence.
       - name: Run the audit
         run: python3 scripts/audit_test_teeth.py
 
