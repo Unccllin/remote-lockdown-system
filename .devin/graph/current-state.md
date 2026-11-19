@@ -53,35 +53,41 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 324 — 2026-11-19 (D-210 is closed, and I had been saying it was open for twenty sessions)
+## Latest session: 325 — 2026-11-19 (19 advisories cleared by overrides, and CI caught the lint I skipped)
 
 ### Fog cleared
 
-- **D-210 is CLOSED and always was**: 14 `/v1/*` routes, CORS, per-device and IP rate limiting, the
-  Express equivalent with WAF guards, and 52 server-side PBL tests. Nothing to take.
-- **The open set is measured, not copied**: D-120 (OPEN), D-129 (OPEN), D-134 (OPEN), and D-130 by the
-  convergence table's count of 60/64 — **all four need hardware or an operator credential**, which is why
-  they have stayed open through this arc.
-- **The advisory situation is measured too**: 19 moderate, **0 high, 0 critical**, all in the jest/babel
-  toolchain; `npm audit --audit-level=high` exits 0, so the CI gate is honestly green rather than being
-  ignored. The "picomatch advisories" phrase carried in this record refers to part of that set.
+- **The 19 moderate advisories are cleared** (`4fd8313`):
+  `overrides: { glob: ^14.0.2, minimatch: ^11.0.1 }` → `npm audit --json` reports **0** (was 19),
+  `--audit-level=high` exit 0, dashboard `audit-with-exceptions.sh` clean.
+- **The trade was measured, not asserted**: `cd server && npm test` → **885 passed, 52 suites** with the
+  forced majors in place, and `npm ci` from the committed lockfile installs 545 packages cleanly — which
+  matters because CI uses `ci`, not `install`.
+- **CI is green on the result** (`3f0c3b9`): `CI`, `Lint` and `CodeQL` all success; the agent suite also
+  re-run locally through `scripts/run-agent-tests.sh` (exit 0).
+- **Two defects CI caught were mine, from S321** (`3f0c3b9`): a **101-character docstring line** (`E501`)
+  and `assert_all_invariants` imported **out of alphabetical order** (`I001`). I had run that file's
+  pytest after writing it and never ran `scripts/lint-agent.sh` — the gate the repo provides for exactly
+  this, and the one CI runs unconditionally.
 
 ### Fog remaining
 
-- **The debt list in my session blocks was wrong for ~20 sessions.** Corrected here; the earlier blocks
-  are history and stay as they are, but `current-state.md` now carries the measured set.
-- **Nothing in the open four is actionable on this host**: D-120 needs real BitLocker media, D-129/D-134
-  need firmware hardware time, D-130 needs the owner's signing PFX. Recording that is more useful than
-  proposing work that cannot be done.
-- **The weekly audit's `cron` path is still unexercised** (every run was dispatch), and its diagnostic
-  step is retired as of this session.
+- **The pipeline-masking mistake recurred for the third time**, and the pattern is now unmistakable:
+  `;` before `git push` (S314), `grep` after a scan (S318), `tail` after a lint (this session). In each
+  case the exit status read came from something other than the verification. Every instance was caught
+  only because CI or a second look disagreed.
+- **Pyright still cannot resolve `graph_assert`** at `agent/tests/test_graph_assertions.py:20,518`
+  (`reportMissingImports`) — a module reached through a runtime `sys.path.insert`. Advisory by policy,
+  resolved at runtime, and not "fixed" with pragmas on lines this session did not otherwise change.
+- **The weekly audit's `cron` path is still unexercised** (all runs were dispatch); its diagnostic step is
+  retired.
 - Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
   `RequestAccessAsync` (untested), the pre-push hook being per-clone state, the docker-socket red for
   `test_tls_floor.py`.
 
 ### Debt items closed
 
-None — D-210 was already closed before this session, which is the finding.
+None. The four open items are unchanged and all blocked on hardware or an operator credential.
 
 ### Debt items still open
 
@@ -90,40 +96,41 @@ signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy)
 
 ### Blockers
 
-- **All four open items are blocked on hardware or an operator credential**, not on code.
+- None for this session's work; the four open ledger items remain blocked on hardware or credentials.
 
 ### Session artifacts
 
-- No code change. The artifact is the correction itself: this block and the regenerated
-  `current-state.md`, plus the retired diagnostic step committed at the start of the session.
+- `server/package.json` + `server/package-lock.json` (overrides) — `4fd8313`.
+- `agent/tests/test_graph_assertions.py` (E501 + I001) — `3f0c3b9`.
+- CI evidence: run on `3f0c3b9` → CI success, Lint success, CodeQL success.
 
 ### Failure attribution
 
-- **Layer 5 (state management), and it is the clean case.** A stale line was copied forward from block to
-  block, so twenty sessions inherited an open item that had been closed before the first of them. Nothing
-  failed loudly because nothing checked: the block format asks for "debt items still open" and any string
-  satisfies it. The harness change is the same one this arc keeps landing — a list that must be *derived*
-  from the ledger rather than retyped: `graph_assert.py` already knows the count (60/64), so a future
-  block could be checked against it.
-- **Layer 4 (verification feedback)**: the next-opening sentence inherited the same error, so the session
-  started work on an item that did not exist. Reading the ledger entry took one command.
+- **Layer 4 (verification feedback), twice over.** First, the two lint defects shipped because I ran the
+  test file and not the lint gate: selecting a subset of the gates that apply to a change is a quiet way
+  to be wrong, and CI is the backstop rather than the plan. Second, the exit-status masking — taking a
+  pipeline's status instead of the command's — is the same defect the arc keeps finding in *code*
+  (S318–S321), now in my own shell usage: a check whose outcome is read from the wrong place has not
+  been read.
+- **Layer 2 (context provision)**: nothing in the block format requires a lint run to be named, so
+  "verified locally" can mean "ran one thing". CI's job list is the actual contract.
 
 ### VERIFY
 
-- `docs/adr/PBL-DEBT-LEDGER.md:2035` → `**Status**: CLOSED (commit 9612fbb, …)`.
-- `git rev-parse --verify 9612fbb` → no such commit; `grep -n 9612fbb .devin/graph/orphaned-commit-refs.txt`
-  → line **29**, i.e. grandfathered by the S149 rewrite baseline.
-- Ledger status lines → D-120 OPEN · D-129 OPEN · D-134 OPEN · D-210 CLOSED; convergence table `60/64`.
-- `cd server && npm audit --audit-level=high` → exit **0**; `npm audit --json` → 19 moderate, 0 high,
-  0 critical, all in the jest/babel chain.
-- `make lint-workflows` → exit 0 after retiring the diagnostic step; workflow YAML parses (8 steps).
+- `npm audit --json` → `{info:0, low:0, moderate:0, high:0, critical:0, total:0}`; was 19 moderate.
+- `npm audit --audit-level=high` → exit 0 · dashboard `audit-with-exceptions.sh` → no vulnerabilities.
+- `cd server && npm test` → **885 passed, 52 suites**, exit 0.
+- `npm ci` in a clean temp dir from the committed lockfile → 545 packages, exit 0.
+- `scripts/lint-agent.sh` → **exit 0**, "All checks passed!", 67 files already formatted.
+- `scripts/run-agent-tests.sh -q` → exit 0.
+- CI on `3f0c3b9` → **CI success · Lint success · CodeQL success**.
 
 ### Next session opening
 
-Clear the 19 moderate dev-dependency advisories by bumping the jest/babel chain, and prove it with
-`cd server && npm test` (885 tests), `npm audit --audit-level=high` still exit 0, and the dashboard's
-`audit-with-exceptions.sh` — a dependency change needs no hardware and no credential, which is the only
-kind of work left in this repo's ledger.
+Make the session block's open-debt list derived rather than retyped: `graph_assert.py` already computes
+`60/64` and the ledger knows each status, so a check that the block's list matches the ledger would have
+caught D-210 being called open for twenty sessions — the same class as S318–S321, in the process instead
+of the code.
 
 ---
 

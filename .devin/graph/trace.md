@@ -5994,3 +5994,103 @@ Clear the 19 moderate dev-dependency advisories by bumping the jest/babel chain,
 kind of work left in this repo's ledger.
 
 ---
+
+---
+
+## Session 325 — 2026-11-19 (19 advisories cleared by overrides, and CI caught the lint I skipped)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `npm audit --json` and `npm audit fix --dry-run` — 19 moderate, 0 high, 0 critical, all through
+  jest's reporting chain, and `fixAvailable` reporting
+  `{isSemVerMajor: true, name: jest, version: 29.7.0}` for 18 of them.
+- **Read**: `npm ls minimatch glob --all` and the two advisories' own data (GitHub Advisory API):
+  glob vulnerable `>=9.0.0 <=14.0.1`, first patched **14.0.2**; minimatch vulnerable `>=7.0.0 <11.0.1`,
+  first patched **11.0.1**. Installed: glob 13.0.6, minimatch 10.2.6.
+- **Read**: `jest dist-tags` — latest 30.5.2, no newer major, so no upgrade path exists.
+- **Read**: the consumers' declared ranges — `@jest/reporters` wants `glob ^13.0.6`, `test-exclude` wants
+  `minimatch ^10.2.2` — to know exactly what an override would be forcing.
+
+**Findings**: npm's only remedy was a semver-major *downgrade* of the test runner for two moderate
+advisories in development tooling, while the actual CI gate (`--audit-level=high`) was already green.
+The advisories were fixable in place with `overrides`, which is a smaller and more honest change — but
+only the suites can say whether forcing those majors is safe.
+
+### Fog cleared
+
+- **The 19 moderate advisories are cleared** (`4fd8313`):
+  `overrides: { glob: ^14.0.2, minimatch: ^11.0.1 }` → `npm audit --json` reports **0** (was 19),
+  `--audit-level=high` exit 0, dashboard `audit-with-exceptions.sh` clean.
+- **The trade was measured, not asserted**: `cd server && npm test` → **885 passed, 52 suites** with the
+  forced majors in place, and `npm ci` from the committed lockfile installs 545 packages cleanly — which
+  matters because CI uses `ci`, not `install`.
+- **CI is green on the result** (`3f0c3b9`): `CI`, `Lint` and `CodeQL` all success; the agent suite also
+  re-run locally through `scripts/run-agent-tests.sh` (exit 0).
+- **Two defects CI caught were mine, from S321** (`3f0c3b9`): a **101-character docstring line** (`E501`)
+  and `assert_all_invariants` imported **out of alphabetical order** (`I001`). I had run that file's
+  pytest after writing it and never ran `scripts/lint-agent.sh` — the gate the repo provides for exactly
+  this, and the one CI runs unconditionally.
+
+### Fog remaining
+
+- **The pipeline-masking mistake recurred for the third time**, and the pattern is now unmistakable:
+  `;` before `git push` (S314), `grep` after a scan (S318), `tail` after a lint (this session). In each
+  case the exit status read came from something other than the verification. Every instance was caught
+  only because CI or a second look disagreed.
+- **Pyright still cannot resolve `graph_assert`** at `agent/tests/test_graph_assertions.py:20,518`
+  (`reportMissingImports`) — a module reached through a runtime `sys.path.insert`. Advisory by policy,
+  resolved at runtime, and not "fixed" with pragmas on lines this session did not otherwise change.
+- **The weekly audit's `cron` path is still unexercised** (all runs were dispatch); its diagnostic step is
+  retired.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, the docker-socket red for
+  `test_tls_floor.py`.
+
+### Debt items closed
+
+None. The four open items are unchanged and all blocked on hardware or an operator credential.
+
+### Debt items still open
+
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
+
+### Blockers
+
+- None for this session's work; the four open ledger items remain blocked on hardware or credentials.
+
+### Session artifacts
+
+- `server/package.json` + `server/package-lock.json` (overrides) — `4fd8313`.
+- `agent/tests/test_graph_assertions.py` (E501 + I001) — `3f0c3b9`.
+- CI evidence: run on `3f0c3b9` → CI success, Lint success, CodeQL success.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), twice over.** First, the two lint defects shipped because I ran the
+  test file and not the lint gate: selecting a subset of the gates that apply to a change is a quiet way
+  to be wrong, and CI is the backstop rather than the plan. Second, the exit-status masking — taking a
+  pipeline's status instead of the command's — is the same defect the arc keeps finding in *code*
+  (S318–S321), now in my own shell usage: a check whose outcome is read from the wrong place has not
+  been read.
+- **Layer 2 (context provision)**: nothing in the block format requires a lint run to be named, so
+  "verified locally" can mean "ran one thing". CI's job list is the actual contract.
+
+### VERIFY
+
+- `npm audit --json` → `{info:0, low:0, moderate:0, high:0, critical:0, total:0}`; was 19 moderate.
+- `npm audit --audit-level=high` → exit 0 · dashboard `audit-with-exceptions.sh` → no vulnerabilities.
+- `cd server && npm test` → **885 passed, 52 suites**, exit 0.
+- `npm ci` in a clean temp dir from the committed lockfile → 545 packages, exit 0.
+- `scripts/lint-agent.sh` → **exit 0**, "All checks passed!", 67 files already formatted.
+- `scripts/run-agent-tests.sh -q` → exit 0.
+- CI on `3f0c3b9` → **CI success · Lint success · CodeQL success**.
+
+### Next session opening
+
+Make the session block's open-debt list derived rather than retyped: `graph_assert.py` already computes
+`60/64` and the ledger knows each status, so a check that the block's list matches the ledger would have
+caught D-210 being called open for twenty sessions — the same class as S318–S321, in the process instead
+of the code.
+
+---
