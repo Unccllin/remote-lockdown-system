@@ -93,6 +93,16 @@ def test_clean_history_passes():
     check("clean change exits 0", code == 0, out[:200])
 
 
+def test_an_unresolvable_base_scans_everything_instead_of_nothing():
+    """S317: a base that does not resolve made the range EMPTY, and an empty range reports "no
+    findings". The hook ran that way on a first push (origin/master did not exist yet) and passed a
+    credential-shaped commit. CI has always fallen back to the full history; the CLI now does too."""
+    repo, _base, _tip = make_repo({"src/creds.js": f"const k = '{AWS_KEY}';\n"})
+    code, out = scan(repo, "--base", "origin/master", "--head", "HEAD")
+    check("unresolvable base still finds the secret", code == 1, out[:200])
+    check("it says it fell back to the whole history", "does not resolve" in out, out[:200])
+
+
 def test_vendor_token_fails_and_is_never_echoed():
     repo, base, _ = make_repo({"src/creds.js": f"const k = '{AWS_KEY}';\n"})
     code, out = scan(repo, "--base", base, "--head", "HEAD")
