@@ -93,6 +93,16 @@ describe('served enrolment (the dashboard one-liner)', () => {
     expect(body).not.toMatch(/token=/);
   });
 
+  it('served setup.ps1 contains no google_api_key even when env var is set (B-070)', async () => {
+    const worker = await getWorker();
+    const env = { ...makeEnv(), GOOGLE_API_KEY: 'secret-google-key-value' };
+    const resp = await worker.fetch(req('/api/enroll/setup.ps1'), env);
+    expect(resp.status).toBe(200);
+    const body = await resp.text();
+    expect(body).not.toContain('secret-google-key-value');
+    expect(body).not.toContain('google_api_key');
+  });
+
   it('still offers the wizard when INSTALLER_GUI=true', async () => {
     const worker = await getWorker();
     const env = { ...makeEnv(), INSTALLER_GUI: 'true' };

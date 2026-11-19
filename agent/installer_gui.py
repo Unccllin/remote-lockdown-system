@@ -294,6 +294,7 @@ def write_config(
     update_public_key: str = "",
     verify_tls: bool = True,
     uefi_password: str = "",
+    google_api_key: str = "",
 ) -> Path:
     """Write the agent config file atomically.
 
@@ -326,6 +327,8 @@ def write_config(
     # omitted when empty so the agent generates one on a machine that has none.
     if uefi_password:
         config["uefi_password"] = uefi_password
+    if google_api_key:
+        config["google_api_key"] = google_api_key
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
 
     # config.json carries the same DENY/read-only ACEs as the binary once tamper
@@ -1013,6 +1016,7 @@ class SetupWizard:
                         boot_lock_enabled=self.boot_lock.get(),
                         update_public_key=pinned,
                         uefi_password=getattr(self, "uefi_password", ""),
+                        google_api_key=str(self.install_result.get("google_api_key") or ""),
                     )
                     self.root.after(0, self._log, f"  Config: {CONFIG_FILE}")
                     self.root.after(
@@ -1388,6 +1392,7 @@ def run_headless(
             update_public_key=install_update_public_key(),
             verify_tls=verify_tls,
             uefi_password=uefi_password,
+            google_api_key=str(data.get("google_api_key") or ""),
         )
 
         print("[3/6] Adding Defender exclusions ...")

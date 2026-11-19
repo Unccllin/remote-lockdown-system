@@ -242,6 +242,88 @@ describe('POST /api/enroll/claim', () => {
       mockPool.query.mock.calls.some((c) => /INSERT INTO devices/.test(c[0]))
     ).toBe(false);
   });
+
+  describe('google_api_key on claim responses (ruling C, S306)', () => {
+    let saved;
+    beforeEach(() => {
+      saved = process.env.GOOGLE_API_KEY;
+      mockPool.query.reset();
+    });
+    afterEach(() => {
+      if (saved === undefined) delete process.env.GOOGLE_API_KEY;
+      else process.env.GOOGLE_API_KEY = saved;
+    });
+
+    test('present when GOOGLE_API_KEY is set (201 site)', async () => {
+      process.env.GOOGLE_API_KEY = 'test-google-key';
+      mockPool.query.setResult('SELECT * FROM enrollment_tokens', { rows: [tokenRow()] });
+      mockPool.query.setResult('UPDATE enrollment_tokens', { rows: [], rowCount: 1 });
+      mockPool.query.setResult('INSERT INTO devices', {
+        rows: [{ id: 'dev-9', hostname: 'PC-9', status: 'active' }],
+      });
+
+      const res = await request(app)
+        .post('/api/enroll/claim')
+        .send({ token: 'good', hostname: 'PC-9' });
+
+      expect(res.status).toBe(201);
+      expect(res.body.google_api_key).toBe('test-google-key');
+    });
+
+    test('absent when GOOGLE_API_KEY is unset (201 site)', async () => {
+      delete process.env.GOOGLE_API_KEY;
+      mockPool.query.setResult('SELECT * FROM enrollment_tokens', { rows: [tokenRow()] });
+      mockPool.query.setResult('UPDATE enrollment_tokens', { rows: [], rowCount: 1 });
+      mockPool.query.setResult('INSERT INTO devices', {
+        rows: [{ id: 'dev-9', hostname: 'PC-9', status: 'active' }],
+      });
+
+      const res = await request(app)
+        .post('/api/enroll/claim')
+        .send({ token: 'good', hostname: 'PC-9' });
+
+      expect(res.status).toBe(201);
+      expect('google_api_key' in res.body).toBe(false);
+    });
+
+    test('present when GOOGLE_API_KEY is set (200 re-associated site)', async () => {
+      process.env.GOOGLE_API_KEY = 'test-google-key';
+      mockPool.query.setResult('SELECT * FROM enrollment_tokens', { rows: [tokenRow()] });
+      mockPool.query.setResult('UPDATE enrollment_tokens', { rows: [], rowCount: 1 });
+      mockPool.query.setResult('SELECT * FROM devices WHERE hardware_uuid', {
+        rows: [{ id: 'dev-1', hardware_uuid: 'HW-1' }],
+      });
+      mockPool.query.setResult('UPDATE devices', {
+        rows: [{ id: 'dev-1', hostname: 'PC-1', hardware_uuid: 'HW-1', status: 'active' }],
+      });
+
+      const res = await request(app)
+        .post('/api/enroll/claim')
+        .send({ token: 'good', hostname: 'PC-1', hardware_uuid: 'HW-1' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.google_api_key).toBe('test-google-key');
+    });
+
+    test('absent when GOOGLE_API_KEY is unset (200 re-associated site)', async () => {
+      delete process.env.GOOGLE_API_KEY;
+      mockPool.query.setResult('SELECT * FROM enrollment_tokens', { rows: [tokenRow()] });
+      mockPool.query.setResult('UPDATE enrollment_tokens', { rows: [], rowCount: 1 });
+      mockPool.query.setResult('SELECT * FROM devices WHERE hardware_uuid', {
+        rows: [{ id: 'dev-1', hardware_uuid: 'HW-1' }],
+      });
+      mockPool.query.setResult('UPDATE devices', {
+        rows: [{ id: 'dev-1', hostname: 'PC-1', hardware_uuid: 'HW-1', status: 'active' }],
+      });
+
+      const res = await request(app)
+        .post('/api/enroll/claim')
+        .send({ token: 'good', hostname: 'PC-1', hardware_uuid: 'HW-1' });
+
+      expect(res.status).toBe(200);
+      expect('google_api_key' in res.body).toBe(false);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

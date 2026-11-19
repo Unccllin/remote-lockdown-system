@@ -397,6 +397,7 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
             mac_address: existing.mac_address,
           },
           api_key: apiKey, // Only returned once — store it securely
+          ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
           reassociated: true,
         },
         200,
@@ -431,6 +432,7 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
         mac_address: device.mac_address,
       },
       api_key: apiKey, // Only returned once — store it securely
+      ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
     },
     201,
   );
@@ -579,6 +581,7 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
             mac_address: existing.mac_address,
           },
           api_key: apiKey, // Only returned once — store it securely
+          ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
           reassociated: true,
         },
         200,
@@ -613,6 +616,7 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
         mac_address: device.mac_address,
       },
       api_key: apiKey, // Only returned once — store it securely
+      ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
     },
     201,
   );

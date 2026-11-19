@@ -59,4 +59,10 @@ export interface Env {
    * deployment that has not enabled R2 keeps working unchanged.
    */
   BINARIES?: R2Bucket;
+  /**
+   * Google Geolocation key, provisioned into the enrolment response at install
+   * time (ruling C, S306 — see docs/adr/ADR-008-geolocation-key-delivery.md).
+   * Optional on purpose: unset means the response omits google_api_key entirely.
+   */
+  GOOGLE_API_KEY?: string;
 }

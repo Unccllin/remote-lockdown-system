@@ -494,6 +494,7 @@ def build_config(
     boot_lock_enabled: bool = True,
     update_public_key: str = "",
     uefi_password: str = "",
+    google_api_key: str = "",
 ) -> dict:
     """The single definition of a provisioned config.json.
 
@@ -527,6 +528,10 @@ def build_config(
     # empty so the agent keeps generating a password on machines that have none.
     if uefi_password:
         config["uefi_password"] = uefi_password
+    # The Google Geolocation key provisioned at install time (ruling C, S306 / ADR-008).
+    # Omitted when empty so a no-key install stays byte-identical to today.
+    if google_api_key:
+        config["google_api_key"] = google_api_key
     return config
 
 
@@ -538,6 +543,7 @@ def write_config(
     boot_lock_enabled: bool = True,
     update_public_key: str = "",
     uefi_password: str = "",
+    google_api_key: str = "",
 ) -> Path:
     """Write the agent config.json to the install directory."""
 
@@ -549,6 +555,7 @@ def write_config(
         boot_lock_enabled,
         update_public_key,
         uefi_password,
+        google_api_key,
     )
 
     print_step(2, f"Writing config to {CONFIG_FILE}...")
@@ -1246,6 +1253,7 @@ def main():
         # --uefi-password (or $UEFI_PASSWORD) supplies the firmware password this machine
         # already has, so the boot-lock layer can authenticate instead of aborting.
         uefi_password=(args.uefi_password or os.environ.get("UEFI_PASSWORD", "") or "").strip(),
+        google_api_key=str(enroll_data.get("google_api_key") or ""),
     )
 
     # --- Step 3: Install files ---

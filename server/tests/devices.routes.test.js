@@ -295,6 +295,44 @@ describe('POST /api/devices (enroll)', () => {
 
     expect(res.status).toBe(201);
   });
+
+  describe('google_api_key on enrol response (ruling C, S306)', () => {
+    let saved;
+    beforeEach(() => {
+      saved = process.env.GOOGLE_API_KEY;
+      mockPool.query.reset();
+    });
+    afterEach(() => {
+      if (saved === undefined) delete process.env.GOOGLE_API_KEY;
+      else process.env.GOOGLE_API_KEY = saved;
+    });
+
+    test('present when GOOGLE_API_KEY is set', async () => {
+      process.env.GOOGLE_API_KEY = 'test-google-key';
+      mockPool.query.setResult('INSERT INTO devices', { rows: [{ id: 'dev-new', hostname: 'DEV-NEW', owner_name: 'Charlie', status: 'active', api_key_hash: 'some-hash' }] });
+
+      const res = await request(app)
+        .post('/api/devices')
+        .set('Authorization', `Bearer ${makeToken()}`)
+        .send({ hostname: 'DEV-NEW', owner_name: 'Charlie' });
+
+      expect(res.status).toBe(201);
+      expect(res.body.google_api_key).toBe('test-google-key');
+    });
+
+    test('absent when GOOGLE_API_KEY is unset', async () => {
+      delete process.env.GOOGLE_API_KEY;
+      mockPool.query.setResult('INSERT INTO devices', { rows: [{ id: 'dev-new', hostname: 'DEV-NEW', owner_name: 'Charlie', status: 'active', api_key_hash: 'some-hash' }] });
+
+      const res = await request(app)
+        .post('/api/devices')
+        .set('Authorization', `Bearer ${makeToken()}`)
+        .send({ hostname: 'DEV-NEW', owner_name: 'Charlie' });
+
+      expect(res.status).toBe(201);
+      expect('google_api_key' in res.body).toBe(false);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -369,6 +369,7 @@ router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
     res.status(201).json({
       ...publicDevice(result.rows[0]),
       api_key: apiKey, // plaintext — capture now, never shown again
+      ...(process.env.GOOGLE_API_KEY ? { google_api_key: process.env.GOOGLE_API_KEY } : {}),
     });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Hostname already registered. Choose a different hostname or use the existing device.' });

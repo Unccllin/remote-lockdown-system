@@ -869,6 +869,47 @@ def test_write_config_carries_the_uefi_password(tmp_path, monkeypatch):
     assert written["uefi_password"] == "firmware-pw"
 
 
+def test_write_config_includes_google_api_key_when_passed(tmp_path, monkeypatch):
+    import json
+
+    import installer_gui
+
+    monkeypatch.setattr(installer_gui, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer_gui, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(installer_gui, "LOCKDOWN_FOLDER", tmp_path / "lockdown_folder")
+
+    installer_gui.write_config(
+        "https://example.com",
+        "api-key",
+        "TEST-PC",
+        "dev-1",
+        google_api_key="g-key",
+    )
+
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written["google_api_key"] == "g-key"
+
+
+def test_write_config_omits_google_api_key_when_empty(tmp_path, monkeypatch):
+    import json
+
+    import installer_gui
+
+    monkeypatch.setattr(installer_gui, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer_gui, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(installer_gui, "LOCKDOWN_FOLDER", tmp_path / "lockdown_folder")
+
+    installer_gui.write_config(
+        "https://example.com",
+        "api-key",
+        "TEST-PC",
+        "dev-1",
+    )
+
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert "google_api_key" not in written
+
+
 def test_headless_installer_exposes_the_flag(monkeypatch, capsys):
     """`lockdown-setup.exe --uefi-password` must be discoverable, not a hidden arg."""
     import installer_gui
@@ -876,3 +917,47 @@ def test_headless_installer_exposes_the_flag(monkeypatch, capsys):
     parser = installer_gui.build_parser()
     args = parser.parse_args(["--server-url", "https://x", "--token", "t", "--uefi-password", "pw"])
     assert args.uefi_password == "pw"
+
+
+def test_claim_response_to_config_includes_google_api_key(tmp_path, monkeypatch):
+    import json
+
+    import installer_gui
+
+    monkeypatch.setattr(installer_gui, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer_gui, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(installer_gui, "LOCKDOWN_FOLDER", tmp_path / "lockdown_folder")
+
+    data = {"device": {"id": "dev-1"}, "api_key": "k", "google_api_key": "g"}
+    installer_gui.write_config(
+        "https://example.com",
+        "api-key",
+        "TEST-PC",
+        "dev-1",
+        google_api_key=str(data.get("google_api_key") or ""),
+    )
+
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written["google_api_key"] == "g"
+
+
+def test_claim_response_to_config_omits_google_api_key_when_absent(tmp_path, monkeypatch):
+    import json
+
+    import installer_gui
+
+    monkeypatch.setattr(installer_gui, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer_gui, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(installer_gui, "LOCKDOWN_FOLDER", tmp_path / "lockdown_folder")
+
+    data = {"device": {"id": "dev-1"}, "api_key": "k"}
+    installer_gui.write_config(
+        "https://example.com",
+        "api-key",
+        "TEST-PC",
+        "dev-1",
+        google_api_key=str(data.get("google_api_key") or ""),
+    )
+
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert "google_api_key" not in written

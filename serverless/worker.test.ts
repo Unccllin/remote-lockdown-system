@@ -300,6 +300,33 @@ describe('Serverless Worker', () => {
       expect(data).toHaveProperty('device.hostname', 'TEST-DEV-001');
     });
 
+    it('omits google_api_key when GOOGLE_API_KEY is unset', async () => {
+      const req = makeRequest(
+        'POST',
+        '/api/enroll',
+        { hostname: 'TEST-DEV-NOKEY', owner_name: 'Test' },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp = await worker.fetch(req, env);
+      const data = await parseResponse(resp);
+      expect(resp.status).toBe(201);
+      expect('google_api_key' in data).toBe(false);
+    });
+
+    it('includes google_api_key when GOOGLE_API_KEY is set', async () => {
+      const envWithKey = { ...env, GOOGLE_API_KEY: 'test-google-key' };
+      const req = makeRequest(
+        'POST',
+        '/api/enroll',
+        { hostname: 'TEST-DEV-KEY', owner_name: 'Test' },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp = await worker.fetch(req, envWithKey);
+      const data = await parseResponse(resp);
+      expect(resp.status).toBe(201);
+      expect(data.google_api_key).toBe('test-google-key');
+    });
+
     it('rejects without admin auth', async () => {
       const req = makeRequest('POST', '/api/enroll', { hostname: 'TEST' });
       const resp = await worker.fetch(req, env);
@@ -499,6 +526,39 @@ describe('Serverless Worker', () => {
       const listResp = await worker.fetch(listReq, env);
       const listData: any = await parseResponse(listResp);
       expect(listData.some((d: any) => d.hostname === 'LIST-CHECK-001')).toBe(true);
+    });
+
+    it('omits google_api_key when GOOGLE_API_KEY is unset (claim)', async () => {
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const tokenResp = await worker.fetch(tokenReq, env);
+      const tokenData: any = await parseResponse(tokenResp);
+      const claimReq = makeRequest('POST', '/api/enroll/claim', {
+        token: tokenData.token,
+        hostname: 'CLAIM-NOKEY-001',
+      });
+      const claimResp = await worker.fetch(claimReq, env);
+      const claimData: any = await parseResponse(claimResp);
+      expect(claimResp.status).toBe(201);
+      expect('google_api_key' in claimData).toBe(false);
+    });
+
+    it('includes google_api_key when GOOGLE_API_KEY is set (claim)', async () => {
+      const envWithKey = { ...env, GOOGLE_API_KEY: 'test-google-key' };
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const tokenResp = await worker.fetch(tokenReq, envWithKey);
+      const tokenData: any = await parseResponse(tokenResp);
+      const claimReq = makeRequest('POST', '/api/enroll/claim', {
+        token: tokenData.token,
+        hostname: 'CLAIM-KEY-001',
+      });
+      const claimResp = await worker.fetch(claimReq, envWithKey);
+      const claimData: any = await parseResponse(claimResp);
+      expect(claimResp.status).toBe(201);
+      expect(claimData.google_api_key).toBe('test-google-key');
     });
   });
 

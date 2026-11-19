@@ -983,3 +983,71 @@ def test_build_config_carries_the_uefi_password_when_supplied():
     """
     cfg = installer.build_config("https://x", "k", "h", "d", uefi_password="firmware-pw")
     assert cfg["uefi_password"] == "firmware-pw"
+
+
+def test_build_config_includes_google_api_key_when_passed():
+    cfg = installer.build_config("https://s", "k", "h", "d", google_api_key="g-key")
+    assert cfg["google_api_key"] == "g-key"
+
+
+def test_build_config_omits_google_api_key_when_empty():
+    cfg = installer.build_config("https://s", "k", "h", "d")
+    assert "google_api_key" not in cfg
+
+
+def test_write_config_includes_google_api_key_when_passed(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "config.json")
+
+    installer.write_config("https://s", "k", "h", "d", google_api_key="g-key")
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written["google_api_key"] == "g-key"
+
+
+def test_write_config_omits_google_api_key_when_empty(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "config.json")
+
+    installer.write_config("https://s", "k", "h", "d")
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert "google_api_key" not in written
+
+
+def test_claim_response_to_config_includes_google_api_key(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "config.json")
+
+    data = {"device": {"id": "dev-1"}, "api_key": "k", "google_api_key": "g"}
+    installer.write_config(
+        "https://s",
+        "k",
+        "TEST-PC",
+        "dev-1",
+        google_api_key=str(data.get("google_api_key") or ""),
+    )
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written["google_api_key"] == "g"
+
+
+def test_claim_response_to_config_omits_google_api_key_when_absent(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "config.json")
+
+    data = {"device": {"id": "dev-1"}, "api_key": "k"}
+    installer.write_config(
+        "https://s",
+        "k",
+        "TEST-PC",
+        "dev-1",
+        google_api_key=str(data.get("google_api_key") or ""),
+    )
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert "google_api_key" not in written

@@ -583,3 +583,23 @@ def test_the_observed_at_migration_exists_in_both_dialects():
         path = REPO / "server/src/db" / dialect_dir / "019_location_observed_at.sql"
         assert path.is_file(), f"{path} is missing; SQLite and PostgreSQL must both get the column"
         assert "observed_at" in path.read_text(encoding="utf-8")
+
+
+def test_the_geolocation_key_contract_matches_on_both_surfaces():
+    # Ruling C / S306: the Google geolocation key is provisioned at install time
+    # on both surfaces; Express and the Worker read the same env name and omit
+    # the field when unset, installer.py carries it, and installer-scripts.ts
+    # must never mention it (B-070: the served template carries no config/secret).
+    devices = (REPO / "server/src/routes/devices.js").read_text(encoding="utf-8")
+    enroll = (REPO / "server/src/routes/enroll.js").read_text(encoding="utf-8")
+    worker = (REPO / "serverless/worker.ts").read_text(encoding="utf-8")
+    env = (REPO / "serverless/pbl/env.ts").read_text(encoding="utf-8")
+    installer = (REPO / "agent/installer.py").read_text(encoding="utf-8")
+    scripts = (REPO / "serverless/installer-scripts.ts").read_text(encoding="utf-8")
+    assert "process.env.GOOGLE_API_KEY" in devices
+    assert "process.env.GOOGLE_API_KEY" in enroll
+    assert "env.GOOGLE_API_KEY" in worker
+    assert "GOOGLE_API_KEY?: string" in env
+    assert "google_api_key" in installer
+    assert "google_api_key" not in scripts
+    assert "GOOGLE_API_KEY" not in scripts

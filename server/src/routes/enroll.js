@@ -271,6 +271,7 @@ router.post('/claim', async (req, res, next) => {
         return res.status(200).json({
           device: publicDevice(updated.rows[0]),
           api_key: apiKey, // plaintext — capture now, never shown again
+          ...(process.env.GOOGLE_API_KEY ? { google_api_key: process.env.GOOGLE_API_KEY } : {}),
           reassociated: true,
         });
       }
@@ -303,6 +304,7 @@ router.post('/claim', async (req, res, next) => {
     res.status(201).json({
       device: publicDevice(created.rows[0]),
       api_key: apiKey, // plaintext — capture now, never shown again
+      ...(process.env.GOOGLE_API_KEY ? { google_api_key: process.env.GOOGLE_API_KEY } : {}),
     });
   } catch (err) {
     if (err.code === '23505') {
