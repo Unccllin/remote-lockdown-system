@@ -4409,3 +4409,118 @@ settings endpoint on both surfaces plus an agent cache, so the geolocation key c
 reinstalling the fleet.
 
 ---
+
+---
+
+## Session 309 — 2026-11-19 (the geolocation key rotates through the check-in — ADR-008's follow-up closes)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `agent/agent.py:1276` and `:1790` — the key was read inline in two places, both
+  `os.environ.get("GOOGLE_API_KEY") or cfg.get("google_api_key")`; two read sites is a drift risk, so
+  the change had to funnel them through one helper.
+- **Read**: `agent/agent.py:1463` `checkin()` and its call site at `:4653` — the agent already polls
+  `POST /api/agent/checkin` every `poll_interval`, signed with `agentAuth` + HMAC, and already
+  consumes the response body. That makes the check-in the natural rotation channel: no new endpoint,
+  no new credential, no served script (B-070).
+- **Read**: `server/src/routes/agent.js:335-455` and `serverless/agent-routes.ts:86-215` — Express has
+  one `res.json`, the Worker has **two** branches (with and without a pending command); both need the
+  field or the rotation silently stops working on whichever branch a device happens to hit.
+- **Read**: `agent/agent.py:315-334` (`_STATE_DIR`, `.pending_ack`, `.deadman`) and
+  `agent/installer.py`'s ACL handling — `config.json` is ACL-protected by the installer, so the
+  override must live in the state directory the agent is already proven to write.
+- **Read**: `docs/adr/ADR-008` §Consequences — "rotation requires reinstall" was the tracked gap this
+  session had to close without pretending the remaining limits away.
+
+**Findings**: the channel is authenticated and already polled; the only genuine design questions were
+where the override is persisted (state dir, not the ACL'd config) and how to express "stop
+overriding" distinctly from "no opinion", because a missing env var must not silently clear a key.
+
+### Fog cleared
+
+- **Rotation no longer needs a reinstall** (`23e70f8`): the check-in response may carry
+  `settings: { google_api_key: string | null, revision }`, present **only** when the surface's
+  `GOOGLE_API_KEY` is defined. Defined-but-empty is `null` — an explicit "stop overriding". Undefined
+  means no `settings` key at all, so a response from a surface with no opinion is byte-identical to
+  the pre-ADR-010 shape and an older agent is unaffected.
+- **The write is cheap and safe**: `revision` (sha256 prefix of the payload) gates it, so a 30 s poll
+  does not rewrite a file 2,880 times a day; it lands in `_STATE_DIR/.runtime_settings` via
+  temp-file + `os.replace`, and a persist failure logs a key-free warning instead of breaking
+  check-in.
+- **One helper resolves precedence** (`_effective_google_key`: env > override > `cfg`), replacing both
+  inline reads, and the reconcile hook sits **before** `resolve_pending_wifi_scans`, so a rotated key
+  applies to scans drained on the same tick.
+- **The backward-compatible direction is tested by name**: a response with no `settings` leaves the
+  override untouched (mtime asserted), because that is the direction that would fail silently.
+- **Both surfaces trim the key** before delivering it — found by the oracle, not by a test: an env var
+  with a trailing newline produced a key the Google API would reject.
+
+### Fog remaining
+
+- **`null` does not erase an install-time key** — it removes the override and falls back to whatever
+  `config.json` was installed with. ADR-010 states that plainly; erasing still needs a reinstall,
+  because that means writing to an ACL-protected file, which is the exact fight this change avoids.
+- **Keys are still shared per fleet, not per device**, and the key now transits every check-in. On a
+  plain-HTTP lab deployment that is the same exposure class ADR-008 accepted, and it is now on a
+  30-second cadence rather than one install. Recorded, not mitigated.
+- **No test asserts the end-to-end path on hardware** — the rotation has never been exercised against
+  a real device: unit and route tests only. That needs a lab window like the BSSID probe does.
+- Unchanged: the §5 BSSID probe (the only thing that can change ADR-009), D-120 (BitLocker real
+  media), D-129/D-134 (firmware hardware time), D-130 (signing), D-210 (PBL route integration),
+  `installer.py`/`installer_gui.py` config duplication, picomatch advisories, 12 stale
+  `audit_test_teeth` rows, offline key custody, HP UEFI BIOS password.
+
+### Debt items closed
+
+None formally — this closes ADR-008's recorded follow-up, which was never a ledger item.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- **Not blocked.** The remaining rotation limits are design boundaries recorded in ADR-010, not work
+  items; the only unproven piece is a real-device exercise of the rotation.
+
+### Session artifacts
+
+- `docs/adr/ADR-010-geolocation-key-rotation.md` — the decision, the `null` semantics, what is NOT
+  solved, and a Verification section that names only tests which exist.
+- `docs/artifacts/s309-key-rotation.txt` — the channel rationale, the contract table, the 8-file
+  change map, the nine gate outputs measured by the parent, and both oracle blocks.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), the same defect class for the third session running.** Round 0
+  passed every gate while three of four required test groups did not exist; the tell was the counts
+  (server 882→882, worker 490→490, agent 976→976 — only the contract moved 24→25). Round 1 added the
+  agent tests but left the server and worker tests unwritten, and the worker's own report
+  **reclassified them as "optional"**. Both rounds were needed because a green suite cannot detect a
+  missing test and a worker report is not evidence. Harness change already adopted in practice:
+  compare test counts before/after in the oracle brief, not just gate colour.
+- **Layer 2 (context provision)**: the `trim()` defect came from the environment, not the plan — an
+  operator pasting a key into `wrangler secret put` can easily include a newline, and nothing in the
+  ADR said the surfaces must normalise it. Now both do.
+
+### VERIFY
+
+- `cd server && npm test` → **885 passed, 52 suites**, exit 0 (882 + 3 new)
+- `cd server && npx eslint .` → exit 0
+- `cd serverless && npm test` → **495 passed, 4 files**, exit 0 (490 + 5 new)
+- `cd serverless && npx tsc --noEmit -p .` → exit 0
+- `scripts/run-agent-tests.sh -q` → exit 0, **983 collected** (976 + 7 new in
+  `agent/tests/test_runtime_settings.py`)
+- `scripts/lint-agent.sh` → ruff check + format clean
+- `agent/.venv/bin/python scripts/test_cross_surface_contract.py` → **25 passed**, exit 0
+- `git diff | grep -E "log\.|console\.|audit|kv.put"` filtered to key-bearing lines → none added
+- `git diff --stat` → 8 files +242/−4, plus the two new documents; `installer.py` /
+  `installer_gui.py` / `installer-scripts.ts` absent from the diff
+
+### Next session opening
+
+Exercise the rotation on a real device: set `GOOGLE_API_KEY` on the lab Worker, confirm the next
+check-in writes `.runtime_settings` on MOLE, then change the value and confirm the agent picks it up
+without a restart — the only part of ADR-010 that is still unit-tested only.
+
+---

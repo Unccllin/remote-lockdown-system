@@ -3887,3 +3887,26 @@ beliefs:
   dependents: []
   notes: 'Evidence level: spec-checked for the platform rule, hardware for the S303 refusals. No source
     file changed in S308.'
+- id: B-177
+  statement: 'The Google geolocation key rotates without reinstalling the fleet as of S309 (ADR-010, commit
+    23e70f8): the authenticated POST /api/agent/checkin response carries settings {google_api_key: string|null,
+    revision} only when the surface''s GOOGLE_API_KEY is DEFINED (defined-but-empty -> null = stop overriding;
+    undefined -> no field, response byte-identical to before), revision is a sha256-16 prefix that gates
+    writes, and the agent reconciles it into _STATE_DIR/.runtime_settings (not config.json, which the
+    installer ACLs) with precedence env > override > cfg through one helper. Limits stated in the ADR:
+    null falls back to the installed key so erasing it still needs a reinstall; keys remain shared per
+    fleet, not per device; the key now transits every check-in.'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/adr/ADR-010-geolocation-key-rotation.md; docs/artifacts/s309-key-rotation.txt; server/src/routes/agent.js;
+    serverless/agent-routes.ts; agent/agent.py
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Measured S309: server 885/52, worker 495/4, agent 983, contract 25. No-key path pinned by tests
+    asserting the exact top-level key set.'
