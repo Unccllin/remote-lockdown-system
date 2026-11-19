@@ -239,6 +239,25 @@ def test_every_script_test_suite_has_a_runner():
     assert missing == [], f"suite(s) with no __main__ runner: {missing}"
 
 
+def test_every_hand_rolled_suite_refuses_a_zero_discovery_run():
+    """A `__main__` runner is necessary but not sufficient.
+
+    S319 found two suites whose only exit condition was "no failures", so a discovery bug that
+    found zero tests printed "0 failed" and exited 0. The pytest-based suites are protected by
+    pytest's own NO_TESTS_COLLECTED (exit 5); the hand-rolled ones have to say it themselves.
+    """
+    hand_rolled = [
+        path for path in sorted(Path(__file__).parent.glob("test_*.py"))
+        if "script_test_runner" not in path.read_text(encoding="utf-8")
+        and "pytest.main" not in path.read_text(encoding="utf-8")
+    ]
+    unguarded = [
+        path.name for path in hand_rolled
+        if "NO TESTS DISCOVERED" not in path.read_text(encoding="utf-8")
+    ]
+    assert unguarded == [], f"hand-rolled suite(s) that pass on zero discovery: {unguarded}"
+
+
 if __name__ == "__main__":
     # Shared runner; see scripts/script_test_runner.py for why a `__main__`
     # block is mandatory here and why the import is not at module level.

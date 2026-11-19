@@ -483,6 +483,12 @@ if __name__ == "__main__":
     ]
     print("=== test_graph_session.py ===")
     print(f"    {len(_tests)} tests discovered")
+    if not _tests:
+        # S319: discovery going quiet is indistinguishable from a clean run when the only
+        # exit condition is `_failed == 0`. A suite that runs nothing has not passed; it has
+        # not run. This is the same failure family as the missing-__main__ holes.
+        print("  NO TESTS DISCOVERED — discovery is broken; refusing to report success")
+        sys.exit(1)
     print()
     for _name, _fn in _tests:
         _fn()

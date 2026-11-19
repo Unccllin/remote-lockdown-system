@@ -203,6 +203,10 @@ if __name__ == "__main__":
     print("=== test_prepush_secrets.py ===")
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     print(f"    {len(tests)} tests discovered")
+    if not tests:
+        # S319: `if FAILED` alone reports success when discovery finds nothing.
+        print("  NO TESTS DISCOVERED — discovery is broken; refusing to report success")
+        sys.exit(1)
     print()
     for _name, _fn in tests:
         _fn()
