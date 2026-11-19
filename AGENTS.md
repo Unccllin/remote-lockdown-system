@@ -611,6 +611,13 @@ intentional `installer-windows-execpolicy` by-design skip).
 Hardware test harness (D-003): `make hw-test-dry` runs the harness in dry-run mode.
 `make hw-test` runs real enforcement path tests on Windows/HP hardware.
 
+**`scripts/audit_test_teeth.py` fails on rows it could not run (S322).** It reintroduces one semantic
+defect at a time and asks whether the suite notices. A row whose anchor no longer matches used to be
+dropped from every list while the summary still counted *table rows* as kills; S280's split moved the
+ACK path to `agent-routes.ts` and twelve rows had been matching nothing ever since. They now report
+`UNVERIFIED` and the audit exits 1 — an unverified behaviour is unknown, not passed — and all twelve are
+re-anchored to current code (55/55 killed).
+
 The two edges the harness cannot see are covered by `scripts/hw-window-preflight.py`
 (documented in `docs/D-129-HARDWARE-RUNBOOK.md` §2a):
 

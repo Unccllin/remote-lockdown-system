@@ -524,6 +524,67 @@ MUTATIONS: list[dict] = [
     },
 ]
 
+# ---------------------------------------------------------------------------
+# S322: re-anchored rows.
+#
+# S280 split the Worker's agent-facing handlers into `agent-routes.ts`, and the ACK path moved with
+# them; `artifact_json` was also renamed `_artifact_json` when it stopped being used. Twelve rows kept
+# matching their pre-S280 text, so they reported SKIPPED — and because the summary counted table rows
+# rather than kills, the audit still said "all 55 mutations killed". Both halves are fixed here: the
+# summary now fails on unverified rows, and these rows point at the code that exists today.
+#
+# Applied as a table instead of editing the literals above so the original anchors stay readable
+# next to their replacements, and so this change is reviewable as one block.
+# ---------------------------------------------------------------------------
+_REANCHORED = [
+    ('worker/ack', 'serverless/agent-routes.ts',
+     "  if (!command || command.device_id !== device.id) {\n    return errorResponse('Command not found', 404);\n  }",
+     "  if (!command) {\n    return errorResponse('Command not found', 404);\n  }", None),
+    ('worker/ack-terminal', 'serverless/agent-routes.ts',
+     "  if (command.status === 'executed') {\n    return jsonResponse({ ok: true, deduplicated: true });\n  }",
+     '  if (false) {\n    return jsonResponse({ ok: true, deduplicated: true });\n  }', None),
+    ('worker/ack-uuid', 'serverless/agent-routes.ts',
+     '    ...(payload.command_uuid ? { command_uuid: payload.command_uuid } : {}),',
+     '    ...(false ? { command_uuid: payload.command_uuid } : {}),', None),
+    ('worker/ack-blocked-files', 'serverless/agent-routes.ts',
+     "    encryption_blocked_files: (encryption_blocked_files ?? null) as Command['encryption_blocked_files'],",
+     "    encryption_blocked_files: null as Command['encryption_blocked_files'],", None),
+    ('worker/ack-session-context', 'serverless/agent-routes.ts',
+     "    lock_session_context: (lock_session_context ?? null) as Command['lock_session_context'],",
+     "    lock_session_context: null as Command['lock_session_context'],", None),
+    ('worker/ack-track', 'serverless/agent-routes.ts',
+     "      track: 'tracking',",
+     "      track: 'active',", None),
+    ('worker/ack-audit-detail', 'serverless/agent-routes.ts',
+     '        lockdown_effective: confirmed.lockdown_effective ?? undefined,',
+     '        lockdown_effective: undefined,', None),
+    ('worker/effectiveness-persist', 'serverless/agent-routes.ts',
+     '    lockdown_effective: lockdownEffective,',
+     '    lockdown_effective: null,', None),
+    ('worker/recover', 'serverless/agent-routes.ts',
+     '      keyMaterial = deviceKey.key_material;',
+     '      keyMaterial = undefined;', 'recovery answers the unlock request without the escrowed key, so the device stays encrypted while the server records a release'),
+    ('worker/uninstall-authz', 'serverless/worker.ts',
+     'async function handleUninstallAuth(request: Request, env: Env): Promise<Response> {\n  const auth = await uninstallAuth(request, env);\n  if (!auth) {',
+     'async function handleUninstallAuth(request: Request, env: Env): Promise<Response> {\n  const auth = await uninstallAuth(request, env);\n  if (false && !auth) {', None),
+    ('worker/uninstall-verify', 'serverless/worker.ts',
+     '    if (timingSafeEqualStr(providedToken, expected)) {',
+     '    if (true) {', None),
+    ('worker/hw-artifact-blob', 'serverless/worker.ts',
+     '    .map(({ artifact_json: _artifact_json, ...summaryRow }) => summaryRow);',
+     '    .map((row) => row);', None),
+]
+
+for _row, _file, _old, _new, _why in _REANCHORED:
+    for _m in MUTATIONS:
+        if _m["path"] == _row:
+            _m["file"], _m["old"], _m["new"] = _file, _old, _new
+            if _why:
+                _m["why"] = _why
+            break
+    else:
+        raise SystemExit(f"re-anchor names a row that does not exist: {_row}")
+
 
 def repo_path(rel: str) -> Path:
     """Resolve a table path and refuse anything outside the repository.
@@ -689,12 +750,19 @@ def main() -> int:
 
     survivors = []
     invalid = []
+    skipped = []
+    killed = 0
     for m in table:
         target = repo_path(m["file"])
         original = target.read_text()
         hits = original.count(m["old"])
         if hits != 1:
-            print(f"{m['path']:16} SKIPPED — anchor matched {hits} times in {m['file']}")
+            # S322: a skipped anchor is an UNVERIFIED behaviour, not a quiet success. It used to be
+            # dropped from every list, so the closing line said "all N mutations killed" counting
+            # table rows rather than kills — and the twelve rows whose anchors no longer match were
+            # folded into that claim. Same defect class as S318-S321: report what was examined.
+            skipped.append(m)
+            print(f"{m['path']:16} UNVERIFIED — anchor matched {hits} times in {m['file']}")
             continue
         try:
             target.write_text(original.replace(m["old"], m["new"], 1))
@@ -712,6 +780,7 @@ def main() -> int:
             verdict = "SURVIVED"
         else:
             verdict = "KILLED"
+            killed += 1
             summary = "caught by: " + sorted(new_failures)[0][:70]
         print(f"{m.get('label', m['path']):22} {verdict:9} {summary}")
 
@@ -730,6 +799,15 @@ def main() -> int:
         print("\n  the full agent suite passed with these defects reintroduced:")
         return 1
     if invalid:
+        return 1
+    if skipped:
+        print(f"{len(skipped)} of {len(table)} mutations never ran — their anchors match nothing, so "
+              f"those behaviours are UNVERIFIED (not killed, not survived):")
+        for m in skipped:
+            print(f"  {m.get('label', m['path'])}: anchor no longer present in {m['file']} — {m['why']}")
+        print()
+        print(f"{killed} of {len(table)} mutations killed; {len(skipped)} unverified.")
+        print("  An unverified behaviour means the suite is unknown for it, so this is not a pass.")
         return 1
     print(f"all {len(table)} mutations killed — every audited suite has teeth")
     return 0
