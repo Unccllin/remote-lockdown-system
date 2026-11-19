@@ -114,6 +114,15 @@ The block must include:
 - Blockers named and status
 - Next session opening — one sentence, specific, no ambiguity
 
+**Two sections of that block are now machine-checked against the ledgers (S326, S327).** "Debt items
+still open" must list exactly the ids the ledgers mark `OPEN` — the check fails on the symmetric
+difference, because a block that restates state instead of reading it drifts (D-210 was reported open for
+twenty sessions after it closed). "Debt items closed" is checked only for an explicit claim form,
+`- **D-nnn — CLOSED**` followed by the commit and the artifact; prose is free, because a block that says
+"None. This fixed D-119/D-120-adjacent behaviour" names ids without closing anything, and an id-scan
+would flag it. A claim must have its ledger status CLOSED, its cited hash resolving (or in
+`orphaned-commit-refs.txt`) and its cited path existing.
+
 **Never paste a credential value into a session block, not even truncated.** S311 pushed 23 local
 commits for the first time and the CI secret scan failed on an `assigned-secret` finding inside
 commit `4c43b58` (S301): the block quoted a full token response body —
