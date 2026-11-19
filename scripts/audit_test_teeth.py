@@ -32,6 +32,7 @@ that could discard unrelated work.
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import tempfile
@@ -668,6 +669,20 @@ def _invalid(rc: int, out: str, why: str, runner: str) -> tuple[None, str, set[s
     return None, _invalid_summary(rc, out, why), set()
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escapes before parsing a runner's output.
+
+    S323: vitest writes its tally as `\x1b[2m      Tests \x1b[22m ... 495 passed`, so
+    `line.strip().startswith("Tests")` is false even though the line is exactly that. This was the
+    first theory, wrongly retired: the local check piped vitest through `grep`, which disables colour,
+    so the test removed the evidence it was looking for. CI showed the escapes in the INVALID dump.
+    """
+    return _ANSI_RE.sub("", text)
+
+
 def _run_captured(cmd: list[str], cwd: Path, timeout: int = 900) -> tuple[int, str]:
     """Run a suite with its output going to a FILE, not a pipe.
 
@@ -707,6 +722,7 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
         rc, out = _run_captured(
             [node, "node_modules/vitest/vitest.mjs", "run"], REPO / "serverless"
         )
+        out = _strip_ansi(out)
         lines = [ln for ln in out.strip().splitlines() if ln.strip()]
         summary = lines[-1][:90] if lines else "(no output)"
         # vitest prints a "Tests  N passed" tally; without it the run did not
