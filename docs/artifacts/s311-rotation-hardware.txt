@@ -64,3 +64,22 @@ MOLE through OpenSSH (`labadmin@192.168.1.249`, key `~/.ssh/lockdown_lab_ed25519
   C:\ProgramData\LockdownAgent\lockdown-agent.exe.bak-1.0.3   (the previous image, for rollback)
   C:\Users\labadmin\agentbuild\                               (source + dist, ~PyInstaller tree)
   Worker secret GOOGLE_API_KEY restored to the operator's real key via version rollback.
+
+--- [8] the restart assertion, closed the same session ---
+  The rotation above ran inside one long-lived process, which left "does a RESTARTED agent read the
+  override back?" open. Closed with an observable rather than an argument:
+
+    before restart : .runtime_settings 13:01:18  rev 3f11ee4980d2a049
+    restart        : Stop-Service + Stop-Process (IGNORES_SHUTDOWN), Start-Service
+                     new process start 13:03:22
+    after check-in : .runtime_settings 13:01:18  rev 3f11ee4980d2a049   UNCHANGED
+                     .last_checkin_ok   13:04:43 (check-in succeeded)
+
+  Why this is decisive: the agent writes the override only when the stored revision differs from the
+  one the surface sent. If the restarted service could not read the file, it would have found no
+  stored revision and rewritten it at 13:04:43. The mtime did not move, so the service read what the
+  previous process wrote — across a restart, under the service identity, in an ACL'd directory.
+  No "Could not persist runtime settings" warning appears in agent.log either.
+
+  That closes ADR-010's last stated gap: delivery, rotation, restore, and read-after-restart are all
+  measured on hardware now.

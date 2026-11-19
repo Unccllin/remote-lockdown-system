@@ -75,5 +75,11 @@ Two environment facts this run established, both recorded in the artifact: the s
 `Stop-Service`; and a `wrangler secret put` deploys a new *version* whose source is "Secret Change",
 so a secret change is not a code deploy and the rotation code had to be deployed separately.
 
-Still unproven: that a **restarted** agent reads the override back from disk — the process that
-wrote it never restarted. One `Restart-Service`, one check-in and one read would close it.
+Read-after-restart, closed the same session (§8 of the artifact): after a service restart at
+13:03:22 and a successful check-in at 13:04:43, the override file's mtime stayed at 13:01:18 and its
+revision was unchanged. The agent only rewrites when the stored revision differs from the one the
+surface sent, so a service unable to read the file would have rewritten it. It did not — the restarted
+`LocalSystem` agent read what the previous process wrote, in the ACL'd state directory.
+
+Nothing in this ADR is now unmeasured on hardware: delivery, rotation without restart, restore, and
+read-after-restart are all observed on MOLE.
