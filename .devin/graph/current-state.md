@@ -53,45 +53,43 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 309 — 2026-11-19 (the geolocation key rotates through the check-in — ADR-008's follow-up closes)
+## Latest session: 310 — 2026-11-19 (the rotation runs for real here — 13/13 — and what that still is not)
 
 ### Fog cleared
 
-- **Rotation no longer needs a reinstall** (`23e70f8`): the check-in response may carry
-  `settings: { google_api_key: string | null, revision }`, present **only** when the surface's
-  `GOOGLE_API_KEY` is defined. Defined-but-empty is `null` — an explicit "stop overriding". Undefined
-  means no `settings` key at all, so a response from a surface with no opinion is byte-identical to
-  the pre-ADR-010 shape and an older agent is unaffected.
-- **The write is cheap and safe**: `revision` (sha256 prefix of the payload) gates it, so a 30 s poll
-  does not rewrite a file 2,880 times a day; it lands in `_STATE_DIR/.runtime_settings` via
-  temp-file + `os.replace`, and a persist failure logs a key-free warning instead of breaking
-  check-in.
-- **One helper resolves precedence** (`_effective_google_key`: env > override > `cfg`), replacing both
-  inline reads, and the reconcile hook sits **before** `resolve_pending_wifi_scans`, so a rotated key
-  applies to scans drained on the same tick.
-- **The backward-compatible direction is tested by name**: a response with no `settings` leaves the
-  override untouched (mtime asserted), because that is the direction that would fail silently.
-- **Both surfaces trim the key** before delivering it — found by the oracle, not by a test: an env var
-  with a trailing newline produced a key the Google API would reject.
+- **The rotation is observed, not argued** (`d756729`): the real Express server plus the real
+  `checkin()`/`_reconcile_runtime_settings()`/`_effective_google_key()` drive all four contract states
+  in **13/13 assertions PASS** — key A arrives and is persisted; the same revision is **not**
+  rewritten (mtime asserted, so a 30 s poll cannot churn the file); key B rotates the value **with no
+  restart**; defined-but-empty delivers `null`, clears the override and the install-time key becomes
+  effective again; and an unset env produces a response with **no** `settings` object that leaves an
+  existing override byte-identical.
+- **The `null` semantic is now a measured behaviour**, not a paragraph in an ADR: after the `null`
+  phase the override file holds `{"google_api_key": null, "revision": "5e4fdbd5ebc2a0be"}` and the
+  effective key is `INSTALL-TIME-KEY` again.
+- **The deployed Worker is inert for this feature**: `wrangler secret list` on `lockdown-serverless`
+  returns exactly one secret — `ADMIN_TOKEN`. No `GOOGLE_API_KEY`, so no device in production can be
+  receiving a `settings` object today. That is the correct safe state and it is now a measured fact
+  rather than an assumption.
+- **Cleanup verified**: no probe server left listening on 3311/3411 and no stray `node src/index.js`.
 
 ### Fog remaining
 
-- **`null` does not erase an install-time key** — it removes the override and falls back to whatever
-  `config.json` was installed with. ADR-010 states that plainly; erasing still needs a reinstall,
-  because that means writing to an ACL-protected file, which is the exact fight this change avoids.
-- **Keys are still shared per fleet, not per device**, and the key now transits every check-in. On a
-  plain-HTTP lab deployment that is the same exposure class ADR-008 accepted, and it is now on a
-  30-second cadence rather than one install. Recorded, not mitigated.
-- **No test asserts the end-to-end path on hardware** — the rotation has never been exercised against
-  a real device: unit and route tests only. That needs a lab window like the BSSID probe does.
-- Unchanged: the §5 BSSID probe (the only thing that can change ADR-009), D-120 (BitLocker real
-  media), D-129/D-134 (firmware hardware time), D-130 (signing), D-210 (PBL route integration),
-  `installer.py`/`installer_gui.py` config duplication, picomatch advisories, 12 stale
+- **MOLE has not run this.** The probe uses this Linux host with the real server and agent modules —
+  `emulated` on the evidence ladder, one step below `hardware`. A Windows service install writing
+  `.runtime_settings` under its ACL'd state directory is still unobserved.
+- **Restart survival is untested**: the probe reuses one agent process, so it proves "no restart
+  needed for the in-memory value" (the claim) but not that a restarted agent reads the file back.
+- **The Worker path is untested end to end** for the same reason the channel is inert: no admin token
+  and no key value here. Its response shapes are covered by `worker.test.ts` on both check-in branches.
+- **The `USE_SQLITE` trap is still a trap** — record only, no documentation change made.
+- Unchanged: the §5 BSSID probe (the only thing that can change ADR-009), D-120, D-129/D-130/D-134,
+  D-210, the `installer.py`/`installer_gui.py` config duplication, picomatch advisories, 12 stale
   `audit_test_teeth` rows, offline key custody, HP UEFI BIOS password.
 
 ### Debt items closed
 
-None formally — this closes ADR-008's recorded follow-up, which was never a ledger item.
+None.
 
 ### Debt items still open
 
@@ -99,48 +97,45 @@ D-120, D-129, D-130, D-134, D-210.
 
 ### Blockers
 
-- **Not blocked.** The remaining rotation limits are design boundaries recorded in ADR-010, not work
-  items; the only unproven piece is a real-device exercise of the rotation.
+- **Two operator-held values** gate the remaining two steps: a Google API key to set on the Worker, and
+  an admin token to observe MOLE's check-in. Neither is something this session can supply, and pushing
+  a throwaway value into a deployed Worker would change production state for a test.
 
 ### Session artifacts
 
-- `docs/adr/ADR-010-geolocation-key-rotation.md` — the decision, the `null` semantics, what is NOT
-  solved, and a Verification section that names only tests which exist.
-- `docs/artifacts/s309-key-rotation.txt` — the channel rationale, the contract table, the 8-file
-  change map, the nine gate outputs measured by the parent, and both oracle blocks.
+- `docs/artifacts/s310-rotation-live-probe.txt` — the driver's description, the 13 PASS lines verbatim,
+  the final on-disk override, what is proven versus not, and the `USE_SQLITE` trap.
+- `/tmp/probe_rotation.py` — the throwaway driver (deliberately not added to the repo: it boots a
+  server with throwaway secrets and would be a liability if anyone pointed it at real data).
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), the same defect class for the third session running.** Round 0
-  passed every gate while three of four required test groups did not exist; the tell was the counts
-  (server 882→882, worker 490→490, agent 976→976 — only the contract moved 24→25). Round 1 added the
-  agent tests but left the server and worker tests unwritten, and the worker's own report
-  **reclassified them as "optional"**. Both rounds were needed because a green suite cannot detect a
-  missing test and a worker report is not evidence. Harness change already adopted in practice:
-  compare test counts before/after in the oracle brief, not just gate colour.
-- **Layer 2 (context provision)**: the `trim()` defect came from the environment, not the plan — an
-  operator pasting a key into `wrangler secret put` can easily include a newline, and nothing in the
-  ADR said the surfaces must normalise it. Now both do.
+- **Layer 3 (execution environment), twice**: the first two probe attempts died on configuration the
+  repo does not state in one place — `ALLOW_NON_PROD` plus four ≥32-character secrets, then
+  `USE_SQLITE=true`. Neither failure was a product defect, and both cost a run.
+- **Layer 4 (verification feedback)**: `GET /api/health` answering 200 while the process is dialling a
+  Postgres that does not exist is a false-green by construction. A readiness probe that does not check
+  the data path cannot tell "up" from "up and useless", and this session was fooled by it for two runs.
+- **A tooling lesson of my own**: `pkill -f "node src/index.js"` matched the shell command that was
+  running it and killed my own turn (exit 143). Killing by captured PID is the correct pattern.
 
 ### VERIFY
 
-- `cd server && npm test` → **885 passed, 52 suites**, exit 0 (882 + 3 new)
-- `cd server && npx eslint .` → exit 0
-- `cd serverless && npm test` → **495 passed, 4 files**, exit 0 (490 + 5 new)
-- `cd serverless && npx tsc --noEmit -p .` → exit 0
-- `scripts/run-agent-tests.sh -q` → exit 0, **983 collected** (976 + 7 new in
-  `agent/tests/test_runtime_settings.py`)
-- `scripts/lint-agent.sh` → ruff check + format clean
-- `agent/.venv/bin/python scripts/test_cross_surface_contract.py` → **25 passed**, exit 0
-- `git diff | grep -E "log\.|console\.|audit|kv.put"` filtered to key-bearing lines → none added
-- `git diff --stat` → 8 files +242/−4, plus the two new documents; `installer.py` /
-  `installer_gui.py` / `installer-scripts.ts` absent from the diff
+- 13/13 `PASS` lines from the live probe, ending `RESULT: PASS (0 failure(s))` — key A persisted,
+  same-revision no-write (mtime), key B rotated with no restart, `null` clears and falls back to
+  `INSTALL-TIME-KEY`, unset leaves the override untouched.
+- Final override file: `{"google_api_key": null, "revision": "5e4fdbd5ebc2a0be"}`.
+- `ss -ltnp | grep -E ":(3311|3411) "` → nothing listening; no leftover `node src/index.js`.
+- `npx wrangler secret list` → `[{"name":"ADMIN_TOKEN","type":"secret_text"}]` for `lockdown-serverless`.
+- No source file changed this session; the platform suite numbers from S309 stand (server 885/52,
+  worker 495/4, agent 983, contract 25).
 
 ### Next session opening
 
-Exercise the rotation on a real device: set `GOOGLE_API_KEY` on the lab Worker, confirm the next
-check-in writes `.runtime_settings` on MOLE, then change the value and confirm the agent picks it up
-without a restart — the only part of ADR-010 that is still unit-tested only.
+Ask the operator for the two values the last step needs — a Google API key for the Worker secret and an
+admin token for the lab API — and then watch MOLE's check-in write `.runtime_settings` and pick the key
+up without a restart; if those values are not available, stop treating the rotation as pending work and
+record it as `emulated`-verified until a hardware window exists.
 
 ---
 

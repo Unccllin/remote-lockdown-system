@@ -3910,3 +3910,25 @@ beliefs:
   dependents: []
   notes: 'Measured S309: server 885/52, worker 495/4, agent 983, contract 25. No-key path pinned by tests
     asserting the exact top-level key set.'
+- id: B-178
+  statement: 'ADR-010''s geolocation-key rotation is verified end to end on this host (S310): the real
+    Express server (throwaway SQLite via USE_SQLITE=true, real admin enrolment, real per-device api_key)
+    plus the real agent checkin()/_reconcile_runtime_settings() drive all four contract states in 13/13
+    assertions — key A arrives and is persisted, the same revision is not rewritten, key B rotates the
+    value with no restart, defined-but-empty delivers null and clears the override so the install-time
+    key applies again, and an unset env yields a response with no settings object that leaves the override
+    untouched. Still unproven: a real Windows device (host path = emulated), and the deployed Worker,
+    which holds only ADMIN_TOKEN so the channel is inert in production.'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/artifacts/s310-rotation-live-probe.txt; /tmp/probe_rotation.py output
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Probe needs USE_SQLITE=true; without it the server dials Postgres, health still answers 200,
+    and /api/setup/status reports 'Database not initialized'.

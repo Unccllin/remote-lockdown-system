@@ -4524,3 +4524,115 @@ check-in writes `.runtime_settings` on MOLE, then change the value and confirm t
 without a restart — the only part of ADR-010 that is still unit-tested only.
 
 ---
+
+---
+
+## Session 310 — 2026-11-19 (the rotation runs for real here — 13/13 — and what that still is not)
+
+### RULE-ZERO — understanding logged before each change
+
+No product code changed: this session exercised S309's rotation against a real server and the real
+agent modules, which required reading how the server boots before it could be aimed at a throwaway DB.
+
+- **Read**: `server/src/db/pool.js:24` — SQLite mode is selected by `USE_SQLITE=true` and *only* that;
+  `SQLITE_PATH` alone leaves the pool on Postgres and even warns that `DATABASE_URL` will be ignored.
+- **Read**: `server/src/index.js:293,328-345` — `PORT`, then `runMigrations()` and only afterwards
+  `startServer()`; a failed migration in non-production logs "Starting anyway" and serves an API whose
+  tables do not exist. That is the state the first two probe attempts hit.
+- **Read**: `server/src/config/env.js:120-180` — placeholders are rejected even outside production, and
+  `JWT_SECRET`, `AGENT_KEY_PEPPER`, `FIELD_ENCRYPTION_KEY`, `LOCATION_FIELD_KEY` each need ≥32
+  characters; `ALLOW_NON_PROD=1` is required when `NODE_ENV !== production`.
+- **Read**: `server/src/routes/setup.js` and the E2E fixtures' bootstrap — first admin via
+  `POST /api/setup/create-admin`, JWT via `POST /api/auth/login`, per-device key via
+  `POST /api/devices`; that is the only path to a key the agent can authenticate with.
+- **Read**: `agent/agent.py` `checkin()`, `_reconcile_runtime_settings()`, `_effective_google_key()`,
+  and `hmacAuth`'s `REQUIRE_HMAC` default — the probe could run unsigned (HMAC is opt-in), which keeps
+  the probe about rotation rather than about signing.
+
+**Findings**: nothing in the repo tells a caller that SQLite needs `USE_SQLITE=true`; the failure mode
+is actively misleading (health answers 200, `/api/setup/status` says "Database not initialized", and
+the log shows Postgres `ECONNREFUSED` on :5432). Recorded, not fixed — it is harness ergonomics.
+
+### Fog cleared
+
+- **The rotation is observed, not argued** (`d756729`): the real Express server plus the real
+  `checkin()`/`_reconcile_runtime_settings()`/`_effective_google_key()` drive all four contract states
+  in **13/13 assertions PASS** — key A arrives and is persisted; the same revision is **not**
+  rewritten (mtime asserted, so a 30 s poll cannot churn the file); key B rotates the value **with no
+  restart**; defined-but-empty delivers `null`, clears the override and the install-time key becomes
+  effective again; and an unset env produces a response with **no** `settings` object that leaves an
+  existing override byte-identical.
+- **The `null` semantic is now a measured behaviour**, not a paragraph in an ADR: after the `null`
+  phase the override file holds `{"google_api_key": null, "revision": "5e4fdbd5ebc2a0be"}` and the
+  effective key is `INSTALL-TIME-KEY` again.
+- **The deployed Worker is inert for this feature**: `wrangler secret list` on `lockdown-serverless`
+  returns exactly one secret — `ADMIN_TOKEN`. No `GOOGLE_API_KEY`, so no device in production can be
+  receiving a `settings` object today. That is the correct safe state and it is now a measured fact
+  rather than an assumption.
+- **Cleanup verified**: no probe server left listening on 3311/3411 and no stray `node src/index.js`.
+
+### Fog remaining
+
+- **MOLE has not run this.** The probe uses this Linux host with the real server and agent modules —
+  `emulated` on the evidence ladder, one step below `hardware`. A Windows service install writing
+  `.runtime_settings` under its ACL'd state directory is still unobserved.
+- **Restart survival is untested**: the probe reuses one agent process, so it proves "no restart
+  needed for the in-memory value" (the claim) but not that a restarted agent reads the file back.
+- **The Worker path is untested end to end** for the same reason the channel is inert: no admin token
+  and no key value here. Its response shapes are covered by `worker.test.ts` on both check-in branches.
+- **The `USE_SQLITE` trap is still a trap** — record only, no documentation change made.
+- Unchanged: the §5 BSSID probe (the only thing that can change ADR-009), D-120, D-129/D-130/D-134,
+  D-210, the `installer.py`/`installer_gui.py` config duplication, picomatch advisories, 12 stale
+  `audit_test_teeth` rows, offline key custody, HP UEFI BIOS password.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- **Two operator-held values** gate the remaining two steps: a Google API key to set on the Worker, and
+  an admin token to observe MOLE's check-in. Neither is something this session can supply, and pushing
+  a throwaway value into a deployed Worker would change production state for a test.
+
+### Session artifacts
+
+- `docs/artifacts/s310-rotation-live-probe.txt` — the driver's description, the 13 PASS lines verbatim,
+  the final on-disk override, what is proven versus not, and the `USE_SQLITE` trap.
+- `/tmp/probe_rotation.py` — the throwaway driver (deliberately not added to the repo: it boots a
+  server with throwaway secrets and would be a liability if anyone pointed it at real data).
+
+### Failure attribution
+
+- **Layer 3 (execution environment), twice**: the first two probe attempts died on configuration the
+  repo does not state in one place — `ALLOW_NON_PROD` plus four ≥32-character secrets, then
+  `USE_SQLITE=true`. Neither failure was a product defect, and both cost a run.
+- **Layer 4 (verification feedback)**: `GET /api/health` answering 200 while the process is dialling a
+  Postgres that does not exist is a false-green by construction. A readiness probe that does not check
+  the data path cannot tell "up" from "up and useless", and this session was fooled by it for two runs.
+- **A tooling lesson of my own**: `pkill -f "node src/index.js"` matched the shell command that was
+  running it and killed my own turn (exit 143). Killing by captured PID is the correct pattern.
+
+### VERIFY
+
+- 13/13 `PASS` lines from the live probe, ending `RESULT: PASS (0 failure(s))` — key A persisted,
+  same-revision no-write (mtime), key B rotated with no restart, `null` clears and falls back to
+  `INSTALL-TIME-KEY`, unset leaves the override untouched.
+- Final override file: `{"google_api_key": null, "revision": "5e4fdbd5ebc2a0be"}`.
+- `ss -ltnp | grep -E ":(3311|3411) "` → nothing listening; no leftover `node src/index.js`.
+- `npx wrangler secret list` → `[{"name":"ADMIN_TOKEN","type":"secret_text"}]` for `lockdown-serverless`.
+- No source file changed this session; the platform suite numbers from S309 stand (server 885/52,
+  worker 495/4, agent 983, contract 25).
+
+### Next session opening
+
+Ask the operator for the two values the last step needs — a Google API key for the Worker secret and an
+admin token for the lab API — and then watch MOLE's check-in write `.runtime_settings` and pick the key
+up without a restart; if those values are not available, stop treating the rotation as pending work and
+record it as `emulated`-verified until a hardware window exists.
+
+---
