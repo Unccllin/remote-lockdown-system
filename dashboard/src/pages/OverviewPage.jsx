@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ShieldAlert,
@@ -14,7 +14,6 @@ import {
   ShieldCheck,
   Clock,
 } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import api from '../api/client';
 import { safeFromNow } from '../utils/time';

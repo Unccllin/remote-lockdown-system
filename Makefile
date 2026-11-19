@@ -287,7 +287,7 @@ check-openapi:
 	@node scripts/check-openapi-routes.js
 
 lint-dashboard:
-	@cd dashboard && npx eslint src/ tests/ --max-warnings=0
+	@cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0
 
 lint-agent:
 	@scripts/lint-agent.sh

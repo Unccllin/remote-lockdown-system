@@ -72,7 +72,7 @@ jobs:
         run: npm ci
 
       - name: Run ESLint
-        run: npx eslint src/ tests/ --max-warnings=0
+        run: npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0
 
   # ---------------------------------------------------------------------------
   # ruff — agent (Python)

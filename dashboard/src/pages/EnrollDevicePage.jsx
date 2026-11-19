@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, KeyRound, Copy, Check, QrCode, Clock, Loader,
@@ -435,7 +435,7 @@ export default function EnrollDevicePage() {
             </div>
             <p className="text-xs text-slate-500 mt-3">
               The setup wizard downloads the agent automatically during installation.
-              Only download "Agent Only" if you're using the command-line installer.
+              Only download &quot;Agent Only&quot; if you&apos;re using the command-line installer.
             </p>
           </div>
 

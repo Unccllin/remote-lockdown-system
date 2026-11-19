@@ -49,5 +49,21 @@
     "dist/",
     "build/",
     "coverage/"
+  ],
+  "overrides": [
+    {
+      "files": ["tests/**/*.{js,jsx}"],
+      "globals": {
+        "describe": "readonly",
+        "it": "readonly",
+        "test": "readonly",
+        "expect": "readonly",
+        "vi": "readonly",
+        "beforeAll": "readonly",
+        "afterAll": "readonly",
+        "beforeEach": "readonly",
+        "afterEach": "readonly"
+      }
+    }
   ]
 }

@@ -259,7 +259,7 @@ npm test
 # Per-component
 cd server   && npm test                       # 843 Jest tests (51 suites)
 scripts/run-agent-tests.sh -q                 # 866 pytest tests (uses agent/.venv)
-cd dashboard && npx vitest run                # 260 Vitest tests (29 files)
+cd dashboard && npx vitest run                # 272 Vitest tests (30 files)
 cd electron  && npm test                      # 30 Jest tests
 cd serverless && npm test                     # 429 Vitest tests
 
@@ -294,7 +294,8 @@ make load-smoke
 
 # Lint
 cd server    && npx eslint .                  # exit 0 = clean
-cd dashboard && npx eslint .                  # exit 0 = clean
+cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0   # exit 0 = clean
+# eslint v8 with .eslintrc.json lints .js only unless --ext is passed, so a directory-taking lint gate must be judged by the count of files it read, not by its exit code.
 scripts/lint-agent.sh                         # ruff 0.17.5 check + format, resolved interpreter
 #   NOT `python3 -m ruff`: this host has no system ruff, and that command is how
 #   `make full-verify` used to abort one target in (S271). The script finds the venv,
@@ -390,7 +391,8 @@ bash -n scripts/*.sh && bash -n .devin/orchestration/orchestrator.sh
 # /var/run/docker.sock (this login session is not in the `docker` group; `sudo -n` is
 # unavailable). That test is deliberately not softened to a SKIP — a gate that cannot run
 # has not passed. Measured 2026-11-17 (S271): server 848 (51 suites), agent 925,
-# dashboard 260, worker 447, electron 30, API E2E 14, verify-env 56 PASS / 0 FAIL / 5 SKIP.
+# dashboard 272 (re-measured 2026-11-19, S305), worker 447, electron 30, API E2E 14,
+# verify-env 56 PASS / 0 FAIL / 5 SKIP.
 make full-verify
 
 # Full environment + artifact verification (63 checks)
@@ -460,7 +462,8 @@ make build
 
 All green, re-measured 2026-11-13 (every number below was produced by running the
 command that owns it — the count is cheaper to re-take than to trust): 843 server
-tests (51 suites), 866 agent tests, 260 dashboard tests (29 files), 30 electron
+tests (51 suites), 866 agent tests, 272 dashboard tests (30 files, re-measured
+2026-11-19 in S305), 30 electron
 tests, 429 serverless tests, 14 API E2E tests, 255 script-harness checks (236
 pytest tests across 14 suites + 19 checks in the hand-rolled secret-scanner suite;
 5 worker-update cases skip without a built worker), eslint clean on server +
@@ -522,7 +525,8 @@ Electron runs too (`npx electron .` from `electron/`, same `LD_LIBRARY_PATH`); `
 dashboard, worker, electron) plus the script-level harness tests, E2E, env and
 artifact checks — it previously ran only three of the five while its own comment
 claimed "all 5 test suites". Current measured totals (2026-11-13): server 843 (51 suites),
-agent 866, dashboard 260, worker 429, electron 30, API E2E 14, script harness 255.
+agent 866, dashboard 272 (re-measured 2026-11-19, S305), worker 429, electron 30, API E2E 14,
+script harness 255.
 
 The script-level harness tests are **auto-discovered** (`scripts/test_*.py`, run
 by `make test-scripts` and the CI `script-tests` job). Counts measured 2026-11-05

@@ -284,7 +284,7 @@ echo "Done!"
             <AlertTriangle className="text-amber-400 shrink-0 mt-0.5" size={18} />
             <div className="text-sm text-amber-200/80">
               <p className="font-medium text-amber-300 mb-1">Save your API key now</p>
-              <p>The API key is shown only once. Store it securely — you'll need it to configure the agent on the target device.</p>
+              <p>The API key is shown only once. Store it securely — you&apos;ll need it to configure the agent on the target device.</p>
             </div>
           </div>
         </div>
@@ -412,7 +412,7 @@ echo "Done!"
               </div>
             </button>
             <p className="text-xs text-amber-500/60 mt-3">
-              Note: Generating the script rotates this device's API key — the old key stops working.
+              Note: Generating the script rotates this device&apos;s API key — the old key stops working.
             </p>
           </div>
         ) : (
@@ -514,7 +514,7 @@ echo "Done!"
 
       <h1 className="text-2xl font-bold text-slate-100 mb-1">Enroll a Device</h1>
       <p className="text-slate-400 text-sm mb-6">
-        Register a new device in the system. After enrollment, you'll receive an API key to configure the agent.
+        Register a new device in the system. After enrollment, you&apos;ll receive an API key to configure the agent.
       </p>
 
       <form onSubmit={handleSubmit} className="card space-y-4">

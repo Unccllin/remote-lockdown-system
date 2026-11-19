@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { pblPolicy, pblAdmin } from '../api/pblClient';
 
 /**
@@ -65,11 +65,18 @@ function PblPolicyPage() {
   const [formTlsCaPin, setFormTlsCaPin] = useState('');
   const [formVerdictSigningKeySpki, setFormVerdictSigningKeySpki] = useState('');
 
-  useEffect(() => {
-    loadData();
+  const loadPolicyVersions = useCallback(async () => {
+    try {
+      const resp = await pblPolicy.list();
+      setPolicyVersions(resp.data.versions || []);
+      setPolicyLatestVersion(resp.data.latest_version || null);
+      setPolicySource(resp.data.source === 'default' ? 'default' : 'stored');
+    } catch {
+      // Policy list endpoint may not be available in all environments
+    }
   }, []);
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -88,18 +95,11 @@ function PblPolicyPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [loadPolicyVersions]);
 
-  async function loadPolicyVersions() {
-    try {
-      const resp = await pblPolicy.list();
-      setPolicyVersions(resp.data.versions || []);
-      setPolicyLatestVersion(resp.data.latest_version || null);
-      setPolicySource(resp.data.source === 'default' ? 'default' : 'stored');
-    } catch {
-      // Policy list endpoint may not be available in all environments
-    }
-  }
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   async function handleDownload() {
     try {

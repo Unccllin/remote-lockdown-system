@@ -1,9 +1,8 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, Bell, RefreshCw, X, Monitor, MapPin, ShieldAlert,
 } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import {
   getAlerts, getSeverity, dismissAlert, getDismissedAlertIds, _clearDismissed,
