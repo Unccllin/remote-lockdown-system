@@ -1,0 +1,62 @@
+=== S315: the §5 BSSID probe, run on MOLE (2026-11-19) ===
+
+The measurement ADR-009 rested on and could not produce. Everything below was run over OpenSSH
+(labadmin@192.168.1.249, key ~/.ssh/lockdown_lab_ed25519) against the lab device, with the most
+permissive consent state the platform offers.
+
+--- [1] the environment the probe ran in ---
+  windows             : MOLE, Win10.0.26300, agent 1.0.4
+  device consent       : HKLM …\CapabilityAccessManager\ConsentStore\location\Value = Allow
+  interactive session  : session 1, user "Newark User", STATE Active  (qwinsta)
+  this SSH session     : session 0, MOLE\labadmin, elevated True
+  So the "location-capable interactive session" exists and consent is ON. Anything denied below is
+  denied to the *caller*, not because the machine lacks a session or a setting.
+
+--- [2] (a) control — elevated admin, session 0 ---
+  $ netsh wlan show networks mode=bssid
+    "Network shell commands need location permission to access WLAN information …"
+  and through the API, which gives numbers instead of prose:
+    WlanOpenHandle rc=0 | WlanEnumInterfaces rc=0 interfaces=1 | if[0] WlanGetNetworkBssList rc=5
+  rc=5 is ERROR_ACCESS_DENIED. Interfaces enumerate; the BSS list — the call that yields BSSIDs — is
+  refused.
+
+--- [3] (b) LocalSystem, session 0 — the measurement that was missing ---
+  Executed through a temporary service (sc create … binPath= 'cmd.exe /c powershell -File wlan-probe.ps1',
+  service deleted afterwards):
+    caller: NT AUTHORITY\SYSTEM
+    elevated: True
+    session: 0
+    location consent (HKLM): Allow
+    WLAN: WlanOpenHandle rc=0 | WlanEnumInterfaces rc=0 interfaces=1 | if[0] WlanGetNetworkBssList rc=5
+  Identical to the admin control. A LocalSystem service cannot obtain BSSIDs even with device-level
+  consent set to Allow.
+
+--- [4] (c) Geolocator from LocalSystem — Microsoft's recommended replacement ---
+  The WinRT type loads and instantiates under SYSTEM (Geolocator, Geoposition both resolved), so this
+  is not a "TypeNotFound" result:
+    caller: NT AUTHORITY\SYSTEM   session: 0   consent: Allow
+    "Your App does not have permission to access location data."
+    RESULT: hresult = 0x80070005        (E_ACCESSDENIED)
+  So option (c2) in ADR-009 — call Geolocator instead of triangulating, needing no Google key — does
+  not work from a service either.
+
+--- [5] what this settles ---
+  - ADR-009's claim is now measured, not read: a Windows service install reports source 'ip' because
+    the platform denies BSSIDs to it, with consent at its most permissive.
+  - (c2) is dead on hardware evidence, so the "no Google key needed on Windows" hope is gone.
+  - The only route left unmeasured is (c1), an in-session helper in session 1. Nothing here rules it
+    out — this probe only shows the *service* cannot, which is the case that prompted the question.
+    Running it needs code execution inside session 1 (Task Scheduler is broken on MOLE, B-073), so it
+    needs `CreateProcessAsUser` with `WTSQueryUserToken` — a different piece of work, and one that only
+    helps while a user is logged on anyway.
+
+--- [6] method notes worth keeping ---
+  - `powershell.exe` as a service binPath never produced a process at all (8 polls over 40 s); the
+    `cmd.exe /c powershell -File …` wrapper started immediately every time. If a future probe shows
+    "no report", it is the wrapper, not the permission.
+  - Under the service, a batch's `whoami` and `netsh` output vanished while the file itself was
+    written — SCM redirection is not a reliable channel. That is why the result is a numeric API
+    return code and not a netsh exit status: exit 1 from netsh is indistinguishable from "no
+    interface".
+  - Cleanup: both temporary services (`PblBssidProbe`, `PblWlanProbe`, `PblGeoProbe`) deleted; the
+    probe scripts remain in C:\Users\labadmin as evidence and are harmless.

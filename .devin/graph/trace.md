@@ -5032,3 +5032,105 @@ Run the §5 BSSID probe on MOLE over SSH — interactive `WlanGetNetworkBssList`
 the only measurement that can change ADR-009 and it needs nobody at a keyboard.
 
 ---
+
+---
+
+## Session 315 — 2026-11-19 (the BSSID probe, run on MOLE: services cannot, and neither can Geolocator)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `docs/artifacts/s308-session0-bssid-feasibility.txt` §5 — the three-call probe this session
+  executes, and §1's quoted Microsoft rule it was written to test.
+- **Read**: `docs/adr/ADR-009` §Consequences and §Alternatives — the two claims marked "unproven" that
+  the probe could now settle.
+- **Read**: the WLAN API contracts (`WlanOpenHandle`, `WlanEnumInterfaces`, `WlanGetNetworkBssList`) and
+  WinRT `Geolocator.GetGeopositionAsync` — enough to P/Invoke them and read return codes rather than
+  parse prose from `netsh`.
+- **Read**: MOLE's actual state before measuring — `qwinsta` (console session 1 Active, user "Newark
+  User"), HKLM location consent (`Allow`), my session id (0) and elevation (True).
+
+**Findings**: the probe is only meaningful if consent is at its most permissive and a
+location-capable session exists, and both were true — so a denial could only be about the *caller*.
+
+### Fog cleared
+
+- **A LocalSystem service cannot obtain BSSIDs, measured** (`docs/artifacts/s315-bssid-probe-hardware.txt`):
+  from a temporary service running as `NT AUTHORITY\SYSTEM` in session 0 with consent `Allow`,
+  `WlanOpenHandle` and `WlanEnumInterfaces` return **0** (one interface) and
+  `WlanGetNetworkBssList` returns **5 = ERROR_ACCESS_DENIED** — identical to the elevated-admin control.
+- **Geolocator fails from a service too**, which kills the hope ADR-009 had left open: the WinRT types
+  load and instantiate under SYSTEM, and `GetGeopositionAsync` faults with **0x80070005 E_ACCESSDENIED**.
+  Option (c2) is now rejected on hardware evidence, not on reasoning.
+- **ADR-009's sentence is now measured**: "a service install reports `source: 'ip'` by platform design"
+  is a hardware result with the strongest possible consent setting, not a reading of documentation.
+- **AGENTS.md now carries the result** so the BSSID question is not re-opened by argument: the three
+  refusals, the two return codes, and the one route that remains unmeasured.
+- **Method facts worth keeping**: `powershell.exe` as a service `binPath` never produced a process
+  (8 polls over 40 s) while `cmd.exe /c powershell -File …` started every time; and under SCM a batch's
+  `whoami`/`netsh` output vanished while the file was written — which is why the evidence is an API
+  return code and not a `netsh` exit status.
+
+### Fog remaining
+
+- **(c1), the in-session helper, is still untested** — neither confirmed nor excluded. Running it means
+  code execution inside session 1, and MOLE's Task Scheduler is broken (B-073), so it needs
+  `CreateProcessAsUser` + `WTSQueryUserToken`. It would also only help while a user is logged on,
+  which is why it was never the recommended path.
+- **MOLE remains IP-level in practice**, and now nobody can claim the key or the platform might change
+  that: `google_api_key` is provisioned (S311) and inert for this device by design.
+- **Consent-off was not run** — deliberately: consent-on already denied the call, so the stricter state
+  could only add nothing.
+- Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
+  HP UEFI password, the `installer.py`/`installer_gui.py` config duplication.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- **(c1) needs a session-1 execution mechanism**, which is a small piece of engineering rather than a
+  measurement anyone can take with a shell.
+
+### Session artifacts
+
+- `docs/artifacts/s315-bssid-probe-hardware.txt` — the environment, the three refusals with numeric
+  codes, what is settled, and the two method traps.
+- `docs/adr/ADR-009-location-precision-by-install-type.md` — hardware results table, and (c2) rejected
+  on evidence.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), in the probe's own plumbing.** Three attempts produced
+  "no output", "exit 1" and "One or more errors occurred" — each of which *looks* like a denial and
+  none of which distinguishes denial from a broken harness. The fix was to stop reading `netsh` prose
+  and SCM redirection and switch to P/Invoke return codes: 5 and 0x80070005 are unambiguous. A probe
+  that cannot separate "denied" from "did not run" is not a measurement.
+- **Layer 3 (execution environment)**: `powershell.exe` as a service binary silently never started;
+  the `cmd.exe /c` wrapper did. Recorded so the next probe does not repeat the 40 seconds.
+
+### VERIFY
+
+- **Environment**: `qwinsta` → session 1 Active ("Newark User"); HKLM consent → `Allow`; probe session 0,
+  elevated True.
+- **(a) control**, elevated admin session 0: `netsh` → "need location permission"; API →
+  `WlanOpenHandle rc=0 | WlanEnumInterfaces rc=0 interfaces=1 | WlanGetNetworkBssList rc=5`.
+- **(b) SYSTEM** via `sc create … cmd.exe /c powershell -File …`: caller `NT AUTHORITY\SYSTEM`,
+  session 0, consent Allow, same three return codes — **rc=5** on the BSS list.
+- **(c) SYSTEM Geolocator**: types resolved (`Geolocator`, `Geoposition`), then
+  "Your App does not have permission to access location data." with **hresult = 0x80070005**.
+- Cleanup: all temporary services deleted (`PblBssidProbe`, `PblWlanProbe`, `PblGeoProbe`).
+- `python3 scripts/brain.py check` → 183 beliefs, integrity clean (B-183 asserted at hardware level).
+
+### Next session opening
+
+Build the (c1) in-session helper probe — `CreateProcessAsUser` with `WTSQueryUserToken` to run the same
+`WlanGetNetworkBssList` inside session 1 — because it is the only BSSID route left untested, and if it
+works the honest product statement becomes "IP-level for service installs, wifi for logged-on ones"
+rather than "IP-level, always".
+
+---

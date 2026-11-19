@@ -65,8 +65,29 @@ S304's UI already labels the result approximate.
   ruling because B-075 forbids the *agent* being a Run key or scheduled task — a separate helper is a
   different actor, which is a decision, not a workaround.
 - **Geolocator from the service.** Microsoft's own recommended replacement for Wi-Fi scans, and it
-  would need no Google key. Untested from session 0, so it cannot be promised; the probe in §5
-  measures it in one call.
+  would need no Google key. **Measured 2026-11-19 (S315) and it fails**: from `LocalSystem` in
+  session 0 with device consent set to Allow, the WinRT types load and instantiate but
+  `GetGeopositionAsync` faults with `0x80070005` (E_ACCESSDENIED). Rejected on hardware evidence, not
+  on reasoning.
+
+## Verified on hardware (S315)
+
+`docs/artifacts/s315-bssid-probe-hardware.txt` — MOLE, 2026-11-19, device consent `Allow`, an active
+console session (1) and the probe running from session 0:
+
+| caller | call | result |
+|---|---|---|
+| elevated admin, session 0 | `WlanGetNetworkBssList` | **rc=5** ERROR_ACCESS_DENIED |
+| `LocalSystem`, session 0 | `WlanGetNetworkBssList` | **rc=5** ERROR_ACCESS_DENIED |
+| `LocalSystem`, session 0 | `Geolocator.GetGeopositionAsync` | **0x80070005** E_ACCESSDENIED |
+
+`WlanOpenHandle` and `WlanEnumInterfaces` both return 0 in every case — the interface is visible, the
+BSSIDs are not. Because consent was at its most permissive and a location-capable session existed,
+these results are about the caller, not about configuration.
+
+The only route this does not test is (c1), an in-session helper running in session 1; it is neither
+confirmed nor excluded here, and it needs code execution inside a user session (Task Scheduler is
+broken on MOLE, B-073).
 
 ## Verification
 

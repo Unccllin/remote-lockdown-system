@@ -4021,3 +4021,25 @@ beliefs:
   dependents: []
   notes: 'CI evidence: lint run 44506991536 all 8 jobs success on d93fb32; lint run for 91a17ea failed
     only Secret scan.'
+- id: B-183
+  statement: 'The BSSID question is settled on hardware (S315, MOLE, consent Allow, console session 1
+    active): from session 0, WlanGetNetworkBssList returns ERROR_ACCESS_DENIED (rc=5) for BOTH an elevated
+    admin and a LocalSystem service started via sc create, while WlanOpenHandle and WlanEnumInterfaces
+    return 0; and Geolocator.GetGeopositionAsync from LocalSystem faults with 0x80070005 E_ACCESSDENIED,
+    so Microsoft''s recommended replacement fails for services too. ADR-009''s ''a service install is
+    IP-level by platform design'' is therefore measured rather than read, option (c2) is rejected on hardware
+    evidence, and the only untested route is an in-session helper in the console session (needs CreateProcessAsUser
+    + WTSQueryUserToken because MOLE''s Task Scheduler is broken, B-073).'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/artifacts/s315-bssid-probe-hardware.txt; docs/adr/ADR-009-location-precision-by-install-type.md;
+    AGENTS.md
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Hardware evidence, 2026-11-19, over SSH to labadmin@192.168.1.249.

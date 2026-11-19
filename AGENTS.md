@@ -765,11 +765,15 @@ build always shows a parent bootloader plus its child, so `tasklist` reporting t
 Windows restricts the BSSID-returning calls (`WlanGetNetworkBssList`, `WlanScan`,
 `WlanGetAvailableNetworkList`) to processes holding precise-location consent, and shows the consent
 prompt only to processes "within the user's context and outside of `C:\Windows\System32`" — a
-`LocalSystem` service in session 0 is neither, so it can never prompt. Measured on MOLE with the
-device-level consent value set to `Allow`, the scan is still refused (*Access is denied*). Do not
-re-open the BSSID question by reasoning from the docs alone: run the three-call probe in
-`docs/artifacts/s308-session0-bssid-feasibility.txt` §5 (interactive admin, LocalSystem-via-service,
-LocalSystem `Geolocator`; consent on and off) and decide from measurements.
+`LocalSystem` service in session 0 is neither, so it can never prompt. **The three-call probe was run on MOLE in S315 and all three were refused**
+(`docs/artifacts/s315-bssid-probe-hardware.txt`, consent `Allow`, an active console session):
+elevated admin in session 0 → `WlanGetNetworkBssList` **rc=5**; `LocalSystem` via a temporary service
+→ **rc=5**; and `LocalSystem` `Geolocator` → **0x80070005**. `WlanOpenHandle` and
+`WlanEnumInterfaces` return 0 in every case, so the interface is visible and the BSSIDs are not.
+Microsoft's recommended replacement is therefore dead on Windows services too — do not re-propose
+it. The only unmeasured route is an in-session helper running in the console session (which needs
+`CreateProcessAsUser` + `WTSQueryUserToken`, since MOLE's Task Scheduler is broken, B-073), and it
+only helps while a user is logged on.
 
 ### Hardware testing status — 2026-11-05 (window: 4 enforcement paths moved)
 

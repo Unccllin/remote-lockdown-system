@@ -53,30 +53,38 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 314 — 2026-11-19 (I pushed a range my own scanner had failed, and the rule that was missing)
+## Latest session: 315 — 2026-11-19 (the BSSID probe, run on MOLE: services cannot, and neither can Geolocator)
 
 ### Fog cleared
 
-- **Both live occurrences are redacted** (`d93fb32`): `trace.md` (my S312 block) and the S312 artifact.
-  `grep -r kLekRUyp .devin/graph/trace.md docs/artifacts/` → 0.
-- **AGENTS.md gained the mechanical half**: "gate the push on the scan, not next to it" — `… && git push`,
-  because "a verification whose failure does not stop the action is a log line, not a check".
-- **CI is green on the corrected push**: `d93fb32` → Lint run 44506991536 with **all eight jobs
-  success**, including `Secret scan (publish range)` and `SAST (Semgrep)`; plus `CI` and `CodeQL`.
-- **The bad push is recorded as red, not hidden**: on `91a17ea` the only failing job was
-  `Secret scan (publish range)`. The gate worked; the operator did not.
+- **A LocalSystem service cannot obtain BSSIDs, measured** (`docs/artifacts/s315-bssid-probe-hardware.txt`):
+  from a temporary service running as `NT AUTHORITY\SYSTEM` in session 0 with consent `Allow`,
+  `WlanOpenHandle` and `WlanEnumInterfaces` return **0** (one interface) and
+  `WlanGetNetworkBssList` returns **5 = ERROR_ACCESS_DENIED** — identical to the elevated-admin control.
+- **Geolocator fails from a service too**, which kills the hope ADR-009 had left open: the WinRT types
+  load and instantiate under SYSTEM, and `GetGeopositionAsync` faults with **0x80070005 E_ACCESSDENIED**.
+  Option (c2) is now rejected on hardware evidence, not on reasoning.
+- **ADR-009's sentence is now measured**: "a service install reports `source: 'ip'` by platform design"
+  is a hardware result with the strongest possible consent setting, not a reading of documentation.
+- **AGENTS.md now carries the result** so the BSSID question is not re-opened by argument: the three
+  refusals, the two return codes, and the one route that remains unmeasured.
+- **Method facts worth keeping**: `powershell.exe` as a service `binPath` never produced a process
+  (8 polls over 40 s) while `cmd.exe /c powershell -File …` started every time; and under SCM a batch's
+  `whoami`/`netsh` output vanished while the file was written — which is why the evidence is an API
+  return code and not a `netsh` exit status.
 
 ### Fog remaining
 
-- **`ca6d953` remains on the remote containing the fragment's first eight characters.** The token is
-  single-use, had a 900 s TTL and expired 2026-11-18T12:03Z+15m — rewriting published history for that
-  is disproportionate, and this file says so rather than implying the exposure is zero.
-- **The pattern behind three separate incidents is not yet a test.** S305's lint gate that linted no
-  `.jsx`, S307's Playwright reuse of a stale dev server, and now a scan chained with `;` are all
-  "checks that watch without blocking". Two were fixed at their own layer; the general shape has no
-  guard.
-- Unchanged: the §5 BSSID probe on MOLE (still the cheapest next measurement), D-120,
-  D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody, HP UEFI password.
+- **(c1), the in-session helper, is still untested** — neither confirmed nor excluded. Running it means
+  code execution inside session 1, and MOLE's Task Scheduler is broken (B-073), so it needs
+  `CreateProcessAsUser` + `WTSQueryUserToken`. It would also only help while a user is logged on,
+  which is why it was never the recommended path.
+- **MOLE remains IP-level in practice**, and now nobody can claim the key or the platform might change
+  that: `google_api_key` is provisioned (S311) and inert for this device by design.
+- **Consent-off was not run** — deliberately: consent-on already denied the call, so the stricter state
+  could only add nothing.
+- Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
+  HP UEFI password, the `installer.py`/`installer_gui.py` config duplication.
 
 ### Debt items closed
 
@@ -88,36 +96,45 @@ D-120, D-129, D-130, D-134, D-210.
 
 ### Blockers
 
-- None.
+- **(c1) needs a session-1 execution mechanism**, which is a small piece of engineering rather than a
+  measurement anyone can take with a shell.
 
 ### Session artifacts
 
-- `AGENTS.md` (the gating rule), `.devin/graph/trace.md`, `docs/artifacts/s312-ci-green.txt` — `d93fb32`.
+- `docs/artifacts/s315-bssid-probe-hardware.txt` — the environment, the three refusals with numeric
+  codes, what is settled, and the two method traps.
+- `docs/adr/ADR-009-location-precision-by-install-type.md` — hardware results table, and (c2) rejected
+  on evidence.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), and self-inflicted twice over.** The check ran, printed `[FAIL]`,
-  and the push proceeded because of `;`; then I asserted cleanliness in the same breath as reading the
-  failure. A check that cannot block is decorative — the same defect class this repo fixed for lint
-  (S305) and for test-environment setup (S307), which is presumably why it keeps recurring in new forms.
-- **Layer 5 (state management)**: publishing is irreversible, and the irreversible action was placed
-  after a reversible check without a fail-fast link. `&&` is the whole fix, and it is now written down.
+- **Layer 4 (verification feedback), in the probe's own plumbing.** Three attempts produced
+  "no output", "exit 1" and "One or more errors occurred" — each of which *looks* like a denial and
+  none of which distinguishes denial from a broken harness. The fix was to stop reading `netsh` prose
+  and SCM redirection and switch to P/Invoke return codes: 5 and 0x80070005 are unambiguous. A probe
+  that cannot separate "denied" from "did not run" is not a measurement.
+- **Layer 3 (execution environment)**: `powershell.exe` as a service binary silently never started;
+  the `cmd.exe /c` wrapper did. Recorded so the next probe does not repeat the 40 seconds.
 
 ### VERIFY
 
-- `python3 scripts/prepush_secrets.py --base 91a17ea --head HEAD` → clean, then `&& git push` published
-  `d93fb32`.
-- CI `d93fb32` — Lint 44506991536: ruff · Secret scan · tsc · Server ESLint · Dashboard ESLint ·
-  actionlint · OpenAPI · SAST → **all success**; `CI` success; `CodeQL` success.
-- CI `91a17ea` — failing job: `Secret scan (publish range)`, and nothing else.
-- `grep -r kLekRUyp .devin/graph/trace.md docs/artifacts/` → **0**.
-- `python3 scripts/brain.py check` → 182 beliefs, integrity clean (B-182 asserted).
+- **Environment**: `qwinsta` → session 1 Active ("Newark User"); HKLM consent → `Allow`; probe session 0,
+  elevated True.
+- **(a) control**, elevated admin session 0: `netsh` → "need location permission"; API →
+  `WlanOpenHandle rc=0 | WlanEnumInterfaces rc=0 interfaces=1 | WlanGetNetworkBssList rc=5`.
+- **(b) SYSTEM** via `sc create … cmd.exe /c powershell -File …`: caller `NT AUTHORITY\SYSTEM`,
+  session 0, consent Allow, same three return codes — **rc=5** on the BSS list.
+- **(c) SYSTEM Geolocator**: types resolved (`Geolocator`, `Geoposition`), then
+  "Your App does not have permission to access location data." with **hresult = 0x80070005**.
+- Cleanup: all temporary services deleted (`PblBssidProbe`, `PblWlanProbe`, `PblGeoProbe`).
+- `python3 scripts/brain.py check` → 183 beliefs, integrity clean (B-183 asserted at hardware level).
 
 ### Next session opening
 
-Run the §5 BSSID probe on MOLE over SSH — interactive `WlanGetNetworkBssList`, the same call from
-`LocalSystem` via a temporary service, and `LocalSystem` `Geolocator`, consent on and off — since it is
-the only measurement that can change ADR-009 and it needs nobody at a keyboard.
+Build the (c1) in-session helper probe — `CreateProcessAsUser` with `WTSQueryUserToken` to run the same
+`WlanGetNetworkBssList` inside session 1 — because it is the only BSSID route left untested, and if it
+works the honest product statement becomes "IP-level for service installs, wifi for logged-on ones"
+rather than "IP-level, always".
 
 ---
 
