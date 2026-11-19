@@ -108,6 +108,8 @@ jobs:
       # .devin/graph decides whether every invariant passes and no gate read it until S328. Its rule
       # set is narrower than ruff.toml (E,W,F,I,UP): this is a build-time script, not shipped code.
       - name: Lint graph assertion engine
+        # This job runs with `working-directory: agent`, so the script must be named from the repo root.
+        working-directory: ${{ github.workspace }}
         run: scripts/lint-graph.sh
 
   # ---------------------------------------------------------------------------
