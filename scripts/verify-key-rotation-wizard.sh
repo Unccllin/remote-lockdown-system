@@ -190,7 +190,7 @@ TOTAL_STAGES=6
 # Everything below this line is authored for this procedure.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKER_DIR="$REPO_ROOT/serverless"
-ARTIFACT="$REPO_ROOT/docs/artifacts/s311-rotation-hardware.txt"
+ARTIFACT="${ROTATION_ARTIFACT:-$REPO_ROOT/docs/artifacts/s311-rotation-hardware.txt}"
 SECRET_NAME="GOOGLE_API_KEY"
 MOLE_FILE='C:\ProgramData\LockdownAgent\.runtime_settings'
 
@@ -231,9 +231,12 @@ banner "Rotate the geolocation key on real hardware"
 
 # The template's banner says "it remembers values already saved" — true for wizards that write
 # .env, false for this one: no key material is ever written to disk, so a re-run asks for the key
-# again. What IS remembered is where you stopped, and whether the Worker was left rotated.
+# again. That sentence is in the library (not ours to edit), so it is corrected out loud, every run,
+# before anything else — including a first run, where no state file exists to trigger the preflight.
 STATE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/lockdown-key-rotation.state"
 mkdir -p "$(dirname "$STATE_FILE")"
+note "Correction to the line above: this wizard saves NO values. The key is never written to disk,"
+note "so a re-run asks for it again. Only progress is kept: $STATE_FILE"
 
 _state_set() {  # _state_set KEY VALUE — upsert into the state file (0600, revisions only)
   local k="$1" v="$2" tmp
