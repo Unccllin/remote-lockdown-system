@@ -883,6 +883,13 @@ print_summary() {
     printf "\n]\n"
   fi
 
+  # S320: a run where nothing passed has verified nothing — every check skipped reads as
+  # "All checks passed (or skipped due to missing tools)" otherwise, which is a green story about an
+  # unmeasured tree. This repo's rule: a gate that cannot run has not passed.
+  if [[ $PASS -eq 0 ]]; then
+    printf "${RED}No check ran successfully (%d skipped) — refusing to report success.${NC}\n" "$SKIP"
+    exit 1
+  fi
   if [[ $FAIL -gt 0 ]]; then
     printf "${RED}%d check(s) failed.${NC}\n" "$FAIL"
     exit 1
