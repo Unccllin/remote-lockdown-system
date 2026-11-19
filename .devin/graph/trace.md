@@ -5436,3 +5436,93 @@ checks per file) and `check-artifacts`, since AGENTS.md already records one suit
 and exited 0 for months.
 
 ---
+
+---
+
+## Session 319 — 2026-11-19 (sweeping the "empty input ⇒ pass" class through the script suites)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `scripts/script_test_runner.py` — the shared runner, and why it exists (two suites lost real
+  coverage to a missing `__main__`).
+- **Read**: the `__main__` block of every `scripts/test_*.py` suite, and classified each by runner type:
+  **12** go through `script_test_runner` (pytest), **1** calls `pytest.main` directly, **2** are
+  hand-rolled runners.
+- **Read**: `scripts/test_check_firmware_todos.py::test_every_script_test_suite_has_a_runner` — the
+  existing meta-test, which enforces the runner but not what the runner reports.
+
+**Findings**: pytest protects its suites for free — zero collected tests is exit **5**, not 0 — so the
+hole was narrower than "all suites". Exactly two hand-rolled runners exit on `if FAILED` alone, so a
+discovery bug that finds nothing prints `0 failed` and exits 0: the same shape S318 found in the secret
+scanner, in the place AGENTS.md already records two historical occurrences.
+
+### Fog cleared
+
+- **Both hand-rolled suites now refuse to report success on zero discovery** (`2dcd211`):
+  `test_graph_session.py` and `test_prepush_secrets.py` print
+  `NO TESTS DISCOVERED — discovery is broken; refusing to report success` and exit 1.
+- **Proven by breaking discovery on purpose**: each suite was copied with `def test_` renamed to
+  `def _disabled_`; both copies exit **1** with that message, and both originals still report normally
+  (40 passed / all checks passed).
+- **The rule is enforced, not remembered**: `test_every_hand_rolled_suite_refuses_a_zero_discovery_run`
+  enumerates every suite that uses neither the shared runner nor `pytest.main` and asserts each carries
+  the guard — so a future hand-rolled suite cannot land without it. 31 firmware-TODO tests pass (30 before).
+- **Classification first, patch second**: twelve suites needed nothing because pytest's `NO_TESTS_COLLECTED`
+  already covers them. That is the difference between a sweep and a rewrite.
+
+### Fog remaining
+
+- **`check-artifacts` and `verify-env` were not swept for the same shape** — this session stopped at the
+  script suites, which is where the documented precedent was. Both report counts ("all artifacts
+  present", "56 PASS / 0 FAIL / 5 SKIP") without asserting the count is non-zero.
+- **The ast-grep runner reported a blocking finding for `test_graph_session.py` while its output was
+  deferred**, and the LSP probe reported the same file clean. Unresolved, but no finding was ever shown,
+  so nothing can be fixed on that basis — recorded rather than chased.
+- Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
+  HP UEFI password, per-executable consent keying (unverified), `RequestAccessAsync` (untested), the
+  pre-push hook being per-clone state.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- None.
+
+### Session artifacts
+
+- `scripts/test_graph_session.py`, `scripts/test_prepush_secrets.py` (guards),
+  `scripts/test_check_firmware_todos.py` (the rule) — `2dcd211`.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), in its purest form**: a suite whose only exit condition is "no
+  failures" cannot distinguish "everything passed" from "nothing ran". The fix is the same sentence as
+  S318's — a check must assert what it examined, not only what it found — and it now has a meta-test so
+  the assertion is not a convention.
+- **A near-miss worth naming**: I first assumed the whole suite set was affected. Classifying by runner
+  type first turned a twelve-file rewrite into a two-file fix.
+
+### VERIFY
+
+- `python3 scripts/test_graph_session.py` → `40 passed, 0 failed`.
+- `python3 scripts/test_prepush_secrets.py` → `all checks passed`.
+- Copies with `def test_` renamed → both exit **1** and print the guard message (the proof the guard
+  works, not merely that it exists).
+- `agent/.venv/bin/python scripts/test_check_firmware_todos.py` → **31 passed** (30 before the rule).
+- Push of `2dcd211` → pre-push hook ran: `publish range: origin/master..HEAD`, `fast-forward`,
+  `no credential-shaped content`.
+- `python3 scripts/brain.py check` → 185 beliefs, integrity clean (B-185).
+
+### Next session opening
+
+Finish the sweep in the two gates it did not reach: `scripts/check-artifacts.py --verify` and
+`scripts/verify-environment.sh` both print counts without asserting the count is non-zero, so an empty
+artifact manifest or a zero-check run would read as PASS.
+
+---

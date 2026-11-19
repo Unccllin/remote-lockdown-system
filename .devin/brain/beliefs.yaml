@@ -4066,3 +4066,25 @@ beliefs:
   dependents: []
   notes: Hardware evidence 2026-11-19 over SSH; launcher ran as SYSTEM, child ran as Newark User in session
     1.
+- id: B-185
+  statement: 'Two of the repo''s fifteen script test suites could report success while running nothing:
+    test_graph_session.py and test_prepush_secrets.py exit on ''no failures'' alone, so a discovery bug
+    that yields zero tests printed ''0 failed'' and exited 0. The other twelve go through scripts/script_test_runner.py
+    and are protected by pytest''s NO_TESTS_COLLECTED exit code 5 (test_memory.py calls pytest.main directly
+    and inherits the same). S319 added an explicit ''NO TESTS DISCOVERED — refusing to report success''
+    exit-1 guard to the two hand-rolled suites, proved it by copying each with its ''def test_'' renamed
+    (both exit 1), and made it a rule: test_check_firmware_todos.py::test_every_hand_rolled_suite_refuses_a_zero_discovery_run
+    fails if a future hand-rolled suite lacks the guard.'
+  domain: verification/tooling
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: scripts/test_graph_session.py; scripts/test_prepush_secrets.py; scripts/test_check_firmware_todos.py;
+    commit 2dcd211
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Hand-rolled = uses neither script_test_runner nor pytest.main; the meta-test enumerates them.

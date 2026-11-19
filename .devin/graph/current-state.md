@@ -53,33 +53,33 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 318 — 2026-11-19 (installing the guard found the hole inside the guard)
+## Latest session: 319 — 2026-11-19 (sweeping the "empty input ⇒ pass" class through the script suites)
 
 ### Fog cleared
 
-- **The hole is real and was observed, not theorised**: on a scratch repo whose first push created
-  `origin/master`, the hook's range was empty, so the scanner printed `[OK] no credential-shaped
-  content` while a credential-shaped commit went to the remote.
-- **Fixed** (`a069eb6`): the CLI now resolves the base with `git rev-parse --verify`; if it does not
-  resolve it warns on stderr and scans `--all`, matching CI instead of being weaker than it.
-- **Pinned by a test**: `test_an_unresolvable_base_scans_everything_instead_of_nothing` — a repo with no
-  remotes and a planted AWS-shaped key now exits 1 with the finding named; before the fix it exited 0.
-  The whole `test_prepush_secrets.py` suite passes.
-- **The guard now runs visibly**: the push of `a069eb6` printed `publish range: origin/master..HEAD`,
-  `fast-forward (1 commit(s) to publish)`, `no credential-shaped content` — the hook doing its job inside
-  a real push rather than in theory.
+- **Both hand-rolled suites now refuse to report success on zero discovery** (`2dcd211`):
+  `test_graph_session.py` and `test_prepush_secrets.py` print
+  `NO TESTS DISCOVERED — discovery is broken; refusing to report success` and exit 1.
+- **Proven by breaking discovery on purpose**: each suite was copied with `def test_` renamed to
+  `def _disabled_`; both copies exit **1** with that message, and both originals still report normally
+  (40 passed / all checks passed).
+- **The rule is enforced, not remembered**: `test_every_hand_rolled_suite_refuses_a_zero_discovery_run`
+  enumerates every suite that uses neither the shared runner nor `pytest.main` and asserts each carries
+  the guard — so a future hand-rolled suite cannot land without it. 31 firmware-TODO tests pass (30 before).
+- **Classification first, patch second**: twelve suites needed nothing because pytest's `NO_TESTS_COLLECTED`
+  already covers them. That is the difference between a sweep and a rewrite.
 
 ### Fog remaining
 
-- **The hook is per-clone state.** It lives in `.git/hooks/`, is never committed, and a fresh clone has
-  none until someone runs `scripts/pre-push-check.sh --install`. AGENTS.md now says so, but nothing
-  enforces it.
-- **The "empty input ⇒ pass" pattern deserves a sweep of its own.** This session found it inside a
-  scanner; the repo has other gates where zero items scanned could look like success — the script test
-  suites are the known example (AGENTS.md records a suite that imported its tests, ran none, and exited
-  0 for months).
+- **`check-artifacts` and `verify-env` were not swept for the same shape** — this session stopped at the
+  script suites, which is where the documented precedent was. Both report counts ("all artifacts
+  present", "56 PASS / 0 FAIL / 5 SKIP") without asserting the count is non-zero.
+- **The ast-grep runner reported a blocking finding for `test_graph_session.py` while its output was
+  deferred**, and the LSP probe reported the same file clean. Unresolved, but no finding was ever shown,
+  so nothing can be fixed on that basis — recorded rather than chased.
 - Unchanged: D-120, D-129/D-130/D-134, D-210, 12 stale `audit_test_teeth` rows, offline key custody,
-  HP UEFI password, per-executable consent keying (unverified), `RequestAccessAsync` (untested).
+  HP UEFI password, per-executable consent keying (unverified), `RequestAccessAsync` (untested), the
+  pre-push hook being per-clone state.
 
 ### Debt items closed
 
@@ -95,34 +95,34 @@ D-120, D-129, D-130, D-134, D-210.
 
 ### Session artifacts
 
-- `scripts/prepush_secrets.py` (base resolution), `scripts/test_prepush_secrets.py` (new case) — `a069eb6`.
+- `scripts/test_graph_session.py`, `scripts/test_prepush_secrets.py` (guards),
+  `scripts/test_check_firmware_todos.py` (the rule) — `2dcd211`.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), twice in one session.** First: the guard I installed in S317 passed
-  on a repo with an empty range — a check whose scope was zero. Second: my own attempt to verify the fix
-  was invalid, because the scratch repo had already been pushed so the base resolved and the empty range
-  was legitimate; caught by reading the output rather than the exit code, and redone against a repo with
-  no remote at all.
-- **Layer 5 (state management)**: the hook is per-clone and therefore not part of the repository's
-  state — a property worth remembering whenever a guard is described as "installed".
+- **Layer 4 (verification feedback), in its purest form**: a suite whose only exit condition is "no
+  failures" cannot distinguish "everything passed" from "nothing ran". The fix is the same sentence as
+  S318's — a check must assert what it examined, not only what it found — and it now has a meta-test so
+  the assertion is not a convention.
+- **A near-miss worth naming**: I first assumed the whole suite set was affected. Classifying by runner
+  type first turned a twelve-file rewrite into a two-file fix.
 
 ### VERIFY
 
-- Before: `python3 scripts/prepush_secrets.py --base origin/master --head HEAD` in a repo with no
-  remotes and a planted key → exit **0**, no finding (the defect).
-- After: same command → `[WARN] base 'origin/master' does not resolve — scanning the full history
-  instead of an empty range`, **1 finding**, exit **1**.
-- `python3 scripts/test_prepush_secrets.py` → all checks passed, including the new case.
-- `git push` of `a069eb6` → hook output present: `publish range: origin/master..HEAD`,
-  `fast-forward (1 commit(s) to publish)`, `no credential-shaped content in origin/master..HEAD`.
+- `python3 scripts/test_graph_session.py` → `40 passed, 0 failed`.
+- `python3 scripts/test_prepush_secrets.py` → `all checks passed`.
+- Copies with `def test_` renamed → both exit **1** and print the guard message (the proof the guard
+  works, not merely that it exists).
+- `agent/.venv/bin/python scripts/test_check_firmware_todos.py` → **31 passed** (30 before the rule).
+- Push of `2dcd211` → pre-push hook ran: `publish range: origin/master..HEAD`, `fast-forward`,
+  `no credential-shaped content`.
+- `python3 scripts/brain.py check` → 185 beliefs, integrity clean (B-185).
 
 ### Next session opening
 
-Sweep the repo's own gates for the same shape this session found — a check whose input is empty and
-therefore passes — starting with the `scripts/test_*.py` suites (assert a non-zero count of executed
-checks per file) and `check-artifacts`, since AGENTS.md already records one suite that ran zero tests
-and exited 0 for months.
+Finish the sweep in the two gates it did not reach: `scripts/check-artifacts.py --verify` and
+`scripts/verify-environment.sh` both print counts without asserting the count is non-zero, so an empty
+artifact manifest or a zero-check run would read as PASS.
 
 ---
 

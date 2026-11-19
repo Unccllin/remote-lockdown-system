@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-19 13:56:47 — 184 beliefs
+Generated: 2026-11-19 14:12:34 — 185 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -497,6 +497,7 @@ mkfs.fat 4.2 (2021-01-31)
 |---|--------|----------|-----------|
 | B-181 | proposed | assumed | A static-analysis gate that cannot run on the developer's host is not a gate: AGENTS.md claimed 'make sast 45 findings / 0 ERROR' while the Lint workflow had been failing on master since 2026-11-18 with 3 unclassified findings (agent/service_host.py:223, :339, scripts/acceptance_lifecycle.py:650) and 1 stale exception (agent/hw_test_harness.py). `make sast` exits 2 when semgrep is absent, so the local claim was never a measurement. Verified in S312 by installing semgrep 1.182.1 in a throwaway venv and running the real gate: 48 findings, 0 ERROR, all dispositioned, and the same push turned CI's Lint workflow green (f96f7ef). |
 | B-182 | proposed | assumed | A verification that does not gate the action it protects is a log line, not a check. S313 pushed a commit whose publish-range secret scan had already FAILED on it, because the scan and `git push` were chained with `;` instead of `&&` and the FAIL output was then read as clean; the two files it named (trace.md and the s312 artifact, both quoting the first eight characters of a dead single-use token) reached the remote. Redacted forward in d93fb32 with the scan gating the push, and the same shape recurred twice before in this arc — the S305 lint gate that linted no .jsx, and the S307 Playwright reuse of a stale dev server. All three are checks that watched without blocking. |
+| B-185 | proposed | assumed | Two of the repo's fifteen script test suites could report success while running nothing: test_graph_session.py and test_prepush_secrets.py exit on 'no failures' alone, so a discovery bug that yields zero tests printed '0 failed' and exited 0. The other twelve go through scripts/script_test_runner.py and are protected by pytest's NO_TESTS_COLLECTED exit code 5 (test_memory.py calls pytest.main directly and inherits the same). S319 added an explicit 'NO TESTS DISCOVERED — refusing to report success' exit-1 guard to the two hand-rolled suites, proved it by copying each with its 'def test_' renamed (both exit 1), and made it a rule: test_check_firmware_todos.py::test_every_hand_rolled_suite_refuses_a_zero_discovery_run fails if a future hand-rolled suite lacks the guard. |
 
 ## windows
 

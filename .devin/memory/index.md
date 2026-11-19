@@ -1,12 +1,13 @@
 # Memory Index
 
-Last rebuilt: 2026-11-19 13:34:06
-Active memories: 1457 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-19 14:12:53
+Active memories: 1471 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
 | ID | Title | Tags | Conf | Last Seen | Score | Rel | Impact |
 |----|-------|------|------|-----------|-------|-----|--------|
+| m-1357 | MISTAKE: mistake: first assumed the deployed agent |  | 0.55 | 2026-11-19 | 0.275 | 0 |  |
 | m-1162 | MISTAKE: mistake: my first attempt to append the D |  | 0.55 | 2026-11-18 | 0.272 | 0 |  |
 | m-1142 | MISTAKE: mistake: first version of the ruling used |  | 0.55 | 2026-11-17 | 0.269 | 0 |  |
 | m-1281 | Converting list-based storage to per-entity turns  |  | 0.55 | 2026-11-17 | 0.269 | 0 |  |
@@ -46,6 +47,20 @@ Active memories: 1457 | Superseded: 0 | Decayed: 20
 | m-1475 | a gate whose tool is absent locally exits nonzero  |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
 | m-1476 | match-keyed exception files need byte-exact lines, |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
 | m-1477 | MISTAKE: mistake: wrote a 'never paste credentials |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1478 | between a check and an irreversible action silentl |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1479 | write the parenthetical AFTER reading the exit sta |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1480 | MISTAKE: mistake: chained verification and push wi |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1481 | netsh exit codes cannot separate permission denial |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1482 | a service binPath of powershell.exe may never star |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1483 | powerShell inside System32 is disqualified from th |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1484 | a launcher that cannot be read by the target user  |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1485 | MISTAKE: mistake: first (c1) attempt used a System |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1486 | a table row must stay on one line; lint may stay s |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1487 | check for an existing guard before writing a new o |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1488 | MISTAKE: mistake: wrote a user-facing claim (inter |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1489 | a runner is necessary but not sufficient: the runn |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1490 | pytest exit 5 (no tests collected) is the reason r |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
+| m-1491 | MISTAKE: mistake: suspected all suites were affect |  | 0.50 | 2026-11-19 | 0.250 | 0 |  |
 | m-002 | FMP capsule payload has a 16-byte FMP_PAYLOAD_HEAD |  | 0.70 | 2026-08-18 | 0.249 | 0 |  |
 | m-003 | Signed FMP capsules have EFI_FIRMWARE_IMAGE_AUTHEN |  | 0.70 | 2026-08-18 | 0.249 | 0 |  |
 | m-004 | OVMF does not support FMP capsule updates — QueryC |  | 0.70 | 2026-08-18 | 0.249 | 0 |  |
@@ -79,7 +94,6 @@ Active memories: 1457 | Superseded: 0 | Decayed: 20
 | m-1354 | Boot lock failed on both layers and was reported h |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
 | m-1355 | Root cause of the BCD rollback is idempotency: rea |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
 | m-1356 | MOLE's deployed lockdown-agent.exe (built 2026-11- |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
-| m-1357 | MISTAKE: mistake: first assumed the deployed agent |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
 | m-1358 | MISTAKE: mistake: peeked at the exe for new string |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
 | m-1359 | _disable_winre/_enable_winre now re-read state via |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
 | m-1360 | The old test pinned the defect as expected behavio |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
