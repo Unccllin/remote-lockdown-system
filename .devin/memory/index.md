@@ -1,6 +1,6 @@
 # Memory Index
 
-Last rebuilt: 2026-11-19 13:28:01
+Last rebuilt: 2026-11-19 13:29:30
 Active memories: 1457 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
@@ -152,7 +152,7 @@ Active memories: 1457 | Superseded: 0 | Decayed: 20
 | m-1427 | dashboard E2E failures were a missing Playwright b |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
 | m-1428 | dashboard/dist was 3 source files stale; vite buil |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
 | m-1429 | server/dev-start-sqlite.js never served the SPA (o |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
-| m-1430 | Client base URL is electronApiUrl || VITE_API_URL  |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
+| m-1430 | Client base URL is electronApiUrl \|\| VITE_API_URL  |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
 | m-1431 | MISTAKE: mistake: the 11/11 E2E failure reads like |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
 | m-1432 | The blocked token endpoint was healthy: 401 'Admin |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
 | m-1433 | The Worker needs no JWT_SECRET: signAdminToken/ver |  | 0.50 | 2026-11-18 | 0.247 | 0 |  |
@@ -194,7 +194,7 @@ Active memories: 1457 | Superseded: 0 | Decayed: 20
 | m-1228 | MISTAKE: mistake: wrote a text-based structural te |  | 0.50 | 2026-11-17 | 0.245 | 0 |  |
 | m-1229 | The seam for testing TpmClient.c on the host is EF |  | 0.50 | 2026-11-17 | 0.245 | 0 |  |
 | m-1230 | D-224 was mis-described as needing 'an EDK II cryp |  | 0.50 | 2026-11-17 | 0.245 | 0 |  |
-| m-1231 | EDK II EcDsaVerify takes RAW r||s, not DER (CryptE |  | 0.50 | 2026-11-17 | 0.245 | 0 |  |
+| m-1231 | EDK II EcDsaVerify takes RAW r\|\|s, not DER (CryptE |  | 0.50 | 2026-11-17 | 0.245 | 0 |  |
 | m-1232 | TPMS_AUTH_COMMAND is 137 bytes (TPM2B_* are fixed  |  | 0.50 | 2026-11-17 | 0.245 | 0 |  |
 | m-1233 | NV_Increment always carries TWO handles (authHandl |  | 0.50 | 2026-11-17 | 0.245 | 0 |  |
 | m-1234 | The host shim can drift from EDK II silently: its  |  | 0.50 | 2026-11-17 | 0.245 | 0 |  |
@@ -343,7 +343,7 @@ Active memories: 1457 | Superseded: 0 | Decayed: 20
 | m-1146 | Dual-accept (Q2-A) is affordable only because the  |  | 0.50 | 2026-11-06 | 0.216 | 0 |  |
 | m-1147 | A single vectors file read by both suites plus a p |  | 0.50 | 2026-11-06 | 0.216 | 0 |  |
 | m-1148 | MISTAKE: mistake: assumed the AGENTS.md serverless |  | 0.50 | 2026-11-06 | 0.216 | 0 |  |
-| m-1149 | MISTAKE: mistake: my first API.md edit used |---|- |  | 0.50 | 2026-11-06 | 0.216 | 0 |  |
+| m-1149 | MISTAKE: mistake: my first API.md edit used \|---\|- |  | 0.50 | 2026-11-06 | 0.216 | 0 |  |
 | m-1150 | MISTAKE: note: three pre-existing Worker destructu |  | 0.50 | 2026-11-06 | 0.216 | 0 |  |
 | m-1151 | A tag-driven repo has no release cadence code can  |  | 0.50 | 2026-11-06 | 0.216 | 0 |  |
 | m-1152 | Enforcement pattern repeated from the SAST gate: c |  | 0.50 | 2026-11-06 | 0.216 | 0 |  |
@@ -603,7 +603,7 @@ Active memories: 1457 | Superseded: 0 | Decayed: 20
 | m-851 | Two more route-ordering traps of the same shape as |  | 0.50 | 2026-11-03 | 0.209 | 0 |  |
 | m-852 | Business rules preserved from Express: one firmwar |  | 0.50 | 2026-11-03 | 0.209 | 0 |  |
 | m-853 | rotate-key test asserts the property that matters: |  | 0.50 | 2026-11-03 | 0.209 | 0 |  |
-| m-854 | Worker Device gains pbl_device_id?: string | null; |  | 0.50 | 2026-11-03 | 0.209 | 0 |  |
+| m-854 | Worker Device gains pbl_device_id?: string \| null; |  | 0.50 | 2026-11-03 | 0.209 | 0 |  |
 | m-855 | 371 tests; coverage 89.07/83.08/93.52/91.09; three |  | 0.50 | 2026-11-03 | 0.209 | 0 |  |
 | m-856 | Pre-existing dead code in worker.ts confirmed at H |  | 0.50 | 2026-11-03 | 0.209 | 0 |  |
 | m-857 | HW test artifacts are the D-129 evidence path: wit |  | 0.50 | 2026-11-03 | 0.209 | 0 |  |
@@ -729,7 +729,7 @@ Active memories: 1457 | Superseded: 0 | Decayed: 20
 | m-744 | A cleared TPM needs no new code for fail-closed be |  | 0.50 | 2026-11-02 | 0.207 | 0 |  |
 | m-745 | New defect D-135: NV_Increment(0x1C00004) returns  |  | 0.50 | 2026-11-02 | 0.207 | 0 |  |
 | m-746 | tpm2-tools swtpm TCTI derives the control port as  |  | 0.50 | 2026-11-02 | 0.207 | 0 |  |
-| m-747 | tpm2_startup must be best-effort (|| true): it can |  | 0.50 | 2026-11-02 | 0.207 | 0 |  |
+| m-747 | tpm2_startup must be best-effort (\|\| true): it can |  | 0.50 | 2026-11-02 | 0.207 | 0 |  |
 | m-748 | MISTAKE: mistake: harness aborted before any boot  |  | 0.50 | 2026-11-02 | 0.207 | 0 |  |
 | m-749 | MISTAKE: mistake: port arithmetic put the swtpm co |  | 0.50 | 2026-11-02 | 0.207 | 0 |  |
 | m-750 | MISTAKE: mistake: wrote D-134's original close cri |  | 0.50 | 2026-11-02 | 0.207 | 0 |  |
@@ -1056,7 +1056,7 @@ Active memories: 1457 | Superseded: 0 | Decayed: 20
 | m-462 | D-215 valid policy carries http:// URI — doubles a |  | 0.50 | 2026-09-18 | 0.126 | 0 |  |
 | m-463 | MISTAKE: refute/confirm have different CLI args th |  | 0.50 | 2026-09-18 | 0.126 | 0 |  |
 | m-464 | pytest needs agent/.venv (pyproject requires --tim |  | 0.50 | 2026-09-18 | 0.126 | 0 |  |
-| m-446 | Parameter-encryption sessionValue = sessionKey ||  |  | 0.50 | 2026-09-17 | 0.124 | 0 |  |
+| m-446 | Parameter-encryption sessionValue = sessionKey \|\|  |  | 0.50 | 2026-09-17 | 0.124 | 0 |  |
 | m-447 | MISTAKE: mistake: previous code used raw sessionKe |  | 0.50 | 2026-09-17 | 0.124 | 0 |  |
 | m-448 | PBL_PLATFORM_STATE is hashed whole into platform_s |  | 0.50 | 2026-09-17 | 0.124 | 0 |  |
 | m-449 | FVE-FS sig @3; Win7/10 metadata offsets u64 @176/1 |  | 0.50 | 2026-09-17 | 0.124 | 0 |  |
@@ -1110,7 +1110,7 @@ Active memories: 1457 | Superseded: 0 | Decayed: 20
 | m-392 | TPM2_PCR_Read requires no authorization; TPM2_PCR_ |  | 0.50 | 2026-09-15 | 0.121 | 0 | PBL TPM behavior, PCR 12/13, N |
 | m-393 | NV indices are controlled by TPMA_NV_* attributes; |  | 0.50 | 2026-09-15 | 0.121 | 0 | PBL TPM behavior, PCR 12/13, N |
 | m-394 | There is no standalone TPM2_Seal; sealing is Creat |  | 0.50 | 2026-09-15 | 0.121 | 0 | PBL TPM behavior, PCR 12/13, N |
-| m-395 | HMAC sessions authorize each command via pHash ||  |  | 0.50 | 2026-09-15 | 0.121 | 0 | PBL TPM behavior, PCR 12/13, N |
+| m-395 | HMAC sessions authorize each command via pHash \|\|  |  | 0.50 | 2026-09-15 | 0.121 | 0 | PBL TPM behavior, PCR 12/13, N |
 | m-396 | PBL uses EFI_TCG2_PROTOCOL->SubmitCommand and exte |  | 0.50 | 2026-09-15 | 0.121 | 0 | PBL TPM behavior, PCR 12/13, N |
 | m-397 | Current PBL gaps: TcgLog.c is a stub, no-session P |  | 0.50 | 2026-09-15 | 0.121 | 0 | PBL TPM behavior, PCR 12/13, N |
 | m-398 | BitLocker default PCR profiles do not include PBL  |  | 0.50 | 2026-09-15 | 0.121 | 0 | PBL TPM behavior, PCR 12/13, N |
@@ -1332,7 +1332,7 @@ Active memories: 1457 | Superseded: 0 | Decayed: 20
 | m-113 | Dashboard already has serverless-mode UI: useServe |  | 0.50 | 2026-08-28 | 0.099 | 0 |  |
 | m-114 | Implementation order for next session: (1) extend  |  | 0.50 | 2026-08-28 | 0.099 | 0 |  |
 | m-115 | MISTAKE: Prior session lost uncommitted Electron s |  | 0.50 | 2026-08-28 | 0.099 | 0 |  |
-| m-116 | electron/config.js: added mode ('local'|'serverles |  | 0.50 | 2026-08-28 | 0.099 | 0 |  |
+| m-116 | electron/config.js: added mode ('local'\|'serverles |  | 0.50 | 2026-08-28 | 0.099 | 0 |  |
 | m-117 | electron/setup-wizard.js + setup.html + setup-prel |  | 0.50 | 2026-08-28 | 0.099 | 0 |  |
 | m-118 | electron/main.js: branches on config.mode. Serverl |  | 0.50 | 2026-08-28 | 0.099 | 0 |  |
 | m-119 | electron/server-starter.js: added startStaticServe |  | 0.50 | 2026-08-28 | 0.099 | 0 |  |

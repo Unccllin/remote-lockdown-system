@@ -16,6 +16,7 @@ The tests use a temp directory so they never touch the real .devin/memory/.
 """
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -400,6 +401,24 @@ class TestBackwardCompat:
         index_text = memory.INDEX_FILE.read_text()
         assert "m-001" in index_text
         assert "| 0 |" in index_text  # Rel count = 0 for old memories
+
+    def test_a_pipe_in_a_title_does_not_split_the_index_row(self, tmp_memory_dir):
+        """S313: an unescaped `|` in memory text added cells and shifted the whole row.
+
+        The index has 8 columns, so a row must contain exactly 9 pipes. A title naming
+        `electronApiUrl || VITE_API_URL` used to add two more and markdownlint reported
+        "Table column count [Expected: 8; Actual: 10]".
+        """
+        write_old_format_memory(
+            memory.CONSOLIDATED_DIR, "m-002", "electronApiUrl || VITE_API_URL", confidence=0.7
+        )
+        memory.stage_index(type("Args", (), {})())
+        rows = [ln for ln in memory.INDEX_FILE.read_text().splitlines() if ln.startswith("| m-002 ")]
+        assert len(rows) == 1, rows
+        # Count only DELIMITERS: an escaped \| is cell content, not a column break.
+        delimiters = len(re.findall(r"(?<!\\)\|", rows[0]))
+        assert delimiters == 9, f"row lost its shape ({delimiters} delimiters): {rows[0]}"
+        assert "\\|" in rows[0], "the pipe must be escaped, not dropped"
 
 
 # ─── Reconcile status tests ────────────────────────────────────────────────────
