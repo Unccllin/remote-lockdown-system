@@ -25,6 +25,7 @@ from graph_assert import (  # noqa: E402
     assert_enforcement_path_status,
     assert_orchestrator_knows_all_phases,
     assert_phase_deps_met,
+    assert_all_invariants,
     assert_rule_zero_quality,
     assert_session_end_quality,
 )
@@ -666,3 +667,26 @@ class TestI6OrchestratorPhases:
         except GraphViolationError as e:
             assert "I6" in str(e)
             assert "not found" in str(e)
+
+
+class TestVacuityGuard:
+    """S321: an empty graph satisfies every invariant by examining nothing.
+
+    The guard exists because the same defect appeared three times in one arc — S318's empty scan
+    range, S319's zero discovered tests, S320's empty gate scope. Each gate reported on what it found
+    and never on what it examined; this one asserts the counts before the invariants run.
+    """
+
+    def test_an_empty_graph_is_reported_not_passed(self):
+        violations = assert_all_invariants({"nodes": [], "enforcement_paths": []})
+        vacuity = [v for v in violations if "vacuous" in v or "examines nothing" in v]
+        assert len(vacuity) == 3, f"expected three vacuity violations, got: {violations}"
+        assert any("phase nodes" in v for v in vacuity)
+        assert any("debt items" in v for v in vacuity)
+        assert any("enforcement paths" in v for v in vacuity)
+
+    def test_the_real_graph_is_not_vacuous(self):
+        """The guard must not fire on the repository's own spec — it has phases, debt and paths."""
+        violations = assert_all_invariants()
+        vacuity = [v for v in violations if "vacuous" in v or "examines nothing" in v]
+        assert vacuity == [], f"the real graph reported vacuity: {vacuity}"

@@ -591,7 +591,7 @@ if a new suite forgets it.
 
 Invariant coverage is now complete: I1 (phase deps), I2 (no debt closed without
 commit + artifact), I4, I5, I6 (orchestrator knows every phase) and I7 all have
-tests in `agent/tests/test_graph_assertions.py`; I3 gained 15 earlier.
+tests in `agent/tests/test_graph_assertions.py`; I3 gained 15 earlier. **None of them can pass vacuously (S321):** `assert_all_invariants()` asserts that the graph declares phase nodes, debt items and enforcement paths before it runs any invariant, because an empty spec satisfies all seven by examining nothing — the same defect as S318/S319/S320 at a different layer.
 
 Two harness bugs found while completing this (both fixed):
 1. `scripts/test_memory.py` had 44 pytest tests and **no `__main__` block**, so

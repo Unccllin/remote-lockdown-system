@@ -815,15 +815,41 @@ def assert_all_invariants(graph: dict | None = None) -> list[str]:
     violations = []
     project_root = Path(__file__).parent.parent.parent
 
+    # S321 — vacuity guard. Every invariant below is satisfied by an EMPTY graph: I1 and I2 iterate
+    # over node lists, and I3-I7 only run when the files they read exist. A spec with no nodes would
+    # therefore print "All invariants pass" without examining anything. That is the same defect as
+    # S318 (empty scan range), S319 (zero discovered tests) and S320 (empty gate scope): a check must
+    # report on what it EXAMINED, not only on what it found. So the counts are asserted first, and
+    # they are asserted here rather than in each invariant so no future invariant can forget.
+    phases = get_phase_nodes(graph)
+    debt_items = get_debt_items(graph)
+    try:
+        enforcement_paths = get_enforcement_paths(graph)
+    except Exception:  # a malformed spec is I3's business, not the vacuity guard's
+        enforcement_paths = None
+    for label, items in (
+        ("phase nodes (I1)", phases),
+        ("debt items (I2)", debt_items),
+    ):
+        if not items:
+            violations.append(
+                f"{label}: the graph declares none, so every invariant over them is satisfied "
+                f"vacuously — an empty graph is not a passing graph"
+            )
+    if enforcement_paths is not None and not enforcement_paths:
+        violations.append(
+            "enforcement paths (I3): the graph declares none, so the status check examines nothing"
+        )
+
     # I1: Check all phase dependencies
-    for phase in get_phase_nodes(graph):
+    for phase in phases:
         try:
             assert_phase_deps_met(graph, phase["id"])
         except GraphViolationError as e:
             violations.append(str(e))
 
     # I2: Check all closed debt items have evidence
-    for debt in get_debt_items(graph):
+    for debt in debt_items:
         try:
             assert_debt_close_has_evidence(debt)
         except GraphViolationError as e:
