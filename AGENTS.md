@@ -114,6 +114,15 @@ The block must include:
 - Blockers named and status
 - Next session opening — one sentence, specific, no ambiguity
 
+**Never paste a credential value into a session block, not even truncated.** S311 pushed 23 local
+commits for the first time and the CI secret scan failed on an `assigned-secret` finding inside
+commit `4c43b58` (S301): the block quoted a full token response body —
+`{"token":"<8 chars>…", …}` — and the generator copies the latest block into `current-state.md`,
+so the fragment reached two files at once. The token was single-use with a 900 s TTL and long dead,
+but a scanner cannot tell, and neither could a reader. Quote the *shape* (`{"token":"<redacted>", …}`)
+and the TTL, never the value's first characters. The forbid-list escape hatch
+(`scripts/prepush_secrets.py`) exists for genuine false positives, not for this.
+
 `current-state.md` is a GENERATED artifact — do NOT edit it by hand. It is
 derived from `trace.md` + `GRAPH-SPEC.yaml` by `scripts/graph_session.py`.
 

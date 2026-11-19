@@ -3566,7 +3566,7 @@ D-210 (PBL route integration).
 - `git push origin master` → `31524c4..0c13b19`, `## master...origin/master` (in sync).
 - `POST /api/auth/login` (`uncletom`) → **200**, JWT returned.
 - `POST /api/enroll/token` with that JWT → **200**
-  `{"token":"kLekRUyp…","expires_at":"2026-11-18T12:03:25.000Z","expires_in":900}`.
+  `{"token":"<redacted — S311>","expires_at":"2026-11-18T12:03:25.000Z","expires_in":900}`.
 - `wrangler secret list` → `ADMIN_TOKEN` only; `admins` KV record backed up before the change.
 - `npm audit --audit-level=high` → exit 1 in server (4 moderate/40 high), dashboard (13 high),
   electron (9 moderate/37 high), serverless (6 high); `--omit=dev` clean except server (5 high,
