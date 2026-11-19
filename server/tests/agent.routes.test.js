@@ -565,6 +565,68 @@ describe('POST /api/agent/checkin', () => {
 // ---------------------------------------------------------------------------
 // S4: /api/agent/escrow-key — escrow-before-arm
 // ---------------------------------------------------------------------------
+describe('POST /api/agent/checkin — runtime settings (ADR-010)', () => {
+  const app = createApp();
+
+  afterEach(() => {
+    delete process.env.GOOGLE_API_KEY;
+  });
+
+  test('env unset → settings absent and top-level key set is byte-identical', async () => {
+    delete process.env.GOOGLE_API_KEY;
+    const { apiKey } = provisionDevice();
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001' });
+    expect(res.status).toBe(200);
+    expect(res.body.settings).toBeUndefined();
+    expect(Object.keys(res.body).sort()).toEqual(
+      ['command', 'device_id', 'pbl_boot', 'poll_interval', 'server_time', 'status'].sort()
+    );
+  });
+
+  test('env set → settings.google_api_key === key, revision non-empty, stable, changes with key', async () => {
+    process.env.GOOGLE_API_KEY = 'test-google-key';
+    const { apiKey } = provisionDevice();
+    const res1 = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001' });
+    expect(res1.status).toBe(200);
+    expect(res1.body.settings.google_api_key).toBe('test-google-key');
+    expect(res1.body.settings.revision).toBeTruthy();
+    const rev1 = res1.body.settings.revision;
+
+    const { apiKey: apiKey2 } = provisionDevice();
+    const res2 = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey2)
+      .send({ hostname: 'DEV-001' });
+    expect(res2.body.settings.revision).toBe(rev1);
+
+    process.env.GOOGLE_API_KEY = 'different-key';
+    const { apiKey: apiKey3 } = provisionDevice();
+    const res3 = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey3)
+      .send({ hostname: 'DEV-001' });
+    expect(res3.body.settings.revision).not.toBe(rev1);
+  });
+
+  test("env set to '' → google_api_key null with revision present", async () => {
+    process.env.GOOGLE_API_KEY = '';
+    const { apiKey } = provisionDevice();
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001' });
+    expect(res.status).toBe(200);
+    expect(res.body.settings.google_api_key).toBeNull();
+    expect(res.body.settings.revision).toBeTruthy();
+  });
+});
+
 describe('POST /api/agent/escrow-key', () => {
   const app = createApp();
 

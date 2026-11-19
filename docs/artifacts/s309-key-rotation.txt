@@ -1,0 +1,80 @@
+=== S309: the geolocation key rotates without reinstalling the fleet (2026-11-19) ===
+
+ADR-008's tracked follow-up, implemented in ADR-010. No hardware, no new dependencies.
+
+--- [1] the channel, and why it is the check-in ---
+  The key is read in exactly two places in the agent (agent/agent.py:1276 and :1790, both
+  `os.environ.get("GOOGLE_API_KEY") or cfg.get("google_api_key")`), and the agent already polls
+  POST /api/agent/checkin every poll_interval with agentAuth + an HMAC signature. So the rotation
+  channel is an authenticated response the device already asks for, not a new endpoint, a new
+  credential, or a served script (B-070).
+
+  config.json was deliberately NOT the write target: the installer applies ACLs to it, so a rotate
+  that edited it would be a permissions fight on a production machine. The override lives in
+  _STATE_DIR/.runtime_settings, beside .pending_ack and .deadman — a directory the running agent
+  is already proven to write.
+
+--- [2] the contract ---
+  settings: { google_api_key: string | null, revision: string }   — in the check-in response
+
+  present ONLY when the surface has an opinion (its GOOGLE_API_KEY env var is DEFINED):
+    defined, non-empty        -> google_api_key: "<key>"
+    defined, empty/whitespace -> google_api_key: null        (stop overriding)
+    undefined                 -> no `settings` key at all     (response byte-identical to before)
+
+  revision = sha256 hex prefix (16) of {"google_api_key": <value>}; stable per value, and it does
+  not need to match across surfaces — only be internally stable. The agent skips the write when
+  the stored revision already matches, so a 30 s poll does not rewrite a file 2,880 times a day.
+
+  Agent precedence, through ONE helper (_effective_google_key) so the two read sites cannot drift:
+    env GOOGLE_API_KEY > .runtime_settings override > cfg google_api_key
+
+  `null` means "remove the override", so the effective key falls back to whatever config.json was
+  installed with. ADR-010 states plainly that clearing an install-time key still needs a reinstall —
+  this change removes the *fleet* reinstall for rotation, not the one for erasure.
+
+--- [3] what shipped (8 files + 2 new, +242/-4) ---
+  server/src/routes/agent.js     agentRuntimeSettings() + a trailing conditional spread, so the
+                                 no-key response keeps its exact top-level key set
+  serverless/agent-routes.ts     the same, on BOTH check-in branches (with and without a pending
+                                 command) — the branches are separate jsonResponse calls
+  agent/agent.py                 RUNTIME_SETTINGS_FILE, _runtime_override, _effective_google_key,
+                                 _reconcile_runtime_settings (atomic temp+replace, revision-gated,
+                                 failure-tolerant), hooked in the main loop BEFORE
+                                 resolve_pending_wifi_scans so a rotated key applies to scans
+                                 drained on the same tick
+  tests                          agent/tests/test_runtime_settings.py (7 cases) ·
+                                 server/tests/agent.routes.test.js (new describe) ·
+                                 serverless/worker.test.ts (5 cases) ·
+                                 scripts/test_cross_surface_contract.py (parity pin, 25 total)
+  docs                           docs/adr/ADR-010-geolocation-key-rotation.md ·
+                                 ADR-008's follow-up line now points at ADR-010 · serverless/README
+
+--- [4] gates, measured by the parent session ---
+  cd server && npm test                     885 passed, 52 suites, exit 0   (882 + 3 new)
+  cd server && npx eslint .                 exit 0
+  cd serverless && npm test                 495 passed, 4 files, exit 0     (490 + 5 new)
+  cd serverless && npx tsc --noEmit -p .    exit 0
+  scripts/run-agent-tests.sh -q             exit 0, 983 collected           (976 + 7 new)
+  scripts/lint-agent.sh                     ruff check + format clean
+  scripts/test_cross_surface_contract.py    25 passed                     (24 + 1 new)
+  git diff | grep 'log\.|console\.|audit|kv.put' filtered to key-bearing lines -> none added
+
+--- [5] what the oracle blocked on, twice, and the pattern ---
+  Round 0: every gate green, but three of the four required test groups did not exist — the counts
+  prove it (server 882->882, worker 490->490, agent 976->976; only the contract moved 24->25).
+  "A green suite cannot detect a missing test" — this is now the third session in a row where that
+  sentence is the reason a round happened (S306 twice, S309 twice).
+  Round 1: the agent tests existed, the ADR-010 Verification section had been added, but
+  server/tests/agent.routes.test.js and serverless/worker.test.ts were still untouched — and the
+  worker's own report reclassified them as "optional". They were explicitly required. A worker
+  report is not evidence; the diff was.
+  Round 2 approved after both were added. Two real code fixes also came out of the rounds: both
+  surfaces now TRIM the key before delivering it (an env var with a trailing newline would have
+  produced a key the API rejects), and the agent's precedence helper was simplified.
+
+--- [6] what is still not true (from ADR-010, not softened) ---
+  - No per-device keys: it is still one shared operator credential, now distributed per device.
+  - The key transits an authenticated check-in response, which on a lab deployment is plain HTTP —
+    the same exposure class ADR-008 accepted, now also on every poll.
+  - Erasing an install-time key still requires a reinstall.

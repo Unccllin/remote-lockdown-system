@@ -603,3 +603,22 @@ def test_the_geolocation_key_contract_matches_on_both_surfaces():
     assert "google_api_key" in installer
     assert "google_api_key" not in scripts
     assert "GOOGLE_API_KEY" not in scripts
+
+
+def test_the_checkin_settings_contract_matches_on_both_surfaces():
+    agent_js = (REPO / "server/src/routes/agent.js").read_text(encoding="utf-8")
+    worker_ts = (REPO / "serverless/agent-routes.ts").read_text(encoding="utf-8")
+    agent_py = (REPO / "agent/agent.py").read_text(encoding="utf-8")
+    installer = (REPO / "agent/installer.py").read_text(encoding="utf-8")
+    scripts = (REPO / "serverless/installer-scripts.ts").read_text(encoding="utf-8")
+    assert "settings" in agent_js
+    assert "settings" in worker_ts
+    assert "google_api_key" in agent_js
+    assert "google_api_key" in worker_ts
+    assert "revision" in agent_js
+    assert "revision" in worker_ts
+    assert "RUNTIME_SETTINGS_FILE" in agent_py
+    assert ".runtime_settings" in agent_py
+    assert "_effective_google_key" in agent_py
+    assert "google_api_key" in installer
+    assert "google_api_key" not in scripts

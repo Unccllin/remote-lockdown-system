@@ -42,8 +42,8 @@ reinstall. The no-key path is unchanged byte-for-byte.
 
 - Serving the key in `installer-scripts.ts` — rejected: the served template is cacheable and
   secret-free (B-070).
-- Check-in refresh (central rotation) — recorded as the **tracked follow-up**, not rejected
-  outright: it would allow rotation without reinstall.
+- Check-in refresh (central rotation) — implemented by ADR-010 (tracked follow-up): rotation
+  without reinstall via the check-in `settings` channel.
 
 ## Verification
 

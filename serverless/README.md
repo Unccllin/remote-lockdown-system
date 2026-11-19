@@ -434,3 +434,4 @@ Authenticode-signed yet (that waits on the owner PFX — see D-130).
 - **Secrets and account bindings** — they only exist after `wrangler secret put`;
 - **Cron/scheduled handlers** — `verify-worker.sh` does not trigger them; run
   `wrangler dev --test-scheduled` and hit `/__scheduled` if you change one.
+The agent check-in response carries `settings.google_api_key` when `GOOGLE_API_KEY` is configured on the Worker, enabling runtime key rotation (ADR-010).

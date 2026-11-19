@@ -83,6 +83,20 @@ export async function verifyAgentAuth(
  * For unlock commands, the encryption key + BIOS password are released
  * in the response (same as the full server's fetchUnlockMaterials).
  */
+async function agentRuntimeSettings(env: Env): Promise<{ google_api_key: string | null; revision: string } | undefined> {
+  if (env.GOOGLE_API_KEY === undefined) return undefined;
+  const raw = env.GOOGLE_API_KEY;
+  const key = (raw || '').trim();
+  const google_api_key = key === '' ? null : key;
+  const canonical = JSON.stringify({ google_api_key });
+  const buf = new TextEncoder().encode(canonical);
+  const digest = await crypto.subtle.digest('SHA-256', buf);
+  const bytes = new Uint8Array(digest);
+  let hex = '';
+  for (const b of bytes) hex += b.toString(16).padStart(2, '0');
+  return { google_api_key, revision: hex.slice(0, 16) };
+}
+
 export async function handleAgentCheckin(request: Request, env: Env): Promise<Response> {
   const body = await request.text();
   const device = await verifyAgentAuth(request, env, body);
@@ -150,12 +164,15 @@ export async function handleAgentCheckin(request: Request, env: Env): Promise<Re
   };
   const pollInterval = ADAPTIVE_POLL[status] ?? activePollSeconds(env);
 
+  const runtimeSettings = await agentRuntimeSettings(env);
+
   if (!pendingCmd) {
     return jsonResponse({
       device_id: device.id,
       status,
       poll_interval: pollInterval,
       command: null,
+      ...(runtimeSettings ? { settings: runtimeSettings } : {}),
     });
   }
 
@@ -224,6 +241,7 @@ export async function handleAgentCheckin(request: Request, env: Env): Promise<Re
       // agent knows to pretend-unlock and silently re-lock.
       duress_code: pendingCmd.duress_code ?? null,
     },
+    ...(runtimeSettings ? { settings: runtimeSettings } : {}),
   });
 }
 

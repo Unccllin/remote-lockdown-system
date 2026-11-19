@@ -332,6 +332,7 @@ LAST_CHECKIN_OK_FILE = _STATE_DIR / ".last_checkin_ok"
 # nobody needs it disabled" expressible; the file is written BEFORE the account is touched
 # so a crash, a failed ACK or a reboot still leaves the operator a name to re-enable.
 LOGON_HOLDS_FILE = _STATE_DIR / ".logon_holds"
+RUNTIME_SETTINGS_FILE = _STATE_DIR / ".runtime_settings"
 
 
 def _find_config_file(cli_config_path=None):
@@ -1266,6 +1267,59 @@ def get_ip_geolocation() -> dict | None:
     return None
 
 
+def _runtime_override():
+    """Read the runtime override from .runtime_settings, or None if absent/corrupt/removed."""
+    try:
+        if not RUNTIME_SETTINGS_FILE.exists():
+            return None
+        data = json.loads(RUNTIME_SETTINGS_FILE.read_text())
+        if not isinstance(data, dict):
+            return None
+        if "google_api_key" not in data:
+            return None
+        return data.get("google_api_key")
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _effective_google_key(cfg: dict):
+    """Single source of truth for the effective Google geolocation key."""
+    env = os.environ.get("GOOGLE_API_KEY")
+    if env:
+        return env
+    override = _runtime_override()
+    if override:
+        return override
+    return cfg.get("google_api_key")
+
+
+def _reconcile_runtime_settings(data):
+    """Reconcile a check-in `settings` object into .runtime_settings (best-effort)."""
+    try:
+        settings = data.get("settings") if isinstance(data, dict) else None
+        if not isinstance(settings, dict):
+            return
+        revision = settings.get("revision")
+        if not isinstance(revision, str) or not revision:
+            return
+        try:
+            if RUNTIME_SETTINGS_FILE.exists():
+                stored = json.loads(RUNTIME_SETTINGS_FILE.read_text())
+                if isinstance(stored, dict) and stored.get("revision") == revision:
+                    return
+        except (OSError, ValueError, TypeError):
+            pass
+        payload = {
+            "google_api_key": settings.get("google_api_key"),
+            "revision": revision,
+        }
+        tmp = RUNTIME_SETTINGS_FILE.with_name(".runtime_settings.tmp")
+        tmp.write_text(json.dumps(payload))
+        os.replace(tmp, RUNTIME_SETTINGS_FILE)
+    except Exception as e:
+        log.warning("Could not persist runtime settings: %s", e)
+
+
 def get_geolocation(cfg: dict) -> dict | None:
     """Get device geolocation. Tries WiFi triangulation first, falls back to IP.
 
@@ -1273,7 +1327,7 @@ def get_geolocation(cfg: dict) -> dict | None:
     otherwise falls back to IP-based geolocation.
     """
     # Try WiFi-based geolocation if Google API key is configured
-    google_key = os.environ.get("GOOGLE_API_KEY") or cfg.get("google_api_key")
+    google_key = _effective_google_key(cfg)
     if google_key:
         wifi = scan_wifi_networks()
         if wifi:
@@ -1787,7 +1841,7 @@ def resolve_pending_wifi_scans(cfg: dict) -> int:
     (with its attempt count) rather than dropped: the device may be offline again, and the
     evidence is only useful if it survives until it can be read.
     """
-    google_key = os.environ.get("GOOGLE_API_KEY") or cfg.get("google_api_key")
+    google_key = _effective_google_key(cfg)
     if not google_key:
         return 0
 
@@ -4658,6 +4712,12 @@ def main() -> None:
                 LAST_CHECKIN_OK_FILE.touch()
             except OSError as e:
                 log.debug("Could not update last-check-in marker: %s", e)
+
+            # ADR-010: reconcile runtime geolocation-key override (best-effort).
+            try:
+                _reconcile_runtime_settings(data)
+            except Exception as e:
+                log.warning("Could not persist runtime settings: %s", e)
 
             # Upload deadman key (if any) now that we have connectivity
             report_deadman_key(cfg)

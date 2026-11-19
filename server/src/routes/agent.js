@@ -332,6 +332,25 @@ function calculatePollInterval(deviceStatus) {
   return ADAPTIVE_POLL[deviceStatus] || 300;
 }
 
+
+
+/**
+ * ADR-010: runtime geolocation-key override delivered via the check-in response.
+ * Present ONLY when process.env.GOOGLE_API_KEY is defined (defined-but-empty
+ * means an explicit "stop overriding"). Returns undefined when unset so the
+ * response stays byte-identical to the pre-ADR-010 shape.
+ */
+function agentRuntimeSettings() {
+  if (process.env.GOOGLE_API_KEY === undefined) return undefined;
+  const raw = process.env.GOOGLE_API_KEY;
+  const key = (raw || '').trim();
+  const google_api_key = key === '' ? null : key;
+  const crypto = require('crypto');
+  const canonical = JSON.stringify({ google_api_key: google_api_key });
+  const revision = crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 16);
+  return { google_api_key, revision };
+}
+
 router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, mac_address, hardware_uuid } = req.body;
   // S1.4: agent-reported TPM restartCount (optional; absent on non-Windows
@@ -400,6 +419,7 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   // restartCount). We flag, not block, per the DEGRADED-alarm ruling.
   const pblBoot = await correlatePblBoot(device, tpmRestartCount);
 
+  const runtimeSettings = agentRuntimeSettings();
   res.json({
     device_id: device.id,
     status: device.status,
@@ -430,6 +450,7 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
           bitlocker_recovery_password: bitlockerRecoveryPassword,
         }
       : null,
+    ...(runtimeSettings ? { settings: runtimeSettings } : {}),
   });
 });
 

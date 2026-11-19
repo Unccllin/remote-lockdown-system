@@ -1044,6 +1044,63 @@ describe('Serverless Worker', () => {
       const stored = await readCommandViaApi(env, device.id, cmdId);
       expect(stored?.command_uuid).toBe('cmd-uuid-abc-123');
     });
+
+    // ADR-010 runtime settings
+    it('includes settings on the no-pending-command branch when GOOGLE_API_KEY set', async () => {
+      const { apiKey } = await enrollDevice(worker, { ...env, GOOGLE_API_KEY: 'test-google-key' }, 'RT-001');
+      const body = JSON.stringify({ hostname: 'RT-001' });
+      const resp = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), { ...env, GOOGLE_API_KEY: 'test-google-key' });
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.settings.google_api_key).toBe('test-google-key');
+      expect(data.settings.revision).toBeTruthy();
+    });
+
+    it('includes settings on the pending-command branch when GOOGLE_API_KEY set', async () => {
+      const { apiKey, device } = await enrollDevice(worker, { ...env, GOOGLE_API_KEY: 'test-google-key' }, 'RT-002');
+      const flagBody = JSON.stringify({});
+      await worker.fetch(makeRequest('POST', `/api/devices/${device.id}/track`, flagBody, { Authorization: `Bearer ${env.ADMIN_TOKEN}` }), { ...env, GOOGLE_API_KEY: 'test-google-key' });
+      const body = JSON.stringify({ hostname: 'RT-002' });
+      const resp = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), { ...env, GOOGLE_API_KEY: 'test-google-key' });
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.settings.google_api_key).toBe('test-google-key');
+      expect(data.settings.revision).toBeTruthy();
+    });
+
+    it('omits settings when GOOGLE_API_KEY is unset', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'RT-003');
+      const body = JSON.stringify({ hostname: 'RT-003' });
+      const resp = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), env);
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.settings).toBeUndefined();
+    });
+
+    it('revision stable across identical requests and changes with value', async () => {
+      const { apiKey } = await enrollDevice(worker, { ...env, GOOGLE_API_KEY: 'test-google-key' }, 'RT-004');
+      const body = JSON.stringify({ hostname: 'RT-004' });
+      const r1 = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), { ...env, GOOGLE_API_KEY: 'test-google-key' });
+      const d1: any = await parseResponse(r1);
+      const r2 = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), { ...env, GOOGLE_API_KEY: 'test-google-key' });
+      const d2: any = await parseResponse(r2);
+      expect(d2.settings.revision).toBe(d1.settings.revision);
+      const { apiKey: apiKey2 } = await enrollDevice(worker, { ...env, GOOGLE_API_KEY: 'other-key' }, 'RT-005');
+      const body2 = JSON.stringify({ hostname: 'RT-005' });
+      const r3 = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body2, signRequest(body2, apiKey2)), { ...env, GOOGLE_API_KEY: 'other-key' });
+      const d3: any = await parseResponse(r3);
+      expect(d3.settings.revision).not.toBe(d1.settings.revision);
+    });
+
+    it('empty-string env -> google_api_key null with revision', async () => {
+      const { apiKey } = await enrollDevice(worker, { ...env, GOOGLE_API_KEY: '' }, 'RT-006');
+      const body = JSON.stringify({ hostname: 'RT-006' });
+      const resp = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), { ...env, GOOGLE_API_KEY: '' });
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.settings.google_api_key).toBeNull();
+      expect(data.settings.revision).toBeTruthy();
+    });
   });
 
   describe('firmware_audit on checkin', () => {
