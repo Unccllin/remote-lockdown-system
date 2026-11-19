@@ -4636,3 +4636,122 @@ up without a restart; if those values are not available, stop treating the rotat
 record it as `emulated`-verified until a hardware window exists.
 
 ---
+
+---
+
+## Session 311 — 2026-11-19 (rotation verified on MOLE, 1.0.3 → 1.0.4, and the gap I had claimed was unbridgeable)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `docs/artifacts/s281-mole-reachability.txt` and memory `m-1341` **after** getting this
+  wrong once: the route is `ssh -i ~/.ssh/lockdown_lab_ed25519 labadmin@192.168.1.249`. I had grepped
+  for an `ssh` config alias, found none, and told the user I had no access — while the answer was in
+  the memory I had already loaded and in a repo artifact.
+- **Read**: `agent/build.ps1` — it stamps `_buildinfo.py` by hashing the source files, so a device
+  with no git can still produce an identifiable build; `-AgentOnly -Install` is the minimal path.
+- **Read**: `server/src/…` service registration and `sc query LockdownAgent` — the service is
+  `STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN`.
+- **Read**: `npx wrangler deployments list` / `versions list` — the newest entry was
+  `Source: Secret Change`, which is a *version*, not a code deployment.
+- **Read**: `ADR-010` §What is NOT solved and §Verification — the two claims that were still marked
+  unmeasured (a real device, restart survival).
+
+**Findings**: the chain had **two** stale halves, not one. The agent was 1.0.3 (pre-`23e70f8`), and the
+Worker's code was older still, so even a fresh agent would have received no `settings` at all. Only the
+agent half was visible from the repo; the Worker half needed the deployment list.
+
+### Fog cleared
+
+- **The rotation is verified on hardware** (`208d145`, `f3a6b70`): MOLE now runs
+  `lockdown-agent 1.0.4 (frozen=True, build=20261119.32849efe4235)`, built **on MOLE itself** with
+  `build.ps1 -AgentOnly -Install` from a tar of `agent/`.
+  - first check-in → `.runtime_settings` written in the same second as `.last_checkin_ok`
+    (`key_len 39`, `revision 3f11ee4980d2a049`);
+  - rotated → `key_len 19`, `revision d8bf5ae6ff123fc3`, written **six minutes into the same
+    process's life** — rotation with no restart;
+  - restored → `key_len 39`, `revision 3f11ee4980d2a049` — the identical digest, which also
+    demonstrates revision stability for an unchanged value.
+- **Restart survival closed with an observable, not an inference**: service restarted at 13:03:22,
+  successful check-in at 13:04:43, file mtime **unchanged at 13:01:18**. The agent rewrites only when
+  the stored revision differs from the one the surface sent, so a `LocalSystem` process unable to read
+  the file would have rewritten it. It did not — so the restarted agent read what the previous process
+  wrote, in the ACL'd state directory.
+- **The secret was never handled by a human twice**: the restore used
+  `wrangler rollback 0ad0ff6a…` to the version that held the real key, and the revision returning to
+  the identical digest is independent proof the key is the same one.
+- **Two environment facts that will bite any future upgrade**, both now in the artifact:
+  `LockdownAgent` is `IGNORES_SHUTDOWN`, so `Stop-Service` reports Stopped while the process keeps
+  running and holds the image — the first swap failed exactly there and needed an explicit
+  `Stop-Process`; and a `wrangler secret put` is a **Secret Change version, not a code deploy**.
+- **`AGENT_VERSION` was bumped** (`f00a980`) after discovering that the rotation shipped without it,
+  which is why the version column could not distinguish builds at all.
+
+### Fog remaining
+
+- **The key does not make MOLE precise.** ADR-009 stands: a session-0 service install cannot obtain
+  BSSIDs, so MOLE is still IP-level. This session verified the *plumbing*, not the precision, and
+  nobody should read `key_len 39` as "MOLE now resolves wifi".
+- **The wizard was not exercised.** `scripts/verify-key-rotation-wizard.sh` remains untested in anger;
+  the hardware evidence came from direct SSH automation instead. Its resume path and its
+  restore-before-continue preflight have still never run.
+- **Left on MOLE**: `lockdown-agent.exe.bak-1.0.3` (deliberate rollback copy) and
+  `C:\Users\labadmin\agentbuild\` (source + PyInstaller tree, ~hundreds of MB).
+- **Unpushed**: 22 local commits (S304→S311) are still only on this host; the Windows build on CI was
+  avoided deliberately by building on MOLE.
+- Unchanged: the §5 BSSID probe, D-120, D-129/D-130/D-134, D-210, `installer.py`/`installer_gui.py`
+  config duplication, picomatch advisories, 12 stale `audit_test_teeth` rows, offline key custody.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134, D-210.
+
+### Blockers
+
+- **None.** The rotation thread is closed on hardware; what remains is deliberately out of scope
+  (precision is ADR-009's decision, not a defect).
+
+### Session artifacts
+
+- `docs/artifacts/s311-rotation-hardware.txt` — the before/after builds, why the Worker had to be
+  redeployed, the `IGNORES_SHUTDOWN` finding, the three measurements, the restart invariant, and what
+  was left on the device.
+- `docs/adr/ADR-010-geolocation-key-rotation.md` — §Verified on real hardware, and its last "still
+  unproven" paragraph replaced with the restart result.
+
+### Failure attribution
+
+- **Layer 5 (state management), mine.** I declared "no SSH access to MOLE" from an empty `ssh` config
+  while `docs/artifacts/s281-mole-reachability.txt`, `trace.md`, and memory `m-1341` all carried the
+  exact command. The user had to correct me with four words. Harness change: when about to say "no
+  access", grep the artifacts and memory first — an access route is a fact this repo writes down.
+- **Layer 4 (verification feedback), the environment half.** The Worker's `settings` field was
+  invisible for a day because a secret change *looks* like a deploy in `versions list`. Anything that
+  depends on a code path needs a deploy check that reads `Source:`, not a date.
+- **Layer 3 (execution environment).** `IGNORES_SHUTDOWN` made a documented upgrade step
+  (`Stop-Service` then replace) silently ineffective; only reading the error message revealed it.
+- **My own tooling, again**: a `brain.py refute` statement passed in double quotes let the shell
+  execute its backticks, storing `"and a  is a Secret Change VERSION"`. Caught by reading the stored
+  belief back, and corrected by refuting it with a properly quoted call (B-180).
+
+### VERIFY
+
+- Version before/after: `1.0.3 (build=20261118.5c31f3eaa364)` → `1.0.4 (build=20261119.32849efe4235)`,
+  built on MOLE; service `Running`, two processes (PyInstaller parent + child, B-079).
+- `.runtime_settings`: `39 / 3f11ee4980d2a049 @12:57:41` → `19 / d8bf5ae6ff123fc3 @13:00:06` →
+  `39 / 3f11ee4980d2a049 @13:01:18`; agent process start 12:53:53 throughout the first two.
+- Restart: process start 13:03:22, `.last_checkin_ok` 13:04:43, file mtime **13:01:18 unchanged**.
+- Worker: deployed `0ad0ff6a-345c-48a1-9df1-8a6eb5b57e06`; rollback target `a0e811ec-…` recorded and
+  used to restore the key.
+- Key material never printed: every read reported `key_len` and `revision` only.
+- `brain.py check` → 180 beliefs, integrity clean. `git log` → `208d145`, `f3a6b70` plus state.
+
+### Next session opening
+
+Push the 22 local commits — the Windows-artifacts and lint workflows have never seen S304→S311 — and
+then decide whether the wizard still earns its place now that the hardware path is automated over SSH.
+
+---

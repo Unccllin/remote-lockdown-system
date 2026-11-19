@@ -3920,7 +3920,7 @@ beliefs:
     untouched. Still unproven: a real Windows device (host path = emulated), and the deployed Worker,
     which holds only ADMIN_TOKEN so the channel is inert in production.'
   domain: agent/location
-  status: proposed
+  status: refuted
   evidence_level: assumed
   provenance: scripts/brain.py
   source: docs/artifacts/s310-rotation-live-probe.txt; /tmp/probe_rotation.py output
@@ -3928,7 +3928,55 @@ beliefs:
   last_verified: null
   commit_ref: null
   supersedes: null
-  superseded_by: null
+  superseded_by: B-179
   dependents: []
   notes: Probe needs USE_SQLITE=true; without it the server dials Postgres, health still answers 200,
     and /api/setup/status reports 'Database not initialized'.
+  refuted_on: '2026-11-19'
+  refute_evidence: 'hardware: measured 2026-11-19 on MOLE over SSH; docs/artifacts/s311-rotation-hardware.txt'
+- id: B-179
+  statement: 'ADR-010''s geolocation-key rotation is verified on REAL HARDWARE (S311, MOLE, agent 1.0.4
+    build 20261119.32849efe4235, Worker version 0ad0ff6a): the Windows service wrote .runtime_settings
+    at its first check-in (key_len 39, revision 3f11ee4980d2a049), rotated to a throwaway value six minutes
+    into the same process''s life (key_len 19, revision d8bf5ae6ff123fc3 — no restart), and restored via
+    wrangler rollback to the identical revision; after a service restart at 13:03:22 a successful check-in
+    at 13:04:43 left the file''s mtime at 13:01:18, proving the LocalSystem agent read back what the previous
+    process wrote in the ACL''d state directory. Two environment facts: LockdownAgent is IGNORES_SHUTDOWN
+    so replacing the binary needs Stop-Process, not Stop-Service; and a  is a Secret Change VERSION, not
+    a code deploy, so the Worker had to be deployed separately.'
+  domain: agent/location
+  status: refuted
+  evidence_level: assumed
+  provenance: 'hardware: measured 2026-11-19 on MOLE over SSH; docs/artifacts/s311-rotation-hardware.txt'
+  source: refutes B-178
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: B-178
+  superseded_by: B-180
+  dependents: []
+  notes: ''
+  refuted_on: '2026-11-19'
+  refute_evidence: 'hardware: measured 2026-11-19 on MOLE over SSH; docs/artifacts/s311-rotation-hardware.txt'
+- id: B-180
+  statement: 'ADR-010''s geolocation-key rotation is verified on REAL HARDWARE (S311, MOLE, agent 1.0.4
+    build 20261119.32849efe4235, Worker version 0ad0ff6a): the Windows service wrote .runtime_settings
+    at its first check-in (key_len 39, revision 3f11ee4980d2a049), rotated to a throwaway value six minutes
+    into the same process''s life (key_len 19, revision d8bf5ae6ff123fc3, no restart), and restored via
+    wrangler rollback to the identical revision; after a service restart at 13:03:22 a successful check-in
+    at 13:04:43 left the file''s mtime at 13:01:18, proving the LocalSystem agent read back what the previous
+    process wrote in the ACL''d state directory. Two environment facts: LockdownAgent is IGNORES_SHUTDOWN
+    so replacing the binary needs Stop-Process, not Stop-Service; and a ''wrangler secret put'' produces
+    a Source: Secret Change VERSION, which is not a code deploy, so the Worker had to be deployed separately.'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: 'hardware: measured 2026-11-19 on MOLE over SSH; docs/artifacts/s311-rotation-hardware.txt'
+  source: refutes B-179
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: B-179
+  superseded_by: null
+  dependents: []
+  notes: ''
