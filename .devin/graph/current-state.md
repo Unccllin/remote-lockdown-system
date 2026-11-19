@@ -53,37 +53,45 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 303 — 2026-11-18 ("the location doesn't map correctly" — it is IP-level, and WiFi is
+## Latest session: 304 — 2026-11-18 (dashboard location honesty, and a lint gate that lints no JSX)
 
 ### Fog cleared
 
-- **The plumbing is faithful and the map is not lying about the numbers** — it renders the exact
-  coordinates it is given, in the right order. What is wrong is the *source*: IP geolocation reports
-  the ISP's booked location, and on this egress that is Karatina, Kenya.
-- **WiFi triangulation is unavailable to a service install**, not merely unconfigured: the WLAN scan
-  needs a location-capable *interactive* session on this Windows build, and the agent runs as
-  LocalSystem in session 0. Even with a Google key there would be nothing to triangulate.
-- **The serverless path cannot be given a key today**: `server/src/routes/installer.js:562` injects
-  `google_api_key` into Express-generated installers, and `serverless/` has no such support — so a
-  Worker-enrolled fleet is permanently IP-only, by omission rather than decision.
-- **The UI implies a precision it does not have**: no source, no accuracy, no age; three identical
-  points read as a movement trail.
+- **Option (a) is implemented, and it needed no new data** (`c62c3af`): `MapPage` popup now renders
+  `Source`, `Accuracy` (`~Nm` / `not reported`) and an `"Approximate — IP-based fix: resolves the
+  ISP's city-level location, not the device."` note; the legend gains "IP-based fixes are city-level
+  (ISP location); devices behind one egress can plot at the same point." when an ip point is plotted;
+  `DeviceDetailPage`'s Accuracy row is unconditional and each report popup carries its own source
+  and accuracy.
+- **The dashboard coverage floor still holds after adding UI copy**: 70.57 / 66.59 / 62.59 / 71.36
+  against floors 68 / 61 / 62 / 70 (`npm run test:coverage` exit 0) — functions was the tight one
+  at 62.59 vs 62, so a future deletion there trips the gate, as AGENTS.md warns.
+- **The dashboard lint gate measures nothing** — this is the finding that outlives the change.
+  eslint v8.57.1 with `.eslintrc.json` cannot declare extensions, so it lints `.js` only:
+  `npx eslint .` → 21 files, **0 .jsx**; `npx eslint src/ tests/ --max-warnings=0` (the exact form
+  in `Makefile:290`, `.github/workflows/lint.yml:46`/`:75`, `release.yml:69`) → 13 files, **0 .jsx**.
+  With `--ext .js,.jsx` the same tree yields **72 files, 30 errors, 1 warning** in 16 files:
+  22 `no-unused-vars`, 7 `react/no-unescaped-entities`, 1 `no-undef`. So every "dashboard eslint
+  clean" claim in AGENTS.md and in past VERIFY lines is true of the command and false of the code.
+  None of the 30 is introduced by this session (the one in a changed file, `fireEvent` at
+  `tests/MapPage.test.jsx:2`, is byte-identical at HEAD).
 
 ### Fog remaining
 
-- **Which fix to implement is a product decision** (see the artifact's four options): UI honesty;
-  Worker-side key provisioning; an in-session BSSID helper; or accepting IP-level for service
-  installs and saying so.
-- **The registry changes made while testing** (`HKLM …\ConsentStore\location\Value = Allow`,
-  `lfsvc Status = 1`, an HKCU Allow on MOLE) are left in place — they are benign and plausibly
-  necessary on machines where an interactive session *can* scan, but they did not change this box's
-  behaviour and are not a fix on their own.
-- Unchanged: picomatch advisories, `make sast` unavailable, 12 stale `audit_test_teeth` rows, offline
-  key custody, HP UEFI BIOS password.
+- **Whether to make the dashboard lint gate real** — needs the 30 baseline errors triaged first,
+  otherwise adding `--ext` turns CI red repo-wide. The 29 real ones are mechanical (unused imports,
+  unescaped apostrophes/quotes in JSX text); the 1 `no-undef` is a config gap, not a defect
+  (`tests/EnrollDevicePage.test.jsx:42` uses the global `afterEach`, which `vitest.config.js`
+  provides via `globals: true`, and no eslint env declares it for `tests/`).
+- **Option (b) of the S303 artifact is untouched**: `serverless/` still provisions no
+  `google_api_key` (`server/src/routes/installer.js:562` does), so a Worker-enrolled fleet is
+  IP-only by omission. That is a separate change to `serverless/installer-scripts.ts` + `worker.test.ts`.
+- Unchanged: the registry changes left on MOLE (benign), picomatch advisories, `make sast`
+  unavailable, 12 stale `audit_test_teeth` rows, offline key custody, HP UEFI BIOS password.
 
 ### Debt items closed
 
-None formally.
+None. This closes no ledger item — option (a) is product honesty, not tracked debt.
 
 ### Debt items still open
 
@@ -92,39 +100,50 @@ D-210 (PBL route integration).
 
 ### Blockers
 
-- **A Google Geolocation API key** is needed for any real fix, and it is an operator credential.
-- **An architectural decision** on how a session-0 service can obtain BSSIDs, if at all.
+- **A product decision, not a blocker** — options (b), (c) and (d) of the S303 artifact remain open,
+  and (b) needs an operator-issued Google Geolocation API key to be worth exercising.
+- **The dashboard lint gate cannot be fixed in one step**: `--ext` alone takes the tree from
+  "0 linted" to "30 errors", so the cleanup and the gate must land together.
 
 ### Session artifacts
 
-- `docs/artifacts/s303-location-diagnosis.txt` — the three identical rows, the provider's own answer
-  for the egress IP, the exact `netsh` refusal, the four settings attempts in the order they were
-  made with their outcomes, and four options ordered by cost.
+- `docs/artifacts/s304-dashboard-location-honesty.txt` — the diff, the six added test names, the
+  three gate outputs verbatim, and the three eslint measurements that show 0 of 72 `.jsx` files
+  are linted by the documented command.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)**: the product reported "location" with a source field of `ip`
-  and an accuracy of `city`, and the dashboard dropped both. A field that exists to describe the
-  confidence of a measurement is worth surfacing *where the measurement is displayed* — otherwise the
-  UI silently upgrades a city-level guess into a pointer.
-- **Layer 3 (execution environment)**: the WLAN-permission ceiling is a platform fact nobody had
-  measured on a service install; the repo's own hardware notes recorded that the WiFi-scan branch was
-  unit-tested only, which was the hint that it had never worked in the deployed context.
+- **Layer 4 (verification feedback)** — the decisive one. Two gates were green on commands that do
+  not measure the code they are cited for: (1) the location UI shipped with `source` and
+  `accuracy_meters` in hand and displayed neither, so the map silently upgraded a city-level ISP
+  guess into a pointer; (2) the dashboard lint gate exits 0 without reading a single `.jsx` file.
+  The harness change that prevents the second class: any gate whose command takes a directory must
+  assert the count of files it actually read, not only its exit status — a green with
+  `files_linted: 0` for the file type under change is a red.
+- **Layer 2 (context provision)** — AGENTS.md documents `cd dashboard && npx eslint . # exit 0 =
+  clean` without noting that eslint v8 needs `--ext` for `.jsx`, so every session reproduced the
+  blind spot faithfully.
 
 ### VERIFY
 
-- Worker `GET /api/devices/14e7dafb…/locations` → three rows, `source: ip`, identical coordinates.
-- `curl https://ipwho.is/41.90.239.213` → `Kenya / Nyeri / Karatina`, `Safaricom Limited`,
-  `-0.4840639 / 37.1266157`.
-- MOLE `netsh wlan show networks mode=bssid` → `networks: 0`, `BSSIDs: 0`, "Access is denied".
-- After HKLM/HKCU Allow + `lfsvc` restart → unchanged (0 / 0, same message).
-- `brain.py check` → integrity clean.
+- `cd dashboard && npx vitest run` → **272 passed (272)**, 30 files, exit 0 (HEAD baseline 266;
+  the diff adds exactly 6 `it()` blocks).
+- `cd dashboard && npx vite build` → `✓ built in 6.96s`, exit 0 (641 kB chunk warning, pre-existing).
+- `cd dashboard && npm run test:coverage` → 70.57 / 66.59 / 62.59 / 71.36 vs floors 68 / 61 / 62 / 70, exit 0.
+- `cd dashboard && npx eslint .` → exit 0 — and `-f json` shows **21 files, 0 of them `.jsx`**;
+  `npx eslint src/ tests/ --max-warnings=0` → 13 files, 0 `.jsx`, exit 0;
+  `npx eslint . --ext .js,.jsx` → 72 files, 30 errors, 1 warning.
+- `git show HEAD:dashboard/tests/MapPage.test.jsx | sed -n 2p` → the flagged `fireEvent` import,
+  identical at HEAD, so the baseline 30 is unchanged by this session.
+- `scripts/check-ruling.sh` → `[OK] No open ruling items — task mode.`
 
 ### Next session opening
 
-Pick one of the four location options — the cheapest being to surface source/accuracy/age in the
-dashboard so a city-level IP fix stops looking like a position — then provision `google_api_key` on
-the serverless path for the installs that can actually scan.
+Make the dashboard lint gate real and prove it: add `--ext .js,.jsx` to `Makefile:290`,
+`.github/workflows/lint.yml:46`/`:75` and `release.yml:69`, clear the 29 real errors (22 unused
+vars, 7 unescaped entities) and declare the vitest globals for `tests/` so `no-undef` is honest,
+then show the gate red before the fix and green after — and only then take option (b),
+`google_api_key` on the serverless path.
 
 ---
 

@@ -1,8 +1,23 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-18 08:42:43 — 149 beliefs
+Generated: 2026-11-19 08:58:33 — 172 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
+
+## agent/bcd
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-152 | refuted | hardware | agent/bcd_lockdown.py::_disable_winre returns False for any non-zero 'reagentc /disable', and apply_bcd_lockdown treats that as a CRITICAL failure that rolls back every BCD change — but reagentc exits non-zero when WinRE is ALREADY disabled (the function's own comment says so). Measured on MOLE 2026-11-18: 'reagentc /info' reported 'Windows RE status: Disabled', so the lockdown rolled back and reported boot_lock_status=partial / lockdown_effective=0 on a device whose BCD was already at the lockdown values. A device that has been locked once can therefore never report BCD lockdown success again until 'already disabled' counts as success. → see B-153 |
+| B-153 | confirmed | code-read | agent/bcd_lockdown.py fixes the WinRE idempotency defect (S284): _winre_status() maps 'reagentc /info' to enabled/disabled/None, _disable_winre treats an already-disabled WinRE as success and _enable_winre an already-enabled one, and an unreadable state (None) is still a failure so a broken reagentc cannot look like a lockdown. Pinned by 6 unit tests plus an apply-level regression test asserting no rollback and a sentinel when WinRE is already off. Unit-tested only: E-BCD stays not-hardware-verified until a rebuilt agent runs on MOLE. |
+
+## agent/build
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-155 | confirmed | hardware | A Windows agent rebuild is reproducible from this repo on MOLE itself: Python 3.14.8 (matching the dev interpreter) installed silently to C:\Python314, deps from agent/requirements.txt, PyInstaller 6.22.3, then 'PyInstaller agent.spec'. The deployed exe sha256 becomes b17f390d6330d92bcf0e09490bc35b80c4c3cdbdde89221836ec421ba591984d. Replacing it requires stopping the service AND killing any lingering lockdown-agent child first — a copy over a running image fails silently while reporting 'copy ok', leaving the old hash in place. |
+| B-156 | confirmed | hardware | The agent now carries a build identity separate from AGENT_VERSION: AGENT_BUILD = '<UTC build date>.<12-hex source hash>' comes from the tracked agent/_buildinfo.py (committed defaults 'unknown'), build.ps1 stamps it before PyInstaller (hash over agent/*.py, so a host without git still works), and version_string() prints it in --version, the startup log and the crash log. AGENT_VERSION stays numeric because server/src/routes/agent.js compareVersions maps each dot-segment through Number(), where a suffix becomes NaN and would silently disable update comparisons. A test fails if a stamped _buildinfo.py is committed. Proven on MOLE: build=20261118.4bfeda526b77 in both --version and 'Agent starting'. |
+| B-167 | proposed | assumed | The Windows service build can no longer produce an unstartable artefact (S299): agent/requirements.txt pins pywin32==312 with a sys_platform=='win32' marker, and scripts/build-windows-artifacts.ps1 checks 'python -c "import servicemanager, win32serviceutil"' when the service target is selected, failing with the fix before PyInstaller runs. Two tests pin it (the check exists and runs before PyInstaller; the dependency carries a Windows-only marker), the suite is 8 passed, and the PowerShell script stays ASCII-only. The guard is verified at source level only: there is no PowerShell on this host and the build needs Windows, so the failure path itself has not been executed. |
 
 ## agent/deadman
 
@@ -11,11 +26,23 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-005 | refuted | code-read | The deadman switch computes elapsed time from the wall clock — a clock rollback yields negative elapsed hours and the switch never triggers. → see B-030 |
 | B-030 | confirmed | emulated | Deadman last_seen is server-anchored via checkin server_time; local clock rollback beyond 300s tolerance is detected and treated as stolen + expired (fail-secure); forward clock fires early — both directions hostile to an attacker. |
 
+## agent/location
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-171 | proposed | assumed | The wrong map position is not a plumbing bug (S303): MOLE's location rows are source 'ip' with identical coordinates -0.4840639/37.1266157 for every report, and ipwho.is returns exactly that for the egress IP 41.90.239.213 (Kenya/Nyeri/Karatina, Safaricom ASN 37061). The dashboard plots [lat, lon] faithfully for Leaflet; what is coarse is the source. WiFi triangulation is unavailable to a service install: netsh wlan show networks mode=bssid on Windows 11 answers 'Network shell commands need location permission to access WLAN information ... Access is denied' (0 SSIDs, 0 BSSIDs) even after HKLM and HKCU consent Allow plus an lfsvc restart, because the scan needs a location-capable interactive session and the agent runs as LocalSystem in session 0. Separately, the Worker has no google_api_key provisioning (only server/src/routes/installer.js:562 does it), so a Worker-enrolled fleet cannot be given a triangulation key at all. The dashboard also drops the source/accuracy/age fields that would tell an operator the fix is city-level. |
+
 ## agent/tpm
 
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-040 | confirmed | code-read | On S3 resume the TPM restartCount bumps (TPM2_Startup STATE) but resetCount (boot_id) does not, AND PBL never runs — so the OS agent (not firmware) must report restartCount. resetCount==restartCount baseline + stale last_boot_at = bypass; restartCount>resetCount = resume. |
+
+## agent/uefi
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-154 | confirmed | hardware | MOLE's HP UEFI lockdown layer cannot succeed because the unit has a BIOS Setup password the agent never set (HP_BIOSPassword IsSet=1; agent.log: 'Setup password was pre-existing — not clearing') while the agent signs every SetBIOSSetting with a 4-character uefi_password from its config; HP returns code 4 'Failed' for all three critical writes (Network (PXE) Boot, USB Storage Boot, Legacy Boot Options), so the layer rolls back and the ACK reports boot_lock_status=partial. It is an operator secret, not a code bug: the real Setup password must be supplied as UEFI_PASSWORD or cleared in BIOS Setup. Sure Start BIOS Settings Protection is Disable, so it is not the blocker. apply_boot_lockdown refuses when a Setup password exists and none is configured, but never validates that a configured one is correct. |
 
 ## agent/update
 
@@ -26,6 +53,10 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | B-048 | confirmed | code-read | Update authenticity is end-to-end only when a signing key is provisioned: every config generator (agent/installer.py, agent/installer_gui.py, server routes/installer.js, the Worker's generated script and the generic NSIS installer) names update_public_key only when update_signing.pub is actually staged, and both installers copy it into C:\ProgramData\LockdownAgent and pin that installed path — never the staging/download folder, because the agent fails closed on a configured-but-unreadable key and would refuse every future update. Unpinned agents accept SHA-256-only updates and report update_verification (signature \| sha256-only \| key-unreadable) at check-in; both backends store it (Express COALESCE, Worker merge) and the dashboard shows it per device and per row. |
 | B-049 | confirmed | code-read | Agent release metadata is produced by scripts/sign-release-metadata.py with one detached Ed25519 signature PER PLATFORM, because the signed message is 'v1:{version}:{sha256}' and therefore binds exactly one hash: a single top-level signature cannot be valid for both a Windows and a Linux build. CI (release.yml publish-agent-release-metadata) signs with the UPDATE_SIGNING_KEY secret, skips the companion binaries (the glob matches lockdown-agent-windows-x64-watchdog.exe before .exe), and attaches agent-release.json to the release; without the secret it publishes unsigned metadata behind a warning annotation, which a pinned agent refuses. The Worker serves platforms[<X-Agent-Platform>].signature first and falls back to the top-level signature only for metadata published before per-platform signing. |
 | B-053 | confirmed | code-read | The Worker's update path was structurally broken until S198: /api/agent/update advertised download_url '/api/agent/download?platform=...' while the Worker only implemented '/api/download/agent', so every serverless update download 404'd; and agent.py's download_update called tmp_file.unlink() in its except handler although tmp_file is created only after requests.get() returns, so any pre-response failure raised UnboundLocalError (not in the except tuple) and escaped check_for_update. Both were found only when an end-to-end test followed the advertised URL. Fixes: an agent-authenticated /api/agent/download route serving binary:agent:<platform> with a shared binary:agent fallback (plus x-content-sha256), and a guarded cleanup. The Worker requires full HMAC auth (all four X- headers) unlike Express's transition-tolerant hmacAuth. |
+| B-163 | proposed | assumed | The update trust root is staged but not published (S295): scripts/generate-update-keys.sh wrote ~/.lockdown-secrets/update_signing.{key,pub} (private mode 600, outside the working copy), and scripts/sign-release-metadata.py produced /tmp/agent-release.json for version 1.0.0 / win / sha256 d9e45902…, signed over 'v1:1.0.0:<sha256>'. Validation: openssl pkeyutl -verify says Signature Verified Successfully; agent.verify_update_signature returns True genuine, False for tampered hash or version, mode 'signature'; make test-worker-e2e 5 passed. update_public_key is a PATH to the .pub, not PEM text (inline PEM yields 'Update public key not found'). Publishing agent_release and staging update_signing.pub into the installer are ONE decision: metadata alone makes the endpoint offer a version, but a device verifies it only after its config names the key. Nothing is published, so the fleet remains sha256-only. |
+| B-164 | proposed | assumed | Update signing is live (S296): agent_release is published to KV and the installer was rebuilt with update_signing.pub staged (41,203,003 B, sha256 f9633ecb…), republished to R2 and served byte-identically by /api/download/installer. MOLE now reports update_verification 'signature' instead of 'sha256-only' at last_checkin 2026-11-18 10:21:36, after the pub key (sha256 207d7cc2…) was placed at C:\ProgramData\LockdownAgent\update_signing.pub and config.json's update_public_key was set to that path. The pin was applied by hand (what the installer writes), not by reinstalling with the new wrapper. No agent has performed a real self-update yet: metadata offers 1.0.0 and the device is already 1.0.0. Private key custody is still single-host (two copies, same disk). |
+| B-165 | proposed | assumed | Auto-update is proven on hardware through verification but not through application (S297). MOLE (Express backend with AGENT_LATEST_VERSION=1.0.1, AGENT_BINARIES_DIR=/tmp/rel101, UPDATE_SIGNING_KEY=the release key) logged 'Update available: 1.0.0 -> 1.0.1', 'Update signature verified (ed25519, pinned key)' and 'Update downloaded and verified (16852626 bytes, SHA-256 OK)', writing .update_pending and .update_downloaded. Nothing consumed them: only agent/watchdog.py reads .update_pending and this service-based install has no watchdog, so the swap had to be done by hand (stop, kill, copy .update_downloaded over lockdown-agent.exe, start). After that the device reports agent_version 1.0.1 and build=20261118.fe295d19ad91 (sha 63747758...), update_verification signature. The log line 'watchdog will apply on next check' is therefore a promise nothing keeps on a service install. |
+| B-166 | proposed | assumed | Auto-update applies itself on a service install (S298): agent/service_host.py gained apply_pending_update (re-checks the SHA-256 named in the signal, backs up, swaps, clears the signal), restore_backup, and _apply_update_if_pending, wired INSIDE the wait-for-child loop because the outer loop only runs after the agent exits. Proven twice on MOLE with no manual step: 1.0.1->1.0.2 at service start, and 1.0.2->1.0.3 mid-flight ('update pending - stopping the agent to apply it' -> 'pending update: applied' -> new agent build=20261118.5c31f3eaa364). Also: the frozen lockdown-service.exe needs pywin32, which agent/requirements.txt omits - without it the SCM start fails with 1053 and no log; a cached PyInstaller build kept the old hash until --clean. And /api/download/* now answers max-age=300 instead of 3600 (deployed f2840f6a...). |
 
 ## api/audit
 
@@ -88,6 +119,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-058 | confirmed | code-read | Admin usernames follow one contract, defined in server/src/validation/username.js: the value is TRIMMED before use, allowed characters are letters, digits and _ @ . -, length is 3-100 on creation while login accepts shorter values so a legacy account can still sign in, and the password is never trimmed. Before S203 three routes each had their own rule (login allowed _ @ . -, setup/create-admin and admins/create allowed only _ -) and none trimmed, so a username accepted at creation could be rejected at login, and padded input failed with 'username contains invalid characters' — a message that reads like a wrong password. The dashboard also submitted the username untrimmed and its setup form used a narrower allowlist than login. |
 
+## dashboard
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-168 | proposed | assumed | The dashboard has no code defect from this work; its two failures were environmental and structural (S300). Measured: 266 unit tests passed, but E2E failed 11/11 with 'browserType.launch: Executable doesn't exist ... chromium_headless_shell-1234'; after 'npx playwright install chromium-headless-shell' the suite is 11/11 green. dashboard/dist was stale by three source files and was rebuilt (assets/index-BiqBoQfX.js, 640.20 kB). And server/dev-start-sqlite.js — the entry every hardware session used — never served dashboard/dist, while server/src/index.js has since the prod-stack bug; the scaffold now mounts it with the same cache rules and SPA fallback, verified live (/ 200, /devices 200, deep device link 200, hashed asset 640,200 B). The client defaults to baseURL '/api' (same-origin); a Worker-pointed dashboard needs VITE_API_URL at build time and there is no dashboard/.env. |
+
 ## dashboard/e2e
 
 | ID | Status | Evidence | Statement |
@@ -100,11 +137,32 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-127 | confirmed | code-read | electron@42's install.js requires the ESM-only @electron/get, so 'npm install' under Node 20 throws ERR_REQUIRE_ESM and leaves node_modules/electron/dist empty — the app then cannot start at all, with no binary and no path.txt. |
 
+## dashboard/tooling
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-172 | proposed | assumed | The dashboard lint gate measures nothing: eslint v8 with .eslintrc.json lints 0 of 72 .jsx files unless --ext .js,.jsx is passed, so npx eslint . (and the Makefile:290 / lint.yml:46,75 / release.yml:69 form 'src/ tests/ --max-warnings=0') exits 0 while 30 errors sit in 16 .jsx files — 22 no-unused-vars, 7 react/no-unescaped-entities, 1 no-undef (the global afterEach in tests/EnrollDevicePage.test.jsx:42, a config gap because vitest.config.js sets globals:true). |
+
 ## db/sqlite
 
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-139 | confirmed | emulated | In SQLite, location_reports.reported_at is 'YYYY-MM-DD HH:MM:SS' while an agent-supplied observed_at is ISO-8601, so a bare ORDER BY COALESCE(observed_at, reported_at) compares characters: 'T' (0x54) sorts above ' ' (0x20) and an earlier fix outranks a later one. datetime(COALESCE(...)) normalises both shapes; PostgreSQL's TIMESTAMPTZ columns need no normalisation |
+
+## deployment/lab
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-150 | confirmed | hardware | MOLE (192.168.1.249; OpenSSH as labadmin, key ~/.ssh/lockdown_lab_ed25519, hostname MOLE, Win10.0.26300) can ping this host but cannot open TCP 3001, and the gate is THIS host's ufw — not a proxy on MOLE and not WSL. This host is a native Arch/Omarchy install holding 192.168.1.43 on wlp0s20f3 (kernel 7.2.15-1-omarchy, no Windows interop); the server listens on *:3001; MOLE's 'netsh interface portproxy show v4tov4' is empty and none is needed. ufw is ENABLED with DEFAULT_INPUT_POLICY=DROP and allows tcp 53317/8000/8787 only, so 3001 is dropped. Fix needs root: sudo ufw allow 3001/tcp. |
+| B-151 | confirmed | hardware | The lab link to MOLE never needed port 3001: MOLE's agent config targets http://192.168.1.43:8787, which ufw already allows (53317/8000/8787). On 2026-11-18 the device was enrolled through POST /api/devices (id d166e8f7a348d3543eefe1902dc6519c), config.json was patched on MOLE (backup config.json.bak-s282) and Restart-Service LockdownAgent produced a check-in within 8s: last_checkin set, hardware_uuid BE10009B-5867-337C-5024-E390E760DA74, agent_version 1.0.0, firmware_audit HP EliteBook 830 G6 / R70 Ver 01.36.00 / secure_boot=false, lock_state none. B-150's finding that 3001 is ufw-blocked remains true but was never the agent's path. MOLE has no usable TPM (seal key creation fails -> DPAPI fallback). |
+
+## deployment/release
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-159 | proposed | assumed | The Worker's published artifacts were refreshed in S290: binary:agent (16,852,161 B, sha256 d9e45902…, build=20261118.4bfeda526b77), binary:agent-installer (15,789,390 B, 399ad9ba…) and binary:lockscreen (9,146,350 B, 6592fd87…) are current, verified by downloading each back and comparing to the local build, and the response's x-content-sha256 equals the local artifact hash. Two gaps remain by kind: binary:installer (18,628,686 B) is still the 2026-11-12 NSIS wrapper because it embeds the agent at build time and makensis is absent on both hosts; agent_release has never been published, so the update path answers 'no release published' and agents only get new builds by reinstall. |
+| B-160 | proposed | assumed | The generic NSIS installer builds without root on this Arch host (unpack nsis_3.12-1_amd64.deb + nsis-common_3.12-1_all.deb with ar+tar, NSISDIR=/tmp/nsis-root/usr/share/nsis — nsis-common is mandatory for the stubs), producing a 41,203,591-byte wrapper. It cannot be published to the Worker's KV: Cloudflare rejects anything over 27 MiB (code 10024), and the wrapper's two mandatory payloads (agent 16,852,161 B + CLI installer 15,789,390 B = 32,641,551 B) already exceed that. So binary:installer stays the 2026-11-12 wrapper until the installer is hosted on R2, merged into one binary, or moved to an external host. |
+| B-162 | proposed | assumed | The release is complete on the Worker (S294): every download path serves a build from 2026-11-18, verified from the URL — binary:installer 41,203,591 B sha256 e5f0f390… (NSIS wrapper, served from R2), binary:agent 16,852,161 B d9e45902…, binary:agent-installer 15,789,390 B 399ad9ba…, binary:lockscreen 9,146,350 B 6592fd87…. Worker version 3cb8baf5-92cb-4469-8b4e-6618bd137b34 with bindings LOCKDOWN_KV + BINARIES (bucket lockdown-binaries). Migrating a key from KV to R2 needs BOTH steps: 'wrangler r2 object put … --remote' (without --remote it writes the local simulator) AND deleting the KV key, because KV-first precedence shadows the R2 object; KV deletes propagate in under a minute. agent_release still does not exist, so no agent is offered an update. |
 
 ## deployment/windows
 
@@ -112,11 +170,26 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-047 | confirmed | code-read | The one-click Windows installer runs on the target with native Windows facilities only (certutil, sc.exe, registry, the frozen lockdown-agent.exe/watchdog exe). No WSL, no Python, no NSSM on the target; makensis is a server-side Linux build dependency only. The IT-admin alternative agent/install_service.ps1 does require Python + NSSM on the target, so it is not interchangeable with the one-click path. |
 
+## deployment/worker
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-157 | confirmed | real-media | The Worker is deployed: lockdown-serverless at https://lockdown-serverless.mainacollins196.workers.dev, version 6a113a90-7707-4b32-a7f0-852e205ee812, uploaded 218.42 KiB (gzip 44.82), KV 84b24c0c1b9e4896b6c6fa41548ac636, OAuth login as mainacollins196@gmail.com via the DEVICE flow (this wrangler has no deploy --temporary). Live over HTTPS: /api/setup/status 200 (1 admin), /api/devices 401 without a token, /api/health 200 serverless:true, /v1/health 200, junk /v1/verdict 400 'invalid CBOR request', /v1/policy/1 200 1471 B, unknown route 404. But the binaries in KV are stale: /api/download/agent serves a 16,370,993-byte PE with COFF TimeDateStamp 2026-11-12T15:16:16Z (sha256 39a29b35…), which predates the S271, S284 and S287 agent fixes. |
+| B-161 | proposed | assumed | The Worker can serve oversized binaries from R2 when it is enabled: serverless/pbl/env.ts declares optional Env.BINARIES (R2Bucket) and serverless/worker.ts's readBinary() tries KV first then R2 under the same key name, used by both handleDownloadBinary and the agent-authenticated /api/agent/download. KV precedence is pinned by tests so nothing that fits moves. R2 itself is NOT enabled on this account (wrangler r2 bucket list/create both answer 'Please enable R2 through the Cloudflare Dashboard.' code 10042), so binary:installer (41,203,591 B, sha256 e5f0f390…) still cannot be published and remains the 2026-11-12 wrapper. Deployed as version 07690cdd-3291-4e32-8036-a5af9b430199 with only the KV binding, and all four downloads still serve from KV with unchanged digests. |
+| B-169 | proposed | assumed | The 'cannot generate an enrollment token on serverless' 401 was a missing admin session, not a broken route or a missing JWT secret (S301): POST /api/enroll/token answers 401 'Admin authentication required' without a valid admin bearer, the Worker's only admin is uncletom (super-admin, base64 PBKDF2-SHA256 record), and the Worker needs no JWT_SECRET because signAdminToken/verifyAdminToken fall back to env.ADMIN_TOKEN. The fix was a credential reset, not a code change: back up the admins KV value, recompute uncletom's hash (PBKDF2-SHA256, 100000 iterations, fresh 16-byte salt, keeping id/role/created_at), write it back — after which login returns 200 with a JWT and /api/enroll/token returns 200 with a 900-second token. Also: Cloudflare answers 403 code 1010 to a Python urllib client (browser-integrity/WAF on the UA) while curl passes, which looks identical to an auth failure if the body is not read. |
+| B-170 | proposed | assumed | The dashboard's device-registration one-liner was broken twice and both are fixed (S302). (1) It downloads /api/download/{installer,agent,service} with ErrorActionPreference=Stop, and binary:service was missing (404), so it aborted before installing; published 9,494,157 B sha256 130238f4… (same binary MOLE runs). (2) The generated script contained 13 UTF-8 em dashes, which PowerShell 5.1 decodes as ANSI, turning — into 'â€"' whose last byte closes the string early: [Parser]::ParseFile on PS 5.1.26100.9818 reported 3 errors, 'The string is missing the terminator'. Template strings in serverless/installer-scripts.ts are now ASCII-only, pinned by a test that composes the script and rejects any non-ASCII char (485 worker tests pass), deployed 6b635f9b-7c37-479d-bffc-cad066f0325d; the re-fetched script parses with 0 errors on the target. The command is: iex (irm '<origin>/api/enroll/setup.ps1'), which prompts for a 15-minute single-use token or reads $env:LOCKDOWN_ENROLL_TOKEN, then self-elevates via -Verb RunAs. MOLE is now enrolled on the Worker through that same token flow. |
+
 ## design
 
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-134 | proposed | assumed | When two components both need one Windows account disabled (lock and covert tracking), they must share a single owner of that state: separate files let each reverse the other's disable, so recover during tracking (or stop_track during a lockdown) hands the account back while the other layer still needs it closed. The working shape is a reason set — {user, reasons:[...]} — with the account enabled only when the set is empty, written BEFORE the account is touched so a crash still leaves a recovery path. |
+
+## enforcement/lock
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-158 | confirmed | hardware | E-LOCK-SCREEN is verified-on-hardware (S289): an interactive console sign-in on a locked MOLE is REFUSED because the interactive account is disabled. Evidence is Windows' own Security log: 8 x event 4625 with TargetUserName='Newark User', LogonType=2, Status=0xc000006e, SubStatus=0xc0000072 (STATUS_ACCOUNT_DISABLED), WorkstationName=MOLE, ProcessName=svchost.exe, from 11:38 to 11:43 local on 2026-11-18 - the operator's 5 attempts among them, refused with 'The account is currently disabled'. The lock-screen overlay still cannot be created in session 0 (CreateWindowEx failed: 2), so the disabled account plus the guardian, not the visual overlay, is the enforcement. Cited as docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01; I3 accepts it. |
 
 ## firmware
 

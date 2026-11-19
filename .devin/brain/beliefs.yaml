@@ -3780,3 +3780,22 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-172
+  statement: 'The dashboard lint gate measures nothing: eslint v8 with .eslintrc.json lints 0 of 72 .jsx
+    files unless --ext .js,.jsx is passed, so npx eslint . (and the Makefile:290 / lint.yml:46,75 / release.yml:69
+    form ''src/ tests/ --max-warnings=0'') exits 0 while 30 errors sit in 16 .jsx files — 22 no-unused-vars,
+    7 react/no-unescaped-entities, 1 no-undef (the global afterEach in tests/EnrollDevicePage.test.jsx:42,
+    a config gap because vitest.config.js sets globals:true).'
+  domain: dashboard/tooling
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: .github/workflows/lint.yml:46,75; .github/workflows/release.yml:69; Makefile:290; docs/artifacts/s304-dashboard-location-honesty.txt
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Measured S304 with eslint v8.57.1: ''npx eslint .'' -> 21 files/0 jsx; ''npx eslint src/ tests/
+    --max-warnings=0'' -> 13 files/0 jsx; ''npx eslint . --ext .js,.jsx'' -> 72 files/30 errors.'
