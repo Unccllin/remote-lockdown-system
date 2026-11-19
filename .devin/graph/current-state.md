@@ -53,41 +53,39 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 325 — 2026-11-19 (19 advisories cleared by overrides, and CI caught the lint I skipped)
+## Latest session: 326 — 2026-11-19 (the open-debt list is now derived from the ledgers, not retyped)
 
 ### Fog cleared
 
-- **The 19 moderate advisories are cleared** (`4fd8313`):
-  `overrides: { glob: ^14.0.2, minimatch: ^11.0.1 }` → `npm audit --json` reports **0** (was 19),
-  `--audit-level=high` exit 0, dashboard `audit-with-exceptions.sh` clean.
-- **The trade was measured, not asserted**: `cd server && npm test` → **885 passed, 52 suites** with the
-  forced majors in place, and `npm ci` from the committed lockfile installs 545 packages cleanly — which
-  matters because CI uses `ci`, not `install`.
-- **CI is green on the result** (`3f0c3b9`): `CI`, `Lint` and `CodeQL` all success; the agent suite also
-  re-run locally through `scripts/run-agent-tests.sh` (exit 0).
-- **Two defects CI caught were mine, from S321** (`3f0c3b9`): a **101-character docstring line** (`E501`)
-  and `assert_all_invariants` imported **out of alphabetical order** (`I001`). I had run that file's
-  pytest after writing it and never ran `scripts/lint-agent.sh` — the gate the repo provides for exactly
-  this, and the one CI runs unconditionally.
+- **`assert_open_debt_list_matches_ledger()` is in the invariant sweep** (`8824de4`): it parses both
+  ledgers, parses the newest block's list, and fails on the symmetric difference, naming both directions
+  (`listed but CLOSED` / `OPEN but unlisted`). Wired into `assert_all_invariants`, so `make graph-check`
+  fails rather than printing a clean sweep.
+- **Verified in both directions, on the real artefact and on the historical failure**:
+  the repository's graph passes (S325's block lists exactly D-120/D-129/D-130/D-134); a synthetic block
+  listing **D-210** against a ledger that has it CLOSED raises `GraphViolationError` naming D-210 — the
+  precise text every block since S303 carried.
+- **Two tests added** (52 in the file, was 50), and the agent lint gate was run **before** the commit:
+  `lint-agent.sh` exit 0, check + format clean.
+- **CI is green** on `8824de4`: `CI`, `Lint`, `CodeQL` all success.
 
 ### Fog remaining
 
-- **The pipeline-masking mistake recurred for the third time**, and the pattern is now unmistakable:
-  `;` before `git push` (S314), `grep` after a scan (S318), `tail` after a lint (this session). In each
-  case the exit status read came from something other than the verification. Every instance was caught
-  only because CI or a second look disagreed.
-- **Pyright still cannot resolve `graph_assert`** at `agent/tests/test_graph_assertions.py:20,518`
-  (`reportMissingImports`) — a module reached through a runtime `sys.path.insert`. Advisory by policy,
-  resolved at runtime, and not "fixed" with pragmas on lines this session did not otherwise change.
-- **The weekly audit's `cron` path is still unexercised** (all runs were dispatch); its diagnostic step is
-  retired.
+- **Only the newest block is checked.** Older trace history still contains the wrong D-210 line, which is
+  correct: it is a record of what those sessions believed, not a claim to repair.
+- **The ledger's own heading for D-210 still reads "not implemented"** while its status is CLOSED. That
+  is cosmetic and historical, but it is the kind of thing a reader trusts over a status line — noted, not
+  changed, because rewriting a closed item's title is not this session's to do.
+- **The invariant checks a list of ids, not prose.** A block could still write "D-120 (BitLocker) is
+  effectively done" beside the id and the check would pass; status semantics remain a human read.
+- **The weekly audit's `cron` path is still unexercised** (all runs were dispatch).
 - Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
   `RequestAccessAsync` (untested), the pre-push hook being per-clone state, the docker-socket red for
-  `test_tls_floor.py`.
+  `test_tls_floor.py`, and the pyright `reportMissingImports` pair on the runtime `sys.path` import.
 
 ### Debt items closed
 
-None. The four open items are unchanged and all blocked on hardware or an operator credential.
+None.
 
 ### Debt items still open
 
@@ -96,41 +94,39 @@ signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy)
 
 ### Blockers
 
-- None for this session's work; the four open ledger items remain blocked on hardware or credentials.
+- None. All four open items remain blocked on hardware or an operator credential, not on code.
 
 ### Session artifacts
 
-- `server/package.json` + `server/package-lock.json` (overrides) — `4fd8313`.
-- `agent/tests/test_graph_assertions.py` (E501 + I001) — `3f0c3b9`.
-- CI evidence: run on `3f0c3b9` → CI success, Lint success, CodeQL success.
+- `.devin/graph/graph_assert.py` (the invariant), `agent/tests/test_graph_assertions.py` (both
+  directions) — `8824de4`. CI evidence: `CI`, `Lint`, `CodeQL` success.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), twice over.** First, the two lint defects shipped because I ran the
-  test file and not the lint gate: selecting a subset of the gates that apply to a change is a quiet way
-  to be wrong, and CI is the backstop rather than the plan. Second, the exit-status masking — taking a
-  pipeline's status instead of the command's — is the same defect the arc keeps finding in *code*
-  (S318–S321), now in my own shell usage: a check whose outcome is read from the wrong place has not
-  been read.
-- **Layer 2 (context provision)**: nothing in the block format requires a lint run to be named, so
-  "verified locally" can mean "ran one thing". CI's job list is the actual contract.
+- **Layer 5 (state management), the case this whole arc has been circling.** A list was copied forward
+  from block to block, so twenty sessions inherited a stale fact and one of them wrote its next-opening
+  sentence from it. Nothing failed loudly because a restatement has no verifier. The fix is the same
+  shape as S318–S321 — derive it, don't restate it — applied to the process instead of the code.
+- **Layer 4 (verification feedback), mine again**: my first attempt at the tests shipped the same trio
+  S321 shipped (out-of-order import, 101-character line, missing `import pytest`). Running
+  `scripts/lint-agent.sh` before the commit rather than after CI is the whole difference, and it was
+  written down last session as a lesson.
 
 ### VERIFY
 
-- `npm audit --json` → `{info:0, low:0, moderate:0, high:0, critical:0, total:0}`; was 19 moderate.
-- `npm audit --audit-level=high` → exit 0 · dashboard `audit-with-exceptions.sh` → no vulnerabilities.
-- `cd server && npm test` → **885 passed, 52 suites**, exit 0.
-- `npm ci` in a clean temp dir from the committed lockfile → 545 packages, exit 0.
-- `scripts/lint-agent.sh` → **exit 0**, "All checks passed!", 67 files already formatted.
-- `scripts/run-agent-tests.sh -q` → exit 0.
-- CI on `3f0c3b9` → **CI success · Lint success · CodeQL success**.
+- `python3 .devin/graph/graph_assert.py` → `✓ All invariants pass` (the real spec: 17 phases, 64 debt
+  items, 13 enforcement paths, and now an open-debt list that matches the ledgers).
+- Synthetic: block listing `D-120, D-210` against a ledger with D-210 CLOSED → `GraphViolationError`
+  naming **D-210**; the corrected list → no violation.
+- `agent/.venv/bin/python -m pytest agent/tests/test_graph_assertions.py -q` → **52 passed**.
+- `scripts/lint-agent.sh` → exit 0, `[OK] ruff check + format clean`, 67 files formatted.
+- CI on `8824de4` → **CI success · Lint success · CodeQL success**.
 
 ### Next session opening
 
-Make the session block's open-debt list derived rather than retyped: `graph_assert.py` already computes
-`60/64` and the ledger knows each status, so a check that the block's list matches the ledger would have
-caught D-210 being called open for twenty sessions — the same class as S318–S321, in the process instead
-of the code.
+Extend the same check to the other half of the block: "Debt items closed" currently accepts any id, so a
+session could claim a closure the ledger does not record — assert that every id listed there is CLOSED in
+the ledger, and that its cited commit and artifact resolve, which the ledger already demands of itself.
 
 ---
 

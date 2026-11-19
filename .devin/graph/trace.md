@@ -6094,3 +6094,97 @@ caught D-210 being called open for twenty sessions — the same class as S318–
 of the code.
 
 ---
+
+---
+
+## Session 326 — 2026-11-19 (the open-debt list is now derived from the ledgers, not retyped)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `docs/adr/PBL-DEBT-LEDGER.md` — the heading/status shape (`### D-nnn — title` followed by
+  `- **Status**: OPEN|CLOSED`), and that D-130 carries a later dated `**Update (...)**` line, so the
+  *first* status line has to decide.
+- **Read**: `.devin/graph/graph_assert.py:453` (`assert_session_end_quality`) — how an existing invariant
+  slices the newest session block, so the new parser follows the same approach rather than inventing one.
+- **Read**: the block format in AGENTS.md — the six required sections, of which "Debt items still open"
+  was the one with no machine check behind it.
+- **Read**: S324's own finding (D-210 listed open for twenty sessions) so the invariant's failure message
+  could cite the case that motivated it.
+
+**Findings**: the ledger is the source of truth for debt status, and the block is a *restatement* of it.
+A restatement can drift silently, and this one had — twenty times — because the format accepts any string.
+
+### Fog cleared
+
+- **`assert_open_debt_list_matches_ledger()` is in the invariant sweep** (`8824de4`): it parses both
+  ledgers, parses the newest block's list, and fails on the symmetric difference, naming both directions
+  (`listed but CLOSED` / `OPEN but unlisted`). Wired into `assert_all_invariants`, so `make graph-check`
+  fails rather than printing a clean sweep.
+- **Verified in both directions, on the real artefact and on the historical failure**:
+  the repository's graph passes (S325's block lists exactly D-120/D-129/D-130/D-134); a synthetic block
+  listing **D-210** against a ledger that has it CLOSED raises `GraphViolationError` naming D-210 — the
+  precise text every block since S303 carried.
+- **Two tests added** (52 in the file, was 50), and the agent lint gate was run **before** the commit:
+  `lint-agent.sh` exit 0, check + format clean.
+- **CI is green** on `8824de4`: `CI`, `Lint`, `CodeQL` all success.
+
+### Fog remaining
+
+- **Only the newest block is checked.** Older trace history still contains the wrong D-210 line, which is
+  correct: it is a record of what those sessions believed, not a claim to repair.
+- **The ledger's own heading for D-210 still reads "not implemented"** while its status is CLOSED. That
+  is cosmetic and historical, but it is the kind of thing a reader trusts over a status line — noted, not
+  changed, because rewriting a closed item's title is not this session's to do.
+- **The invariant checks a list of ids, not prose.** A block could still write "D-120 (BitLocker) is
+  effectively done" beside the id and the check would pass; status semantics remain a human read.
+- **The weekly audit's `cron` path is still unexercised** (all runs were dispatch).
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, the docker-socket red for
+  `test_tls_floor.py`, and the pyright `reportMissingImports` pair on the runtime `sys.path` import.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
+
+### Blockers
+
+- None. All four open items remain blocked on hardware or an operator credential, not on code.
+
+### Session artifacts
+
+- `.devin/graph/graph_assert.py` (the invariant), `agent/tests/test_graph_assertions.py` (both
+  directions) — `8824de4`. CI evidence: `CI`, `Lint`, `CodeQL` success.
+
+### Failure attribution
+
+- **Layer 5 (state management), the case this whole arc has been circling.** A list was copied forward
+  from block to block, so twenty sessions inherited a stale fact and one of them wrote its next-opening
+  sentence from it. Nothing failed loudly because a restatement has no verifier. The fix is the same
+  shape as S318–S321 — derive it, don't restate it — applied to the process instead of the code.
+- **Layer 4 (verification feedback), mine again**: my first attempt at the tests shipped the same trio
+  S321 shipped (out-of-order import, 101-character line, missing `import pytest`). Running
+  `scripts/lint-agent.sh` before the commit rather than after CI is the whole difference, and it was
+  written down last session as a lesson.
+
+### VERIFY
+
+- `python3 .devin/graph/graph_assert.py` → `✓ All invariants pass` (the real spec: 17 phases, 64 debt
+  items, 13 enforcement paths, and now an open-debt list that matches the ledgers).
+- Synthetic: block listing `D-120, D-210` against a ledger with D-210 CLOSED → `GraphViolationError`
+  naming **D-210**; the corrected list → no violation.
+- `agent/.venv/bin/python -m pytest agent/tests/test_graph_assertions.py -q` → **52 passed**.
+- `scripts/lint-agent.sh` → exit 0, `[OK] ruff check + format clean`, 67 files formatted.
+- CI on `8824de4` → **CI success · Lint success · CodeQL success**.
+
+### Next session opening
+
+Extend the same check to the other half of the block: "Debt items closed" currently accepts any id, so a
+session could claim a closure the ledger does not record — assert that every id listed there is CLOSED in
+the ledger, and that its cited commit and artifact resolve, which the ledger already demands of itself.
+
+---
