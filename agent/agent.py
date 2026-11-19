@@ -229,7 +229,7 @@ except ImportError:
 # Version
 # ---------------------------------------------------------------------------
 
-AGENT_VERSION = "1.0.3"
+AGENT_VERSION = "1.0.4"
 
 # Build identity. AGENT_VERSION stays numeric semver because the update path compares it
 # numerically (`compareVersions` splits on '.', server/src/routes/agent.js:1037), so build
@@ -240,6 +240,11 @@ AGENT_VERSION = "1.0.3"
 # Why this exists: two different binaries both called themselves `1.0.0`, and telling the stale
 # one from the current one cost a session and a hand-run sha256 against the device (S286). A
 # version that cannot distinguish two builds is not an identity.
+#
+# The rule that follows from it, learned again the hard way (S310): a FUNCTIONAL change bumps this
+# number in the same commit. ADR-010's runtime key rotation landed in 23e70f8 without a bump, so
+# every device still reported 1.0.3 and the dashboard could not say which ones had the code — the
+# exact ambiguity this block exists to prevent. Rotation is 1.0.4.
 #
 # The two pragmas below are for the checker, not for the runtime: `_buildinfo` is a tracked
 # sibling module (agent/_buildinfo.py) that ships with the source and is bundled by PyInstaller
