@@ -24,6 +24,7 @@ from graph_assert import (  # noqa: E402
     artifact_supports_claim,
     assert_all_invariants,
     assert_artifact_quality,
+    assert_claimed_closures_are_real,
     assert_debt_close_has_evidence,
     assert_enforcement_path_status,
     assert_open_debt_list_matches_ledger,
@@ -704,8 +705,8 @@ class TestOpenDebtListMatchesLedger:
 
     @staticmethod
     def _project(tmp_path, block_body):
-        (tmp_path / "docs" / "adr").mkdir(parents=True)
-        (tmp_path / ".devin" / "graph").mkdir(parents=True)
+        (tmp_path / "docs" / "adr").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".devin" / "graph").mkdir(parents=True, exist_ok=True)
         (tmp_path / "docs/adr/PBL-DEBT-LEDGER.md").write_text(
             "### D-120 — BitLocker\n- **Status**: OPEN\n\n"
             "### D-210 — route integration\n- **Status**: CLOSED (commit 9612fbb)\n"
@@ -728,3 +729,54 @@ class TestOpenDebtListMatchesLedger:
     def test_the_derived_list_passes(self, tmp_path):
         trace = self._project(tmp_path, "D-120 (BitLocker real media).")
         assert_open_debt_list_matches_ledger(trace, tmp_path)
+
+
+class TestClaimedClosuresAreReal:
+    """S327: a closure the block claims must be one the ledger records.
+
+    Prose is deliberately not scanned — S119's block says "None. This session fixed live defects
+    (D-119/D-120-adjacent behaviour)", naming two ids and closing neither. Only the explicit form
+    `- **D-nnn — CLOSED**` is a claim.
+    """
+
+    @staticmethod
+    def _project(tmp_path, closed_body, ledger_status="OPEN", orphans=""):
+        (tmp_path / "docs" / "adr").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".devin" / "graph").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "docs/adr/PBL-DEBT-LEDGER.md").write_text(
+            f"### D-120 — BitLocker\n- **Status**: {ledger_status}\n"
+        )
+        (tmp_path / ".devin/graph/orphaned-commit-refs.txt").write_text(orphans)
+        (tmp_path / "docs/adr/x.md").write_text("evidence\n")  # the claim cites it
+        trace = tmp_path / ".devin/graph/trace.md"
+        trace.write_text(
+            "## Session 999 — synthetic\n\n### Debt items closed\n\n"
+            + closed_body
+            + "\n\n### Next session opening\n\nx\n"
+        )
+        return trace
+
+    def test_a_closure_the_ledger_does_not_record_is_a_violation(self, tmp_path):
+        trace = self._project(tmp_path, "- **D-120 — CLOSED.** criteria met, honest.")
+        with pytest.raises(GraphViolationError) as exc:
+            assert_claimed_closures_are_real(trace, tmp_path)
+        assert "D-120" in str(exc.value)
+
+    def test_prose_that_merely_names_ids_is_not_a_claim(self, tmp_path):
+        trace = self._project(
+            tmp_path,
+            "None. Fixed live defects (D-119/D-120-adjacent behaviour) but closed none.",
+        )
+        assert_claimed_closures_are_real(trace, tmp_path)
+
+    def test_a_cited_commit_must_resolve_or_be_a_known_orphan(self, tmp_path):
+        claim = "- **D-120 — CLOSED** (`commit_ref deadbeefcafe`), artifact docs/adr/x.md."
+        trace = self._project(tmp_path, claim, ledger_status="CLOSED")
+        with pytest.raises(GraphViolationError) as exc:
+            assert_claimed_closures_are_real(trace, tmp_path)
+        message = str(exc.value)
+        assert "deadbeefcafe" in message or "does not exist" in message
+
+        # the same claim passes once the hash is a known orphan (S149 rewrite baseline)
+        trace = self._project(tmp_path, claim, ledger_status="CLOSED", orphans="deadbeefcafe\n")
+        assert_claimed_closures_are_real(trace, tmp_path)

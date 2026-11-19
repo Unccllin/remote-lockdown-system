@@ -890,6 +890,117 @@ def assert_open_debt_list_matches_ledger(
         )
 
 
+
+# ---------------------------------------------------------------------------
+# I2 (extended, S327): a claimed closure must be a real one
+# ---------------------------------------------------------------------------
+
+# A block claims a closure in ONE explicit form: `- **D-132 — CLOSED** (commit_ref ...)`.
+# Prose is deliberately not scanned: S119's block says "None. This session fixed live defects
+# (D-119/D-120-adjacent behaviour)", which names two ids and closes neither. Requiring a form keeps
+# prose free and still makes claims checkable.
+_DEBT_CLOSED_CLAIM_RE = re.compile(
+    r"^\s*[-*]\s*\*\*(D-\d+)\s*[—:-]\s*CLOSED", re.MULTILINE | re.IGNORECASE
+)
+_HEX_REF_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
+_PATH_REF_RE = re.compile(r"\b((?:docs|agent|scripts|server|serverless|electron|firmware|\.devin)/[\w./-]+)")
+
+
+def _latest_block_closed_claims(trace_path: Path) -> list[tuple[str, str]]:
+    """(id, the claiming line) for each explicit CLOSED claim in the newest block."""
+    text = trace_path.read_text(encoding="utf-8", errors="replace")
+    starts = [m.start() for m in re.finditer(r"^## Session", text, re.MULTILINE)]
+    if not starts:
+        return []
+    block = text[starts[-1]:]
+    section = re.search(
+        r"^### Debt items closed[ \t]*$(.*?)(?=^### |\Z)", block, re.MULTILINE | re.DOTALL
+    )
+    if not section:
+        return []
+    # The LINE, not the match: the regex stops at "CLOSED", while the commit and artifact a claim
+    # must justify are cited after it. Returning group(0) made the evidence invisible — the guard
+    # silently had nothing to verify, which its own test caught.
+    claims: list[tuple[str, str]] = []
+    for line in section.group(1).splitlines():
+        m = _DEBT_CLOSED_CLAIM_RE.match(line)
+        if m:
+            claims.append((m.group(1), line.strip()))
+    return claims
+
+
+def _orphan_baseline(project_root: Path) -> set[str]:
+    path = project_root / ".devin" / "graph" / "orphaned-commit-refs.txt"
+    if not path.exists():
+        return set()
+    return {
+        line.strip()
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+
+
+def assert_claimed_closures_are_real(trace_path: Path, project_root: Path | None = None) -> None:
+    """S327: every closure a block CLAIMS must be CLOSED in the ledger, with resolving evidence.
+
+    The block's "Debt items closed" section used to accept anything, so a session could record a
+    closure the ledger never made — the mirror of S326's stale-open problem. The ledger already demands
+    commit_ref + artifact_ref of itself (I2); this demands the same of the block that reports it.
+    """
+    if not trace_path.exists():
+        return
+    claims = _latest_block_closed_claims(trace_path)
+    if not claims:
+        return
+    if project_root is None:
+        project_root = Path(__file__).parent.parent.parent
+    closed = _ledger_open_ids(project_root)  # cheap parse; subtract below for the CLOSED side
+    ledger_closed: set[str] = set()
+    for rel in ("docs/adr/DEBT-LEDGER.md", "docs/adr/PBL-DEBT-LEDGER.md"):
+        path = project_root / rel
+        if not path.exists():
+            continue
+        current = None
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            heading = _DEBT_HEADING_RE.match(line)
+            if heading:
+                current = heading.group(1)
+                continue
+            if current and line.startswith("- **Status**:"):
+                if "CLOSED" in line.upper():
+                    ledger_closed.add(current)
+                current = None
+    orphans = _orphan_baseline(project_root)
+    problems: list[str] = []
+    for debt_id, line in claims:
+        if debt_id not in ledger_closed:
+            state = "OPEN" if debt_id in closed else "absent from both ledgers"
+            problems.append(f"{debt_id} is claimed CLOSED in the block but is {state}")
+        for hexref in _HEX_REF_RE.findall(line):
+            if hexref in orphans:
+                continue
+            resolved = subprocess.run(
+                ["git", "rev-parse", "--verify", "--quiet", f"{hexref}^{{commit}}"],
+                cwd=str(project_root), capture_output=True, text=True,
+            )
+            if resolved.returncode != 0:
+                problems.append(
+                    f"{debt_id}: cited commit {hexref} does not resolve and is not in the "
+                    "orphaned-refs baseline"
+                )
+        for rel_path in _PATH_REF_RE.findall(line):
+            # A sentence ends `artifact docs/adr/x.md.` — the full stop is punctuation, not the path.
+            stripped = rel_path.rstrip(".,;:)")
+            if stripped and not (project_root / stripped).exists():
+                problems.append(f"{debt_id}: cited artifact {stripped} does not exist")
+    if problems:
+        raise GraphViolationError(
+            "I2", "claimed_closures", "; ".join(problems),
+            "A closure the ledger does not record is a claim, not a close. Cite the commit and the "
+            "artifact, and only after the ledger records them.",
+        )
+
+
 def assert_all_invariants(graph: dict | None = None) -> list[str]:
     """Run all invariant checks and return a list of violation messages.
 
@@ -946,6 +1057,12 @@ def assert_all_invariants(graph: dict | None = None) -> list[str]:
     trace_path = project_root / ".devin" / "graph" / "trace.md"
     try:
         assert_open_debt_list_matches_ledger(trace_path)
+    except GraphViolationError as e:
+        violations.append(str(e))
+
+    # I2 (extended): every closure the block CLAIMS must be real (S327)
+    try:
+        assert_claimed_closures_are_real(trace_path, project_root)
     except GraphViolationError as e:
         violations.append(str(e))
 
