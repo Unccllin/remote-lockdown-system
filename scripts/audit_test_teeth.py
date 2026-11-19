@@ -632,6 +632,24 @@ def _pytest_failures(lines: list[str]) -> set[str]:
     return out
 
 
+def _dump_invalid(runner: str, out: str, limit: int = 40) -> None:
+    """Print the head and tail of a run that produced no verdict.
+
+    S323: the first two CI runs of the audit could only report the last line, which was a Worker log
+    line — so a failing baseline looked like a failing assertion and cost two 10-minute round trips to
+    learn nothing. When the verdict is "could not run", the output IS the diagnosis.
+    """
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    print(f"--- {runner} output ({len(lines)} lines) ---", file=sys.stderr)
+    for ln in lines[:limit]:
+        print(f"  | {ln}"[:400], file=sys.stderr)
+    if len(lines) > limit:
+        print(f"  | … {len(lines) - limit} more line(s)", file=sys.stderr)
+        for ln in lines[-5:]:
+            print(f"  | {ln}"[:400], file=sys.stderr)
+    print(f"--- end {runner} output ---", file=sys.stderr)
+
+
 def _invalid_summary(proc, out: str, why: str) -> str:
     """S323: an INVALID verdict has to say enough to diagnose it.
 
@@ -642,6 +660,11 @@ def _invalid_summary(proc, out: str, why: str) -> str:
     lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
     tail = " / ".join(lines[-3:])[:300]
     return f"{why} [rc={proc.returncode}] :: {tail}"
+
+def _invalid(proc, out: str, why: str, runner: str) -> tuple[None, str, set[str]]:
+    """`_invalid_summary` plus the evidence, printed once per failing baseline."""
+    _dump_invalid(runner, out)
+    return None, _invalid_summary(proc, out, why), set()
 
 
 def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
@@ -672,7 +695,7 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
         finished = any(ln.strip().startswith("Tests") for ln in lines)
         if not finished or "Error: Cannot find module" in out:
             why = "vitest printed no 'Tests' tally" if not finished else "vitest could not load a module"
-            return None, _invalid_summary(proc, out, why), set()
+            return _invalid(proc, out, why, "vitest")
         if proc.returncode in (0, 1):
             return proc.returncode == 0, summary, _vitest_failures(lines)
         return None, summary, set()
@@ -698,9 +721,9 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
         crashed = "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG" in out or "Node.js v" in out
         if not finished or crashed:
             why = "jest crashed" if crashed else "jest printed no tally"
-            return None, _invalid_summary(proc, out, why), set()
+            return _invalid(proc, out, why, "jest")
         if any(m in out for m in ("No tests found", "Cannot find module")):
-            return None, _invalid_summary(proc, out, "jest ran no tests"), set()
+            return _invalid(proc, out, "jest ran no tests", "jest")
         if proc.returncode in (0, 1):
             return proc.returncode == 0, summary, _jest_failures(lines)
         return None, summary, set()
