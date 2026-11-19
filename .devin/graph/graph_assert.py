@@ -803,6 +803,93 @@ def artifact_supports_claim(
 # ---------------------------------------------------------------------------
 
 
+
+# ---------------------------------------------------------------------------
+# I2 (extended, S326): the block's open-debt list must be derived, not retyped
+# ---------------------------------------------------------------------------
+
+_DEBT_HEADING_RE = re.compile(r"^### (D-\d+)\b")
+_BLOCK_DEBT_ID_RE = re.compile(r"\bD-(\d+)\b")
+
+
+def _ledger_open_ids(project_root: Path) -> set[str]:
+    """Ids whose FIRST '- **Status**:' line after their heading says OPEN.
+
+    Both ledgers are read: DEBT-LEDGER.md for the legacy D-001..D-021 range and PBL-DEBT-LEDGER.md for
+    D-100.., because a block's list covers whatever is open, regardless of which file records it.
+    The first status line decides, since later ones are dated updates (D-130 has one).
+    """
+    open_ids: set[str] = set()
+    for rel in ("docs/adr/DEBT-LEDGER.md", "docs/adr/PBL-DEBT-LEDGER.md"):
+        path = project_root / rel
+        if not path.exists():
+            continue
+        current = None
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            heading = _DEBT_HEADING_RE.match(line)
+            if heading:
+                current = heading.group(1)
+                continue
+            if current and line.startswith("- **Status**:"):
+                if "OPEN" in line.upper():
+                    open_ids.add(current)
+                current = None
+    return open_ids
+
+
+def _latest_block_open_ids(trace_path: Path) -> set[str] | None:
+    """The ids listed under the newest session block's 'Debt items still open' heading."""
+    text = trace_path.read_text(encoding="utf-8", errors="replace")
+    starts = [m.start() for m in re.finditer(r"^## Session", text, re.MULTILINE)]
+    if not starts:
+        return None
+    block = text[starts[-1]:]
+    section = re.search(
+        r"^### Debt items still open[ \t]*$(.*?)(?=^### |\Z)",
+        block, re.MULTILINE | re.DOTALL,
+    )
+    if not section:
+        return None
+    return {f"D-{n}" for n in _BLOCK_DEBT_ID_RE.findall(section.group(1))}
+
+
+def assert_open_debt_list_matches_ledger(
+    trace_path: Path, project_root: Path | None = None
+) -> None:
+    """S326: the newest block's open-debt list must match the ledgers, not be retyped.
+
+    S324 found `D-210 (PBL route integration)` listed as open in every block since S303, while
+    PBL-DEBT-LEDGER.md had it **CLOSED** with a commit grandfathered by the S149 orphan baseline.
+    Nothing objected: the block format accepts any string under "Debt items still open", so a stale
+    line propagated for twenty sessions. This compares the list against the ledger and names the
+    symmetric difference, which is the same "derive it, don't restate it" rule the code invariants
+    follow.
+
+    Silent when the newest block has no such section (older blocks predate it) — the session-end
+    quality invariant already covers a missing section.
+    """
+    if not trace_path.exists():
+        return
+    listed = _latest_block_open_ids(trace_path)
+    if listed is None:
+        return
+    if project_root is None:
+        project_root = Path(__file__).parent.parent.parent
+    actual = _ledger_open_ids(project_root)
+    phantom = sorted(listed - actual)
+    missing = sorted(actual - listed)
+    if phantom or missing:
+        raise GraphViolationError(
+            "I2",
+            "open_debt_list",
+            "the newest session block's open-debt list disagrees with the ledgers — "
+            f"listed but CLOSED: {', '.join(phantom) if phantom else 'none'}; "
+            f"OPEN but unlisted: {', '.join(missing) if missing else 'none'}",
+            "Read the open set out of the ledgers rather than retyping it; D-210 was reported open "
+            "for twenty sessions after it had been closed.",
+        )
+
+
 def assert_all_invariants(graph: dict | None = None) -> list[str]:
     """Run all invariant checks and return a list of violation messages.
 
@@ -854,6 +941,13 @@ def assert_all_invariants(graph: dict | None = None) -> list[str]:
             assert_debt_close_has_evidence(debt)
         except GraphViolationError as e:
             violations.append(str(e))
+
+    # I2 (extended): the block's open-debt list must match the ledgers (S326)
+    trace_path = project_root / ".devin" / "graph" / "trace.md"
+    try:
+        assert_open_debt_list_matches_ledger(trace_path)
+    except GraphViolationError as e:
+        violations.append(str(e))
 
     # I3: Check enforcement path statuses are valid and consistent
     try:

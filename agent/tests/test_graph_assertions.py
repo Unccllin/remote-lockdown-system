@@ -14,6 +14,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add graph directory to path
 _GRAPH_DIR = Path(__file__).resolve().parent.parent.parent / ".devin" / "graph"
 sys.path.insert(0, str(_GRAPH_DIR))
@@ -24,6 +26,7 @@ from graph_assert import (  # noqa: E402
     assert_artifact_quality,
     assert_debt_close_has_evidence,
     assert_enforcement_path_status,
+    assert_open_debt_list_matches_ledger,
     assert_orchestrator_knows_all_phases,
     assert_phase_deps_met,
     assert_rule_zero_quality,
@@ -690,3 +693,38 @@ class TestVacuityGuard:
         violations = assert_all_invariants()
         vacuity = [v for v in violations if "vacuous" in v or "examines nothing" in v]
         assert vacuity == [], f"the real graph reported vacuity: {vacuity}"
+
+
+class TestOpenDebtListMatchesLedger:
+    """S326: the block's open-debt list must be derived from the ledgers.
+
+    S324 found D-210 listed as open in every block since S303 while the ledger had it CLOSED.
+    Nothing objected, because any string satisfies "Debt items still open".
+    """
+
+    @staticmethod
+    def _project(tmp_path, block_body):
+        (tmp_path / "docs" / "adr").mkdir(parents=True)
+        (tmp_path / ".devin" / "graph").mkdir(parents=True)
+        (tmp_path / "docs/adr/PBL-DEBT-LEDGER.md").write_text(
+            "### D-120 — BitLocker\n- **Status**: OPEN\n\n"
+            "### D-210 — route integration\n- **Status**: CLOSED (commit 9612fbb)\n"
+        )
+        trace = tmp_path / ".devin/graph/trace.md"
+        trace.write_text(
+            "## Session 999 — synthetic\n\n"
+            "### Debt items still open\n\n" + block_body + "\n\n"
+            "### Next session opening\n\nx\n"
+        )
+        return trace
+
+    def test_a_closed_item_listed_as_open_is_a_violation(self, tmp_path):
+        listed = "D-120 (BitLocker), D-210 (PBL route integration)."
+        trace = self._project(tmp_path, listed)
+        with pytest.raises(GraphViolationError) as exc:
+            assert_open_debt_list_matches_ledger(trace, tmp_path)
+        assert "D-210" in str(exc.value)
+
+    def test_the_derived_list_passes(self, tmp_path):
+        trace = self._project(tmp_path, "D-120 (BitLocker real media).")
+        assert_open_debt_list_matches_ledger(trace, tmp_path)
