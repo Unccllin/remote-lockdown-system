@@ -57,6 +57,7 @@ help:
 	@echo "  make check-structure      check dist dirs exist (non-fatal)"
 	@echo "  make verify-env           verify all environment items (agent, NSIS, Docker, signing, etc.)"
 	@echo "  make graph-check          run graph invariant sweep (I1-I7)"
+	@echo "  make lint-graph           ruff over .devin/graph (the code that enforces I1-I7)"
 	@echo "  make audit-teeth          would each verified-in-unit-test suite notice a regression?"
 	@echo "  make graph-status         print convergence report (phases, debt, enforcement gaps)"
 	@echo "  make gen-state            regenerate current-state.md from trace.md (compact, auto-derived)"
@@ -239,7 +240,7 @@ pre-push-check:
 # Lint all components — server, dashboard, agent, workflows.
 .PHONY: lint lint-server lint-dashboard lint-agent lint-workflows check-firmware-todos check-debt-ledger
 
-lint: lint-server lint-dashboard lint-agent lint-workflows check-firmware-todos check-debt-ledger typecheck-worker check-openapi
+lint: lint-server lint-dashboard lint-agent lint-graph lint-workflows check-firmware-todos check-debt-ledger typecheck-worker check-openapi
 
 # Workflow lint. CI runs actionlint v1.7.12 through raven-actions/actionlint,
 # which bundles shellcheck — so CI also checks the shell inside every `run:`
@@ -292,6 +293,13 @@ lint-dashboard:
 
 lint-agent:
 	@scripts/lint-agent.sh
+
+# The graph assertion engine decides every invariant in this repo, so it is linted like the rest
+# (S328). Narrow rule set on purpose - see the header of the script.
+.PHONY: lint-graph
+
+lint-graph:
+	@scripts/lint-graph.sh
 
 # Format check is now part of lint-agent. This target is kept for backwards
 # compatibility and delegates to the same script, so it can never drift back to a

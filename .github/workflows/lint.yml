@@ -105,6 +105,11 @@ jobs:
       - name: Run ruff format check
         run: ruff format --check . tests/
 
+      # .devin/graph decides whether every invariant passes and no gate read it until S328. Its rule
+      # set is narrower than ruff.toml (E,W,F,I,UP): this is a build-time script, not shipped code.
+      - name: Lint graph assertion engine
+        run: scripts/lint-graph.sh
+
   # ---------------------------------------------------------------------------
   # actionlint — GitHub Actions workflow validation
   # ---------------------------------------------------------------------------

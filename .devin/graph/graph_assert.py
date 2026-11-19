@@ -39,28 +39,22 @@ Usage:
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 # Add parent to path for graph_loader import
 sys.path.insert(0, str(Path(__file__).parent))
 from graph_loader import (  # noqa: E402
-    are_phase_deps_met,
     get_blocked_enforcement_paths,
     get_debt_items,
     get_enforcement_paths,
-    get_invariants,
-    get_open_debt_items,
     get_phase,
     get_phase_nodes,
     load_graph,
 )
-
 
 # ---------------------------------------------------------------------------
 # Exception
@@ -182,7 +176,7 @@ def _artifact_paths(artifact_ref: str) -> list[str]:
     for path in _ARTIFACT_PATH.findall(artifact_ref):
         if any(ch in path for ch in "*{},?"):
             continue
-        if path.endswith("/") or path.endswith("-"):
+        if path.endswith(("/", "-")):
             continue
         out.append(path)
     return out
@@ -568,10 +562,14 @@ def assert_orchestrator_knows_all_phases(graph: dict, orchestrator_path: Path) -
         # Check if the phase number appears in the orchestrator
         phase_num = phase["id"].replace("P", "")
         # Look for the phase number in PHASE_DEPS or PHASE_NAMES
-        if f"[{phase_num}]=" not in content and f'"{phase_num}"' not in content:
+        if (
+            f"[{phase_num}]=" not in content
+            and f'"{phase_num}"' not in content
             # Also check if it appears in the case statement or run_all
-            if f" {phase_num})" not in content and f" {phase_num} " not in content:
-                missing.append(phase["id"])
+            and f" {phase_num})" not in content
+            and f" {phase_num} " not in content
+        ):
+            missing.append(phase["id"])
     if missing:
         raise GraphViolationError(
             "I6", "orchestrator_knows_all_phases",
@@ -815,8 +813,9 @@ _BLOCK_DEBT_ID_RE = re.compile(r"\bD-(\d+)\b")
 def _ledger_open_ids(project_root: Path) -> set[str]:
     """Ids whose FIRST '- **Status**:' line after their heading says OPEN.
 
-    Both ledgers are read: DEBT-LEDGER.md for the legacy D-001..D-021 range and PBL-DEBT-LEDGER.md for
-    D-100.., because a block's list covers whatever is open, regardless of which file records it.
+    Both ledgers are read: DEBT-LEDGER.md for the legacy D-001..D-021 range and
+    PBL-DEBT-LEDGER.md for D-100.., because a block's list covers whatever is open,
+    regardless of which file records it.
     The first status line decides, since later ones are dated updates (D-130 has one).
     """
     open_ids: set[str] = set()
@@ -903,7 +902,9 @@ _DEBT_CLOSED_CLAIM_RE = re.compile(
     r"^\s*[-*]\s*\*\*(D-\d+)\s*[—:-]\s*CLOSED", re.MULTILINE | re.IGNORECASE
 )
 _HEX_REF_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
-_PATH_REF_RE = re.compile(r"\b((?:docs|agent|scripts|server|serverless|electron|firmware|\.devin)/[\w./-]+)")
+_PATH_REF_RE = re.compile(
+    r"\b((?:docs|agent|scripts|server|serverless|electron|firmware|\.devin)/[\w./-]+)"
+)
 
 
 def _latest_block_closed_claims(trace_path: Path) -> list[tuple[str, str]]:
@@ -944,8 +945,9 @@ def assert_claimed_closures_are_real(trace_path: Path, project_root: Path | None
     """S327: every closure a block CLAIMS must be CLOSED in the ledger, with resolving evidence.
 
     The block's "Debt items closed" section used to accept anything, so a session could record a
-    closure the ledger never made — the mirror of S326's stale-open problem. The ledger already demands
-    commit_ref + artifact_ref of itself (I2); this demands the same of the block that reports it.
+    closure the ledger never made — the mirror of S326's stale-open problem. The ledger
+    already demands commit_ref + artifact_ref of itself (I2); this demands the same of the
+    block that reports it.
     """
     if not trace_path.exists():
         return
@@ -989,7 +991,8 @@ def assert_claimed_closures_are_real(trace_path: Path, project_root: Path | None
                     "orphaned-refs baseline"
                 )
         for rel_path in _PATH_REF_RE.findall(line):
-            # A sentence ends `artifact docs/adr/x.md.` — the full stop is punctuation, not the path.
+            # A sentence ends "artifact docs/adr/x.md." - the full stop is punctuation,
+            # not part of the path.
             stripped = rel_path.rstrip(".,;:)")
             if stripped and not (project_root / stripped).exists():
                 problems.append(f"{debt_id}: cited artifact {stripped} does not exist")
@@ -1016,7 +1019,8 @@ def assert_all_invariants(graph: dict | None = None) -> list[str]:
     # S321 — vacuity guard. Every invariant below is satisfied by an EMPTY graph: I1 and I2 iterate
     # over node lists, and I3-I7 only run when the files they read exist. A spec with no nodes would
     # therefore print "All invariants pass" without examining anything. That is the same defect as
-    # S318 (empty scan range), S319 (zero discovered tests) and S320 (empty gate scope): a check must
+    # S318 (empty scan range), S319 (zero discovered tests) and S320 (empty gate scope):
+    # a check must
     # report on what it EXAMINED, not only on what it found. So the counts are asserted first, and
     # they are asserted here rather than in each invariant so no future invariant can forget.
     phases = get_phase_nodes(graph)
@@ -1230,9 +1234,11 @@ def print_convergence_report() -> None:
         print("  ✗ Project NOT CONVERGED — remaining gaps:")
         print()
         if report["phases"]["complete"] < report["phases"]["total"]:
-            print(f"     • {report['phases']['total'] - report['phases']['complete']} phase(s) not COMPLETE")
+            pending = report["phases"]["total"] - report["phases"]["complete"]
+            print(f"     • {pending} phase(s) not COMPLETE")
         if report["debt"]["closed"] < report["debt"]["total"]:
-            print(f"     • {report['debt']['total'] - report['debt']['closed']} debt item(s) not CLOSED")
+            open_debt = report["debt"]["total"] - report["debt"]["closed"]
+            print(f"     • {open_debt} debt item(s) not CLOSED")
         if report["enforcement"]["on_hardware"] < report["enforcement"]["total"]:
             gap = report["enforcement"]["total"] - report["enforcement"]["on_hardware"]
             print(f"     • {gap} enforcement path(s) need hardware verification:")
@@ -1241,7 +1247,7 @@ def print_convergence_report() -> None:
                 if e["risk_notes"]:
                     print(f"           notes: {e['risk_notes'][:80]}")
     print()
-    print(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+    print(f"Timestamp: {datetime.now(UTC).isoformat()}")
 
 
 # ---------------------------------------------------------------------------
@@ -1255,7 +1261,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--assert-phase-deps",
         metavar="PHASE_ID",
-        help="Assert that a single phase's dependencies are met (e.g., P3). Exits 0 if OK, 1 if violated.",
+        help=(
+            "Assert that a single phase's dependencies are met (e.g., P3). "
+            "Exits 0 if OK, 1 if violated."
+        ),
     )
     parser.add_argument(
         "--full-sweep",
@@ -1296,10 +1305,10 @@ if __name__ == "__main__":
             print(f"  ✗ {len(violations)} violation(s) found:")
             print()
             for v in violations:
-                print(f"  ---")
+                print("  ---")
                 print(f"  {v}")
                 print()
 
         print()
-        print(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+        print(f"Timestamp: {datetime.now(UTC).isoformat()}")
         sys.exit(0 if not violations else 1)
