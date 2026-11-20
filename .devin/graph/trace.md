@@ -6995,3 +6995,87 @@ watch the first `CI`/`Lint` run on master, and only then take `pytest-cov` and `
 own PR so a failure points at one bump.
 
 ---
+
+---
+
+## Session 336 — 2026-11-20 (pytest 9.0.3 landed with a scoped admin bypass; ruleset verified intact)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: PR #3's state and the `EFFORT` ruleset (10 rules: linear history, signatures, CodeQL
+  thresholds, coverage, deletion, non-fast-forward) before choosing how to land it.
+- **Read**: `agent/requirements-dev.txt` on `master` before and after the merge, so the local venv could be
+  aligned to the *new* pin rather than to what I had tested in a scratch run.
+- **Read**: `scripts/run-agent-tests.sh --version` — the documented runner's interpreter — because
+  "the suite passed on 9.0.3" is only a fact if the runner actually used 9.0.3.
+
+**Findings**: the owner authorised a bypass of the EFFORT ruleset for this one merge, with the condition
+that the protection is back in place at the end.
+
+### Fog cleared
+
+- **PR #3 merged** as **`4afd409`** (`state=MERGED`, squashed, dependabot branch deleted) using
+  `gh pr merge --admin`. That flag is a *per-merge* admin bypass: it neither disables nor edits the
+  ruleset, which is why nothing had to be restored.
+- **The protection is verified still enforcing**: `EFFORT enforcement=active target=branch`, **10 rules**
+  listed after the merge. Checked rather than assumed, because "bypass" reads like "disabled".
+- **Local aligned to the merged pin**: pulled to `4afd409`, `pytest==9.0.3` in
+  `requirements-dev.txt`, `pip install -r` run, and both `agent/.venv/bin/python -m pytest --version`
+  and `scripts/run-agent-tests.sh --version` report **9.0.3**.
+- **The gates pass on the merged pin**, not just on the pre-merge experiment: **990 tests, 0 failures**
+  and **coverage 66.01% vs `fail_under` 59**.
+- **CI is green on `4afd409`**: `CI`, `Lint`, `CodeQL`, `Dependency Graph` all success — and `Lint`
+  includes `Lint Agent (ruff)`, which installs from the same `requirements-dev.txt`, so the pin is proven
+  in a clean environment rather than only in this venv.
+
+### Fog remaining
+
+- **`pytest-cov` (5.0.0 vs 7.1.0) and `pytest-timeout` (2.3.1 vs 2.4.0) remain behind** and were only
+  proven at their old versions. Each deserves its own PR so a failure names one change.
+- **The two docker-blocked gates are unchanged**: `test_tls_floor.py` and `pg-smoke` need
+  `sudo usermod -aG docker $USER` plus a fresh login session.
+- **`Dependabot Updates`** still fails with `write access to the repository is required`; the weekly
+  audit's `cron` path is still unexercised; the pyright `reportMissingImports` pair remains advisory.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134 — all blocked on hardware or an operator credential.
+
+### Blockers
+
+- **Docker group membership** for the two environment-blocked gates.
+
+### Session artifacts
+
+- Merge commit **`4afd409`**; `/tmp/post-merge-suite.txt` (990 on 9.0.3), `/tmp/post-merge-cov.txt`
+  (66.01%), `/tmp/pt9-*` (the pre-merge verification).
+
+### Failure attribution
+
+- **Layer 5 (state management), on the one thing that could have gone quietly wrong**: a bypass that
+  leaves protection disabled is invisible until the next PR lands unreviewed. The ruleset was re-checked
+  after the merge (`enforcement=active`, 10 rules) rather than trusted, and the local venv was aligned to
+  the merged pin rather than left on the version tested before it.
+
+### VERIFY
+
+- `gh pr view 3` → `state=MERGED`, `mergeCommit=4afd409`; local `git rev-parse` → `4afd409`.
+- `agent/requirements-dev.txt:4` → `pytest==9.0.3`.
+- `agent/.venv/bin/python -m pytest --version` → `pytest 9.0.3`;
+  `scripts/run-agent-tests.sh --version` → `pytest 9.0.3`.
+- `scripts/run-agent-tests.sh -q` → 990 passed, exit 0; `--cov --cov-fail-under=59` → 66.01%, exit 0.
+- `gh api …/rulesets` → `EFFORT enforcement=active target=branch`, rule count **10**.
+- CI on `4afd409` → **CI success · Lint success · CodeQL success · Dependency Graph success**.
+
+### Next session opening
+
+Bump `pytest-cov` to 7.x as its own PR — the largest remaining version gap in the agent toolchain — with
+the suite and the coverage gate as its evidence, then `pytest-timeout` likewise.
+
+---
