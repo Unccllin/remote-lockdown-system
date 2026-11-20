@@ -42,6 +42,30 @@
 // Route handlers
 // ---------------------------------------------------------------------------
 
+/**
+ * Newest-first with a deterministic tie-break (S340).
+ *
+ * `created_at` is an ISO string with millisecond precision, so two records created inside the same
+ * millisecond compare equal — and a stable sort then keeps their INSERTION order, which puts the OLDER
+ * one first while the caller asked for the newest. That is not theoretical: the device-commands list was
+ * returning the flag-stolen command ahead of the unlock queued a millisecond later, so the agent ACKed the
+ * wrong command, the device stayed `recovering`, and `DELETE /api/devices/:id/release` answered 409
+ * (worker.test.ts "release deletes both per-device keys", intermittent only on fast runners).
+ *
+ * The secondary key is the array index, which is the KV index order — the order records were appended in.
+ * `=== undefined` (rather than a falsy check) keeps a legitimate index 0 meaningful.
+ */
+function newestFirst<T extends { created_at?: string | null }>(rows: T[]): T[] {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort(
+      (a, b) =>
+        String(b.row.created_at ?? '').localeCompare(String(a.row.created_at ?? '')) ||
+        b.index - a.index,
+    )
+    .map(({ row }) => row);
+}
+
 async function handleHealth(): Promise<Response> {
   return jsonResponse({
     status: 'ok',
@@ -1062,10 +1086,8 @@ async function handleListDeviceCommands(
   const requested = Number.parseInt(requestUrl(request).searchParams.get('limit') || '20', 10);
   const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 20, 1), 100);
 
-  const commands = (await listCommands(env))
-    .filter((c) => c.device_id === deviceId)
-    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
-    .slice(0, limit);
+  const allCommands = await listCommands(env);
+  const commands = newestFirst(allCommands.filter((c) => c.device_id === deviceId)).slice(0, limit);
 
   return jsonResponse(commands);
 }
@@ -1190,8 +1212,7 @@ async function handleGetPbaCredentials(
   const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
 
-  const devicePws = (await listBiosPasswordsForDevice(env, deviceId)).sort((a, b) =>
-    b.created_at.localeCompare(a.created_at));
+  const devicePws = newestFirst(await listBiosPasswordsForDevice(env, deviceId));
   const creds = groupPbaCredentials(devicePws);
 
   await addAuditEntry(

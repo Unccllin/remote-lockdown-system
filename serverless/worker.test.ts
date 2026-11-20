@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { COMMAND_INDEX_KEY, commandKey } from './kv-store';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -6191,6 +6192,48 @@ describe('ADR-006: per-device secret stores', () => {
     const keys = JSON.parse((await env.LOCKDOWN_KV.get(`encryption_keys:${device.id}`)) as string);
     expect(keys.find((k: any) => k.key_material === 'NEW-KEY').released_at).toBeTruthy();
     expect(keys.find((k: any) => k.key_material === 'OLD-KEY').released_at).toBeNull();
+  });
+
+
+  it('lists the later of two same-millisecond commands first (S340)', async () => {
+    // `created_at` is millisecond precision, so two commands created in the same millisecond compare
+    // equal and a stable sort keeps insertion order — oldest first. The device-commands list feed the
+    // agent's "which command do I run?" read, so an older command winning a tie made the unlock ACK
+    // land on the flag instead, leaving the device `recovering` and release answering 409. Seeded
+    // directly at a fixed timestamp so the collision is deterministic rather than a race.
+    const { device: d } = await enrollDevice(worker, env, 'TIE-ORDER');
+    const sameMs = '2026-11-20T00:00:00.000Z';
+    const seed = async (id: string, command_type: string) => {
+      await env.LOCKDOWN_KV.put(
+        commandKey(id),
+        JSON.stringify({
+          id,
+          device_id: d.id,
+          command_type,
+          status: 'pending',
+          created_at: sameMs,
+          command_uuid: null,
+          payload: {},
+        }),
+      );
+    };
+    await seed('tie-older', 'flag_stolen');
+    await seed('tie-newer', 'unlock');
+    await env.LOCKDOWN_KV.put(COMMAND_INDEX_KEY, JSON.stringify(['tie-older', 'tie-newer']));
+
+    const resp = await worker.fetch(
+      makeRequest('GET', `/api/devices/${d.id}/commands`, undefined, ADMIN),
+      env,
+    );
+    const list = (await parseResponse(resp)) as any[];
+    expect(list.map((c) => c.id)).toEqual(['tie-newer', 'tie-older']);
+
+    // the slice happens after the sort, so a tie broken the wrong way could also DROP the newest
+    const one = await worker.fetch(
+      makeRequest('GET', `/api/devices/${d.id}/commands?limit=1`, undefined, ADMIN),
+      env,
+    );
+    expect(((await parseResponse(one)) as any[])[0].id).toBe('tie-newer');
   });
 
   it('release deletes both per-device keys', async () => {
