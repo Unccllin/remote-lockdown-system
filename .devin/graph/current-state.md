@@ -53,37 +53,68 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 340 — 2026-11-20 (the "flaky" worker test was a real ordering bug)
+## Latest session: 341 — 2026-11-20 (two red gates were asking the wrong question; both now ask theirs)
 
 ### Fog cleared
 
-- **Root cause fixed, not papered over**: `newestFirst()` breaks ties by array index (the KV append
-  order), so a later-appended record always wins; applied to the device-commands list and the
-  BIOS-password list, which had the same latent defect. The third similar sort was already correct (it
-  sorts ascending and takes the last element).
-- **The regression test is proven to have teeth**: with the fix `1 passed`; with the fix stashed
-  `1 failed — expected [ 'tie-older', 'tie-newer' ] to deeply equal [ 'tie-newer', 'tie-older' ]`. It
-  seeds two commands at a fixed identical `created_at`, so the collision is deterministic, and it also
-  asserts `limit=1` returns the newest (the slice happens after the sort, so a bad tie-break could drop
-  the newest command from the page entirely).
-- **Gates**: worker suite **496 passed** (was 495 + the new case), `tsc --noEmit` clean.
-- **CI is green** on `e1b5b72`: `CI`, `Lint`, `CodeQL`.
-- **Beyond the test**: any consumer of that endpoint could read a stale command as the newest — including
-  the dashboard's command list — so this is a product fix, not a test fix.
+- **S340's opening is closed with evidence, not optimism.** Three consecutive post-fix CI runs on `master`
+  (`44700427139`, `44700863573`, `44701772997`) are **13/13 jobs green each** — `Serverless Worker Tests`
+  included in all three. The ordering bug has not recurred in 3/3 runs.
+- **The `Dependabot Updates` failure was misdiagnosed in `1f0cb64`, and the fix is not a setting.**
+  `default_workflow_permissions` is `write`, `allow_auto_merge` is `true`, `delete_branch_on_merge` is
+  `true` — yet the job failed twice on `npm_and_yarn in /electron for glob, minimatch`. The step log names
+  the real cause: the updater refuses a path that would **downgrade jest 30.5.2 → 29.7.0**, because glob's
+  patched release (14.0.2+, GHSA-3g3m-2fjr-6pw4 covers `>=9.0.0 <=14.0.1`) is outside jest's `^13.0.6`.
+  The phrase "write access to the repository is required" is also GitHub's boilerplate link text for the
+  private updates log, which is what made the doc row wrong rather than merely incomplete.
+- **electron's 23 moderate advisories are gone** (glob + minimatch, both dev/build-only — the packaged app
+  ships neither jest nor electron-builder). Fixed with **version-scoped** overrides.
+- **A blanket override would have been worse than the advisories, and that is measured, not argued.**
+  `@electron/asar`'s `crawlfs` calls `util.promisify(glob.glob)`; glob v9+ dropped callbacks, so the
+  promisified call **never settles** (measured on glob 14.0.6 in a scratch dir: `RESULT: HANG`). A blanket
+  `"glob": "^14.0.6"` — exactly the form `server/package.json` uses safely, since it has no such consumer —
+  would make `electron-builder` stall with no error. The scoped form leaves `glob@7.2.3` and
+  `minimatch@3.1.5/5.1.9` in place because those versions are outside the vulnerable ranges.
+- **The secret scanner no longer dies on the full-history path.** `git show -p` with the default strict
+  decoder raised `UnicodeDecodeError` on commit `85ede32` — an artifact that captured a mangled console
+  byte (`0x83` at offset 20582). Only the `--all` / unresolvable-base path was affected, i.e. the fallback
+  the range scan degrades to and the one CI takes when it cannot resolve a base: the guard was weakest
+  exactly where S317 had hardened it. Now `errors="replace"`.
+- **Both regression tests are proven to have teeth.** The scanner test puts the secret in a file that sorts
+  *after* the bad bytes, so a truncate-at-the-bad-byte "fix" would still pass a crash-only test and still
+  leak; with the strict decode restored it fails with the traceback. The override change is verified by
+  four independent measurements, not by `npm audit` alone (below).
 
 ### Fog remaining
 
-- **The flake's absence is not yet proven over time** — the test is now deterministic by construction, so
-  the next few CI runs are the confirmation, not this one.
-- **Two other `.sort()` sites were not changed**: `worker.ts:913` (already correct by construction) and
-  `:2388` (artifacts list, sorts by `created_at` then `id`, so it already has a deterministic tie-break).
-- **`Dependabot Updates`** still needs the two owner settings (workflow write permission, auto-merge).
-- **The weekly audit's `cron` path** is still unexercised; the pyright advisory pair stands; the four open
-  ledger items remain hardware- or credential-blocked.
+- **Whether Dependabot's next scheduled run goes green is unproven.** The overrides remove the resolution
+  dead end the updater was complaining about, but the job runs on its own schedule — the next run is the
+  measurement, not this session.
+- **`electron` is still absent from the CI audit gate.** It accumulated 23 moderate findings precisely
+  because `--audit-level=high` covers only server + dashboard. Adding it at `--audit-level=moderate` would
+  make a future dev-dependency advisory red CI, which is a policy decision, not a bug fix — left as a
+  recommendation rather than done unilaterally. `AGENTS.md` now tells a reader to run it locally.
+- **`prepush_secrets.py --all` exits 1 on this repository and always will** without a history rewrite: the
+  4 findings are the S301/S312 session blocks quoting an already-dead token. CI's fallback path would go
+  red on them. **Deliberately not silenced** — the allow-list has no commit scoping, so an entry would be a
+  permanent hole in the two files most likely to hold a quoted secret. The next session that sees this
+  should not "fix" it with an allow-list entry.
+- **`brain.py assert` loses a belief when two asserts run concurrently — reproduced this session.**
+  Two `assert` calls issued in one parallel tool block both returned `[OK] Asserted B-186` and only the
+  second statement survived in `beliefs.yaml`; the other had to be re-asserted (B-187) sequentially. The
+  next id is computed from max-id with no lock, so both writers choose the same one and the last write
+  wins. This is the *same* known gap the harness audit lists for `memory.py` ("no file locking or atomic
+  writes"), now proven in the brain layer — and `scripts/test_brain.py` does not exist, so nothing pins
+  it. Sequential use is unaffected, which is why it stayed invisible. Written into `AGENTS.md`; not fixed
+  here because it is a write-path change to a mandatory subsystem and deserves its own tests.
+- **Pre-existing, untouched:** the weekly audit's `cron` path is still unexercised; the pyright advisory
+  pair stands; `ruff check`/`format` report 3 findings and 2 unformatted files under `scripts/`, all
+  present at `HEAD` before this session (nothing new added); the four open ledger items remain
+  hardware- or credential-blocked.
 
 ### Debt items closed
 
-None.
+None. This session closed no ledger item; it fixed two gates that were red, which the ledger does not track.
 
 ### Debt items still open
 
@@ -95,32 +126,51 @@ D-120, D-129, D-130, D-134.
 
 ### Session artifacts
 
-- `serverless/worker.ts` (`newestFirst`), `serverless/worker.test.ts` (the deterministic collision test) —
-  `e1b5b72`. CI evidence: `CI`, `Lint`, `CodeQL` success.
+- `electron/package.json` (scoped `glob`/`minimatch` overrides) + lockfile — `fdfceab`; evidence
+  `docs/artifacts/s341-electron-overrides.txt`.
+- `scripts/prepush_secrets.py` (`errors="replace"`) + `scripts/test_prepush_secrets.py` (21 checks, the
+  non-UTF-8 case added) — `1255ece`; evidence `docs/artifacts/s341-prepush-secrets-utf8.txt`.
+- `AGENTS.md` (corrected Dependabot row + the resolution-dead-end section + electron in the audit block) —
+  `168618a`.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), in its most valuable form**: an intermittent red that was already
-  labelled "known flake" in this repo's own history. The label was the risk — a flake invites a retry, and
-  a retry hides a real ordering bug in a read path the dashboard and the agent both consume. Reading the
-  handler for the *only* 409 on that path, and reproducing the tie-break with a three-line Node
-  expression, turned "flaky test" into "wrong sort key" in a few minutes.
-- **Layer 2 (context provision)**: nothing documented that `created_at` is not a unique ordering key. The
-  helper now says so at the definition site, which is where the next person will look.
+- **Layer 5 (state management), for the Dependabot row**: `1f0cb64` recorded a causal chain it had not
+  verified end-to-end — "read-only permission ⇒ this error text" — one session before this one found the
+  permission already correct. The cost is asymmetric: a wrong entry in a table titled "verify with the
+  commands, not by memory" sends the next agent to check a setting that is fine, and the error text it cites
+  is ambiguous boilerplate. The doc precedent held (the setting is still worth documenting); only the
+  symptom claim was wrong. Fixed by writing what the text actually is and what the real failure was.
+- **Layer 4 (verification feedback)**: a security gate whose failure mode is a *traceback* is not a gate —
+  it reports a stack frame instead of a finding, and it did so only on the path the workflow falls back to.
+  Both fixes here are pinned by tests observed failing with the fix reverted, which is the only form of
+  "verified" this repo accepts.
 
 ### VERIFY
 
-- Locally, before: `npx vitest run` → 495 passed, exit 0 (so it was never reproducible here).
-- CI `aae8ce8`: `Serverless Worker Tests` failed, `AssertionError: expected 409 to be 200`.
-- With the fix: `vitest run worker.test.ts -t "same-millisecond"` → 1 passed; full worker suite 496 passed;
-  `tsc --noEmit -p .` exit 0.
-- With the fix stashed: the same test fails with the older command first — the exact defect.
-- CI on `e1b5b72` → **CI success · Lint success · CodeQL success**.
+- CI, post-S340 fix, 3 runs (`44700427139`, `44700863573`, `44701772997`): **13/13 jobs success each**.
+- electron before → after: `npm audit` **23 moderate → 0** (`--audit-level=moderate` exit 0).
+  `npm ci --ignore-scripts` in a scratch dir reproduces the identical tree from the committed lockfile.
+  `npm test` **30 passed**; `test:coverage` **39.4 / 47.36 / 30.95 / 39.3** vs floors 37 / 45 / 29 / 37.
+  `@electron/asar` packs **105886 bytes** before and after (the `glob@7` path a blanket override hangs);
+  `app-builder-lib` `FileMatcher` still includes `main.js`, excludes `node_modules/**`.
+- `scripts/test_prepush_secrets.py`: all checks pass; with the strict decode restored, **1 check FAILED**
+  with the traceback — the exact defect.
+- `python3 scripts/prepush_secrets.py --all` on this repo: **4 FAIL / 10 WARN / 0 traceback** (was a
+  traceback and no report). Publish-range scan `--base origin/master --head HEAD`: exit 0, no output.
+- `make verify-env` → **56 PASS / 0 FAIL / 5 SKIP**. `make graph-check` → all invariants pass.
+- `make test-scripts` → every suite green **except** `scripts/test_tls_floor.py`, which is the stale-group
+  condition AGENTS.md documents; under `newgrp docker` it is **2 passed**. Not a regression from this
+  session's changes.
+- `scripts/lint-agent.sh` → ruff clean + formatted.
+- `python3 scripts/brain.py assert` ×2 **in parallel** → both print `B-186`; `beliefs.yaml` holds one.
+  Re-asserted sequentially → `B-187`, `grep -c` → 2. `brain.py check` → 187 beliefs, integrity clean.
 
 ### Next session opening
 
-Watch the next two or three CI runs on `master` for `Serverless Worker Tests` — the ordering test is now
-deterministic, so a repeat of the 409 would mean a second, different cause worth its own investigation.
+Watch the next scheduled `Dependabot Updates` run and confirm it no longer fails on
+`npm_and_yarn in /electron for glob, minimatch`; if it fails again, read the updater's `explanation` field
+rather than the log's "write access" boilerplate.
 
 ---
 

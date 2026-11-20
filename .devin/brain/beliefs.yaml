@@ -4088,3 +4088,40 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: Hand-rolled = uses neither script_test_runner nor pytest.main; the meta-test enumerates them.
+- id: B-186
+  statement: 'Dependabot Updates fails on this repo for a dependency-resolution reason (glob is patched
+    only at 14.0.2+, jest 30 pins glob@^13.0.6, so the updater refuses the jest 30->29 downgrade), not
+    for a workflow-permission reason: the permission is already ''write''. The phrase ''write access to
+    the repository is required'' in the log is also GitHub''s boilerplate link text for the private updates
+    log.'
+  domain: ci/dependabot
+  status: proposed
+  evidence_level: assumed
+  provenance: 'S341: gh api actions/permissions/workflow -> write; job log for run 44678509330 names the
+    jest downgrade; AGENTS.md corrected in 168618a'
+  source: ''
+  asserted: '2026-11-20'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-187
+  statement: 'A blanket npm override of glob to 14.x hangs @electron/asar: its crawlfs calls util.promisify(glob.glob),
+    and glob v9+ returns a Promise instead of using a callback, so the promisified wrapper never settles.
+    electron overrides for glob/minimatch must therefore be scoped by version range (glob@>=9.0.0 <14.0.2,
+    minimatch@>=7.0.0 <11.0.1) so glob@7.2.3 and minimatch@3.1.5/5.1.9 stay in place.'
+  domain: deployment/electron
+  status: proposed
+  evidence_level: assumed
+  provenance: 'S341: measured on glob 14.0.6 (scratch dir) plus @electron/asar pack byte-identical before/after;
+    docs/artifacts/s341-electron-overrides.txt'
+  source: ''
+  asserted: '2026-11-20'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

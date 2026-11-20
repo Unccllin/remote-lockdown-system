@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-19 14:12:34 — 185 beliefs
+Generated: 2026-11-20 15:25:46 — 187 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -127,6 +127,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 |---|--------|----------|-----------|
 | B-058 | confirmed | code-read | Admin usernames follow one contract, defined in server/src/validation/username.js: the value is TRIMMED before use, allowed characters are letters, digits and _ @ . -, length is 3-100 on creation while login accepts shorter values so a legacy account can still sign in, and the password is never trimmed. Before S203 three routes each had their own rule (login allowed _ @ . -, setup/create-admin and admins/create allowed only _ -) and none trimmed, so a username accepted at creation could be rejected at login, and padded input failed with 'username contains invalid characters' — a message that reads like a wrong password. The dashboard also submitted the username untrimmed and its setup form used a narrower allowlist than login. |
 
+## ci/dependabot
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-186 | proposed | assumed | Dependabot Updates fails on this repo for a dependency-resolution reason (glob is patched only at 14.0.2+, jest 30 pins glob@^13.0.6, so the updater refuses the jest 30->29 downgrade), not for a workflow-permission reason: the permission is already 'write'. The phrase 'write access to the repository is required' in the log is also GitHub's boilerplate link text for the private updates log. |
+
 ## dashboard
 
 | ID | Status | Evidence | Statement |
@@ -157,6 +163,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-139 | confirmed | emulated | In SQLite, location_reports.reported_at is 'YYYY-MM-DD HH:MM:SS' while an agent-supplied observed_at is ISO-8601, so a bare ORDER BY COALESCE(observed_at, reported_at) compares characters: 'T' (0x54) sorts above ' ' (0x20) and an earlier fix outranks a later one. datetime(COALESCE(...)) normalises both shapes; PostgreSQL's TIMESTAMPTZ columns need no normalisation |
+
+## deployment/electron
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-187 | proposed | assumed | A blanket npm override of glob to 14.x hangs @electron/asar: its crawlfs calls util.promisify(glob.glob), and glob v9+ returns a Promise instead of using a callback, so the promisified wrapper never settles. electron overrides for glob/minimatch must therefore be scoped by version range (glob@>=9.0.0 <14.0.2, minimatch@>=7.0.0 <11.0.1) so glob@7.2.3 and minimatch@3.1.5/5.1.9 stay in place. |
 
 ## deployment/lab
 
