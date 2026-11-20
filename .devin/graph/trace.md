@@ -6289,3 +6289,109 @@ graph invariant, it carries 11 pre-existing findings, and no gate in the repo re
 "who checks the checker" question this arc has asked five times.
 
 ---
+
+---
+
+## Session 328 — 2026-11-19 (the invariant engine is now linted, and two wiring bugs proved the gate runs)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `scripts/lint-agent.sh` — how the interpreter is selected (venv → PATH → python3) and why a
+  missing tool must fail loudly (S271: `python3 -m ruff` on a host without it aborted a sweep mid-way).
+- **Read**: `agent/ruff.toml` — `select = ["E","W","F","I","B","S","UP"]` with per-file ignores tuned for
+  shipped code, which is what an unconditional reuse would import into a build-time script.
+- **Read**: `.github/workflows/lint.yml`'s ruff job — `defaults.run.working-directory` and the pinned ruff
+  version (`requirements-dev.txt: ruff==0.17.5`), i.e. the two things that would decide whether a step
+  written here behaves the same in CI.
+- **Read**: `ruff check .devin/graph/graph_assert.py --statistics` under both rule sets — 15 findings with
+  defaults, 17 with the agent config, 20 with the chosen `E,W,F,I,UP` — before deciding which bar is right.
+
+**Findings**: the file that decides whether I1-I7 pass was the one file in the tree no gate read. ruff
+governed `agent/`, eslint the JS components, `tsc` the worker; `.devin/graph/` was in none of them.
+
+### Fog cleared
+
+- **The invariant engine is linted** (`f6dd19a`): `scripts/lint-graph.sh`, `make lint-graph` added to
+  `make lint`, and a step in CI's ruff job. Rule set deliberately narrow — `E,W,F,I,UP` at line-length
+  100 — because `agent/ruff.toml` selects `S` and per-file ignores for code shipped to a device, and this
+  is a build-time script. The chosen set cannot change behaviour by construction.
+- **20 findings fixed**: 12 by autofix (5 unused imports, 2 `datetime.UTC`, an f-string, import order, an
+  unused `noqa`), 8 by hand (6 lines over 100 chars, an `endswith` tuple, a collapsible nested `if`).
+- **Behaviour verified unchanged**: `--assert-phase-deps P3` exit 0, full sweep exit 0 with
+  `All invariants pass`, `--convergence` exit 0, `scripts/test_graph_session.py` 40/40,
+  `agent/tests/test_graph_assertions.py` 55/55.
+- **CI is green on the result** (`94ac0f6`): `CI`, `Lint`, `CodeQL`, `Dependency Graph` all success.
+- **The gate proved it actually runs, twice, by failing on my wiring**:
+  1. `run: scripts/lint-graph.sh` → `No such file or directory` (exit 127), because that job sets
+     `working-directory: agent`; fixed with `working-directory: ${{ github.workspace }}` (`7420059`);
+  2. `ruff --fix` had removed an unused `import os` from **both** `.devin/graph` files and I staged only
+     the four paths I remembered, so `make lint-graph` was green against an uncommitted tree while CI
+     found `F401 graph_loader.py:18` on the committed one (`94ac0f6`).
+- **A stale fork was found and left as a decision**: `harness-template/graph_assert.py` is **640 lines**
+  against the live engine's **1299**, and nothing in the repo references `harness-template/` — not the
+  Makefile, CI, a script or a doc.
+
+### Fog remaining
+
+- **`harness-template/graph_assert.py` is a second copy of the invariant engine**, missing everything
+  since it was forked (the S326/S327 ledger checks included). A reader would take it for the engine.
+  Deleting something named "template" is the owner's call; marking it as a scaffold with a pointer to the
+  live file is the cheap alternative. Not acted on.
+- **`Dependabot Updates` failed on this push**, with `write access to the repository is required` — the
+  same text as the run on **2026-11-12**, before this session's `overrides` existed, so it is a
+  repository/permission condition rather than a dependency change of mine. Recorded, not chased.
+- **The weekly audit's `cron` path is still unexercised** (every run so far was dispatch).
+- **The pyright `reportMissingImports` pair** on the runtime `sys.path` import remains an advisory.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, the docker-socket red for
+  `test_tls_floor.py`.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
+
+### Blockers
+
+- None. The four open items remain blocked on hardware or an operator credential.
+
+### Session artifacts
+
+- `scripts/lint-graph.sh`, `Makefile` (`lint-graph`), `.github/workflows/lint.yml` (step),
+  `.devin/graph/graph_assert.py` (findings), `.devin/graph/graph_loader.py` (unused import) —
+  `f6dd19a`, `7420059`, `94ac0f6`. CI evidence: `CI`, `Lint`, `CodeQL` success.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), in its third distinct shape.** S314: a check whose failure could not
+  stop the action (`;` before `git push`). S318: a check run on the wrong output (`grep` after a scan).
+  S328: **a correct check run on the wrong tree** — `make lint-graph` was green because the working tree
+  held an autofix I had not staged. All three are "the verification ran and its subject was not what
+  shipped"; the countermeasure is mechanical, not attentional: after an autofix over a directory, stage
+  the directory.
+- **Layer 2 (context provision)**: the job's `working-directory: agent` is three lines above the step I
+  edited and I did not read it. A workflow step is not self-contained — it inherits a default path, and
+  the file that declares it is the file being edited.
+
+### VERIFY
+
+- `make lint-graph` → `All checks passed!`, `[OK] ruff check clean`, exit 0.
+- `make lint-workflows` → exit 0 (actionlint + shellcheck); `lint.yml` parses.
+- `python3 .devin/graph/graph_assert.py` → `✓ All invariants pass`; `--assert-phase-deps P3` exit 0;
+  `--convergence` exit 0.
+- `scripts/test_graph_session.py` → 40 passed, 0 failed.
+- `agent/.venv/bin/python -m pytest agent/tests/test_graph_assertions.py -q` → 55 passed.
+- CI on `94ac0f6` → **CI · Lint · CodeQL · Dependency Graph success**; `Dependabot Updates` failure
+  reproduces the 2026-11-12 text and is not attributable to this session.
+
+### Next session opening
+
+Decide the `harness-template/graph_assert.py` fork: delete it, or mark it as a scaffold with a one-line
+pointer to `.devin/graph/graph_assert.py` and a note that it predates the S326/S327 ledger checks — a
+640-line copy of the engine that nothing references is the next thing a reader will mistake for the truth.
+
+---

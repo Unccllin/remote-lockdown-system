@@ -53,40 +53,44 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 327 — 2026-11-19 (a claimed closure must be a real one, and my own guard was examining nothing)
+## Latest session: 328 — 2026-11-19 (the invariant engine is now linted, and two wiring bugs proved the gate runs)
 
 ### Fog cleared
 
-- **`assert_claimed_closures_are_real()` is in the sweep** (`ad45008`): an explicit
-  `- **D-nnn — CLOSED**` claim must have its ledger status CLOSED, every cited hash resolving (or in the
-  orphan baseline) and every cited path existing. Prose is not scanned, deliberately.
-- **Three bugs in my own implementation were caught by the tests before CI**:
-  1. the extractor returned the regex **match** rather than the line, so the cited commit and artifact
-     were invisible and the guard verified nothing — the test reported "DID NOT RAISE", which is exactly
-     what a guard with no evidence should do;
-  2. the path pattern swallowed the sentence's full stop (`docs/adr/x.md.`), which would have failed a
-     real artifact on punctuation;
-  3. the fixture created its directory without `exist_ok` and wrote its artifact into the **wrong
-     helper**, so the pass case failed for fixture reasons rather than logic.
-- **Both halves of the session block are now derived from the ledgers** — open list (S326) and claimed
-  closures (S327) — and AGENTS.md documents the claim form so a future session writes something the
-  check can read instead of discovering the requirement by failing.
-- **CI is green** on `ad45008`: `CI`, `Lint`, `CodeQL` all success. `make graph-check` clean. 55 tests in
-  the file (was 52).
+- **The invariant engine is linted** (`f6dd19a`): `scripts/lint-graph.sh`, `make lint-graph` added to
+  `make lint`, and a step in CI's ruff job. Rule set deliberately narrow — `E,W,F,I,UP` at line-length
+  100 — because `agent/ruff.toml` selects `S` and per-file ignores for code shipped to a device, and this
+  is a build-time script. The chosen set cannot change behaviour by construction.
+- **20 findings fixed**: 12 by autofix (5 unused imports, 2 `datetime.UTC`, an f-string, import order, an
+  unused `noqa`), 8 by hand (6 lines over 100 chars, an `endswith` tuple, a collapsible nested `if`).
+- **Behaviour verified unchanged**: `--assert-phase-deps P3` exit 0, full sweep exit 0 with
+  `All invariants pass`, `--convergence` exit 0, `scripts/test_graph_session.py` 40/40,
+  `agent/tests/test_graph_assertions.py` 55/55.
+- **CI is green on the result** (`94ac0f6`): `CI`, `Lint`, `CodeQL`, `Dependency Graph` all success.
+- **The gate proved it actually runs, twice, by failing on my wiring**:
+  1. `run: scripts/lint-graph.sh` → `No such file or directory` (exit 127), because that job sets
+     `working-directory: agent`; fixed with `working-directory: ${{ github.workspace }}` (`7420059`);
+  2. `ruff --fix` had removed an unused `import os` from **both** `.devin/graph` files and I staged only
+     the four paths I remembered, so `make lint-graph` was green against an uncommitted tree while CI
+     found `F401 graph_loader.py:18` on the committed one (`94ac0f6`).
+- **A stale fork was found and left as a decision**: `harness-template/graph_assert.py` is **640 lines**
+  against the live engine's **1299**, and nothing in the repo references `harness-template/` — not the
+  Makefile, CI, a script or a doc.
 
 ### Fog remaining
 
-- **Only the newest block is checked.** That is deliberate — history records what sessions believed — but
-  it means the invariants protect the next block, not the existing ones.
-- **The check verifies ids and refs, not meaning.** A block could claim a closure whose ledger criteria
-  were never met; `assert_debt_close_has_evidence` covers the ledger side, and the block side has no
-  equivalent.
-- **`.devin/graph/graph_assert.py` is outside every lint gate this repo runs** (ruff governs `agent/`,
-  eslint the JS components, `tsc` the worker). The 11 findings on it are pre-existing and none are on
-  lines this session added — but the file that enforces the invariants is itself unlinted, which is worth
-  a decision rather than an omission.
-- **The weekly audit's `cron` path is still unexercised**, and the pyright `reportMissingImports` pair on
-  the runtime `sys.path` import remains an advisory.
+- **`harness-template/graph_assert.py` is a second copy of the invariant engine**, missing everything
+  since it was forked (the S326/S327 ledger checks included). A reader would take it for the engine.
+  Deleting something named "template" is the owner's call; marking it as a scaffold with a pointer to the
+  live file is the cheap alternative. Not acted on.
+- **`Dependabot Updates` failed on this push**, with `write access to the repository is required` — the
+  same text as the run on **2026-11-12**, before this session's `overrides` existed, so it is a
+  repository/permission condition rather than a dependency change of mine. Recorded, not chased.
+- **The weekly audit's `cron` path is still unexercised** (every run so far was dispatch).
+- **The pyright `reportMissingImports` pair** on the runtime `sys.path` import remains an advisory.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, the docker-socket red for
+  `test_tls_floor.py`.
 
 ### Debt items closed
 
@@ -103,36 +107,38 @@ signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy)
 
 ### Session artifacts
 
-- `.devin/graph/graph_assert.py` (the invariant), `agent/tests/test_graph_assertions.py` (three tests),
-  `AGENTS.md` (the claim form) — `ad45008`. CI evidence: `CI`, `Lint`, `CodeQL` success.
+- `scripts/lint-graph.sh`, `Makefile` (`lint-graph`), `.github/workflows/lint.yml` (step),
+  `.devin/graph/graph_assert.py` (findings), `.devin/graph/graph_loader.py` (unused import) —
+  `f6dd19a`, `7420059`, `94ac0f6`. CI evidence: `CI`, `Lint`, `CodeQL` success.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), and the guard was the culprit for the fifth time.** The extractor bug
-  meant the new invariant checked nothing, and only the *test's* "did not raise" exposed it. That is the
-  same shape as S318 (empty scan range), S319 (zero discovered tests), S320 (empty gate scope), S321
-  (empty graph) and S326 (a restated list): a check whose scope collapsed to nothing reports success.
-  The runnable rule this arc keeps producing: **when a check passes, ask what it examined.**
-- **Layer 2 (context provision)**: nothing documented the claim form, so the first thing a future session
-  would do is write prose the check cannot read. AGENTS.md now carries it, in the same paragraph as the
-  session-end requirements.
+- **Layer 4 (verification feedback), in its third distinct shape.** S314: a check whose failure could not
+  stop the action (`;` before `git push`). S318: a check run on the wrong output (`grep` after a scan).
+  S328: **a correct check run on the wrong tree** — `make lint-graph` was green because the working tree
+  held an autofix I had not staged. All three are "the verification ran and its subject was not what
+  shipped"; the countermeasure is mechanical, not attentional: after an autofix over a directory, stage
+  the directory.
+- **Layer 2 (context provision)**: the job's `working-directory: agent` is three lines above the step I
+  edited and I did not read it. A workflow step is not self-contained — it inherits a default path, and
+  the file that declares it is the file being edited.
 
 ### VERIFY
 
-- `agent/.venv/bin/python -m pytest agent/tests/test_graph_assertions.py -q` → **55 passed**
-  (`/usr/bin/python3 -m pytest` → "No module named pytest", the documented bare-invocation trap).
-- `scripts/lint-agent.sh` → exit 0, check + format clean, 67 files formatted.
-- `python3 .devin/graph/graph_assert.py` → `✓ All invariants pass` (open list + claimed closures both
-  checked against the ledgers).
-- Synthetic proofs: an unrecorded closure raises naming the id; a cited dead hash raises unless it is a
-  known orphan; the prose-only block passes.
-- CI on `ad45008` → **CI success · Lint success · CodeQL success**.
+- `make lint-graph` → `All checks passed!`, `[OK] ruff check clean`, exit 0.
+- `make lint-workflows` → exit 0 (actionlint + shellcheck); `lint.yml` parses.
+- `python3 .devin/graph/graph_assert.py` → `✓ All invariants pass`; `--assert-phase-deps P3` exit 0;
+  `--convergence` exit 0.
+- `scripts/test_graph_session.py` → 40 passed, 0 failed.
+- `agent/.venv/bin/python -m pytest agent/tests/test_graph_assertions.py -q` → 55 passed.
+- CI on `94ac0f6` → **CI · Lint · CodeQL · Dependency Graph success**; `Dependabot Updates` failure
+  reproduces the 2026-11-12 text and is not attributable to this session.
 
 ### Next session opening
 
-Decide whether `.devin/graph/*.py` should be covered by a lint gate: it is the code that enforces every
-graph invariant, it carries 11 pre-existing findings, and no gate in the repo reads it — the same
-"who checks the checker" question this arc has asked five times.
+Decide the `harness-template/graph_assert.py` fork: delete it, or mark it as a scaffold with a one-line
+pointer to `.devin/graph/graph_assert.py` and a note that it predates the S326/S327 ledger checks — a
+640-line copy of the engine that nothing references is the next thing a reader will mistake for the truth.
 
 ---
 
