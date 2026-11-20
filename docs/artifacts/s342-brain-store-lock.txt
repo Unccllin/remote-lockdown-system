@@ -1,0 +1,120 @@
+# S342 — brain.py lost beliefs when two asserts ran concurrently
+# Host: Linux 7.2.15-1-omarchy x86_64 · python 3.14.8
+# Generated 2026-11-20T12:36:16Z — every block below is real command output.
+
+## 1. How it presented in S341 (the symptom, not a hypothesis)
+   Two `brain.py assert` calls issued in ONE parallel tool block both printed the same id:
+     [OK] Asserted B-186 (proposed/assumed): Dependabot Updates fails on this repo for a depend
+     [OK] Asserted B-186 (proposed/assumed): A blanket npm override of glob to 14.x hangs @electr
+   Only the second statement was in beliefs.yaml afterwards; the first had to be re-asserted (B-187).
+
+## 2. Why: atomic_write prevents a torn file, not a lost update
+   Every mutating command is read-modify-write:
+     def cmd_assert(args):  store = load_store(); ... store['beliefs'].append(belief); save_store(store)
+   save_store -> atomic_write (tmp + rename): a reader never sees a half-written file, but two
+   writers that both read before either renames each write a complete file — the second rename
+   discards the first belief. gen_belief_id() derives the id from max-id in the file it just read,
+   so both writers choose the SAME id. There was no lock and no test (scripts/test_brain.py did
+   not exist; scripts/test_memory.py next door had 44 tests).
+
+## 3. The fix (scripts/brain.py)
+   @contextlib.contextmanager
+   def store_lock():
+       """Hold an exclusive lock across one read-modify-write of the belief store.
+   
+       atomic_write() prevents a *torn file*; it never prevented a *lost update*. Two
+       concurrent `brain.py assert` calls both read the store, both compute the same next
+       id from max-id, and the second rename discards the first belief — both printing
+       `[OK] Asserted B-186`, one belief surviving (S341, reproduced by issuing two
+       asserts in one parallel tool block). Serialising the whole command is the fix;
+       the alternative (allocating ids without reading the store) only moves the race.
+   
+       flock is POSIX, msvcrt is Windows; whichever exists is used. msvcrt's LK_LOCK
+       retries ~10x then raises rather than blocking forever, so a stuck writer fails
+       loudly instead of hanging a session.
+       """
+       BRAIN_DIR.mkdir(parents=True, exist_ok=True)
+       with open(LOCK_FILE, "a+") as fh:
+           if fcntl is not None:
+               fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+           elif msvcrt is not None:  # pragma: no cover - Windows
+               fh.seek(0)
+               msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+           try:
+               yield
+           finally:
+               if fcntl is not None:
+                   fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+               elif msvcrt is not None:  # pragma: no cover - Windows
+                   fh.seek(0)
+                   msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+   
+   
+   def mutating(fn):
+       """Run a store-mutating command under store_lock().
+   
+       A decorator rather than a `with` block inside each command: every mutating
+       command has the same load-mutate-save shape, and one wrapper cannot be forgotten
+       when the next command is added. No command calls another, so this never nests.
+       """
+   
+       @functools.wraps(fn)
+       def wrapper(args):
+           with store_lock():
+               return fn(args)
+   
+       return wrapper
+   Applied with a decorator so the four mutating commands (init, assert, confirm, refute) cannot
+   each forget it, and one wrapper is the only place to reason about the lock.
+
+## 4. Regression suite: scripts/test_brain.py (7 tests, 16 checks)
+   === test_brain.py ===
+       7 tests discovered
+   
+     ✓ confirming a missing belief exits 1 inside the lock
+     ✓ the next writer still gets its own id
+     ✓ refute keeps both records
+     ✓ the original is refuted
+     ✓ the replacement supersedes it
+     ✓ the original points at its replacement
+     ✓ every concurrent assert exited 0
+     ✓ 12 concurrent asserts keep 12 beliefs
+     ✓ every concurrent id is distinct
+     ✓ every statement survived
+     ✓ confirm promotes the belief
+     ✓ confirm records the evidence level
+     ✓ three sequential asserts are B-001..B-003
+     ✓ brain.py check passes after the race
+     ✓ no temporary store file is left behind
+     ✓ the lock is a file in the brain dir
+   
+     all checks passed
+
+## 5. Teeth: the same suite with only the four @mutating decorators removed — 5 rounds
+   decorators present: 0  (0 = lock removed)
+   round 1: ✗ 12 concurrent asserts keep 12 beliefs store holds 8: ['B-001', 'B-002', 'B-003', 'B-004', 'B-005', 'B-006', 
+
+   round 2: ✗ 12 concurrent asserts keep 12 beliefs store holds 6: ['B-001', 'B-002', 'B-003', 'B-004', 'B-005', 'B-006'] 
+
+   round 3: ✗ 12 concurrent asserts keep 12 beliefs store holds 6: ['B-001', 'B-002', 'B-003', 'B-004', 'B-005', 'B-006'] 
+
+   round 4: ✗ 12 concurrent asserts keep 12 beliefs store holds 6: ['B-001', 'B-002', 'B-003', 'B-004', 'B-005', 'B-006'] 
+
+   round 5: ✗ 12 concurrent asserts keep 12 beliefs store holds 7: ['B-001', 'B-002', 'B-003', 'B-004', 'B-005', 'B-006', 
+
+   decorators restored: 4
+   after restore:   all checks passed
+
+## 6. What the lost updates looked like
+   In the five rounds above, 12 concurrent writers produced **6-8** beliefs (ids B-001..B-00N): 4-6
+   statements discarded every round, with the ids stopping short exactly as gen_belief_id() predicts
+   when several writers read the same max. Not a rare interleaving — roughly a third to a half of the
+   writes. (An earlier run of the same experiment lost 7 of 12, which is where the 5-belief figure in
+   the first draft of this section came from; this section now reports only the run printed above.)
+
+## 7. The reachable-refusal test had to change: argparse, not the command, rejects
+   $ python3 scripts/brain.py confirm --id B-001
+   brain.py confirm: error: the following arguments are required: --evidence-level, --provenance   (rc=2)
+   So cmd_confirm/cmd_refute's own 'a missing --x' [ERROR] branches are unreachable from the CLI.
+   The test now pins the property that matters — a refusal inside the `with` releases the lock and
+   the next writer still gets its own id — rather than an exit code the CLI cannot produce.

@@ -29,11 +29,22 @@ Usage:
 """
 
 import argparse
+import contextlib
+import functools
 import re
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+try:
+    import fcntl  # POSIX store lock
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+try:
+    import msvcrt  # Windows store lock
+except ImportError:  # pragma: no cover - POSIX
+    msvcrt = None
 
 try:
     import yaml
@@ -45,6 +56,7 @@ except ImportError:
 BRAIN_DIR = Path(__file__).resolve().parent.parent / ".devin" / "brain"
 STORE_FILE = BRAIN_DIR / "beliefs.yaml"
 VIEW_FILE = BRAIN_DIR / "BELIEFS.md"
+LOCK_FILE = BRAIN_DIR / ".beliefs.lock"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 EVIDENCE_LEVELS = ["assumed", "code-read", "spec-checked", "emulated", "real-media", "hardware"]
@@ -58,6 +70,54 @@ def atomic_write(path: Path, content: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(content)
     tmp.rename(path)
+
+
+@contextlib.contextmanager
+def store_lock():
+    """Hold an exclusive lock across one read-modify-write of the belief store.
+
+    atomic_write() prevents a *torn file*; it never prevented a *lost update*. Two
+    concurrent `brain.py assert` calls both read the store, both compute the same next
+    id from max-id, and the second rename discards the first belief — both printing
+    `[OK] Asserted B-186`, one belief surviving (S341, reproduced by issuing two
+    asserts in one parallel tool block). Serialising the whole command is the fix;
+    the alternative (allocating ids without reading the store) only moves the race.
+
+    flock is POSIX, msvcrt is Windows; whichever exists is used. msvcrt's LK_LOCK
+    retries ~10x then raises rather than blocking forever, so a stuck writer fails
+    loudly instead of hanging a session.
+    """
+    BRAIN_DIR.mkdir(parents=True, exist_ok=True)
+    with open(LOCK_FILE, "a+") as fh:
+        if fcntl is not None:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        elif msvcrt is not None:  # pragma: no cover - Windows
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            elif msvcrt is not None:  # pragma: no cover - Windows
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def mutating(fn):
+    """Run a store-mutating command under store_lock().
+
+    A decorator rather than a `with` block inside each command: every mutating
+    command has the same load-mutate-save shape, and one wrapper cannot be forgotten
+    when the next command is added. No command calls another, so this never nests.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(args):
+        with store_lock():
+            return fn(args)
+
+    return wrapper
 
 
 def now_iso():
@@ -125,6 +185,7 @@ def belief_text(b: dict) -> str:
 
 # ─── Commands ────────────────────────────────────────────────────────────────
 
+@mutating
 def cmd_init(args):
     BRAIN_DIR.mkdir(parents=True, exist_ok=True)
     if STORE_FILE.exists():
@@ -135,6 +196,7 @@ def cmd_init(args):
     print(f"     View will be generated at: {VIEW_FILE}")
 
 
+@mutating
 def cmd_assert(args):
     store = load_store()
     belief = {
@@ -158,6 +220,7 @@ def cmd_assert(args):
     print(f"[OK] Asserted {belief['id']} (proposed/assumed): {args.statement[:70]}")
 
 
+@mutating
 def cmd_confirm(args):
     store = load_store()
     b = find_belief(store, args.id)
@@ -180,6 +243,7 @@ def cmd_confirm(args):
     print(f"[OK] Confirmed {args.id} at level '{args.evidence_level}': {b['statement'][:60]}")
 
 
+@mutating
 def cmd_refute(args):
     store = load_store()
     b = find_belief(store, args.id)
