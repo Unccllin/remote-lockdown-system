@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # pyright: ignore[reportMissingImports] — pytest is not installed in the interpreter the
@@ -814,6 +815,90 @@ def test_the_memory_lock_is_a_file_beside_the_store():
     root = make_isolated_repo()
     memory_cli(root, "capture", "--task", "t", "--files", "- f")
     assert (root / ".devin" / "memory" / ".memory.lock").exists()
+
+
+TEST_DRIVER = '''
+import importlib.util, pathlib, sys, time
+
+spec = importlib.util.spec_from_file_location("store_under_test", sys.argv[1])
+store = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(store)
+
+root = pathlib.Path(sys.argv[2])
+name = sys.argv[3]
+hold = float(sys.argv[4])
+
+# Point the store at the temp dir. store_lock() resolves its lock path from the current
+# store directory at call time (S343), so rebinding the directory is enough.
+if hasattr(store, "MEMORY_DIR"):
+    store.MEMORY_DIR = root
+else:
+    store.BRAIN_DIR = root
+
+with store.store_lock():
+    (root / (name + ".entered")).write_text(repr(time.monotonic()))
+    time.sleep(hold)
+    (root / (name + ".leaving")).write_text(repr(time.monotonic()))
+'''
+
+
+def _read_ts(path: Path) -> float:
+    return float(path.read_text())
+
+
+@pytest.mark.parametrize(
+    "store_script",
+    ["memory.py", "brain.py"],
+    ids=["memory", "brain"],
+)
+def test_store_lock_excludes_a_second_process(store_script):
+    """The primitive itself: while one process holds the lock, a second one waits.
+
+    Every other concurrency test here checks an OUTCOME (no lost writes, no overwrite),
+    and an outcome test passes if the lock is a no-op and the writers happen not to
+    collide. This one checks the exclusion directly, and it is parametrised over both
+    scripts because the two `store_lock()` implementations are separate copies — proving
+    one says nothing about the other.
+
+    It is also the POSIX half of the Windows question: on Windows the exclusion runs
+    through `msvcrt.locking`, which cannot be exercised on this host at all.
+    """
+    root = Path(tempfile.mkdtemp(prefix="store-exclusion-"))
+    driver = root / "driver.py"
+    driver.write_text(TEST_DRIVER)
+    script = SCRIPTS_DIR / store_script
+
+    holder = subprocess.Popen(
+        [sys.executable, str(driver), str(script), str(root), "a", "0.8"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    entered = root / "a.entered"
+    for _ in range(400):  # wait up to ~4s for the holder to take the lock
+        if entered.exists() and entered.read_text().strip():
+            break
+        time.sleep(0.01)
+    assert entered.exists(), "the holder never took the lock"
+
+    waiter = subprocess.run(
+        [sys.executable, str(driver), str(script), str(root), "b", "0"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    holder.wait(timeout=60)
+
+    assert waiter.returncode == 0, waiter.stdout + waiter.stderr
+    released_at = _read_ts(root / "a.leaving")
+    acquired_at = _read_ts(root / "b.entered")
+
+    assert acquired_at >= released_at, (
+        "the second process entered the lock "
+        f"{released_at - acquired_at:.4f}s BEFORE the holder released it — store_lock() "
+        "is not excluding anyone"
+    )
 
 
 def test_store_lock_refuses_when_no_lock_primitive_exists(tmp_memory_dir, monkeypatch):

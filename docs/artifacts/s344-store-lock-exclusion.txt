@@ -1,0 +1,40 @@
+# S344 — the store locks are now tested as a primitive, not only by their outcomes
+# Host: Linux 7.2.15-1-omarchy x86_64 · python 3.14.8
+# Generated 2026-11-20T13:20:52Z — every block below is real command output.
+
+## 1. The gap this closes
+   S342/S343 proved no writes are lost under concurrency, which is an OUTCOME. An outcome
+   test passes if the lock is a no-op and the writers happen not to collide — at 12 writers
+   memory's capture race produced 12/12 correct results while the race was still there.
+   Nothing asserted the primitive: while one process holds the lock, a second must wait.
+
+## 2. The test — parametrised over BOTH scripts, because the implementations are copies
+   $ pytest scripts/test_memory.py -k excludes_a_second_process -v
+   collected 51 items / 49 deselected / 2 selected
+   ======================= 2 passed, 49 deselected in 2.01s =======================
+   Driver: process A takes store_lock(), stamps monotonic time, holds 0.8s, stamps again;
+   process B starts once A is inside, and stamps its own entry. The assertion is
+   B.entry >= A.release, so a lock that excludes nothing fails with a measured gap.
+
+## 3. Teeth — LOCK_EX -> LOCK_SH keeps a working lock that excludes nobody
+   The mutation is deliberate: the lock still acquires and still releases, so nothing
+   crashes. It simply stops being exclusive, which is exactly the property under test.
+   E       AssertionError: the second process entered the lock 0.7085s BEFORE the holder released it — store_lock() is not excluding anyone
+   E       AssertionError: the second process entered the lock 0.7045s BEFORE the holder released it — store_lock() is not excluding anyone
+   2 failed, 49 deselected in 2.16s
+   restored (LOCK_EX present in both) ->
+   2 passed, 49 deselected in 1.96s
+
+## 4. This is the POSIX half of the Windows question
+   On Windows the exclusion runs through msvcrt.locking on the same 0-byte file, and that
+   branch cannot be exercised on this host. Reachability of the only Windows box, measured
+   this session:
+   192.168.1.43:3001 (lab server / FRANKENSTEIN proxy) -> HTTP 000
+   unreachable
+   HTTP 000 = no connection. So the Windows verification is blocked on access, not effort:
+   FRANKENSTEIN has no git and no shared filesystem, and the LAN port-proxy does not survive
+   a WSL restart (AGENTS.md). It needs a session where that box is reachable.
+
+## 5. Gates for this session
+   make test-scripts   MAKE_EXIT=0, 17 suites, scripts/test_memory.py 51 passed (49 + 2)
+   ruff                rule ids identical to HEAD for the touched file (no new classes)
