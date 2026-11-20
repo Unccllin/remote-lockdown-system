@@ -6752,3 +6752,82 @@ Run `make test-coverage` across all five components — the last gate with no re
 which floors are tight (the dashboard's functions floor sat at 62.59 against 62 in S305).
 
 ---
+
+---
+
+## Session 333 — 2026-11-19 (the last stale gate: five-component coverage, measured)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `make test-coverage` and each component's own floor — server `jest.config.js`
+  (66/62/70/67), dashboard `vitest.config.js` (68/61/62/70), worker `vitest.config.mts` (82/75/86/83),
+  electron `jest.config.js` (37/45/29/37), agent `pyproject.toml` `fail_under = 59`.
+- **Read**: AGENTS.md's note that the dashboard functions floor was the tight one (62.59 vs 62 in S305),
+  so the comparison is per-component and per-metric rather than an aggregate.
+
+**Findings**: coverage was the last gate with no recent number, and its floors live in five different
+files — an aggregate figure would hide exactly the component that is closest to failing.
+
+### Fog cleared
+
+- **All five components pass their own floors** (`/tmp/coverage-s333.log`, exit 0):
+
+  | component | statements | branches | functions | lines | floor |
+  |---|---|---|---|---|---|
+  | server | 74.86 | 71.63 | 80.28 | 75.70 | 66/62/70/67 |
+  | dashboard | 70.62 | 66.59 | **62.59** | 71.40 | 68/61/62/70 |
+  | worker | 86.46 | 83.00 | 95.06 | 88.60 | 82/75/86/83 |
+  | electron | 39.40 | 47.36 | **30.95** | 39.30 | 37/45/29/37 |
+  | agent | — | — | — | 66.01 | 59 (`fail_under`) |
+
+- **The tightest margins are `functions`**: dashboard **+0.59** and electron **+1.95**. A small deletion
+  trips either, which is now written where the numbers are.
+- **AGENTS.md's sweep paragraph is fully current**: every one of its figures is either re-measured today
+  or carries a named reason it cannot be (pg-smoke: no PostgreSQL on :5432, no usable docker).
+
+### Fog remaining
+
+- **`make pg-smoke` remains the only gate that cannot run on this host**, for the same docker/PG reason as
+  `test_tls_floor.py` — one operator action (docker group + re-login) would unblock both.
+- **`Dependabot Updates`** still fails with `write access to the repository is required`; the weekly
+  audit's `cron` path is still unexercised; the pyright `reportMissingImports` pair is an advisory;
+  `harness-template/` remains documented drift awaiting the owner's decision (S329).
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
+
+### Blockers
+
+- **No docker socket and no local PostgreSQL** — the two gates that cannot run here, one cause.
+
+### Session artifacts
+
+- `AGENTS.md` (coverage re-dated with all five components and their margins), `/tmp/coverage-s333.log`.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback)**: coverage had been reported as "all five components above floor"
+  without a date or a figure since S305, which is a claim that cannot be re-checked. It is now five
+  numbers against five declared floors, with the two tight ones called out — the difference between
+  "green" and "green with 0.59 to spare" is the difference between a fact and a mood.
+
+### VERIFY
+
+- `make test-coverage` → exit **0**; per-component numbers above, each compared to its own config floor.
+- `make graph-check` → `✓ All invariants pass`; tree clean before and after.
+- `COVERAGE_EXIT=0` recorded in the log.
+
+### Next session opening
+
+Ask the operator for docker group membership (then re-login) so `test_tls_floor.py` and `pg-smoke` can
+run — the last two gates in this repository that are blocked on the environment rather than on code.
+
+---

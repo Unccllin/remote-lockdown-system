@@ -520,9 +520,13 @@ in S307 and passed (14/14, 56 PASS / 0 FAIL / 5 SKIP, all artifacts present).
 
 **Re-measured in S332:** `make sast` 48 findings / 0 ERROR, all dispositioned (semgrep 1.182.1 from a
 throwaway venv) and `make firmware-host-tests` 195 checks / 35 cases, 0 failures (CBOR 97/19, TPM 86/8,
-COSE 12/8). **Still not re-measured:** `make pg-smoke` — this host has no PostgreSQL on :5432
-(`pg_isready` → no response) and no usable docker (exit 1) — and `make test-coverage` across all five
-components; only the dashboard floor was re-run, at 70.62 / 66.59 / 62.59 / 71.40
+COSE 12/8). **`make test-coverage` re-measured in S333, all five components above their floors:** server
+74.86/71.63/80.28/75.70 vs 66/62/70/67 · dashboard 70.62/66.59/**62.59**/71.40 vs 68/61/62/70 ·
+worker 86.46/83.00/95.06/88.60 vs 82/75/86/83 · electron 39.40/47.36/**30.95**/39.30 vs 37/45/29/37 ·
+agent 66.01 vs `fail_under` 59. The tightest margins are dashboard **functions** (+0.59) and electron
+**functions** (+1.95) — a small deletion trips either.
+**Still not re-measured:** `make pg-smoke` — this host has no PostgreSQL on :5432
+(`pg_isready` → no response) and no usable docker (exit 1)
 against 68 / 61 / 62 / 70.
 
 **`make test-e2e` was intermittently fatal until 2026-11-13; it is fixed and proven.** The

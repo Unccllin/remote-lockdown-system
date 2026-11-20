@@ -53,29 +53,31 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 332 — 2026-11-19 (two "not re-measured" gates closed; one shown to be unrunnable here)
+## Latest session: 333 — 2026-11-19 (the last stale gate: five-component coverage, measured)
 
 ### Fog cleared
 
-- **`make sast` re-measured** (`/tmp/sast-s332.log`): **48 findings, 0 ERROR**, `[OK] every finding is
-  either fixed or carries a reviewed reason`, exit 0 — the S312 figure holds, with the S312 exceptions in
-  place.
-- **`make firmware-host-tests` re-measured** (`/tmp/fw-s332.log`): **195 checks, 0 failures, 35 cases**
-  (CBOR 97 checks/19 cases, TPM 86/8, COSE 12/8), exit 0 — the recorded figure exactly.
-- **`make pg-smoke` shown to be unrunnable on this host, with evidence rather than recollection**: no
-  PostgreSQL on `localhost:5432` (`pg_isready` → "no response") and no usable docker (`docker ps` → exit
-  1), which is the same socket condition as the sweep's one red.
-- **AGENTS.md updated**: the "not re-measured" sentence now records sast and firmware as re-measured in
-  S332 and names the concrete reason pg-smoke cannot run, instead of listing all four as merely stale.
+- **All five components pass their own floors** (`/tmp/coverage-s333.log`, exit 0):
+
+  | component | statements | branches | functions | lines | floor |
+  |---|---|---|---|---|---|
+  | server | 74.86 | 71.63 | 80.28 | 75.70 | 66/62/70/67 |
+  | dashboard | 70.62 | 66.59 | **62.59** | 71.40 | 68/61/62/70 |
+  | worker | 86.46 | 83.00 | 95.06 | 88.60 | 82/75/86/83 |
+  | electron | 39.40 | 47.36 | **30.95** | 39.30 | 37/45/29/37 |
+  | agent | — | — | — | 66.01 | 59 (`fail_under`) |
+
+- **The tightest margins are `functions`**: dashboard **+0.59** and electron **+1.95**. A small deletion
+  trips either, which is now written where the numbers are.
+- **AGENTS.md's sweep paragraph is fully current**: every one of its figures is either re-measured today
+  or carries a named reason it cannot be (pg-smoke: no PostgreSQL on :5432, no usable docker).
 
 ### Fog remaining
 
-- **`make test-coverage` across all five components was not re-run** (the longest gate, and the context
-  budget for this session); only the dashboard floor has a recent number.
-- **The docker socket remains the single environmental blocker** — it costs both `test_tls_floor.py` and
-  `pg-smoke`, and needs an operator (add to the `docker` group, re-login).
+- **`make pg-smoke` remains the only gate that cannot run on this host**, for the same docker/PG reason as
+  `test_tls_floor.py` — one operator action (docker group + re-login) would unblock both.
 - **`Dependabot Updates`** still fails with `write access to the repository is required`; the weekly
-  audit's `cron` path is still unexercised; the pyright `reportMissingImports` pair stands as advisory;
+  audit's `cron` path is still unexercised; the pyright `reportMissingImports` pair is an advisory;
   `harness-template/` remains documented drift awaiting the owner's decision (S329).
 - Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
   `RequestAccessAsync` (untested), the pre-push hook being per-clone state.
@@ -91,36 +93,29 @@ signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy)
 
 ### Blockers
 
-- **No PostgreSQL and no usable docker on this host** — `pg-smoke` and `test_tls_floor` are the two gates
-  that cannot run here, and both for the same reason (no docker socket, no local PG).
+- **No docker socket and no local PostgreSQL** — the two gates that cannot run here, one cause.
 
 ### Session artifacts
 
-- `AGENTS.md` (sast + firmware re-dated; pg-smoke's blocker named).
-- Logs: `/tmp/sast-s332.log`, `/tmp/fw-s332.log`.
+- `AGENTS.md` (coverage re-dated with all five components and their margins), `/tmp/coverage-s333.log`.
 
 ### Failure attribution
 
-- **Layer 3 (execution environment), now measured instead of assumed.** `pg-smoke` had been carried as
-  "needs real PostgreSQL 16" for two hundred sessions; the actual condition on this host (nothing
-  listening on 5432, docker unusable) is a one-command check that nobody had run. A deferral that names
-  its prerequisite is better than one that names a category.
-- **Layer 4 (verification feedback)**: the sweep's "not re-measured" list was itself a claim without a
-  date, so it read as "these might be broken". Two of the four were green the whole time.
+- **Layer 4 (verification feedback)**: coverage had been reported as "all five components above floor"
+  without a date or a figure since S305, which is a claim that cannot be re-checked. It is now five
+  numbers against five declared floors, with the two tight ones called out — the difference between
+  "green" and "green with 0.59 to spare" is the difference between a fact and a mood.
 
 ### VERIFY
 
-- `PATH=/tmp/sgvenv/bin:$PATH make sast` → `Semgrep findings: 48`, `[OK] every finding is either fixed or
-  carries a reviewed reason`, exit 0.
-- `make firmware-host-tests` → `97 checks, 0 failures across 19 cases` · `86 checks, 0 failures across 8
-  cases` · `12 checks, 0 failures across 8 cases`; exit 0.
-- `pg_isready -h localhost -p 5432` → `no response`; `docker ps` → exit 1.
+- `make test-coverage` → exit **0**; per-component numbers above, each compared to its own config floor.
 - `make graph-check` → `✓ All invariants pass`; tree clean before and after.
+- `COVERAGE_EXIT=0` recorded in the log.
 
 ### Next session opening
 
-Run `make test-coverage` across all five components — the last gate with no recent number — and record
-which floors are tight (the dashboard's functions floor sat at 62.59 against 62 in S305).
+Ask the operator for docker group membership (then re-login) so `test_tls_floor.py` and `pg-smoke` can
+run — the last two gates in this repository that are blocked on the environment rather than on code.
 
 ---
 
