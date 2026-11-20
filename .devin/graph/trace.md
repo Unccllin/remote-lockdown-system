@@ -6831,3 +6831,80 @@ Ask the operator for docker group membership (then re-login) so `test_tls_floor.
 run — the last two gates in this repository that are blocked on the environment rather than on code.
 
 ---
+
+---
+
+## Session 334 — 2026-11-19 (the stale engine fork is gone)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: every reference to `harness-template` in the tree — the only hits are this repo's own trace
+  entries recording the S329 decision, plus the README S329 added. No Makefile target, CI workflow,
+  script or document consumes it.
+- **Read**: the drift itself — `graph_assert.py` 640 lines vs the live 1314, `graph_loader.py` 197 vs 192,
+  `GRAPH-SPEC.yaml` 396 vs 1595, and both S326/S327 ledger checks absent from the fork.
+
+**Findings**: the confusion risk is asymmetric. A stale engine that reads as authoritative is worse than
+no engine, because anyone bootstrapping a harness from it starts without the checks this repo now relies
+on — and would not know to miss them.
+
+### Fog cleared
+
+- **`harness-template/` is deleted** (owner's decision, my recommendation): three files that nothing
+  references, carrying a fork of the engine that predates every check added since S326. Git history keeps
+  it recoverable, so the cost of being wrong is one `git revert`.
+- **Nothing broke**: `make graph-check` → `✓ All invariants pass`; `scripts/test_graph_session.py` →
+  40 passed, 0 failed. The deletion removed no import, no path, no target.
+- **The record is preserved where it belongs**: the S329 trace entries state the fork's line counts and why
+  it was left as a decision, so a reader can reconstruct what was removed and why.
+
+### Fog remaining
+
+- **Two gates remain blocked on docker** (`test_tls_floor.py`, `pg-smoke`): `sudo usermod -aG docker $USER`
+  plus a new login session is the operator action; `sudo -n` needs a password, so nothing in-session can
+  do it.
+- **`Dependabot Updates`** still fails with `write access to the repository is required` — a repository
+  setting.
+- **The weekly audit's `cron` path is still unexercised**; the pyright `reportMissingImports` pair remains
+  an advisory.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
+
+### Blockers
+
+- **Docker socket and Dependabot write access** — both outside the repository, both named above.
+
+### Session artifacts
+
+- Deletion of `harness-template/` (3 files: `graph_assert.py`, `graph_loader.py`, `GRAPH-SPEC.yaml` and the
+  S329 README).
+
+### Failure attribution
+
+- **Layer 5 (state management)**: a fork created before this arc drifted for a hundred sessions without
+  anything noticing, and once noticed it took a second session to resolve because the right answer
+  (deletion) was the owner's call rather than mine. The durable rule: a copy of the invariant engine that
+  is not the engine should not exist, and if it must, it should carry its provenance in its first line.
+
+### VERIFY
+
+- `grep -rn harness-template` → no consumer remains (only this repo's trace history).
+- `make graph-check` → `✓ All invariants pass`.
+- `python3 scripts/test_graph_session.py` → 40 passed, 0 failed.
+- `git status` clean afterwards; push passes the pre-push hook.
+
+### Next session opening
+
+Ask the operator for docker group membership (then re-login) so `test_tls_floor.py` and `pg-smoke` can run
+— the only two gates in this repository still blocked on the environment rather than on code.
+
+---

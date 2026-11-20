@@ -53,32 +53,27 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 333 — 2026-11-19 (the last stale gate: five-component coverage, measured)
+## Latest session: 334 — 2026-11-19 (the stale engine fork is gone)
 
 ### Fog cleared
 
-- **All five components pass their own floors** (`/tmp/coverage-s333.log`, exit 0):
-
-  | component | statements | branches | functions | lines | floor |
-  |---|---|---|---|---|---|
-  | server | 74.86 | 71.63 | 80.28 | 75.70 | 66/62/70/67 |
-  | dashboard | 70.62 | 66.59 | **62.59** | 71.40 | 68/61/62/70 |
-  | worker | 86.46 | 83.00 | 95.06 | 88.60 | 82/75/86/83 |
-  | electron | 39.40 | 47.36 | **30.95** | 39.30 | 37/45/29/37 |
-  | agent | — | — | — | 66.01 | 59 (`fail_under`) |
-
-- **The tightest margins are `functions`**: dashboard **+0.59** and electron **+1.95**. A small deletion
-  trips either, which is now written where the numbers are.
-- **AGENTS.md's sweep paragraph is fully current**: every one of its figures is either re-measured today
-  or carries a named reason it cannot be (pg-smoke: no PostgreSQL on :5432, no usable docker).
+- **`harness-template/` is deleted** (owner's decision, my recommendation): three files that nothing
+  references, carrying a fork of the engine that predates every check added since S326. Git history keeps
+  it recoverable, so the cost of being wrong is one `git revert`.
+- **Nothing broke**: `make graph-check` → `✓ All invariants pass`; `scripts/test_graph_session.py` →
+  40 passed, 0 failed. The deletion removed no import, no path, no target.
+- **The record is preserved where it belongs**: the S329 trace entries state the fork's line counts and why
+  it was left as a decision, so a reader can reconstruct what was removed and why.
 
 ### Fog remaining
 
-- **`make pg-smoke` remains the only gate that cannot run on this host**, for the same docker/PG reason as
-  `test_tls_floor.py` — one operator action (docker group + re-login) would unblock both.
-- **`Dependabot Updates`** still fails with `write access to the repository is required`; the weekly
-  audit's `cron` path is still unexercised; the pyright `reportMissingImports` pair is an advisory;
-  `harness-template/` remains documented drift awaiting the owner's decision (S329).
+- **Two gates remain blocked on docker** (`test_tls_floor.py`, `pg-smoke`): `sudo usermod -aG docker $USER`
+  plus a new login session is the operator action; `sudo -n` needs a password, so nothing in-session can
+  do it.
+- **`Dependabot Updates`** still fails with `write access to the repository is required` — a repository
+  setting.
+- **The weekly audit's `cron` path is still unexercised**; the pyright `reportMissingImports` pair remains
+  an advisory.
 - Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
   `RequestAccessAsync` (untested), the pre-push hook being per-clone state.
 
@@ -93,29 +88,31 @@ signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy)
 
 ### Blockers
 
-- **No docker socket and no local PostgreSQL** — the two gates that cannot run here, one cause.
+- **Docker socket and Dependabot write access** — both outside the repository, both named above.
 
 ### Session artifacts
 
-- `AGENTS.md` (coverage re-dated with all five components and their margins), `/tmp/coverage-s333.log`.
+- Deletion of `harness-template/` (3 files: `graph_assert.py`, `graph_loader.py`, `GRAPH-SPEC.yaml` and the
+  S329 README).
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback)**: coverage had been reported as "all five components above floor"
-  without a date or a figure since S305, which is a claim that cannot be re-checked. It is now five
-  numbers against five declared floors, with the two tight ones called out — the difference between
-  "green" and "green with 0.59 to spare" is the difference between a fact and a mood.
+- **Layer 5 (state management)**: a fork created before this arc drifted for a hundred sessions without
+  anything noticing, and once noticed it took a second session to resolve because the right answer
+  (deletion) was the owner's call rather than mine. The durable rule: a copy of the invariant engine that
+  is not the engine should not exist, and if it must, it should carry its provenance in its first line.
 
 ### VERIFY
 
-- `make test-coverage` → exit **0**; per-component numbers above, each compared to its own config floor.
-- `make graph-check` → `✓ All invariants pass`; tree clean before and after.
-- `COVERAGE_EXIT=0` recorded in the log.
+- `grep -rn harness-template` → no consumer remains (only this repo's trace history).
+- `make graph-check` → `✓ All invariants pass`.
+- `python3 scripts/test_graph_session.py` → 40 passed, 0 failed.
+- `git status` clean afterwards; push passes the pre-push hook.
 
 ### Next session opening
 
-Ask the operator for docker group membership (then re-login) so `test_tls_floor.py` and `pg-smoke` can
-run — the last two gates in this repository that are blocked on the environment rather than on code.
+Ask the operator for docker group membership (then re-login) so `test_tls_floor.py` and `pg-smoke` can run
+— the only two gates in this repository still blocked on the environment rather than on code.
 
 ---
 
