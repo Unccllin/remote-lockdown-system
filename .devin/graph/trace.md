@@ -6395,3 +6395,95 @@ pointer to `.devin/graph/graph_assert.py` and a note that it predates the S326/S
 640-line copy of the engine that nothing references is the next thing a reader will mistake for the truth.
 
 ---
+
+---
+
+## Session 329 — 2026-11-19 (a stale fork documented, and a worktree I left behind)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `harness-template/`'s contents and their live counterparts — `graph_assert.py` 640 vs 1314
+  lines, `graph_loader.py` 197 vs 192, `GRAPH-SPEC.yaml` 396 vs 1595.
+- **Read**: every reference to `harness-template` in the repository — none outside `.git/`, so nothing
+  runs it: not the Makefile, CI, a script or a doc.
+- **Read**: the template engine for the checks added since S326 — `assert_open_debt_list_matches_ledger`
+  and `assert_claimed_closures_are_real` are both **absent**, so the fork predates the ledger checks.
+- **Read**: `git worktree list` — one live worktree plus `/tmp/pre304` (detached at `25df83e`), which S307
+  registered while attributing a Playwright failure and never removed.
+
+**Findings**: two pieces of state had outlived their purpose and neither announced itself. A stale copy of
+the invariant engine is the more dangerous of the two because it reads as authoritative.
+
+### Fog cleared
+
+- **`harness-template/` now says what it is** (`7c7db09`): a scaffold, not the engine; nothing here runs
+  it; a table of its three files against their live counterparts; the consequence of the drift (missing
+  S326/S327 ledger checks); and the two honest options — delete it, or re-sync it when it is actually used
+  to bootstrap a project. Deleting something named "template" is the owner's call, so the note is the
+  action and the choice stays open.
+- **The orphaned worktree is gone**: `git worktree remove /tmp/pre304 --force` + `git worktree prune`;
+  `git worktree list` shows one worktree and `.git/worktrees/` is empty.
+- **CI is green** on `7c7db09`: `CI`, `Lint`, `CodeQL` all success. Tree clean, local == remote.
+
+### Fog remaining
+
+- **The fork still exists.** It is documented, not resolved: either delete `harness-template/` or re-sync
+  it from `.devin/graph/` the first time it bootstraps a project. A template that tracks its source needs
+  no disclaimer, which is why the README names that end state.
+- **`Dependabot Updates` fails with `write access to the repository is required`** — the same text as the
+  2026-11-12 run, before this session's dependency overrides, so it is a repository/permission condition
+  and not a change of mine. It is a setting only the owner can change.
+- **The weekly audit's `cron` path is still unexercised** (every run so far was dispatch).
+- **The pyright `reportMissingImports` pair** on the runtime `sys.path` import remains an advisory.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, the docker-socket red for
+  `test_tls_floor.py`.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
+
+### Blockers
+
+- None. The four open items remain blocked on hardware or an operator credential.
+
+### Session artifacts
+
+- `harness-template/README.md` (the drift table and the two options) — `7c7db09`. Plus the removal of the
+  `/tmp/pre304` worktree registration (repo state, not a commit).
+
+### Failure attribution
+
+- **Layer 5 (state management), twice, and both mine.** The `pre304` worktree was registered in S307 for a
+  one-off attribution, answered nothing, and stayed registered for twenty sessions; the template fork was
+  created before this arc began and drifted silently. Neither failed a gate, because neither is the kind
+  of thing a gate looks at — which is exactly why the sweep has to include "what did I leave behind" as
+  well as "what does the code say".
+- **A note on restraint**: the tempting move was to delete `harness-template/` because it is unreferenced.
+  That is an owner decision about a scaffold that may bootstrap another repo, and the evidence for deletion
+  (`grep` finds nothing) is weaker than the evidence against it (the name says "template"). Documenting the
+  drift and naming both options is the action that cannot be wrong.
+
+### VERIFY
+
+- `grep -rn harness-template` (excluding the directory itself) → nothing outside `.git/`; the statement in
+  the new README is itself checkable.
+- `harness-template/graph_assert.py` vs `.devin/graph/graph_assert.py` → **640 vs 1314** lines;
+  `assert_open_debt_list_matches_ledger` and `assert_claimed_closures_are_real` absent from the fork.
+- `git worktree list` → one worktree (`e0dc669 [master]`); `.git/worktrees/` → empty.
+- `make graph-check` → `✓ All invariants pass`; tree clean; local == remote before and after.
+- CI on `7c7db09` → **CI success · Lint success · CodeQL success**.
+
+### Next session opening
+
+Re-run `make full-verify` end to end: twenty sessions have added or changed gates (`lint-graph` is now in
+`make lint`, the SAST exceptions changed, the dependency overrides landed, the audit gained a weekly job),
+and the sweep's recorded numbers predate all of it — with the known docker-socket red for
+`test_tls_floor.py` as the one expected failure.
+
+---

@@ -53,39 +53,27 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 328 — 2026-11-19 (the invariant engine is now linted, and two wiring bugs proved the gate runs)
+## Latest session: 329 — 2026-11-19 (a stale fork documented, and a worktree I left behind)
 
 ### Fog cleared
 
-- **The invariant engine is linted** (`f6dd19a`): `scripts/lint-graph.sh`, `make lint-graph` added to
-  `make lint`, and a step in CI's ruff job. Rule set deliberately narrow — `E,W,F,I,UP` at line-length
-  100 — because `agent/ruff.toml` selects `S` and per-file ignores for code shipped to a device, and this
-  is a build-time script. The chosen set cannot change behaviour by construction.
-- **20 findings fixed**: 12 by autofix (5 unused imports, 2 `datetime.UTC`, an f-string, import order, an
-  unused `noqa`), 8 by hand (6 lines over 100 chars, an `endswith` tuple, a collapsible nested `if`).
-- **Behaviour verified unchanged**: `--assert-phase-deps P3` exit 0, full sweep exit 0 with
-  `All invariants pass`, `--convergence` exit 0, `scripts/test_graph_session.py` 40/40,
-  `agent/tests/test_graph_assertions.py` 55/55.
-- **CI is green on the result** (`94ac0f6`): `CI`, `Lint`, `CodeQL`, `Dependency Graph` all success.
-- **The gate proved it actually runs, twice, by failing on my wiring**:
-  1. `run: scripts/lint-graph.sh` → `No such file or directory` (exit 127), because that job sets
-     `working-directory: agent`; fixed with `working-directory: ${{ github.workspace }}` (`7420059`);
-  2. `ruff --fix` had removed an unused `import os` from **both** `.devin/graph` files and I staged only
-     the four paths I remembered, so `make lint-graph` was green against an uncommitted tree while CI
-     found `F401 graph_loader.py:18` on the committed one (`94ac0f6`).
-- **A stale fork was found and left as a decision**: `harness-template/graph_assert.py` is **640 lines**
-  against the live engine's **1299**, and nothing in the repo references `harness-template/` — not the
-  Makefile, CI, a script or a doc.
+- **`harness-template/` now says what it is** (`7c7db09`): a scaffold, not the engine; nothing here runs
+  it; a table of its three files against their live counterparts; the consequence of the drift (missing
+  S326/S327 ledger checks); and the two honest options — delete it, or re-sync it when it is actually used
+  to bootstrap a project. Deleting something named "template" is the owner's call, so the note is the
+  action and the choice stays open.
+- **The orphaned worktree is gone**: `git worktree remove /tmp/pre304 --force` + `git worktree prune`;
+  `git worktree list` shows one worktree and `.git/worktrees/` is empty.
+- **CI is green** on `7c7db09`: `CI`, `Lint`, `CodeQL` all success. Tree clean, local == remote.
 
 ### Fog remaining
 
-- **`harness-template/graph_assert.py` is a second copy of the invariant engine**, missing everything
-  since it was forked (the S326/S327 ledger checks included). A reader would take it for the engine.
-  Deleting something named "template" is the owner's call; marking it as a scaffold with a pointer to the
-  live file is the cheap alternative. Not acted on.
-- **`Dependabot Updates` failed on this push**, with `write access to the repository is required` — the
-  same text as the run on **2026-11-12**, before this session's `overrides` existed, so it is a
-  repository/permission condition rather than a dependency change of mine. Recorded, not chased.
+- **The fork still exists.** It is documented, not resolved: either delete `harness-template/` or re-sync
+  it from `.devin/graph/` the first time it bootstraps a project. A template that tracks its source needs
+  no disclaimer, which is why the README names that end state.
+- **`Dependabot Updates` fails with `write access to the repository is required`** — the same text as the
+  2026-11-12 run, before this session's dependency overrides, so it is a repository/permission condition
+  and not a change of mine. It is a setting only the owner can change.
 - **The weekly audit's `cron` path is still unexercised** (every run so far was dispatch).
 - **The pyright `reportMissingImports` pair** on the runtime `sys.path` import remains an advisory.
 - Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
@@ -107,38 +95,37 @@ signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy)
 
 ### Session artifacts
 
-- `scripts/lint-graph.sh`, `Makefile` (`lint-graph`), `.github/workflows/lint.yml` (step),
-  `.devin/graph/graph_assert.py` (findings), `.devin/graph/graph_loader.py` (unused import) —
-  `f6dd19a`, `7420059`, `94ac0f6`. CI evidence: `CI`, `Lint`, `CodeQL` success.
+- `harness-template/README.md` (the drift table and the two options) — `7c7db09`. Plus the removal of the
+  `/tmp/pre304` worktree registration (repo state, not a commit).
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), in its third distinct shape.** S314: a check whose failure could not
-  stop the action (`;` before `git push`). S318: a check run on the wrong output (`grep` after a scan).
-  S328: **a correct check run on the wrong tree** — `make lint-graph` was green because the working tree
-  held an autofix I had not staged. All three are "the verification ran and its subject was not what
-  shipped"; the countermeasure is mechanical, not attentional: after an autofix over a directory, stage
-  the directory.
-- **Layer 2 (context provision)**: the job's `working-directory: agent` is three lines above the step I
-  edited and I did not read it. A workflow step is not self-contained — it inherits a default path, and
-  the file that declares it is the file being edited.
+- **Layer 5 (state management), twice, and both mine.** The `pre304` worktree was registered in S307 for a
+  one-off attribution, answered nothing, and stayed registered for twenty sessions; the template fork was
+  created before this arc began and drifted silently. Neither failed a gate, because neither is the kind
+  of thing a gate looks at — which is exactly why the sweep has to include "what did I leave behind" as
+  well as "what does the code say".
+- **A note on restraint**: the tempting move was to delete `harness-template/` because it is unreferenced.
+  That is an owner decision about a scaffold that may bootstrap another repo, and the evidence for deletion
+  (`grep` finds nothing) is weaker than the evidence against it (the name says "template"). Documenting the
+  drift and naming both options is the action that cannot be wrong.
 
 ### VERIFY
 
-- `make lint-graph` → `All checks passed!`, `[OK] ruff check clean`, exit 0.
-- `make lint-workflows` → exit 0 (actionlint + shellcheck); `lint.yml` parses.
-- `python3 .devin/graph/graph_assert.py` → `✓ All invariants pass`; `--assert-phase-deps P3` exit 0;
-  `--convergence` exit 0.
-- `scripts/test_graph_session.py` → 40 passed, 0 failed.
-- `agent/.venv/bin/python -m pytest agent/tests/test_graph_assertions.py -q` → 55 passed.
-- CI on `94ac0f6` → **CI · Lint · CodeQL · Dependency Graph success**; `Dependabot Updates` failure
-  reproduces the 2026-11-12 text and is not attributable to this session.
+- `grep -rn harness-template` (excluding the directory itself) → nothing outside `.git/`; the statement in
+  the new README is itself checkable.
+- `harness-template/graph_assert.py` vs `.devin/graph/graph_assert.py` → **640 vs 1314** lines;
+  `assert_open_debt_list_matches_ledger` and `assert_claimed_closures_are_real` absent from the fork.
+- `git worktree list` → one worktree (`e0dc669 [master]`); `.git/worktrees/` → empty.
+- `make graph-check` → `✓ All invariants pass`; tree clean; local == remote before and after.
+- CI on `7c7db09` → **CI success · Lint success · CodeQL success**.
 
 ### Next session opening
 
-Decide the `harness-template/graph_assert.py` fork: delete it, or mark it as a scaffold with a one-line
-pointer to `.devin/graph/graph_assert.py` and a note that it predates the S326/S327 ledger checks — a
-640-line copy of the engine that nothing references is the next thing a reader will mistake for the truth.
+Re-run `make full-verify` end to end: twenty sessions have added or changed gates (`lint-graph` is now in
+`make lint`, the SAST exceptions changed, the dependency overrides landed, the audit gained a weekly job),
+and the sweep's recorded numbers predate all of it — with the known docker-socket red for
+`test_tls_floor.py` as the one expected failure.
 
 ---
 
