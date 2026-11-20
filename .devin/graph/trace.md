@@ -7530,6 +7530,9 @@ D-120, D-129, D-130, D-134.
   condition AGENTS.md documents; under `newgrp docker` it is **2 passed**. Not a regression from this
   session's changes.
 - `scripts/lint-agent.sh` → ruff clean + formatted.
+- CI / Lint / CodeQL on `ccfe644` → **all three success** (13/13 CI jobs, `Script Tests` and
+  `Electron Tests` included). Dependabot open alerts on the default branch: **0** (was 23 npm-audit
+  findings across the tree; the last GitHub-side alert flipped to `fixed` at 12:26Z on this push).
 - `python3 scripts/brain.py assert` ×2 **in parallel** → both print `B-186`; `beliefs.yaml` holds one.
   Re-asserted sequentially → `B-187`, `grep -c` → 2. `brain.py check` → 187 beliefs, integrity clean.
 
