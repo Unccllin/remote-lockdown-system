@@ -1,0 +1,61 @@
+=== S345: the Windows half of store_lock(), measured on MOLE (2026-11-20) ===
+
+S344 left exactly one unproven claim: that msvcrt.locking on a 0-byte lock file — opened
+'a+', the shape both scripts use — actually excludes a second process. This host is POSIX,
+so the branch had never executed anywhere. MOLE is the Windows lab device, reached over
+OpenSSH (labadmin@192.168.1.249). Python on it is 3.14.8, the same minor as this host.
+
+--- [1] the platform and the primitive actually used ---
+  python           : 3.14.8
+  platform         : win32
+  primitive        : msvcrt.locking
+  holder rc        : 0
+  waiter rc        : 0
+  A released at    : 271932.9821
+  B entered at     : 271933.5389
+  B - A.release    : +0.5568s  (EXCLUDED)
+
+--- [2] the control: same protocol, store_lock() bypassed ---
+  Without this, a positive result could be an artifact of the orchestrator (B might simply
+  start late). The only difference between the two runs is the lock.
+  python           : 3.14.8
+  platform         : win32
+  primitive        : msvcrt.locking
+  holder rc        : 0
+  waiter rc        : 0
+  A released at    : 271958.2496
+  B entered at     : 271957.7012
+  B - A.release    : -0.5484s  (NOT EXCLUDED)
+  B entered 0.5484s BEFORE A released — so the protocol detects non-exclusion, and the
+  +0.5568s in [1] is the lock doing its job, not the harness posing.
+  (The control driver still prints "primitive: msvcrt.locking" because it reports what the
+  module *could* use; it never calls store_lock(). The two runs differ only in that one line
+  of the driver: `with store.store_lock():` versus `if True:`.)
+
+--- [3] end-to-end through the real CLI: 20 concurrent captures on Windows ---
+  $ python lockdown-lock-test\run_e2e_captures.py     (memory.py copied into <tmp>\scripts\
+  so its __file__-relative store lands inside the temp repo)
+  writers         : 20
+  all exit 0      : True 
+  captures kept   : 20
+  lock file       : True
+
+--- [4] two things the numbers say that prose would not ---
+  * The wait is COARSE on Windows. B entered ~0.55s after A released, though A's release is
+    immediate: msvcrt.locking(LK_LOCK) retries at ~1s intervals, so a blocked writer can wait
+    up to about a second. Correctness is unaffected; latency is. It matters because a
+    consolidate holds the lock for the whole run, so a concurrent capture waits seconds, not
+    milliseconds.
+  * A 0-byte lock file IS lockable on Windows. That was the specific doubt: msvcrt locks one
+    byte at the current position, and the file is empty when first created. It works
+    (holder rc=0, waiter rc=0), so the 'a+' open + LOCK of byte 0 needs no file-size fix-up.
+
+--- [5] what is now settled ---
+  Both branches of store_lock() are measured on their own platform: fcntl.flock on Linux
+  (S344: 2 parametrised exclusion tests + LOCK_SH teeth) and msvcrt.locking on Windows
+  (this file). The deployed fleet is Windows, which is why the unproven half was the
+  important one.
+
+  Re-run: the scripts are left in C:\Users\labadmin\lockdown-lock-test on MOLE —
+    ssh labadmin@192.168.1.249 "cd lockdown-lock-test && C:\Python314\python.exe run_exclusion.py"
+    ssh labadmin@192.168.1.249 "cd lockdown-lock-test && C:\Python314\python.exe run_e2e_captures.py"

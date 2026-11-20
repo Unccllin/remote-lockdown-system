@@ -1053,6 +1053,19 @@ work — pick up here tomorrow.
   - **`scripts/memory.py`'s in-process tests still cannot see a lost update** — they call stage
     functions directly in one process. The concurrency tests added in S343 spawn the real CLI against a
     copy of `memory.py` in a temp repo root, which is the only shape that exercises the lock.
+  - **Both branches are now measured on their own platform (S344/S345).** The locks are pinned by a
+    *primitive* test — process A holds `store_lock()`, process B must not enter until A releases —
+    because outcome tests are blind at low contention: 12 concurrent captures returned 12/12 correct
+    results while the race was still present (S343's own measurement). Teeth are mechanism-specific:
+    `LOCK_EX → LOCK_SH` leaves a working lock that excludes nobody, which the test catches
+    (0.7085 s of overlap). On **MOLE** (Windows, `msvcrt.locking`) the same protocol gives
+    **+0.5568 s EXCLUDED**, and the lock-bypassed control gives **−0.5484 s NOT EXCLUDED**, so the
+    positive result is the lock and not the harness; 20 concurrent `capture` runs through the real CLI
+    kept 20/20. Two facts that only a run could produce: a **0-byte lock file is lockable** on Windows
+    (the specific doubt), and the Windows wait is **coarse** — `LK_LOCK` retries at ~1 s, so a blocked
+    writer waits up to about a second, which matters because `consolidate` holds the lock for its whole
+    run. Evidence: `docs/artifacts/s344-store-lock-exclusion.txt`,
+    `docs/artifacts/s345-store-lock-windows.txt`.
 - Floating-point confidence artifacts (0.6000000000000001 in files)
 - Deduplication brittle (first 5 words only — false positives/negatives)
 - Retrieve is keyword-only (no stemming, stopwords, semantic, typo tolerance)
