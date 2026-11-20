@@ -53,34 +53,29 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 336 — 2026-11-20 (pytest 9.0.3 landed with a scoped admin bypass; ruleset verified intact)
+## Latest session: 337 — 2026-11-20 (pytest-cov 5.0.0 → 7.1.0: two majors, identical numbers)
 
 ### Fog cleared
 
-- **PR #3 merged** as **`4afd409`** (`state=MERGED`, squashed, dependabot branch deleted) using
-  `gh pr merge --admin`. That flag is a *per-merge* admin bypass: it neither disables nor edits the
-  ruleset, which is why nothing had to be restored.
-- **The protection is verified still enforcing**: `EFFORT enforcement=active target=branch`, **10 rules**
-  listed after the merge. Checked rather than assumed, because "bypass" reads like "disabled".
-- **Local aligned to the merged pin**: pulled to `4afd409`, `pytest==9.0.3` in
-  `requirements-dev.txt`, `pip install -r` run, and both `agent/.venv/bin/python -m pytest --version`
-  and `scripts/run-agent-tests.sh --version` report **9.0.3**.
-- **The gates pass on the merged pin**, not just on the pre-merge experiment: **990 tests, 0 failures**
-  and **coverage 66.01% vs `fail_under` 59**.
-- **CI is green on `4afd409`**: `CI`, `Lint`, `CodeQL`, `Dependency Graph` all success — and `Lint`
-  includes `Lint Agent (ruff)`, which installs from the same `requirements-dev.txt`, so the pin is proven
-  in a clean environment rather than only in this venv.
+- **pytest-cov 7.1.0 measures identically**: `TOTAL 6575 / 2235 / 66%`
+  (`Required test coverage of 59% reached. Total coverage: 66.01%`), 990 tests passing, exit 0 — the same
+  figures as 5.0.0, to the statement count.
+- **`agent/requirements-dev.txt` now pins `pytest-cov==7.1.0`** (`0565105`), a clean
+  `pip install -r` reports 7.1.0, and `scripts/lint-agent.sh` is green.
+- **CI is green on `0565105`**: `CI`, `Lint`, `CodeQL`, `Dependency Graph` — `Lint` includes
+  `Lint Agent (ruff)`, which installs from this file, so the bump is proven in a clean environment.
 
 ### Fog remaining
 
-- **`pytest-cov` (5.0.0 vs 7.1.0) and `pytest-timeout` (2.3.1 vs 2.4.0) remain behind** and were only
-  proven at their old versions. Each deserves its own PR so a failure names one change.
-- **The two docker-blocked gates are unchanged**: `test_tls_floor.py` and `pg-smoke` need
-  `sudo usermod -aG docker $USER` plus a fresh login session.
-- **`Dependabot Updates`** still fails with `write access to the repository is required`; the weekly
-  audit's `cron` path is still unexercised; the pyright `reportMissingImports` pair remains advisory.
-- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
-  `RequestAccessAsync` (untested), the pre-push hook being per-clone state.
+- **`pytest-timeout` 2.3.1 → 2.4.0 is the last of the three toolchain bumps** and is deliberately not
+  bundled: one bump per commit keeps a failure unambiguous.
+- **The two docker-blocked gates** (`test_tls_floor.py`, `pg-smoke`) still need
+  `sudo usermod -aG docker $USER` plus a fresh login.
+- **`Dependabot Updates`** still fails with `write access to the repository is required`; PRs #1/#2 were
+  checked this session and are **already closed/superseded** (electron's pin is `^42.11.18`, installed
+  42.11.18, past their proposed 42.11.16), so there is nothing to merge there.
+- Unchanged: the weekly audit's unexercised `cron`, the pyright advisory pair, offline key custody,
+  HP UEFI BIOS password, per-executable consent keying, `RequestAccessAsync`, and the four open items.
 
 ### Debt items closed
 
@@ -88,7 +83,7 @@ None.
 
 ### Debt items still open
 
-D-120, D-129, D-130, D-134 — all blocked on hardware or an operator credential.
+D-120, D-129, D-130, D-134 — blocked on hardware or an operator credential.
 
 ### Blockers
 
@@ -96,30 +91,25 @@ D-120, D-129, D-130, D-134 — all blocked on hardware or an operator credential
 
 ### Session artifacts
 
-- Merge commit **`4afd409`**; `/tmp/post-merge-suite.txt` (990 on 9.0.3), `/tmp/post-merge-cov.txt`
-  (66.01%), `/tmp/pt9-*` (the pre-merge verification).
+- `agent/requirements-dev.txt` (pytest-cov 7.1.0) — `0565105`; log `/tmp/cov71.txt`.
 
 ### Failure attribution
 
-- **Layer 5 (state management), on the one thing that could have gone quietly wrong**: a bypass that
-  leaves protection disabled is invisible until the next PR lands unreviewed. The ruleset was re-checked
-  after the merge (`enforcement=active`, 10 rules) rather than trusted, and the local venv was aligned to
-  the merged pin rather than left on the version tested before it.
+- **Layer 4 (verification feedback), applied correctly this time**: the bump was accepted on identical
+  measurements rather than on a green exit code, and the check that could still differ (CI's clean
+  `coverage` install) was run rather than assumed from the local venv.
 
 ### VERIFY
 
-- `gh pr view 3` → `state=MERGED`, `mergeCommit=4afd409`; local `git rev-parse` → `4afd409`.
-- `agent/requirements-dev.txt:4` → `pytest==9.0.3`.
-- `agent/.venv/bin/python -m pytest --version` → `pytest 9.0.3`;
-  `scripts/run-agent-tests.sh --version` → `pytest 9.0.3`.
-- `scripts/run-agent-tests.sh -q` → 990 passed, exit 0; `--cov --cov-fail-under=59` → 66.01%, exit 0.
-- `gh api …/rulesets` → `EFFORT enforcement=active target=branch`, rule count **10**.
-- CI on `4afd409` → **CI success · Lint success · CodeQL success · Dependency Graph success**.
+- `pytest --cov --cov-fail-under=59` on pytest 9.0.3 + pytest-cov 7.1.0 → `66.01%`, `6575/2235`, exit 0.
+- `pip install -r agent/requirements-dev.txt` → `pytest-cov 7.1.0`; `scripts/lint-agent.sh` → exit 0.
+- CI on `0565105` → **CI · Lint · CodeQL · Dependency Graph all success**.
+- `gh pr list --state open` → empty; PRs #1/#2 → `CLOSED`; `electron/package.json` → `^42.11.18`.
 
 ### Next session opening
 
-Bump `pytest-cov` to 7.x as its own PR — the largest remaining version gap in the agent toolchain — with
-the suite and the coverage gate as its evidence, then `pytest-timeout` likewise.
+Bump `pytest-timeout` to 2.4.0 in its own commit — the last of the three agent-toolchain bumps — and
+confirm the suite still finishes under the `--timeout=30` addopts rather than hanging on a slow test.
 
 ---
 

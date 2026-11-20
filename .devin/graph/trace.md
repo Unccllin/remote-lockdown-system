@@ -7079,3 +7079,75 @@ Bump `pytest-cov` to 7.x as its own PR — the largest remaining version gap in 
 the suite and the coverage gate as its evidence, then `pytest-timeout` likewise.
 
 ---
+
+---
+
+## Session 337 — 2026-11-20 (pytest-cov 5.0.0 → 7.1.0: two majors, identical numbers)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `agent/requirements-dev.txt` (pytest 9.0.3, pytest-cov 5.0.0, pytest-timeout 2.3.1) and the
+  S333 coverage baseline (66.01%, `6575` statements, `2235` missed) so a plugin upgrade could be judged by
+  a *number* rather than by an exit code.
+- **Read**: the plugin's declared requirements (`coverage, pluggy, pytest`) — the `coverage` dependency is
+  why CI's clean install, not this venv, is the real proof.
+
+**Findings**: a coverage-plugin major bump has exactly one meaningful question — does the measurement move?
+
+### Fog cleared
+
+- **pytest-cov 7.1.0 measures identically**: `TOTAL 6575 / 2235 / 66%`
+  (`Required test coverage of 59% reached. Total coverage: 66.01%`), 990 tests passing, exit 0 — the same
+  figures as 5.0.0, to the statement count.
+- **`agent/requirements-dev.txt` now pins `pytest-cov==7.1.0`** (`0565105`), a clean
+  `pip install -r` reports 7.1.0, and `scripts/lint-agent.sh` is green.
+- **CI is green on `0565105`**: `CI`, `Lint`, `CodeQL`, `Dependency Graph` — `Lint` includes
+  `Lint Agent (ruff)`, which installs from this file, so the bump is proven in a clean environment.
+
+### Fog remaining
+
+- **`pytest-timeout` 2.3.1 → 2.4.0 is the last of the three toolchain bumps** and is deliberately not
+  bundled: one bump per commit keeps a failure unambiguous.
+- **The two docker-blocked gates** (`test_tls_floor.py`, `pg-smoke`) still need
+  `sudo usermod -aG docker $USER` plus a fresh login.
+- **`Dependabot Updates`** still fails with `write access to the repository is required`; PRs #1/#2 were
+  checked this session and are **already closed/superseded** (electron's pin is `^42.11.18`, installed
+  42.11.18, past their proposed 42.11.16), so there is nothing to merge there.
+- Unchanged: the weekly audit's unexercised `cron`, the pyright advisory pair, offline key custody,
+  HP UEFI BIOS password, per-executable consent keying, `RequestAccessAsync`, and the four open items.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134 — blocked on hardware or an operator credential.
+
+### Blockers
+
+- **Docker group membership** for the two environment-blocked gates.
+
+### Session artifacts
+
+- `agent/requirements-dev.txt` (pytest-cov 7.1.0) — `0565105`; log `/tmp/cov71.txt`.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), applied correctly this time**: the bump was accepted on identical
+  measurements rather than on a green exit code, and the check that could still differ (CI's clean
+  `coverage` install) was run rather than assumed from the local venv.
+
+### VERIFY
+
+- `pytest --cov --cov-fail-under=59` on pytest 9.0.3 + pytest-cov 7.1.0 → `66.01%`, `6575/2235`, exit 0.
+- `pip install -r agent/requirements-dev.txt` → `pytest-cov 7.1.0`; `scripts/lint-agent.sh` → exit 0.
+- CI on `0565105` → **CI · Lint · CodeQL · Dependency Graph all success**.
+- `gh pr list --state open` → empty; PRs #1/#2 → `CLOSED`; `electron/package.json` → `^42.11.18`.
+
+### Next session opening
+
+Bump `pytest-timeout` to 2.4.0 in its own commit — the last of the three agent-toolchain bumps — and
+confirm the suite still finishes under the `--timeout=30` addopts rather than hanging on a slow test.
+
+---
